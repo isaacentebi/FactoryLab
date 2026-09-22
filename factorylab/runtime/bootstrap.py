@@ -420,6 +420,11 @@ class BootstrapMixin:
         }
         self.vote_handles: dict[str, str] = {}
         self.order_intents: dict[str, dict] = {}
+        # The vault surface ([venue] vault_tools): vault writes by client id, the
+        # vaults this world's seats created or hold, and the venue ledger cursor.
+        self.vault_intents: dict[str, dict] = {}
+        self.vault_book: dict[str, dict] = {}
+        self.vault_ledger_cursor_ns = self.clock.now_ns
         # Decision handle -> why a venue write it attempted was refused, read once
         # by that decision's own answer: a refused write is not an answer's licence.
         self.venue_attempts: dict[str, str] = {}
@@ -503,6 +508,15 @@ class BootstrapMixin:
             if spec.id in self.venue_tools.PUBLIC_READS:
                 self.tool_specs[spec.id]["price_micro_per_call"] = (
                     manifest.connectors.call_price_micro)
+        vault_examples: dict[str, list[dict]] = {}
+        if getattr(manifest.exchange, "vault_tools", False):
+            # A surface, published only where the manifest opts in: what each call
+            # does and costs, and no word about what a vault might be for.
+            from factorylab.world.venue_tools import vault_specs
+
+            specs, vault_examples = vault_specs(manifest.connectors.call_price_micro)
+            self.tool_specs.update(specs)
+            self.treasury.vault_custody = True
         self.tool_specs["treasury.transfer"] = {
             "id": "treasury.transfer",
             "description": "Move USDC spot_to_perps or perps_to_spot, between venue and reserve, "
@@ -579,6 +593,7 @@ class BootstrapMixin:
             "note.get": [{"key": "shared-plan"}],
             "artifact.get": [{"sha": "0" * 64}],
             "outcome.get": [{"outcome_id": "outcome:1"}, {"handle": "decision-1"}],
+            **vault_examples,
         }
         from factorylab.runtime.notes import specs as note_specs
 

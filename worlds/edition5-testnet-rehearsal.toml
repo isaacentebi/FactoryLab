@@ -380,6 +380,9 @@ principal_usd = "120"
 # canonical name and a rehearsable lot, and HYPE/USDC is the spot HYPE that pays the
 # population's own Core gas.
 spot_pairs = ["PURR/USDC", "HYPE/USDC"]
+# The venue's vaults are not a surface of this world. `vault_tools = true` here would
+# publish venue.vault_details/_positions/_create/_deposit/_withdraw and make vault
+# equity a venue pot (docs/manifest.md, "Vaults"); it changes the manifest hash.
 
 # Edition 3 charter as ratified on 15 September 2026 (docs/charter/edition3-ratified.toml,
 # draft docs/charter/edition3-draft.toml, decisions docs/plans/edition3.md C3): five norms

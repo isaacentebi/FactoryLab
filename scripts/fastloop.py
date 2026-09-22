@@ -245,7 +245,8 @@ def print_card(card: dict[str, Any]) -> None:
 
 # --- running ------------------------------------------------------------------------
 
-def simulation_manifest(world: Path, seed: int, exploration: float | None = None) -> Any:
+def simulation_manifest(world: Path, seed: int, exploration: float | None = None,
+                        vault_tools: bool = False) -> Any:
     """The launch identity with only the venue swapped for the deterministic fake.
 
     ``effective_manifest`` freezes the roster, charter, seed lenses, prompts and
@@ -260,7 +261,8 @@ def simulation_manifest(world: Path, seed: int, exploration: float | None = None
     base = load_manifest(world)
     manifest = rehearsal.effective_manifest(base, native_completions=True)
     exchange = replace(manifest.exchange, kind="fake", mainnet=False, seed=seed,
-                       spot_pairs=(), client_namespace=None)
+                       spot_pairs=(), client_namespace=None,
+                       vault_tools=vault_tools or manifest.exchange.vault_tools)
     manifest = replace(manifest, exchange=exchange, seed=seed)
     if exploration is not None:
         manifest = replace(manifest, evaluation=replace(
@@ -270,13 +272,19 @@ def simulation_manifest(world: Path, seed: int, exploration: float | None = None
 
 
 def run(provider_kind: str, ticks: int, world: Path, out: Path, cap_usd: str,
-        seed: int, exploration: float | None = None) -> dict[str, Any]:
+        seed: int, exploration: float | None = None,
+        vault_depositor_usd: str | None = None) -> dict[str, Any]:
+    """``vault_depositor_usd`` opts the world into the vault surface and scripts one
+    outside depositor into every vault the factory creates, who leaves ten steps later;
+    the fake's vaults earn nothing on their own, so the depositor pays no commission
+    unless a vault's equity moved."""
     from factorylab.runtime.loop import Runtime
 
     stamp = time.strftime("%Y%m%d-%H%M%S")
     target = out / f"{provider_kind}-{stamp}-s{seed}"
     target.mkdir(parents=True, exist_ok=True)
-    manifest = simulation_manifest(world, seed, exploration)
+    manifest = simulation_manifest(world, seed, exploration,
+                                   vault_tools=bool(vault_depositor_usd))
     admission = rehearsal.Admission(cap_micro=int(Decimal(cap_usd) * 1_000_000),
                                     max_calls=10_000, recover_provider_failures=True)
     inner = (PolicyProvider(world) if provider_kind == "scripted"
@@ -289,6 +297,9 @@ def run(provider_kind: str, ticks: int, world: Path, out: Path, cap_usd: str,
                           initial_balance_micro=None,
                           ledger_path=str(target / "ledger.jsonl"), drip=False,
                           router_gamma=0.1, provider=provider, kill_at_end=True)
+        if vault_depositor_usd:
+            runtime.exchange.vault_depositor_usd = Decimal(vault_depositor_usd)
+            runtime.exchange.vault_depositor_steps = 10
         summary = runtime.run()
         card["status"] = "completed"
         card["terminated"] = summary.get("terminated")
@@ -358,7 +369,9 @@ def run_seeds(args: argparse.Namespace, seeds: list[int]) -> dict[str, Any]:
         [sys.executable, __file__, "run", "--provider", args.provider,
          "--ticks", str(args.ticks), "--world", str(args.world), "--out", str(args.out),
          "--cap-usd", args.cap_usd, "--seed", str(seed),
-         *(["--exploration", str(args.exploration)] if args.exploration is not None else [])],
+         *(["--exploration", str(args.exploration)] if args.exploration is not None else []),
+         *(["--vault-depositor-usd", args.vault_depositor_usd]
+           if args.vault_depositor_usd else [])],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=ROOT) for seed in seeds]
     cards = []
     for seed, proc in zip(seeds, procs, strict=True):
@@ -385,6 +398,9 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--seed", type=int, default=1)
     r.add_argument("--exploration", type=float, default=None,
                    help="evaluation.exploration_share for this run (the manifest's otherwise)")
+    r.add_argument("--vault-depositor-usd", default=None,
+                   help="publish the vault surface and script an outside depositor of this "
+                        "many USD into each vault the factory creates")
     r.add_argument("--seeds", default=None,
                    help="comma-separated seeds run in parallel processes, e.g. 1,2,3,4")
     args = parser.parse_args(argv)
@@ -396,7 +412,7 @@ def main(argv: list[str] | None = None) -> int:
         print_card(card)
         return 0 if all(c.get("status") == "completed" for c in card["seeds"]) else 1
     card = run(args.provider, args.ticks, args.world, args.out, args.cap_usd, args.seed,
-               args.exploration)
+               args.exploration, args.vault_depositor_usd)
     print_card(card)
     return 0 if card.get("status") == "completed" else 1
 

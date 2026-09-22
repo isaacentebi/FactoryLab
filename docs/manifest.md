@@ -991,6 +991,41 @@ are allowed).
 USDC through the same intent, submission and receipt journal. Venue pots show
 `perps` and `spot` as components of `venue`, never additional capital.
 
+## Vaults
+
+`venue.vault_tools` is a boolean, default `false`, fixed at launch, and dropped
+from the canonical JSON when false (so no existing world's hash changes). When
+true the world publishes the venue's vaults as a surface: `venue.vault_details`
+(priced like the other public venue reads) and `venue.vault_positions` (free),
+and the consequence writes `venue.vault_create`, `venue.vault_deposit` and
+`venue.vault_withdraw` (free, like every venue write). The venue's terms and
+their sources are in `factorylab/world/vaults.py`: a 10% leader commission on a
+depositor's withdrawn profit, a leader's 5% minimum share, a 100 USDC minimum
+initial deposit, a 10,000 USDC creation fee, and a depositor lockup (1 day on
+mainnet). Each write has a durable `vault.intent` under a stable client id
+before submission, is refused with a reason when free perps collateral (the
+pot `_order_collateral` weighs orders against), the vault record or the terms
+would refuse it, and an uncertain acknowledgement is resolved from the
+transfer's own `userNonFundingLedgerUpdates` row, never by sending it again.
+Equity in vaults is the `vaults` component of the `venue` pot and the
+`venue_vaults` custody account, never additional capital. A withdrawal's
+difference from its basis is venue P&L (`venue.settled`, custody
+`venue_vaults`); the creation fee is venue P&L on `venue_perps`. A
+`vaultLeaderCommission` row paid to this account is income (`income.earned`,
+service `vault.leader_commission`, custody `venue_perps`), except the
+commission a leader's own withdrawal is charged and repaid in the same
+transaction, which is ledgered `vault.commission_returned` and booked as
+nothing. Each acknowledged write is bound to its own venue transaction hash
+(checkpointed with the intent); a row bound to one write never confirms
+another, and writes alike in operation, vault and amount are paired with their
+rows in submission order. A commission row names no vault, so it is income only
+while every vault the account leads is one this world created, and never on a
+page with a vault row that could not be read (`vault.commission_skipped`
+otherwise). A withdrawal whose row never arrives within the poll bound is
+ledgered `vault.unbooked`. At a kill, vault equity is residual exposure
+(`wind_down_pending`), never withdrawn by the wind-down, and the summary reports
+`vault_equity_usd` beside `exchange_equity_usd`.
+
 Class transfer confirmation requires a unique hashed `accountClassTransfer`
 row matching the signed direction and exact amount, executed within the
 inclusive interval from the nonce to nonce plus `CLASS_EXECUTION_TOLERANCE_MS`

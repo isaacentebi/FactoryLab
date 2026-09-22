@@ -167,6 +167,11 @@ class Treasury:
         # Receipts the wake host's seller wrote for paid calls it served; the runtime,
         # the only writer of this ledger, turns each into an ``income.earned`` item.
         self.income_spool = os.environ.get("FACTORYLAB_INCOME_SPOOL") or None
+        # Whether the venue's vaults are a custodian of this world ([venue]
+        # vault_tools). Money in a vault is still the venue's to hold but not the
+        # perps account's, so a rail that does not report it has it read here, or
+        # the venue pot would lose every deposit. Off: no read, no pot, no change.
+        self.vault_custody = False
 
     def _write(self, kind: str, **fields) -> None:
         self.ledger.append({"kind": "treasury." + kind, **fields})
@@ -247,8 +252,10 @@ class Treasury:
         # this factory sells over, USDC on Base to the reserve, so a receipt
         # without an explicit chain is still a complete identity and two
         # spellings of the same transfer collide.
-        # Every income goes to the reserve: a receipt that names no recipient names
-        # the reserve, and a log index is an integer however it was spelled. Without
+        # Paid-call income goes to the reserve: a receipt that names no recipient names
+        # the reserve. (A vault leader's commission names the venue account it was
+        # paid to, and its custody; it is income all the same, never financing.)
+        # A log index is an integer however it was spelled. Without
         # this, one transfer reported by two paths ("None" against "5", "" against
         # the address) was two identities and booked twice.
         log_index = _log_index(detail.get("log_index"))
@@ -431,6 +438,28 @@ class Treasury:
                    or TRANSFER_BLOCKED}
         return gas
 
+    def _vault_pot(self) -> int | None:
+        """This account's equity across its vaults, in micro-USD, or None when unread.
+
+        Read from the venue the rail reads, through the journal (the ``lookup``
+        suffix classifies it read-only), so a replay sees the recorded answer.
+        """
+        target = getattr(self.rail, "target", self.rail)
+        read = getattr(getattr(target, "exchange", None), "vault_equities", None)
+        if read is None:
+            return None
+
+        def micro() -> int:
+            return sum(int(Decimal(str(p["equity_usd"])) * 1_000_000)
+                       for p in read()["positions"])
+
+        try:
+            if hasattr(self.ledger, "call"):
+                return self.ledger.call("treasury.vaults.lookup", micro, (), {})
+            return micro()
+        except Exception:  # noqa: BLE001 - an unread custodian is unknown, not empty
+            return None
+
     def refresh_pots(self) -> dict:
         """Persist a complete or explicitly unavailable observation before replacing the view."""
         if self._blocking():
@@ -456,7 +485,13 @@ class Treasury:
         except Exception:
             venue = reserve = None
         pots = {"venue": venue, "reserve": reserve, "seed": seed, "sellers": sellers}
-        pots.update({k: observed[k] for k in ("perps", "spot") if k in observed})
+        pots.update({k: observed[k] for k in ("perps", "spot", "vaults") if k in observed})
+        if self.vault_custody and "vaults" not in observed and venue is not None:
+            # A component of the venue pot like perps and spot, never more capital:
+            # an unread vault leaves the venue pot unknown, not short.
+            vaults = self._vault_pot()
+            pots["vaults"] = vaults
+            pots["venue"] = None if vaults is None else venue + vaults
         if hasattr(self.rail, "gas_view"):
             pots["gas"] = self._gas_view()
         credits = [seed, *sellers.values()]
@@ -1023,6 +1058,11 @@ class FakeRail:
             spot = int((acct.equity_usd - self.exchange._perp_equity()) * 1_000_000)
             perps = int(self.exchange._perp_equity() * 1_000_000)
             result.update(venue=perps + spot, perps=perps, spot=spot)
+            if getattr(self.exchange, "_vaults", None):
+                # Equity held in vaults is the venue's to hold and not the perps
+                # account's: a third component of the venue pot, never more capital.
+                vaults = int(self.exchange._vault_equity() * 1_000_000)
+                result.update(venue=perps + spot + vaults, vaults=vaults)
         return result
 
     def receive_income(self, micro: int) -> None:

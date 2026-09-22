@@ -174,6 +174,12 @@ def custody_view(rt: Any) -> dict[str, Any]:
         "base_reserve": reserve,
         "pending_conversions": _pending(treasury, pots_ns),
     }
+    if "vaults" in pots:
+        # Only a world with the vault surface has this account ([venue] vault_tools):
+        # equity this venue account holds in vaults, which is not perps collateral.
+        view["venue_vaults"] = (observed(pots_ns, balance_micro=pots["vaults"])
+                                if _micro(pots.get("vaults")) is not None
+                                else unavailable("vault equity unavailable", pots_ns))
     view["authority"] = {
         # Not an asset: the constitutional ceiling the assets above back.
         "kind": "authority", "unlocked_micro": rt.wallet.unlocked,

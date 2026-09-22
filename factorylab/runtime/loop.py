@@ -68,6 +68,7 @@ from factorylab.runtime.shared import (
 )
 from factorylab.runtime.subscriptions import SubscriptionBook, ThinkingMixin
 from factorylab.runtime.summary import SummaryMixin, _as_unit
+from factorylab.runtime.vault import VaultMixin
 from factorylab.runtime.venue import VenueMixin
 from factorylab.runtime.worlds import WorldManifest
 from factorylab.settlement.vocabulary import (
@@ -192,6 +193,7 @@ class Runtime(
     RoutingMixin,
     GovernanceMixin,
     VenueMixin,
+    VaultMixin,
     PricingMixin,
     FeedbackMixin,
     SummaryMixin,

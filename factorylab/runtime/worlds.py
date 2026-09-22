@@ -77,6 +77,10 @@ class ExchangeSpec:
     # enforces it. The venue's own account is the only limit on the principal used.
     # Dropped from the canonical JSON at its ``None`` default, as it always was.
     principal_usd: str | None = None
+    # Whether the venue's vaults are a surface of this world (``[venue] vault_tools``):
+    # the vault reads and writes are published, and a vault's equity is a custody pot.
+    # Off by default, and dropped from the canonical JSON when off.
+    vault_tools: bool = False
 
 
 @dataclass(frozen=True)
@@ -591,6 +595,9 @@ class WorldManifest:
         # existed: an added key may not rename a world that predates it.
         if payload["exchange"].get("principal_usd") is None:
             payload["exchange"].pop("principal_usd", None)
+        # A world without the vault surface hashes as it did before the key existed.
+        if payload["exchange"].get("vault_tools") is False:
+            payload["exchange"].pop("vault_tools")
         return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
     def manifest_hash(self) -> str:
@@ -1048,6 +1055,9 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             raise ValueError(
                 "venue.principal_usd must be a positive exact decimal string"
             ) from None
+    vault_tools = venue.get("vault_tools", False)
+    if type(vault_tools) is not bool:
+        raise ValueError("venue.vault_tools must be true or false")
     if (not isinstance(spot_pairs, list) or any(
             not isinstance(p, str) or p.count("/") != 1 or not p.endswith("/USDC")
             or not p.split("/")[0] for p in spot_pairs)
@@ -1063,6 +1073,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         start_cash_usd=str(ex.get("start_cash_usd", "100")),
         collateral_headroom_usd=headroom,
         principal_usd=principal,
+        vault_tools=vault_tools,
         shocks=tuple(
             Shock(int(sh["step"]), str(sh["coin"]), str(sh["multiplier"]))
             for sh in ex.get("shocks", [])

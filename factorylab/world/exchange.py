@@ -19,6 +19,7 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 from factorylab.world.events import WorldEvent, WorldEventKind
+from factorylab.world.vaults import FAKE_ACCOUNT
 
 
 class VenueUnavailable(RuntimeError):
@@ -242,6 +243,18 @@ class FakeExchange:
     min_order_value_usd: Decimal = Decimal(0)  # published and enforced; the fake has no floor
     listed_coins: tuple[str, ...] = ()
     listed_spot_pairs: tuple[str, ...] = ()
+    # Vaults (factorylab/world/vaults.py). The lockup is mainnet's documented day. The
+    # fake has no trading on a vault's own account, so a vault's equity moves only by
+    # ``vault_return_bps`` a step; and an outside depositor exists only when a caller
+    # scripts one: ``vault_depositor_usd`` enters every vault this account leads and
+    # leaves ``vault_depositor_steps`` steps later. All zero: no vault ever moves.
+    vault_lockup_ns: int = 86_400 * 10**9
+    vault_return_bps: Decimal = Decimal(0)
+    vault_depositor_usd: Decimal = Decimal(0)
+    vault_depositor_steps: int = 0
+    # The account this venue's books are, as a leader or depositor names it. A class
+    # attribute, not a field: the fake has one account and it is not configurable.
+    _address = FAKE_ACCOUNT
 
     def __post_init__(self) -> None:
         self._rng = random.Random(self.seed)
@@ -308,6 +321,8 @@ class FakeExchange:
         if ts_ns - self._last_funding_ns >= self.funding_interval_ns:
             self._last_funding_ns = ts_ns - (ts_ns % self.funding_interval_ns)
             events.extend(self._apply_funding())
+        if self.__dict__.get("_vaults"):
+            self._advance_vaults()
         return events
 
     def _next_price(self, coin: str) -> Decimal:
@@ -800,6 +815,272 @@ class FakeExchange:
                 )
             )
         return events
+
+    # ---- vaults: the venue's terms and their sources are in factorylab/world/vaults.py
+
+    def _vault_state(self) -> tuple[dict, list, dict]:
+        """The vault book, its ledger rows and its client results, created on first use.
+
+        Created lazily so a venue that never touches a vault checkpoints exactly as
+        it did before vaults existed.
+        """
+        d = self.__dict__
+        return (d.setdefault("_vaults", {}), d.setdefault("_vault_rows", []),
+                d.setdefault("_vault_results", {}))
+
+    def _vault_equity(self) -> Decimal:
+        """This account's equity across every vault it holds: a pot, never collateral."""
+        from factorylab.world.vaults import FAKE_ACCOUNT
+
+        return sum((v["followers"][FAKE_ACCOUNT]["equity"]
+                    for v in self.__dict__.get("_vaults", {}).values()
+                    if FAKE_ACCOUNT in v["followers"]), Decimal(0))
+
+    def _vault_row(self, kind: str, tx: str, **fields: Any) -> None:
+        """One row of this account's own venue ledger, in the normalised row shape."""
+        _, rows, _ = self._vault_state()
+        rows.append({"ts_ns": self._now_ns, "hash": tx, "type": kind, **fields})
+
+    def vault_create(self, name: str, description: str, usd: Decimal, *,
+                     client_id: str | None = None) -> dict:
+        """Guarantees one vault per client id, created only with the deposit and fee affordable.
+
+        The initial deposit and the creation fee both leave the perps account; the
+        deposit becomes this account's equity in the vault, the fee is gone.
+        """
+        from factorylab.world.vaults import (
+            CREATE_FEE_USD,
+            FAKE_ACCOUNT,
+            check_create,
+            row_hash,
+        )
+
+        vaults, _, results = self._vault_state()
+        if client_id is not None and client_id in results:
+            return dict(results[client_id])
+        reason = check_create(name, description, usd)
+        usd = Decimal(str(usd))
+        if reason is None and usd + CREATE_FEE_USD > self._perp_withdrawable():
+            reason = "insufficient perps collateral for the deposit and the creation fee"
+        if reason is not None:
+            result = {"status": "rejected", "error": reason}
+        else:
+            address = row_hash("vault", self.seed, len(vaults), name)[:42]
+            self._cash -= usd + CREATE_FEE_USD
+            vaults[address] = {
+                "name": name, "description": description, "leader": FAKE_ACCOUNT,
+                "created_ns": self._now_ns, "closed": False, "allow_deposits": True,
+                "followers": {FAKE_ACCOUNT: {"equity": usd, "basis": usd,
+                                             "entry_ns": self._now_ns,
+                                             "lockup_until_ns": self._now_ns
+                                             + self.vault_lockup_ns}}}
+            tx = row_hash("create", address, self._now_ns)
+            self._vault_row("vaultCreate", tx, vault=address, user=None, usd=usd,
+                            fee=CREATE_FEE_USD)
+            result = {"status": "ok", "vault": address, "usd": str(usd),
+                      "fee_usd": str(CREATE_FEE_USD), "hash": tx}
+        if client_id is not None:
+            results[client_id] = result
+        return dict(result)
+
+    def vault_transfer(self, vault: str, is_deposit: bool, usd: Decimal, *,
+                       client_id: str | None = None) -> dict:
+        """Guarantees one transfer per client id, between perps collateral and a vault."""
+        from factorylab.world.vaults import FAKE_ACCOUNT
+
+        _, _, results = self._vault_state()
+        if client_id is not None and client_id in results:
+            return dict(results[client_id])
+        result = self._vault_move(str(vault).lower(), FAKE_ACCOUNT, is_deposit,
+                                  Decimal(str(usd)))
+        if client_id is not None:
+            results[client_id] = result
+        return dict(result)
+
+    def _vault_move(self, vault: str, user: str, is_deposit: bool, usd: Decimal) -> dict:
+        """One deposit or withdrawal by ``user``, under the venue's documented terms.
+
+        This account's own moves change its perps cash and write its ledger rows; an
+        outside depositor's move changes only the vault, except that the commission on
+        its profit is paid to the leader, which writes a commission row when the
+        leader is this account.
+        """
+        from factorylab.world.vaults import (
+            FAKE_ACCOUNT,
+            LEADER_MIN_FRACTION,
+            commission_on,
+            leader_share_after,
+            row_hash,
+        )
+
+        vaults, rows, _ = self._vault_state()
+        v = vaults.get(vault)
+        if v is None:
+            return {"status": "rejected", "error": "unknown vault"}
+        if v["closed"]:
+            return {"status": "rejected", "error": "vault is closed"}
+        if not usd.is_finite() or usd <= 0:
+            return {"status": "rejected", "error": "usd must be positive"}
+        own, followers = user == FAKE_ACCOUNT, v["followers"]
+        total = sum((f["equity"] for f in followers.values()), Decimal(0))
+        leader_equity = followers.get(v["leader"], {}).get("equity", Decimal(0))
+        tx = row_hash("transfer", vault, user, is_deposit, usd, self._now_ns, len(rows))
+        if is_deposit:
+            if not v["allow_deposits"] and user != v["leader"]:
+                return {"status": "rejected", "error": "vault does not accept deposits"}
+            if own and usd > self._perp_withdrawable():
+                return {"status": "rejected", "error": "insufficient perps collateral"}
+            if user != v["leader"] and leader_equity / (total + usd) < LEADER_MIN_FRACTION:
+                return {"status": "rejected",
+                        "error": "deposit would take the leader below 5% of the vault"}
+            f = followers.setdefault(user, {"equity": Decimal(0), "basis": Decimal(0)})
+            f.update(equity=f["equity"] + usd, basis=f["basis"] + usd, entry_ns=self._now_ns,
+                     lockup_until_ns=self._now_ns + self.vault_lockup_ns)
+            if own:
+                self._cash -= usd
+                self._vault_row("vaultDeposit", tx, vault=vault, user=None, usd=usd)
+            return {"status": "ok", "vault": vault, "usd": str(usd), "hash": tx}
+        f = followers.get(user)
+        if f is None or usd > f["equity"]:
+            return {"status": "rejected",
+                    "error": "withdrawal exceeds the equity held in the vault"}
+        if self._now_ns < f["lockup_until_ns"]:
+            return {"status": "rejected",
+                    "error": f"deposit locked until {f['lockup_until_ns']} ns"}
+        if user == v["leader"]:
+            after = leader_share_after(f["equity"], total, usd)
+            if after is not None and after < LEADER_MIN_FRACTION:
+                return {"status": "rejected", "error": "leader share would fall below 5%"}
+        commission, basis_out = commission_on(f["equity"], f["basis"], usd)
+        f.update(equity=f["equity"] - usd, basis=f["basis"] - basis_out)
+        if f["equity"] == 0:
+            del followers[user]
+        net = usd - commission
+        if own:
+            self._cash += net
+            self._vault_row("vaultWithdraw", tx, vault=vault, user=user, requested=usd,
+                            commission=commission, closing_cost=Decimal(0), basis=basis_out,
+                            net=net)
+        rebate = Decimal(0)
+        if v["leader"] == FAKE_ACCOUNT and commission > 0:
+            # The leader is paid in the withdrawal's own transaction; when the leader
+            # withdrew, that is its own commission coming back.
+            self._cash += commission
+            self._vault_row("vaultLeaderCommission", tx, vault=None, user=FAKE_ACCOUNT,
+                            usd=commission)
+            rebate = commission if own else Decimal(0)
+        return {"status": "ok", "vault": vault, "usd": str(usd), "net": str(net),
+                "basis": str(basis_out), "commission": str(commission),
+                "commission_rebate": str(rebate), "hash": tx}
+
+    def vault_details(self, vault: str) -> dict:
+        """A vault's record in the surface's shape; an unknown vault is an error."""
+        from factorylab.world.vaults import FAKE_ACCOUNT, LEADER_MIN_FRACTION, LEADER_PROFIT_SHARE
+
+        v = self.__dict__.get("_vaults", {}).get(str(vault).lower())
+        if v is None:
+            return {"error": "vault not found"}
+        followers = v["followers"]
+        total = sum((f["equity"] for f in followers.values()), Decimal(0))
+        leader_equity = followers.get(v["leader"], {}).get("equity", Decimal(0))
+        mine = followers.get(FAKE_ACCOUNT)
+        own = mine["equity"] if mine else Decimal(0)
+        leading = v["leader"] == FAKE_ACCOUNT
+        withdrawable = (max(Decimal(0), (own - LEADER_MIN_FRACTION * total)
+                            / (1 - LEADER_MIN_FRACTION)) if leading and len(followers) > 1
+                        else own)
+        return {"vault": str(vault).lower(), "name": v["name"], "description": v["description"],
+                "leader": v["leader"], "is_leader": leading, "equity_usd": total,
+                "depositors": len([u for u in followers if u != v["leader"]]),
+                "depositors_capped": False,
+                "leader_fraction": leader_equity / total if total else Decimal(0),
+                "leader_commission": LEADER_PROFIT_SHARE, "own_equity_usd": own,
+                "own_lockup_until_ns": mine["lockup_until_ns"] if mine else None,
+                "max_withdrawable_usd": withdrawable.quantize(Decimal("0.000001"),
+                                                              rounding=ROUND_DOWN),
+                "allow_deposits": v["allow_deposits"], "is_closed": v["closed"],
+                "observed_at_ns": self._now_ns}
+
+    def vault_equities(self) -> dict:
+        """This account's vault positions and the vaults it leads."""
+        from factorylab.world.vaults import FAKE_ACCOUNT
+
+        vaults = self.__dict__.get("_vaults", {})
+        return {"positions": [{"vault": a, "equity_usd": v["followers"][FAKE_ACCOUNT]["equity"],
+                               "locked_until_ns": v["followers"][FAKE_ACCOUNT]["lockup_until_ns"]}
+                              for a, v in vaults.items() if FAKE_ACCOUNT in v["followers"]],
+                "leading": [{"vault": a, "name": v["name"]} for a, v in vaults.items()
+                            if v["leader"] == FAKE_ACCOUNT],
+                "observed_at_ns": self._now_ns}
+
+    def vault_ledger(self, since_ns: int) -> list[dict]:
+        """This account's vault ledger rows at or after an inclusive cursor, oldest first."""
+        return [dict(r) for r in self.__dict__.get("_vault_rows", []) if r["ts_ns"] >= since_ns]
+
+    def vault_lookup(self, client_id: str, *, operation: str, args: dict, since_ns: int = 0,
+                     claimed: frozenset = frozenset(), position: int = 0,
+                     peers: int = 1) -> dict:
+        """Resolve a vault write from this account's own ledger rows, as the live venue
+        must: the fake answers by the row, never by the client id it remembers."""
+        from factorylab.world.vaults import match_intent
+
+        return match_intent(self.vault_ledger(since_ns), operation, args, FAKE_ACCOUNT,
+                            claimed=claimed, position=position, peers=peers)
+
+    def simulate_vault(self, name: str, leader: str, usd: Decimal) -> str:
+        """An outside party's vault, for this account to deposit into; returns its address."""
+        from factorylab.world.vaults import row_hash
+
+        vaults, _, _ = self._vault_state()
+        address = row_hash("outside", leader, len(vaults), name)[:42]
+        vaults[address] = {"name": name, "description": name, "leader": leader.lower(),
+                           "created_ns": self._now_ns, "closed": False, "allow_deposits": True,
+                           "followers": {leader.lower(): {
+                               "equity": Decimal(usd), "basis": Decimal(usd),
+                               "entry_ns": self._now_ns, "lockup_until_ns": self._now_ns}}}
+        return address
+
+    def simulate_deposit(self, vault: str, user: str, usd: Decimal) -> dict:
+        """An outside depositor's deposit: money from outside the factory enters the vault."""
+        return self._vault_move(str(vault).lower(), user.lower(), True, Decimal(usd))
+
+    def simulate_withdraw(self, vault: str, user: str, usd: Decimal) -> dict:
+        """An outside depositor's withdrawal, paying the leader its commission."""
+        return self._vault_move(str(vault).lower(), user.lower(), False, Decimal(usd))
+
+    def mark_vaults(self, bps: Decimal) -> None:
+        """Every open vault's followers gain or lose ``bps`` of their equity, pro rata."""
+        factor = 1 + Decimal(bps) / Decimal(10_000)
+        for v in self.__dict__.get("_vaults", {}).values():
+            if not v["closed"]:
+                for f in v["followers"].values():
+                    f["equity"] = (f["equity"] * factor).quantize(Decimal("0.000001"),
+                                                                  rounding=ROUND_DOWN)
+
+    def _advance_vaults(self) -> None:
+        """One step of the scripted vault world: the return, then the outside depositor."""
+        from factorylab.world.vaults import FAKE_ACCOUNT
+
+        if self.vault_return_bps:
+            self.mark_vaults(self.vault_return_bps)
+        if not self.vault_depositor_usd:
+            return
+        depositor = "0x" + "de9051".rjust(40, "0")
+        entered = self.__dict__.setdefault("_depositor_entered", {})
+        for address, v in self.__dict__["_vaults"].items():
+            if v["leader"] != FAKE_ACCOUNT or v["closed"]:
+                continue
+            if address not in entered:
+                if self.simulate_deposit(address, depositor,
+                                         self.vault_depositor_usd)["status"] == "ok":
+                    entered[address] = self._step
+                continue
+            held = v["followers"].get(depositor)
+            if (entered[address] is not None and held is not None
+                    and self._step - entered[address] >= self.vault_depositor_steps
+                    and self._now_ns >= held["lockup_until_ns"]):
+                if self.simulate_withdraw(address, depositor, held["equity"])["status"] == "ok":
+                    entered[address] = None
 
 
 # --------------------------------------------------------------------- hyperliquid
@@ -1571,6 +1852,149 @@ class HyperliquidExchange:
             return {"status": "rejected", "error": str(resp)}
         except Exception as exc:
             return {"status": "rejected", "error": f"{type(exc).__name__}: {exc}"}
+
+    # ---- vaults: the venue's terms and their sources are in factorylab/world/vaults.py
+
+    def vault_details(self, vault: str) -> dict:
+        """``vaultDetails`` for one vault, with this account's own follower state."""
+        import time
+
+        from factorylab.world.vaults import details_from_wire
+
+        body = {"type": "vaultDetails", "vaultAddress": vault,
+                **({"user": self._address} if self._address else {})}
+        raw = self._guarded("vault_details", lambda: self._info.post("/info", body))
+        return details_from_wire(raw, self._address, time.time_ns())
+
+    def vault_equities(self) -> dict:
+        """``userVaultEquities`` and ``leadingVaults`` for this account, read together."""
+        import time
+
+        if not self._address:
+            raise RuntimeError("vault_equities() needs an address or a private key")
+        held = self._guarded("user_vault_equities",
+                             lambda: self._info.user_vault_equities(self._address))
+        leading = self._guarded("leading_vaults", lambda: self._info.post(
+            "/info", {"type": "leadingVaults", "user": self._address}))
+        positions = []
+        for row in held if isinstance(held, list) else []:
+            lock = row.get("lockedUntilTimestamp")
+            positions.append({"vault": str(row["vaultAddress"]).lower(),
+                              "equity_usd": Decimal(str(row["equity"])),
+                              "locked_until_ns": int(lock) * NS_PER_MS
+                              if isinstance(lock, int) else None})
+        return {"positions": positions,
+                "leading": [{"vault": str(r["address"]).lower(), "name": r.get("name")}
+                            for r in (leading if isinstance(leading, list) else [])],
+                "observed_at_ns": time.time_ns()}
+
+    def vault_ledger(self, since_ns: int) -> list[dict]:
+        """Vault rows of this account's non-funding ledger at or after an inclusive cursor.
+
+        Paginated and failing closed exactly like ``funding_payments``: a stalled
+        full page raises rather than silently skipping its tail.
+        """
+        from factorylab.world.vaults import ledger_rows
+
+        if type(since_ns) is not int or since_ns < 0:
+            raise ValueError("since_ns must be nonnegative integer nanoseconds")
+        if not self._address:
+            raise RuntimeError("vault_ledger() needs an address or a private key")
+        start = since_ns // NS_PER_MS
+        rows: dict[tuple, dict] = {}
+        while True:
+            page = self._guarded("non_funding_ledger", lambda start=start:
+                                 self._info.user_non_funding_ledger_updates(self._address, start))
+            if not isinstance(page, list):
+                raise ValueError("invalid non-funding ledger response")
+            for row in ledger_rows(page):
+                if row["ts_ns"] >= since_ns:
+                    rows[(row["hash"], row["type"], row["vault"], str(row.get("usd")),
+                          str(row.get("requested")))] = row
+            if len(page) < 500:
+                break
+            latest = max((int(r.get("time", 0)) for r in page), default=start)
+            if latest <= start:
+                raise ValueError("non-funding ledger pagination stalled at a full timestamp")
+            start = latest
+        return sorted(rows.values(), key=lambda r: (r["ts_ns"], r["hash"], r["type"]))
+
+    def vault_lookup(self, client_id: str, *, operation: str, args: dict, since_ns: int,
+                     claimed: frozenset = frozenset(), position: int = 0,
+                     peers: int = 1) -> dict:
+        """Resolve a vault write by its own ledger row; never submits anything."""
+        from factorylab.world.vaults import match_intent
+
+        try:
+            return match_intent(self.vault_ledger(since_ns), operation, args, self._address,
+                                claimed=claimed, position=position, peers=peers)
+        except Exception as exc:
+            return {"status": "uncertain", "error": f"lookup exception: {type(exc).__name__}"}
+
+    def _vault_submit(self, client_id: str | None, submit) -> dict:
+        """Submit once per identity. Neither vault action carries a client order id, so
+        a seen identity is answered from what it received, never sent again."""
+        results = self.__dict__.setdefault("_vault_results", {})
+        if client_id is not None and client_id in results:
+            return dict(results[client_id])
+        if self._exchange is None:
+            return {"status": "rejected", "error": "no signing key"}
+        if client_id is not None:
+            results[client_id] = {"status": "uncertain", "error": "submission unacknowledged"}
+        try:
+            resp = submit()
+            if isinstance(resp, dict) and resp.get("status") == "ok":
+                response = resp.get("response") or {}
+                result = {"status": "ok"}
+                if isinstance(response, dict) and isinstance(response.get("data"), str):
+                    result["vault"] = response["data"].lower()
+            elif isinstance(resp, dict) and resp.get("status") == "err":
+                result = {"status": "rejected", "error": str(resp.get("response"))[:300]}
+            else:
+                result = {"status": "uncertain", "error": "unknown response shape"}
+        except Exception as exc:
+            # Exception messages may carry credentials or signed request bodies.
+            result = {"status": "uncertain", "error": f"submit exception: {type(exc).__name__}"}
+        if client_id is not None:
+            results[client_id] = result
+        return dict(result)
+
+    def vault_create(self, name: str, description: str, usd: Decimal, *,
+                     client_id: str | None = None) -> dict:
+        """``createVault``, signed as an L1 action. The SDK has no helper for it; the
+        action's fields are the TS SDK's schema, in its order (unverified on the wire)."""
+        from factorylab.world.vaults import check_create
+
+        reason = check_create(name, description, usd)
+        if reason is not None:
+            return {"status": "rejected", "error": reason}
+        micro = int(Decimal(str(usd)) * 1_000_000)
+
+        def submit():
+            from hyperliquid.utils.constants import MAINNET_API_URL
+            from hyperliquid.utils.signing import get_timestamp_ms, sign_l1_action
+
+            ex = self._exchange
+            nonce = get_timestamp_ms()
+            action = {"type": "createVault", "name": name, "description": description,
+                      "initialUsd": micro, "nonce": nonce}
+            signature = sign_l1_action(ex.wallet, action, None, nonce, ex.expires_after,
+                                       ex.base_url == MAINNET_API_URL)
+            return ex._post_action(action, signature, nonce)
+
+        result = self._vault_submit(client_id, submit)
+        return {**result, "usd": str(usd)} if result["status"] == "ok" else result
+
+    def vault_transfer(self, vault: str, is_deposit: bool, usd: Decimal, *,
+                       client_id: str | None = None) -> dict:
+        """``vaultTransfer`` through the SDK; ``usd`` goes on the wire as micro-USDC."""
+        micro = int(Decimal(str(usd)) * 1_000_000)
+        if micro <= 0:
+            return {"status": "rejected", "error": "usd must be positive"}
+        result = self._vault_submit(client_id, lambda: self._exchange.vault_usd_transfer(
+            vault, is_deposit, micro))
+        return ({**result, "vault": str(vault).lower(), "usd": str(usd)}
+                if result["status"] == "ok" else result)
 
     # ---- helpers
 
