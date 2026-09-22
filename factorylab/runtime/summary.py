@@ -101,6 +101,23 @@ def _equity_or_none(exchange: Any) -> str | None:
         return None
 
 
+def _vault_equity_or_none(exchange: Any) -> str | None:
+    """This account's equity across its vaults: held at the venue, not in its account.
+
+    ``exchange_equity_usd`` is the trading account alone, so money moved into a vault
+    would read there as a loss; this is the figure beside it. ``None`` when the venue
+    has no vaults to read or would not say.
+    """
+    read = getattr(exchange, "vault_equities", None)
+    if read is None:
+        return None
+    try:
+        return str(sum((Decimal(str(p["equity_usd"])) for p in read()["positions"]),
+                       Decimal(0)))
+    except Exception:  # noqa: BLE001 - an unread custodian is unknown, not empty
+        return None
+
+
 def _as_unit(value: Any) -> float | None:
     if isinstance(value, bool) or not isinstance(value, int | float):
         return None
@@ -190,6 +207,7 @@ class SummaryMixin:
                 "positions_closed_at_exit": False,
             },
             "exchange_equity_usd": _equity_or_none(self.exchange.target),
+            "vault_equity_usd": _vault_equity_or_none(self.exchange.target),
             "live": self.live,
             "evaluation_boundary": "registered accepts → selected emits → return channel",
             "charter_edition": self.charter.edition,

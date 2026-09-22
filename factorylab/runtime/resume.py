@@ -364,13 +364,16 @@ class RecoveryJournal:
                                           unbilled=item.get("unbilled", False),
                                           carry=item.get("carry"))
                 return result
-            if name in ("exchange.place", "exchange.close", "exchange.cancel"):
+            if name in ("exchange.place", "exchange.close", "exchange.cancel",
+                        "exchange.vault_create", "exchange.vault_transfer"):
                 from factorylab.world.exchange import OrderResult
 
                 # Complete the interrupted journal call with uncertainty, then let
                 # the normal intent owner query the venue using its persisted identity.
-                result = ({"status": "uncertain"} if name == "exchange.cancel" else
-                          OrderResult(None, "uncertain", Decimal(0), None))
+                # A vault write is resolved from its own venue ledger row, never resent.
+                result = (OrderResult(None, "uncertain", Decimal(0), None)
+                          if name in ("exchange.place", "exchange.close")
+                          else {"status": "uncertain"})
                 self.append({"kind": "io.result", "call": seq, "result": encode(result)})
                 return result
             if name in ("market.complete", "connector.paid_fetch"):
@@ -440,12 +443,18 @@ def _read_only(name: str) -> bool:
                                          "gas_view")
     ):
         return True
+    if name.startswith("polymarket.") and name.rsplit(".", 1)[-1] in (
+            "search_markets", "market", "market_of_token", "midpoint"):
+        return True  # the public Polymarket reads (world/polymarket.py)
     return name.rsplit(".", 1)[-1] in (
         "mids", "account", "funding", "fills", "candles", "order_book", "funding_history",
         "open_orders", "balance_micro", "balance_of", "affordable", "catalogue", "discover",
         "quote", "fetch",
         "registration_price", "seller_models", "funding_payments", "lookup",
         "reserve_balance", "discover_index", "instruments",
+        # The vault surface's reads: a vault's record, this account's vault equities,
+        # its vault ledger rows, and the ledger match that resolves a lost write.
+        "vault_details", "vault_equities", "vault_ledger", "vault_lookup",
     )
 
 
@@ -533,6 +542,9 @@ _RUNTIME_FIELDS = (
     "catalogue_completion_limits", "sellers",
     "registration_feedback", "tool_jail_available", "vote_handles", "voted_amendments",
     "order_intents", "market_index", "unresolved_x402",
+    # Vault writes by client id, the vaults this world's seats created or hold, and
+    # the cursor of the venue's vault ledger rows already read.
+    "vault_intents", "vault_book", "vault_ledger_cursor_ns",
     "exposure_evidence", "pending_meta", "verdict_outcomes", "consequence_mix",
     # Verdict commitments already closed out and already graded, by judge handle: a
     # restored runtime never re-opens, re-closes or re-grades one it finished.
@@ -770,6 +782,10 @@ def runtime_state(rt) -> Checkpoint:
         "fake_exchange": encode(vars(rt.exchange.target)) if rt.exchange.deterministic else None,
         "fake_provider": encode(vars(rt.provider.target)) if rt.provider.deterministic else None,
     })
+    if getattr(rt, "polymarket", None) is not None:
+        # Only a world that enables event markets carries this key, so every other
+        # checkpoint keeps its shape.
+        state["polymarket"] = encode(rt.polymarket.state())
     # The diary this state descends from, beside the mapping and never in it.
     state.diary = rt.diary_id or rt.ledger.diary_id
     state.origin = rt.ledger.path
@@ -945,6 +961,8 @@ def restore_runtime(rt, state: dict) -> None:
                 raise ResumeError(f"{name} requires the original deterministic adapter")
             component.target.__dict__.clear()
             component.target.__dict__.update(decode(state[name]))
+    if state.get("polymarket") is not None and getattr(rt, "polymarket", None) is not None:
+        rt.polymarket.restore(decode(state["polymarket"]))
     bind_launch_nonce(rt.exchange, rt.launch_nonce)
     for model_id in rt.sellers:
         rt.market.register(model_id, rt.prices.price(model_id).per_request_micro)

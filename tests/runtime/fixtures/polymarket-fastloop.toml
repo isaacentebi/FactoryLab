@@ -14,7 +14,12 @@
 # edition 3 charter (C3) and the coordinator ratifies it on this roster; only then does the
 # roster digest belong here. `roster_sha256` is deliberately absent until that vote: the
 # edition 2 digest names the edition 2 roster and this is not it.
-name = "edition5-testnet-rehearsal"
+# TEST FIXTURE, not a world: tests/runtime/test_polymarket_fastloop.py runs it through
+# scripts/fastloop.py on the simulated venues. It is worlds/edition5-testnet-rehearsal.toml
+# unchanged except for this name and the [polymarket] block at the end, which enables
+# Polymarket event markets on the seeded simulated venue (runtime/polymarket.py). No world
+# under worlds/ enables the block.
+name = "polymarket-fastloop"
 seed = 3
 # $300 of inference backing, precommitted whole (GPT-6 §12.1). $120 is released at genesis
 # and the remaining $180 in three weekly tranches below.
@@ -380,9 +385,6 @@ principal_usd = "120"
 # canonical name and a rehearsable lot, and HYPE/USDC is the spot HYPE that pays the
 # population's own Core gas.
 spot_pairs = ["PURR/USDC", "HYPE/USDC"]
-# The venue's vaults are not a surface of this world. `vault_tools = true` here would
-# publish venue.vault_details/_positions/_create/_deposit/_withdraw and make vault
-# equity a venue pot (docs/manifest.md, "Vaults"); it changes the manifest hash.
 
 # Edition 3 charter as ratified on 15 September 2026 (docs/charter/edition3-ratified.toml,
 # draft docs/charter/edition3-draft.toml, decisions docs/plans/edition3.md C3): five norms
@@ -418,3 +420,14 @@ lambda = 0.1
 [prompt]
 
 mode = "compact"
+
+[polymarket]
+enabled = true
+venue = "fake"
+# The simulated pot's opening USDC. It is its own custody: it never borrows the venue
+# principal above or the reserve.
+collateral_usd = "40"
+read_price_usd = "0.001"
+max_order_usd = "10"
+max_open_usd = "30"
+max_orders_per_window = 20

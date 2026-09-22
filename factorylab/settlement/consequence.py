@@ -286,6 +286,28 @@ class ReturnConsequences:
         elif kind == "OrderRejected" and payload.get("order_id") is not None:
             self.cancel(str(payload["order_id"]), event)
 
+    def redeem(self, coin: str, payout: str, event: int, facts: dict) -> dict[str, int]:
+        """Close every event lot of ``coin`` at its market's resolution, with evidence first.
+
+        Guarantees the resolution is ledgered before any lot moves, and that each
+        decision that held the token is given one ``resolution`` execution receipt
+        naming what it held, the payout and what that realised: a resolution is a
+        fact about the world, addressed to the decisions it settled. Returns the
+        signed micro-USD realised per handle, floored once.
+        """
+        table, credited = self.table.redeem(coin, payout)
+        if table is self.table:
+            return {}
+        self._apply("resolution", {"coin": coin, "payout": str(payout), "event": event,
+                                   **facts}, table)
+        realized = {}
+        for handle, net in credited.items():
+            realized[handle] = net.numerator // net.denominator
+            self._execution("resolution", handle, event, {
+                **facts, "coin": coin, "payout": str(payout),
+                "realized_micro": realized[handle]})
+        return realized
+
     def resolve(self, event: int) -> list[Payoff]:
         """Persist all newly fixed outcomes before publishing the successor accounting state."""
         # An outcome censored for documented unobservability was fixed the moment

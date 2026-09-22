@@ -9,6 +9,17 @@ from decimal import Decimal
 from typing import Any
 
 from factorylab.world.exchange import Exchange, Order, OrderKind
+from factorylab.world.vaults import (
+    ADDRESS_PATTERN,
+    CREATE_FEE_USD,
+    DESCRIPTION_LENGTH,
+    MIN_CREATE_USD,
+    NAME_LENGTH,
+)
+
+#: The vault surface's writes and reads (``[venue] vault_tools``).
+VAULT_WRITES = frozenset({"venue.vault_create", "venue.vault_deposit", "venue.vault_withdraw"})
+VAULT_READS = frozenset({"venue.vault_details", "venue.vault_positions"})
 
 
 def seed_markets(exchange, spec) -> None:
@@ -99,9 +110,13 @@ def _validate(value: Any, schema: dict, path: str = "args") -> None:
             raise ValueError(f"{path}: must exceed {schema['exclusiveMinimum']}")
     if kind == "string":
         if len(value) < schema.get("minLength", 0):
-            raise ValueError(f"{path}: must not be empty")
+            raise ValueError(f"{path}: must not be empty" if schema.get("minLength", 0) <= 1
+                             else f"{path}: at least {schema['minLength']} characters")
+        if "maxLength" in schema and len(value) > schema["maxLength"]:
+            raise ValueError(f"{path}: at most {schema['maxLength']} characters")
         if "pattern" in schema and re.fullmatch(schema["pattern"], value) is None:
-            raise ValueError(f"{path}: invalid decimal string")
+            raise ValueError(f"{path}: invalid address" if schema["pattern"] == ADDRESS_PATTERN
+                             else f"{path}: invalid decimal string")
 
 
 def _json_value(value: Any) -> Any:
@@ -357,3 +372,69 @@ class VenueTools:
             return ex.close(args["coin"], None if size is None else Decimal(str(size)),
                             market=args.get("market", "perp"))
         return ex.set_leverage(args["coin"], args["leverage"], market=args.get("market", "perp"))
+
+
+def vault_specs(read_price_micro: int) -> tuple[dict[str, dict], dict[str, list[dict]]]:
+    """Guarantees the vault surface's contracts and one schema-valid example for each.
+
+    Descriptions state what a call does and what the venue charges or refuses, and
+    nothing about what a vault is for. The public vault record is priced like the
+    other public venue reads; this account's own positions are free like
+    ``venue.positions``; the writes are free like every venue write.
+    """
+    address = {"type": "string", "pattern": ADDRESS_PATTERN}
+    usd = {
+        "anyOf": [
+            {"type": "number", "exclusiveMinimum": 0},
+            {"type": "string",
+             "pattern": r"^(?=[0-9.]*[1-9])(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$"},
+        ]
+    }
+    definitions = [
+        ("venue.vault_details",
+         "A vault's venue record: name, leader, total equity, depositor count, leader "
+         "fraction and commission, whether it takes deposits or is closed, and this "
+         "account's own equity, lockup end and withdrawable amount in it.",
+         {"vault": address}, ["vault"], read_price_micro),
+        ("venue.vault_positions",
+         "This account's equity in each vault it holds, with each lockup end, and the "
+         "vaults it leads.", {}, [], 0),
+        ("venue.vault_create",
+         "Create a vault led by this account, moving usd from perps collateral into it. "
+         f"The venue also charges a {CREATE_FEE_USD} USDC creation fee from perps "
+         f"collateral. usd is at least {MIN_CREATE_USD}; name ({NAME_LENGTH[0]}-"
+         f"{NAME_LENGTH[1]} characters) and description ({DESCRIPTION_LENGTH[0]}-"
+         f"{DESCRIPTION_LENGTH[1]}) cannot be changed later. Returns the vault address.",
+         {"name": {"type": "string", "minLength": NAME_LENGTH[0],
+                   "maxLength": NAME_LENGTH[1]},
+          "description": {"type": "string", "minLength": DESCRIPTION_LENGTH[0],
+                          "maxLength": DESCRIPTION_LENGTH[1]},
+          "usd": usd}, ["name", "description", "usd"], 0),
+        ("venue.vault_deposit",
+         "Move usd from perps collateral into a vault. The deposit is locked until the "
+         "lockup end venue.vault_details reports.",
+         {"vault": address, "usd": usd}, ["vault", "usd"], 0),
+        ("venue.vault_withdraw",
+         "Move usd of this account's equity in a vault back to perps collateral. Refused "
+         "before the lockup end, and in a vault this account leads when its share would "
+         "fall below 5%. The venue pays a withdrawal net of the leader's commission on "
+         "the profit of the part withdrawn.",
+         {"vault": address, "usd": usd}, ["vault", "usd"], 0),
+    ]
+    specs = {
+        tool_id: {"id": tool_id, "description": description,
+                  "args_schema": {"type": "object", "properties": deepcopy(properties),
+                                  "required": required, "additionalProperties": False},
+                  "price_micro_per_call": price, "kind": "venue"}
+        for tool_id, description, properties, required, price in definitions
+    }
+    vault = "0x" + "0" * 40
+    examples = {
+        "venue.vault_details": [{"vault": vault}],
+        "venue.vault_positions": [{}],
+        "venue.vault_create": [{"name": "example", "description": "Example description.",
+                                "usd": "100"}],
+        "venue.vault_deposit": [{"vault": vault, "usd": "10"}],
+        "venue.vault_withdraw": [{"vault": vault, "usd": "10"}],
+    }
+    return specs, examples

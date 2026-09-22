@@ -68,6 +68,7 @@ from factorylab.runtime.shared import (
 )
 from factorylab.runtime.subscriptions import SubscriptionBook, ThinkingMixin
 from factorylab.runtime.summary import SummaryMixin, _as_unit
+from factorylab.runtime.vault import VaultMixin
 from factorylab.runtime.venue import VenueMixin
 from factorylab.runtime.worlds import WorldManifest
 from factorylab.settlement.vocabulary import (
@@ -192,6 +193,7 @@ class Runtime(
     RoutingMixin,
     GovernanceMixin,
     VenueMixin,
+    VaultMixin,
     PricingMixin,
     FeedbackMixin,
     SummaryMixin,
@@ -397,6 +399,10 @@ class Runtime(
         self._observe_delivered_event(ev)
         if ev.kind is EventKind.TICK:
             self._reconcile_orders()
+            if getattr(self, "polymarket", None) is not None:
+                from factorylab.runtime import polymarket
+
+                polymarket.tick(self)  # its own intents, fills and resolutions
             self._collect_income()  # C10: each receipt credits its owning seat before the tick
             self.treasury.tick(self.clock.now_ns)
             self._classify_financing()  # a conversion confirmed this tick is spendable now

@@ -996,6 +996,41 @@ are allowed).
 USDC through the same intent, submission and receipt journal. Venue pots show
 `perps` and `spot` as components of `venue`, never additional capital.
 
+## Vaults
+
+`venue.vault_tools` is a boolean, default `false`, fixed at launch, and dropped
+from the canonical JSON when false (so no existing world's hash changes). When
+true the world publishes the venue's vaults as a surface: `venue.vault_details`
+(priced like the other public venue reads) and `venue.vault_positions` (free),
+and the consequence writes `venue.vault_create`, `venue.vault_deposit` and
+`venue.vault_withdraw` (free, like every venue write). The venue's terms and
+their sources are in `factorylab/world/vaults.py`: a 10% leader commission on a
+depositor's withdrawn profit, a leader's 5% minimum share, a 100 USDC minimum
+initial deposit, a 10,000 USDC creation fee, and a depositor lockup (1 day on
+mainnet). Each write has a durable `vault.intent` under a stable client id
+before submission, is refused with a reason when free perps collateral (the
+pot `_order_collateral` weighs orders against), the vault record or the terms
+would refuse it, and an uncertain acknowledgement is resolved from the
+transfer's own `userNonFundingLedgerUpdates` row, never by sending it again.
+Equity in vaults is the `vaults` component of the `venue` pot and the
+`venue_vaults` custody account, never additional capital. A withdrawal's
+difference from its basis is venue P&L (`venue.settled`, custody
+`venue_vaults`); the creation fee is venue P&L on `venue_perps`. A
+`vaultLeaderCommission` row paid to this account is income (`income.earned`,
+service `vault.leader_commission`, custody `venue_perps`), except the
+commission a leader's own withdrawal is charged and repaid in the same
+transaction, which is ledgered `vault.commission_returned` and booked as
+nothing. Each acknowledged write is bound to its own venue transaction hash
+(checkpointed with the intent); a row bound to one write never confirms
+another, and writes alike in operation, vault and amount are paired with their
+rows in submission order. A commission row names no vault, so it is income only
+while every vault the account leads is one this world created, and never on a
+page with a vault row that could not be read (`vault.commission_skipped`
+otherwise). A withdrawal whose row never arrives within the poll bound is
+ledgered `vault.unbooked`. At a kill, vault equity is residual exposure
+(`wind_down_pending`), never withdrawn by the wind-down, and the summary reports
+`vault_equity_usd` beside `exchange_equity_usd`.
+
 Class transfer confirmation requires a unique hashed `accountClassTransfer`
 row matching the signed direction and exact amount, executed within the
 inclusive interval from the nonce to nonce plus `CLASS_EXECUTION_TOLERANCE_MS`
@@ -1115,6 +1150,61 @@ invocation, like a fetch's. A successful `web.search` also permits one additiona
 round, the same one a successful `connector.fetch` permits: ordinary population, note,
 artifact and outcome tools, then a final model answer, so a seat can search and act within
 one wake. A search that returned no results buys no extra round.
+
+## Event markets: `[polymarket]`
+
+`[polymarket]` is off by default. A manifest without it, or with `enabled = false` and any
+other keys at all, hashes exactly as it did before the block existed: a disabled block
+registers nothing its keys could limit, so it is dropped from the canonical JSON whole. No
+world under `worlds/` enables it. The
+keys, all fixed for the world's life:
+
+| key | default | meaning |
+|---|---|---|
+| `enabled` | `false` | publish the Polymarket tools and open the `polymarket` custody pot |
+| `venue` | `"fake"` | `fake`: the seeded simulated venue (`world/polymarket.py`, `FakePolymarket`) for reads and writes. `live`: the public Gamma and CLOB read APIs only; no write tool and no pot are registered, because live order signing on Polygon is not built |
+| `read_price_usd` | `"0.001"` | the flat price of each read tool |
+| `collateral_usd` | `"0"` | the simulated pot's opening USDC; refused with `venue = "live"` |
+| `max_order_usd` | `"10"` | the most one order's notional (`price x size`) may be |
+| `max_open_usd` | `"100"` | the most the pot may have committed: tokens held at cost plus resting buys |
+| `max_orders_per_window` | `20` | orders placed per reserve window |
+| `seed` | `0` | the simulated venue's seed |
+
+Tools: `polymarket.search {query, limit?}`, `polymarket.market {market_id}` and
+`polymarket.book {token_id, depth?}` are reads priced at `read_price_usd`. Their answers
+carry text third parties wrote (questions, rules, slugs, resolution sources), so they are
+outside text exactly as a `connector.fetch` body is: prose of at least
+`MIN_PROTECTED_BODY_CHARS` is protected, and a round that read them runs population, note,
+artifact and outcome tools only, so market text cannot reach a write in the same wake. With
+the simulated venue, `polymarket.positions {}` reads the pot (free), and
+`polymarket.place_limit {token_id, side, size, price}` and `polymarket.cancel {order_id}`
+write (free). The writes are consequence writes: only a producing decision with an open
+consequence account may make them, each has a client id (`<handle>:<slot>`) and a durable
+`polymarket.intent` before submission, a repeat reconciles and never resubmits, an
+unanswered intent is polled at most `UNCERTAIN_ORDER_POLLS` times and then released as
+unknown, and a batch that writes is weighed whole with the venue's writes.
+
+Custody: collateral is the `polymarket` pot, its own account in `custody_view` and in
+`world.pots` (valued at USDC plus tokens at cost, so a buy does not move the total; tokens
+listed by count and cost). An order is weighed against that pot alone, with the market's own
+tick and minimum size, and never against the Hyperliquid accounts or the reserve. What the pot
+settles is ledgered as `venue.settled` with `custody = "polymarket"` and summed on the pot's
+own books, never in `BudgetBook.book_venue`; what a decision's event positions realise is its
+owner's claim on the pot (`polymarket.claim`), never a venue claim, so `_classify_financing`
+cannot convert a Polymarket profit out of Hyperliquid money. Every tick the pot reconciles
+`opening + settled == USDC + tokens at cost` and ledgers `polymarket.drift` beyond one
+micro-USD. A kill cancels resting orders only: held tokens are paid for, cannot be liquidated
+and resolve into the pot, so they are reported as residual exposure (`wind_down_pending`).
+
+Settlement: a fill opens an `event` lot, marked every tick at the CLOB midpoint. At the
+consequence backstop a held lot is marked there like a spot lot, so the decision is scored on
+the normal horizon at the market's price: the market's anticipatory settlement (essay
+II.IV.b). The resolution later closes every lot on the token at its payout (1, 0, or 0.5 on a
+50-50), ledgered as `consequence.resolution` with one `resolution` execution receipt per
+decision, and its money reaches the owner through `_settle_late` without rescoring. A token
+with no midpoint loses its mark (`polymarket.mark_unavailable`) and its decision falls back as
+any unobserved consequence does. Outcome labels are third-party text: outside the jailed reads
+every surface carries ids and a normalised `YES`, `NO` or `outcome <n>`.
 
 ## New kinds of work: reward shapes and predicates
 

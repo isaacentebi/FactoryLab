@@ -177,6 +177,19 @@ def custody_view(rt: Any) -> dict[str, Any]:
         "base_reserve": reserve,
         "pending_conversions": _pending(treasury, pots_ns),
     }
+    if "vaults" in pots:
+        # Only a world with the vault surface has this account ([venue] vault_tools):
+        # equity this venue account holds in vaults, which is not perps collateral.
+        view["venue_vaults"] = (observed(pots_ns, balance_micro=pots["vaults"])
+                                if _micro(pots.get("vaults")) is not None
+                                else unavailable("vault equity unavailable", pots_ns))
+    from factorylab.runtime.polymarket import custody as polymarket_custody
+
+    polymarket = polymarket_custody(rt)
+    if polymarket is not None:
+        # The Polygon collateral pot of a world that enables event markets. It is
+        # its own custodian and backs only its own orders (runtime/polymarket.py).
+        view["polymarket"] = polymarket
     view["authority"] = {
         # Not an asset: the constitutional ceiling the assets above back.
         "kind": "authority", "unlocked_micro": rt.wallet.unlocked,

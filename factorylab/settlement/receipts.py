@@ -39,7 +39,7 @@ from dataclasses import asdict, dataclass, field, replace
 
 from factorylab.kernel.ledger import Ledger, canonical
 
-#: What an execution receipt may be a receipt for. A seventh kind is a new fact
+#: What an execution receipt may be a receipt for. A further kind is a new fact
 #: about the world, not a new interpretation of an old one.
 EXECUTION_KINDS = (
     "fill",
@@ -48,6 +48,9 @@ EXECUTION_KINDS = (
     "transfer",
     "program_result",
     "failed_delivery",
+    # An event market's resolution: what an outcome token redeemed at, and what
+    # that realised for the decision holding it.
+    "resolution",
 )
 
 

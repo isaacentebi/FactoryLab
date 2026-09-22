@@ -77,6 +77,10 @@ class ExchangeSpec:
     # enforces it. The venue's own account is the only limit on the principal used.
     # Dropped from the canonical JSON at its ``None`` default, as it always was.
     principal_usd: str | None = None
+    # Whether the venue's vaults are a surface of this world (``[venue] vault_tools``):
+    # the vault reads and writes are published, and a vault's equity is a custody pot.
+    # Off by default, and dropped from the canonical JSON when off.
+    vault_tools: bool = False
 
 
 @dataclass(frozen=True)
@@ -207,6 +211,45 @@ class WebSpec:
 #: The hybrid capital-loop keys: each absent from the canonical hash when unset.
 HYBRID_VENICE_KEYS = ("venice_network", "venice_shadow_sink", "max_venice_total_micro",
                       "venice_reserve_floor_micro", "venice_pay_to")
+
+
+@dataclass(frozen=True)
+class PolymarketSpec:
+    """``[polymarket]``: Polymarket event markets as a surface, off unless enabled.
+
+    ``enabled = false`` registers no tool, opens no custody pot and hashes the
+    manifest exactly as it did before the block existed, whatever else the
+    disabled block names. ``venue`` names what the
+    tools reach: ``fake`` is the seeded simulated venue for reads and writes;
+    ``live`` is the public read API only, and no write tool is registered, because
+    live order signing on Polygon is not built (``world/polymarket.py``,
+    ``LiveOrderAdapter``). The caps are limits the kernel refuses beyond, fixed
+    for the world's life: one order's notional, the pot's open exposure (resting
+    buys plus the cost of tokens held), and orders a window. ``collateral_micro``
+    is the simulated pot's opening USDC; a live pot is whatever its wallet holds.
+    """
+
+    enabled: bool = False
+    venue: str = "fake"
+    read_price_micro: int = 1000
+    collateral_micro: int = 0
+    max_order_micro: int = 10_000_000
+    max_open_micro: int = 100_000_000
+    max_orders_per_window: int = 20
+    seed: int = 0
+
+    def __post_init__(self):
+        if type(self.enabled) is not bool:
+            raise ValueError("polymarket.enabled must be true or false")
+        if self.venue not in ("fake", "live"):
+            raise ValueError("polymarket.venue must be fake or live")
+        for name in ("read_price_micro", "collateral_micro", "max_order_micro",
+                     "max_open_micro", "max_orders_per_window", "seed"):
+            value = getattr(self, name)
+            if type(value) is not int or value < 0:
+                raise ValueError(f"polymarket.{name} must be a non-negative integer")
+        if self.venue == "live" and self.collateral_micro:
+            raise ValueError("polymarket.collateral_usd seeds only the simulated venue")
 
 
 @dataclass(frozen=True)
@@ -457,6 +500,7 @@ class WorldManifest:
     tools: ToolsSpec = ToolsSpec()
     connectors: ConnectorsSpec = ConnectorsSpec()
     web: WebSpec = WebSpec()
+    polymarket: PolymarketSpec = PolymarketSpec()
     notes: NotesSpec = NotesSpec()
     prices: PricesSpec = PricesSpec()
     treasury: TreasurySpec = TreasurySpec()
@@ -580,6 +624,11 @@ class WorldManifest:
         # exactly as it did before web search existed.
         if payload["web"] == asdict(WebSpec()):
             payload.pop("web")
+        # Likewise [polymarket]: a world that does not enable event markets hashes
+        # exactly as it did before the surface existed, whatever caps a disabled
+        # block names, since a disabled block registers nothing they could limit.
+        if not payload["polymarket"]["enabled"]:
+            payload.pop("polymarket")
         for assembly in payload["assemblies"]:
             if assembly.get("cadence_floor") == 1:
                 assembly.pop("cadence_floor", None)
@@ -615,6 +664,9 @@ class WorldManifest:
         # existed: an added key may not rename a world that predates it.
         if payload["exchange"].get("principal_usd") is None:
             payload["exchange"].pop("principal_usd", None)
+        # A world without the vault surface hashes as it did before the key existed.
+        if payload["exchange"].get("vault_tools") is False:
+            payload["exchange"].pop("vault_tools")
         return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
     def manifest_hash(self) -> str:
@@ -1123,6 +1175,9 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             raise ValueError(
                 "venue.principal_usd must be a positive exact decimal string"
             ) from None
+    vault_tools = venue.get("vault_tools", False)
+    if type(vault_tools) is not bool:
+        raise ValueError("venue.vault_tools must be true or false")
     if (not isinstance(spot_pairs, list) or any(
             not isinstance(p, str) or p.count("/") != 1 or not p.endswith("/USDC")
             or not p.split("/")[0] for p in spot_pairs)
@@ -1138,6 +1193,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         start_cash_usd=str(ex.get("start_cash_usd", "100")),
         collateral_headroom_usd=headroom,
         principal_usd=principal,
+        vault_tools=vault_tools,
         shocks=tuple(
             Shock(int(sh["step"]), str(sh["coin"]), str(sh["multiplier"]))
             for sh in ex.get("shocks", [])
@@ -1244,6 +1300,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         evaluation=evaluation,
         connectors=connectors,
         web=web,
+        polymarket=_manifest_polymarket(d.get("polymarket")),
         notes=notes,
         tools=ToolsSpec(
             int((d.get("tools") or {}).get("population_tool_micro_per_call", 50)),
@@ -1361,6 +1418,40 @@ def _manifest_address_enabled(raw: Any) -> bool:
     if type(raw) is not bool:
         raise ValueError("tools.address_enabled must be true or false")
     return raw
+
+
+def _manifest_polymarket(raw: Any) -> PolymarketSpec:
+    """``[polymarket] enabled = true`` and its caps, in exact USD text like every price.
+
+    An absent block is the disabled default. An unknown key is refused rather
+    than ignored, so a manifest cannot believe it set a cap it did not set.
+    """
+    if raw is None:
+        return PolymarketSpec()
+    keys = {"enabled", "venue", "read_price_usd", "collateral_usd", "max_order_usd",
+            "max_open_usd", "max_orders_per_window", "seed"}
+    if not isinstance(raw, dict) or set(raw) - keys:
+        raise ValueError("unknown polymarket manifest key")
+    default = PolymarketSpec()
+
+    def usd(key: str, micro: int) -> int:
+        value = raw.get(key)
+        if value is None:
+            return micro
+        if type(value) not in (str, int):
+            raise ValueError(f"polymarket.{key} must be exact USD text or integer")
+        return usd_to_micro(value, rounding="exact")
+
+    return PolymarketSpec(
+        enabled=raw.get("enabled", False), venue=raw.get("venue", "fake"),
+        read_price_micro=usd("read_price_usd", default.read_price_micro),
+        collateral_micro=usd("collateral_usd", default.collateral_micro),
+        max_order_micro=usd("max_order_usd", default.max_order_micro),
+        max_open_micro=usd("max_open_usd", default.max_open_micro),
+        max_orders_per_window=raw.get("max_orders_per_window",
+                                      default.max_orders_per_window),
+        seed=raw.get("seed", default.seed),
+    )
 
 
 def _manifest_prompt(raw: Any) -> PromptSpec:

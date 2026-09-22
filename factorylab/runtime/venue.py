@@ -119,6 +119,8 @@ class VenueMixin:
                                    launch_nonce=getattr(self, "launch_nonce", None))
             elif owed:
                 report["error"] = "world has no exchange"
+            if owed and getattr(getattr(self, "polymarket", None), "writes", False):
+                self._wind_down_polymarket(report)
         except Exception as exc:  # noqa: BLE001 - nothing may raise into a kill
             report["error"] = type(exc).__name__
         finally:
@@ -462,14 +464,36 @@ class VenueMixin:
         if observe_positions:
             self._observe_positions()
 
+    def _wind_down_polymarket(self, report: dict) -> None:
+        """Wind the polymarket pot down beside the venue, and let its exposure count.
+
+        A kill owes every custody its wind-down; a Polymarket position the book
+        would not take is exposure the dead world still holds, so the report's
+        ``exposure_state`` is the worse of the two venues'.
+        """
+        from factorylab.runtime import winddown
+        from factorylab.runtime.polymarket import wind_down as polymarket_wind_down
+
+        pm = polymarket_wind_down(self)
+        report["polymarket"] = pm
+        rank = (winddown.FLAT, winddown.DUST, winddown.PENDING, winddown.UNKNOWN)
+        states = [report.get("exposure_state", winddown.UNKNOWN), pm["exposure_state"]]
+        report["exposure_state"] = max(
+            states, key=lambda state: rank.index(state) if state in rank else len(rank))
+
     def tool_writes(self, handle: str) -> list[dict]:
         """The venue writes this decision made through tools, in submission order.
 
         Guarantees only intents durably written under this handle's tool slots
         are returned; the answer's own market order (client id == handle) is not.
+        A vault write is a venue write like an order and is returned beside them,
+        and a Polymarket write is one of them too: a decision acts once, on any venue.
         """
-        return [intent for client_id, intent in self.order_intents.items()
-                if intent["handle"] == handle and client_id != handle]
+        polymarket = getattr(self, "polymarket", None)
+        return [intent for client_id, intent in (
+                    *self.order_intents.items(), *getattr(self, "vault_intents", {}).items())
+                if intent["handle"] == handle and client_id != handle] + (
+            polymarket.writes_of(handle) if polymarket is not None else [])
 
     def executed_operations(self, handle: str) -> list[dict]:
         """What this decision executed at the venue, as its evaluators may see it.
@@ -643,15 +667,31 @@ class VenueMixin:
         in one batch are one order written twice. ``writes`` is (slot, tool, args)
         in batch order. A hedge whose second leg would be refused therefore never
         leaves its first leg standing alone. Collateral is weighed per write against
-        the account as it is now, not as the earlier legs would leave it.
+        the account as it is now, less what the batch's earlier writes take from the
+        same pool: the margin an earlier perp order needs and the USDC a vault write
+        moves out of perps are not free for a later perp order or vault write, and
+        an earlier spot buy's cost is not free for a later spot buy. Without that, a
+        deposit and an order that each fit alone passed together and left one leg
+        standing when the venue refused the other.
         """
+        from factorylab.world.venue_tools import VAULT_WRITES
+
         placed: set[tuple] = set()
+        committed = Decimal(0)  # taken from free perps collateral by earlier writes
+        spot_committed = Decimal(0)  # taken from spot USDC by earlier spot buys
         for index, (slot, tool, args) in enumerate(writes):
             client_id = f"{handle}:{slot}"
-            if client_id in self.order_intents:
+            if client_id in self.order_intents or client_id in getattr(
+                    self, "vault_intents", {}):
                 continue  # a retry reconciles; it is not a new write
             if self._class_transfer_pending() and tool != "venue.cancel":
                 return index, "class transfer awaiting receipt"
+            if tool in VAULT_WRITES:
+                reason, moved = self._vault_refusal(tool, args, committed=committed)
+                if reason:
+                    return index, reason
+                committed += moved
+                continue
             shortfall = self._spot_shortfall(tool, args)
             if shortfall:
                 return index, shortfall
@@ -670,12 +710,40 @@ class VenueMixin:
                 price = Decimal(str(args["price"])) if "price" in args else None
             except ArithmeticError:
                 return index, "size or price is not a number"
-            reason = self._order_collateral(handle, str(args.get("coin")), size,
-                                            args.get("side") == "buy", price,
-                                            reduce_only=args.get("reduce_only") is True)
+            coin, is_buy = str(args.get("coin")), args.get("side") == "buy"
+            reduce_only = args.get("reduce_only") is True
+            reason = self._order_collateral(
+                handle, coin, size, is_buy, price, reduce_only=reduce_only,
+                committed=spot_committed if "/" in coin else committed)
             if reason:
                 return index, reason
+            if not reduce_only:
+                taken = self._order_requirement(coin, size, is_buy, price)
+                if "/" in coin:
+                    spot_committed += taken
+                else:
+                    committed += taken
         return None
+
+    def _order_requirement(self, coin: str, size: Decimal, is_buy: bool,
+                           price: Decimal | None = None) -> Decimal:
+        """What an accepted order takes from its pool's free balance, as the collateral
+        check weighs it: a perp order's initial margin at the venue's leverage, a spot
+        buy's cost. Zero where the venue has not said enough to know."""
+        try:
+            mids = self._tick_mids()
+            mark = max(mids[coin], price or mids[coin])
+            if "/" in coin:
+                return size * mark if is_buy else Decimal(0)
+            view = self._collateral_view(coin, "perp")
+            current = Decimal(str(view.get("position_size", 0)))
+            target = current + (size if is_buy else -size)
+            increase = max(Decimal(0), abs(target) - abs(current)) * mark
+            leverage = self._order_leverage(coin, view)
+        except (AttributeError, KeyError, ValueError, ArithmeticError, RuntimeError,
+                TypeError):
+            return Decimal(0)
+        return increase / leverage if leverage else Decimal(0)
 
     def _venue_write(self, handle: str, operation: str, args: dict, *, slot: str) -> dict:
         """Every venue write has a durable intent and a stable identity before submission."""
@@ -896,10 +964,13 @@ class VenueMixin:
                 self._give_up_on_order(client_id)
                 continue
             self._recover_order(client_id)
+        if getattr(self, "vault_intents", None):
+            self._reconcile_vault_intents(final=final)
 
     def _order_collateral(
         self, handle: str, coin: str, size: Decimal, is_buy: bool,
         price: Decimal | None = None, *, reduce_only: bool = False,
+        committed: Decimal = Decimal(0),
     ) -> str | None:
         """New exposure is collateralised by the pot the venue actually charges.
 
@@ -941,7 +1012,10 @@ class VenueMixin:
             view = self._collateral_view(coin, "spot" if spot else "perp")
             mids = self._tick_mids()
             mark = max(mids[coin], price or mids[coin])
+            # What earlier writes of the same batch already take from this pool is
+            # not free for this one: it rides as headroom (``venue_batch_refusal``).
             headroom = Decimal(str(getattr(self.m.exchange, "collateral_headroom_usd", "0")))
+            headroom += committed
             stale = self._collateral_stale(view)
             if stale is not None:
                 reason = stale

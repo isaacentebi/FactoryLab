@@ -57,6 +57,9 @@ MIN_DECLARED_MASS = 0.05
 EFFECT_TOOLS: Mapping[str, str] = MappingProxyType({
     "venue.place_market": "order", "venue.place_limit": "order", "venue.close": "close",
     "venue.cancel": "cancel", "venue.set_leverage": "leverage", "treasury.transfer": "transfer",
+    # The vault surface's writes ([venue] vault_tools), named "vault:<operation>".
+    "venue.vault_create": "vault", "venue.vault_deposit": "vault",
+    "venue.vault_withdraw": "vault",
 })
 # How big the order was, in the base units the return declared, as a closed
 # vocabulary of five bands. Sizing is a decision — half a position and a tenth of
@@ -114,6 +117,8 @@ def effect_label(tool: str, args: Any) -> str | None:
         return _order_label(args)
     if kind == "transfer":
         return f"transfer:{str(args.get('direction', '')).strip().lower()}"[:64]
+    if kind == "vault":
+        return f"vault:{tool.removeprefix('venue.vault_')}"
     return f"{kind}:{str(args.get('coin', '')).strip().upper()}"[:64]
 
 
@@ -200,7 +205,8 @@ def action_class(label: str, outputs: Any, *, tool_calls: int = 0) -> str:
         return label
     outputs = outputs if isinstance(outputs, dict) else {}
     parts = label.split("+")
-    if any(p.startswith(("buy:", "sell:", "close:", "cancel:", "leverage:", "transfer:"))
+    if any(p.startswith(("buy:", "sell:", "close:", "cancel:", "leverage:", "transfer:",
+                         "vault:"))
            for p in parts):
         return "order"
     register = outputs.get("register")
