@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from factorylab.charter.region import CardRule
 from factorylab.charter.windows import MetricWindow
 from factorylab.cortex.registration import CONTRACT_ROLES, ROLES, event_name
+
+_UNSET = object()
+#: A holdout names one registered predicate at one version: ``id@version``.
+HOLDOUT_RE = re.compile(r"[a-z][a-z0-9-]{1,47}@[1-9][0-9]*")
 
 
 class Norm(str):
@@ -57,29 +63,80 @@ class Norm(str):
         return {"id": str(self), **({"definition": self.definition} if self.definition else {})}
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class MetricCard:
-    """One norm interpretation binds a typed window and an accountable emitted kind."""
+    """One norm interpretation binds a typed window and an accountable emitted kind.
+
+    ``region`` is the card's acceptable region as typed data, ``{rule, lo, hi}``
+    (charter audit P2), and ``acceptable_region`` is the sentence derived from it.
+    A region may still be given as one of the historical sentences, positionally
+    or as ``acceptable_region=``: it is read into the rule and stated again from
+    it. A sentence no rule reads is kept verbatim as the region; such a card holds
+    no numeric region and carries no price.
+
+    ``holdout`` names registered predicates, each frozen at a version
+    (``id@version``), that a closed window must also satisfy (essay II.IV.a: the
+    evaluatory layer adds "holdout test criteria to a given charter"). A card
+    whose measurement is inside its region but whose holdout fails is priced as
+    violating: see ``holdout_violation``.
+    """
 
     id: str
     norm: str
     description: str
     units: str
     window: MetricWindow
-    acceptable_region: str
+    region: CardRule | str
     observation: str
     answers_for: str
+    holdout: tuple[str, ...] = ()
 
-    def __post_init__(self) -> None:
-        for name in ("id", "norm", "description", "units", "acceptable_region", "observation"):
-            if not isinstance(getattr(self, name), str) or not getattr(self, name).strip():
+    def __init__(self, id: str, norm: str, description: str, units: str, window: object,
+                 region: object = None, observation: object = _UNSET,
+                 answers_for: object = _UNSET, holdout: object = (), *,
+                 acceptable_region: object = None) -> None:
+        """Guarantees a stated sentence and a typed region are one region.
+
+        ``acceptable_region``, when given, states the region as a sentence and
+        takes the place of ``region``: ``dataclasses.replace(card,
+        acceptable_region=...)`` restates a card's region in words.
+        """
+        for name, value in (("observation", observation), ("answers_for", answers_for)):
+            if value is _UNSET:
+                # A card never defaults its measurement or the role it holds to account.
+                raise TypeError(f"MetricCard missing required argument: {name!r}")
+        for name, value in (("id", id), ("norm", norm), ("description", description),
+                            ("units", units), ("observation", observation)):
+            if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"metric card needs {name}")
-        object.__setattr__(self, "window", MetricWindow.parse(self.window))
+            object.__setattr__(self, name, value)
+        object.__setattr__(self, "window", MetricWindow.parse(window))
+        stated = acceptable_region if acceptable_region is not None else region
+        if isinstance(stated, str):
+            stated = stated.strip()
+        if stated is None or stated == "":
+            raise ValueError(f"card {id} region: a card needs a region")
         try:
-            scope = event_name(self.answers_for.strip() if isinstance(self.answers_for, str)
-                               else self.answers_for)
+            rule: CardRule | str = CardRule.parse(stated)
         except ValueError as exc:
-            raise ValueError(f"card {self.id} answers_for: {exc}") from None
+            if not isinstance(stated, str):
+                raise ValueError(f"card {id} region: {exc}") from None
+            rule = stated  # an unread sentence: no numeric region, no price
+        object.__setattr__(self, "region", rule)
+        if isinstance(holdout, str) or not isinstance(holdout, (tuple, list)):
+            raise ValueError(f"card {id} holdout: must be a list of predicate@version ids")
+        holdout = tuple(holdout)
+        for entry in holdout:
+            if not isinstance(entry, str) or HOLDOUT_RE.fullmatch(entry) is None:
+                raise ValueError(f"card {id} holdout: {entry!r} is not predicate@version")
+        if len({entry.split("@")[0] for entry in holdout}) != len(holdout):
+            raise ValueError(f"card {id} holdout: a predicate is named once")
+        object.__setattr__(self, "holdout", holdout)
+        try:
+            scope = event_name(answers_for.strip() if isinstance(answers_for, str)
+                               else answers_for)
+        except ValueError as exc:
+            raise ValueError(f"card {id} answers_for: {exc}") from None
         # A role alias is its own exact lower-case spelling, and a seed kind names
         # the alias of the population that emits it. Every other scope keeps the
         # emitted kind's exact name: ``Producer`` is a kind the registry would
@@ -87,6 +144,16 @@ class MetricCard:
         if scope not in (*ROLES, "all"):
             scope = CONTRACT_ROLES.get(scope, scope)
         object.__setattr__(self, "answers_for", scope)
+
+    @property
+    def acceptable_region(self) -> str:
+        """The region as the charter renders it: derived from the typed rule."""
+        return self.region.prose() if isinstance(self.region, CardRule) else self.region
+
+    @property
+    def rule(self) -> CardRule | None:
+        """The typed region, or None for a sentence no rule reads."""
+        return self.region if isinstance(self.region, CardRule) else None
 
     def validate_answers_for(self, registered_kinds: frozenset[str]) -> None:
         """Admission refuses an accountability scope absent from the public kind catalogue."""
@@ -150,8 +217,43 @@ class Charter:
                 f"- {c.id} (norm: {c.norm})",
                 f"  {c.description}",
                 f"  units: {c.units}; window: {c.window}; acceptable: {c.acceptable_region}",
-                f"  observation: {c.observation}; answers_for: {c.answers_for}",
+                f"  observation: {c.observation}; answers_for: {c.answers_for}"
+                + (f"; holdout: {', '.join(c.holdout)}" if c.holdout else ""),
                 "  lambda: " + (price_label if price_label is not None else str(
                     prices.get(c.id, 0.0) if prices is not None else "unassigned")),
             ]
         return "\n".join(lines)
+
+
+def holdout_violation(results: list[bool | None], named: int) -> float:
+    """The violation a card's failed holdouts add, in region-relative units.
+
+    Each named holdout is one acceptance test; ``k`` failed of ``n`` named is a
+    violation of ``k / n`` (a whole region when every one fails). A holdout that
+    could not be resolved on the window (absent facts, a failed run) is not a
+    failure: absent evidence is never a score. The card is priced on the larger
+    of this and its region violation.
+    """
+    if named <= 0:
+        return 0.0
+    return sum(result is False for result in results) / named
+
+
+def stated_region(row: Mapping) -> object:
+    """The region a card table states: typed ``region``, or the ``acceptable_region`` sentence.
+
+    A table that states both must state one region; otherwise the disagreement is
+    refused with the card's id, never resolved by picking one.
+    """
+    typed, prose = row.get("region"), row.get("acceptable_region")
+    if typed is None:
+        return "" if prose is None else prose
+    if prose is not None:
+        try:
+            agree = CardRule.parse(prose) == CardRule.parse(typed)
+        except ValueError:
+            agree = False
+        if not agree:
+            raise ValueError(f"card {row.get('id')} acceptable_region: disagrees with its "
+                             "typed region")
+    return typed

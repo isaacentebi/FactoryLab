@@ -679,9 +679,18 @@ class ObservationBook:
         """
         if not observation.registered:
             return observation.measure(window)
-        if self._run is None:
+        return self.value_of_facts(observation, window_facts(window))
+
+    def value_of_facts(self, observation: Observation, facts: dict) -> float | None:
+        """Run a registered observation on facts already made public, with the same range rule.
+
+        The facts are the caller's: a closed window's (``window_facts``) or one
+        scope's share of them (``charter.measurement.scope_facts``). Either way the
+        code is handed numbers and never the identity they were filed under.
+        """
+        if not observation.registered or self._run is None:
             return None
-        value, _error = self._run(observation.code, window_facts(window))
+        value, _error = self._run(observation.code, facts)
         if value is None:
             return None
         lo, hi = observation.unit_range

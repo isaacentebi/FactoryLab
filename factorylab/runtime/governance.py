@@ -101,9 +101,22 @@ class GovernanceMixin:
                                        self.ledger, "norms")
         self.observer.predicates = self.predicates
         self.PROPOSAL_SHAPES = deepcopy(self.PROPOSAL_SHAPES)
-        for kind in ("connector", "retire"):
+        for kind in ("connector", "retire", "challenge"):
             self.PROPOSAL_SHAPES[kind]["predicted_effect"] = {
                 "card_id": "a current card id", "direction": "decrease", "window": 1}
+        # Charter audit P2: a card's region is typed data; the sentence is derived.
+        # Charter audit M3: a holdout motion appends one registered predicate to a card.
+        shape = self.PROPOSAL_SHAPES["amendment"]
+        for card in shape.get("add", ()):
+            card.pop("acceptable_region", None)
+            card["region"] = {"rule": "at most | at least | above | below | between | "
+                              "below the median of the previous window",
+                              "lo": "number, for at least, above and between",
+                              "hi": "number, for at most, below and between"}
+        shape["holdout"] = {"card_id": "a current card id",
+                            "predicate": "a registered predicate id",
+                            "evidence": "why the card needs it, at most 4000 chars",
+                            "trial_windows": 3}
 
     def _commissioned_judge_refusal(self, target: str) -> str | None:
         """Name why a judging contract cannot be commissioned as a child, or None.
@@ -169,6 +182,10 @@ class GovernanceMixin:
                 prediction = None
                 if item.get("kind") in ("connector", "retire"):
                     prediction = self._policy_prediction(item.get("predicted_effect"))
+                elif isinstance(item, dict) and item.get("kind") == "challenge":
+                    # Charter audit P2: a challenge declares its own promise; the
+                    # runtime never infers it from the replacement's wording.
+                    prediction = PredictedEffect.parse(item.get("predicted_effect"))
                 if isinstance(item, dict) and item.get("kind") == "amendment":
                     self._propose_amendment(handle, item)
                 else:
@@ -176,7 +193,7 @@ class GovernanceMixin:
                     namespaced = (isinstance(mid, str) and item.get("kind") == "model"
                                   and mid.startswith(("x402:", "venice:")))
                     adapted = {**item, "openrouter_id": "namespace/model"} if namespaced else item
-                    if item.get("kind") == "connector":
+                    if item.get("kind") in ("connector", "challenge"):
                         adapted = {k: v for k, v in adapted.items() if k != "predicted_effect"}
                     accepted, rejected = parse_proposals(
                         {"register": [adapted]},
@@ -430,7 +447,8 @@ class GovernanceMixin:
         """The replacement cards under trial or ballot, keyed by challenge id."""
         return {cid: ch["replacement"] for cid, ch in self._live_challenges().items()}
 
-    def _register_challenge(self, handle: str, prop: ChallengeProposal) -> None:
+    def _register_challenge(self, handle: str, prop: ChallengeProposal, *,
+                            predicted_effect: PredictedEffect | None = None) -> None:
         """Admit a metric challenge: one novelty trial buys a frozen side-by-side trial.
 
         The replacement keeps the challenged card's id and norm, so adopting it
@@ -438,6 +456,10 @@ class GovernanceMixin:
         definitions behind them are frozen here; the incumbent keeps pricing
         the live charter throughout, so commitments incurred under it settle
         under it. The challenge is ledgered before it exists in state.
+
+        Charter audit P2: the replacement's region is built as typed data from
+        the challenge's rule and value, and the promise its ballot is graded on
+        is the one the challenger declared, which names the challenged card.
         """
         from factorylab.charter.amendment import proposed_answers_for
         from factorylab.charter.book import validate_observation_bindings
@@ -448,16 +470,22 @@ class GovernanceMixin:
             raise ValueError("challenge card_id must name a current card")
         if any(ch["card_id"] == prop.card_id for ch in self._live_challenges().values()):
             raise ValueError("card is already under challenge")
+        if predicted_effect is None:
+            raise ValueError("a challenge declares its predicted_effect")
+        if predicted_effect.card_id != incumbent.id:
+            raise ValueError("a challenge's predicted_effect names the challenged card")
         spec = prop.replacement
         answers_for = spec.get("answers_for", incumbent.answers_for)
         if answers_for not in self._kind_rewards():
             answers_for = proposed_answers_for(answers_for, incumbent.id)
+        rule = str(spec["rule"])
+        bound = "lo" if rule in ("at least", "above") else "hi"
         replacement = MetricCard(
             incumbent.id, incumbent.norm,
             str(spec.get("description", incumbent.description)),
             str(spec.get("units", incumbent.units)),
-            spec["window"], f"{spec['rule']} {spec['value']}", str(spec["observation"]),
-            answers_for,
+            spec["window"], {"rule": rule, bound: spec["value"]}, str(spec["observation"]),
+            answers_for, holdout=incumbent.holdout,
         )
         if replacement == incumbent:
             raise ValueError("challenge leaves the card unchanged")
@@ -494,7 +522,7 @@ class GovernanceMixin:
             "evidence": prop.evidence, "incumbent": incumbent, "replacement": replacement,
             "trial_windows": prop.trial_windows, "start_window": self.window.index,
             "observations": definitions, "series": [], "status": "trial",
-            "amendment_id": None,
+            "amendment_id": None, "predicted_effect": predicted_effect,
         }
         self.ledger.append({"kind": "challenge.proposed",
                             **{k: v for k, v in record.items() if k != "series"},
@@ -547,14 +575,18 @@ class GovernanceMixin:
             if challenge["status"] != "due":
                 continue
             replacement = challenge["replacement"]
-            direction = ("increase" if replacement.acceptable_region.startswith(
-                ("at least", "above")) else "decrease")
+            effect = challenge.get("predicted_effect")
+            if effect is None:
+                # A challenge admitted before challenges declared their own promise
+                # (charter audit P2) keeps the one it was always going to be balloted on.
+                effect = PredictedEffect(replacement.id, "increase" if replacement.rule
+                                         is not None and replacement.rule.kind == "min"
+                                         else "decrease", 1)
             try:
                 am = Amendment(
                     id=challenge["id"], proposer_handle=challenge["handle"],
                     edition_base=self.charter.edition, add=(), replace=(replacement,),
-                    remove=(),
-                    predicted_effect=PredictedEffect(replacement.id, direction, 1),
+                    remove=(), predicted_effect=effect,
                 )
                 self.charter_book.propose(am, self._policy_observations(challenge))
             except ValueError as exc:
@@ -694,7 +726,7 @@ class GovernanceMixin:
                   predicted_effect: PredictedEffect | None = None) -> None:
         amount = self.ev.trial_amount_micro
         if isinstance(prop, ChallengeProposal):
-            self._register_challenge(handle, prop)
+            self._register_challenge(handle, prop, predicted_effect=predicted_effect)
             return
         if isinstance(prop, MarketProposal):
             self._register_market(handle, prop)
@@ -1078,7 +1110,7 @@ class GovernanceMixin:
             proposed_price,
             proposed_tick_interval,
         )
-        from factorylab.charter.charter import MetricCard
+        from factorylab.charter.charter import MetricCard, stated_region
 
         present = {"cards": any(item.get(key) for key in ("add", "replace", "remove")),
                    "lambda": "lambda" in item, "clock": "tick_interval" in item}
@@ -1125,6 +1157,15 @@ class GovernanceMixin:
                     self._refuse_amendment(
                         item, "a card carries no lambda: a motion carries one change class "
                         "(cards, lambda or clock)")
+                holdout = tuple(c.get("holdout") or ())
+                incumbent = next((x for x in self.charter.cards if x.id == c.get("id")), None)
+                kept = incumbent.holdout if incumbent is not None and key == "replace" else ()
+                if not set(holdout) <= set(kept):
+                    # Charter audit M3: a holdout is appended by its own motion, with a
+                    # trial; a cards motion may keep or drop a card's holdouts only.
+                    self._refuse_amendment(
+                        item, "a cards motion keeps or drops a card's holdouts; a holdout "
+                        "is appended by a holdout motion")
                 out.append(
                     MetricCard(
                         str(c.get("id", "")),
@@ -1132,11 +1173,12 @@ class GovernanceMixin:
                         str(c.get("description", "")),
                         str(c.get("units", "")),
                         c.get("window"),
-                        str(c.get("acceptable_region", "")),
+                        stated_region(c),
                         str(c.get("observation", "")),
                         (c.get("answers_for") if isinstance(c.get("answers_for"), str)
                          and c.get("answers_for") in self._kind_rewards()
                          else proposed_answers_for(c.get("answers_for"), str(c.get("id", "")))),
+                        holdout=holdout,
                     )
                 )
             from factorylab.runtime.cards import parses
@@ -1144,7 +1186,7 @@ class GovernanceMixin:
             for card in out:
                 card.validate_answers_for(frozenset(self._kind_rewards()))
                 if not parses(card):
-                    raise ValueError("card acceptable_region has no finite usable bounds")
+                    raise ValueError("card region has no finite usable bounds")
                 # A card may name a registered observation; an unregistered one
                 # is refused here, before a vote, with the reason.
                 region_for(card, rolling={}, observations=self.observations)

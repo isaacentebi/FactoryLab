@@ -68,7 +68,8 @@ def _record_types() -> dict[str, type]:
     from factorylab.charter.committee import Ballot, Committee, Seat, StandingCommittee
     from factorylab.charter.controller import CardRegion, _CardState
     from factorylab.charter.measurement import CardSamples
-    from factorylab.charter.windows import MetricWindow
+    from factorylab.charter.region import CardRule
+    from factorylab.charter.windows import Interval, MetricWindow
     from factorylab.cortex.assembly import AssemblySpec, ProgramAssemblySpec
     from factorylab.cortex.tools import PopulationTool
     from factorylab.kernel.events import Event, EventKind
@@ -104,6 +105,7 @@ def _record_types() -> dict[str, type]:
 
     classes = (
         Amendment, PredictedEffect, Charter, MetricCard, MetricWindow, CardSamples,
+        CardRule, Interval,
         Ballot, Committee, Seat, StandingCommittee, CardRegion, _CardState,
         AssemblySpec, WorkAssemblySpec, ProgramAssemblySpec, Predicate, PredicateForecast,
         PopulationTool, Event, PopulationEvent, EventKind, Decision,
