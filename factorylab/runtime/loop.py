@@ -970,16 +970,6 @@ class Runtime(
                 "the consequence horizon, net of fees, and the price is the decision's "
                 "score; one that names none settles at neutral."
             )
-            explore = self._exploration_draw(handle, sample.chosen, adversarial)
-            if explore is not None:
-                description += (
-                    f" EXPLORATION DRAW: the kernel sampled this decision (probability "
-                    f"{explore['p']:.3f}) to take an action of class {explore['class']!r}. "
-                    "Take one, as small and cheap as you find informative, and say what "
-                    "you expect to learn from it; the draw, not your judgement, is recorded "
-                    "as this decision's propensity. If that class is impossible now, answer "
-                    "status cannot with the specific reason."
-                )
             schema = {
                 "type": "object",
                 "properties": {
