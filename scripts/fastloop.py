@@ -191,7 +191,6 @@ def scorecard(events: list[dict[str, Any]]) -> dict[str, Any]:
                      "unknown" if version.endswith("-unknown") else version)
             producer_settle[f"{ret.get('status')}:{label}"] += 1
     kinds = collections.Counter(e.get("kind") for e in events)
-    taken = [e for e in events if e.get("kind") == "exploration.taken"]
     findings = collections.Counter(e.get("status") for e in events
                                    if e.get("kind") == "consequence.finding")
     intents = collections.Counter(e.get("operation") for e in events
@@ -227,10 +226,6 @@ def scorecard(events: list[dict[str, Any]]) -> dict[str, Any]:
                 if (named := sum(1 for e in opportunity if e.get("declined"))) else None),
         },
         "judge_unmeasured": kinds.get("evaluation.unmeasured", 0),
-        "exploration": {"draws": kinds.get("exploration.draw", 0),
-                        "complied": sum(1 for e in taken if e.get("complied")),
-                        "by_class": dict(collections.Counter(
-                            f"{e['drawn']}->{e['taken']}" for e in taken))},
         "orders": {"intents": dict(intents),
                    "duplicates_refused": kinds.get("order.duplicate", 0),
                    "reported_not_placed": kinds.get("order.reported", 0),
@@ -245,8 +240,7 @@ def print_card(card: dict[str, Any]) -> None:
 
 # --- running ------------------------------------------------------------------------
 
-def simulation_manifest(world: Path, seed: int, exploration: float | None = None,
-                        vault_tools: bool = False) -> Any:
+def simulation_manifest(world: Path, seed: int, vault_tools: bool = False) -> Any:
     """The launch identity with only the venue swapped for the deterministic fake.
 
     ``effective_manifest`` freezes the roster, charter, seed lenses, prompts and
@@ -269,16 +263,12 @@ def simulation_manifest(world: Path, seed: int, exploration: float | None = None
                        spot_pairs=(), client_namespace=None,
                        vault_tools=vault_tools or manifest.exchange.vault_tools)
     manifest = replace(manifest, exchange=exchange, seed=seed)
-    if exploration is not None:
-        manifest = replace(manifest, evaluation=replace(
-            manifest.evaluation, exploration_share=exploration))
     manifest.validate()
     return manifest
 
 
 def run(provider_kind: str, ticks: int, world: Path, out: Path, cap_usd: str,
-        seed: int, exploration: float | None = None,
-        vault_depositor_usd: str | None = None) -> dict[str, Any]:
+        seed: int, vault_depositor_usd: str | None = None) -> dict[str, Any]:
     """``vault_depositor_usd`` opts the world into the vault surface and scripts one
     outside depositor into every vault the factory creates, who leaves ten steps later;
     the fake's vaults earn nothing on their own, so the depositor pays no commission
@@ -288,8 +278,7 @@ def run(provider_kind: str, ticks: int, world: Path, out: Path, cap_usd: str,
     stamp = time.strftime("%Y%m%d-%H%M%S")
     target = out / f"{provider_kind}-{stamp}-s{seed}"
     target.mkdir(parents=True, exist_ok=True)
-    manifest = simulation_manifest(world, seed, exploration,
-                                   vault_tools=bool(vault_depositor_usd))
+    manifest = simulation_manifest(world, seed, vault_tools=bool(vault_depositor_usd))
     admission = rehearsal.Admission(cap_micro=int(Decimal(cap_usd) * 1_000_000),
                                     max_calls=10_000, recover_provider_failures=True)
     inner = (PolicyProvider(world) if provider_kind == "scripted"
@@ -337,7 +326,7 @@ def combine(cards: list[dict[str, Any]]) -> dict[str, Any]:
         add(total, {k: card.get(k) for k in (
             "ticks", "calls", "invocations", "malformed_reasons", "producer_actions",
             "producer_settlements", "grounded_findings", "judge_unmeasured", "orders",
-            "exploration", "opportunity_cost")
+            "opportunity_cost")
             if card.get(k) is not None})
     # Averages and rates are recomputed from the seeds, never summed.
     priced = [c.get("opportunity_cost") or {} for c in cards]
@@ -374,7 +363,6 @@ def run_seeds(args: argparse.Namespace, seeds: list[int]) -> dict[str, Any]:
         [sys.executable, __file__, "run", "--provider", args.provider,
          "--ticks", str(args.ticks), "--world", str(args.world), "--out", str(args.out),
          "--cap-usd", args.cap_usd, "--seed", str(seed),
-         *(["--exploration", str(args.exploration)] if args.exploration is not None else []),
          *(["--vault-depositor-usd", args.vault_depositor_usd]
            if args.vault_depositor_usd else [])],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=ROOT) for seed in seeds]
@@ -401,8 +389,6 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--out", type=Path, default=DEFAULT_OUT)
     r.add_argument("--cap-usd", default="2")
     r.add_argument("--seed", type=int, default=1)
-    r.add_argument("--exploration", type=float, default=None,
-                   help="evaluation.exploration_share for this run (the manifest's otherwise)")
     r.add_argument("--vault-depositor-usd", default=None,
                    help="publish the vault surface and script an outside depositor of this "
                         "many USD into each vault the factory creates")
@@ -417,7 +403,7 @@ def main(argv: list[str] | None = None) -> int:
         print_card(card)
         return 0 if all(c.get("status") == "completed" for c in card["seeds"]) else 1
     card = run(args.provider, args.ticks, args.world, args.out, args.cap_usd, args.seed,
-               args.exploration, args.vault_depositor_usd)
+               args.vault_depositor_usd)
     print_card(card)
     return 0 if card.get("status") == "completed" else 1
 

@@ -33,6 +33,7 @@ from factorylab.world.vaults import (
     LEADER_MIN_FRACTION,
     UNPARSED,
     check_create,
+    exact_micro,
     leader_share_after,
     own_withdraw_hashes,
 )
@@ -98,6 +99,8 @@ class VaultMixin:
             return "usd is not a number", Decimal(0)
         if not usd.is_finite() or usd <= 0:
             return "usd must be positive", Decimal(0)
+        if exact_micro(usd) is None:
+            return "usd is finer than one micro-USD (at most 6 decimals)", Decimal(0)
         if operation == "venue.vault_create":
             reason = check_create(args.get("name"), args.get("description"), usd)
             if reason:
@@ -430,9 +433,12 @@ class VaultMixin:
         foreign = sorted(leading - led)
         seats = {self.vault_book[vault].get("seat") for vault in led}
         seat = next(iter(seats)) if len(seats) == 1 else None
+        seen = set(self.vault_ledger_seen)
         for row in rows:
             if row["type"] != "vaultLeaderCommission" or not row.get("usd"):
                 continue
+            if row["ts_ns"] == self.vault_ledger_cursor_ns and row["hash"] in seen:
+                continue  # processed on an earlier poll at the inclusive cursor
             micro = usd_to_micro(row["usd"], rounding="nearest")
             if micro <= 0:
                 continue
@@ -460,4 +466,11 @@ class VaultMixin:
                 continue  # the treasury ledgered the conflict; nothing is booked
             if item is not None:
                 self._book_income(item)
-        self.vault_ledger_cursor_ns = max(r["ts_ns"] for r in rows) + 1
+        # The cursor stays inclusive: the venue reports milliseconds, so a row indexed
+        # late in the newest row's millisecond must still be read on the next poll.
+        # Rows already processed at that millisecond are remembered by identity.
+        newest = max(r["ts_ns"] for r in rows)
+        self.vault_ledger_seen = sorted(
+            {r["hash"] for r in rows if r["ts_ns"] == newest}
+            | (set(self.vault_ledger_seen) if newest == self.vault_ledger_cursor_ns else set()))
+        self.vault_ledger_cursor_ns = newest

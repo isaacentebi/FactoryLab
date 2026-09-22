@@ -2205,30 +2205,6 @@ class ComputeMixin:
                 "note": "your own learner's current policy over the action set you registered; "
                         "declare a propensity on your return to train it"}
 
-    #: The classes an exploration draw may name: the ones that act on the world.
-    EXPLORATION_CLASSES = ("order", "investigate", "build", "govern")
-
-    def _exploration_draw(self, handle: str, seat: str, adversarial: bool) -> dict | None:
-        """Draw this decision's action class for the seat, at ``exploration_share``.
-
-        Guarantees a draw only when the share is positive, from the runtime's seeded
-        generator (so a replay draws the same), uniformly over
-        ``EXPLORATION_CLASSES``; the antagonist, whose share is the adversarial cap,
-        is never drawn. The draw is ledgered and held for this handle so the
-        propensity recorded for it is the kernel's, not the seat's.
-        """
-        share = float(getattr(self.ev, "exploration_share", 0.0) or 0.0)
-        if share <= 0 or adversarial:
-            return None
-        if self.rng.random() >= share:
-            return None
-        chosen = self.EXPLORATION_CLASSES[self.rng.randrange(len(self.EXPLORATION_CLASSES))]
-        draw = {"class": chosen, "p": share / len(self.EXPLORATION_CLASSES)}
-        self.exploration_draws[handle] = draw
-        self.ledger.append({"kind": "exploration.draw", "handle": handle,
-                            "assembly_id": seat, **draw, "ts": self.clock.now_ns})
-        return draw
-
     def _record_declared_propensity(self, action_id: str, req: Request, ret: Return, role: str,
                                     *, effects: tuple[str, ...] = ()):
         """Log the woken assembly's own distribution as a second propensity on the handle.
@@ -2263,18 +2239,6 @@ class ComputeMixin:
             if learner is not None else "declared"
         )
         declared = ret.outputs.get("propensity") if isinstance(ret.outputs, dict) else None
-        draw = getattr(self, "exploration_draws", {}).pop(req.handle, None)
-        if draw is not None and taken_class == draw["class"]:
-            # The kernel sampled this decision and the seat took the class drawn: the
-            # kernel's distribution is the true behaviour. A seat that defied the draw
-            # took its own decision, so its own declaration stands and the defiance
-            # is on the ledger.
-            declared = {c: 1 / len(self.EXPLORATION_CLASSES) for c in self.EXPLORATION_CLASSES}
-        if draw is not None:
-            self.ledger.append({"kind": "exploration.taken", "handle": req.handle,
-                                "assembly_id": action_id, "drawn": draw["class"],
-                                "taken": taken_class, "complied": taken_class == draw["class"],
-                                "ts": self.clock.now_ns})
         record, reason = declared_record(
             label, declared,
             learner_id=self._assembly_learner_id(action_id), state_hash=state_hash,

@@ -309,7 +309,6 @@ min_ratio = 3
 jitter_fraction = 0.2
 
 [evaluation]
-exploration_share = 0.15
 consequence_backstop_events = 60
 consequence_share = 0.3
 max_forecasts_per_verdict = 2

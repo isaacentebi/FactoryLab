@@ -88,6 +88,20 @@ def _usd(value: Any) -> Decimal:
     return number
 
 
+def exact_micro(usd: Any) -> int | None:
+    """Guarantees the amount as whole micro-USD, or None when it is finer than that.
+
+    The venue takes vault amounts as integer micro-USDC. An amount with a seventh
+    decimal would be truncated on the wire while the books round it, so the intent,
+    the booking and the venue's own ledger row could never agree: it is refused.
+    """
+    try:
+        micro = _usd(usd) * 1_000_000
+    except (ArithmeticError, ValueError):
+        return None
+    return int(micro) if micro == micro.to_integral_value() else None
+
+
 def commission_on(equity: Decimal, basis: Decimal, usd: Decimal) -> tuple[Decimal, Decimal]:
     """Guarantees the venue's arithmetic: (commission, basis of the part withdrawn).
 

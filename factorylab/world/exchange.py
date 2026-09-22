@@ -851,12 +851,15 @@ class FakeExchange:
             CREATE_FEE_USD,
             FAKE_ACCOUNT,
             check_create,
+            exact_micro,
             row_hash,
         )
 
         vaults, _, results = self._vault_state()
         if client_id is not None and client_id in results:
             return dict(results[client_id])
+        if exact_micro(usd) is None:  # the venue takes whole micro-USDC, like the live one
+            return {"status": "rejected", "error": "usd is finer than one micro-USD"}
         reason = check_create(name, description, usd)
         usd = Decimal(str(usd))
         if reason is None and usd + CREATE_FEE_USD > self._perp_withdrawable():
@@ -885,11 +888,13 @@ class FakeExchange:
     def vault_transfer(self, vault: str, is_deposit: bool, usd: Decimal, *,
                        client_id: str | None = None) -> dict:
         """Guarantees one transfer per client id, between perps collateral and a vault."""
-        from factorylab.world.vaults import FAKE_ACCOUNT
+        from factorylab.world.vaults import FAKE_ACCOUNT, exact_micro
 
         _, _, results = self._vault_state()
         if client_id is not None and client_id in results:
             return dict(results[client_id])
+        if exact_micro(usd) is None:  # the venue takes whole micro-USDC, like the live one
+            return {"status": "rejected", "error": "usd is finer than one micro-USD"}
         result = self._vault_move(str(vault).lower(), FAKE_ACCOUNT, is_deposit,
                                   Decimal(str(usd)))
         if client_id is not None:
@@ -1962,12 +1967,14 @@ class HyperliquidExchange:
                      client_id: str | None = None) -> dict:
         """``createVault``, signed as an L1 action. The SDK has no helper for it; the
         action's fields are the TS SDK's schema, in its order (unverified on the wire)."""
-        from factorylab.world.vaults import check_create
+        from factorylab.world.vaults import check_create, exact_micro
 
         reason = check_create(name, description, usd)
         if reason is not None:
             return {"status": "rejected", "error": reason}
-        micro = int(Decimal(str(usd)) * 1_000_000)
+        micro = exact_micro(usd)
+        if micro is None:
+            return {"status": "rejected", "error": "usd is finer than one micro-USD"}
 
         def submit():
             from hyperliquid.utils.constants import MAINNET_API_URL
@@ -1987,7 +1994,11 @@ class HyperliquidExchange:
     def vault_transfer(self, vault: str, is_deposit: bool, usd: Decimal, *,
                        client_id: str | None = None) -> dict:
         """``vaultTransfer`` through the SDK; ``usd`` goes on the wire as micro-USDC."""
-        micro = int(Decimal(str(usd)) * 1_000_000)
+        from factorylab.world.vaults import exact_micro
+
+        micro = exact_micro(usd)
+        if micro is None:
+            return {"status": "rejected", "error": "usd is finer than one micro-USD"}
         if micro <= 0:
             return {"status": "rejected", "error": "usd must be positive"}
         result = self._vault_submit(client_id, lambda: self._exchange.vault_usd_transfer(
