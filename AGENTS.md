@@ -38,8 +38,14 @@ architecture.
    - No carve-outs or prompt patches for a model's past mistakes.
    - Never justify a change by a behaviour-mix delta ("they hold too much"). That is
      the architect optimizing toward its own "better", which is Class 2.
-3. **Physics is enforced, not announced (§II.b).** The kernel is the hard cast. Never
-   describe kernel rules in prompt text.
+3. **Physics is enforced, not announced (§II.b).** The kernel is the hard cast.
+   - Never restate a kernel rule as an instruction, a warning or an invitation in
+     request or system text ("do X", "you will be scored on Y, so…").
+   - This is not secrecy. The published schematics are required (§I.b): "the
+     informational schematics of the factory should be absolutely public", which
+     includes "the structures of requests and rewards". That covers tools, prices,
+     custody, contracts and the reward formulas. They are published as factual,
+     retrievable sections (`world.read`), not as advice.
 4. **Two channels only (§I.b).**
    - A *rich* request channel: self-describing and author-neutral.
    - A *thin* reward channel: a score plus the propensity, delivered to a persistent
