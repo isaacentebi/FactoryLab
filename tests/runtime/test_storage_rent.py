@@ -55,3 +55,18 @@ def test_storage_rate_is_read_from_storage_and_from_the_old_notes_key():
 def test_notebook_keys_and_bad_rates_are_refused(tables, match):
     with pytest.raises(ValueError, match=match):
         manifest_from_dict(_world(**tables))
+
+
+def test_the_storage_price_is_published_to_every_seat():
+    """Codex review of #125: a price is a public schematic (essay II.I.b). Removing
+    the notebook had removed the only place the storage rent was stated."""
+    from factorylab.cortex.request import Request
+
+    rt = make_runtime()
+    rt.m = replace(rt.m, storage=StorageSpec(micro_per_byte_day="3"))
+    world = rt._world_block()
+    assert world["storage"]["micro_per_byte_day"] == "3"
+    assert "reserve-window boundary" in world["storage"]["pricing"]
+    text = Request("h", "d", {"world": world}, {}, {"type": "object"}, 0, 1_000_000, None,
+                   "answer", "verdict", "seat").prompt_text()
+    assert '"micro_per_byte_day":"3"' in text.replace(" ", "")

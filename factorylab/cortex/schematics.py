@@ -465,6 +465,15 @@ class SchematicsMixin:
             "recent_mids": {c: list(v) for c, v in self.recent_mids.items()},
             "account": account,
             "venue": self._traded_instruments(),
+            # A price is a public schematic (essay II.I.b): the rent a seat's retained
+            # working state pays is stated here, with how it is collected.
+            "storage": {"micro_per_byte_day": self.m.storage.micro_per_byte_day,
+                        "units": "micro-USD per byte per day",
+                        "pricing": "Your retained working_state pays storage rent of "
+                        "micro_per_byte_day per byte by elapsed time from the moment it is "
+                        "written, collected at each reserve-window boundary from your own "
+                        "spending authority and scored against the decision that wrote it. "
+                        "Rent a boundary cannot collect stays due on the state."},
             "tools": self._published_tool_specs(),
             "reserve": {"protected": self.reserve.remaining(), "units": "micro-USD",
                         "trials": self.m.novelty.trials,
