@@ -172,6 +172,26 @@ def _publishable(policy: dict[str, float]) -> dict[str, float]:
     return rounded
 
 
+
+#: Hyperliquid's own SDK names for the venue arguments this world publishes. Models
+#: trained on that SDK write them (PR121 seqs 282 and 7343; edition 5 testnet), and
+#: each voided a whole batch. They name the same quantities, so they are translated
+#: before validation, never guessed: an argument given under both names is left alone.
+_VENUE_ALIASES = {"limit_px": "price", "sz": "size", "reduceOnly": "reduce_only"}
+_ALIASED_TOOLS = ("venue.place_market", "venue.place_limit", "venue.close")
+
+
+def _venue_aliases(call: dict) -> None:
+    """Rewrite the venue SDK's argument names to this world's, in place."""
+    if call.get("tool") not in _ALIASED_TOOLS:
+        return
+    args = call["args"]
+    for alias, name in _VENUE_ALIASES.items():
+        if alias in args and name not in args:
+            args[name] = args.pop(alias)
+    if "is_buy" in args and "side" not in args and isinstance(args["is_buy"], bool):
+        args["side"] = "buy" if args.pop("is_buy") else "sell"
+
 class ArtifactListing:
     """The archive's directory rows in listing order, kept sorted as the archive changes.
 
@@ -582,6 +602,9 @@ class ComputeMixin:
         if writes and refused is not None:
             raise SectionError("tool_calls", "a batch that writes cannot run beside a "
                                f"refused call: {calls[refused]['invalid']}", refused)
+        for call in calls:
+            if isinstance(call, dict) and isinstance(call.get("args"), dict):
+                _venue_aliases(call)
         for index, call in enumerate(calls):
             spec = self.tool_specs.get(call["tool"])
             if spec is None or call.get("invalid"):

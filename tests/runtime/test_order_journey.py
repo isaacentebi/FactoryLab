@@ -213,7 +213,7 @@ def test_a_turn_whose_every_read_was_wrong_is_still_a_continuation():
 
 def test_a_bad_item_in_a_batch_that_writes_still_voids_the_whole_batch():
     bad_limit = {"tool": "venue.place_limit",
-                 "args": {"coin": "BTC", "is_buy": False, "size": "0.01", "limit_px": "150"}}
+                 "args": {"coin": "BTC", "side": "sell", "price": "150"}}  # no size
     provider = Scripted({"action": "hold", "tool_calls": [
         {"tool": "venue.positions", "args": {}}, bad_limit]})
     runtime = _consequence_runtime(provider=provider, exchange=_exchange())
@@ -260,3 +260,16 @@ def test_an_order_described_only_in_prose_is_refused_with_how_to_place_it():
                    if i["kind"] == "order.refused" and i["handle"] == handle)
     assert "nothing was submitted" in refusal["reason"]
     assert "venue.place_limit" in refusal["reason"]
+
+
+def test_the_venue_sdks_own_argument_names_are_translated_not_refused():
+    """Edition 5 testnet: a funding-spread hedge written with is_buy was voided whole."""
+    sdk = {"tool": "venue.place_limit",
+           "args": {"coin": "BTC", "is_buy": False, "sz": "0.01", "limit_px": "150"}}
+    provider = Scripted({"action": "investigate", "tool_calls": [sdk]},
+                        {"action": "order", "rationale": "short resting"})
+    runtime = _consequence_runtime(provider=provider, exchange=_exchange())
+    handle, _ = _consequence_produce(runtime)
+    writes = _writes(runtime, handle)
+    assert [(w["args"]["side"], w["args"]["size"], w["args"]["price"]) for w in writes] == [
+        ("sell", "0.01", "150")]
