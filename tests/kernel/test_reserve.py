@@ -173,10 +173,16 @@ def test_protection_changes_only_after_wallet_ledger_item(ledger, clock, monkeyp
 
     def capture(entry):
         entries.append(entry)
-        assert reserve.remaining() == 0 and wallet.balance == 100
+        # Every record precedes the change it records: the reserve moves last.
+        assert reserve.remaining() == 0
+        if entry["kind"] == "wallet.commit":
+            assert wallet.balance == 100
         return append(entry)
 
     monkeypatch.setattr(ledger, "append", capture)
     wallet.commit(hold, 10)
-    assert entries[0]["kind"] == "wallet.commit"
+    assert [e["kind"] for e in entries] == ["wallet.commit", "novelty.compute"]
+    # The niche's use is recorded (ruling R5): what the hold was entitled to and used.
+    assert entries[1]["protected"] == 25 and entries[1]["used"] == 10
+    assert entries[1]["handle"] == "new" and entries[1]["reason"] == "model"
     assert reserve.remaining() == 15

@@ -342,7 +342,8 @@ class Wallet:
         )
         self._log("reserve", amount, self.balance, handle, reason, reservation_id=reservation.id)
         if self.__novelty is not None and self.__unhistoried(handle, reason):
-            self.__novelty_holds[reservation.id] = self.__novelty._allocate_compute(amount)
+            self.__novelty_holds[reservation.id] = self.__novelty._allocate_compute(
+                amount, handle, reason)
         self.__reservations[reservation.id] = reservation
         self.__next_reservation += 1
         return reservation

@@ -10,6 +10,38 @@ from time import time_ns
 from factorylab.kernel.ledger import Ledger
 from factorylab.kernel.money import Money, require_money
 
+#: The two kinds of action a seat can take (essay II.II.b; ruling R5): what its
+#: return declared it did (its action label), or a tool of a kind it called.
+ACTION_LABEL, ACTION_TOOL = "label", "tool"
+
+
+def action_key(*, label: str | None = None, tool: str | None = None,
+               kind: str | None = None) -> str:
+    """The name of one action: ``label:<label>``, or ``tool:<kind>:<tool>``.
+
+    Essay II.II.b: learning death is prevented by a niche "usable only in the
+    context of unhistoried actions (decisions that arrive carrying no propensity
+    record and no reward trail)". An action is either the label a return declared
+    for what it did, or a (tool, kind) it called; exactly one of the two is named.
+    Guarantees one key per action, whoever takes it.
+    """
+    if (label is None) == (tool is None):
+        raise ValueError("an action is a label or a (tool, kind), exactly one of them")
+    if label is not None:
+        if not isinstance(label, str) or not label.strip():
+            raise ValueError("an action label is a nonempty string")
+        return f"{ACTION_LABEL}:{label}"
+    if (not isinstance(tool, str) or not tool.strip()
+            or not isinstance(kind, str) or not kind.strip()):
+        raise ValueError("a tool action names a nonempty tool and kind")
+    return f"{ACTION_TOOL}:{kind}:{tool}"
+
+
+def _is_action_key(key: object) -> bool:
+    return isinstance(key, str) and (
+        (key.startswith(f"{ACTION_LABEL}:") and len(key) > len(ACTION_LABEL) + 1)
+        or (key.startswith(f"{ACTION_TOOL}:") and key.count(":") >= 2))
+
 
 class SettleStatus(StrEnum):
     PENDING = "pending"
@@ -139,6 +171,10 @@ class DecisionQueue:
         # The deciding agent's own distribution over its own actions, recorded
         # as a second propensity on the handle the router already opened.
         self.__declared: dict[str, list[PropensityRecord]] = {}
+        # The actions each decision took (``action_key``), and per contract the
+        # actions that carry a reward trail: a settled decision that took them.
+        self.__actions: dict[str, frozenset[str]] = {}
+        self.__settled_actions: dict[str, set[str]] = {}
 
     def open(
         self,
@@ -210,6 +246,36 @@ class DecisionQueue:
             "propensity": propensity, "index": len(self.__declared.get(handle, ())) + 1,
         })
         self.__declared.setdefault(handle, []).append(propensity)
+
+    def record_actions(self, handle: str, keys) -> None:
+        """Log the actions an open decision took; they gain history only when it settles.
+
+        Guarantees that an action key joins its contract's reward trail
+        (``has_action_history``) only through a SETTLED outcome of a decision that
+        recorded it: a censored, inapplicable or timed-out decision leaves no trail.
+        Actions can only be added while the decision is open, and only as
+        ``action_key`` names; the record is evidence and never changes addressing.
+        """
+        decision = self.__decisions[handle]
+        keys = frozenset(keys)
+        if not keys or not all(_is_action_key(key) for key in keys):
+            raise ValueError("actions are nonempty action_key names")
+        if decision.status not in (SettleStatus.PENDING, SettleStatus.TIMED_OUT):
+            raise ValueError("decision already has a final outcome")
+        added = keys - self.__actions.get(handle, frozenset())
+        if not added:
+            return
+        self.__ledger.append({"kind": "decision.actions", "ts": self.__clock(),
+                              "handle": handle, "actions": sorted(added)})
+        self.__actions[handle] = self.__actions.get(handle, frozenset()) | added
+
+    def has_action_history(self, contract_id: str, key: str) -> bool:
+        """Whether a settled decision of ``contract_id`` took the action ``key``.
+
+        An action without it is *unhistoried* for that contract (essay II.II.b):
+        no decision of the contract that carried it has a reward trail.
+        """
+        return key in self.__settled_actions.get(contract_id, ())
 
     def propensities(self, handle: str) -> tuple[PropensityRecord, ...]:
         """Return every propensity on a handle: the router's first, then the agents'."""
@@ -323,6 +389,9 @@ class DecisionQueue:
         self.__returns[handle].append(retained)
         if status == SettleStatus.SETTLED:
             self.__settled_contracts.add(decision.propensity.chosen)
+            taken = self.__actions.get(handle)
+            if taken:
+                self.__settled_actions.setdefault(decision.propensity.chosen, set()).update(taken)
         if actor is not None:
             delivered = replace(original, channel=mapped_channel)
             self.__deliveries.setdefault(actor, []).append(delivered)
@@ -386,6 +455,8 @@ class DecisionQueue:
             "returns": {k: list(v) for k, v in self.__returns.items()},
             "settled_contracts": set(self.__settled_contracts),
             "declared": {k: list(v) for k, v in self.__declared.items()},
+            "actions": dict(self.__actions),
+            "settled_actions": {k: set(v) for k, v in self.__settled_actions.items()},
         }
 
     def _restore_state(self, state: dict) -> None:
@@ -396,5 +467,8 @@ class DecisionQueue:
                      "settled_contracts"):
             setattr(self, f"_DecisionQueue__{name}", state[name])
         self.__declared = state.get("declared", {})
+        # Older checkpoints predate action history: no action has a trail yet.
+        self.__actions = dict(state.get("actions", {}))
+        self.__settled_actions = {k: set(v) for k, v in state.get("settled_actions", {}).items()}
         self.__pending = {handle: None for handle, decision in self.__decisions.items()
                           if decision.status == SettleStatus.PENDING}

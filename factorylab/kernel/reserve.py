@@ -158,20 +158,35 @@ class NoveltyReserve:
     def _belongs_to(self, ledger: Ledger) -> bool:
         return self.__ledger is ledger
 
-    def _allocate_compute(self, amount: Money) -> tuple[int | None, Money]:
+    def _allocate_compute(self, amount: Money, handle: str = "",
+                          reason: str = "") -> tuple[int | None, Money, str, str]:
         """A preceding wallet.reserve item entitles one hold to protected compute.
 
         The wallet classifies the action before this call. Its existing reservation
         id, handle and reason are the audit evidence; no second money item is needed.
+        The handle and reason ride with the allocation so its use can be ledgered.
         """
         protected = min(amount, self.remaining())
         self.__remaining -= protected
-        return self.__start, protected
+        return self.__start, protected, handle, reason
 
-    def _refund_compute(self, allocation: tuple[int | None, Money], spent: Money) -> None:
-        """A preceding wallet.commit/release returns unused protection only to its own window."""
-        start, amount = allocation
-        if start == self.__start and self._active():
+    def _refund_compute(self, allocation: tuple, spent: Money) -> None:
+        """A preceding wallet.commit/release returns unused protection only to its own window.
+
+        Guarantees one ``novelty.compute`` entry per allocation that protected
+        anything: how much of the niche the hold was entitled to and how much of it
+        the booked cost used. It records the entitlement's use; no money moves here.
+        """
+        start, amount = allocation[0], allocation[1]
+        handle, reason = (allocation[2], allocation[3]) if len(allocation) >= 4 else ("", "")
+        refunded = start == self.__start and self._active()
+        # Ledger first: the entitlement changes only after its record is durable.
+        if amount > 0 and not self.__ledger.final:
+            self.__ledger.append({"kind": "novelty.compute", "handle": handle,
+                                  "reason": reason, "protected": amount,
+                                  "used": min(amount, max(0, spent)),
+                                  "refunded": refunded, "ts": self.__clock()})
+        if refunded:
             self.__remaining += max(0, amount - spent)
 
     def _validate_registration(
