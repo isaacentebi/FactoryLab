@@ -310,7 +310,9 @@ class Runtime(
         if released:
             self.budget.on_release(released)
         self._manage_reserve_window()
-        self.treasury.open_window(self.stats.reserve_windows)  # reserve-window top-up cap
+        # The Venice and forwarding-fee caps count their own wall-clock windows, never
+        # the pricing window (time audit T1, T13).
+        self.treasury.open_window(self._cap_window())
         # At each window boundary: when no live seat can act from its entitlement,
         # release the commons to the seats, or, with nothing left to release, let
         # the termination rule below see the starvation (P1-04).
@@ -319,13 +321,14 @@ class Runtime(
             self._sampling_actuator()
         self._observe_delivered_event(ev)
         if ev.kind is EventKind.TICK:
+            self._open_pending_epochs()
             self._reconcile_orders()
             if getattr(self, "polymarket", None) is not None:
                 from factorylab.runtime import polymarket
 
                 polymarket.tick(self)  # its own intents, fills and resolutions
             self._collect_income()  # C10: each receipt credits its owning seat before the tick
-            self.treasury.tick(self.clock.now_ns)
+            self._tick_treasury()
             self._classify_financing()  # a conversion confirmed this tick is spendable now
             self._reconcile_x402()
             if self.venue is not None:
@@ -386,6 +389,103 @@ class Runtime(
             self._snapshot("reserve_window")
         return True
 
+    def _call_deadline_s(self) -> float:
+        """A model call's deadline: ``min_ratio`` delivered ticks, in seconds (time audit T8).
+
+        Chapter II §IV.c: "the factory is expected to outrun the world". A call may
+        take no longer than one period of the fastest outer loop over the tick
+        (the price loop's floor), so no single completion freezes the world for
+        longer than its own fastest correction. The delivered tick is the slower
+        of the measured and the declared gap.
+        """
+        from factorylab.runtime.clockwork import tick_ns
+
+        return self.m.timing.min_ratio * tick_ns(self.tick_clock) / 1_000_000_000
+
+    def _call_expired(self, handle: str, timeout_s: float | None) -> None:
+        """A call that outlived its deadline is its decision timing out, in tick terms.
+
+        The decision's cutoff is reached now: the queue records the timeout, its
+        router is credited at the cutoff like any other (zero consequence, T4), and
+        a return that settles it later settles it without training a learner twice.
+        """
+        try:
+            pending = self.queue.get(handle).status is SettleStatus.PENDING
+        except KeyError:
+            return
+        self.ledger.append({"kind": "decision.call_expired", "handle": handle,
+                            "timeout_s": timeout_s, "tick": self.ticks_consumed,
+                            "ts": self.clock.now_ns})
+        if pending:
+            self.stats.timeouts += len(self.queue.time_out([handle], self.clock.now_ns))
+
+    def _safety_pass(self) -> None:
+        """Fills, order state, watchers and a terminal stop never wait behind a model call.
+
+        Chapter II §IV.c (requisite velocity); time audit T8. Before every model
+        call (and so between every tool round), once a delivered tick of wall time
+        has passed since the event began or since the last pass, the kernel reads
+        the venue's fills and settles them, reconciles resting orders and settles
+        every watcher from world state, without a model call and without a thread.
+        A wallet that fell to a terminal state stops further calls in this event, so
+        the wind-down at its end is not held behind them. A simulated world's clock
+        does not move inside an event, so it never needs one.
+        """
+        from factorylab.runtime.clockwork import tick_ns
+
+        if not self.live or self.venue is None:
+            return
+        now = self.wall.now_ns()
+        if now - self._safety_ns < tick_ns(self.tick_clock):
+            return
+        self._safety_ns = now
+        self.clock.now_ns = max(self.clock.now_ns, now)
+        fills = [WorldEvent(WorldEventKind.FILL, max(now, ts), self.exchange.name, payload)
+                 for ts, payload in self.consequence_fills.poll(self.exchange)]
+        self._settle_exchange_effects(fills)
+        self._reconcile_orders()
+        self._evaluate_watchers(sweep=f"safety-{now}")
+        terminal = self.termination.check(self.wallet, self.clock.now_ns,
+                                          cheapest_seat_micro=self._cheapest_seat_micro())
+        self.ledger.append({"kind": "safety.pass", "fills": len(fills), "tick": self.ticks_consumed,
+                            "terminal": terminal if terminal not in (None, DORMANT) else None,
+                            "ts": now})
+
+    def _cap_window(self) -> int:
+        """The index of the treasury caps' own window: ``treasury.cap_window`` wall time.
+
+        Money rails run in wall time, so a rate cap on them is a wall-clock duration
+        counted from launch (time audit T1, T13). A world resumed from a checkpoint
+        that predates the anchor continues from the window its treasury last opened.
+        """
+        span = self.m.treasury.cap_window_ns
+        if self.cap_anchor_ns is None:
+            self.cap_anchor_ns = self.clock.now_ns - max(0, self.treasury.venice_window - 1) * span
+        return 1 + max(0, self.clock.now_ns - self.cap_anchor_ns) // span
+
+    def _tick_treasury(self) -> None:
+        """Advance the treasury one tick on the capital loop's own clock (time audit T13).
+
+        The forward wait a strand is judged by is the declared floor raised to the
+        capital loop's measured p90 closure, in ticks, so a conversion is never
+        stranded faster than the rail has been seen to deliver. Every conversion
+        that finalizes this tick is one closure of that loop, recorded in ticks and
+        in wall time, and it joins the slowest period governance respects.
+        """
+        from factorylab.runtime.clockwork import ticks_for
+
+        measured = self.cadence.capital_period_events() or 0
+        self.treasury.tick_index = self.ticks_consumed
+        self.treasury.forward_wait_ticks = max(self.m.treasury.forward_wait_ticks, measured)
+        for result in self.treasury.tick(self.clock.now_ns) or ():
+            latency_ns = result.get("latency_ns") if isinstance(result, dict) else None
+            if result.get("status") != "confirmed" or latency_ns is None:
+                continue
+            ticks = ticks_for(latency_ns, self.tick_clock)
+            self.cadence.record_capital(transfer_id=result["transfer_id"],
+                                        latency_ticks=ticks, latency_ns=latency_ns)
+            self.clockwork.record("capital", ticks)
+
     def _snapshot(self, boundary: str) -> bool:
         """Persist a complete continuation at launch and after each boundary event finishes."""
         try:
@@ -440,7 +540,7 @@ class Runtime(
             observed.extend(self.venue.funding_payments(now_ns))
             self._settle_exchange_effects(observed)
             self._collect_income()
-            self.treasury.tick(now_ns)
+            self._tick_treasury()
             self._classify_financing()
         snapshot = Reconciler.snapshot(
             self.wallet.balance,

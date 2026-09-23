@@ -117,14 +117,18 @@ def test_a_refused_shadow_leg_spends_nothing_real():
 def test_a_top_up_that_fails_after_the_shadow_strands_recoverably_and_resumes_once():
     treasury, wallet, exchange, ledger = hybrid()
     treasury.rail.script["top_up_unavailable"] = True
+    # The wait is counted in world ticks the runtime states (time audit T13).
+    treasury.forward_wait_ticks = 2
     cash = exchange._cash
     treasury.transfer("to_venice", "5", handle="h", now_ns=1)
+    treasury.tick_index = 2
     treasury.tick(2)
     pots = treasury.pots()
     assert pots["pending"] and pots["pending_reason"] == "Venice top-up quote unavailable"
+    treasury.tick_index = 3
     treasury.tick(3)
-    treasury.open_window(2)
-    treasury.open_window(3)
+    assert treasury.state["status"] == "submitted"  # one tick short of the bound
+    treasury.tick_index = 4
     treasury.tick(4)
     # Past the bound the paid shadow leg parks with its hold and frees the slot.
     assert treasury.state["status"] == "stranded" and treasury.state["recoverable"]
@@ -679,11 +683,13 @@ def test_2_the_reviewers_probe_six_strands_then_top_ups_never_passes_the_absolut
                                     max_venice_total_micro=2 * FIVE)
     rail, books = treasury.rail, treasury.rail.hybrid_books
     rail.script["top_up_unavailable"] = True
+    treasury.forward_wait_ticks = 2
     now, window, results = 1, 1, []
-    for n in range(6):  # try to park six paid shadows, each past forward_wait_windows
+    for n in range(6):  # try to park six paid shadows, each past forward_wait_ticks
         results.append(treasury.transfer("to_venice", "5", handle=f"seat-{n}", now_ns=now))
         for _ in range(3):
             now += 1
+            treasury.tick_index = now
             treasury.tick(now)
             window += 1
             treasury.open_window(window)
@@ -693,6 +699,7 @@ def test_2_the_reviewers_probe_six_strands_then_top_ups_never_passes_the_absolut
     rail.script["top_up_unavailable"] = False
     for _ in range(30):  # every free slot is taken, every window renewed
         now += 1
+        treasury.tick_index = now
         treasury.tick(now)
         treasury.transfer("to_venice", "5", handle=f"late-{now}", now_ns=now)
         window += 1

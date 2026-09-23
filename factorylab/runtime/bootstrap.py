@@ -342,7 +342,7 @@ class BootstrapMixin:
                 fee_ceiling_micro=manifest.treasury.max_transfer_fee_micro,
                 max_venice_per_window=manifest.treasury.max_venice_per_window,
                 max_forward_fees_per_window=manifest.treasury.max_forward_fees_per_window,
-                forward_wait_windows=manifest.treasury.forward_wait_windows,
+                forward_wait_ticks=manifest.treasury.forward_wait_ticks,
                 clock_ns=self.clock,
                 max_venice_total_micro=getattr(manifest.treasury, "max_venice_total_micro",
                                                None),

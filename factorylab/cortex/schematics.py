@@ -1645,19 +1645,21 @@ class SchematicsMixin:
             "the decay the immune controller borrows — are in world.adaptive_scoring, and "
             "controller.decay and consequence_mix above are what they were committed at",
             "treasury": {"max_venice_per_window_micro": self.m.treasury.max_venice_per_window,
+                         "cap_window": _duration_str(self.m.treasury.cap_window_ns),
                          "venice_tranche_usd": "5",
                          "cctp_forwarding": self.m.treasury.cctp_forwarding,
                          "max_forward_fee_micro": self.m.treasury.max_forward_fee_micro,
                          "max_forward_fees_per_window_micro":
                              self.m.treasury.max_forward_fees_per_window,
-                         "forward_wait_windows": self.m.treasury.forward_wait_windows,
+                         "forward_wait_ticks": self.m.treasury.forward_wait_ticks,
                          "exit_route": "to_reserve burns USDC on HyperCore and mints it on "
                          "Base. Spot HYPE in the venue account pays the Core gas charge: buy it "
                          "on HYPE/USDC; HYPE spent as that charge is not a fill. The mint is "
                          "self-paid when the reserve holds Base ETH; otherwise Circle forwards "
                          "it for the on-chain fee quoted in pots.gas, bounded per transfer and "
-                         "per reserve window. pots.gas names the branch and any blocker. A "
-                         "forwarded mint unobserved for forward_wait_windows reserve windows "
+                         "per cap_window. pots.gas names the branch and any blocker. A "
+                         "forwarded mint unobserved for forward_wait_ticks world ticks (or the "
+                         "capital loop's measured p90 conversion, if longer) "
                          "strands recoverably (pots.stranded): its burned principal stays "
                          "held and re-checked, and new transfers are admitted.",
                          "return_route": "to_venue needs reserve Base ETH and HyperEVM HYPE "

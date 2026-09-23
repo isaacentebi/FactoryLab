@@ -253,9 +253,15 @@ class TreasurySpec:
     # $0.10 of headroom over the $0.20 the deployed CoreDepositWallet quotes on both networks.
     max_forward_fee_micro: int = 300_000
     max_forward_fees_per_window: int = 1_000_000
-    # Reserve windows a forwarded mint may stay unobserved before the exit is stranded
-    # (recoverably) and the treasury admits new transfers again.
-    forward_wait_windows: int = 2
+    # World ticks a forwarded mint (or a hybrid top-up) may stay undone before the exit
+    # is stranded (recoverably) and the treasury admits new transfers again. A declared
+    # floor: the runtime raises it to the capital loop's measured p90 closure, so a
+    # conversion is never stranded faster than the rail delivers (time audit T13).
+    forward_wait_ticks: int = 360
+    # The Venice and forwarding-fee caps' own period, a wall-clock duration: money rails
+    # run in wall time, so a rate cap is stated there and never borrows the pricing
+    # window (time audit T1, T13).
+    cap_window_ns: int = 3600 * NS_PER_SECOND
     # The hybrid capital-loop rehearsal (docs/architecture/capital-loop-rehearsal.md):
     # "base-mainnet" buys real Venice credit from the Base mainnet reserve while the
     # venue stays on testnet, and a shadow leg sends the same $5 of testnet USDC from
@@ -813,9 +819,15 @@ class WorldManifest:
                 raise ValueError(f"treasury.{budget_field} must be nonnegative integer money")
         if self.treasury.cctp_forwarding not in ("never", "on_empty_gas", "always"):
             raise ValueError("treasury.cctp_forwarding must be never, on_empty_gas or always")
-        windows = self.treasury.forward_wait_windows
-        if type(windows) is not int or windows < 1:
-            raise ValueError("treasury.forward_wait_windows must be a positive integer")
+        wait = self.treasury.forward_wait_ticks
+        if type(wait) is not int or wait < self.timing.min_ratio:
+            raise ValueError("treasury.forward_wait_ticks must be an integer of at least "
+                             "timing.min_ratio ticks")
+        cap_window = self.treasury.cap_window_ns
+        if (type(cap_window) is not int
+                or cap_window < self.timing.min_ratio * self.tick_interval_ns):
+            # The cap is an outer loop over the ticks transfers are attempted on.
+            raise ValueError("treasury.cap_window must be at least timing.min_ratio ticks")
         # A forwarded exit's burn carries maxFee up to the CCTP cap plus the forwarding cap;
         # the mint step must still fit the transfer fee cap after the principal burned.
         if (self.treasury.withdrawal_fee_micro + self.treasury.cctp_max_fee_micro
@@ -1333,7 +1345,8 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             max_forward_fee_micro=usd_to_micro(
                 (d.get("treasury") or {}).get("max_forward_fee_usd", "0.30"), rounding="exact"),
             max_forward_fees_per_window=usd_to_micro(forward_cap, rounding="exact"),
-            forward_wait_windows=(d.get("treasury") or {}).get("forward_wait_windows", 2),
+            forward_wait_ticks=(d.get("treasury") or {}).get("forward_wait_ticks", 360),
+            cap_window_ns=duration_ns((d.get("treasury") or {}).get("cap_window", "1h")),
             venice_network=(d.get("treasury") or {}).get("venice_network"),
             venice_shadow_sink=(d.get("treasury") or {}).get("venice_shadow_sink"),
             max_venice_total_micro=_optional_usd(d, "max_venice_total_usd"),

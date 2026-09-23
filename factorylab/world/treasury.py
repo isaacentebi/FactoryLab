@@ -17,10 +17,10 @@ from factorylab.world.x402 import TOP_UP_MICRO
 # writing one item per tick. Attempts are counted per step and never reset by the limit.
 PENDING_JOURNAL_EVERY = 10
 # The reason a forwarded exit strands when Circle's mint stays unobserved past the bound.
-FORWARD_WAIT_EXCEEDED = "forwarded mint not delivered within treasury.forward_wait_windows"
+FORWARD_WAIT_EXCEEDED = "forwarded mint not delivered within treasury.forward_wait_ticks"
 # The reason a hybrid conversion strands when its shadow leg paid and its real Venice
 # top-up could not even be prepared (no quote, no mainnet USDC) past the same bound.
-TOP_UP_WAIT_EXCEEDED = "Venice top-up not prepared within treasury.forward_wait_windows"
+TOP_UP_WAIT_EXCEEDED = "Venice top-up not prepared within treasury.forward_wait_ticks"
 TRANSFER_BLOCKED = "a previous transfer is still pending or stranded"
 # Hybrid mode's absolute bound, and the rule that one owed top-up blocks the next.
 VENICE_TOTAL_EXHAUSTED = "treasury.max_venice_total_usd exhausted"
@@ -128,7 +128,7 @@ class Treasury:
     One transfer at a time serializes each signer's nonce and simplifies recovery.
 
     A forwarded exit whose burn confirmed but whose mint Circle never delivered is
-    stranded after ``forward_wait_windows`` reserve windows and parked in ``stranded``
+    stranded after ``forward_wait_ticks`` world ticks and parked in ``stranded``
     with its principal hold: it no longer occupies the transfer slot, and whenever the
     slot is free a tick re-checks it (the forwarder's delivery, or the reserve's own
     self-mint of the still-unclaimed message) and completes it through the same steps.
@@ -150,7 +150,7 @@ class Treasury:
         fee_ceiling_micro=2_000_000,
         max_venice_per_window=10_000_000,
         max_forward_fees_per_window=1_000_000,
-        forward_wait_windows=2,
+        forward_wait_ticks=360,
         clock_ns=None,
         max_venice_total_micro=None,
     ):
@@ -167,9 +167,13 @@ class Treasury:
         # with the moment it was read, and the custody view reports that stamp.
         self.clock_ns = clock_ns if callable(clock_ns) else time_ns
         self.pots_observed_ns: int | None = None
-        if type(forward_wait_windows) is not int or forward_wait_windows < 1:
-            raise ValueError("forward_wait_windows must be a positive integer")
-        self.forward_wait_windows = forward_wait_windows
+        if type(forward_wait_ticks) is not int or forward_wait_ticks < 1:
+            raise ValueError("forward_wait_ticks must be a positive integer")
+        # How long a prepare stall may last before a recoverable strand, in world ticks
+        # (time audit T13). The runtime raises it to the capital loop's measured
+        # closure each tick and states the tick it is on in ``tick_index``.
+        self.forward_wait_ticks = forward_wait_ticks
+        self.tick_index = 0
         if type(fee_ceiling_micro) is not int or fee_ceiling_micro < 0:
             raise ValueError("fee ceiling must be nonnegative integer micro-USD")
         self.fee_ceiling_micro = fee_ceiling_micro
@@ -205,7 +209,11 @@ class Treasury:
         self.ledger.append({"kind": "treasury." + kind, **fields})
 
     def open_window(self, index: int) -> None:
-        """A forward reserve-window boundary renews the Venice submission budget once."""
+        """A forward cap-window boundary renews the Venice submission budget once.
+
+        The index is the caps' own wall-clock window (``treasury.cap_window``),
+        never the pricing window (time audit T1, T13).
+        """
         if type(index) is not int or index < self.venice_window:
             raise ValueError("treasury window must advance monotonically")
         if index != self.venice_window:
@@ -849,6 +857,8 @@ class Treasury:
                     "received_micro": finished["received_micro"],
                     "fees_micro": finished["fees_micro"],
                     "tx_refs": deepcopy(finished["receipts"]),
+                    # Open to finalized: one closure of the capital loop (time audit T13).
+                    "latency_ns": max(0, now_ns - finished.get("started_ns", now_ns)),
                 }
             ]
         # Record completion independently from preparing the next step. This lets
@@ -925,10 +935,11 @@ class Treasury:
         if previous is None:
             record = {"step": step, "phase": phase, "reason": reason, "attempts": 1,
                       "since_ns": now_ns, "since_window": self.venice_window,
-                      "reference": deepcopy(carry)}
+                      "since_tick": self.tick_index, "reference": deepcopy(carry)}
         else:
-            record = {**previous, "phase": phase, "reason": reason,
-                      "attempts": previous["attempts"] + 1}
+            # A stall recorded before the tick clock counts its wait from now.
+            record = {"since_tick": self.tick_index, **previous, "phase": phase,
+                      "reason": reason, "attempts": previous["attempts"] + 1}
             if carry is not None:
                 record["reference"] = deepcopy(carry)
         if (previous is None or reason != previous["reason"]
@@ -957,14 +968,14 @@ class Treasury:
         return self._forwarded(state) or self._shadowed(state)
 
     def _forward_wait_exceeded(self) -> bool:
-        """A forwarded mint or a hybrid top-up still undone after the manifest's windows."""
+        """A forwarded mint or a hybrid top-up still undone after ``forward_wait_ticks``."""
         state = self.state
         record = state.get("pending")
         if record is None or not self._recoverable(state):
             return False
-        # Checkpoints predating the bound carry no window: the wait is measured from now.
-        since = record.get("since_window", self.venice_window)
-        return self.venice_window - since >= self.forward_wait_windows
+        # A stall recorded before the tick clock carries no tick: its wait counts from now.
+        since = record.get("since_tick", self.tick_index)
+        return self.tick_index - since >= self.forward_wait_ticks
 
     def _recover(self, now_ns: int) -> None:
         """Re-check the oldest parked strand on a free slot; a reference re-enters the plan.
