@@ -162,6 +162,27 @@ def test_dangerous_or_unsupported_worlds_are_refused_before_runtime():
         )
 
 
+def test_the_prepaid_ceiling_covers_the_wire_schema():
+    """The rehearsal's own reservation counts a carried schema as input (§II.b)."""
+    import json
+
+    manifest = rehearsal.effective_manifest(load_manifest(WORLD))
+    prepaid = rehearsal.PrepaidProvider(
+        StubProvider(ModelResponse(request().model_id, "{}", 1, 1, "stop", cost_micro=1)),
+        manifest, rehearsal.Admission(cap_micro=1_000_000, max_calls=3))
+    schema = {"type": "object", "properties": {"x": {"type": "string"}},
+              "required": ["x"], "description": "d" * 5_000}
+    bare = request()
+    carried = replace(bare, response_schema=schema)
+    chars = len(bare.system) + sum(len(str(m["content"])) for m in bare.messages)
+    size = len(json.dumps(schema, separators=(",", ":")))
+    price = prepaid._prices.price(bare.model_id)
+    assert prepaid._ceiling(bare) == price.cost(int(chars * 1.5) + 64, bare.max_tokens)
+    assert prepaid._ceiling(carried) == price.cost(int((chars + size) * 1.5) + 64,
+                                                   bare.max_tokens)
+    assert prepaid._ceiling(carried) > prepaid._ceiling(bare)
+
+
 def test_admission_counts_attempts_and_stops_on_overrun_or_unknown_bill():
     manifest = rehearsal.effective_manifest(load_manifest(WORLD))
     probe = rehearsal.PrepaidProvider(

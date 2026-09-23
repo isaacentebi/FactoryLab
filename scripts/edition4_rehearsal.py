@@ -207,9 +207,11 @@ class PrepaidProvider:
         }
 
     def _ceiling(self, req: ModelRequest) -> int:
+        from factorylab.world.models import prompt_chars
+
         price = self._prices.price(req.model_id)
-        chars = len(req.system) + sum(len(str(m.get("content", ""))) for m in req.messages)
-        return price.cost(int(chars * 1.5) + 64, req.max_tokens)
+        # The wire schema is input too (models.contract, §II.b), so it is reserved for.
+        return price.cost(int(prompt_chars(req) * 1.5) + 64, req.max_tokens)
 
     def affordable(self, model_id: str, ceiling_micro: int) -> tuple[bool, str]:
         if not self._namespace_allowed(model_id):
@@ -644,16 +646,19 @@ def build_prepaid_provider(manifest: WorldManifest, *, keep_reserve_env: bool = 
         raise RehearsalRefused("unsupported_provider_rail")
     config = {m.id: dict(m.reasoning) for m in manifest.models if m.reasoning}
     extra = manifest.extra_body_config()
+    schema_models = manifest.schema_contract_models()
     openrouter = None
     if "openrouter" in providers:
         if not os.environ.get("OPENROUTER_API_KEY"):
             raise RehearsalRefused("openrouter_credential_missing")
         openrouter = OpenRouterProvider(reasoning_config=config,
-                                        web_config=manifest.web_config(), extra_body=extra)
+                                        web_config=manifest.web_config(), extra_body=extra,
+                                        schema_models=schema_models)
     venice = None
     if "venice" in providers:
         if os.environ.get("VENICE_API_KEY"):
-            venice = VeniceProvider(reasoning_config=config, web_config=manifest.web_config())
+            venice = VeniceProvider(reasoning_config=config, web_config=manifest.web_config(),
+                                    schema_models=schema_models)
         elif os.environ.get("RESERVE_PRIVATE_KEY"):
             transport, reserve_client = _venice_reserve_transport()
 
@@ -665,7 +670,7 @@ def build_prepaid_provider(manifest: WorldManifest, *, keep_reserve_env: bool = 
 
             venice = CapturedReserveVenice(
                 transport=transport, reasoning_config=config,
-                web_config=manifest.web_config())
+                web_config=manifest.web_config(), schema_models=schema_models)
         else:
             raise RehearsalRefused("venice_prepaid_credential_missing")
     # Runtime must never inherit the reserve private key. The captured transport can

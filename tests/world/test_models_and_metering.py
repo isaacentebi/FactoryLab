@@ -80,6 +80,28 @@ def test_fake_model_is_deterministic_and_scripted() -> None:
     assert a == b and a.text == "BUY BTC 0.001" and (a.input_tokens, a.output_tokens) == (10, 4)
 
 
+def test_the_reservation_ceiling_covers_the_wire_schema() -> None:
+    """A schema a host may bill as prompt tokens is input, so it is reserved for."""
+    import json
+    from dataclasses import replace
+
+    from factorylab.world.models import prompt_chars
+
+    prices = PriceTable()
+    prices.register("m", TokenPrice(1, 0))
+    model = MeteredModel(FakeModel(), prices, Meter(TinyWallet(balance=10**9)))
+    bare = ModelRequest("m", "system", ({"role": "user", "content": "hello"},), 16,
+                        json_object=True)
+    schema = {"type": "object", "properties": {"verdict": {"type": "number"}},
+              "required": ["verdict"]}
+    carried = replace(bare, response_schema=schema)
+    size = len(json.dumps(schema, separators=(",", ":")))
+    assert prompt_chars(carried) == prompt_chars(bare) + size
+    assert model.ceiling(carried) - model.ceiling(bare) == int(
+        prompt_chars(carried) * 1.5) - int(prompt_chars(bare) * 1.5)
+    assert model.ceiling(carried) >= model.ceiling(bare) + size
+
+
 def test_metering_reserves_then_commits_actual_before_return() -> None:
     w = TinyWallet(balance=1_000_000)
     meter = Meter(w)
