@@ -777,6 +777,9 @@ def run_rehearsal(
     report_path = None
     if out is not None:
         output_dir = Path(out)
+        # Before anything is created: a refused launch must not leave a run directory
+        # where the private kill witness lives (the #142 review).
+        _refuse_reserved_out(output_dir)
         output_dir.mkdir(parents=True, exist_ok=False)
         report_path = output_dir / "report.json"
     admission = Admission(cap_micro, max_calls, recover_provider_failures=True)
@@ -797,7 +800,6 @@ def run_rehearsal(
             # still settle (a crashed world's last one stays valid for its timeout).
             from factorylab.runtime.capital_loop import launch_check
 
-            _refuse_reserved_out(output_dir)
             runs = tuple(previous_runs) + _sibling_runs(output_dir)
             launch = launch_check(manifest, previous_runs=runs,
                                   transport=capital_loop_transport or _http_request())

@@ -218,3 +218,15 @@ def test_a_run_named_like_the_witness_is_still_read_and_the_name_is_refused(tmp_
     assert rehearsal._sibling_runs(tmp_path / "now") == (tmp_path / WITNESS_DIR,)
     with pytest.raises(rehearsal.RehearsalRefused, match="output_dir_reserved_for_witness"):
         rehearsal._refuse_reserved_out(tmp_path / WITNESS_DIR)
+
+
+def test_a_launch_named_like_the_witness_is_refused_before_anything_is_created(tmp_path):
+    # The #142 review: the refusal must precede mkdir, or it leaves a 0755 .witness.
+    from factorylab.runtime.witness import WITNESS_DIR
+    from scripts import edition4_rehearsal as rehearsal
+
+    with pytest.raises(rehearsal.RehearsalRefused, match="output_dir_reserved_for_witness"):
+        rehearsal.run_rehearsal("worlds/edition6-capital-loop.toml",
+                                out=tmp_path / "runs" / WITNESS_DIR, capital_loop=True,
+                                provider=object())
+    assert not (tmp_path / "runs").exists()
