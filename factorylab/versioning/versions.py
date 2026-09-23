@@ -63,15 +63,17 @@ def diagnose(windows: list[dict], state: dict, *, k: int, tv_threshold: float,
       rolling operator over those cards has a gap of at least
       ``immune.gap_threshold`` (``card_gap``: registrations and revisions, which the
       organ's raised gain invites, cannot narrow it and reset the duration);
-    * **thrash** is a factory that "never settles": the version gap series is
-      volatile (mean change above ``immune.tv_threshold``); or at least two
-      versions in a row were abandoned before they settled and the current one has
-      not settled either (an oscillation keeps its gap flat and low, and shows as
-      versions cut before they hold); or a configuration was refactored faster
+    * **thrash** is a factory that "never settles". Four signals, each priced
+      (``unsettled``, the measurement the thrash price observes, is the largest):
+      the current version's gap series is volatile (its mean change, above
+      ``immune.tv_threshold``); the behaviour repeats with a period (``live.period``:
+      "We can think of thrash as oscillation", essay II.IV.b; reads 1); two
+      versions in a row, launch excepted, were abandoned before they settled and
+      the current one has not (reads 1); or a configuration was refactored faster
       than the loop that corrects it closes (a recorded lifespan shorter than its
-      feedback latency; essay II.IV.b, "Thrash occurs in loops whose periods exceed
-      the lifespan of the configurations they are trying to error-correct"; time
-      audit T14);
+      feedback latency, reading ``1 - lifespan / latency``; "Thrash occurs in loops
+      whose periods exceed the lifespan of the configurations they are trying to
+      error-correct", time audit T14);
     * **learning death** is the frontier "no longer being invoked" or
       "quarantined", which leaves "a single state with no variety": one cell over
       the tail, no registration or revision in it, and the frontier gone
@@ -87,12 +89,15 @@ def diagnose(windows: list[dict], state: dict, *, k: int, tv_threshold: float,
     short_lived = [row for w in tail for row in w.get("lifespans", ())
                    if row.get("ratio") is not None and row["ratio"] < 1]
     abandoned = state.get("unsettled_run", 0) >= 2 and state.get("settled_tick") is None
+    periodic = state.get("period") is not None
+    unsettled = max([state.get("volatility") or 0.0, float(periodic), float(abandoned),
+                     *(1.0 - row["ratio"] for row in short_lived)])
     frontier = frontier_evidence(tail)
     single = supported and len(set(tail_cells)) == 1
     flags = {
         "stable_failure": bool(failing and wide),
         "learning_death": bool(single and frontier["quiet"] and frontier["gone"]),
-        "thrash": bool(supported and (volatile or abandoned or short_lived)),
+        "thrash": bool(supported and (volatile or periodic or abandoned or short_lived)),
     }
     return {
         "flags": flags, "cells": [list(c) for c in tail_cells], "dimensions": dims,
@@ -100,6 +105,7 @@ def diagnose(windows: list[dict], state: dict, *, k: int, tv_threshold: float,
         "card_gap": state.get("card_gap"),
         "volatility": state.get("volatility"), "version": state.get("version"),
         "settled": state.get("settled_tick") is not None, "abandoned": abandoned,
+        "period": state.get("period"), "unsettled": unsettled if supported else None,
         "violated_cards": failing, "short_lived": short_lived, "frontier": frontier,
     }
 
@@ -141,11 +147,14 @@ def frontier_evidence(tail: list[dict]) -> dict:
     ``uninvoked_routers`` (when every tail window recorded the routers' draws): the
     frontier (mean-based) routers whose every draw in every tail window gave NOOP at
     least ``1 - gamma``, so their seats were woken by exploration alone, the
-    frontier "no longer being invoked" (essay II.II.a; ruling R9, versioning U1).
-    ``unhistoried``: the draws that offered an unhistoried seat and the probability
-    mass they put on such seats; offered and never drawn at all is the frontier
-    "quarantined". ``gone`` is either. ``improving``, the slopes and
-    ``lost_access`` are the causal annotation, never the flag.
+    frontier "no longer being invoked" (essay II.II.a; ruling R9, versioning U1),
+    whatever the reason. ``quarantined_routers``: the frontier routers that, in
+    every tail window, held every unhistoried seat they offered within the organ's
+    tolerance of the exploration floor, ``(1 + immune.tv_threshold) * gamma / N``,
+    while a historied seat held more than all the other arms together: newcomers
+    offered only by exploration, "quarantined" from the incumbents. ``gone`` is
+    either. ``improving``, the slopes and ``lost_access`` are the causal annotation,
+    never the flag.
     """
     paid_off = slope([w["profile"].get("paid_off") for w in tail])
     realized = slope([w["profile"].get("realized_pnl") for w in tail])
@@ -157,11 +166,14 @@ def frontier_evidence(tail: list[dict]) -> dict:
                     for w in tail]
         uninvoked = sorted(set.intersection(*({row["router"] for row in rows
                                                if row.get("uninvoked")} for rows in frontier)))
+        quarantined = sorted(set.intersection(*({row["router"] for row in rows
+                                                 if row.get("quarantined")}
+                                                for rows in frontier)))
         offered = sum(row.get("unhistoried_offered", 0) for rows in frontier for row in rows)
         mass = fsum(row.get("unhistoried_mass", 0.0) for rows in frontier for row in rows)
-        evidence = {"uninvoked_routers": uninvoked,
+        evidence = {"uninvoked_routers": uninvoked, "quarantined_routers": quarantined,
                     "unhistoried": {"offered": offered, "mass": mass}}
-        gone = bool(uninvoked) or (offered > 0 and mass == 0)
+        gone = bool(uninvoked) or bool(quarantined)
     return {
         "quiet": bool(tail) and all(
             w["profile"].get("registrations") == 0 and w["profile"].get("revision") == 0
@@ -189,7 +201,7 @@ def replay(windows: list[dict], *, k: int, horizon: int, tv_threshold: float,
     retained: list[dict] = []
     result = []
     for window in windows:
-        retained = [*retained, window][-horizon:]
+        retained = [*retained, window][-live.retention(horizon, k):]
         state, events = live.advance(state, retained, k=k, horizon=horizon,
                                      tv_threshold=tv_threshold, **bins)
         result.append({"state": state, "events": events,

@@ -84,14 +84,14 @@ def test_learning_death_is_read_from_frontier_invocation_never_from_cards(diary)
     assert spans == [(2, 3), (7, 8)]
 
 
-def test_a_quarantined_frontier_is_offered_unhistoried_seats_and_never_draws_them():
-    window = {"profile": {"registrations": 0, "revision": 0}, "regions": {},
-              "frontier_invocation": [{"router": "r", "uninvoked": False,
-                                       "unhistoried_offered": 4, "unhistoried_mass": 0.0}]}
-    evidence = frontier_evidence([window, window, window])
-    assert evidence["gone"] and evidence["unhistoried"] == {"offered": 12, "mass": 0.0}
-    window["frontier_invocation"][0]["unhistoried_mass"] = 0.2
-    assert not frontier_evidence([window, window, window])["gone"]
+def test_a_quarantined_frontier_is_gone_only_when_every_tail_window_quarantines():
+    def window(quarantined):
+        return {"profile": {"registrations": 0, "revision": 0}, "regions": {},
+                "frontier_invocation": [{"router": "r", "uninvoked": False,
+                                         "quarantined": quarantined}]}
+    evidence = frontier_evidence([window(True)] * 3)
+    assert evidence["gone"] and evidence["quarantined_routers"] == ["r"]
+    assert not frontier_evidence([window(True), window(False), window(True)])["gone"]
     # Without the routers' record (an older diary) nothing is diagnosed gone.
     assert not frontier_evidence([{"profile": {}, "regions": {}}])["gone"]
 
@@ -103,7 +103,8 @@ def test_oscillation_is_thrash_and_a_steady_series_is_not(diary):
     rows = [{"cards": {"activity": i % 2}, "regions": {"activity": region}} for i in range(14)]
     report = summary(diary(rows), k=3, tv_threshold=0.2)
     thrash = [f for f in report["pathologies"] if f["kind"] == "thrash"]
-    assert thrash and all(not e["settled"] for f in thrash for e in f["evidence"]["windows"])
+    assert thrash and all(e["period"] == 2 and e["unsettled"] == 1
+                          for f in thrash for e in f["evidence"]["windows"])
     steady = [{"cards": {"activity": 1}, "regions": {"activity": region}} for _ in range(14)]
     assert not [f for f in summary(diary(steady), k=3)["pathologies"] if f["kind"] == "thrash"]
 
@@ -154,9 +155,10 @@ def test_versions_are_debounced_detections_each_with_its_own_gap(diary):
     rows = [{"verdict": v, "cards": {"quality": v}, "regions": {"quality": region}}
             for v in [0] * 6 + [1] * 6]
     spans = summary(diary(rows), k=3, tv_threshold=.5)["versions"]
-    assert [(s["start_window"], s["cause"]) for s in spans] == [(0, "launch"), (7, "behaviour")]
+    # The change must persist, beyond chance, at k consecutive closes (7, 8, 9).
+    assert [(s["start_window"], s["cause"]) for s in spans] == [(0, "launch"), (9, "behaviour")]
     assert sum(span["duration"] for span in spans) == 12
-    assert spans[0]["dominant_cells"][0]["share"] == pytest.approx(6 / 7)
+    assert spans[0]["dominant_cells"][0]["share"] == pytest.approx(6 / 9)
     assert spans[1]["gap"] == 1 and spans[1]["durable"]
 
 

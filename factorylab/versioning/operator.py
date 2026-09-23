@@ -98,13 +98,25 @@ def observed_gap(cells: list[tuple]) -> float | None:
     """
     if len(cells) < 2:
         return None
-    occupied = sorted(set(cells))
+    transitions = Counter(zip(cells, cells[1:], strict=False))
+    return gap_from_counts(dict(transitions), dict(Counter(cells)))
+
+
+def gap_from_counts(transitions: dict, occupancy: dict) -> float | None:
+    """``observed_gap`` from accumulated counts: {(from, to): n} and {cell: n}.
+
+    The same bound, read from counts a live version keeps over its whole life
+    rather than from the windows still retained. None without a transition.
+    """
+    if not transitions:
+        return None
+    occupied = sorted(set(occupancy) | {c for pair in transitions for c in pair})
     indices = {cell: i for i, cell in enumerate(occupied)}
     counts = [[0] * len(occupied) for _ in occupied]
-    for left, right in zip(cells, cells[1:], strict=False):
-        counts[indices[left]][indices[right]] += 1
-    occupancy = Counter(cells)
-    fallback = [occupancy[cell] / len(cells) for cell in occupied]
+    for (left, right), n in transitions.items():
+        counts[indices[left]][indices[right]] += n
+    total = sum(occupancy.values())
+    fallback = [occupancy.get(cell, 0) / total for cell in occupied]
     step = [[value / sum(row) for value in row] if sum(row) else list(fallback)
             for row in counts]
     power, best = step, 1.0

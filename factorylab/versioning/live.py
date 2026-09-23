@@ -22,13 +22,16 @@ What it keeps (versioning audit M1, M2, C3, P6):
   published surfaces and prices) opens a version at once: "If a revision to the
   input at the level of the charter happens, the version has changed. If an
   external force changes the terms ... the version has changed." Behaviour opens
-  one when two complete adjacent k-window blocks, both inside the current version,
-  differ by more than ``immune.tv_threshold`` (debounced: never within 2k windows
-  of the last boundary).
-* **A gap per version**, over the version's retained windows once it has k of them,
-  and the series of those readings, whose volatility is the thrash signal.
-* **Settling time**: the ticks from a version's opening to the first close at which
-  the last k windows differ from the k before them by less than ``tv_threshold``
+  one when the last k windows differ from the rest of the current version by more
+  than ``immune.tv_threshold`` plus the sampling allowance of a k-window sample
+  (``shift``) at k consecutive closes, and never within 2k windows of the last
+  boundary.
+* **A gap per version**, over the version's retained windows once it has 2k of them,
+  and the series of those readings inside the version, whose volatility is one
+  thrash signal; **periodicity** over the retained windows (``period``) is another.
+* **Settling time**: the ticks from a version's opening to the first close, 2k
+  windows or more into it, at which the last k windows differ from the rest of the
+  version by no more than ``tv_threshold`` plus that allowance
   (essay II.IV.c: "how long the output distribution takes to return to a settled
   distribution"). A version superseded before it settles leaves its age as a
   lower bound.
@@ -40,11 +43,12 @@ carries.
 from __future__ import annotations
 
 from bisect import bisect_left
+from collections import Counter
 from copy import deepcopy
-from math import fsum
+from math import fsum, sqrt
 
 from factorylab.charter.controller import CardRegion, violation
-from factorylab.versioning.operator import observed_gap, total_variation
+from factorylab.versioning.operator import gap_from_counts, observed_gap, total_variation
 
 #: The activity dimensions every cell carries beside the cards, when supported.
 ACTIVITY = ("registrations", "revision")
@@ -116,6 +120,28 @@ def block_distance(windows: list[dict], k: int, **bins) -> float | None:
     return total_variation(series[:k], series[k:])
 
 
+def shift(windows: list[dict], k: int, **bins) -> dict | None:
+    """How far the last k windows moved from the version before them, beyond chance.
+
+    Guarantees ``tv``, the TV between the last k windows' cells and every earlier
+    window's of ``windows`` (over their shared support), and ``noise``, the
+    sampling allowance ``1/2 * sum_i sqrt(q_i (1 - q_i) (1/k + 1/n))`` over the
+    earlier windows' occupancy q (n of them): the TV two samples of an unchanged
+    distribution, of k and of n windows, reach anyway (the #134 review: stationary
+    random behaviour kept opening versions). A shift is a change of behaviour only
+    when ``tv`` exceeds ``tv_threshold`` plus that allowance. None with fewer than
+    2k windows.
+    """
+    if len(windows) < 2 * k:
+        return None
+    _dims, series = cells(windows, **bins)
+    base, block = series[:-k], series[-k:]
+    counts = Counter(base)
+    noise = 0.5 * fsum(sqrt((n / len(base)) * (1 - n / len(base)) * (1 / k + 1 / len(base)))
+                       for n in counts.values())
+    return {"tv": total_variation(base, block), "noise": noise}
+
+
 def volatility(series: list[float | None]) -> float | None:
     """Mean absolute change between successive defined gap readings, or None.
 
@@ -130,12 +156,71 @@ def volatility(series: list[float | None]) -> float | None:
     return fsum(abs(b - a) for a, b in zip(values, values[1:], strict=False)) / (len(values) - 1)
 
 
+def period(windows: list[dict], cycles: int, **bins) -> int | None:
+    """The shortest period, at least 2 and at most ``cycles``, the last windows repeat.
+
+    Essay II.IV.b: "We can think of thrash as oscillation ... the factory revisits
+    the same regions of configuration space on a regular cadence and learns nothing
+    new on each pass". Guarantees a period p is returned only when the last
+    ``cycles * p`` windows' cells (over their shared support) each equal the cell p
+    windows before, and the cycle visits at least two cells: a constant sequence has
+    no period. ``cycles`` is the cascade ratio, so the organ names an oscillation only
+    after it has repeated as often as an outer loop needs to separate from it, and a
+    k of any size cannot hide one. None when no period fits the retained windows.
+    """
+    for p in range(2, cycles + 1):
+        n = cycles * p
+        if len(windows) < n:
+            break
+        series = cells(windows[-n:], **bins)[1]
+        if len(set(series[-p:])) >= 2 and all(
+                series[i] == series[i - p] for i in range(p, n)):
+            return p
+    return None
+
+
+def _count(state: dict, span: list[dict], **bins) -> dict:
+    """The current version's transition and occupancy counts, over its whole life.
+
+    Guarantees the counts cover every window the version has had while its cells'
+    dimensions stay the same; a change of dimensions (a card gaining or losing
+    support) recounts from the retained windows, the only ones whose cells are
+    comparable. Cells are keyed as text so the counts are plain data.
+    """
+    dims, series = cells(span, **bins)
+    keys = [",".join(map(str, cell)) for cell in series]
+    book = state.get("book")
+    if not book or book["version"] != state["version"] or book["dims"] != dims:
+        book = {"version": state["version"], "dims": dims, "windows": len(keys),
+                "occupancy": dict(Counter(keys)), "last": keys[-1],
+                "transitions": dict(Counter(f"{a}|{b}" for a, b in zip(keys, keys[1:],
+                                                                         strict=False)))}
+    else:
+        pair = f"{book['last']}|{keys[-1]}"
+        book["transitions"][pair] = book["transitions"].get(pair, 0) + 1
+        book["occupancy"][keys[-1]] = book["occupancy"].get(keys[-1], 0) + 1
+        book["last"], book["windows"] = keys[-1], book["windows"] + 1
+    state["book"] = book
+    return book
+
+
+def retention(horizon: int, k: int) -> int:
+    """How many closed windows the organ keeps: the operator's horizon, or ``cycles²``.
+
+    ``cycles = horizon // k`` is the cascade ratio; a period up to it is named only
+    after ``cycles`` repeats (``period``), so a small k cannot hide an oscillation.
+    """
+    cycles = max(2, horizon // k)
+    return max(horizon, cycles * cycles)
+
+
 def fresh() -> dict:
     """The state before the first window: no version is open yet."""
     return {"version": 0, "start_window": None, "start_tick": None, "cause": None,
             "settled_tick": None, "gap": None, "rolling_gap": None, "card_gap": None,
             "gaps": [],
-            "volatility": None, "closed": [], "boundaries": 0, "unsettled_run": 0}
+            "volatility": None, "closed": [], "boundaries": 0, "unsettled_run": 0,
+            "period": None, "shifting": 0}
 
 
 def tick(window: dict) -> int:
@@ -148,14 +233,23 @@ def advance(state: dict, windows: list[dict], *, k: int, horizon: int, tv_thresh
             revision_bins: tuple[float, ...]) -> tuple[dict, list[dict]]:
     """Read the newest closed window (the last of ``windows``) into the live versions.
 
-    ``windows`` are the retained closed windows, oldest first, at most ``horizon``
-    of them. Returns the next state and what happened at this window: a
-    ``boundary`` (the version that closed and why the next opened) and a
-    ``settled`` reading (a version's settling time, or a superseded version's age
-    as a lower bound, ``settled`` False). The state keeps at most ``horizon``
-    closed versions.
+    ``windows`` are the retained closed windows, oldest first: the rolling operator
+    reads the last ``horizon`` of them, and periodicity (``period``) up to
+    ``cycles²`` of them, ``cycles = horizon // k`` (the cascade ratio). Returns the
+    next state and what happened at this window: a ``boundary`` (the version that
+    closed and why the next opened) and a ``settled`` reading (a version's settling
+    time, or a superseded version's age as a lower bound, ``settled`` False). The
+    state keeps at most ``horizon`` closed versions.
+
+    Guarantees, the #134 review: a version's gap is read only once it has 2k
+    windows (a whole operator's worth: two blocks), and its gap series starts empty
+    at every boundary, so no volatility is carried from one version into the next;
+    settling compares two complete blocks inside the version.
     """
     bins = {"registration_bins": registration_bins, "revision_bins": revision_bins}
+    cycles = max(2, horizon // k)
+    retained = windows
+    windows = windows[-horizon:]
     state = deepcopy(state)
     window = windows[-1]
     now = tick(window)
@@ -172,9 +266,15 @@ def advance(state: dict, windows: list[dict], *, k: int, horizon: int, tv_thresh
               and window.get("terms") is not None and previous["terms"] != window["terms"]):
             cause = "terms"
         elif len(span) >= 2 * k:
-            distance = block_distance(span, k, **bins)
-            if distance is not None and distance > tv_threshold:
-                cause = "behaviour"
+            moved = shift(span, k, **bins)
+            if moved is not None and moved["tv"] > tv_threshold + moved["noise"]:
+                # Debounced: a change of behaviour is one that persists, beyond chance,
+                # at k consecutive closes; a single noisy block is not a new version.
+                state["shifting"] = state.get("shifting", 0) + 1
+                if state["shifting"] >= k:
+                    cause = "behaviour"
+            else:
+                state["shifting"] = 0
     if cause is not None:
         if state["start_window"] is not None:
             closed = {"version": state["version"], "start_window": state["start_window"],
@@ -193,30 +293,41 @@ def advance(state: dict, windows: list[dict], *, k: int, horizon: int, tv_thresh
                                "ticks": now - state["start_tick"], "window": window["index"]})
                 # Versions abandoned before they settled, one after another: the factory
                 # keeps moving on without ever holding a state (essay II.II.a, thrash
-                # "never settles"). One such version is a transition, not thrash.
-                state["unsettled_run"] = state.get("unsettled_run", 0) + 1
+                # "never settles"). One such version is a transition, not thrash, and
+                # the launch version is the world's warm-up, never counted.
+                if state["cause"] != "launch":
+                    state["unsettled_run"] = state.get("unsettled_run", 0) + 1
             state["boundaries"] += 1
         state.update(version=state["version"] + 1, start_window=window["index"],
-                     start_tick=now, cause=cause, settled_tick=None)
+                     start_tick=now, cause=cause, settled_tick=None, gaps=[], shifting=0)
     span = [w for w in windows if w["index"] >= state["start_window"]]
-    if state["settled_tick"] is None and len(span) >= k:
-        distance = block_distance(windows, k, **bins)
-        if distance is not None and distance < tv_threshold:
+    if state["settled_tick"] is None and len(span) >= 2 * k:
+        moved = shift(span, k, **bins)
+        distance = moved["tv"] if moved is not None else None
+        if (moved is not None and not state.get("shifting")
+                and moved["tv"] <= tv_threshold + moved["noise"]):
             state["settled_tick"] = now
             state["unsettled_run"] = 0
             events.append({"kind": "settled", "version": state["version"],
                            "cause": state["cause"], "settled": True,
                            "ticks": now - state["start_tick"], "window": window["index"],
                            "tv": distance})
-    # A version's operator is read once it has k windows, the evidence the organ asks
-    # of anything it establishes; a younger version has no gap reading yet.
-    state["gap"] = gap(span, **bins) if len(span) >= k else None
+    book = _count(state, span, **bins)
+    # A version's operator is counted over its whole life (``_count``) and read once
+    # it has two blocks of k windows; a younger version has no gap reading yet, so
+    # its warm-up cannot read as volatility, and a stationary one's reading converges.
+    state["gap"] = (gap_from_counts({tuple(pair.split("|")): n
+                                     for pair, n in book["transitions"].items()},
+                                    book["occupancy"])
+                    if book["windows"] >= 2 * k else None)
     state["rolling_gap"] = gap(windows, **bins)
     # The same rolling operator over the cards alone: whether the charter's metrics sit
     # in one attractor, whatever the activity around them (versioning audit P3).
     state["card_gap"] = gap(windows, activity=False, **bins)
-    state["gaps"] = [*state["gaps"], state["gap"]][-2 * k:]
-    state["volatility"] = volatility(state["gaps"])
+    if state["gap"] is not None:
+        state["gaps"] = [*state.get("gaps", []), state["gap"]][-2 * k:]
+    state["volatility"] = volatility(state.get("gaps", []))
+    state["period"] = period(retained, cycles, **bins)
     return state, events
 
 
