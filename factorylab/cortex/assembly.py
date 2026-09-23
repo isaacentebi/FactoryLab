@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from typing import Any
@@ -190,6 +191,7 @@ class Assembly:
             max_tokens=self.spec.max_tokens,
             effort=self.spec.effort,
             json_object=True,
+            response_schema=wire_schema(req.outcome_schema),
         )
 
     def invoke(self, req: Request) -> Return:
@@ -1016,6 +1018,98 @@ def _validate_return(parsed: dict, schema: dict, kind: str | None = None) -> Non
     validate_schema(parsed, schema, partial=continuation or cannot)
     for child in parsed.get("requests", []):
         _check_child(child)
+
+
+def wire_schema(schema: Any) -> dict | None:
+    """The contract as a provider's constrained decoder carries it, or None for no schema.
+
+    Guarantees every reply shape ``_validate_return`` accepts under ``schema`` is
+    admitted: the final answer, a continuation (a non-empty ``tool_calls`` or
+    ``requests`` beside whatever answer fields are already filled) and the refusal
+    form (``status: "cannot"`` with a string ``reason``). Every object the
+    contract leaves open is marked open (``additionalProperties: true``, the
+    JSON-schema default), so a decoder whose default is closed cannot forbid a
+    field the kernel accepts, such as ``working_state``. The kernel's own
+    validation stays the authority over what a reply means; this is its transport.
+    ``schema`` is never mutated.
+    """
+    # Chapter II §II.b: physics is enforced, not announced. The I/O contract is
+    # physics, so it is handed to the decoder that samples the reply, not only
+    # printed in the prompt the reply is sampled from.
+    if not isinstance(schema, dict):
+        return None
+    schema = deepcopy(schema)
+    forms: list[dict] = []
+    for shape in _answer_shapes(schema):
+        forms.append(shape)
+        properties = shape.get("properties")
+        properties = properties if isinstance(properties, dict) else {}
+        for key in ("tool_calls", "requests"):
+            listed = properties.get(key)
+            listed = listed if isinstance(listed, dict) else {"type": "array"}
+            if listed.get("maxItems", 1) == 0:
+                continue  # this contract admits no continuation through ``key``
+            partial = _partial(shape)
+            partial["properties"] = {**properties, key: {
+                **listed, "minItems": max(1, listed.get("minItems", 0))}}
+            partial["required"] = [key]
+            forms.append(partial)
+        status = properties.get("status", {})
+        reason = properties.get("reason", {})
+        try:
+            validate_schema("cannot", status if isinstance(status, dict) else {})
+        except (ValueError, TypeError):
+            continue  # the contract's own status cannot say "cannot"
+        declared = reason.get("type") if isinstance(reason, dict) else None
+        if declared is not None and "string" not in (
+                declared if isinstance(declared, list) else [declared]):
+            continue  # nor can its reason be the string a refusal carries
+        refusal = _partial(shape)
+        refusal["properties"] = {**properties, "status": {"enum": ["cannot"]},
+                                 "reason": {**(reason if isinstance(reason, dict) else {}),
+                                            "type": "string"}}
+        refusal["required"] = ["status", "reason"]
+        forms.append(refusal)
+    # Every reply is an object (``_validate_return``'s envelope), so the root says so.
+    return deepcopy(_open({"type": "object", "anyOf": forms}))
+
+
+def _answer_shapes(schema: dict) -> list[dict]:
+    """A contract's alternatives, flattened when it is nothing but a union of them."""
+    alternatives = schema.get("anyOf")
+    if (set(schema) == {"anyOf"} and isinstance(alternatives, list) and alternatives
+            and all(isinstance(a, dict) for a in alternatives)):
+        return [shape for a in alternatives for shape in _answer_shapes(a)]
+    return [schema]
+
+
+def _partial(shape: dict) -> dict:
+    """``shape`` as ``validate_schema(partial=True)`` reads it: no top-level required."""
+    out = {k: v for k, v in shape.items() if k != "required"}
+    if isinstance(out.get("anyOf"), list):
+        out["anyOf"] = [_partial(a) if isinstance(a, dict) else a for a in out["anyOf"]]
+    return out
+
+
+def _open(schema: Any) -> Any:
+    """Every object schema without ``additionalProperties`` states the default, true."""
+    if isinstance(schema, list):
+        return [_open(item) for item in schema]
+    if not isinstance(schema, dict):
+        return schema
+    out = {}
+    for key, value in schema.items():
+        if key in ("properties", "patternProperties") and isinstance(value, dict):
+            out[key] = {name: _open(sub) for name, sub in value.items()}
+        elif key in ("items", "additionalProperties", "anyOf", "oneOf", "allOf", "not"):
+            out[key] = _open(value)
+        else:
+            out[key] = value
+    kind = out.get("type")
+    if (kind == "object" or (isinstance(kind, list) and "object" in kind)
+            or "properties" in out) and "additionalProperties" not in out:
+        out["additionalProperties"] = True
+    return out
 
 
 def validate_proposal(proposal: dict) -> None:

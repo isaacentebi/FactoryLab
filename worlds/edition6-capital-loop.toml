@@ -149,6 +149,8 @@ reasoning = { enabled = false }
 # Never silently authorize a more expensive fallback than the route that was validated
 # (GPT-6 §10.2): OpenRouter routes only to providers that honour these parameters.
 extra_body = { provider = { require_parameters = true } }
+# json_schema: 10/10 kernel-valid vs 10/10 json_object (DeepInfra, Wafer, DekaLLM), 23 Sept 2026 probe.
+contract = "json_schema"
 
 [[models]]
 id = "openai/gpt-5.6-sol"
@@ -176,6 +178,8 @@ input_usd_per_mtok = "0.15"
 output_usd_per_mtok = "0.47"
 reasoning = { enabled = false }
 extra_body = { provider = { require_parameters = true } }
+# json_schema: 10/10 kernel-valid vs 6/10 json_object (Alibaba), 23 Sept 2026 probe.
+contract = "json_schema"
 
 # The nine seats of GPT-6 §10.3, on the kernel's seed system prompt (see the header).
 # Each lens is seeded once into `initial_state` as {lens, open_questions,
@@ -202,6 +206,8 @@ input_usd_per_mtok = "0.30"
 output_usd_per_mtok = "1.20"
 reasoning = { enabled = false }
 extra_body = { provider = { require_parameters = true } }
+# json_schema: 9/10 kernel-valid vs 8/10 json_object (Together, CoreWeave), 23 Sept 2026 probe.
+contract = "json_schema"
 
 # The one frontier seat: tier-3 meta-audit, which grades the metas and fires a handful of
 # times per few hundred ticks, so frontier judgement where it has the most leverage.

@@ -307,3 +307,83 @@ def test_a_completion_is_sent_under_its_callers_deadline_never_above_the_ceiling
     assert call_timeout(30.0, MODEL_COMPLETION_TIMEOUT_S) == 30.0
     assert call_timeout(5000.0, MODEL_COMPLETION_TIMEOUT_S) == MODEL_COMPLETION_TIMEOUT_S
     assert call_timeout(0.01, MODEL_COMPLETION_TIMEOUT_S) == 1.0
+
+
+SCHEMA = {"type": "object", "properties": {"verdict": {"type": "number"}},
+          "required": ["verdict"], "additionalProperties": True}
+
+
+def test_a_json_object_request_routes_only_to_hosts_that_honour_it(completion, req):
+    from dataclasses import replace as replaced
+
+    transport = FakeTransport([completion])
+    OpenRouterProvider(transport=transport).complete(replaced(req, json_object=True))
+    payload = transport.calls[0][2]
+    assert payload["response_format"] == {"type": "json_object"}
+    assert payload["provider"] == {"require_parameters": True}
+
+
+def test_a_json_schema_route_sends_the_schema_to_the_decoder(completion, req):
+    """Chapter II §II.b: the contract is enforced by the decoder, not only printed."""
+    from dataclasses import replace as replaced
+
+    transport = FakeTransport([completion, dict(completion), dict(completion)])
+    provider = OpenRouterProvider(transport=transport, schema_models=["test/flash"])
+    provider.complete(replaced(req, json_object=True, response_schema=SCHEMA))
+    payload = transport.calls[0][2]
+    assert payload["response_format"] == {"type": "json_schema", "json_schema": {
+        "name": "outcome", "strict": False, "schema": SCHEMA}}
+    assert payload["provider"] == {"require_parameters": True}
+    # The wire carries a copy: nothing downstream can edit the request's contract.
+    assert payload["response_format"]["json_schema"]["schema"] is not SCHEMA
+    # The route's contract is keyed on the model, whatever effort or plugin suffix.
+    provider.complete(replaced(req, model_id="test/flash@low", json_object=True,
+                               response_schema=SCHEMA))
+    assert transport.calls[1][2]["response_format"]["type"] == "json_schema"
+    # A json_schema route asked only for JSON sends JSON.
+    provider.complete(replaced(req, json_object=True))
+    assert transport.calls[2][2]["response_format"] == {"type": "json_object"}
+
+
+def test_a_default_route_keeps_json_object_when_a_request_carries_a_schema(completion, req):
+    from dataclasses import replace as replaced
+
+    transport = FakeTransport([completion, dict(completion)])
+    OpenRouterProvider(transport=transport, schema_models=["other/model"]).complete(
+        replaced(req, json_object=True, response_schema=SCHEMA))
+    OpenRouterProvider(transport=transport).complete(replaced(req, response_schema=SCHEMA))
+    for call in transport.calls:
+        assert call[2]["response_format"] == {"type": "json_object"}
+        assert call[2]["provider"] == {"require_parameters": True}
+
+
+def test_a_request_without_a_contract_sends_no_response_format(completion, req):
+    transport = FakeTransport([completion])
+    OpenRouterProvider(transport=transport).complete(req)
+    assert "response_format" not in transport.calls[0][2]
+    assert "provider" not in transport.calls[0][2]
+
+
+def test_extra_body_keeps_its_routing_but_cannot_replace_the_contract(completion, req):
+    from dataclasses import replace as replaced
+
+    extra = {"test/flash": {
+        "provider": {"order": ["HostA"], "require_parameters": False},
+        "response_format": {"type": "text"}}}
+    transport = FakeTransport([completion])
+    OpenRouterProvider(transport=transport, extra_body=extra,
+                       schema_models=["test/flash"]).complete(
+        replaced(req, json_object=True, response_schema=SCHEMA))
+    payload = transport.calls[0][2]
+    # The contract is applied after the manifest's body, so the schema wins ...
+    assert payload["response_format"]["type"] == "json_schema"
+    assert payload["response_format"]["json_schema"]["schema"] == SCHEMA
+    # ... while the manifest's own routing keys win on conflict, as they always have.
+    assert payload["provider"] == {"order": ["HostA"], "require_parameters": False}
+    extra["test/flash"]["provider"] = {"order": ["HostA"]}
+    transport = FakeTransport([completion])
+    OpenRouterProvider(transport=transport, extra_body=extra,
+                       schema_models=["test/flash"]).complete(
+        replaced(req, json_object=True, response_schema=SCHEMA))
+    assert transport.calls[0][2]["provider"] == {"order": ["HostA"],
+                                                 "require_parameters": True}

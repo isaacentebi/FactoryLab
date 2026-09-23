@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import socket
 import ssl
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
@@ -36,6 +37,35 @@ def expired(exc: BaseException) -> bool:
 def call_timeout(req_timeout: float | None, ceiling: float) -> float:
     """The deadline one completion is given: its caller's, never above the adapter's."""
     return ceiling if req_timeout is None else max(1.0, min(float(req_timeout), ceiling))
+
+
+#: The name the contract travels under in ``response_format.json_schema``.
+SCHEMA_NAME = "outcome"
+
+
+def response_format(req: Any, *, schema_route: bool = False) -> dict | None:
+    """The ``response_format`` a request asks for on the OpenAI wire, or None for none.
+
+    Guarantees that on a route whose manifest ``contract`` is ``json_schema``
+    (``schema_route``) a request carrying ``response_schema`` sends that schema,
+    unaltered and not shared with the request, as ``json_schema`` with
+    ``strict: false``; that any other request asking for JSON, or carrying a
+    schema, sends ``json_object``; and that a request asking for neither sends
+    nothing.
+    """
+    # Chapter II §II.b: on a route that can carry it, the contract is enforced by the
+    # decoder that samples the reply. Which routes can is a load-time fact of the
+    # manifest, never a fallback chosen mid-run. strict stays false because OpenAI's
+    # strict mode is a different contract (every property required, every object
+    # closed): the schema is sent as the kernel reads it, and the kernel's
+    # validation remains the authority.
+    schema = getattr(req, "response_schema", None)
+    if schema is not None and schema_route:
+        return {"type": "json_schema", "json_schema": {
+            "name": SCHEMA_NAME, "strict": False, "schema": deepcopy(schema)}}
+    if schema is not None or getattr(req, "json_object", False):
+        return {"type": "json_object"}
+    return None
 
 
 def dispatched(exc: BaseException) -> bool:

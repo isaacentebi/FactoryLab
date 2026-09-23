@@ -107,6 +107,23 @@ completed operations, so a long completion can outlast the requested run duratio
 Stopping an in-flight process still leaves its full quote as uncertain liability;
 there is no automatic retry.
 
+`models[].contract` states how a route carries each request's I/O contract
+(Chapter II §II.b: physics is enforced, not announced). It defaults to
+`"json_object"`, which asks the host for JSON syntax alone. `"json_schema"` hands
+the contract to the host's constrained decoder as `response_format.json_schema`
+(`strict: false`). The schema covers every reply shape the kernel accepts: the
+final answer, a continuation (a non-empty `tool_calls` or `requests`) and the
+refusal form (`status: "cannot"` with a `reason`). Every object the contract
+leaves open is marked open. On OpenRouter, `provider.require_parameters` is set
+unless `extra_body` names it, as it is for `json_object`. The key is accepted only
+on `openrouter` and `venice` routes, and any other value is refused at load. It is
+fixed for the world's life. A route changes contract only in a new manifest; a
+refused schema never falls back to `json_object` mid-run. Either way the kernel's
+own validation of the reply is the authority, and the prompt's `outcome_schema`
+section is unchanged. OpenAI-hosted routes stay on the default: their hosts
+refuse a schema whose root is a union, and strict mode would require every
+property and close every object, which is a different contract.
+
 The deterministic scripted fixture reuses its existing call schedule: the third
 registration slot installs a helper and a producer accepting `ProducerReturn`;
 the fourth tool slot requests helper → grandchild with a catalogue tool; the

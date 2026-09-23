@@ -13,7 +13,13 @@ from urllib import error
 
 from factorylab.kernel.money import nonnegative_usd_micro
 from factorylab.world.models import CatalogueEntry, ModelRequest, ModelResponse, TokenPrice
-from factorylab.world.openai_wire import CALL_EXPIRED, dispatched, expired, parse_completion
+from factorylab.world.openai_wire import (
+    CALL_EXPIRED,
+    dispatched,
+    expired,
+    parse_completion,
+    response_format,
+)
 from factorylab.world.x402 import VENICE_URL, X402Client, http_request, redact
 
 #: How much of a completion's `reasoning_content` the diary keeps. Enough to see
@@ -142,6 +148,7 @@ class VeniceProvider:
         reasoning_models: Iterable[str] = (),
         reasoning_config: Mapping[str, Mapping[str, Any]] | None = None,
         web_config: Mapping[str, Mapping[str, Any]] | None = None,
+        schema_models: Iterable[str] = (),
     ) -> None:
         self._key_env = key_env
         self._base_url = base_url.rstrip("/")
@@ -153,6 +160,8 @@ class VeniceProvider:
         self._reasoning_config = deepcopy(dict(reasoning_config or {}))
         self._web_config = deepcopy(dict(web_config or {}))
         self._prices: dict[str, TokenPrice] = {}
+        # The model ids whose manifest ``contract`` is ``json_schema`` (Chapter II §II.b).
+        self._schema_models = frozenset(schema_models)
 
     def _default_transport(self, method: str, path: str, payload: dict | None) -> dict:
         key = os.environ.get(self._key_env)
@@ -275,9 +284,13 @@ class VeniceProvider:
             "max_tokens": req.max_tokens,
             **options,
         }
-        # Venice speaks the OpenAI wire: a request for a JSON object says so there.
-        if req.json_object:
-            payload["response_format"] = {"type": "json_object"}
+        # Venice speaks the OpenAI wire: a request for a JSON object says so there, and
+        # on a route whose manifest contract is json_schema it carries the schema.
+        tier = req.model_id.partition("@")[0]
+        contract = response_format(req, schema_route=any(
+            k in self._schema_models for k in (req.model_id, tier, tier.removesuffix(":online"))))
+        if contract is not None:
+            payload["response_format"] = contract
         if tools is not None:
             payload["tools"] = list(tools)
         if tool_choice is not None:

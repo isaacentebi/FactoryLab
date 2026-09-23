@@ -13,6 +13,7 @@ from urllib import parse
 
 from factorylab.world.metering import BillingUncertain, Infeasible, Metered, MeteredModel
 from factorylab.world.models import CatalogueEntry, ModelRequest, ModelResponse, TokenPrice
+from factorylab.world.openai_wire import response_format
 from factorylab.world.venice import VeniceAndOpenRouter
 from factorylab.world.x402 import (
     BASE_NETWORK,
@@ -388,11 +389,13 @@ class X402Provider:
 
     def _payload(self, req: ModelRequest) -> tuple[str, dict]:
         root, model = split_model_id(req.model_id)
-        # A seller on the OpenAI wire receives the same JSON-object contract as
-        # every other provider; the quote and the paid call carry identical bodies.
-        # The contract is applied after the seller's extra body, so an accepted
-        # extra body can never pay for a call that did not ask for structured JSON.
-        contract = {"response_format": {"type": "json_object"}} if req.json_object else {}
+        # A seller on the OpenAI wire receives the JSON-object contract of every route
+        # whose manifest contract is the default (a request's schema, if it carries
+        # one, is not sent); the quote and the paid call carry identical bodies. The
+        # contract is applied after the seller's extra body, so an accepted extra
+        # body can never pay for a call that did not ask for structured JSON.
+        wire = response_format(req)
+        contract = {"response_format": wire} if wire is not None else {}
         return root + "/v1/chat/completions", {
             "model": model, "messages": [{"role": "system", "content": req.system}, *req.messages],
             "max_tokens": req.max_tokens,

@@ -140,6 +140,18 @@ def test_build_provider_needs_key_for_openrouter(monkeypatch) -> None:
     assert build_provider(load_manifest("scripted")) is None
 
 
+def test_build_provider_hands_each_adapter_the_manifests_schema_routes(monkeypatch) -> None:
+    """A route's contract reaches the adapter that sends it (models.contract, §II.b)."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key-not-real")
+    monkeypatch.setenv("VENICE_API_KEY", "test-key-not-real")
+    manifest = load_manifest("edition6-testnet-rehearsal")
+    provider = build_provider(manifest)
+    assert provider.openrouter._schema_models == manifest.schema_contract_models()
+    assert provider.venice._schema_models == manifest.schema_contract_models()
+    assert "openai/gpt-6-luna" not in provider.openrouter._schema_models
+    assert build_provider(load_manifest("testnet")).openrouter._schema_models == frozenset()
+
+
 def test_runtime_runs_a_live_shaped_world_with_stub_venue_and_scripted_models() -> None:
     d = {
         "name": "stubnet",

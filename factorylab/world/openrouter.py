@@ -17,6 +17,7 @@ from factorylab.world.openai_wire import (
     dispatched,
     expired,
     parse_completion,
+    response_format,
 )
 from factorylab.world.x402 import MODEL_COMPLETION_TIMEOUT_S
 
@@ -68,6 +69,7 @@ class OpenRouterProvider:
         reasoning_config: Mapping[str, Mapping[str, Any]] | None = None,
         web_config: Mapping[str, Mapping[str, Any]] | None = None,
         extra_body: Mapping[str, Mapping[str, Any]] | None = None,
+        schema_models: Iterable[str] = (),
     ) -> None:
         self._key_env = key_env
         self._base_url = base_url.rstrip("/")
@@ -83,6 +85,10 @@ class OpenRouterProvider:
                 raise OpenRouterError(
                     None, "Extra body cannot override the bounded completion request",
                     sent=False)
+        # The model ids whose manifest ``contract`` is ``json_schema``: their requests
+        # hand the contract to the host's decoder (Chapter II §II.b). Every other
+        # route asks for JSON syntax alone.
+        self._schema_models = frozenset(schema_models)
         self._transport = transport if transport is not None else self._default_transport
         # The deadline of the completion in flight (``ModelRequest.timeout_s``), set
         # only for the duration of that one call.
@@ -170,13 +176,15 @@ class OpenRouterProvider:
                       if k in self._extra_body), None)
         if extra is not None:
             payload.update(deepcopy(extra))
-        if req.json_object:
+        contract = response_format(req, schema_route=any(
+            k in self._schema_models for k in (req.model_id, wire_id, base_id)))
+        if contract is not None:
             # The contract is applied after the manifest's extra body, so an extra body
-            # can never turn a structured request into free text. A response_format is
-            # only honoured by hosts that support it: route to those alone, keeping the
-            # manifest's own routing preferences (``provider.order``, say) and letting
-            # its own keys win on conflict.
-            payload["response_format"] = {"type": "json_object"}
+            # can never turn a structured request into free text or loosen its schema.
+            # A response_format is only honoured by hosts that support it: route to
+            # those alone, keeping the manifest's own routing preferences
+            # (``provider.order``, say) and letting its own keys win on conflict.
+            payload["response_format"] = contract
             routing = dict(payload.get("provider") or {})
             routing.setdefault("require_parameters", True)
             payload["provider"] = routing

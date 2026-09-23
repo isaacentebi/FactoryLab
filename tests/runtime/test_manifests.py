@@ -128,13 +128,15 @@ def test_a_manifest_hashes_what_it_says_and_a_default_is_no_exception():
     (time audit T1, T5, T13: the novelty window and lifetime left, the treasury caps
     gained their own duration and the forward wait its ticks), and again when thrash
     came to be priced and immune.decay_step left (versioning audit C2), and again when
-    novelty.seat_share capped one seat's share of the niche (ruling R5); each time it is
-    a new v0."""
+    novelty.seat_share capped one seat's share of the niche (ruling R5), and again when
+    each model came to state how its route carries the contract (models.contract,
+    §II.b); each time it is a new v0."""
     scripted = load_manifest("scripted")
     assert '"forecast_horizon_events":10' in scripted.canonical_json()
     assert '"chaos":{"connector_timeout":0.0' in scripted.canonical_json()
+    assert '"contract":"json_object"' in scripted.canonical_json()
     assert scripted.manifest_hash() == (
-        "e318e37e0693f975e277ee4c3ef347bf30105d94704c3a0b38565ebb86077860"
+        "4928b3aed6db8b4fca6560855b41153d8f1e609ce78fc2aba3d0b348de4a7883"
     )
 
     implicit = manifest_from_dict(_base())
@@ -347,3 +349,32 @@ def test_keys_no_world_set_are_refused_not_ignored(section, table):
     raw[section] = table
     with pytest.raises(ValueError, match="was removed"):
         manifest_from_dict(raw)
+
+
+def test_a_models_contract_defaults_to_json_object_and_names_its_schema_routes():
+    """Chapter II §II.b: how a route carries the contract is a load-time fact."""
+    raw = _base()
+    assert manifest_from_dict(raw).models[0].contract == "json_object"
+    assert manifest_from_dict(raw).schema_contract_models() == frozenset()
+    raw["models"][0].update(provider="openrouter", contract="json_schema")
+    manifest = manifest_from_dict(raw)
+    assert manifest.schema_contract_models() == frozenset({"m"})
+    assert manifest.manifest_hash() != manifest_from_dict(_base()).manifest_hash()
+
+
+@pytest.mark.parametrize("provider,contract", [
+    ("openrouter", "json"), ("openrouter", "strict"), ("openrouter", True),
+    ("openrouter", None), ("x402", "json_schema"), ("fake", "json_schema"),
+])
+def test_a_contract_no_route_can_keep_is_refused_at_load(provider, contract):
+    raw = _base()
+    raw["models"][0].update(provider=provider, contract=contract)
+    with pytest.raises(ValueError, match="models.contract"):
+        manifest_from_dict(raw)
+
+
+def test_the_edition6_worlds_carry_the_schema_on_the_probed_routes_alone():
+    expected = frozenset({"qwen/qwen3.8-flash", "deepseek/deepseek-v4.1-flash",
+                          "minimax/minimax-m3"})
+    for world in ("edition6-testnet-rehearsal", "edition6-capital-loop"):
+        assert load_manifest(world).schema_contract_models() == expected
