@@ -718,7 +718,10 @@ _COMPONENT_FIELDS = (
     ("book", "_ForecastBook__", ("forecasts", "settled", "requested")),
     ("baseline", "_PrevalenceBaseline__", ("counts",)),
     ("cadence", "_", ("latencies", "last_activation_ns", "waiting", "deferred",
-                       "current_event", "last_activation_event", "outstanding", "min_support")),
+                       "current_event", "last_activation_event", "outstanding", "min_support",
+                       # Time audit T7, T13: settling times, the card series, the open
+                       # probe and the capital loop. An older checkpoint has none.
+                       "settling", "series", "probe", "capital")),
     ("standing", "_ConsequenceStanding__", ("min_coverage", "evaluators")),
     ("settler", "_Settler__", ("snapshots", "recorded")),
     ("charter_book", "_CharterBook__", (
@@ -987,6 +990,10 @@ def restore_runtime(rt, state: dict) -> None:
                 continue
             if name == "bill_settlement" and name not in components:
                 # Older checkpoints predate bill settlement; the next read takes a reference.
+                continue
+            if (name == "cadence" and field in ("settling", "series", "probe", "capital")
+                    and field not in components[name]):
+                # Older checkpoints predate the settling and capital loops: none measured.
                 continue
             setattr(getattr(rt, name), prefix + field, components[name][field])
     rt.prices.prices = decode(state["prices"])

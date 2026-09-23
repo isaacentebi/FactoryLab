@@ -926,15 +926,18 @@ class FeedbackMixin:
         self._settle_evaluations()
         for s in settled:
             # The cadence's clock is world ticks consumed (defect 1).
+            opened = self.cadence.opened_at(s.handle, self.ticks_consumed)
             self.cadence.record(
                 handle=s.handle,
                 predicate_id=s.predicate_id,
-                opened_event=self.cadence.opened_at(s.handle, self.ticks_consumed),
+                opened_event=opened,
                 settled_event=self.ticks_consumed,
                 opened_ns=self.queue.get(s.handle).opened_ns,
                 settled_ns=self.clock.now_ns,
                 status=str(s.status),
             )
+            # The forecast loop a forecast card's samples come from (time audit T2).
+            self.clockwork.record("forecast", max(0, self.ticks_consumed - opened))
             self.stats.forecasts_settled += 1
             self.window.outcomes += 1
             self.window.censored += int(s.status is SettleStatus.CENSORED)
@@ -1448,9 +1451,14 @@ class FeedbackMixin:
         When the evaluator role's verdict mean rises while its payoff skill falls
         over the last ``immune.k`` closed windows (the offline overfitting
         divergence), the consequence mix in evaluator selection rises by
-        ``evaluation.sampling_step`` for the next window, capped at
-        ``evaluation.sampling_cap``; without divergence it steps back toward the
-        manifest's ``consequence_share``. Every change is a ledger item.
+        ``evaluation.sampling_step``, capped at ``evaluation.sampling_cap``; without
+        divergence it steps back toward the manifest's ``consequence_share``. Every
+        change is a ledger item.
+
+        Every closed window is read; the mix moves only on the actuator's own loop
+        (time audit T1, T2): at least ``min_ratio`` measured consequence periods
+        apart, with its own jitter, because a mix change returns as forecast skill
+        only when the consequences it selected for have settled.
         """
         from factorylab.versioning.versions import slope
 
@@ -1462,6 +1470,11 @@ class FeedbackMixin:
         })
         k = self.m.immune.k
         del self.sampling_history[:-k]
+        now, inner = self.ticks_consumed, self.cadence.consequence_period_events()
+        if not self.clockwork.due("sampling", now, inner):
+            return
+        self._ledger_loop("sampling", self.clockwork.fire("sampling", now, inner),
+                          inner_loop="consequence")
         base, step, cap = self.ev.consequence_share, self.ev.sampling_step, self.ev.sampling_cap
         before = self.consequence_mix
         verdict_slope = outcome_slope = None

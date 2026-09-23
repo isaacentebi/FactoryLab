@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field, replace
 from decimal import Decimal
 from fractions import Fraction
+from math import ceil
 
 from factorylab.charter.charter import MetricCard
 from factorylab.charter.controller import CardRegion, relative_region, violation
@@ -82,6 +83,10 @@ class MeasureWindow:
     # Every invocation's metered cost plus retained-storage rent, in micro-USD: the
     # window's compute burn (``burn_per_window``; charter audit M6).
     compute_spend_micro: int = 0
+    # The world tick the window opened at and the tick its drawn period ends (time
+    # audit T1): the price loop's own schedule, published with the window.
+    opened_tick: int = 0
+    due_tick: int | None = None
 
 
 #: The definition of a censored settlement that carries a price: its decision left
@@ -228,49 +233,132 @@ class PricingMixin:
         self.price_origins[handle]["turnover"] = self.window.index
 
     def _manage_reserve_window(self) -> None:
+        """Close the measurement window when the price loop is due, and open the next.
+
+        Essay II.IV.c; time audit T1, T2. The window is the price loop's period,
+        counted in world ticks: drawn, with the price loop's own jitter, as
+        ``min_ratio`` times the fastest priced card's sample loop
+        (``_price_inner``), and due only when that period has elapsed and the
+        ratio still holds against the loop measured now. No other loop shares its
+        boundary: the immune organ, the sampling actuator, governance, the novelty
+        grant and the money caps each keep their own schedule.
+        """
         if self.reserve_window_start is None:
             self.cadence.launch(self.clock.now_ns if self.live else 0)
-        if (
-            self.reserve_window_start is None
-            or self.clock.now_ns >= self.reserve_window_start + self.m.novelty.window_ns
-        ):
-            closed = self.window.index if self.reserve_window_start is not None else None
-            if closed is not None:
-                self._close_price_window()
-            # The novelty share is a share of money the population can spend: locked
-            # backing is not, and a venue loss can carry the unlocked part below zero.
-            self.reserve.open_window(self.clock.now_ns, max(0, self.wallet.unlocked))
-            self.reserve_window_start = self.clock.now_ns
-            self.market_index = None
-            self.stats.reserve_windows += 1
-            self._issue_novelty_grant()
-            self.window = MeasureWindow(self.stats.reserve_windows, self._equity_micro())
-            from factorylab.runtime.continuity import charge_window as charge_state_window
+        now = self.ticks_consumed
+        inner = self._price_inner()
+        if self.reserve_window_start is not None and not self.clockwork.due("price", now, inner):
+            return
+        closed = self.window.index if self.reserve_window_start is not None else None
+        if closed is not None:
+            self._close_price_window()
+        schedule = self.clockwork.fire("price", now, inner)
+        self._ledger_loop("price", schedule, inner_loop="card samples")
+        if closed is None:
+            # Launch opens every outer loop's first period (time audit T1): the immune
+            # organ's over the price loop (versioning P5) and the sampling actuator's
+            # over the consequence loop, each on its own jittered schedule, and checks
+            # that a governance tier is viable at all (T7).
+            for name, over, label in (("immune", ceil(schedule["period"]), "price"),
+                                      ("sampling", self._consequence_period(), "consequence")):
+                self._ledger_loop(name, self.clockwork.fire(name, now, over), inner_loop=label)
+            self._check_viability()
+        # Time audit T6: the novelty share is a flow, one share of the spendable
+        # budget per measured consequence period, of which this window accrues the
+        # part its drawn period covers. Locked backing is not spendable, and a venue
+        # loss can carry the unlocked part below zero.
+        period = self._consequence_period()
+        self.reserve.open_window(
+            self.clock.now_ns, max(0, self.wallet.unlocked),
+            accrued=Fraction(min(period, ceil(schedule["period"])), period))
+        self.reserve_window_start = self.clock.now_ns
+        self.market_index = None
+        self.stats.reserve_windows += 1
+        self._issue_novelty_grant()
+        self.window = MeasureWindow(self.stats.reserve_windows, self._equity_micro(),
+                                    opened_tick=now, due_tick=schedule["due"])
+        from factorylab.runtime.continuity import charge_window as charge_state_window
 
-            charge_state_window(self)  # a seat's working state pays byte-time rent
-            self.price_windows[self.window.index] = self.window
-            self._observe_positions()
-            self._activate_charter_if_due()
-            self._derive_regions()
-            if closed is not None:
-                # The closed window's public world block, ledgered once, after any
-                # charter activation at this boundary, so the wake never shows an
-                # activated amendment against the edition it replaced.
-                from factorylab.runtime.wake import public_window_item
+        charge_state_window(self)  # a seat's working state pays byte-time rent
+        self.price_windows[self.window.index] = self.window
+        self._observe_positions()
+        self._activate_charter_if_due()
+        self._derive_regions()
+        if closed is not None:
+            # The closed window's public world block, ledgered once, after any
+            # charter activation at this boundary, so the wake never shows an
+            # activated amendment against the edition it replaced.
+            from factorylab.runtime.wake import public_window_item
 
-                self.ledger.append({**public_window_item(self, window=closed, event=self.n),
-                                    "ts": self.clock.now_ns})
+            self.ledger.append({**public_window_item(self, window=closed, event=self.n),
+                                "ts": self.clock.now_ns})
+
+    def _ledger_loop(self, name: str, schedule: dict, *, inner_loop: str) -> None:
+        """One derived loop fired: its tick, the period drawn and the inner loop's period."""
+        self.ledger.append({"kind": "clock.loop", "loop": name, "tick": schedule["opened"],
+                            "period_ticks": schedule["period"], "due_tick": schedule["due"],
+                            "inner": inner_loop, "inner_ticks": schedule["inner"],
+                            "ts": self.clock.now_ns})
+
+    def _consequence_period(self) -> int:
+        """The measured consequence loop in ticks: the backstop, or the p90 settlement above it."""
+        return self.cadence.consequence_period_events()
+
+    def _patience(self) -> int:
+        """How long an exploration is protected, in ticks: ``min_ratio`` consequence periods.
+
+        Essay II.IV.b: "the compensation period of any exploratory learner must be
+        shorter than the lifetime of the things it is being compensated for
+        discovering", and "some share of the exploratory population is allowed to
+        live longer than justified by its own current scoring" (time audit T5).
+        """
+        return self.m.timing.min_ratio * self._consequence_period()
+
+    def _card_inner(self, card: MetricCard) -> int:
+        """The measured period, in ticks, of the loop a card's samples come from.
+
+        A card measured on settled forecasts waits on the forecast loop; any other
+        on the settle loop of the role it answers for (every role's slowest for a
+        card that answers for all): a price changes the rewards of that role's
+        decisions, and its effect returns only when they settle (time audit T2).
+        """
+        from factorylab.charter.measurement import FORECAST_ROWS
+
+        observation = normalise(card.observation)
+        if card.window.kind == "forecasts" or (
+                card.window.kind == "windows" and observation in FORECAST_ROWS):
+            return self.clockwork.measured("forecast")
+        if card.answers_for != "all":
+            return self.clockwork.measured(f"settle:{card.answers_for}")
+        return max((self.clockwork.measured(name) for name in self.clockwork.latencies
+                    if name.startswith("settle:")), default=1)
+
+    def _price_inner(self) -> int:
+        """The fastest priced card's sample loop in ticks: what the window must separate from."""
+        cards = [c for c in self.charter.cards if c.id in self.regions]
+        return min((self._card_inner(c) for c in cards), default=1)
 
     def _issue_novelty_grant(self) -> None:
-        """Learning death in the window that closed grants one extra novelty trial per
-        assembly for the window that opens; whatever the previous grant left
-        unspent expires here, and the flag must be raised again to re-issue it."""
-        flagged = bool(self.stats.pathologies.get("learning_death"))
-        window = self.stats.reserve_windows if flagged else None
-        self.novelty_grant = {"window": window, "consumed": []}
-        if flagged:
-            self.ledger.append({"kind": "novelty.grant", "window": window,
-                                "ts": self.clock.now_ns})
+        """Learning death grants one extra novelty trial per assembly, for one patience.
+
+        Time audit T5, T6: the grant lives ``_patience`` ticks from its issue, not
+        one window, and is not re-issued while it lives; a flag raised after it
+        lapsed issues the next one.
+        """
+        now = self.ticks_consumed
+        grant = self.novelty_grant
+        live = grant.get("until_tick") is not None and now < grant["until_tick"]
+        if live:
+            return
+        if not self.stats.pathologies.get("learning_death"):
+            self.novelty_grant = {"window": None, "consumed": []}
+            return
+        until = now + self._patience()
+        self.novelty_grant = {"window": self.stats.reserve_windows, "consumed": [],
+                              "issued_tick": now, "until_tick": until}
+        self.ledger.append({"kind": "novelty.grant", "window": self.stats.reserve_windows,
+                            "tick": now, "until_tick": until, "ts": self.clock.now_ns})
+
     def _prune_price_evidence(self) -> None:
         """Completed decisions release old attribution windows after their totals are frozen."""
         for handle in tuple(self.price_origins):
@@ -309,8 +397,9 @@ class PricingMixin:
                     and "trial_window" not in entry):
                 self.ledger.append({"kind": "observation.trial", "observation": ev.payload["id"],
                                     "version": entry["version"], "window": self.window.index,
-                                    "ts": self.clock.now_ns})
+                                    "tick": self.ticks_consumed, "ts": self.clock.now_ns})
                 entry["trial_window"] = self.window.index
+                entry["trial_tick"] = self.ticks_consumed
         if ev.kind is EventKind.VERDICT:
             judges = self.window.verdicts.setdefault(ev.payload["about_handle"], {})
             judge = self.handle_to_assembly.get(
@@ -401,25 +490,33 @@ class PricingMixin:
         w = replace(self.window, forecast_skills=skills)
         book = self.observations
         named = {normalise(c.observation) for c in self.charter.cards}
+        now, patience = self.ticks_consumed, self._patience()
         for oid, entry in self.registered_observations.items():
-            born = entry.get("trial_window")
+            if "trial_window" in entry and "trial_tick" not in entry:
+                # Registered before the tick clock: its patience counts from now.
+                entry["trial_tick"] = now
+            born = entry.get("trial_tick")
             if born is None and "inactive_window" not in entry:
                 self.ledger.append({"kind": "observation.inactive", "observation": oid,
                                     "version": entry["version"], "window": w.index,
-                                    "ts": self.clock.now_ns})
+                                    "tick": now, "ts": self.clock.now_ns})
                 entry["inactive_window"] = w.index
-            lifetime_start = born if born is not None else entry["inactive_window"]
-            expired = w.index - lifetime_start >= self.m.novelty.max_lifetime_windows
+            if born is None:
+                entry.setdefault("inactive_tick", now)
+            lifetime_start = born if born is not None else entry["inactive_tick"]
+            # Time audit T5: a trial lives ``min_ratio`` consequence periods, in ticks.
+            expired = now - lifetime_start >= patience
             if oid not in named and expired and not entry.get("retired"):
                 self.ledger.append({"kind": "observation.retired", "observation": oid,
                                     "version": entry["version"], "window": w.index,
-                                    "reason": "unused_trial_expired", "ts": self.clock.now_ns})
+                                    "reason": "unused_trial_expired", "tick": now,
+                                    "ts": self.clock.now_ns})
                 entry["retired"] = True
         values = {}
         for observation in book.all():
             entry = self.registered_observations.get(observation.id, {})
-            born = entry.get("trial_window")
-            trial = born is not None and w.index - born < self.m.novelty.max_lifetime_windows
+            born = entry.get("trial_tick")
+            trial = born is not None and now - born < patience
             if observation.registered and observation.id not in named and not trial:
                 continue
             value = book.value(observation, w)
@@ -428,6 +525,10 @@ class PricingMixin:
         # Typed windows. A card may name a registered observation.
         card_values = measure_cards(self.charter.cards, self.card_samples, w, observations=book)
         card_values = {cid: value for cid, value in card_values.items() if cid in self.regions}
+        # The per-card score series governance's settling time is read from (time
+        # audit T7), and the viability of a governance tier against it.
+        self.cadence.observe_scores(card_values)
+        self._check_viability()
         # A decision settling late is priced on the window it worked in.
         self.window.closed_values = dict(card_values)
         self.window.closed_regions = dict(self.regions)
@@ -456,16 +557,24 @@ class PricingMixin:
                 "ts": self.clock.now_ns,
             }
         )
-        before = self.controller.snapshot()["cards"]
-        observed = sorted(card_values)
-        for card_id in observed:
+        cards = {c.id: c for c in self.charter.cards}
+        for card_id in sorted(card_values):
+            held = self._price_held(cards[card_id], w)
+            if held is not None:
+                # Time audit T2: the price loop moves only on a new settled sample, and
+                # no faster than ``min_ratio`` times the loop its samples come from.
+                self.ledger.append({"kind": "price.skipped", "card_id": card_id,
+                                    "value": card_values[card_id], "window": w.index,
+                                    "tick": now, **held})
+                self.stats.price_skipped += 1
+                continue
+            before = self.controller.snapshot()["cards"][card_id]["updates"]
             self.controller.observe(card_id, card_values[card_id], window_end_event=self.n,
                                     holdout=holdouts.get(card_id, 0.0),
                                     anticipated=self._anticipated_violation(
                                         card_id, card_values[card_id]))
-        after = self.controller.snapshot()["cards"]
-        for card_id in observed:
-            if after[card_id]["updates"] > before[card_id]["updates"]:
+            if self.controller.snapshot()["cards"][card_id]["updates"] > before:
+                self.card_clock[card_id] = now
                 self.stats.price_updates += 1
             else:
                 self.stats.price_skipped += 1
@@ -486,6 +595,51 @@ class PricingMixin:
         self._ledger_unattributed()
         close_window(self, values)
         self._prune_price_evidence()
+
+    def _check_viability(self) -> None:
+        """Ledger when a governance tier stops, or starts again, to fit (time audit T7).
+
+        Essay II.IV.c: governance lives "between an upper bound of sampling noise
+        and a lower bound of 'lagging the world'". ``min_ratio`` times the slowest
+        loop must fit within the ticks the run has left and the world's repricing
+        period (``timing.world_repricing``, converted at the delivered tick). Each
+        change of state is one ledger entry; the state is published in the world
+        block. Nothing here accelerates a loop: that is left to the charter.
+        """
+        from factorylab.runtime.clockwork import ticks_for
+
+        left = max(0, getattr(self.tick_clock, "count", self.events_budget)
+                   - self.ticks_consumed)
+        repricing = self.m.timing.world_repricing_ns
+        state = self.cadence.viability(
+            run_ticks=left,
+            world_ticks=ticks_for(repricing, self.tick_clock) if repricing else None)
+        if state["viable"] != self.governance_viable:
+            self.ledger.append({"kind": "governance.viable" if state["viable"]
+                                else "governance.nonviable", "tick": self.ticks_consumed,
+                                **state, "ts": self.clock.now_ns})
+            self.governance_viable = state["viable"]
+
+    def _price_held(self, card: MetricCard, window: MeasureWindow) -> dict | None:
+        """Why a card's price may not move at this close, or None when it may.
+
+        Time audit T2. ``no_new_sample``: nothing settled in the card's scope in
+        the window that closed, so its measurement is the one already priced and
+        integrating it again would count the same evidence twice. ``ratio``: fewer
+        than ``min_ratio`` times the card's sample loop (``_card_inner``) have
+        passed since its price last moved, so the effect of that move has not
+        returned yet (essay II.IV.c: correcting "against the unfinished
+        transients of the controlled loop").
+        """
+        from factorylab.charter.measurement import fresh_sample
+
+        if not fresh_sample(card, self.card_samples, window):
+            return {"reason": "no_new_sample"}
+        last = self.card_clock.get(card.id)
+        inner = self._card_inner(card)
+        if last is not None and self.ticks_consumed - last < self.m.timing.min_ratio * inner:
+            return {"reason": "ratio", "last_tick": last, "inner_ticks": inner}
+        return None
 
     def _anticipated_violation(self, card_id: str, value: float) -> float | None:
         """The market's expected change in a card's violation, or None without a market.

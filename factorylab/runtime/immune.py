@@ -46,9 +46,19 @@ def _gain(rt, kind: str, window: int) -> None:
     that the gain answers is diagnosed) never goes below the router's own seed
     gamma, so a ratchet the organ raised unwinds after the attractor is left and a
     router that was never raised is not touched. Each change is ledgered first.
+
+    A router's gain is an outer loop over that router's own rounds (time audit T2):
+    a kind's routers step at most once per ``min_ratio`` times their measured round
+    period, so a step is never taken on rounds drawn under the previous one.
     """
     spec = rt.m.immune
+    now = rt.ticks_consumed
+    stepped: set[str] = set()
     for router in rt._all_router_states():
+        loop = f"gain:{router.kind}"
+        inner = rt.clockwork.measured(f"router:{router.kind}")
+        if router.kind not in stepped and not rt.clockwork.due(loop, now, inner):
+            continue
         saved = router.state()
         bases = _bases(saved["router"]["learner"])
         before = [base["gamma"] for base in bases]
@@ -65,8 +75,11 @@ def _gain(rt, kind: str, window: int) -> None:
         replacement = type(router).restore(saved)
         rt.ledger.append({"kind": "immune.gain", "pathology": kind, "window": window,
                           "router": router.learner.id, "gamma_before": before,
-                          "gamma_after": after})
+                          "gamma_after": after, "tick": now})
         router.learner, router.router = replacement.learner, replacement.router
+        if router.kind not in stepped:
+            rt.clockwork.fire(loop, now, inner)
+            stepped.add(router.kind)
 
 
 def access_evidence(rt) -> dict[str, tuple[bool, str | None]]:
@@ -177,12 +190,24 @@ def close_window(rt, values: dict[str, float]) -> None:
     for kind, detected in flags.items():
         if detected:
             rt.ledger.append({"kind": f"pathology.{kind}", **evidence})
+    # Versioning P5, time audit T2: the organ diagnoses every closed window but acts
+    # (gain, decay, ratchet) only on its own loop, at least ``min_ratio`` price-loop
+    # periods apart with its own jitter, so it never revises the controller at the
+    # controller's own frequency (iatrogenic thrash, essay II.IV.c).
+    now = rt.ticks_consumed
+    inner = rt.clockwork.period("price", default=rt.m.timing.min_ratio)
+    acts = rt.clockwork.due("immune", now, inner)
     rt.ledger.append({"kind": "immune.window", **evidence, "profile": profile, "flags": flags,
-                      "regions": current["regions"], "charter_edition": rt.charter.edition})
+                      "regions": current["regions"], "charter_edition": rt.charter.edition,
+                      "acts": acts})
     rt.stats.immune_windows = windows
     # Learning death's response is this flag alone: the reserve reads it at the next
     # window boundary and issues the one extra novelty trial per assembly.
     rt.stats.pathologies = flags
+    if not acts:
+        return
+    schedule = rt.clockwork.fire("immune", now, inner)
+    rt._ledger_loop("immune", schedule, inner_loop="price")
     # Oscillation has priority if coarse cells make the two signals overlap.
     ratcheted: set[str] = set()
     if flags["thrash"]:

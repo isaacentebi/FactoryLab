@@ -20,7 +20,7 @@ def _base() -> dict:
         "initial_balance_usd": "10",
         "models": [{"id": "m", "input_usd_per_mtok": "1", "output_usd_per_mtok": "5"}],
         "assemblies": [{"id": "a", "model_id": "m"}],
-        "novelty": {"share": 0.1, "window": "1h"},
+        "novelty": {"share": 0.1},
         "charter": seed_charter_table(),
         "immune": {"price_step": 0.05},
     }
@@ -57,8 +57,41 @@ def test_mainnet_requires_a_client_namespace_before_the_charter_hashes() -> None
 
 def test_duration_strings() -> None:
     d = _base()
-    d["novelty"]["window"] = "36h"
-    assert manifest_from_dict(d).novelty.window_ns == 36 * NS_PER_HOUR
+    d["treasury"] = {"cap_window": "36h"}
+    d["timing"] = {"world_repricing": "36h"}
+    m = manifest_from_dict(d)
+    assert m.treasury.cap_window_ns == 36 * NS_PER_HOUR
+    assert m.timing.world_repricing_ns == 36 * NS_PER_HOUR
+
+
+@pytest.mark.parametrize("section,key", [("novelty", "window"),
+                                         ("novelty", "max_lifetime_windows"),
+                                         ("treasury", "forward_wait_windows")])
+def test_a_cast_window_is_refused_because_windows_are_derived(section, key):
+    """Time audit T1, T5, T11, T13: no loop period is cast in a manifest (ruling R8)."""
+    d = _base()
+    d.setdefault(section, {})[key] = "1m" if key == "window" else 2
+    with pytest.raises(ValueError, match=rf"{section}\.{key} was"):
+        manifest_from_dict(d)
+
+
+def test_the_load_half_of_the_ratio_rule_refuses_a_horizon_inside_min_ratio_ticks():
+    """Time audit T2: a horizon a decision waits on is an outer loop over the tick."""
+    for key in ("verdict_timeout_events", "consequence_backstop_events"):
+        d = _base()
+        d["evaluation"] = {key: 2, "consequence_horizon_ticks": 1}
+        with pytest.raises(ValueError, match="at least timing.min_ratio ticks"):
+            manifest_from_dict(d)
+    d = _base()
+    d["treasury"] = {"forward_wait_ticks": 2}
+    with pytest.raises(ValueError, match="forward_wait_ticks"):
+        manifest_from_dict(d)
+    d = _base()
+    d["tick_interval"] = "10s"
+    d["clock"] = {"min_tick": "10s"}
+    d["treasury"] = {"cap_window": "20s"}
+    with pytest.raises(ValueError, match="cap_window"):
+        manifest_from_dict(d)
 
 
 def test_prices_section_defaults_and_validation() -> None:
@@ -88,12 +121,14 @@ def test_a_manifest_hashes_what_it_says_and_a_default_is_no_exception():
     of the scripted world moved when the shims went, again when the standing committee
     added committee.quorum, norm_house and charter_parent_sha256, again when a card's
     region became typed data beside its holdouts and interval (charter audit P2, M3),
-    and again when W4's judges came to accept Exposure (primitive audit F12); each time
-    it is a new v0."""
+    again when W4's judges came to accept Exposure (primitive audit F12), and again when
+    the clock stopped casting windows (time audit T1, T5, T13: the novelty window and
+    lifetime left, the treasury caps gained their own duration and the forward wait
+    its ticks); each time it is a new v0."""
     scripted = load_manifest("scripted")
     assert '"forecast_horizon_events":10' in scripted.canonical_json()
     assert scripted.manifest_hash() == (
-        "335ed4d9c209477d1f8a6c9de733efb794631347bf6ad963a1b284d403166fc8"
+        "1515d10235966f599c254ab4430d8e8a741ca3eb39c3fd1a29853dbf22bcc051"
     )
 
     implicit = manifest_from_dict(_base())
@@ -122,16 +157,24 @@ def test_the_deleted_reward_chain_keys_are_refused_not_ignored(key, value):
 
 
 def test_clock_bounds_seed_validation_and_hash():
+    """max_tick is derived from the world's repricing period (time audit T7).
+
+    A governance period is at least min_ratio consequence backstops, so a tick is
+    admissible while that many ticks fit inside the world's repricing period. A
+    world that states no repricing period has no upper bound.
+    """
     d = _base()
     d["clock"] = {"min_tick": "10s"}
     d["tick_interval"] = "10s"
+    assert manifest_from_dict(d).max_tick_ns is None
+    d["timing"] = {"world_repricing": "10h"}  # 36,000 s over 3 x 200 backstop ticks
     m = manifest_from_dict(d)
     assert m.clock.min_tick_ns == 10_000_000_000
-    assert m.max_tick_ns == 1200_000_000_000
+    assert m.max_tick_ns == 60_000_000_000
     assert "max_tick" not in m.canonical_json()
-    d["tick_interval"] = "20m"
+    d["tick_interval"] = "1m"
     assert manifest_from_dict(d).tick_interval_ns == m.max_tick_ns
-    for invalid in ["9s", "1201s"]:
+    for invalid in ["9s", "61s"]:
         d["tick_interval"] = invalid
         with pytest.raises(ValueError, match="tick_interval"):
             manifest_from_dict(d)

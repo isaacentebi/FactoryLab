@@ -3,7 +3,6 @@ blamed by the charter. It settles when the return's window closes, its Brier ent
 judge's standing beside payoff skill, the meta is graded against it too, and an antagonist
 exposes a judge whose high verdict landed on a return the window blamed."""
 
-from dataclasses import replace
 
 import pytest
 
@@ -17,8 +16,8 @@ class ProcessDeath(BaseException):
 
 
 def _short_window_manifest():
-    base = load_manifest("scripted")
-    return replace(base, novelty=replace(base.novelty, window_ns=2 * base.tick_interval_ns))
+    # Windows are derived from the loops they command (time audit T1): a few ticks here.
+    return load_manifest("scripted")
 
 
 @pytest.mark.slow

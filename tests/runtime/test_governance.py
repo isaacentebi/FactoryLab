@@ -110,6 +110,10 @@ def _ballot(rt, monkeypatch, direction, *, baseline, value, vote=True):
     ballot = rt.pending_votes[-1]
     assert ballot["baseline"] == baseline and ballot["region"] is not None
     reading["value"] = value
+    # Grading waits min_ratio consequence periods after activation (time audit T2).
+    rt._close_policy_window(rt.window.index)
+    assert not [i for i in rt.ledger._recovery_items() if i["kind"] == "policy.outcome"]
+    rt.ticks_consumed += rt._policy_floor()
     rt._close_policy_window(rt.window.index)
     outcome = [i for i in rt.ledger._recovery_items() if i["kind"] == "policy.outcome"][-1]
     return handle, outcome
@@ -145,6 +149,7 @@ def test_a_ballot_without_a_baseline_is_censored(monkeypatch):
     assert rt.pending_votes[-1]["baseline"] is None
     monkeypatch.setattr(governance, "measure_card",
                         lambda card, samples, observations=None: {"all": 0.95})
+    rt.ticks_consumed += rt._policy_floor()
     rt._close_policy_window(rt.window.index)
     outcome = [i for i in rt.ledger._recovery_items() if i["kind"] == "policy.outcome"][-1]
     assert outcome["y"] is None and outcome["status"] == str(SettleStatus.CENSORED)

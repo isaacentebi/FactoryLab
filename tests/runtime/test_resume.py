@@ -243,7 +243,6 @@ def test_snapshot_and_tail_restore_all_state_with_delayed_router_and_assembly_me
     base = load_manifest("scripted")
     m = replace(
         base,
-        novelty=replace(base.novelty, window_ns=2 * base.tick_interval_ns),
         assemblies=tuple(replace(a, memory_policy="handle-scoped") for a in base.assemblies),
     )
     if endowed:
@@ -253,10 +252,12 @@ def test_snapshot_and_tail_restore_all_state_with_delayed_router_and_assembly_me
             (base.tick_interval_ns + 1, 1_000), (NS_PER_DAY, m.initial_balance_micro - 1_000))))
     path = tmp_path / "state.jsonl"
     rt = make_runtime(m, path)
-    rt.events_budget = 6
+    rt.events_budget = 9
     rt._build_router("Tick", "blum_mansour", 0.2)
     rt._build_router("Tick", "exp3", 0.3, replace=False)
-    stop_after(rt, lambda r, e: r.ticks_consumed == 4 and str(e.kind) == "Tick")
+    # A price window is at least min_ratio ticks (time audit T1): by tick seven two
+    # windows have opened after the launch, each a snapshot.
+    stop_after(rt, lambda r, e: r.ticks_consumed == 7 and str(e.kind) == "Tick")
     if endowed:
         assert rt.dormancy is not None and rt.wallet.released_tranches == 1
         assert rt.wallet.locked == m.initial_balance_micro - 1_000

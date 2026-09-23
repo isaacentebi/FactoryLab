@@ -271,7 +271,6 @@ class BootstrapMixin:
         self.queue = DecisionQueue(self.ledger, clock_ns=self.clock)
         self.reserve = NoveltyReserve(
             manifest.novelty.share,
-            manifest.novelty.window_ns,
             has_history=self._registration_has_history,
             ledger=self.ledger,
             clock_ns=self.clock,

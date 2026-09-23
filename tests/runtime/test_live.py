@@ -170,7 +170,7 @@ def test_runtime_runs_a_live_shaped_world_with_stub_venue_and_scripted_models() 
             },
             {"id": "meta-a", "role": "meta", "model_id": "fake-haiku", "accepts": ["Verdict"]},
         ],
-        "novelty": {"share": 0.1, "window": "1d"},
+        "novelty": {"share": 0.1},
         "charter": seed_charter_table(),
         "immune": {"price_step": 0.05},
     }

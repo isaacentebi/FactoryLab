@@ -461,6 +461,7 @@ class ComputeMixin:
         self.event_schemas.update(spec.schemas)
         if not self.ledger.bootstrap:
             self.stats.registered_window.setdefault(spec.id, self.stats.reserve_windows)
+            self.stats.registered_tick.setdefault(spec.id, self.ticks_consumed)
         return asm
 
     def _check_event_schemas(self, spec: AssemblySpec) -> None:

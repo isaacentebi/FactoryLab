@@ -21,11 +21,52 @@ COST_OBSERVATIONS = frozenset({"cost_per_return", "cost_per_attempt"})
 # The runtime keeps per-decision attribution on the same window object;
 # measurement never observes it.
 ATTRIBUTION_FIELDS = ("decisions", "closed_values", "closed_regions", "closed_cards",
-                      "closed_prices", "closed_scopes", "closed_holdouts", "series_discarded")
+                      "closed_prices", "closed_scopes", "closed_holdouts", "series_discarded",
+                      # The price loop's own schedule is the clock's, not an observation.
+                      "opened_tick", "due_tick")
 FORECAST_OBSERVATIONS = frozenset({
     "forecast_skill", "verdict_mean", "verdict_std", "consequence_paid_off_rate", "censored_share",
     "avoidably_unresolved_share",
 })
+#: Observations a whole-window card still measures from settled forecast rows.
+FORECAST_ROWS = frozenset({"forecast_skill", "avoidably_unresolved_share"})
+#: The closed window's own counter that says a whole-window seed observation has a new
+#: settled sample in it (time audit T2).
+_WINDOW_SUPPORT = {
+    "verdict_mean": lambda w: bool(w.verdicts),
+    "verdict_std": lambda w: bool(w.verdicts),
+    "consequence_paid_off_rate": lambda w: w.consequences_settled > 0,
+    "censored_share": lambda w: w.outcomes > 0,
+}
+
+
+def fresh_sample(card: MetricCard, samples: CardSamples, window) -> bool:
+    """Whether the window that just closed added a settled sample to this card's scope.
+
+    Time audit T2: a price moves on new evidence, never on the same rolling
+    selection read again. A card over responses or settled forecasts has one when
+    a row of its own scope (its role, its per) was recorded in that window; a
+    whole-window seed observation when the window's own counter for it moved. A
+    window-level observation (a registered measurement, turnover, the window's
+    facts) is sampled by the closed window itself.
+    """
+    observation = card.observation.strip().lower()
+    kind = card.window.kind
+    if kind == "windows" and card.window.per is None and observation not in FORECAST_ROWS:
+        if observation in RETURN_OBSERVATIONS:
+            return window.invocations > 0 or bool(window.decisions)
+        support = _WINDOW_SUPPORT.get(observation)
+        return True if support is None else support(window)
+    if kind in ("returns", "forecasts"):
+        rows = getattr(samples, kind)
+    elif observation in RETURN_OBSERVATIONS:
+        rows = samples.returns
+    elif observation in FORECAST_OBSERVATIONS:
+        rows = samples.forecasts
+    else:
+        return True
+    rows = [row for row in _selected(observation, rows) if row["window"] == window.index]
+    return bool(_groups(card, rows))
 
 
 def measurement_catalogue(observations=None) -> list[dict]:

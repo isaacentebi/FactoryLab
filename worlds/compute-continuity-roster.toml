@@ -169,11 +169,13 @@ accepts = ["Verdict"]
 max_tokens = 800
 effort = "low"
 
+# The novelty share is a flow per measured consequence period, and a trial's patience is
+# timing.min_ratio of those periods (time audit T5, T6). Neither the pricing window nor any
+# other loop period is cast here: each is derived from the loop it commands (time audit
+# T1, T2, T11).
 [novelty]
 trials = 3
-max_lifetime_windows = 6
 share = 0.1
-window = "2m"
 
 [timing]
 cadence_sample = 200

@@ -8,7 +8,16 @@ BURN = {"observation": "burn_per_window", "direction": "decrease", "window": 1}
 
 
 def runtime():
-    return Runtime(load_manifest("scripted"), events=1, seed=1, initial_balance_micro=None,
+    """The scripted world, stating a world repricing period of forty minutes.
+
+    max_tick is derived from it (time audit T7): 2,400 s over timing.min_ratio (3)
+    consequence backstops (20 ticks) is a 40 s tick.
+    """
+    from dataclasses import replace
+
+    base = load_manifest("scripted")
+    manifest = replace(base, timing=replace(base.timing, world_repricing_ns=2400 * 10**9))
+    return Runtime(manifest, events=1, seed=1, initial_balance_micro=None,
                    ledger_path=None, router_gamma=0.1)
 
 
@@ -87,7 +96,8 @@ def test_activation_ledgers_before_clock_mutation(monkeypatch):
     assert rt.charter_book.activated_amendment(2).tick_interval == "2s"
     assert rt.tick_clock.interval_ns == 2 * 10**9
     assert rt.stats.clock_changes == 1
-    assert rt._world_block()["clock"] == {
+    clock = rt._world_block()["clock"]
+    assert {k: clock[k] for k in ("tick_interval", "min_tick", "max_tick")} == {
         "tick_interval": "2s", "min_tick": "1s", "max_tick": "40s",
     }
 
@@ -182,6 +192,7 @@ def test_a_clock_ballot_is_graded_on_the_burn_observation(monkeypatch):
     assert ballot["card"].window.kind == "windows" and ballot["card"].window.n == 1
     rt._activate_policy_ballots(am.id)
     reading["value"] = 300_000.0  # burn rose by 0.3 of the observation's range
+    rt.ticks_consumed += rt._policy_floor()  # graded after its floor (time audit T2)
     rt._close_policy_window(rt.window.index)
     outcome = [i for i in rt.ledger._recovery_items() if i["kind"] == "policy.outcome"][-1]
     assert outcome["observation_id"] == "burn_per_window"

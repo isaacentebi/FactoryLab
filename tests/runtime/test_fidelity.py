@@ -43,7 +43,10 @@ def decision(rt, assembly, *, settled=False):
 
 
 def close(rt, value, *, registrations=1):
+    """One closed window a price-loop period after the last, the organ's loop due at it."""
     rt.n += 10
+    rt.ticks_consumed += rt.m.timing.min_ratio
+    rt.clockwork.force("immune", rt.ticks_consumed)
     rt.window = MeasureWindow(rt.n, rt.wallet.balance, invocations=10,
                               ok=int(value * 10), registrations=registrations)
     rt._close_price_window()

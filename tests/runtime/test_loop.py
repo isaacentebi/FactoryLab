@@ -43,12 +43,11 @@ def test_crash_world_wipes_its_venue_without_spending_its_compute_authority() ->
 
 
 def test_determinism_same_seed_same_summary() -> None:
-    base = load_manifest("scripted")
-    m = replace(base, novelty=replace(base.novelty, window_ns=20_000_000_000))
-    a = run_world(m, events=45, seed=7)
-    b = run_world(m, events=45, seed=7)
-    # Forty-five events reach an immune window, a router replacement and a price update
-    # (thirty did while judges were scored for forecasting holds already resolved).
+    m = load_manifest("scripted")  # every window is derived from the loops it commands
+    a = run_world(m, events=70, seed=7)
+    b = run_world(m, events=70, seed=7)
+    # Seventy events reach an immune window, a router replacement and a price update: a
+    # card is priced once its sample is in, on its own loop (time audit T1, T2).
     assert a["stats"]["immune_windows"] and a["stats"]["routers_replaced"]
     assert a["stats"]["price_updates"]
     a.pop("aggregates", None)
@@ -502,10 +501,16 @@ def _market_runtime(market_http, *, provider=None, events=10, treasury=None, see
 
 
 def _register_test_seller(runtime):
+    from fractions import Fraction
+
     from factorylab.cortex.registration import AssemblyProposal, ModelProposal
     from tests.world.test_market import MODEL
 
     runtime._manage_reserve_window()
+    # A whole flow period's share accrued (time audit T6): the registrations are funded.
+    runtime.clock.now_ns += 1
+    runtime.reserve.open_window(runtime.clock.now_ns, max(0, runtime.wallet.unlocked),
+                                accrued=Fraction(1))
     runtime._register("proposal", ModelProposal(MODEL))
     runtime._register("proposal", AssemblyProposal(
         "market-buyer", "producer", MODEL, "Return JSON.", ("Tick",), 16, "low",

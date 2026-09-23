@@ -92,9 +92,6 @@ class MarketsMixin:
                               horizon_windows: int) -> str:
         """One post, one policy decision, owned by the posting seat's durable identity."""
         lid = f"assembly:{assembly}"
-        deadline = self.clock.now_ns + (
-            self.events_budget + self.ev.consequence_backstop_ticks
-        ) * self.m.max_tick_ns + (horizon_windows + 1) * self.m.novelty.window_ns
         try:
             self.queue.get(handle)
             parent = handle
@@ -104,7 +101,8 @@ class MarketsMixin:
             actor=lid, event_id=event_id,
             propensity=PropensityRecord((assembly,), (1.0,), assembly, 0, lid,
                                         "direct-market-post"),
-            channel="policy", deadline_ns=deadline, parent_handle=parent, cost_ceiling=0)
+            channel="policy", horizon_ticks=self._policy_horizon(horizon_windows + 1),
+            parent_handle=parent, cost_ceiling=0)
         self.handle_to_assembly[post] = assembly
         return post
 
@@ -247,12 +245,12 @@ class MarketsMixin:
 
         A decision's consequence is fixed by its backstop plus the verdict window at
         the latest (``evaluation.consequence_backstop_ticks + verdict_timeout_ticks``),
-        converted to reserve windows at the tick now in force, and never sooner than
-        ``timing.min_ratio`` windows.
+        converted to closed windows at the price loop's current period in ticks, and
+        never sooner than ``timing.min_ratio`` windows.
         """
         ticks = self.ev.consequence_backstop_ticks + self.ev.verdict_timeout_ticks
-        span = ticks * self.tick_clock.interval_ns
-        return max(int(self.m.timing.min_ratio), -(-span // self.m.novelty.window_ns))
+        window = self.clockwork.period("price", default=self.m.timing.min_ratio)
+        return max(int(self.m.timing.min_ratio), -(-ticks // window))
 
     def _keep_margin_window(self, index: int) -> None:
         """Keep the closed window's decisions and each card's per-scope violations.

@@ -135,7 +135,12 @@ def test_explicit_endowment_refuses_overspend_and_open_hold_without_mutation():
 
 
 def test_full_novelty_reserve_does_not_block_backed_founder_endowment():
+    from fractions import Fraction
+
     rt = _runtime(novelty_share=1)
+    # A whole flow period's share accrued (time audit T6): the reserve holds everything.
+    rt.clock.now_ns += 1
+    rt.reserve.open_window(rt.clock.now_ns, max(0, rt.wallet.unlocked), accrued=Fraction(1))
     handle = _handle(rt)
     amount = 1_000
     founder_before = rt.budget.entitlement(FOUNDER)

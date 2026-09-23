@@ -46,7 +46,7 @@ def test_overrun_does_not_relax_normal_commit_or_reservation_identity():
 def test_reported_bill_preserves_novelty_protection_and_refunds():
     ledger = Ledger()
     wallet = Wallet(1000, ledger)
-    reserve = NoveltyReserve(.1, 100, has_history=lambda _: False,
+    reserve = NoveltyReserve(.1, has_history=lambda _: False,
                              ledger=ledger, clock_ns=lambda: 0)
     wallet.bind_novelty(reserve, lambda handle, _: handle == "fresh")
     reserve.open_window(0, 1000)

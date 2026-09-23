@@ -607,13 +607,14 @@ class RoutingMixin:
 
         A population assembly's trial ends when ``novelty.trials`` settled
         consequences have been delivered to it (continuations and children do not
-        count) or ``novelty.max_lifetime_windows`` have passed since its
-        registration, whichever comes first: the lifetime ends the trial even when
-        no consequence ever arrived, so silence is not an unbounded entitlement
-        (essay II.IV.b: the compensation period must be shorter than the lifetime).
-        The window after a learning-death flag grants one more trial. A seed
-        assembly has no registration window; it is protected until its first
-        settled record.
+        count) or its patience has passed since its registration, whichever comes
+        first: the lifetime ends the trial even when no consequence ever arrived, so
+        silence is not an unbounded entitlement. Its patience is ``min_ratio``
+        measured consequence periods in ticks (``_patience``; time audit T5), so the
+        consequence that pays it can arrive inside it (essay II.IV.b: the
+        compensation period must be shorter than the lifetime). A live learning-death
+        grant adds one more trial. A seed assembly has no registration tick; it is
+        protected until its first settled record.
         """
         try:
             population = self.registry.get(action_id).provenance != "seed"
@@ -621,8 +622,9 @@ class RoutingMixin:
             population = False
         if not population:
             return not self.queue.has_history(action_id)
-        born = self.stats.registered_window.get(action_id, self.stats.reserve_windows)
-        if self.stats.reserve_windows - born >= self.m.novelty.max_lifetime_windows:
+        # Registered before the tick clock: its patience counts from the first read.
+        born = self.stats.registered_tick.setdefault(action_id, self.ticks_consumed)
+        if self.ticks_consumed - born >= self._patience():
             return False
         if not self.queue.has_history(action_id):
             return True
@@ -630,12 +632,18 @@ class RoutingMixin:
         return delivered < self.m.novelty.trials or self._novelty_grant_open(action_id)
 
     def _novelty_grant_open(self, assembly_id: str) -> bool:
-        """A learning-death grant is one extra trial per assembly, live only in the window
-        it was issued for and spent by that assembly's first delivered trial beyond the
-        base allowance; an unspent grant expires at the next boundary."""
+        """A learning-death grant is one extra trial per assembly, live for its patience.
+
+        Live from its issue until ``until_tick`` (time audit T5) and spent by that
+        assembly's first delivered trial beyond the base allowance. A grant issued
+        before the tick clock is live only in the window it was issued for.
+        """
         grant = self.novelty_grant
-        return (grant["window"] == self.stats.reserve_windows
-                and assembly_id not in grant["consumed"])
+        if assembly_id in grant["consumed"]:
+            return False
+        if "until_tick" in grant:
+            return self.ticks_consumed < grant["until_tick"]
+        return grant["window"] is not None and grant["window"] == self.stats.reserve_windows
 
     def _register_with_trial(self, contract: Contract, handle: str, amount: int,
                              *, refuse: str = ""):
@@ -1055,15 +1063,56 @@ class RoutingMixin:
         return {kind: return_channel(kind, shapes.get(kind, defaults[kind]), higher=bool(higher))
                 for kind in kinds}
 
+    def _epoch_due(self, kind: str) -> bool:
+        """Whether a kind's routers may open a new epoch now (time audit T6).
+
+        Essay II.IV.b: "some speed limit needs to be applied to the velocity with
+        which the factory refactors itself, allowing feedback loops the time they
+        need to actually close". A router's menu grows at most once per measured
+        period of its own rounds, in ticks: a registration waits for the rounds
+        drawn over the old menu to be learned before the menu changes again.
+        """
+        opened = self.clockwork.opened(f"epoch:{kind}")
+        inner = self.clockwork.measured(f"router:{kind}")
+        return opened is None or self.ticks_consumed - opened >= inner
+
+    def _open_pending_epochs(self) -> None:
+        """Open every deferred epoch whose speed limit has passed."""
+        for kind in list(self.pending_epochs):
+            self._open_epoch(kind)
+
     def _open_epoch(self, kind: str) -> None:
         universe = self._universe_for(kind)
         entry = {"kind": "epoch", "event_kind": kind, "universe": universe, "ts": self.clock.now_ns}
         states = self.routers.get(kind)
+        now = self.ticks_consumed
         if not states:
             self._build_router(kind, self._seed_learner_kind(kind), self.router_gamma)
             self.ledger.append({**entry, "carried": False})
             self.stats.epochs += 1
+            self.clockwork.loops[f"epoch:{kind}"] = {"opened": now, "due": now, "period": 1.0,
+                                                    "inner": 1, "fires": 1}
             return
+        # Only a grown menu waits: a retirement is already cadence-gated, and a router
+        # must never keep drawing an assembly that left.
+        grows = (any(set(universe) > set(st.universe) for st in states)
+                 and not any(set(st.universe) - set(universe) for st in states))
+        if grows and not self._epoch_due(kind):
+            if kind not in self.pending_epochs:
+                self.ledger.append({"kind": "epoch.deferred", "event_kind": kind,
+                                    "universe": universe, "tick": now,
+                                    "since_tick": self.clockwork.opened(f"epoch:{kind}"),
+                                    "inner_ticks": self.clockwork.measured(f"router:{kind}"),
+                                    "ts": self.clock.now_ns})
+                self.pending_epochs[kind] = now
+            return
+        self.pending_epochs.pop(kind, None)
+        if any(universe != st.universe for st in states):
+            previous = self.clockwork.loops.get(f"epoch:{kind}", {})
+            self.clockwork.loops[f"epoch:{kind}"] = {
+                "opened": now, "due": now, "period": 1.0,
+                "inner": self.clockwork.measured(f"router:{kind}"),
+                "fires": previous.get("fires", 0) + 1}
         for i, state in enumerate(list(states)):
             if universe == state.universe:
                 continue

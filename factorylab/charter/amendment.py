@@ -32,9 +32,16 @@ def proposed_price(value: object, lambda_max: float) -> float:
     return price
 
 
-def proposed_tick_interval(value: object, min_ns: int, max_ns: int | float) -> int:
-    """Return exact integer nanoseconds for a duration within inclusive clock bounds."""
-    reason = f"tick_interval must be a duration string within [{min_ns}ns, {max_ns}ns]"
+def proposed_tick_interval(value: object, min_ns: int, max_ns: int | float | None) -> int:
+    """Return exact integer nanoseconds for a duration within inclusive clock bounds.
+
+    ``max_ns`` None states no upper bound (a world that declares no repricing period).
+    """
+    if max_ns is None:
+        max_ns = float("inf")
+        reason = f"tick_interval must be a duration string of at least {min_ns}ns"
+    else:
+        reason = f"tick_interval must be a duration string within [{min_ns}ns, {max_ns}ns]"
     if not isinstance(value, str):
         raise ValueError(reason)
     match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)(ns|s|m|h|d)", value.strip())

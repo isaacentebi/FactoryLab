@@ -175,8 +175,16 @@ def _items(rt, kind):
 
 
 def _next_window(rt):
-    rt.clock.now_ns = rt.reserve_window_start + rt.m.novelty.window_ns
+    """The price loop falls due: its period is ticks, and the clock moves with them."""
+    rt.clock.now_ns = rt.reserve_window_start + rt.tick_clock.interval_ns
+    rt.clockwork.force("price", rt.ticks_consumed)
     rt._manage_reserve_window()
+
+
+def _grade(rt):
+    """Grade the policy window once min_ratio consequence periods have passed (T2)."""
+    rt.ticks_consumed += rt._policy_floor()
+    rt._close_policy_window(rt.window.index)
 
 
 SCOPED = (
@@ -357,7 +365,7 @@ def test_both_branches_are_forecast_and_the_reject_branch_is_graded(monkeypatch)
     assert rt.queue.history(void["handle"])[-1].status is SettleStatus.CENSORED
     assert {v["branch"] for v in rt.pending_votes} == {"reject"}
     _sample(rt, ok=True)  # the unchanged charter improved anyway: 1.0
-    rt._close_policy_window(rt.window.index)
+    _grade(rt)
     outcomes = _items(rt, "policy.outcome")
     forecast = next(o for o in outcomes if o["forecast"])
     assert forecast["branch"] == "reject" and forecast["y"] is True
@@ -376,7 +384,7 @@ def test_a_reflexive_no_loses_when_the_unchanged_charter_does_not_move(monkeypat
     _sample(rt, ok=False)
     _decide(rt, monkeypatch, vote=False)
     _sample(rt, ok=False)  # without the motion, nothing improved
-    rt._close_policy_window(rt.window.index)
+    _grade(rt)
     ballots = _items(rt, "policy.outcome")
     assert ballots and all(o["y"] is False and o["score"] == 0.0 for o in ballots)
 
@@ -393,7 +401,7 @@ def test_an_enacted_motion_grades_its_enact_forecasts_and_voids_the_reject_ones(
     void, = _items(rt, "policy.void")
     assert void["branch"] == "reject" and void["decided"] == "enact"
     _sample(rt, ok=True)
-    rt._close_policy_window(rt.window.index)
+    _grade(rt)
     forecast = next(o for o in _items(rt, "policy.outcome") if o["forecast"])
     assert forecast["branch"] == "enact" and forecast["score"] == pytest.approx(1 - 0.25 ** 2)
     ballots = [o for o in _items(rt, "policy.outcome") if not o["forecast"]]
