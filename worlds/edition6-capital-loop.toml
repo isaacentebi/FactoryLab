@@ -586,18 +586,19 @@ spot_pairs = ["PURR/USDC", "HYPE/USDC"]
 # with their definitions in the charter object and one card.
 [charter]
 edition = 1
-# Edition 6's own charter, drafted and adopted by this roster on 23 September 2026
+# Edition 6's own charter, drafted and adopted 3-2 by this population on 23 September 2026
 # (scripts/charter_session.py, live; docs/charter/edition6-ratified.toml and
-# edition6-session.json): 45 proposed cards, 7 passed their ballots and the
-# preflight, and a fresh sortition adopted the whole 3-2. It replaces edition 5's
-# table. The architect supplied the norms only (essay II.IV.a).
-# As adopted, card `independent-uptake` is described as uptake by an independent
-# lineage but binds `revision_rate` (accepted registrations or activated
-# amendments); the world publishes no uptake observation. It stands as the
-# population wrote it; an amendment or the next session may change it.
-# The cards are edition6-testnet-rehearsal's, ratified there. No digest is claimed:
-# this world routes seven seats through Venice, so its roster hashes differently,
-# and a funded launch of this roster would need its own session.
+# edition6-session.json): 45 proposed cards, 7 passed their ballots and the preflight.
+# The architect supplied the norms only (essay II.IV.a). As adopted, card
+# `independent-uptake` is described as uptake by an independent lineage but binds
+# `revision_rate` (accepted registrations or activated amendments); the world publishes
+# no uptake observation. It stands as the population wrote it.
+# UNPINNED. The roster changed after that session (DeepSeek's contract, every seat on
+# OpenRouter, the Venice menu), so its roster digest no longer holds and none is
+# claimed. Two sessions on the changed roster drafted new tables and rejected them, 4-1
+# and 3-2 (docs/charter/edition6-session-2.json, -3.json); several ballots read the draft
+# against this table as if both were to stand. A funded launch needs a session that
+# adopts on the launch roster, and its digests pinned here.
 norms = [
   { id = "consequential usefulness", definition = "Create things or changes that others have reason to value; uptake by an independent counterparty is evidence, internal applause is a hypothesis." },
   { id = "epistemic integrity", definition = "Make commitments answerable to evidence and preserve the ability to discover that they were wrong; a changed criterion does not rewrite what was promised." },

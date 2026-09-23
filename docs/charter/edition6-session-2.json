@@ -1,0 +1,1372 @@
+{
+ "session": "2: DeepSeek on json_object, before the skill formula was published",
+ "world": "edition6-testnet-rehearsal",
+ "roster_sha256": "e8e49df661934846be19aed2e05c0aa761bc4fd413d1db5510acf1e916112f09",
+ "charter_sha256": "559291311dd73f09c444f609e1263118d1832634b16ed8ed38a9386ef28db354",
+ "approved": false,
+ "cost_micro": 192684,
+ "norms": [
+  {
+   "id": "consequential usefulness",
+   "definition": "Create things or changes that others have reason to value; uptake by an independent counterparty is evidence, internal applause is a hypothesis."
+  },
+  {
+   "id": "epistemic integrity",
+   "definition": "Make commitments answerable to evidence and preserve the ability to discover that they were wrong; a changed criterion does not rewrite what was promised."
+  },
+  {
+   "id": "durable agency",
+   "definition": "Steward the resources and capabilities that make future worthwhile choices possible; spending for an enduring capability can be good stewardship, maintaining a dead institution is not."
+  },
+  {
+   "id": "bounded reciprocity",
+   "definition": "Do not finance the factory's advantage by imposing unconsented costs on outsiders."
+  },
+  {
+   "id": "fidelity",
+   "definition": "Measurements are defeasible evidence of the values, not substitutes for them. A favorable measurement is insufficient when supported consequences contradict the value it represents. Missing measurement alone is not evidence of failure."
+  }
+ ],
+ "draft": {
+  "sortition_size": 5,
+  "proposals": [
+   {
+    "key": "p01",
+    "proposal": {
+     "id": "independent-uptake",
+     "norm": "consequential usefulness",
+     "description": "Share of producer returns whose accepted registration, tool, observation, assembly, or service is subsequently taken up by an independent lineage; assess eligible settled outcomes only and treat missing evidence as unmeasured.",
+     "units": "fraction",
+     "window": {
+      "kind": "windows",
+      "n": 25,
+      "per": null
+     },
+     "region": {
+      "rule": "at least",
+      "lo": 0.2
+     },
+     "observation": "revision_rate",
+     "answers_for": "producer",
+     "reason": "Independent uptake is evidence that a created capability has value beyond internal approval."
+    },
+    "problem": "did not win a majority",
+    "ballots": {
+     "yes": 2,
+     "no": 3,
+     "invalid": 0
+    },
+    "passed": false
+   },
+   {
+    "key": "p02",
+    "proposal": {
+     "id": "forecast-skill-floor",
+     "norm": "epistemic integrity",
+     "description": "Mean paired forecast skill against the pre-outcome prevalence baseline for settled forecasts, with unresolved commitments assessed separately.",
+     "units": "score difference",
+     "window": {
+      "kind": "forecasts",
+      "n": 25,
+      "per": "assembly"
+     },
+     "region": {
+      "rule": "at least",
+      "lo": 0
+     },
+     "observation": "forecast_skill",
+     "answers_for": "all",
+     "reason": "Forecast performance above the prevalence baseline rewards commitments that remain answerable to evidence."
+    },
+    "problem": null,
+    "ballots": {
+     "yes": 5,
+     "no": 0,
+     "invalid": 0
+    },
+    "passed": true
+   },
+   {
+    "key": "p03",
+    "proposal": {
+     "id": "avoidable-unresolved-ceiling",
+     "norm": "epistemic integrity",
+     "description": "Attributable, avoidably unresolved accepted commitments over eligible commitments due in the responsible scope; exclude commitments not yet due and documented external unobservability without owner fault, and treat no eligible sample as unmeasured.",
+     "units": "fraction",
+     "window": {
+      "kind": "forecasts",
+      "n": 25,
+      "per": "assembly"
+     },
+     "region": {
+      "rule": "at most",
+      "hi": 0.3
+     },
+     "observation": "avoidably_unresolved_share",
+     "answers_for": "all",
+     "reason": "A ceiling on avoidable unresolved commitments supports accountability without penalizing work that is not yet due or externally unobservable."
+    },
+    "problem": null,
+    "ballots": {
+     "yes": 5,
+     "no": 0,
+     "invalid": 0
+    },
+    "passed": true
+   },
+   {
+    "key": "p04",
+    "proposal": {
+     "id": "compute-burn-ceiling",
+     "norm": "durable agency",
+     "description": "Total metered invocation compute plus retained-storage rent per closed window.",
+     "units": "micro-USD per window",
+     "window": {
+      "kind": "windows",
+      "n": 25,
+      "per": null
+     },
+     "region": {
+      "rule": "at most",
+      "hi": 10000000
+     },
+     "observation": "burn_per_window",
+     "answers_for": "all",
+     "reason": "A spending ceiling encourages stewardship of resources needed to preserve future worthwhile choices."
+    },
+    "problem": null,
+    "ballots": {
+     "yes": 5,
+     "no": 0,
+     "invalid": 0
+    },
+    "passed": true
+   },
+   {
+    "key": "p05",
+    "proposal": {
+     "id": "outsider-cost-discipline",
+     "norm": "bounded reciprocity",
+     "description": "Mean cost over all selected responses, failures included, with retained-storage charges allocated to response cost but never counted as responses.",
+     "units": "micro-USD per attempt",
+     "window": {
+      "kind": "returns",
+      "n": 25,
+      "per": "assembly"
+     },
+     "region": {
+      "rule": "at most",
+      "hi": 1000000
+     },
+     "observation": "cost_per_attempt",
+     "answers_for": "all",
+     "reason": "Tracking cost across failures as well as successes discourages shifting avoidable expense onto shared resources and others."
+    },
+    "problem": null,
+    "ballots": {
+     "yes": 5,
+     "no": 0,
+     "invalid": 0
+    },
+    "passed": true
+   },
+   {
+    "key": "p06",
+    "proposal": {
+     "id": "independent-consequence",
+     "norm": "consequential usefulness",
+     "description": "Share of settled selected consequences that are paid off.",
+     "units": "fraction",
+     "window": {
+      "kind": "windows",
+      "n": 10,
+      "per": null
+     },
+     "region": {
+      "rule": "at least",
+      "lo": 0.5
+     },
+     "observation": "consequence_paid_off_rate",
+     "answers_for": "producer",
+     "reason": "Paid-off consequences provide outcome-based evidence that producer work delivers useful results."
+    },
+    "problem": null,
+    "ballots": {
+     "yes": 3,
+     "no": 2,
+     "invalid": 0
+    },
+    "passed": true
+   },
+   {
+    "key": "p07",
+    "proposal": {
+     "id": "well-formed-floor",
+     "norm": "fidelity",
+     "description": "Successful responses over selected invocation responses, including ballots, so the success rate includes malformed or failed outputs.",
+     "units": "fraction",
+     "window": {
+      "kind": "returns",
+      "n": 25,
+      "per": "assembly"
+     },
+     "region": {
+      "rule": "at least",
+      "lo": 0.9
+     },
+     "observation": "well_formed_rate",
+     "answers_for": "all",
+     "reason": "Reliable, measurable outputs make the charter's evidence usable while remaining only one defeasible signal of fidelity."
+    },
+    "problem": null,
+    "ballots": {
+     "yes": 5,
+     "no": 0,
+     "invalid": 0
+    },
+    "passed": true
+   },
+   {
+    "key": "p08",
+    "proposal": {
+     "id": "independent-uptake",
+     "norm": "consequential usefulness",
+     "description": "Share of selected producer returns whose accepted registration, tool, observation, assembly, or service is subsequently taken up by an independent lineage; consider eligible settled outcomes only and treat missing evidence as unmeasured.",
+     "units": "fraction",
+     "window": {
+      "kind": "windows",
+      "n": 25,
+      "per": null
+     },
+     "region": {
+      "rule": "at least",
+      "lo": 0.2
+     },
+     "observation": "revision_rate",
+     "answers_for": "producer",
+     "lambda": 0.2,
+     "reason": "Independent uptake is evidence that a creation serves someone beyond its makers, without treating internal activity as proof of value."
+    },
+    "problem": "did not win a majority",
+    "ballots": {
+     "yes": 1,
+     "no": 4,
+     "invalid": 0
+    },
+    "passed": false
+   },
+   {
+    "key": "p09",
+    "proposal": {
+     "id": "forecast-skill-floor",
+     "norm": "epistemic integrity",
+     "description": "Mean paired forecast skill against the pre-outcome prevalence baseline for settled forecasts; unresolved commitments are tracked separately by the censorship-bound card.",
+     "units": "score difference",
+     "window": {
+      "kind": "forecasts",
+      "n": 25,
+      "per": "assembly"
+     },
+     "region": {
+      "rule": "at least",
+      "lo": 0
+     },
+     "observation": "forecast_skill",
+     "answers_for": "all",
+     "lambda": 0.2,
+     "reason": "Comparing forecasts with a pre-outcome baseline rewards evidence-responsive prediction rather than confident guesses or hindsight."
+    },
+    "problem": "preflight: card forecast-skill-floor observation: already named by live card forecast-skill-floor for the same role",
+    "ballots": {
+     "yes": 5,
+     "no": 0,
+     "invalid": 0
+    },
+    "passed": false
+   },
+   {
+    "key": "p10",
+    "proposal": {
+     "id": "avoidable-unresolved-ceiling",
+     "norm": "epistemic integrity",
+     "description": "Attributable, avoidably unresolved accepted commitments over eligible commitments due in the responsible scope; exclude commitments not yet due and documented external unobservability without owner fault, and treat no eligible sample as unmeasured.",
+     "units": "fraction",
+     "window": {
+      "kind": "forecasts",
+      "n": 25,
+      "per": "assembly"
+     },
+     "region": {
+      "rule": "at most",
+      "hi": 0.3
+     },
+     "observation": "avoidably_unresolved_share",
+     "answers_for": "all",
+     "lambda": 0.2,
+     "reason": "This makes answerability about due commitments the seat could have resolved, not premature deadlines or evidence outside its control."
+    },
+    "problem": "preflight: card avoidable-unresolved-ceiling observation: already named by live card avoidable-unresolved-ceiling for the same role",
+    "ballots": {
+     "yes": 4,
+     "no": 1,
+     "invalid": 0
+    },
+    "passed": false
+   },
+   {
+    "key": "p11",
+    "proposal": {
+     "id": "compute-burn-ceiling",
+     "norm": "durable agency",
+     "description": "Total metered invocation compute plus retained-storage rent per closed window.",
+     "units": "micro-USD per window",
+     "window": {
+      "kind": "windows",
+      "n": 25,
+      "per": null
+     },
+     "region": {
+      "rule": "at most",
+      "hi": 10000000
+     },
+     "observation": "burn_per_window",
+     "answers_for": "all",
+     "lambda": 0.2,
+     "reason": "Tracking total burn encourages preserving resources for future choices while leaving room for spending that builds enduring capability."
+    },
+    "problem": "preflight: card compute-burn-ceiling observation: already named by live card compute-burn-ceiling for the same role",
+    "ballots": {
+     "yes": 4,
+     "no": 1,
+     "invalid": 0
+    },
+    "passed": false
+   },
+   {
+    "key": "p12",
+    "proposal": {
+     "id": "outsider-cost-discipline",
+     "norm": "bounded reciprocity",
+     "description": "Mean cost over all selected responses, failures included, with retained-storage charges assigned to those responses but never counted as responses.",
+     "units": "micro-USD per attempt",
+     "window": {
+      "kind": "returns",
+      "n": 25,
+      "per": "assembly"
+     },
+     "region": {
+      "rule": "at most",
+      "hi": 1000000
+     },
+     "observation": "cost_per_attempt",
+     "answers_for": "all",
+     "lambda": 0.2,
+     "reason": "Including failed attempts makes resource costs visible without misclassifying storage rent as a response."
+    },
+    "problem": "preflight: card outsider-cost-discipline observation: already named by live card outsider-cost-discipline for the same role",
+    "ballots": {
+     "yes": 4,
+     "no": 1,
+     "invalid": 0
+    },
+    "passed": false
+   },
+   {
+    "key": "p13",
+    "proposal": {
+     "id": "independent-consequence",
+     "norm": "consequential usefulness",
+     "description": "Share of settled selected consequences that are paid off.",
+     "units": "fraction",
+     "window": {
+      "kind": "windows",
+      "n": 10,
+      "per": null
+     },
+     "region": {
+      "rule": "at least",
+      "lo": 0.5
+     },
+     "observation": "consequence_paid_off_rate",
+     "answers_for": "producer",
+     "lambda": 0.2,
+     "reason": "Measured paid-off consequences provide evidence of useful results, while the charter's fidelity norm prevents treating this proxy as the value itself."
+    },
+    "problem": "did not win a majority",
+    "ballots": {
+     "yes": 2,
+     "no": 3,
+     "invalid": 0
+    },
+    "passed": false
+   },
+   {
+    "key": "p14",
+    "proposal": {
+     "id": "well-formed-floor",
+     "norm": "fidelity",
+     "description": "Successful responses over selected invocation responses, including ballots, so a seat whose output mostly fails to parse cannot be credited only for the fraction that landed.",
+     "units": "fraction",
+     "window": {
+      "kind": "returns",
+      "n": 25,
+      "per": "assembly"
+     },
+     "region": {
+      "rule": "at least",
+      "lo": 0.9
+     },
+     "observation": "well_formed_rate",
+     "answers_for": "all",
+     "lambda": 0.2,
+     "reason": "A floor on successful responses protects the reliability of evidence while remaining a defeasible measure rather than a definition of fidelity."
+    },
+    "problem": "preflight: card well-formed-floor observation: already named by live card well-formed-floor for the same role",
+    "ballots": {
+     "yes": 4,
+     "no": 1,
+     "invalid": 0
+    },
+    "passed": false
+   },
+   {
+    "key": "p15",
+    "proposal": {
+     "id": "verdict-calibration-floor",
+     "norm": "epistemic integrity",
+     "description": "Mean evaluator verdict, so a judging population cannot drift to uniformly generous or uniformly harsh scores that no consequence ever contradicts.",
+     "units": "score",
+     "window": {
+      "kind": "returns",
+      "n": 25,
+      "per": "assembly"
+     },
+     "region": {
+      "rule": "between",
+      "lo": 0.3,
+      "hi": 0.9
+     },
+     "observation": "verdict_mean",
+     "answers_for": "evaluator",
+     "lambda": 0.3,
+     "reason": "Verdicts that cluster at either extreme are unanswerable to evidence, so this bounds the calibration failure the fidelity norm forbids."
+    },
+    "problem": "card verdict-calibration-floor window: verdict_mean cannot be measured over returns",
+    "ballots": {
+     "yes": 0,
+     "no": 0,
+     "invalid": 0
+    },
+    "passed": false
+   },
+   {
+    "key": "p16",
+    "proposal": {
+     "id": "censoring-ceiling",
+     "norm": "epistemic integrity",
+     "description": "Censored outcomes over resolved outcomes, so commitments do not accumulate a growing mass of answers that can never be discovered to be wrong.",
+     "units": "fraction",
+     "window": {
+      "kind": "windows",
+      "n": 25,
+      "per": null
+     },
+     "region": {
+      "rule": "at most",
+      "hi": 0.5
+     },
+     "observation": "censored_share",
+     "answers_for": "all",
+     "lambda": 0.4,
+     "reason": "Preserving the ability to discover error requires outcomes to actually settle, which this measures without treating a mere delay as failure."
+    },
+    "problem": "did not win a majority",
+    "ballots": {
+     "yes": 2,
+     "no": 3,
+     "invalid": 0
+    },
+    "passed": false
+   },
+   {
+    "key": "p17",
+    "proposal": {
+     "id": "evaluator-cost-ceiling",
+     "norm": "durable agency",
+     "description": "Compute the evaluator roles spent over all compute spent in the window, retained-storage rent included, keeping the judging apparatus from crowding out productive capability.",
+     "units": "fraction",
+     "window": {
+      "kind": "windows",
+      "n": 10,
+      "per": null
+     },
+     "region": {
+      "rule": "at most",
+      "hi": 0.6
+     },
+     "observation": "evaluator_compute_share",
+     "answers_for": "all",
+     "lambda": 0.3,
+     "reason": "Over-spending on evaluation starves the productive work whose survival is what durable agency stewards."
+    },
+    "problem": "card evaluator-cost-ceiling window: measurement preflight produced no value",
+    "ballots": {
+     "yes": 0,
+     "no": 0,
+     "invalid": 0
+    },
+    "passed": false
+   },
+   {
+    "key": "p18",
+    "proposal": {
+     "id": "provider-concentration-ceiling",
+     "norm": "durable agency",
+     "description": "The largest share of the window's model calls served by one provider, guarding against a single external dependency holding the population's future choices hostage.",
+     "units": "fraction",
+     "window": {
+      "kind": "windows",
+      "n": 10,
+      "per": null
+     },
+     "region": {
+      "rule": "at most",
+      "hi": 0.9
+     },
+     "observation": "provider_concentration",
+     "answers_for": "all",
+     "lambda": 0.2,
+     "reason": "A single point of provider failure removes future choice, so diversification is stewardship of future capability."
+    },
+    "problem": "card provider-concentration-ceiling window: measurement preflight produced no value",
+    "ballots": {
+     "yes": 0,
+     "no": 0,
+     "invalid": 0
+    },
+    "passed": false
+   },
+   {
+    "key": "p19",
+    "proposal": {
+     "id": "noop-share-floor",
+     "norm": "consequential usefulness",
+     "description": "Minimum share of producer responses declaring noop or hold, so the population does not manufacture unrequested activity that merely burns compute.",
+     "units": "fraction",
+     "window": {
+      "kind": "returns",
+      "n": 25,
+      "per": "assembly"
+     },
+     "region": {
+      "rule": "at least",
+      "lo": 0.1
+     },
+     "observation": "noop_share",
+     "answers_for": "producer",
+     "lambda": 0.2,
+     "reason": "Uptake, not volume, is the evidence of value, so restraining needless action protects the shared resource without demanding busywork."
+    },
+    "problem": "did not win a majority",
+    "ballots": {
+     "yes": 1,
+     "no": 4,
+     "invalid": 0
+    },
+    "passed": false
+   },
+   {
+    "key": "p20",
+    "proposal": {
+     "id": "revision-ceiling",
+     "norm": "consequential usefulness",
+     "description": "Share of responses carrying accepted registrations or activated amendments, capped so rapid re-registration does not masquerade as independent uptake.",
+     "units": "fraction",
+     "window": {
+      "kind": "returns",
+      "n": 25,
+      "per": "assembly"
+     },
+     "region": {
+      "rule": "at most",
+      "hi": 0.4
+     },
+     "observation": "revision_rate",
+     "answers_for": "producer",
+     "lambda": 0.2,
+     "reason": "If every return ships a new registration, uptake counts measure churn rather than value received from an independent counterparty."
+    },
+    "problem": "did not win a majority",
+    "ballots": {
+     "yes": 1,
+     "no": 4,
+     "invalid": 0
+    },
+    "passed": false
+   },
+   {
+    "key": "p21",
+    "proposal": {
+     "id": "reciprocity-burn-ceiling",
+     "norm": "bounded reciprocity",
+     "description": "Mean cost over every selected response including failures, capping what each scope may impose on the shared reserve per attempt.",
+     "units": "micro-USD per attempt",
+     "window": {
+      "kind": "returns",
+      "n": 25,
+      "per": "assembly"
+     },
+     "region": {
+      "rule": "at most",
+      "hi": 1000000
+     },
+     "observation": "cost_per_attempt",
+     "answers_for": "all",
+     "lambda": 0.3,
+     "reason": "Every micro-USD spent without return is drawn from funds others also depend on, which is precisely the unconsented cost the norm forbids."
+    },
+    "problem": "preflight: card reciprocity-burn-ceiling observation: already named by live card outsider-cost-discipline for the same role",
+    "ballots": {
+     "yes": 4,
+     "no": 1,
+     "invalid": 0
+    },
+    "passed": false
+   },
+   {
+    "key": "p22",
+    "proposal": {
+     "id": "concentration-reciprocity",
+     "norm": "bounded reciprocity",
+     "description": "Largest share of the window's model calls made on one foundation model family, so the population's dependence does not concentrate pricing power against its own budget.",
+     "units": "fraction",
+     "window": {
+      "kind": "windows",
+      "n": 10,
+      "per": null
+     },
+     "region": {
+      "rule": "at most",
+      "hi": 0.85
+     },
+     "observation": "family_concentration",
+     "answers_for": "all",
+     "lambda": 0.2,
+     "reason": "Relying on one family hands a single supplier the power to raise costs on a captive population, an outsized externality the norm rejects."
+    },
+    "problem": "card concentration-reciprocity window: measurement preflight produced no value",
+    "ballots": {
+     "yes": 0,
+     "no": 0,
+     "invalid": 0
+    },
+    "passed": false
+   },
+   {
+    "key": "p23",
+    "proposal": {
+     "id": "disagreement-fidelity-ceiling",
+     "norm": "fidelity",
+     "description": "Mean population standard deviation across judges of the same return, so a single favourable verdict cannot stand in for a contested judgement.",
+     "units": "score standard deviation",
+     "window": {
+      "kind": "windows",
+      "n": 10,
+      "per": null
+     },
+     "region": {
+      "rule": "at most",
+      "hi": 0.3
+     },
+     "observation": "evaluator_disagreement",
+     "answers_for": "evaluator",
+     "lambda": 0.3,
+     "reason": "High disagreement means the measurement is weak evidence of the value it claims to represent, which fidelity says must not be substituted for the value."
+    },
+    "problem": "did not win a majority",
+    "ballots": {
+     "yes": 2,
+     "no": 3,
+     "invalid": 0
+    },
+    "passed": false
+   },
+   {
+    "key": "p24",
+    "proposal": {
+     "id": "meta-grade-consistency",
+     "norm": "fidelity",
+     "description": "Mean raw meta verdict delivered across tiers, guarding that meta oversight does not systematically overstate or understate the conformity it reports.",
+     "units": "score",
+     "window": {
+      "kind": "windows",
+      "n": 25,
+      "per": null
+     },
+     "region": {
+      "rule": "between",
+      "lo": 0.3,
+      "hi": 0.9
+     },
+     "observation": "meta_verdict_mean",
+     "answers_for": "meta",
+     "lambda": 0.3,
+     "reason": "A meta layer pinned to an extreme becomes a favourable measurement contradicting the consequences below it, which fidelity treats as insufficient."
+    },
+    "problem": "did not win a majority",
+    "ballots": {
+     "yes": 2,
+     "no": 3,
+     "invalid": 0
+    },
+    "passed": false
+   },
+   {
+    "key": "p25",
+    "proposal": {
+     "id": "evaluator-consequence-calibration",
+     "norm": "epistemic integrity",
+     "description": "Mean evaluator verdict score on resolved forecast records, assessing whether judgments track measured consequences rather than confidence alone.",
+     "units": "score",
+     "window": {
+      "kind": "forecasts",
+      "n": 25,
+      "per": "assembly"
+     },
+     "region": {
+      "rule": "at least",
+      "lo": 0.5
+     },
+     "observation": "verdict_mean",
+     "answers_for": "evaluator",
+     "reason": "Judges should make evidence-responsive assessments, and their forecast-linked verdicts provide a direct though defeasible signal of that performance."
+    },
+    "problem": "did not win a majority",
+    "ballots": {
+     "yes": 1,
+     "no": 4,
+     "invalid": 0
+    },
+    "passed": false
+   },
+   {
+    "key": "p26",
+    "proposal": {
+     "id": "provider-diversity-ceiling",
+     "norm": "durable agency",
+     "description": "Largest share of model calls served by any one provider in a closed window.",
+     "units": "fraction",
+     "window": {
+      "kind": "windows",
+      "n": 10,
+      "per": null
+     },
+     "region": {
+      "rule": "at most",
+      "hi": 0.8
+     },
+     "observation": "provider_concentration",
+     "answers_for": "all",
+     "reason": "Limiting dependence on one provider can preserve the factory's future ability to operate through provider outages or changes."
+    },
+    "problem": "card provider-diversity-ceiling window: measurement preflight produced no value",
+    "ballots": {
+     "yes": 0,
+     "no": 0,
+     "invalid": 0
+    },
+    "passed": false
+   },
+   {
+    "key": "p27",
+    "proposal": {
+     "id": "evaluator-compute-stewardship",
+     "norm": "durable agency",
+     "description": "Share of total window compute spent on evaluator roles, including retained-storage rent in total compute.",
+     "units": "fraction",
+     "window": {
+      "kind": "windows",
+      "n": 10,
+      "per": null
+     },
+     "region": {
+      "rule": "at most",
+      "hi": 0.7
+     },
+     "observation": "evaluator_compute_share",
+     "answers_for": "all",
+     "reason": "Monitoring evaluator resource share can flag when assessment overhead threatens resources available for other worthwhile work without treating any particular share as inherently wasteful."
+    },
+    "problem": "card evaluator-compute-stewardship window: measurement preflight produced no value",
+    "ballots": {
+     "yes": 0,
+     "no": 0,
+     "invalid": 0
+    },
+    "passed": false
+   },
+   {
+    "key": "p28",
+    "proposal": {
+     "id": "independent-uptake",
+     "norm": "consequential usefulness",
+     "description": "Share of selected producer returns whose accepted registration, tool, observation, assembly, or service is subsequently taken up by an independent lineage; assess only eligible settled outcomes and treat missing evidence as unmeasured.",
+     "units": "fraction",
+     "window": {
+      "kind": "windows",
+      "n": 25,
+      "per": null
+     },
+     "region": {
+      "rule": "at least",
+      "lo": 0.2
+     },
+     "observation": "revision_rate",
+     "answers_for": "producer",
+     "reason": "Independent uptake is the charter's own evidence that the work was valued by someone other than its author."
+    },
+    "problem": "did not win a majority",
+    "ballots": {
+     "yes": 1,
+     "no": 4,
+     "invalid": 0
+    },
+    "passed": false
+   },
+   {
+    "key": "p29",
+    "proposal": {
+     "id": "forecast-skill-floor",
+     "norm": "epistemic integrity",
+     "description": "Mean paired forecast skill against the pre-outcome prevalence baseline for settled forecasts, with unresolved commitments tracked separately by the existing censorship-bound card.",
+     "units": "score difference",
+     "window": {
+      "kind": "forecasts",
+      "n": 25,
+      "per": "assembly"
+     },
+     "region": {
+      "rule": "at least",
+      "lo": 0
+     },
+     "observation": "forecast_skill",
+     "answers_for": "all",
+     "reason": "Skill over the prevalence baseline is the cleanest check that commitments were made answerable to evidence rather than to fashion."
+    },
+    "problem": "preflight: card forecast-skill-floor observation: already named by live card forecast-skill-floor for the same role",
+    "ballots": {
+     "yes": 4,
+     "no": 1,
+     "invalid": 0
+    },
+    "passed": false
+   },
+   {
+    "key": "p30",
+    "proposal": {
+     "id": "avoidable-unresolved-ceiling",
+     "norm": "epistemic integrity",
+     "description": "Attributable, avoidably unresolved accepted commitments over eligible commitments due in the responsible scope; exclude commitments not yet due and documented external unobservability without owner fault, and treat no eligible sample as unmeasured.",
+     "units": "fraction",
+     "window": {
+      "kind": "forecasts",
+      "n": 25,
+      "per": "assembly"
+     },
+     "region": {
+      "rule": "at most",
+      "lo": 0.3
+     },
+     "observation": "avoidably_unresolved_share",
+     "answers_for": "all",
+     "reason": "A commitment left avoidably unresolved is a promise whose truth can no longer be discovered, which is the failure epistemic integrity forbids."
+    },
+    "problem": "card avoidable-unresolved-ceiling region: region.lo does not belong to rule at most",
+    "ballots": {
+     "yes": 0,
+     "no": 0,
+     "invalid": 0
+    },
+    "passed": false
+   },
+   {
+    "key": "p31",
+    "proposal": {
+     "id": "compute-burn-ceiling",
+     "norm": "durable agency",
+     "description": "Total metered invocation compute plus retained-storage rent per closed window.",
+     "units": "micro-USD per window",
+     "window": {
+      "kind": "windows",
+      "n": 25,
+      "per": null
+     },
+     "region": {
+      "rule": "at most",
+      "lo": 10000000
+     },
+     "observation": "burn_per_window",
+     "answers_for": "all",
+     "reason": "Capping window burn keeps enough reserve alive that future worthwhile choices remain finable at all."
+    },
+    "problem": "card compute-burn-ceiling region: region.lo does not belong to rule at most",
+    "ballots": {
+     "yes": 0,
+     "no": 0,
+     "invalid": 0
+    },
+    "passed": false
+   },
+   {
+    "key": "p32",
+    "proposal": {
+     "id": "outsider-cost-discipline",
+     "norm": "bounded reciprocity",
+     "description": "Mean cost over all selected responses, failures included, including the retained-storage charge assigned to those responses but never counting storage as a response.",
+     "units": "micro-USD per attempt",
+     "window": {
+      "kind": "returns",
+      "n": 25,
+      "per": "assembly"
+     },
+     "region": {
+      "rule": "at most",
+      "lo": 1000000
+     },
+     "observation": "cost_per_attempt",
+     "answers_for": "all",
+     "reason": "Holding per-attempt cost down keeps the factory's advantage from being financed by unpriced draw on shared compute."
+    },
+    "problem": "card outsider-cost-discipline region: region.lo does not belong to rule at most",
+    "ballots": {
+     "yes": 0,
+     "no": 0,
+     "invalid": 0
+    },
+    "passed": false
+   },
+   {
+    "key": "p33",
+    "proposal": {
+     "id": "independent-consequence",
+     "norm": "consequential usefulness",
+     "description": "Share of settled selected consequences that are paid off.",
+     "units": "fraction",
+     "window": {
+      "kind": "windows",
+      "n": 10,
+      "per": null
+     },
+     "region": {
+      "rule": "at least",
+      "lo": 0.5
+     },
+     "observation": "consequence_paid_off_rate",
+     "answers_for": "producer",
+     "reason": "Returns that paid off against measured outcomes are the non-applause evidence that others had reason to value the work."
+    },
+    "problem": "did not win a majority",
+    "ballots": {
+     "yes": 2,
+     "no": 3,
+     "invalid": 0
+    },
+    "passed": false
+   },
+   {
+    "key": "p34",
+    "proposal": {
+     "id": "well-formed-floor",
+     "norm": "fidelity",
+     "description": "Successful responses over selected invocation responses, including ballots, so a seat whose output mostly fails to parse cannot be credited on the fraction that happened to land.",
+     "units": "fraction",
+     "window": {
+      "kind": "returns",
+      "n": 25,
+      "per": "assembly"
+     },
+     "region": {
+      "rule": "at least",
+      "lo": 0.9
+     },
+     "observation": "well_formed_rate",
+     "answers_for": "all",
+     "reason": "If most returns fail to parse, every downstream measurement is evidence about nothing, so fidelity demands the raw material of measurement be sound."
+    },
+    "problem": "preflight: card well-formed-floor observation: already named by live card well-formed-floor for the same role",
+    "ballots": {
+     "yes": 4,
+     "no": 1,
+     "invalid": 0
+    },
+    "passed": false
+   },
+   {
+    "key": "p35",
+    "proposal": {
+     "id": "position-concentration-ceiling",
+     "norm": "durable agency",
+     "description": "Keep the peak observed absolute marked notional on any one coin below 50% of starting equity when positions and marks are available.",
+     "units": "ratio",
+     "window": {
+      "kind": "windows",
+      "n": 10,
+      "per": null
+     },
+     "region": {
+      "rule": "at most",
+      "hi": 0.5
+     },
+     "observation": "position_concentration",
+     "answers_for": "producer",
+     "lambda": 0.2,
+     "reason": "A concentrated position can impair future choices, while absent marks should leave the card unmeasured rather than imply safety."
+    },
+    "problem": "did not win a majority",
+    "ballots": {
+     "yes": 2,
+     "no": 3,
+     "invalid": 0
+    },
+    "passed": false
+   },
+   {
+    "key": "p36",
+    "proposal": {
+     "id": "evaluation-compute-share-ceiling",
+     "norm": "durable agency",
+     "description": "Keep evaluator-role compute, including its share of retained-storage rent, below 60% of total compute spent.",
+     "units": "fraction",
+     "window": {
+      "kind": "windows",
+      "n": 10,
+      "per": null
+     },
+     "region": {
+      "rule": "at most",
+      "hi": 0.6
+     },
+     "observation": "evaluator_compute_share",
+     "answers_for": "all",
+     "lambda": 0.1,
+     "reason": "Evaluation should preserve capacity for creating and testing useful work, though a temporary increase may be justified by its consequences."
+    },
+    "problem": "card evaluation-compute-share-ceiling window: measurement preflight produced no value",
+    "ballots": {
+     "yes": 0,
+     "no": 0,
+     "invalid": 0
+    },
+    "passed": false
+   },
+   {
+    "key": "p37",
+    "proposal": {
+     "id": "model-family-concentration-ceiling",
+     "norm": "durable agency",
+     "description": "Keep any one foundation model family's share of model calls at or below 80% across closed windows.",
+     "units": "fraction",
+     "window": {
+      "kind": "windows",
+      "n": 10,
+      "per": null
+     },
+     "region": {
+      "rule": "at most",
+      "hi": 0.8
+     },
+     "observation": "family_concentration",
+     "answers_for": "all",
+     "lambda": 0.05,
+     "reason": "Avoiding dependence on one model family helps preserve alternatives, but diversification alone is not evidence of useful outcomes."
+    },
+    "problem": "card model-family-concentration-ceiling window: measurement preflight produced no value",
+    "ballots": {
+     "yes": 0,
+     "no": 0,
+     "invalid": 0
+    },
+    "passed": false
+   },
+   {
+    "key": "p38",
+    "proposal": {
+     "id": "forecast-skill-floor",
+     "norm": "epistemic integrity",
+     "description": "Mean paired forecast skill against the pre-outcome prevalence baseline for settled forecasts.",
+     "units": "score difference",
+     "window": {
+      "kind": "forecasts",
+      "n": 25,
+      "per": "assembly"
+     },
+     "region": {
+      "rule": "at least",
+      "lo": 0
+     },
+     "observation": "forecast_skill",
+     "answers_for": "all",
+     "lambda": 0.2,
+     "reason": "Comparing forecasts with a pre-outcome baseline rewards evidence-sensitive prediction without mistaking confidence for accuracy."
+    },
+    "problem": "preflight: card forecast-skill-floor observation: already named by live card forecast-skill-floor for the same role",
+    "ballots": {
+     "yes": 4,
+     "no": 1,
+     "invalid": 0
+    },
+    "passed": false
+   },
+   {
+    "key": "p39",
+    "proposal": {
+     "id": "avoidably-unresolved-ceiling",
+     "norm": "epistemic integrity",
+     "description": "Share of attributable, avoidably unresolved accepted commitments that are due in the responsible scope; commitments not yet due and documented external unobservability without owner fault are excluded, and no eligible sample is unmeasured.",
+     "units": "fraction",
+     "window": {
+      "kind": "forecasts",
+      "n": 25,
+      "per": "assembly"
+     },
+     "region": {
+      "rule": "at most",
+      "hi": 0.3
+     },
+     "observation": "avoidably_unresolved_share",
+     "answers_for": "all",
+     "lambda": 0.2,
+     "reason": "A bounded ceiling makes due commitments answerable while avoiding penalties for honest external uncertainty or commitments not yet due."
+    },
+    "problem": "did not win a majority",
+    "ballots": {
+     "yes": 2,
+     "no": 3,
+     "invalid": 0
+    },
+    "passed": false
+   },
+   {
+    "key": "p40",
+    "proposal": {
+     "id": "compute-burn-ceiling",
+     "norm": "durable agency",
+     "description": "Compute spent per closed window, including metered invocation costs and retained-storage rent.",
+     "units": "micro-USD per window",
+     "window": {
+      "kind": "windows",
+      "n": 25,
+      "per": null
+     },
+     "region": {
+      "rule": "at most",
+      "hi": 10000000
+     },
+     "observation": "burn_per_window",
+     "answers_for": "all",
+     "lambda": 0.1,
+     "reason": "Monitoring total compute and storage burn encourages preserving resources for future choices without treating every capability investment as waste."
+    },
+    "problem": "preflight: card compute-burn-ceiling observation: already named by live card compute-burn-ceiling for the same role",
+    "ballots": {
+     "yes": 4,
+     "no": 1,
+     "invalid": 0
+    },
+    "passed": false
+   },
+   {
+    "key": "p41",
+    "proposal": {
+     "id": "outsider-cost-discipline",
+     "norm": "bounded reciprocity",
+     "description": "Mean cost over selected responses, failures included, with retained-storage charges assigned to their costs but not counted as responses.",
+     "units": "micro-USD per attempt",
+     "window": {
+      "kind": "returns",
+      "n": 25,
+      "per": "assembly"
+     },
+     "region": {
+      "rule": "at most",
+      "hi": 1000000
+     },
+     "observation": "cost_per_attempt",
+     "answers_for": "all",
+     "lambda": 0.1,
+     "reason": "Including failed attempts discourages shifting avoidable costs onto shared resources while keeping storage accounting distinct from response counts."
+    },
+    "problem": "preflight: card outsider-cost-discipline observation: already named by live card outsider-cost-discipline for the same role",
+    "ballots": {
+     "yes": 4,
+     "no": 1,
+     "invalid": 0
+    },
+    "passed": false
+   },
+   {
+    "key": "p42",
+    "proposal": {
+     "id": "independent-consequence",
+     "norm": "consequential usefulness",
+     "description": "Share of settled selected consequences that are paid off.",
+     "units": "fraction",
+     "window": {
+      "kind": "windows",
+      "n": 10,
+      "per": null
+     },
+     "region": {
+      "rule": "at least",
+      "lo": 0.5
+     },
+     "observation": "consequence_paid_off_rate",
+     "answers_for": "producer",
+     "lambda": 0.2,
+     "reason": "Observed paid-off consequences provide evidence of useful outcomes, while the charter's fidelity norm prevents treating the rate as decisive by itself."
+    },
+    "problem": "did not win a majority",
+    "ballots": {
+     "yes": 2,
+     "no": 3,
+     "invalid": 0
+    },
+    "passed": false
+   },
+   {
+    "key": "p43",
+    "proposal": {
+     "id": "well-formed-floor",
+     "norm": "fidelity",
+     "description": "Successful responses over selected invocation responses, including ballots.",
+     "units": "fraction",
+     "window": {
+      "kind": "returns",
+      "n": 25,
+      "per": "assembly"
+     },
+     "region": {
+      "rule": "at least",
+      "lo": 0.9
+     },
+     "observation": "well_formed_rate",
+     "answers_for": "all",
+     "lambda": 0.1,
+     "reason": "A high rate of usable responses supports dependable measurement without claiming that well-formed output proves substantive success."
+    },
+    "problem": "preflight: card well-formed-floor observation: already named by live card well-formed-floor for the same role",
+    "ballots": {
+     "yes": 4,
+     "no": 1,
+     "invalid": 0
+    },
+    "passed": false
+   },
+   {
+    "key": "p44",
+    "proposal": {
+     "id": "evaluator-compute-discipline",
+     "norm": "durable agency",
+     "description": "Fraction of total window compute spent on evaluator roles (judges, meta) including storage rent.",
+     "units": "fraction",
+     "window": {
+      "kind": "windows",
+      "n": 25,
+      "per": null
+     },
+     "region": {
+      "rule": "at most",
+      "hi": 0.6
+     },
+     "observation": "evaluator_compute_share",
+     "answers_for": "all",
+     "reason": "Prevents the judging apparatus from consuming more than a reasonable share of resources compared to production."
+    },
+    "problem": "card evaluator-compute-discipline window: measurement preflight produced no value",
+    "ballots": {
+     "yes": 0,
+     "no": 0,
+     "invalid": 0
+    },
+    "passed": false
+   },
+   {
+    "key": "p45",
+    "proposal": {
+     "id": "provider-diversity-floor",
+     "norm": "bounded reciprocity",
+     "description": "Largest share of model calls served by any single provider in the window.",
+     "units": "fraction",
+     "window": {
+      "kind": "windows",
+      "n": 25,
+      "per": null
+     },
+     "region": {
+      "rule": "at most",
+      "hi": 0.8
+     },
+     "observation": "provider_concentration",
+     "answers_for": "all",
+     "reason": "Encourages diversification of compute sources to avoid over-dependence on a single vendor's terms or stability."
+    },
+    "problem": "card provider-diversity-floor window: measurement preflight produced no value",
+    "ballots": {
+     "yes": 0,
+     "no": 0,
+     "invalid": 0
+    },
+    "passed": false
+   },
+   {
+    "key": "p46",
+    "proposal": {
+     "id": "noop-efficiency-ceiling",
+     "norm": "consequential usefulness",
+     "description": "Share of producer responses declaring noop or hold among selected returns.",
+     "units": "fraction",
+     "window": {
+      "kind": "returns",
+      "n": 25,
+      "per": "assembly"
+     },
+     "region": {
+      "rule": "at most",
+      "hi": 0.7
+     },
+     "observation": "noop_share",
+     "answers_for": "producer",
+     "reason": "Discourages assemblies that primarily abstain without producing value, ensuring engagement with world events."
+    },
+    "problem": "did not win a majority",
+    "ballots": {
+     "yes": 1,
+     "no": 4,
+     "invalid": 0
+    },
+    "passed": false
+   }
+  ]
+ },
+ "adopt": {
+  "sortition_size": 5,
+  "yes": 1,
+  "no": 4,
+  "invalid": 0,
+  "reasons": [
+   "The charter's norms and cards form a coherent, measurable set covering epistemic integrity, consequence, cost discipline, and fidelity with reasonable thresholds.",
+   "The charter's own text already lists seven cards, including independent-uptake and well-formed-floor, while the submitted edition 1 carries only six and drops independent-uptake; adopting it whole would silently enact a different card set than the one the world input presents, so the discrepancy should be resolved before the edition is adopted.",
+   "The charter\u2019s unresolved-commitment card uses a forecast window although that observation\u2019s unresolved-share measurement is not meaningfully forecast-based, risking an invalid preflight.",
+   "The forecast-skill card requires a nonnegative skill floor, but skill is defined as forecast Brier minus baseline Brier, so positive values indicate worse forecasts.",
+   "The proposed cards are internally inconsistent with edition 1: independent-uptake is absent, and unresolved commitments are specified separately despite the existing censorship-bound card."
+  ]
+ },
+ "lambda_dollars": {
+  "work/fastloop/ab2-control/live-20260923-104810-s1/events.json": {
+   "source": "price.margin",
+   "windows": 0,
+   "cards": {}
+  }
+ },
+ "redaction": "Seat aliases, assembly ids, proposers and models are removed: the sortition is anonymous (essay II.IV)."
+}
