@@ -12,14 +12,16 @@
 # at least three families (Wave 5a; docs/manifest.md, "The evaluator population").
 #
 # What differs from edition6-testnet-rehearsal: the [treasury] block below (reserve,
-# hybrid mode, sink, window cap, absolute bound, reserve floor, pinned payee), the Venice
-# Luna menu entry, and the seats' routes. Seven of the fourteen seats think on Venice
-# (the four GLM seats, the `opportunity` producer on Venice's Luna, and the qwen judge and
-# antagonist on Venice's qwen), so the credit a conversion buys is credit this population
-# actually spends. A provider change is not a model change, so every seat keeps its
-# family and the evaluator tier its four (glm, gpt, deepseek, qwen). The Luna and
-# deepseek judges, the calibration meta, the tier-three meta, the adversarial judge and
-# the first antagonist stay on OpenRouter, so a Venice outage cannot silence evaluation.
+# hybrid mode, sink, window cap, absolute bound, reserve floor, pinned payee), two Venice
+# menu entries (GPT-6 Luna and DeepSeek v4.1 flash), and the seats' routes. Seven of the
+# fourteen seats think on Venice (the four Luna seats, the `mechanism` producer and the
+# countercase meta on Venice's DeepSeek, and the Qwen antagonist), so the credit a
+# conversion buys is credit this population actually spends. A provider change is not a
+# model change: every seat keeps the exact model it holds in the testnet world, so the
+# two rehearsals differ only in the capital loop. MiniMax stays on OpenRouter because
+# Venice sells only a preview checkpoint of M3. The consequence, fidelity, mechanics and
+# adversarial judges and the calibration and tier-three metas stay on OpenRouter, so a
+# Venice outage cannot silence evaluation.
 #
 # THE ROSTER IS UNRATIFIED, as edition 6's is: its charter table is edition 6's, and no
 # ratification digest is claimed for this roster (see the [charter] note).
@@ -139,8 +141,10 @@ start_cash_usd = "120"
 [[models]]
 id = "deepseek/deepseek-v4.1-flash"
 provider = "openrouter"
+# Ceilings at or above the route's list price (OpenRouter, 23 September 2026: $0.04 in,
+# $0.64 out); metering charges what the provider reports.
 input_usd_per_mtok = "0.15"
-output_usd_per_mtok = "0.60"
+output_usd_per_mtok = "0.70"
 reasoning = { enabled = false }
 # Never silently authorize a more expensive fallback than the route that was validated
 # (GPT-6 §10.2): OpenRouter routes only to providers that honour these parameters.
@@ -179,6 +183,46 @@ extra_body = { provider = { require_parameters = true } }
 # its very first return: a prior, not a permanent role.
 
 # GPT-6 §10.3: the cheap route the local screen scored 100% on.
+[[models]]
+id = "openai/gpt-6-luna"
+provider = "openrouter"
+input_usd_per_mtok = "0.10"
+output_usd_per_mtok = "0.50"
+reasoning = { effort = "low" }
+extra_body = { provider = { require_parameters = true } }
+
+# A fifth family for the evaluator tier. The seed roster is chosen on cost, latency and
+# conformance to the I/O contract, never on what seats decide (AGENTS.md, rule 2): in the
+# last live batch 11 of the 15 answers the contract could not parse were Qwen 3.8 flash's,
+# so it keeps one seat, and a seat may move back to it by model proposal.
+[[models]]
+id = "minimax/minimax-m3"
+provider = "openrouter"
+input_usd_per_mtok = "0.30"
+output_usd_per_mtok = "1.20"
+reasoning = { enabled = false }
+extra_body = { provider = { require_parameters = true } }
+
+# The one frontier seat: tier-3 meta-audit, which grades the metas and fires a handful of
+# times per few hundred ticks, so frontier judgement where it has the most leverage.
+[[models]]
+id = "openai/gpt-6-sol"
+provider = "openrouter"
+input_usd_per_mtok = "2.00"
+output_usd_per_mtok = "10.00"
+reasoning = { effort = "low" }
+extra_body = { provider = { require_parameters = true } }
+
+# A sixth family on the menu, seated by no one: Xiaomi's MiMo v2.6 flash (OpenRouter, 21
+# September 2026: $0.14 in, $0.28 out). A seat reaches it only through a model proposal.
+[[models]]
+id = "xiaomi/mimo-v2.6-flash"
+provider = "openrouter"
+input_usd_per_mtok = "0.14"
+output_usd_per_mtok = "0.28"
+reasoning = { enabled = false }
+extra_body = { provider = { require_parameters = true } }
+
 [[models]]
 id = "openai/gpt-5.6-luna"
 provider = "openrouter"
@@ -226,20 +270,27 @@ input_usd_per_mtok = "0.14"
 output_usd_per_mtok = "0.49"
 reasoning = { enabled = false }
 
-# The capital loop's Luna route: the same model the judges use on OpenRouter, served by
-# Venice at Venice's list price ($0.25 in / $1.50 out per million tokens), so a producer
-# can think on the credit its own profit bought without changing what it thinks with.
+# The capital loop's routes for the seats' own models, served by Venice at Venice's list
+# prices (23 September 2026), so a seat can think on the credit its own profit bought
+# without changing what it thinks with.
 [[models]]
-id = "venice:openai-gpt-56-luna"
+id = "venice:openai-gpt-6-luna"
 provider = "venice"
-input_usd_per_mtok = "0.25"
-output_usd_per_mtok = "1.50"
+input_usd_per_mtok = "0.125"
+output_usd_per_mtok = "0.625"
 reasoning = { effort = "low" }
+
+[[models]]
+id = "venice:deepseek-v4-1-flash"
+provider = "venice"
+input_usd_per_mtok = "0.375"
+output_usd_per_mtok = "1.50"
+reasoning = { enabled = false }
 
 [[assemblies]]
 id = "mechanism"
 role = "producer"
-model_id = "venice:z-ai-glm-5-3-flash"
+model_id = "venice:deepseek-v4-1-flash"
 accepts = ["WorldUpdate", "Fill"]
 max_tokens = "provider"
 effort = "low"
@@ -249,7 +300,7 @@ initial_state = { lens = "Your starting prior is that mechanisms explain more th
 [[assemblies]]
 id = "empirical"
 role = "producer"
-model_id = "venice:z-ai-glm-5-3-flash"
+model_id = "venice:openai-gpt-6-luna"
 accepts = ["WorldUpdate", "Fill"]
 max_tokens = "provider"
 effort = "low"
@@ -260,7 +311,7 @@ initial_state = { lens = "Your starting prior is that an observed pattern is wea
 [[assemblies]]
 id = "constructor"
 role = "producer"
-model_id = "venice:z-ai-glm-5-3-flash"
+model_id = "minimax/minimax-m3"
 accepts = ["WorldUpdate", "Fill"]
 max_tokens = "provider"
 effort = "low"
@@ -271,7 +322,7 @@ initial_state = { lens = "Your starting prior is that reusable capability may be
 [[assemblies]]
 id = "opportunity"
 role = "producer"
-model_id = "venice:openai-gpt-56-luna"
+model_id = "venice:openai-gpt-6-luna"
 accepts = ["WorldUpdate", "Fill"]
 max_tokens = "provider"
 effort = "low"
@@ -281,7 +332,7 @@ initial_state = { lens = "Your starting prior is that the value of any use of re
 [[assemblies]]
 id = "judge-consequence"
 role = "evaluator"
-model_id = "openai/gpt-5.6-luna"
+model_id = "deepseek/deepseek-v4.1-flash"
 accepts = ["ProducerReturn", "Exposure"]
 max_tokens = "provider"
 effort = "low"
@@ -291,7 +342,7 @@ initial_state = { lens = "Your starting prior is that an outcome is noisy eviden
 [[assemblies]]
 id = "judge-fidelity"
 role = "evaluator"
-model_id = "venice:z-ai-glm-5-3-flash"
+model_id = "minimax/minimax-m3"
 accepts = ["ProducerReturn", "Exposure"]
 max_tokens = "provider"
 effort = "low"
@@ -302,7 +353,7 @@ initial_state = { lens = "Your starting prior is that a favourable measurement c
 [[assemblies]]
 id = "judge-mechanics"
 role = "evaluator"
-model_id = "deepseek/deepseek-v4.1-flash"
+model_id = "minimax/minimax-m3"
 accepts = ["ProducerReturn", "Exposure"]
 max_tokens = "provider"
 effort = "low"
@@ -311,7 +362,7 @@ initial_state = { lens = "Your starting prior is that what a return did is stron
 [[assemblies]]
 id = "judge-base-rate"
 role = "evaluator"
-model_id = "venice:qwen-3-8-flash"
+model_id = "venice:openai-gpt-6-luna"
 accepts = ["ProducerReturn", "Exposure"]
 max_tokens = "provider"
 effort = "low"
@@ -322,7 +373,7 @@ initial_state = { lens = "Your starting prior is that most outcomes in a quiet m
 [[assemblies]]
 id = "meta-calibration"
 role = "meta"
-model_id = "openai/gpt-5.6-luna"
+model_id = "minimax/minimax-m3"
 accepts = ["Verdict", "MetaVerdict"]
 max_tokens = "provider"
 effort = "low"
@@ -332,7 +383,7 @@ initial_state = { lens = "Your starting prior is that apparent evaluator skill i
 [[assemblies]]
 id = "meta-countercase"
 role = "meta"
-model_id = "venice:z-ai-glm-5-3-flash"
+model_id = "venice:deepseek-v4-1-flash"
 accepts = ["Verdict", "MetaVerdict"]
 max_tokens = "provider"
 effort = "low"
@@ -344,7 +395,7 @@ initial_state = { lens = "Your starting prior is that apparent evaluator compete
 [[assemblies]]
 id = "meta-audit"
 role = "meta"
-model_id = "deepseek/deepseek-v4.1-flash"
+model_id = "openai/gpt-6-sol"
 accepts = ["Verdict", "MetaVerdict"]
 max_tokens = "provider"
 effort = "low"
@@ -366,7 +417,7 @@ initial_state = { lens = "Your starting prior is that a confident verdict is wro
 [[assemblies]]
 id = "antagonist"
 role = "antagonist"
-model_id = "openai/gpt-5.6-luna"
+model_id = "venice:openai-gpt-6-luna"
 accepts = ["WorldUpdate"]  # architect review #7: once a tick, not every price print
 max_tokens = "provider"
 effort = "low"
@@ -397,7 +448,8 @@ cadence_sample = 200
 min_ratio = 3
 jitter_fraction = 0.2
 # The world's own repricing period, a fact about the venue: Hyperliquid settles perp
-# funding every hour (essay II.IV.c; time audit T7).
+# funding every hour. Governance is viable only while timing.min_ratio times the
+# slowest loop fits inside it (essay II.IV.c; time audit T7).
 world_repricing = "1h"
 
 [evaluation]

@@ -289,8 +289,22 @@ def test_the_capital_loop_world_puts_most_seats_on_venice_and_caps_two_conversio
     assert world.treasury.max_venice_total_micro == 2 * FIVE
     assert world.treasury.venice_pay_to == PAYEE
     assert int(world.treasury.venice_shadow_sink, 16) != 0
-    assert (menu["venice:openai-gpt-56-luna"].input_usd_per_mtok,
-            menu["venice:openai-gpt-56-luna"].output_usd_per_mtok) == ("0.25", "1.50")
+    assert (menu["venice:openai-gpt-6-luna"].input_usd_per_mtok,
+            menu["venice:openai-gpt-6-luna"].output_usd_per_mtok) == ("0.125", "0.625")
+
+
+def test_the_capital_loop_world_seats_the_testnet_worlds_models_on_other_routes():
+    # Codex review of #135: the two rehearsals must differ only in the capital loop, so
+    # every seat holds the same model in both worlds, whichever provider serves it.
+    def served(world):
+        menu = {m.id: m for m in world.models}
+        return {a.id: menu[a.model_id].id.removeprefix("venice:") for a in world.assemblies}
+
+    same = {"deepseek-v4-1-flash": "deepseek/deepseek-v4.1-flash",
+            "openai-gpt-6-luna": "openai/gpt-6-luna",
+            "qwen-3-8-flash": "qwen/qwen3.8-flash"}
+    loop = {seat: same.get(m, m) for seat, m in served(capital_loop()).items()}
+    assert loop == served(load_manifest("worlds/edition6-testnet-rehearsal.toml"))
 
 
 def test_the_rehearsal_runner_admits_only_the_conversion_and_only_when_asked():

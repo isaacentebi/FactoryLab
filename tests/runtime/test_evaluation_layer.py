@@ -93,8 +93,8 @@ def test_an_evaluator_monoculture_is_refused_and_a_provider_change_does_not_help
 def test_too_few_judge_families_for_two_judges_a_return_is_refused_only_with_a_share():
     raw = _edition6()
     for seat in raw["assemblies"]:
-        if seat["id"] in ("judge-mechanics", "judge-base-rate"):
-            seat["model_id"] = "openai/gpt-5.6-luna"
+        if seat["id"] in ("judge-fidelity", "judge-mechanics"):
+            seat["model_id"] = "openai/gpt-6-luna"
     with pytest.raises(ValueError, match="opportunity's ProducerReturn is accepted by judges "
                                          "on 1 families other than its own"):
         manifest_from_dict(raw)
@@ -721,11 +721,11 @@ def test_a_roster_whose_metas_cannot_read_a_chain_is_refused():
     raw = _edition6()
     for seat in raw["assemblies"]:
         if seat["role"] == "meta":
-            seat["model_id"] = "openai/gpt-5.6-luna"
+            seat["model_id"] = "openai/gpt-6-luna"
     raw["assemblies"].append({**next(a for a in raw["assemblies"] if a["id"] == "meta-audit"),
-                              "id": "meta-extra", "model_id": "z-ai/glm-5.3-flash"})
-    with pytest.raises(ValueError, match="no meta reads a Verdict by a glm judge on a gpt "
-                                         "return off both families"):
+                              "id": "meta-extra", "model_id": "minimax/minimax-m3"})
+    with pytest.raises(ValueError, match="no meta reads a Verdict by a minimax judge on a "
+                                         "gpt return off both families"):
         manifest_from_dict(raw)
 
 

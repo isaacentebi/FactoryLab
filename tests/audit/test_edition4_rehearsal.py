@@ -34,6 +34,13 @@ class StubProvider:
             ("qwen/qwen3.8-flash", "0.00000015", "0.00000047", 131_072),
             ("openai/gpt-5.6-luna", "0.00000020", "0.00000120", 128_000),
             ("openai/gpt-5.6-luna:online", "0.00000020", "0.00000120", 128_000),
+            # Edition 6's roster since #135, and the capital loop's Venice routes of it.
+            ("openai/gpt-6-luna", "0.00000010", "0.00000050", 128_000),
+            ("openai/gpt-6-sol", "0.00000200", "0.00001000", 128_000),
+            ("minimax/minimax-m3", "0.00000030", "0.00000120", 131_072),
+            ("xiaomi/mimo-v2.6-flash", "0.00000014", "0.00000028", 131_072),
+            ("venice:openai-gpt-6-luna", "0.000000125", "0.000000625", 128_000),
+            ("venice:deepseek-v4-1-flash", "0.000000375", "0.00000150", 384_000),
         )
         return [
             CatalogueEntry(
