@@ -131,6 +131,9 @@ class Amendment:
     predicted_effect: PredictedEffect
     proposed_prices: tuple[tuple[str, float], ...] = ()
     tick_interval: str | None = None
+    #: ``(card_id, "predicate@version")``: append one holdout to the card as it stands
+    #: when the motion activates (charter audit M3), never to a copy frozen earlier.
+    holdout: tuple[str, str] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.id, str) or re.fullmatch(r"[a-z][a-z0-9-]{1,47}", self.id) is None:
@@ -172,6 +175,16 @@ class Amendment:
         if len({card_id for card_id, _ in prices}) != len(prices):
             raise ValueError("a card may have only one proposed lambda")
         object.__setattr__(self, "proposed_prices", prices)
+        if self.holdout is not None:
+            from factorylab.charter.charter import HOLDOUT_RE
+
+            card_id, entry = tuple(self.holdout)
+            if (not isinstance(card_id, str) or not card_id.strip()
+                    or not isinstance(entry, str) or HOLDOUT_RE.fullmatch(entry) is None):
+                raise ValueError("holdout is (card_id, predicate@version)")
+            if self.add or self.replace or self.remove:
+                raise ValueError("a holdout motion carries its holdout alone")
+            object.__setattr__(self, "holdout", (card_id, entry))
         classes = self.change_classes()
         if len(classes) > 1:
             raise ValueError("a motion carries one change class (cards, lambda or clock); "
@@ -183,7 +196,7 @@ class Amendment:
 
     def change_classes(self) -> tuple[str, ...]:
         """The change classes this motion carries, in ``CHANGE_CLASSES`` order."""
-        present = {"cards": bool(self.add or self.replace or self.remove),
+        present = {"cards": bool(self.add or self.replace or self.remove or self.holdout),
                    "lambda": bool(self.proposed_prices),
                    "clock": self.tick_interval is not None}
         return tuple(name for name in CHANGE_CLASSES if present[name])

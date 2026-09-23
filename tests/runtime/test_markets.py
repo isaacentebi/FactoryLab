@@ -499,3 +499,41 @@ def test_posts_and_forecasts_survive_a_checkpoint_and_an_older_one_has_none(monk
     assert twin.lambda_posts == [] and twin.lambda_standing == {}
     ballot = {"vote": True}
     assert twin._branch_probability(ballot, ballot.get("branch", "enact")) == 1.0
+
+
+def test_a_late_settlement_on_a_removed_card_is_priced_on_its_own_window(monkeypatch):
+    """Codex review of #131: a settlement arriving after an amendment removed its card
+    crashed the dollar statistic. The margins read each window's own frozen cards and
+    prices, and a removed card's controller is never asked."""
+    rt = _runtime(monkeypatch, SMALL)
+    rt.controller.set_price("spend", 0.3, amendment_id="test")
+    window = rt.window.index
+    _return(rt, "eval-a", shadow_prices={"spend": 0.2})
+    handle = _handle(rt, "seed-observer", "late")
+    rt._contribution(handle, "producer").update(invocations=1, ok=1, cost=5000)
+    rt.card_samples.returned(handle=handle, assembly="seed-observer", role="producer",
+                             window=window, ret=Return(handle, {}, 5000, "ok"))
+    _next_window(rt)  # the window closes with "spend" priced
+    frozen = rt.price_windows[window].closed_prices["spend"]
+    # An amendment removes the card: a new edition without it, and the card unpriced.
+    from factorylab.charter.charter import Charter
+
+    rt.charter = Charter(rt.charter.edition + 1, rt.charter.norms, rt.charter.cards[:1])
+    rt._drop_cards({"ok-rate"}, "remove-spend")
+    assert "spend" not in rt.priced
+    asked = []
+    price = rt.controller.price
+    monkeypatch.setattr(rt.controller, "price",
+                        lambda card_id: asked.append(card_id) or price(card_id))
+    # The late settlement is priced on the window it worked in, by that window's card.
+    rt._settle_priced(handle, channel="verdict", score=0.9, definition_version="t",
+                      sampling_ref=None, cards="producer")
+    term = next(t for t in _items(rt, "price.penalty")[-1]["terms"] if t["card_id"] == "spend")
+    assert term["window"] == window and term["lambda"] == frozen
+    _to_margin(rt, window)
+    margin_row = next(e for e in _items(rt, "price.margin")
+                      if e["window"] == window and e["card_id"] == "spend")
+    assert margin_row["lambda"] == frozen
+    settled, = _items(rt, "lambda_post.settled")
+    assert settled["card_id"] == "spend" and settled["status"] == "censored"
+    assert "spend" not in asked

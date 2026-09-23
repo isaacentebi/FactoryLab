@@ -592,11 +592,17 @@ class GovernanceMixin:
                 effect = PredictedEffect(replacement.id, "increase" if replacement.rule
                                          is not None and replacement.rule.kind == "min"
                                          else "decrease", 1)
+            holdout = challenge.get("holdout")
             try:
+                # A holdout motion appends to the card as it stands when it activates
+                # (charter audit M3): a replace frozen at admission would revert any
+                # cards motion that activated during the trial.
                 am = Amendment(
                     id=challenge["id"], proposer_handle=challenge["handle"],
-                    edition_base=self.charter.edition, add=(), replace=(replacement,),
-                    remove=(), predicted_effect=effect,
+                    edition_base=self.charter.edition, add=(),
+                    replace=() if holdout else (replacement,), remove=(),
+                    predicted_effect=effect,
+                    holdout=(challenge["card_id"], holdout) if holdout else None,
                 )
                 self.charter_book.propose(am, self._policy_observations(challenge))
             except ValueError as exc:
@@ -1624,6 +1630,8 @@ class GovernanceMixin:
                         "add": [asdict(c) for c in am.add],
                         "replace": [asdict(c) for c in am.replace],
                         "remove": list(am.remove),
+                        **({"holdout": {"card_id": am.holdout[0], "predicate": am.holdout[1]}}
+                           if getattr(am, "holdout", None) else {}),
                         **({"lambda": prices} if prices else {}),
                         "predicted_effect": am.predicted_effect.as_dict(),
                         **({"tick_interval": am.tick_interval}

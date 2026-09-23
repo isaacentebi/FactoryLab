@@ -211,3 +211,86 @@ def test_a_behavioural_holdout_names_what_it_reads():
     assert behavioural_reads(HOLDS) == {"ok", "invocations"}
     assert behavioural_reads("import math\ndef resolve(f):\n    return math.isfinite("
                              "f.get('tool_calls', 0))\n") == {"tool_calls"}
+
+
+def _boundary(rt):
+    rt.clock.now_ns = rt.cadence.earliest_ns(rt.tick_clock)
+    rt.n = rt.cadence.earliest_event()
+    rt.cadence.advance(rt.n)
+    rt._activate_charter_if_due()
+
+
+def test_a_holdout_is_appended_to_the_card_as_it_stands_when_it_activates(monkeypatch):
+    """Codex review of #131: a replace frozen at admission reverted a cards motion that
+    activated during the holdout's trial. The holdout now appends to the current card."""
+    rt = _runtime(monkeypatch)
+    _register(rt, "eval-a", _motion())
+    card = next(c for c in rt.charter.cards if c.id == "well_formed_rate")
+    rt._propose_amendment(_handle(rt, "seed-decider"), {
+        "kind": "amendment", "id": "loosen-rate", "replace": [{
+            "id": card.id, "norm": card.norm, "description": "Loosened during the trial.",
+            "units": card.units, "window": {"kind": "returns", "n": 50, "per": "role"},
+            "region": {"rule": "at least", "lo": 0.8}, "observation": card.observation,
+            "answers_for": card.answers_for}],
+        "predicted_effect": {"card_id": card.id, "direction": "increase", "window": 1}})
+    _boundary(rt)  # the concurrent cards motion takes effect mid-trial
+    loosened = next(c for c in rt.charter.cards if c.id == card.id)
+    assert loosened.rule.lo == 0.8 and loosened.window.n == 50
+    rt._close_challenge_window(rt.window.index)
+    rt._ballot_due_challenges()
+    assert [am.id for am in rt.charter_book.agenda()] == ["hold-well-formed"]
+    _boundary(rt)
+    held = next(c for c in rt.charter.cards if c.id == card.id)
+    assert held.holdout == ("all-well-formed@1",)
+    # Everything the concurrent motion changed survives the holdout's activation.
+    assert (held.rule.lo, held.window.n, held.description) == (
+        0.8, 50, "Loosened during the trial.")
+
+
+def test_a_holdout_whose_card_was_removed_during_its_trial_is_refused(monkeypatch):
+    rt = _runtime(monkeypatch)
+    _register(rt, "eval-a", _motion())
+    rt._propose_amendment(_handle(rt, "seed-decider"), {
+        "kind": "amendment", "id": "drop-rate", "remove": ["well_formed_rate"],
+        "predicted_effect": {"card_id": "forecast_skill", "direction": "increase",
+                             "window": 1}})
+    _boundary(rt)
+    assert "well_formed_rate" not in {c.id for c in rt.charter.cards}
+    rt._close_challenge_window(rt.window.index)
+    rt._ballot_due_challenges()
+    refused, = _items(rt, "challenge.refused")
+    assert "does not carry" in refused["reason"]
+    assert rt.charter_book.agenda() == []
+
+
+def _both_passed(rt, order):
+    from factorylab.charter.amendment import Amendment, PredictedEffect
+
+    book = rt.charter_book
+    motions = {
+        "hold-late": Amendment("hold-late", "h", rt.charter.edition, (), (), (),
+                               PredictedEffect("well_formed_rate", "increase", 1),
+                               holdout=("well_formed_rate", "all-well-formed@1")),
+        "drop-first": Amendment("drop-first", "h", rt.charter.edition, (), (),
+                                ("well_formed_rate",),
+                                PredictedEffect("forecast_skill", "increase", 1)),
+    }
+    for motion in order:
+        book.propose(motions[motion])
+    committee = book.seat(1, {"a": "producer", "b": "evaluator", "c": "meta"}, rt.rng,
+                          size=3, quorum=3)
+    for motion in order:
+        for seat in committee.seats:
+            book.vote(committee, motion, seat.alias, True, "yes")
+    return book
+
+
+def test_a_passed_holdout_whose_card_went_first_is_refused_at_activation(monkeypatch):
+    book = _both_passed(_runtime(monkeypatch), ("hold-late", "drop-first"))
+    first = book.activate_due(0)
+    held = next(c for c in first.cards if c.id == "well_formed_rate")
+    assert held.holdout == ("all-well-formed@1",)
+    book = _both_passed(_runtime(monkeypatch), ("drop-first", "hold-late"))
+    book.activate_due(0)
+    refusal = book.activate_due(0)
+    assert refusal.amendment_id == "hold-late" and "does not carry" in refusal.reason

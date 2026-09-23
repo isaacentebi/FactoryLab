@@ -230,7 +230,11 @@ class MarketsMixin:
             if posted is not None:
                 self.ledger.append({"kind": "lambda_post.aggregate", "card_id": card_id,
                                     "window": index, **posted,
-                                    "controller_lambda": self.controller.price(card_id),
+                                    # A post may outlive its card: a removed card has
+                                    # no controller price, only the posts made on it.
+                                    "controller_lambda": (self.controller.price(card_id)
+                                                          if card_id in self.priced
+                                                          else None),
                                     "ts": self.clock.now_ns})
         super()._close_price_window()
         self._keep_margin_window(index)
