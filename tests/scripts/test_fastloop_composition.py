@@ -12,20 +12,29 @@ WORLD = Path(__file__).parents[2] / "worlds" / "edition6-testnet-rehearsal.toml"
 
 @pytest.mark.gate
 def test_the_scripted_population_reaches_requests_tools_and_both_credits(tmp_path):
-    """The free tier's plumbing covers the composition path end to end."""
-    # A builder is credited only by uses judged inside its registering decision's hold
-    # window; seed 2's draws put a judged cross-lineage use there on edition 6's
-    # fourteen-seat roster (seed 1's first two uses were an unjudged return and an
-    # antagonist's unmeasured Exposure).
-    card = fastloop.run("scripted", 80, WORLD, tmp_path, cap_usd="2", seed=2)
-    assert card["status"] == "completed", card.get("error")
-    composed = card["composition"]
-    assert composed["child_requests_by_kind"].get("ProducerReturn", 0) >= 1
-    assert composed["child_requests_forwarding_propensity"] >= 1
-    assert composed["executor_credits_paid"] >= 1
+    """The free tier's plumbing covers the composition path end to end, on every seed.
+
+    A builder is credited only by other-lineage uses judged inside its registering
+    decision's hold window, so on any one 80-tick seed the count is a small number
+    that can be zero (edition 6, seeds 1-8: 0 to 4 a seed). The path is asserted over
+    four seeds, never a chosen one: each reaches requests, forwarded propensities,
+    executor credits and cross-lineage tool calls, and between them builders are
+    credited.
+    """
+    builder_credits = 0
+    for seed in (1, 2, 3, 4):
+        card = fastloop.run("scripted", 80, WORLD, tmp_path / f"s{seed}", cap_usd="2",
+                            seed=seed)
+        assert card["status"] == "completed", card.get("error")
+        composed = card["composition"]
+        assert composed["child_requests_by_kind"].get("ProducerReturn", 0) >= 1, seed
+        assert composed["child_requests_forwarding_propensity"] >= 1, seed
+        assert composed["executor_credits_paid"] >= 1, seed
+        if jail_available():
+            assert composed["population_tool_calls_by_non_builder"] >= 1, seed
+        builder_credits += composed["tool_builder_credits"]
     if jail_available():
-        assert composed["population_tool_calls_by_non_builder"] >= 1
-        assert composed["tool_builder_credits"] >= 1
+        assert builder_credits >= 4
 
 
 def test_the_composition_card_counts_requests_credits_and_cross_lineage_tool_calls():
