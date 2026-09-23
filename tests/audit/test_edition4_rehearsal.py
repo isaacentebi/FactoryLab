@@ -203,11 +203,20 @@ def test_admission_counts_attempts_and_stops_on_overrun_or_unknown_bill():
     assert table.admission.stop_reason == "non_authoritative_table_cost"
 
 
-def test_a_probe_above_the_remaining_cap_is_infeasible_and_admission_goes_on():
+def test_a_probe_above_the_whole_cap_is_infeasible_and_admission_goes_on():
     admission = rehearsal.Admission(cap_micro=1_000, max_calls=10)
-    assert admission.can_admit(1_001, probe=True) == (False, "quote_above_remaining_cap")
+    assert admission.can_admit(1_001, probe=True) == (False, "quote_above_cap")
     assert admission.stop_reason is None
     admission.admit(1_000)
+
+
+def test_a_probe_the_spent_cap_cannot_cover_ends_the_rehearsal():
+    # Codex review of #136: once the cap excludes every seat, the run must end rather
+    # than record NOOP decisions for the rest of its duration.
+    admission = rehearsal.Admission(cap_micro=1_000, max_calls=10)
+    admission.known_micro = 600
+    assert admission.can_admit(500, probe=True) == (False, "quote_above_remaining_cap")
+    assert admission.stop_reason == "quote_above_remaining_cap"
 
 
 def test_an_actual_call_above_the_remaining_cap_ends_the_rehearsal():
@@ -225,7 +234,7 @@ def test_the_prepaid_provider_probes_feasibility_without_ending_the_rehearsal():
     provider = rehearsal.PrepaidProvider(StubProvider(None), manifest,
                                          rehearsal.Admission(cap_micro=1_000, max_calls=3))
     model = manifest.assemblies[0].model_id
-    assert provider.affordable(model, 1_001) == (False, "admission: quote_above_remaining_cap")
+    assert provider.affordable(model, 1_001) == (False, "admission: quote_above_cap")
     assert provider.admission.stop_reason is None
 
 

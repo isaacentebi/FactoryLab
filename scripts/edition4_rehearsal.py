@@ -61,8 +61,8 @@ class Admission:
     """Track independent admission and provider-bill bounds for one rehearsal.
 
     Guarantees: no admitted call starts above the remaining quote cap or call count;
-    a feasibility probe whose quote is above the remaining cap is refused without
-    stopping admission, and an actual call above it stops admission;
+    a feasibility probe whose quote is above the whole cap is refused without
+    stopping admission; any other quote above the remaining cap stops admission;
     every completion attempt is counted. With population recovery enabled, failed
     dispatches retain their quote and three consecutive exceptions stop admission.
     Otherwise a dispatched failure stops immediately, preserving probe protocols. Successful
@@ -97,13 +97,15 @@ class Admission:
         if ceiling_micro > self.remaining_micro:
             # The experimenter's spending bound on a rehearsal, outside the world: not
             # factory architecture, and no seat's doing. The router probes every seat's
-            # feasibility at twice its quote, so a probe that does not fit only makes
-            # that seat infeasible; a sticky stop there ended whole runs on a probe for a
-            # seat whose worst case alone exceeds the cap, before any call was made. An
-            # actual call that does not fit still ends the rehearsal, so the cap never
-            # enters the experiment's data as a seat's failed return.
-            if not probe:
-                self.stop_reason = self.stop_reason or "quote_above_remaining_cap"
+            # feasibility at twice its quote. A probe above the whole cap names a seat
+            # this rehearsal can never afford, which only makes that seat infeasible; a
+            # sticky stop there ended whole runs, before any call was made, on a seat
+            # whose worst case alone exceeds the cap. Anything else that does not fit
+            # (an exhausted cap, or an actual call) ends the rehearsal, so the cap never
+            # enters the experiment's data as a seat's failed return or a run of NOOPs.
+            if probe and ceiling_micro > self.cap_micro:
+                return False, "quote_above_cap"
+            self.stop_reason = self.stop_reason or "quote_above_remaining_cap"
             return False, "quote_above_remaining_cap"
         return True, ""
 
