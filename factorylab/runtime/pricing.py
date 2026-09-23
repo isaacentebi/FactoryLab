@@ -66,11 +66,6 @@ class MeasureWindow:
     closed_scopes: dict[str, dict[str, float]] = field(default_factory=dict)
     # Each measured card's holdout violation at the close (charter audit M3).
     closed_holdouts: dict[str, float] = field(default_factory=dict)
-    # Charter audit M5: the penalty each card took from the window's settlements, in
-    # reward units, and the raw scores those settlements carried. Private: the per-card
-    # dollar statistic built from them is published in world.card_prices.
-    penalties: dict[str, float] = field(default_factory=dict)
-    reward_mass: float = 0.0
     mids: list[dict] = field(default_factory=list)
     funding: list[dict] = field(default_factory=list)
     wallet_balance_micro: list[list[int]] = field(default_factory=list)
@@ -506,8 +501,8 @@ class PricingMixin:
         charter". A holdout is a registered predicate frozen at a version; it is
         resolved on the closed window's public facts. Returns, per card with any,
         ``{"results": {id@version: bool | None}, "violation": v}``, ``v`` from
-        ``charter.holdout_violation``: a failed holdout prices the card as
-        violating even inside its region, and an unresolved one is not a failure.
+        ``charter.holdout_violation``: each failed holdout adds one resolution step
+        of the card's region to its violation, and an unresolved one adds nothing.
         """
         from factorylab.charter.charter import holdout_violation
         from factorylab.runtime.observations import window_facts
@@ -520,8 +515,22 @@ class PricingMixin:
         for card in cards:
             results = {entry: self._resolve_holdout(entry, facts) for entry in card.holdout}
             out[card.id] = {"results": results, "violation": holdout_violation(
-                list(results.values()), len(card.holdout))}
+                list(results.values()), self._resolution_step(card.id))}
         return out
+
+    def _resolution_step(self, card_id: str) -> float:
+        """One promise resolution of a card's region, in the region's own relative units.
+
+        ``committee.promise_resolution * observation.scale / region.scale``: the move a
+        promise must clear, as a distance the controller prices. Zero for a card with
+        no region or no observation.
+        """
+        region = self.regions.get(card_id)
+        card = next((c for c in self.charter.cards if c.id == card_id), None)
+        observation = self.observations.get(card.observation) if card is not None else None
+        if region is None or observation is None or region.scale <= 0:
+            return 0.0
+        return self.m.committee.promise_resolution * observation.scale / region.scale
 
     def _resolve_holdout(self, entry: str, facts: dict) -> bool | None:
         """One ``predicate@version`` on public facts; unknown or unresolved is None."""
@@ -624,7 +633,7 @@ class PricingMixin:
                 continue
             holdouts = (self.card_samples.holdouts if window.closed_values is None
                         else window.closed_holdouts)
-            amount = max(violation(region, values[card.id]), holdouts.get(card.id, 0.0))
+            amount = violation(region, values[card.id]) + holdouts.get(card.id, 0.0)
             weight = price * amount
             owner = None
             share = 1.0 if handle is None else self._decision_share(
@@ -856,23 +865,3 @@ class PricingMixin:
         self.ledger.append(entry)
         if penalty > 0:
             self.stats.penalized_settlements += 1
-        self._account_penalty(penalty, entry["terms"], None if unresolved else score)
-
-    def _account_penalty(self, penalty: float, terms: list[dict], raw: float | None) -> None:
-        """Charter audit M5: the penalty a settlement took, apportioned to its cards.
-
-        Each card's part is its term's ``lambda * v * share`` over the terms' total,
-        the same weights the penalty itself was allocated by. ``raw`` is the score
-        the settlement carried before the penalty; the window's reward mass is their
-        sum, the reward the window's compute bought.
-        """
-        if raw is not None:
-            self.window.reward_mass += raw
-        total = sum(t["weight"] * t["share"] for t in terms)
-        if penalty <= 0 or total <= 0:
-            return
-        for term in terms:
-            part = penalty * term["weight"] * term["share"] / total
-            if part > 0:
-                self.window.penalties[term["card_id"]] = (
-                    self.window.penalties.get(term["card_id"], 0.0) + part)

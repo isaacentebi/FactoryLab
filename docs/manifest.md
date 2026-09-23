@@ -638,14 +638,22 @@ No manifest key: the formulas are published in `world.mechanics.committee` and
   priced now, each in `[0, prices.lambda_max]`, one per seat, card and reserve
   window (`lambda_post.posted`; a refusal is `lambda_post.refused` and reaches the
   poster's inbox). Each post opens its own `policy` decision under
-  `assembly:<id>`, settled after `timing.min_ratio` window closes as
-  `lambda-post-quadratic-v1` with `1 - ((p - y) / lambda_max)^2`, `y` the card's
-  λ after that close (`lambda_post.settled`); a card no longer priced censors it.
-  The posted price is the median of each seat's latest unsettled post weighted by
-  `(1/2 + sum of its settled post scores) / (1 + their count)`, ledgered at every
-  close (`lambda_post.aggregate`), published in `world.card_prices[].posted` and on
-  every ballot's `inputs.agenda.cards`. A lambda motion may name `"posted"` for a
-  card: the aggregate at admission (`lambda_post.adopted`).
+  `assembly:<id>`. A post is a claim about the window it is posted in: once that
+  window's decisions have their world-measured consequences
+  (`consequence_backstop_ticks + verdict_timeout_ticks`, in windows at the tick in
+  force, at least `timing.min_ratio`), the window's shadow price `y` is read: the
+  least-squares slope, across the card's scopes (per role or assembly; at least 3,
+  with variance in `v`), of each scope's mean consequence (a judgement's
+  consequence score, a return's `return_paid_off` or priced declined trade) on its
+  violation `v`, clipped to `[0, lambda_max]` (`price.margin`). The post settles as
+  `lambda-post-quadratic-v1` with `1 - ((p - y) / lambda_max)^2`
+  (`lambda_post.settled`); with `y` unidentified it is censored. The committee's
+  λ is never the target. The posted price is the median of each seat's latest
+  unsettled post weighted by `(1/2 + sum of its settled post scores) / (1 + their
+  count)`, ledgered at every close (`lambda_post.aggregate`), published in
+  `world.card_prices[].posted` and on every ballot's `inputs.agenda.cards`. A
+  lambda motion may name `"posted"` for a card: the aggregate at admission
+  (`lambda_post.adopted`).
 - **Conditional forecasts on motions.** Any return may carry
   `motion_forecasts: [{motion, branch, q}]` on a motion on the agenda, `branch`
   `enact` or `reject`, one per seat, motion and branch (`policy.forecast`). Each is
@@ -653,12 +661,17 @@ No manifest key: the formulas are published in `world.mechanics.committee` and
   is graded as `motion-forecast-brier-v1` on the branch taken; the other branch's
   forecasts are void (`policy.void`, censored). Each agenda motion's forecasts per
   branch are on `inputs.agenda.markets`.
-- **Feed-forward.** At a window close, for a card named by the predicted effect of
-  forecasts on the branch in force (reject while the motion is undecided, the
-  branch taken until its horizon), the price law adds
-  `F = prices.kp * max(e - v, -v)`, `e` the forecasts' expected violation; the
-  integral and derivative stay on realized measurement. `price.update` carries `f`
-  and `anticipated` when a market exists. With `prices.kp = 0` there is none.
+- **Feed-forward.** At a window close, for a card in violation (`v > 0`) that
+  is named by the predicted effect of liable forecasts, the price law adds
+  `F = prices.kp * max(E - v, -v)`. Each forecast reads
+  `max(0, v + sign * q * s)`, `sign` +1 when its direction deepens the violation
+  and -1 when it relieves it, `s` one promise resolution in region units. A decided
+  motion's forecasts on the branch taken count one each; an undecided motion's
+  count only as one seat's pair on both branches, `p * e(enact) + (1 - p) *
+  e(reject)`, `p = (passed + 1) / (passed + failed + 2)` over the charter motions
+  decided so far. `E` is their mean. The integral and derivative stay on realized
+  measurement. `price.update` carries `f` and `anticipated` when a market exists.
+  With `prices.kp = 0` there is none.
 - **Holdouts.** An evaluator or antagonist seat proposes
   `{"kind": "amendment", "id", "holdout": {card_id, predicate, evidence,
   trial_windows}, "predicted_effect"}`; `predicate` is a registered predicate,
@@ -666,21 +679,25 @@ No manifest key: the formulas are published in `world.mechanics.committee` and
   `holdout.proposed`); its trial windows record `holdout: {predicate, held}` in
   `challenge.window`, and it then joins the next committee's agenda as the replace
   of the card with the holdout appended. At each close a card's holdouts are
-  resolved on the window's public facts (`price.window.holdouts`); `k` failed of
-  `n` named is a violation of `k / n`, and the card is priced on the larger of that
-  and its region violation.
+  resolved on the window's public facts (`price.window.holdouts`); each failed
+  holdout adds one promise resolution of the card's region to its violation. A
+  holdout predicate reads behavioural facts only (`charter.holdout.BEHAVIOURAL_FACTS`,
+  by literal key, importing at most `math` and `statistics`): one that reads the
+  window's index, timestamps, balances or market series is refused.
 - **Scoped population observations.** A registered observation may be named by a
   `windows` card with `per` role or assembly: its code runs once per scope on that
   scope's share of the window facts, with no identity in them, and the card carries
   attributable blame like a seed one.
-- **λ in dollars.** Each close ledgers `price.dollars {window, reward_mass,
-  compute_spend_micro, cards: {id: {lambda, penalty, micro_usd}}}`:
-  `micro_usd = round(penalty * compute_spend_micro / reward_mass)`, the penalty
-  mass a card's price took from the window's settlements at the window's own cost
-  of a unit of reward. `world.card_prices[].last_window_dollars` publishes it.
-  `scripts/charter_session.py report` computes the same from rehearsal diaries.
+- **λ in dollars.** The same margins are the λ-to-dollar statistic: each
+  `price.margin {window, card_id, lambda, points, slope, micro_usd_per_violation,
+  shadow_price}` carries the window's anonymous per-scope points and, beside the λ
+  the window closed at, the marginal consequence and the marginal compute spend
+  per unit of violation. `world.card_prices[].last_window_margin` publishes the last
+  one read. `scripts/charter_session.py report` recomputes them from the same points
+  with the same function.
 - **The charter session.** `scripts/charter_session.py session` (with `--dry-run`
-  for a scripted provider) has the seed population draft cards from the manifest's
+  for a scripted provider, else the rehearsal's prepaid provider under `--cap-usd`)
+  has the seed population draft cards from the manifest's
   norms, a sortition vote on each, a fresh sortition adopt or reject the drafted
   charter whole, and exports it with typed regions and the digests the load path
   verifies. It replaces `draft_edition1.py`, `ratify_charter.py` and

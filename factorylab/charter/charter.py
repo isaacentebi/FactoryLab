@@ -78,7 +78,7 @@ class MetricCard:
     (``id@version``), that a closed window must also satisfy (essay II.IV.a: the
     evaluatory layer adds "holdout test criteria to a given charter"). A card
     whose measurement is inside its region but whose holdout fails is priced as
-    violating: see ``holdout_violation``.
+    violating, by a bounded step per failed holdout: see ``holdout_violation``.
     """
 
     id: str
@@ -225,18 +225,18 @@ class Charter:
         return "\n".join(lines)
 
 
-def holdout_violation(results: list[bool | None], named: int) -> float:
+def holdout_violation(results: list[bool | None], step: float) -> float:
     """The violation a card's failed holdouts add, in region-relative units.
 
-    Each named holdout is one acceptance test; ``k`` failed of ``n`` named is a
-    violation of ``k / n`` (a whole region when every one fails). A holdout that
-    could not be resolved on the window (absent facts, a failed run) is not a
-    failure: absent evidence is never a score. The card is priced on the larger
-    of this and its region violation.
+    Each holdout is its own acceptance test, counted on its own: every one that
+    failed adds ``step``, a bounded constant (one promise resolution of the card's
+    region), so a holdout that always holds dilutes nothing and one failing holdout
+    cannot saturate a card in one window. A holdout that could not be resolved on
+    the window is not a failure: absent evidence is never a score.
     """
-    if named <= 0:
-        return 0.0
-    return sum(result is False for result in results) / named
+    if type(step) not in (int, float) or step < 0:
+        raise ValueError("step must be a nonnegative number")
+    return step * sum(result is False for result in results)
 
 
 def stated_region(row: Mapping) -> object:

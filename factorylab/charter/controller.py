@@ -148,11 +148,14 @@ class PriceController:
     controller … A futarchic λ, however, is necessarily forward-looking—the market
     continually reprices based on the expectation of constraint violations"). The
     runtime may pass ``anticipated``: the change in the card's violation that the
-    conditional forecasts on open motions expect, ``ê - v``
-    (``charter.market.expected_violation``). The law adds
-    ``F = Kp * max(anticipated, -v)``, so the proportional part prices the expected
-    violation, ``P + F = Kp * max(0, ê)``, while ``I`` and ``D`` stay on realized
-    measurement. The combination is argued this way:
+    conditional forecasts on open motions expect, ``ê - v``, where each forecast
+    reads ``max(0, v + sign * q * step)`` (``charter.market.branch_violation``) and
+    only forecasts that stay liable enter (see ``runtime.markets``). While the card
+    violates (``v > 0``) the law adds ``F = Kp * max(anticipated, -v)``, so the
+    proportional part prices the expected violation, ``P + F = Kp * max(0, ê)``,
+    while ``I`` and ``D`` stay on realized measurement. A card inside its region
+    takes no feed-forward: the market may move a price the world has already made
+    nonzero, never create one. The combination is argued this way:
 
     - the backward terms remain the only memory. ``I`` still integrates realized
       violation alone and ``D`` still answers a measured move, so a market that is
@@ -162,12 +165,15 @@ class PriceController:
     - ``F`` uses the gain the charter already committed for converting violation into
       price, ``Kp``, so no new constant enters and a world with ``Kp = 0`` is
       exactly as backward-looking as it was;
+    - ``|F| <= Kp * step`` for any one forecast, in either direction: relief and
+      deepening are read symmetrically, one promise resolution at most, so no single
+      forecast can cancel ``P``;
     - ``P + F >= 0``, so a card still out of its region is never priced below its
-      accumulated integral, however strongly the market expects relief (the same
-      guarantee ``D`` keeps);
-    - a mispriced ``F`` is an arbitrage: the forecasts that drive it are scored
-      against the branch the world takes, so the adversarial population profits by
-      correcting it.
+      accumulated integral (the same guarantee ``D`` keeps);
+    - every forecast that moves ``F`` is scored whichever branch the committee takes
+      (a seat's undecided-motion forecasts count only as a pair on both branches), so
+      moving the price is never free and a mispriced ``F`` is an arbitrage the
+      adversarial population profits by correcting.
 
     Without ``anticipated`` the law is the backward PID above, unchanged.
 
@@ -321,8 +327,8 @@ class PriceController:
         measures the largest absolute change after clipping.
 
         ``holdout`` is the violation the card's failed holdouts add
-        (``charter.holdout_violation``); the card is priced on the larger of it
-        and its region violation. ``anticipated`` is the market's expected change
+        (``charter.holdout_violation``), added to its region violation.
+        ``anticipated`` is the market's expected change
         in the violation, for the feed-forward term (see the class docstring).
         """
         holdout = _number(holdout, "holdout")
@@ -348,9 +354,9 @@ class PriceController:
                 }
             )
             return
-        violation = max(self.violation(card_id, value), holdout)
+        violation = self.violation(card_id, value) + holdout
         requested, integral, terms = self._pid(state, value, violation)
-        if anticipated is not None:
+        if anticipated is not None and violation > 0:
             feed_forward = self.__kp * max(anticipated, -violation)
             requested += feed_forward
             terms = {**terms, "f": feed_forward, "anticipated": anticipated}

@@ -21,8 +21,7 @@ COST_OBSERVATIONS = frozenset({"cost_per_return", "cost_per_attempt"})
 # The runtime keeps per-decision attribution on the same window object;
 # measurement never observes it.
 ATTRIBUTION_FIELDS = ("decisions", "closed_values", "closed_regions", "closed_cards",
-                      "closed_prices", "closed_scopes", "closed_holdouts", "penalties",
-                      "reward_mass", "series_discarded")
+                      "closed_prices", "closed_scopes", "closed_holdouts", "series_discarded")
 FORECAST_OBSERVATIONS = frozenset({
     "forecast_skill", "verdict_mean", "verdict_std", "consequence_paid_off_rate", "censored_share",
     "avoidably_unresolved_share",

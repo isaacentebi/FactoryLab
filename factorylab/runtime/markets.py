@@ -23,9 +23,11 @@ from factorylab.charter.controller import violation
 from factorylab.charter.market import (
     BRANCHES,
     LAMBDA_POST_DEFINITION,
-    expected_violation,
-    lambda_dollars,
+    branch_violation,
+    enactment_rate,
+    margin,
     post_score,
+    shadow_price,
     standing,
     violation_sign,
     weighted_median,
@@ -60,7 +62,11 @@ class MarketsMixin:
         # (n, sum of scores): the standing its posts are weighted by.
         self.lambda_posts: list[dict[str, Any]] = []
         self.lambda_standing: dict[str, tuple[int, float]] = {}
-        # Charter audit M5: the last closed window's λ-to-dollar statistic per card.
+        # Each closed window's decisions and per-scope card violations, kept until its
+        # decisions' consequences are measured; those consequences; and the last
+        # window's margins (charter audit M1, M5).
+        self.margin_windows: dict[int, dict[str, Any]] = {}
+        self.measured_consequences: dict[str, float] = {}
         self.lambda_dollars: dict[str, Any] = {}
         self.A_RETURN_MAY_INCLUDE = {**self.A_RETURN_MAY_INCLUDE, **MARKET_RETURN_FIELDS}
 
@@ -102,16 +108,6 @@ class MarketsMixin:
         self.handle_to_assembly[post] = assembly
         return post
 
-    def _lambda_horizon(self) -> int:
-        """Closed windows a post waits for its realized price: the price loop's settling ratio.
-
-        Essay II.IV.c: an inner loop settles at least ``min_ratio`` times faster
-        than the loop that commands it. The price law is commanded by the
-        committee, so a posted price is resolved after ``min_ratio`` closes of the
-        price loop, the shortest horizon on which the committee can act on it.
-        """
-        return max(1, int(self.m.timing.min_ratio))
-
     def _post_shadow_prices(self, handle: str, raw: Any) -> None:
         """Admit each valid ``{card_id: lambda}`` post; refuse each invalid one with its reason."""
         assembly = self._proposer_assembly(handle)
@@ -122,7 +118,7 @@ class MarketsMixin:
             self._market_refused(handle, "lambda_post",
                                  "shadow_prices must map priced card ids to prices")
             return
-        horizon = self._lambda_horizon()
+        horizon = self._margin_horizon()
         for card_id, value in raw.items():
             card_id = str(card_id)
             if card_id not in self.priced:
@@ -142,7 +138,7 @@ class MarketsMixin:
                 handle, assembly, f"lambda-post-{card_id}-{self.window.index}", horizon)
             row = {"handle": post, "parent": handle, "assembly": assembly, "card_id": card_id,
                    "lambda": price, "window": self.window.index,
-                   "due_window": self.window.index + horizon - 1,
+                   "due_window": self.window.index + horizon,
                    "controller_lambda": self.controller.price(card_id)}
             self.ledger.append({"kind": "lambda_post.posted", **row, "ts": self.clock.now_ns})
             self.lambda_posts.append(row)
@@ -227,7 +223,7 @@ class MarketsMixin:
     # --- settlement and the feed-forward ------------------------------------------
 
     def _close_price_window(self) -> None:
-        """Ledger the posted aggregate, close the window, then settle posts that fell due."""
+        """Ledger the posted aggregate, close the window, then settle what fell due."""
         index = self.window.index
         for card_id in sorted({p["card_id"] for p in self.lambda_posts}):
             posted = self._posted_lambda(card_id)
@@ -237,90 +233,180 @@ class MarketsMixin:
                                     "controller_lambda": self.controller.price(card_id),
                                     "ts": self.clock.now_ns})
         super()._close_price_window()
-        self._settle_lambda_posts(index)
-        self._close_lambda_dollars(index)
+        self._keep_margin_window(index)
+        self._capture_consequences()
+        for closed in sorted(w for w, row in self.margin_windows.items() if row["due"] <= index):
+            self._close_margin(closed, index)
 
-    def _close_lambda_dollars(self, index: int) -> None:
-        """Ledger and keep the closed window's λ-to-dollar statistic (charter audit M5).
+    def _margin_horizon(self) -> int:
+        """Closed windows until a window's decisions have their world-measured consequences.
 
-        Per card priced in the window: its λ at the close, the penalty mass its price
-        took from the window's settlements, and that mass in micro-USD at the
-        window's own cost of a unit of reward (``charter.market.lambda_dollars``).
+        A decision's consequence is fixed by its backstop plus the verdict window at
+        the latest (``evaluation.consequence_backstop_ticks + verdict_timeout_ticks``),
+        converted to reserve windows at the tick now in force, and never sooner than
+        ``timing.min_ratio`` windows.
+        """
+        ticks = self.ev.consequence_backstop_ticks + self.ev.verdict_timeout_ticks
+        span = ticks * self.tick_clock.interval_ns
+        return max(int(self.m.timing.min_ratio), -(-span // self.m.novelty.window_ns))
+
+    def _keep_margin_window(self, index: int) -> None:
+        """Keep the closed window's decisions and each card's per-scope violations.
+
+        The window's marginal consequence is read once its decisions' consequences
+        are measured (``_margin_horizon`` windows later). Nothing kept is published.
         """
         window = self.window
-        cards = sorted(set(window.closed_prices) | set(window.penalties))
-        if not cards:
-            self.lambda_dollars = {}
-            return
-        usd = lambda_dollars({c: window.penalties.get(c, 0.0) for c in cards},
-                             window.reward_mass, window.compute_spend_micro)
-        self.lambda_dollars = {
-            "window": index, "reward_mass": window.reward_mass,
-            "compute_spend_micro": window.compute_spend_micro,
-            "cards": {c: {"lambda": window.closed_prices.get(c, self.controller.price(c)),
-                          "penalty": window.penalties.get(c, 0.0), "micro_usd": usd[c]}
-                      for c in cards}}
-        self.ledger.append({"kind": "price.dollars", **self.lambda_dollars,
-                            "ts": self.clock.now_ns})
+        cards = {}
+        for card in window.closed_cards:
+            region = window.closed_regions.get(card.id)
+            scopes = window.closed_scopes.get(card.id) or {}
+            cards[card.id] = {
+                "per": card.window.per, "lambda": window.closed_prices.get(card.id, 0.0),
+                "violations": ({str(scope): violation(region, value)
+                                for scope, value in scopes.items()}
+                               if region is not None and card.window.per else {})}
+        self.margin_windows[index] = {
+            "due": index + self._margin_horizon(),
+            "decisions": {handle: {"assembly": self.handle_to_assembly.get(handle),
+                                   "role": row["role"], "cost": row["cost"]}
+                          for handle, row in window.decisions.items()},
+            "cards": cards}
 
-    def _settle_lambda_posts(self, index: int) -> None:
-        """Score every post due at this close against the price the law now holds.
+    def _capture_consequences(self) -> None:
+        """Keep each tracked decision's world-measured consequence once the world fixes it.
 
-        The realized price is the card's λ after this window's observation: what
-        the published law, backward terms and feed-forward alike, charged per unit
-        of violation once the window was measured. The score is
-        ``charter.market.post_score``, strictly proper for the mean, and it settles
-        the post's own policy decision. A card no longer priced leaves nothing to
-        score: the post is censored.
+        A judgement's consequence score, or a return's measured outcome
+        (``return_paid_off``, a declined trade's priced move): the reward chain's own
+        world signal, in [0, 1]. The chain forgets them after its horizon; the window
+        that owns the decision keeps them until its margin is read.
         """
-        remaining = []
+        tracked = {h for row in self.margin_windows.values() for h in row["decisions"]}
+        for handle in tracked - set(self.measured_consequences):
+            kept = self.consequence_scores.get(handle)
+            if kept is not None and kept[0] is not None:
+                self.measured_consequences[handle] = float(kept[0])
+                continue
+            outcome = self.world_outcomes.get(handle)
+            if outcome is not None and outcome.get("state") == "measured":
+                self.measured_consequences[handle] = float(outcome["y"])
+
+    def _margin_points(self, record: dict, card: dict) -> list[dict]:
+        """One anonymous point per violating-or-not scope with a measured consequence."""
+        per = card["per"]
+        points = []
+        for scope, v in sorted(card["violations"].items()):
+            rows = [(self.measured_consequences.get(handle), row["cost"])
+                    for handle, row in record["decisions"].items()
+                    if str(row.get(per)) == scope]
+            measured = [c for c, _cost in rows if c is not None]
+            if not measured:
+                continue
+            points.append({"v": v, "consequence": sum(measured) / len(measured),
+                           "micro_usd": sum(cost for _c, cost in rows) / len(rows),
+                           "n": len(measured)})
+        return points
+
+    def _close_margin(self, window: int, index: int) -> None:
+        """Read a window's marginal consequence per card and score the posts made in it.
+
+        Essay II.IV.a (architect's ruling on the cold review): a posted λ is scored
+        against the window's realized shadow price, ``charter.market.shadow_price``,
+        the least-squares slope of the scopes' world-measured consequence on their
+        violation, clipped to ``[0, lambda_max]``. The committee's λ is not the
+        target, so posting it, or adopting a post by motion, cannot make a post
+        come true. The score is ``charter.market.post_score``, strictly proper for
+        the mean. With the slope unidentifiable the post is censored. The same
+        margins are the window's λ-to-dollar statistic (``price.margin``).
+        """
+        record = self.margin_windows.pop(window)
         lambda_max = self.m.prices.lambda_max
+        margins = {}
+        for card_id, card in sorted(record["cards"].items()):
+            points = self._margin_points(record, card)
+            row = margin(points)
+            target = shadow_price(points, lambda_max)
+            margins[card_id] = {"lambda": card["lambda"],
+                                "marginal_consequence": row["slope"],
+                                "micro_usd_per_violation": row["micro_usd_per_violation"],
+                                "shadow_price": target, "scopes": row["scopes"]}
+            self.ledger.append({"kind": "price.margin", "window": window, "card_id": card_id,
+                                "lambda": card["lambda"], "points": points, **row,
+                                "shadow_price": target, "ts": self.clock.now_ns})
+        if margins:
+            self.lambda_dollars = {"window": window, "cards": margins}
+        remaining = []
         for post in self.lambda_posts:
-            if post["due_window"] > index:
+            if post["window"] != window:
                 remaining.append(post)
                 continue
-            if post["card_id"] in self.priced:
-                realized = self.controller.price(post["card_id"])
-                score = post_score(post["lambda"], realized, lambda_max)
-                status = SettleStatus.SETTLED
+            target = (margins.get(post["card_id"]) or {}).get("shadow_price")
+            if target is None:
+                score, status = 0.0, SettleStatus.CENSORED
+            else:
+                score, status = post_score(post["lambda"], target, lambda_max), \
+                    SettleStatus.SETTLED
                 n, total = self.lambda_standing.get(post["assembly"], (0, 0.0))
                 self.lambda_standing[post["assembly"]] = (n + 1, total + score)
-            else:
-                realized, score, status = None, 0.0, SettleStatus.CENSORED
             self.ledger.append({"kind": "lambda_post.settled", "handle": post["handle"],
                                 "card_id": post["card_id"], "posted": post["lambda"],
-                                "realized": realized, "score": score, "window": index,
-                                "status": str(status), "ts": self.clock.now_ns})
+                                "realized": target, "score": score, "window": index,
+                                "posted_window": window, "status": str(status),
+                                "ts": self.clock.now_ns})
             self.queue.settle(post["handle"], channel="policy", score=score, status=status,
                               definition_version=LAMBDA_POST_DEFINITION, sampling_ref=None)
         self.lambda_posts[:] = remaining
+        live = {h for row in self.margin_windows.values() for h in row["decisions"]}
+        for handle in [h for h in self.measured_consequences if h not in live]:
+            del self.measured_consequences[handle]
 
     def _anticipated_violation(self, card_id: str, value: float) -> float | None:
-        """The change in a card's violation the conditional forecasts expect, or None.
+        """The change in a violating card's violation that liable forecasts expect, or None.
 
-        The forecasts read are those on the branch the world is on: for an
-        undecided motion, the unchanged charter the controller is pricing now
-        (``reject``); for a decided one, the branch taken, until its horizon
-        settles. Each names the card through its motion's predicted effect. The
-        expectation is ``charter.market.expected_violation``, in the controller's
-        region-relative units, with one promise resolution as its step.
+        Only forecasts that are scored whichever branch the committee takes enter:
+
+        - on a decided motion (until its horizon settles), the forecasts on the branch
+          taken, each reading ``charter.market.branch_violation``;
+        - on an undecided motion, only a seat that forecast both branches, its pair
+          read as ``p * e(enact) + (1 - p) * e(reject)``, ``p`` the factory's realized
+          enactment rate (``charter.market.enactment_rate``). A forecast on one branch
+          alone would be voided at no cost if the other branch were taken, so it
+          moves nothing.
+
+        The expectation is the mean over those contributions. A card inside its
+        region takes no feed-forward (the controller checks it too).
         """
         region = self.regions.get(card_id)
         if region is None:
             return None
-        rows = [v for v in self.pending_votes if v.get("forecast")
-                and v["prediction"].card_id == card_id
-                and (v["activation_window"] is not None or v["branch"] == "reject")]
-        if not rows:
-            return None
         now = violation(region, value)
-        observation = self.observations.get(next(
-            c.observation for c in self.charter.cards if c.id == card_id))
-        step = (self.m.committee.promise_resolution * observation.scale / region.scale
-                if observation is not None else 0.0)
-        forecasts = [(v["q"], violation_sign(region.kind, region.lo, region.hi, value,
-                                             v["prediction"].direction)) for v in rows]
-        return expected_violation(now, forecasts, step) - now
+        if now <= 0:
+            return None
+        step = self._resolution_step(card_id)
+        p = enactment_rate(self.motion_tally["passed"], self.motion_tally["failed"])
+
+        def expect(vote: dict) -> float:
+            sign = violation_sign(region.kind, region.lo, region.hi, value,
+                                  vote["prediction"].direction)
+            return branch_violation(now, vote["q"], sign, step)
+
+        contributions = []
+        undecided: dict[tuple[str, str], dict[str, dict]] = {}
+        for vote in self.pending_votes:
+            if not vote.get("forecast") or vote["prediction"].card_id != card_id:
+                continue
+            if vote["activation_window"] is not None:
+                contributions.append(expect(vote))
+            else:
+                undecided.setdefault((vote["amendment_id"], vote["assembly"]), {})[
+                    vote["branch"]] = vote
+        for pair in undecided.values():
+            if set(pair) == {"enact", "reject"}:
+                contributions.append(p * expect(pair["enact"])
+                                     + (1 - p) * expect(pair["reject"]))
+        if not contributions:
+            return None
+        return sum(contributions) / len(contributions) - now
 
     # --- publication --------------------------------------------------------------
 
@@ -333,9 +419,9 @@ class MarketsMixin:
             if posted is not None:
                 row["posted"] = posted
             if row["card_id"] in dollars:
-                # Charter audit M5: what the card's price cost in the last closed window.
-                row["last_window_dollars"] = {"window": self.lambda_dollars["window"],
-                                              **dollars[row["card_id"]]}
+                # Charter audit M5: the last read window's margins beside its lambda.
+                row["last_window_margin"] = {"window": self.lambda_dollars["window"],
+                                             **dollars[row["card_id"]]}
         return block
 
     def _mechanics_block(self) -> dict[str, Any]:
@@ -358,34 +444,52 @@ class MarketsMixin:
             "no predicted effect in a retire proposal, their ballots are unscored and "
             "censored.")
         committee["shadow_prices"] = (
-            f"a seat may post a card's lambda p in [0, {lambda_max}]. It is scored after "
-            f"{self._lambda_horizon()} closed windows (timing.min_ratio) against y, the "
-            "card's lambda after that close: score = 1 - ((p - y) / lambda_max)^2, on the "
-            "post's own policy decision; a card no longer priced censors it. The posted "
-            "price of a card is the median of each seat's latest unsettled post weighted by "
-            "the seat's (1/2 + sum of its settled post scores) / (1 + their count); it is "
-            "published in world.card_prices and on the standing committee's agenda beside "
-            "the controller's lambda. A lambda motion may name \"posted\" as a card's value: "
-            "the posted price when the motion is admitted.")
+            f"a seat may post a card's lambda p in [0, {lambda_max}] for the reserve window it "
+            "posts in. When that window's decisions have their world-measured consequences "
+            "(consequence_backstop_ticks + verdict_timeout_ticks later, at least "
+            "timing.min_ratio windows) the window's shadow price y is read: the least-squares "
+            "slope, across the card's scopes (per role or assembly, at least 3, with "
+            "variance in v), of the scope's mean consequence (a judgement's consequence "
+            "score, a return's return_paid_off or priced declined trade, in [0, 1]) on its "
+            "violation v, clipped to [0, lambda_max]. score = 1 - ((p - y) / lambda_max)^2 "
+            "on the post's own policy decision; with y unidentified the post is censored. "
+            "The posted price of a card is the median of each seat's latest unsettled post "
+            "weighted by the seat's (1/2 + sum of its settled post scores) / (1 + their "
+            "count); it is published in world.card_prices and on the standing committee's "
+            "agenda beside the controller's lambda. A lambda motion may name \"posted\" as "
+            "a card's value: the posted price when the motion is admitted.")
         committee["lambda_dollars"] = (
-            "per closed window, each card's penalty mass P (the reward its price took from "
-            "the window's settlements: each settlement's penalty apportioned by lambda * v * "
-            "share), the reward mass R (the settlements' raw scores) and the window's "
-            "compute spend C in micro-USD: micro_usd = round(P * C / R); unmeasured when "
-            "R = 0. Published in world.card_prices as last_window_dollars")
+            "per window, once its consequences are measured, each card's margins across its "
+            "scopes: marginal_consequence (the slope above, unclipped) and "
+            "micro_usd_per_violation (the slope of the scopes' mean decision cost on v), "
+            "beside the lambda the window closed at; None when not identifiable. Ledgered "
+            "as price.margin with its points, published in world.card_prices as "
+            "last_window_margin")
+        committee["card_contract"] = (
+            "a metric card: id; norm (one of the charter's norms); description; units; "
+            "window {kind: returns | forecasts | windows, n: positive integer, per: role | "
+            "assembly | null, optionally interval {level, half_width}}; region {rule, lo, "
+            "hi}, rule one of at least, above (lo), at most, below (hi), between (lo < hi), "
+            "below the median of the previous window (neither); observation (an id in "
+            "world.observations); answers_for (producer, evaluator, meta, antagonist, all, "
+            "or an emitted kind); optionally holdout [predicate@version]. A window selects "
+            "the latest n samples; fewer is unmeasured. A card is preflighted through the "
+            "measurement before any vote")
         committee["motion_forecasts"] = (
             "a seat may forecast q, the probability that an agenda motion's predicted_effect "
             "holds on its enact or reject branch; scored as the liability states. Each "
             "motion's forecasts per branch (count, mean q) are on the committee's agenda.")
         controller = block["controller"]
         controller["recurrence"] += (
-            ". A card's failed holdouts add a violation h = failed / named, and v = "
-            "max(region violation, h). Feed-forward: for a card named by the predicted "
-            "effect of forecasts on the branch in force (reject while undecided, the "
-            "branch taken until its horizon), each forecast q whose direction relieves the "
-            "violation reads (1 - q) * v and one that deepens it v + q * s, s = "
-            "committee.promise_resolution * observation.scale / region scale; e = their mean "
-            "(at least 0); F = kp * max(e - v, -v) is added to lambda' before clipping")
+            ". s = committee.promise_resolution * observation.scale / region scale. Each "
+            "failed holdout adds s to v. Feed-forward, only while v > 0: each forecast q on "
+            "a motion whose predicted effect names the card reads e = max(0, v + sign * q * "
+            "s), sign +1 when the predicted direction deepens the violation and -1 when it "
+            "relieves it. A decided motion's forecasts on the branch taken count one each; "
+            "an undecided motion's count only as a seat's pair on both branches, as p * "
+            "e(enact) + (1 - p) * e(reject), p = (passed + 1) / (passed + failed + 2) over "
+            "the charter motions decided so far. With E their mean, F = kp * max(E - v, -v) "
+            "is added to lambda' before clipping")
         block["measurement"] += (
             " A window may add interval {level, half_width}: a scope is measured only when "
             "z * s / sqrt(n) <= half_width, z the normal quantile at (1 + level) / 2, s the "

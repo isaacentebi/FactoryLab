@@ -15,9 +15,12 @@ from factorylab.charter.controller import CardRegion, PriceController
 from factorylab.charter.market import (
     LAMBDA_POST_DEFINITION,
     MOTION_FORECAST_DEFINITION,
+    branch_violation,
     brier,
-    expected_violation,
+    enactment_rate,
+    margin,
     post_score,
+    shadow_price,
     standing,
     violation_sign,
     weighted_median,
@@ -69,17 +72,35 @@ def test_the_aggregate_is_a_standing_weighted_median():
     assert standing((3, 0.0)) == pytest.approx(0.5 / 4)
 
 
-def test_the_expected_violation_reads_each_forecast_at_its_two_points():
-    # Relief: a kept promise relieves the violation, a broken one leaves it.
-    assert expected_violation(0.6, [(0.75, -1)], 0.1) == pytest.approx(0.15)
-    # Deepening: a kept promise adds at least one resolution step.
-    assert expected_violation(0.0, [(0.5, +1)], 0.1) == pytest.approx(0.05)
-    assert expected_violation(0.4, [], 0.1) == 0.4
+def test_a_forecast_moves_the_expected_violation_symmetrically_by_at_most_a_step():
+    """Cold review: relief at q = 1 used to cancel the whole violation while deepening
+    at q = 1 added one step. Both now move it by q * step, in opposite directions."""
+    for q in (0.0, 0.3, 1.0):
+        relief = branch_violation(0.6, q, -1, 0.1)
+        deepen = branch_violation(0.6, q, +1, 0.1)
+        assert 0.6 - relief == pytest.approx(deepen - 0.6) == pytest.approx(q * 0.1)
+    assert branch_violation(0.05, 1.0, -1, 0.1) == 0.0  # never below zero
     assert violation_sign("max", None, 1.0, 2.0, "increase") == 1
     assert violation_sign("min", 0.9, None, 0.5, "increase") == -1
     assert violation_sign("band", 0.2, 0.8, 0.9, "decrease") == -1
     assert violation_sign("band", 0.2, 0.8, 0.1, "decrease") == 1
     assert brier(0.2, 1) == pytest.approx(0.36) and brier(1, True) == 1.0
+    assert enactment_rate(0, 0) == 0.5 and enactment_rate(3, 1) == pytest.approx(4 / 6)
+
+
+def test_the_shadow_price_is_the_realized_marginal_consequence_or_nothing():
+    points = [{"v": 0.0, "consequence": 0.2, "micro_usd": 100},
+              {"v": 1.0, "consequence": 0.8, "micro_usd": 300},
+              {"v": 1.0, "consequence": 0.8, "micro_usd": 500}]
+    row = margin(points)
+    assert row["slope"] == pytest.approx(0.6)
+    assert row["micro_usd_per_violation"] == pytest.approx(300)
+    assert shadow_price(points, 1.0) == pytest.approx(0.6)
+    assert shadow_price(points, 0.5) == 0.5  # clipped to lambda_max
+    worse = [dict(point, consequence=1 - point["consequence"]) for point in points]
+    assert shadow_price(worse, 1.0) == 0.0  # violating costs consequence: no premium
+    assert shadow_price(points[:2], 1.0) is None  # too few scopes
+    assert shadow_price([dict(point, v=0.5) for point in points], 1.0) is None  # no variance
 
 
 def test_the_feed_forward_term_has_the_market_s_sign_and_never_waives_the_integral():
@@ -93,20 +114,29 @@ def test_the_feed_forward_term_has_the_market_s_sign_and_never_waives_the_integr
     backward = controller()
     backward.observe("c", 1.4, 2)
     worse, better, relief = controller(), controller(), controller()
-    worse.observe("c", 1.4, 2, anticipated=+0.2)
-    better.observe("c", 1.4, 2, anticipated=-0.2)
+    worse.observe("c", 1.4, 2, anticipated=+0.1)
+    better.observe("c", 1.4, 2, anticipated=-0.1)
     relief.observe("c", 1.4, 2, anticipated=-5.0)
     base = backward.price("c")
     # A market expecting the violation to grow prices it before it happens ...
-    assert worse.price("c") == pytest.approx(base + 0.5 * 0.2)
-    # ... one expecting relief eases the price ...
-    assert better.price("c") == pytest.approx(base - 0.5 * 0.2)
+    assert worse.price("c") == pytest.approx(base + 0.5 * 0.1)
+    # ... one expecting relief eases the price by the same amount ...
+    assert better.price("c") == pytest.approx(base - 0.5 * 0.1)
     # ... and never below the accumulated integral while the card still violates.
     integral = relief.snapshot()["cards"]["c"]["integral"]
     assert relief.price("c") == pytest.approx(integral) and integral > 0
-    update = [i for i in relief._PriceController__ledger._recovery_items()
-              if i["kind"] == "price.update"][-1]
-    assert update["f"] == pytest.approx(-0.5 * 0.4) and update["anticipated"] == -5.0
+
+
+def test_no_feed_forward_prices_a_card_inside_its_region():
+    """Cold review: F priced an in-region card (lambda 0.0033 at v = 0)."""
+    ledger = Ledger(None)
+    c = PriceController(ledger, eta=0.2, decay=0.1, lambda_max=1.0, min_window_events=1,
+                        kp=0.5)
+    c.register(CardRegion("c", "max", None, 1.0, 1.0))
+    c.observe("c", 0.5, 1, anticipated=+0.5)
+    assert c.price("c") == 0.0
+    update = [i for i in ledger._recovery_items() if i["kind"] == "price.update"][-1]
+    assert "f" not in update
 
 
 # --- a running world ----------------------------------------------------------------
@@ -149,38 +179,84 @@ def _next_window(rt):
     rt._manage_reserve_window()
 
 
-def test_a_seat_posts_lambda_through_its_return_and_is_scored_on_the_realized_price(
-        monkeypatch):
-    rt = _runtime(monkeypatch)
-    card = "well_formed_rate"
-    _return(rt, "eval-a", shadow_prices={card: 0.3})
-    _return(rt, "antagonist-a", shadow_prices={card: 0.9})
-    _return(rt, "seed-decider", shadow_prices={card: 0.5})
-    posts = _items(rt, "lambda_post.posted")
-    assert [p["lambda"] for p in posts] == [0.3, 0.9, 0.5]
-    assert rt._posted_lambda(card) == {"lambda": 0.5, "posts": 3,
-                                       "windows": [rt.window.index] * 2}
-    # The committee's agenda and world.card_prices carry it beside the controller's.
-    row = next(r for r in rt._world_block()["card_prices"] if r["card_id"] == card)
-    assert row["posted"]["lambda"] == 0.5 and "lambda" in row
-    stats = next(r for r in rt._card_statistics() if r["card_id"] == card)
-    assert stats["posted"]["posts"] == 3
-    horizon = rt.m.timing.min_ratio
-    for _ in range(horizon):
+SCOPED = (
+    MetricCard("ok-rate", "truthful commitments", "Well-formed share per seat.", "fraction",
+               MetricWindow("returns", 1, "assembly"), {"rule": "at least", "lo": 0.9},
+               "well_formed_rate", "all"),
+)
+#: One well-formed seat and two malformed ones, and what the world measured of each.
+WORLD = {"eval-a": (True, 0.2), "eval-b": (False, 0.8), "eval-c": (False, 0.8)}
+
+
+def _scoped_window(rt):
+    """A window in which the malformed seats' decisions paid off better: violating paid."""
+    for seat, (ok, consequence) in WORLD.items():
+        handle = _handle(rt, seat, f"work-{seat}")
+        rt.card_samples.returned(handle=handle, assembly=seat, role="evaluator",
+                                 window=rt.window.index,
+                                 ret=Return(handle, {}, 1, "ok" if ok else "failed"))
+        sample = rt._contribution(handle, "evaluator")
+        sample.update(invocations=1, ok=int(ok), cost=100)
+        rt.consequence_scores[handle] = (consequence, rt.ticks_consumed)
+
+
+def _to_margin(rt, posted_window):
+    while posted_window in rt.margin_windows or posted_window >= rt.window.index:
         _next_window(rt)
-    settled = _items(rt, "lambda_post.settled")
-    assert len(settled) == 3 and rt.lambda_posts == []
-    realized = settled[0]["realized"]
-    assert realized == rt.controller.price(card)
-    for row in settled:
-        assert row["score"] == pytest.approx(1 - (row["posted"] - realized) ** 2)
+
+
+def test_a_post_is_scored_on_the_realized_shadow_price_not_on_the_committee_s_lambda(
+        monkeypatch):
+    """Architect's ruling: a post is scored against the window's realized marginal
+    consequence per unit of violation. Posting the current lambda, or zero, no longer
+    scores near 1 when that slope differs; adopting a post by motion cannot make it
+    come true."""
+    rt = _runtime(monkeypatch, SCOPED)
+    card = "ok-rate"
+    rt.controller.set_price(card, 0.1, amendment_id="test")
+    window = rt.window.index
+    _return(rt, "eval-a", shadow_prices={card: 0.1})  # the committee's own lambda
+    _return(rt, "antagonist-a", shadow_prices={card: 0.0})
+    _return(rt, "seed-decider", shadow_prices={card: 0.6})
+    posts = _items(rt, "lambda_post.posted")
+    assert rt._posted_lambda(card)["lambda"] == 0.1
+    row = next(r for r in rt._world_block()["card_prices"] if r["card_id"] == card)
+    assert row["posted"]["lambda"] == 0.1 and "lambda" in row
+    _scoped_window(rt)
+    # The committee adopts a post; the price law moves, the target does not.
+    rt.controller.set_price(card, 0.9, amendment_id="adopt-posted")
+    _to_margin(rt, window)
+    settled = {e["posted"]: e for e in _items(rt, "lambda_post.settled")}
+    assert all(e["realized"] == pytest.approx(0.6) for e in settled.values())
+    assert settled[0.1]["score"] == pytest.approx(1 - 0.5 ** 2)
+    assert settled[0.0]["score"] == pytest.approx(1 - 0.6 ** 2)
+    assert settled[0.6]["score"] == pytest.approx(1.0)
+    margin_row, = [e for e in _items(rt, "price.margin") if e["window"] == window]
+    assert margin_row["slope"] == pytest.approx(0.6) and len(margin_row["points"]) == 3
     # The score reaches each poster's durable identity on the policy channel.
     post = posts[0]["handle"]
     history = rt.queue.history(post)
     assert history[-1].definition_version == LAMBDA_POST_DEFINITION
-    assert history[-1].score == pytest.approx(settled[0]["score"])
+    assert history[-1].score == pytest.approx(settled[0.1]["score"])
     assert rt.queue.get(post).actor == "assembly:eval-a"
     assert rt.lambda_standing["eval-a"][0] == 1
+    # The same margins are the window's lambda-to-dollar statistic, in public.
+    published = next(r for r in rt._world_block()["card_prices"] if r["card_id"] == card)
+    assert published["last_window_margin"]["marginal_consequence"] == pytest.approx(0.6)
+    assert published["last_window_margin"]["micro_usd_per_violation"] == pytest.approx(0.0)
+    assert "lambda_dollars" in rt._mechanics_block()["committee"]
+    assert "card_contract" in rt._mechanics_block()["committee"]
+
+
+def test_a_post_on_an_unidentified_window_is_censored_never_scored_on_a_default(monkeypatch):
+    rt = _runtime(monkeypatch)  # the seed cards: no scope has a measured consequence
+    window = rt.window.index
+    _return(rt, "eval-a", shadow_prices={"well_formed_rate": 0.3})
+    _to_margin(rt, window)
+    settled, = _items(rt, "lambda_post.settled")
+    assert settled["status"] == "censored" and settled["realized"] is None
+    assert rt.queue.history(settled["handle"])[-1].status is SettleStatus.CENSORED
+    assert "eval-a" not in rt.lambda_standing
 
 
 @pytest.mark.parametrize(("prices", "reason"), [
@@ -338,35 +414,54 @@ def test_an_invalid_forecast_is_refused(monkeypatch, forecast, reason):
     assert reason in refused["reason"]
 
 
-def test_open_forecasts_feed_forward_into_the_card_they_name(monkeypatch):
-    """The market expects relief: the card's price eases before the measurement does."""
+def test_a_forecast_on_one_branch_moves_nothing_risk_free(monkeypatch):
+    """Cold review: a reject-branch relief forecast lowered lambda and was voided free
+    when the motion passed. An undecided motion's forecasts count only as a pair."""
     rt = _runtime(monkeypatch, SMALL, kp=0.5)
     _motion(rt, direction="increase")  # toward "at least 0.9": relief
     _return(rt, "eval-a", motion_forecasts=[
-        {"motion": "drop-spend", "branch": "reject", "q": 0.8}])
-    region = rt.regions["ok-rate"]
-    now = (region.lo - 0.45) / region.scale
-    assert rt._anticipated_violation("ok-rate", 0.45) == pytest.approx(-0.8 * now)
-    # An enact-branch forecast is not the branch in force while the motion is undecided.
-    assert rt._anticipated_violation("spend", 5000.0) is None
+        {"motion": "drop-spend", "branch": "reject", "q": 1.0}])
+    assert rt._anticipated_violation("ok-rate", 0.45) is None
     _sample(rt, ok=False)
     rt.controller.set_price("ok-rate", 0.5, amendment_id="test")
     rt._close_price_window()
     update = [i for i in _items(rt, "price.update") if i["card_id"] == "ok-rate"][-1]
-    assert update["f"] < 0 and update["anticipated"] < 0
+    assert "f" not in update
+
+
+def test_a_pair_of_forecasts_feeds_forward_weighted_by_the_enactment_rate(monkeypatch):
+    rt = _runtime(monkeypatch, SMALL, kp=0.5)
+    _motion(rt, direction="increase")
+    _return(rt, "eval-a", motion_forecasts=[
+        {"motion": "drop-spend", "branch": "reject", "q": 0.2},
+        {"motion": "drop-spend", "branch": "enact", "q": 1.0}])
+    region = rt.regions["ok-rate"]
+    step = rt._resolution_step("ok-rate")
+    now = (region.lo - 0.45) / region.scale
+    p = enactment_rate(0, 0)
+    expected = p * (now - 1.0 * step) + (1 - p) * (now - 0.2 * step)
+    assert rt._anticipated_violation("ok-rate", 0.45) == pytest.approx(expected - now)
+    # Inside the region nothing is fed forward.
+    assert rt._anticipated_violation("ok-rate", 0.95) is None
+    _sample(rt, ok=False)
+    rt.controller.set_price("ok-rate", 0.5, amendment_id="test")
+    rt._close_price_window()
+    update = [i for i in _items(rt, "price.update") if i["card_id"] == "ok-rate"][-1]
+    assert update["f"] == pytest.approx(0.5 * (expected - now)) and update["f"] < 0
+    assert abs(update["f"]) <= 0.5 * step
     assert update["lambda_after"] == pytest.approx(
         update["p"] + update["i"] + update["d"] + update["f"])
 
 
-def test_a_forecast_deepening_a_compliant_card_raises_its_price_early(monkeypatch):
+def test_once_decided_only_the_branch_taken_feeds_forward(monkeypatch):
     rt = _runtime(monkeypatch, SMALL, kp=0.5)
-    _motion(rt, direction="decrease")  # away from "at least 0.9"
-    _return(rt, "eval-a", motion_forecasts=[
-        {"motion": "drop-spend", "branch": "reject", "q": 1.0}])
-    _sample(rt, ok=True)  # inside the region: no violation yet
-    rt._close_price_window()
-    update = [i for i in _items(rt, "price.update") if i["card_id"] == "ok-rate"][-1]
-    assert update["violation"] == 0 and update["f"] > 0 and update["lambda_after"] > 0
+    _motion(rt, direction="decrease")  # deepens the violation of "at least 0.9"
+    _return(rt, "antagonist-a", motion_forecasts=[
+        {"motion": "drop-spend", "branch": "enact", "q": 1.0}])
+    _sample(rt, ok=False)
+    _decide(rt, monkeypatch, vote=True)
+    step = rt._resolution_step("ok-rate")
+    assert rt._anticipated_violation("ok-rate", 0.45) == pytest.approx(step)
 
 
 def test_without_a_proportional_gain_the_law_stays_backward(monkeypatch):
@@ -374,11 +469,12 @@ def test_without_a_proportional_gain_the_law_stays_backward(monkeypatch):
     rt = _runtime(monkeypatch, SMALL)
     _motion(rt, direction="decrease")
     _return(rt, "eval-a", motion_forecasts=[
-        {"motion": "drop-spend", "branch": "reject", "q": 1.0}])
-    _sample(rt, ok=True)
+        {"motion": "drop-spend", "branch": "reject", "q": 1.0},
+        {"motion": "drop-spend", "branch": "enact", "q": 1.0}])
+    _sample(rt, ok=False)
     rt._close_price_window()
     update = [i for i in _items(rt, "price.update") if i["card_id"] == "ok-rate"][-1]
-    assert update["f"] == 0 and update["lambda_after"] == 0
+    assert update["f"] == 0
 
 
 def test_posts_and_forecasts_survive_a_checkpoint_and_an_older_one_has_none(monkeypatch):
@@ -403,26 +499,3 @@ def test_posts_and_forecasts_survive_a_checkpoint_and_an_older_one_has_none(monk
     assert twin.lambda_posts == [] and twin.lambda_standing == {}
     ballot = {"vote": True}
     assert twin._branch_probability(ballot, ballot.get("branch", "enact")) == 1.0
-
-
-def test_each_window_publishes_what_a_card_s_price_cost_in_micro_usd(monkeypatch):
-    """Charter audit M5: λ at runtime beside the dollars its penalty stood for."""
-    rt = _runtime(monkeypatch, SMALL)
-    _sample(rt, ok=False)
-    rt.controller.set_price("ok-rate", 0.5, amendment_id="test")
-    _next_window(rt)
-    handle = _handle(rt, "seed-observer", "priced")
-    rt._contribution(handle, "producer")["invocations"] = 1  # one malformed return
-    rt.window.compute_spend_micro += 9_000
-    rt._settle_priced(handle, channel="verdict", score=0.9, definition_version="t",
-                      sampling_ref=None, cards="producer")
-    penalty = rt.window.penalties["ok-rate"]
-    assert penalty > 0 and rt.window.reward_mass == 0.9
-    closing = rt.window.index
-    _next_window(rt)
-    dollars = _items(rt, "price.dollars")[-1]
-    assert dollars["window"] == closing
-    assert dollars["cards"]["ok-rate"]["micro_usd"] == round(penalty * 9_000 / 0.9)
-    row = next(r for r in rt._world_block()["card_prices"] if r["card_id"] == "ok-rate")
-    assert row["last_window_dollars"]["micro_usd"] == round(penalty * 9_000 / 0.9)
-    assert "lambda_dollars" in rt._mechanics_block()["committee"]

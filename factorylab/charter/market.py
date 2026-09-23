@@ -94,42 +94,78 @@ def violation_sign(kind: str, lo: float | None, hi: float | None, value: float,
     return up if upper_side else -up
 
 
-def expected_violation(violation: float, forecasts: list[tuple[float, int]],
-                       step: float) -> float:
-    """The violation a motion's conditional forecasts expect at their horizon.
+def branch_violation(violation: float, q: float, sign: int, step: float) -> float:
+    """The violation one conditional forecast expects on its branch, symmetric in direction.
 
-    Each forecast ``(q, sign)`` is the market's probability ``q`` that the card
-    moves the way the motion predicts, ``sign`` saying whether that way deepens
-    the violation (+1) or relieves it (-1). A promise kept toward the region is
-    read as the violation relieved, a broken one as the violation staying where it
-    is: ``(1 - q) * v``. A promise kept away from the region is read as the
-    violation deepened by at least one promise resolution (``step``, in the same
-    region-relative units), a broken one as unchanged: ``v + q * step``. The market's
-    expectation is the mean over its forecasts, never below zero.
+    A forecast is the probability ``q`` that the card moves the way its motion
+    predicts by at least one promise resolution (``step``, region-relative units).
+    ``sign`` is +1 when that way deepens the violation and -1 when it relieves it.
+    The expectation is ``max(0, v + sign * q * step)``: a forecast of relief lowers
+    it exactly as far as an equally confident forecast of deepening raises it, and
+    neither moves it by more than one resolution.
     """
-    if not forecasts:
-        return violation
-    values = [((1 - q) * violation) if sign < 0 else (violation + q * step)
-              for q, sign in forecasts]
-    return max(0.0, sum(values) / len(values))
+    if sign not in (-1, 1):
+        raise ValueError("sign is +1 or -1")
+    if type(q) not in (int, float) or not isfinite(q) or not 0 <= q <= 1:
+        raise ValueError("q must be a probability")
+    return max(0.0, violation + sign * q * step)
 
 
-def lambda_dollars(penalties: dict[str, float], reward_mass: float,
-                   spend_micro: int) -> dict[str, int | None]:
-    """Each card's penalty in one window, converted to micro-USD.
+def enactment_rate(passed: int, failed: int) -> float:
+    """The factory's realized rate of enactment, ``(passed + 1) / (passed + failed + 2)``.
 
-    Essay II.IV: "the correlation between the pricing λ of a factory's norm set and
-    the material costs established as constraints needs to be profoundly understood
-    at charter time" (charter audit M5). λ prices a unit-interval reward; the window
-    bought ``reward_mass`` units of reward with ``spend_micro`` of compute, so one
-    unit of reward cost ``spend_micro / reward_mass``. A card's penalty mass (reward
-    units its price took from the window's settlements) is worth
-    ``penalty * spend_micro / reward_mass`` micro-USD, rounded to the integer. With
-    no reward settled the conversion is unmeasured (None), never zero.
+    The weight a seat's enact-branch forecast carries in the feed-forward while a
+    motion is undecided; the reject branch carries the rest.
     """
-    if type(spend_micro) is not int or spend_micro < 0:
-        raise ValueError("spend_micro is a nonnegative integer of micro-USD")
-    if not isfinite(reward_mass) or reward_mass <= 0:
-        return {card_id: None for card_id in penalties}
-    return {card_id: round(mass * spend_micro / reward_mass)
-            for card_id, mass in penalties.items()}
+    if min(passed, failed) < 0:
+        raise ValueError("counts are nonnegative")
+    return (passed + 1) / (passed + failed + 2)
+
+
+#: The fewest scopes a window's marginal consequence is read from.
+MIN_MARGIN_SCOPES = 3
+
+
+def margin(points: list[dict]) -> dict:
+    """A window's realized marginal consequence and marginal spend per unit of violation.
+
+    Essay II.IV.a: λ is "the marginal worth of that constraint at the factory's
+    current operating point". Each point is one scope of a card in one closed
+    window: ``v``, its violation in region-relative units; ``consequence``, the mean
+    world-measured consequence of the scope's decisions in that window (in [0, 1]:
+    ``return_paid_off``, a declined trade's priced outcome, a judgement's consequence
+    score); ``micro_usd``, their mean compute cost. The margins are the least-squares
+    slopes across scopes: ``slope`` is consequence gained per unit of violation, and
+    ``micro_usd_per_violation`` compute spent per unit of violation. Relaxing the
+    constraint by one unit is worth ``slope`` of reward: a λ below it means violating
+    pays. With fewer than ``MIN_MARGIN_SCOPES`` points, or no variance in ``v``, the
+    margins are not identifiable and are None, never a default.
+    """
+    rows = [p for p in points if p.get("consequence") is not None]
+    out: dict = {"scopes": len(rows), "slope": None, "micro_usd_per_violation": None}
+    if len(rows) < MIN_MARGIN_SCOPES:
+        return out
+    vs = [float(p["v"]) for p in rows]
+    mean_v = sum(vs) / len(vs)
+    var = sum((v - mean_v) ** 2 for v in vs)
+    if var <= 0:
+        return out
+
+    def slope(key: str) -> float:
+        ys = [float(p[key]) for p in rows]
+        mean_y = sum(ys) / len(ys)
+        return sum((v - mean_v) * (y - mean_y) for v, y in zip(vs, ys, strict=True)) / var
+
+    out["slope"] = slope("consequence")
+    out["micro_usd_per_violation"] = slope("micro_usd")
+    return out
+
+
+def shadow_price(points: list[dict], lambda_max: float) -> float | None:
+    """The realized shadow price a λ post is scored against, or None when unidentified.
+
+    ``clip(margin(points).slope, 0, lambda_max)``: the reward one more unit of
+    violation bought in the world, which the committee's own λ does not enter.
+    """
+    slope = margin(points)["slope"]
+    return None if slope is None else min(lambda_max, max(0.0, slope))

@@ -122,24 +122,34 @@ def test_a_cards_motion_cannot_smuggle_a_holdout_in(monkeypatch):
     assert "holdout is appended by a holdout motion" in rejected["reason"]
 
 
-def test_a_failed_holdout_prices_a_card_that_sits_inside_its_region():
-    assert holdout_violation([True, False, None], 3) == pytest.approx(1 / 3)
-    assert holdout_violation([None, None], 2) == 0.0  # absent evidence is never a failure
+def test_each_failed_holdout_adds_one_bounded_step_and_passing_ones_dilute_nothing():
+    """Cold review: k/n let always-true holdouts dilute a real failure, and 1/1 was a
+    whole region of violation. Each failure now counts on its own, as one step."""
+    step = 0.05
+    assert holdout_violation([False], step) == pytest.approx(0.05)
+    assert holdout_violation([False, True, True, True], step) == pytest.approx(0.05)
+    assert holdout_violation([False, False, None], step) == pytest.approx(0.10)
+    assert holdout_violation([None, None], step) == 0.0  # absent evidence is never a failure
     ledger = Ledger(None)
     controller = PriceController(ledger, eta=0.5, decay=0.1, lambda_max=1.0,
-                                 min_window_events=1)
+                                 min_window_events=1, kp=0.5)
     controller.register(CardRegion("c", "min", 0.9, None, 1.0))
     controller.observe("c", 0.95, 1)
     assert controller.price("c") == 0.0
-    controller.observe("c", 0.95, 2, holdout=0.5)
-    assert controller.price("c") == pytest.approx(0.25)
+    controller.observe("c", 0.95, 2, holdout=step)
+    # One failing holdout inside the region: priced, and nowhere near lambda_max.
+    assert controller.price("c") == pytest.approx(0.5 * step + 0.5 * step)
     update = [i for i in ledger._recovery_items() if i["kind"] == "price.update"][-1]
-    assert update["holdout"] == 0.5 and update["violation"] == 0.5
+    assert update["holdout"] == step and update["violation"] == step
+    # Outside the region the holdout adds to the region's violation.
+    controller.observe("c", 0.85, 3, holdout=step)
+    update = [i for i in ledger._recovery_items() if i["kind"] == "price.update"][-1]
+    assert update["violation"] == pytest.approx(0.05 / 1.0 + step)
     with pytest.raises(ValueError, match="holdout"):
-        controller.observe("c", 0.95, 3, holdout=-0.1)
+        controller.observe("c", 0.95, 4, holdout=-0.1)
 
 
-def test_a_live_card_with_a_failing_holdout_is_priced_at_the_close(monkeypatch):
+def test_a_live_card_with_a_failing_holdout_is_priced_one_step_at_the_close(monkeypatch):
     from dataclasses import replace
 
     from factorylab.charter.charter import Charter
@@ -159,11 +169,45 @@ def test_a_live_card_with_a_failing_holdout_is_priced_at_the_close(monkeypatch):
     rt.card_samples.returned(handle=handle, assembly="seed-decider", role="producer",
                              window=rt.window.index, ret=Return(handle, {}, 1, "ok"))
     rt._close_price_window()
+    step = rt.m.committee.promise_resolution * 1.0 / rt.regions[card.id].scale
     window, = [i for i in _items(rt, "price.window") if "holdouts" in i]
     assert window["values"][card.id] == 1.0  # inside "at least 0.9"
-    assert window["holdouts"][card.id] == {"results": {"all-well-formed@1": False},
-                                           "violation": 1.0}
+    assert window["holdouts"][card.id]["results"] == {"all-well-formed@1": False}
+    assert window["holdouts"][card.id]["violation"] == pytest.approx(step)
     update = [i for i in _items(rt, "price.update") if i["card_id"] == card.id][-1]
-    assert update["violation"] == 1.0 and update["lambda_after"] > 0.4
+    assert update["violation"] == pytest.approx(step)
+    assert 0.4 < update["lambda_after"] < rt.m.prices.lambda_max
     term, = rt._penalty_terms("all", handle)
-    assert term["violation"] == 1.0
+    assert term["violation"] == pytest.approx(step)
+
+
+@pytest.mark.parametrize(("code", "reason"), [
+    ("def resolve(facts):\n    return facts['index'] < 40\n", "not a behavioural fact"),
+    ("def resolve(facts):\n    return len(facts['tick_timestamps_ns']) < 9\n",
+     "not a behavioural fact"),
+    ("def resolve(facts):\n    return facts['mids']['BTC'][-1][1] > 0\n",
+     "not a behavioural fact"),
+    ("import time\ndef resolve(facts):\n    return time.time() < 2e9 and facts['ok'] > 0\n",
+     "imports only"),
+    ("def resolve(facts):\n    k = 'index'\n    return facts[k] < 40\n", "literal key"),
+    ("def resolve(facts):\n    return any(v for v in facts)\n", "subscript or .get"),
+])
+def test_a_holdout_on_the_clock_or_the_world_is_refused(monkeypatch, code, reason):
+    """Cold review: a predicate on the window index passes preflight and trial, then
+    fails forever. A holdout reads behavioural facts only."""
+    rt = _runtime(monkeypatch)
+    rt.predicates.register("calendar", "reads the calendar", code,
+                           facts={"ok": 1, "invocations": 1, "index": 1,
+                                  "tick_timestamps_ns": [], "mids": {"BTC": [[1, 1]]}},
+                           persist=lambda _p: None)
+    _register(rt, "eval-a", _motion(predicate="calendar"))
+    rejected, = _items(rt, "registration.rejected")
+    assert reason in rejected["reason"] and _items(rt, "holdout.proposed") == []
+
+
+def test_a_behavioural_holdout_names_what_it_reads():
+    from factorylab.charter.holdout import behavioural_reads
+
+    assert behavioural_reads(HOLDS) == {"ok", "invocations"}
+    assert behavioural_reads("import math\ndef resolve(f):\n    return math.isfinite("
+                             "f.get('tool_calls', 0))\n") == {"tool_calls"}

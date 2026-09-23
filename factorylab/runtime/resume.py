@@ -593,9 +593,12 @@ _RUNTIME_FIELDS = (
     # The charter's markets (charter audit M1): unsettled lambda posts and each seat's
     # settled-post record. An older checkpoint has neither; both start empty.
     "lambda_posts", "lambda_standing",
-    # Charter audit M5: the last closed window's lambda-to-dollar statistic; empty
-    # when an older checkpoint lacks it.
-    "lambda_dollars",
+    # Charter audit M5 and the posts' target: each closed window's decisions and scope
+    # violations until their consequences are in, the consequences measured so far, and
+    # the last margin published. Each starts empty when an older checkpoint lacks it.
+    "margin_windows", "measured_consequences", "lambda_dollars",
+    # Charter motions decided by branch (the realized enactment rate).
+    "motion_tally",
     "return_bindings",
     "return_events",
     # The population's registered measurements and its open assembly-learner rounds.

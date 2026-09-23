@@ -92,6 +92,9 @@ class GovernanceMixin:
         self.forecast_returns = {}
         # challenge id -> frozen incumbent and replacement cards, trial series, status
         self.challenges: dict[str, dict] = {}
+        # Charter motions decided so far by branch: the factory's realized enactment
+        # rate, which weighs a seat's pair of conditional forecasts (charter.market).
+        self.motion_tally: dict[str, int] = {"passed": 0, "failed": 0}
         self.predicate_runner = JournalProxy(PredicateRunner(), self.ledger, "predicate")
         # The norm house's files beside the ledger, read only at a governance
         # boundary and through the journal, so a resumed world reads what the
@@ -1271,6 +1274,7 @@ class GovernanceMixin:
         committee's agenda under its own id and its own predicted effect.
         """
         from factorylab.charter.charter import HOLDOUT_RE
+        from factorylab.charter.holdout import behavioural_reads
         from factorylab.cortex.registration import (
             MAX_CHALLENGE_TRIAL_WINDOWS,
             MAX_EVIDENCE_CHARS,
@@ -1301,6 +1305,12 @@ class GovernanceMixin:
             self._refuse_amendment(item, "holdout.predicate must name a registered predicate; "
                                    "a seed predicate resolves over a forecast's horizon, not "
                                    "a closed window")
+        try:
+            # A holdout tests behaviour: a predicate on the window's index, the clock,
+            # balances or market series would fail forever whatever the factory did.
+            behavioural_reads(predicate.code)
+        except ValueError as exc:
+            self._refuse_amendment(item, str(exc))
         entry = f"{predicate.id}@{predicate.version}"
         if HOLDOUT_RE.fullmatch(entry) is None:
             self._refuse_amendment(item, "holdout.predicate is not a predicate id")
@@ -1716,11 +1726,13 @@ class GovernanceMixin:
             if not retiring:
                 self.cadence.approve(am.id)
                 self.stats.amendments_passed += 1
+                self.motion_tally["passed"] += 1
         elif outcome == "failed" and retiring:
             self._censor_ballots(am.id)
         elif outcome == "failed":
             # Charter audit P1: the rejected branch is observable. Its ballots and
             # its reject-branch forecasts are graded against the unchanged charter.
+            self.motion_tally["failed"] += 1
             self.ledger.append({"kind": "policy.rejected", "amendment_id": am.id,
                                 "window": self.window.index})
             self._activate_policy_ballots(am.id, branch="reject")
