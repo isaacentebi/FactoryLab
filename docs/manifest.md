@@ -123,11 +123,12 @@ settings".
 
 | Key | Type | Default / seed | Hard cast? |
 | --- | --- | --- | --- |
-| `treasury.max_venice_per_window` | Exact USD decimal string or integer, nonnegative | `"10"` (10,000,000 micro-USD) | Configured resource bound, fixed for a run; not amendable through metric cards |
+| `treasury.max_venice_per_window` | Exact USD decimal string or integer, nonnegative | `"10"` (10,000,000 micro-USD) | Configured resource bound per `treasury.cap_window`, fixed for a run; not amendable through metric cards |
+| `treasury.cap_window` | Duration, at least `timing.min_ratio` declared ticks | `"1h"` | The Venice and forwarding-fee caps' own wall-clock window, counted from launch. A money rail runs in wall time, so its rate cap is a duration and never the pricing window (time audit T1, T13) |
 | `treasury.cctp_forwarding` | `"never"`, `"on_empty_gas"` or `"always"` | `"on_empty_gas"` | Configured route rule, fixed for a run |
 | `treasury.max_forward_fee_usd` | Exact USD decimal string, nonnegative | `"0.30"` ($0.10 of headroom over the $0.20 quoted on both networks) | Hard bound on the on-chain forwarding fee quote per exit; a higher quote refuses before signing |
-| `treasury.max_forward_fees_per_window` | Exact USD decimal string or integer, nonnegative | `"1"` | Per-reserve-window cap on forwarding fees quoted for submitted exits; a failed exit still counts |
-| `treasury.forward_wait_windows` | Positive integer | `2` | Reserve windows a forwarded mint may stay unobserved before the exit strands recoverably |
+| `treasury.max_forward_fees_per_window` | Exact USD decimal string or integer, nonnegative | `"1"` | Per-cap-window cap on forwarding fees quoted for submitted exits; a failed exit still counts |
+| `treasury.forward_wait_ticks` | Integer, at least `timing.min_ratio` | `360` | Declared floor, in world ticks, on how long a forwarded mint or a hybrid top-up may stay undone before the exit strands recoverably. The runtime raises it to the capital loop's measured p90 conversion (open to finalized) in ticks, so nothing strands faster than the rail delivers (time audit T13). `treasury.forward_wait_windows` is refused |
 | `treasury.venice_network` | Absent, or `"base-mainnet"` | Absent | Hybrid capital-loop rehearsal: `to_venice` buys real Venice credit from the Base mainnet reserve and pays for it in the testnet pots with a shadow send (docs/architecture/capital-loop-rehearsal.md). Refused on a mainnet venue and without `venice_shadow_sink` |
 | `treasury.venice_shadow_sink` | Nonzero EVM address, only with `venice_network` | Absent | Where the shadow leg's testnet USDC goes; must be an existing Hyperliquid testnet account outside every observed pot |
 | `treasury.max_venice_total_usd` | Exact USD, positive; required with `venice_network`, refused without it | Absent | Absolute bound on real USDC ever authorized for Venice in the world, re-authorizations included; the counter is checkpointed |
@@ -151,9 +152,9 @@ settings".
 | Proposal `predicted_effect.card_id` | Current or proposed card id for cards and lambda amendments; current card id for connectors and retirements | Required unless `observation` is given; no default | Liability binds to a measurable card |
 | Proposal `predicted_effect.observation` | `burn_per_window` or a population-registered observation id | Required for, and only for, a clock amendment (`tick_interval`) | Speed is cash burn (charter audit M6): the promise is graded on the observation over one closed window, its region the observation's declared range |
 | Proposal `predicted_effect.direction` | `increase` or `decrease` | Required; no default | The promise graded against the baseline recorded at activation |
-| Proposal `predicted_effect.window` | Positive integer count of closed reserve windows after activation | Required; no default | Population-authored liability horizon |
+| Proposal `predicted_effect.window` | Positive integer count of closed price windows after activation | Required; no default | Population-authored liability horizon. The promise is graded at the later of that count and `timing.min_ratio` measured consequence periods, in ticks, after activation (time audit T2) |
 
-The existing `committee.min_settled`, `novelty.window`, `novelty.share`,
+The existing `committee.min_settled`, `novelty.share`,
 `novelty.trials`, prices, timing and clock parameters are disclosed in
 every request's `world.mechanics`, at the values the manifest committed and an
 amendment last activated. The two the runtime adapts live — the consequence mix
@@ -709,7 +710,8 @@ No manifest key: the formulas are published in `world.mechanics.committee` and
 $5 tranche from the reserve into Venice credit. The $5 amount is the existing
 x402 protocol constraint, not a new optimiser setting. Submitted tranches count
 against the window budget, including uncertain or later failed submissions.
-The budget resets only when the reserve-window index advances, and survives
+The budget resets only when the treasury's own cap window (`treasury.cap_window`
+of wall time since launch) advances, never with the pricing window, and survives
 resume. A pending or stranded transfer prevents another transfer.
 
 The journal records the quote, unsigned authorization, nonce and expiry before
@@ -757,9 +759,10 @@ reverts because Circle delivered first ("Nonce already used"), the step
 re-checks the transmitter's consumed-nonce record and confirms the forwarder's
 finalized credit, booking only the reverted transaction's gas, instead of
 stranding money that arrived. The wait is bounded: a forwarded mint still
-unobserved once `treasury.forward_wait_windows` reserve windows have opened
-since the wait began is stranded through `treasury.failed` with reason
-`forwarded mint not delivered within treasury.forward_wait_windows`, the wait
+unobserved once `treasury.forward_wait_ticks` world ticks (or the capital loop's
+measured p90 conversion, if longer) have passed since the wait began is stranded
+through `treasury.failed` with reason
+`forwarded mint not delivered within treasury.forward_wait_ticks`, the wait
 record (`waited`) and `recoverable: true`; such a strand keeps its principal
 hold but leaves the transfer slot, so new transfers are admitted, and whenever
 no transfer is in flight a tick re-checks it exactly as during the wait (the
@@ -841,7 +844,9 @@ parameters; the observer never substitutes a second set of thresholds.
 | --- | --- | --- | --- |
 | `timing.min_support` | positive integer, at most `timing.cadence_sample` | `30` | Yes: settled samples required before estimating p90; a larger support than the retained sample could never be reached, so it is refused at load. |
 | `timing.cadence_sample` | positive integer | `200` | Yes: retained consequence-latency sample length (latencies in world ticks). |
-| `timing.min_ratio` | integer, at least 3 | `3` | Yes: cascade and governance separation. |
+| `timing.min_ratio` | integer, at least 3 | `3` | Yes: the one ratio every derived loop keeps to the measured loop it commands (price, immune organ, sampling actuator, cascade tiers, novelty patience, policy grading, governance), and the ratio slack on every decision cutoff. |
+| `timing.jitter_fraction` | finite nonnegative number | `0.2` | Yes: how far each derived loop's own continuous jitter may lengthen its period. |
+| `timing.world_repricing` | Absent, or a positive duration | Absent | Yes: the world's own repricing period, a fact about the venue (Hyperliquid funding settles hourly; edition 6 states `"1h"`). Governance is viable only while `timing.min_ratio` times the slowest loop fits inside it and inside the run's remaining ticks (`governance.nonviable`); `max_tick` is derived from it. |
 | `evaluation.consequence_backstop_events` (or `consequence_backstop_ticks`) | positive integer, in world ticks | `200`; scripted worlds `20`; testnet `60` | Yes: consequence horizon and conservative governance period floor. |
 | `evaluation.verdict_timeout_events` (or `verdict_timeout_ticks`) | positive integer, in world ticks | `20` | Yes: how long a judgement waits for its judge (a verdict for a producer return, a meta verdict for a verdict) before it is censored. |
 | `prices.penalty_cap` | finite number strictly between 0 and 1 | `0.5` | Yes: maximum penalty before attribution. |
@@ -870,6 +875,62 @@ pathology (`immune.gain` with pathology `cleared`); a learning-dead window holds
 it. That state resumes with the controller. (Older worlds halved the violated
 cards' effective price for one window instead; `immune.price_relief` entries in
 their diaries record that. The relief is deleted, charter audit U2.)
+
+## The clock (Chapter II §IV.b-c; time audit T1-T13)
+
+Every loop counts **world ticks consumed**. The delivered tick interval (the
+slower of the measured mean gap and the declared `tick_interval`) converts ticks
+to wall time only for display (a deadline shown to a seat, a window's estimated
+end) and for money rails. No manifest key casts a window: `novelty.window`,
+`novelty.max_lifetime_windows` and `treasury.forward_wait_windows` are refused.
+
+* **Measured loops** (`runtime/clockwork.py`, checkpointed): the settle loop of
+  each measured role (`settle:<role>`, a decision's open to its first outcome,
+  censorings included), its scored loop (`scored:<role>`, the same when a real
+  score closed it), each router kind's rounds (`router:<kind>`), settled forecasts
+  (`forecast`) and conversions (`capital`). A meter reports its p90, never below
+  one tick.
+* **Derived loops**: each outer loop's next period is drawn as
+  `min_ratio × inner × (1 + jitter_fraction × u)`, where `u` is a continuous
+  draw seeded by the world, the loop and its firing count, and each is due only
+  while the ticks since it fired are still at least `min_ratio` times the inner
+  loop measured now. Each firing is a `clock.loop` item. The price loop (the
+  measurement window) is derived from the fastest priced card's sample loop;
+  the immune organ acts over the price loop (versioning P5; it diagnoses every
+  window, `immune.window.acts`), and a kind's gain steps over its router's
+  rounds; the sampling actuator acts over the consequence loop; a cascade tier's
+  window is `min_ratio` times its scored loop; governance keeps
+  `min_ratio × slowest`.
+* **Prices** move only on a new settled sample in the card's scope and no
+  faster than `min_ratio` times the loop the card's samples come from
+  (`price.skipped` with `no_new_sample` or `ratio`).
+* **Cutoffs**: a decision's cutoff is its horizon in ticks plus
+  `ceil(horizon / min_ratio)`: 27 ticks for a 20-tick verdict timeout, 80 for a
+  60-tick backstop, `h + ceil(h/3)` for a forecast of horizon `h`. A forecast
+  comes due on its tick (`Forecast.due_at_tick`). A round that reaches its cutoff
+  unscored is credited the router's zero-consequence reward, never the arm's own
+  mean (T4).
+* **Exploration**: the novelty share is a flow, one share per measured
+  consequence period, of which each window accrues the part its period covers;
+  the reserve never holds more than one period's share (`novelty.window` items
+  carry `carried`, `accrued` and `cap`). A trial's patience is `min_ratio`
+  measured consequence periods. A grown router menu opens its epoch at most once
+  per measured period of that router's rounds (`epoch.deferred`).
+* **Governance**: each activation opens a settling probe (`governance.probe`);
+  the time until every read card's score series returns to the band it held
+  before, at any level, is its settling time (`governance.settling`), part of the
+  slowest period. A probe unsettled after `min_ratio` consequence periods closes
+  with its age as a lower bound. `governance.nonviable` / `governance.viable`
+  record each change in whether `min_ratio × slowest` fits the run's remaining
+  ticks and the world's repricing period.
+* **Money rails**: each conversion's open-to-finalized latency is a
+  `cadence.capital` sample; the caps count `treasury.cap_window` of wall time.
+* **Requisite velocity (T8)**: a model call's deadline is `min_ratio` delivered
+  ticks (`ModelRequest.timeout_s`, never above the adapter's ceiling); a call
+  that outlives it times its decision out (`decision.call_expired`). Before every
+  model call, once a delivered tick of wall time has passed in the event, a live
+  world settles venue fills, reconciles orders and settles watchers
+  (`safety.pass`), reading its wall clock through the journal. No thread is used.
 
 ## Timing interpretation
 
@@ -1012,10 +1073,11 @@ learning-dead, nor is a stable one whose outcomes are improving. The window
 profile carries `paid_off` and `realized_pnl` for this, and each `immune.window`
 item publishes the `frontier` evidence (`quiet`, `improving`, `holding` and
 the two slopes). Learning death's only response is that flag: the reserve reads it
-at the next window boundary and grants one extra novelty trial per assembly for
-the window that opens. A grant is spent by the first consequence delivered to an
-assembly beyond `novelty.trials`, and whatever is unspent expires at the next
-boundary, where the flag must be raised again to re-issue it. That single grant
+at the next window boundary and grants one extra novelty trial per assembly, live
+for `timing.min_ratio` measured consequence periods in ticks (time audit T5) and
+not re-issued while it lives. A grant is spent by the first consequence delivered
+to an assembly beyond `novelty.trials`; one that lapses is re-issued only if the
+flag is raised again. That single grant
 is part of the novelty lifetime policy (A13): ledger evidence `novelty.grant` and
 `novelty.grant_consumed`.
 
@@ -1133,7 +1195,8 @@ At window close, registered observations run only when named by a live card
 or covered by an open registration trial. Seed observations remain available.
 Delivery of the registration starts `observation.trial`. An undelivered
 registration records `observation.inactive`. An unused observation retires
-after `novelty.max_lifetime_windows` from its trial or inactive window, records
+after `timing.min_ratio` measured consequence periods, in ticks, from its trial or
+inactive tick (time audit T5), records
 `observation.retired`, and leaves the observation book.
 
 ## Spot venue
@@ -1202,7 +1265,7 @@ A poll or step preparation that cannot complete is ledgered as `treasury.pending
 with the transfer id, `step`, `phase` (`poll` or `prepare`), a bounded `reason`
 (the rail's own constant message or, for any other exception, its class name,
 never RPC text), the monotone per-step `attempts` count, `since_ns`, the
-reserve window `since_window` the wait began in and the
+cap window `since_window` and the world tick `since_tick` the wait began in and the
 rail's carried `reference`, written on the first attempt, on every change of
 reason and on every tenth attempt (`PENDING_JOURNAL_EVERY`), and the pots view
 publishes the current stall as `pending_reason` and `pending_since` until the
