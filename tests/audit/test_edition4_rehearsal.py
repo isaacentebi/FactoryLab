@@ -257,10 +257,23 @@ def test_one_seat_above_the_cap_does_not_end_the_rehearsal():
     provider = rehearsal.PrepaidProvider(StubProvider(None), manifest,
                                          rehearsal.Admission(cap_micro=10, max_calls=3))
     seated = sorted({a.model_id for a in manifest.assemblies})
+    for model in seated[1:]:
+        provider.affordable(model, 11)
+    provider.affordable(seated[0], 5)
+    assert provider.admission.stop_reason is None
+
+
+def test_a_seat_that_once_fit_and_now_exceeds_the_cap_counts_as_excluded():
+    # Codex review of #136: only each model's latest probe counts, so a world whose
+    # every seat has since grown past the cap still ends.
+    manifest = rehearsal.effective_manifest(load_manifest(WORLD))
+    provider = rehearsal.PrepaidProvider(StubProvider(None), manifest,
+                                         rehearsal.Admission(cap_micro=10, max_calls=3))
+    seated = sorted({a.model_id for a in manifest.assemblies})
     provider.affordable(seated[0], 5)
     for model in seated:
         provider.affordable(model, 11)
-    assert provider.admission.stop_reason is None
+    assert provider.admission.stop_reason == "cap_below_every_seat"
 
 
 def test_admission_uses_canonical_provider_failure_billing_classification():

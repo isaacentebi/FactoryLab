@@ -198,11 +198,10 @@ class PrepaidProvider:
         self.manifest = manifest
         self.admission = admission
         self._prices = manifest.price_table()
-        # Models whose feasibility probe fit the cap at least once, and those whose
-        # probe exceeded the whole cap: when every seated model is in the second set
-        # and none in the first, no call can ever be admitted (Codex review of #136).
-        self._fit: set[str] = set()
-        self._over_cap: set[str] = set()
+        # Each model's latest feasibility probe: True when it exceeded the whole cap.
+        # When every seated model's latest probe did, no call can be admitted (Codex
+        # review of #136); a probe grows with the world, so only the latest counts.
+        self._over_cap: dict[str, bool] = {}
 
     def _namespace_allowed(self, model_id: str) -> bool:
         if model_id.startswith("venice:"):
@@ -220,16 +219,12 @@ class PrepaidProvider:
         if not self._namespace_allowed(model_id):
             return False, "provider: rail denied"
         allowed, reason = self.admission.can_admit(ceiling_micro, probe=True)
-        if reason == "quote_above_cap":
-            self._over_cap.add(model_id)
-            seated = {a.model_id for a in self.manifest.assemblies}
-            if not self._fit and seated <= self._over_cap:
-                # A cap below every seat's worst case admits nothing; the run ends
-                # rather than recording NOOP decisions for its remaining events.
-                self.admission.stop_reason = (self.admission.stop_reason
-                                              or "cap_below_every_seat")
-        elif allowed:
-            self._fit.add(model_id)
+        self._over_cap[model_id] = reason == "quote_above_cap"
+        seated = {a.model_id for a in self.manifest.assemblies}
+        if all(self._over_cap.get(m, False) for m in seated):
+            # A cap below every seat's current worst case admits nothing; the run ends
+            # rather than recording NOOP decisions for its remaining events.
+            self.admission.stop_reason = self.admission.stop_reason or "cap_below_every_seat"
         if not allowed:
             return False, f"admission: {reason}"
         affordable = getattr(self.inner, "affordable", None)
