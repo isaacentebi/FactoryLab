@@ -61,6 +61,7 @@ class Admission:
     """Track independent admission and provider-bill bounds for one rehearsal.
 
     Guarantees: no admitted call starts above the remaining quote cap or call count;
+    a quote above the remaining cap refuses that call without stopping admission;
     every completion attempt is counted. With population recovery enabled, failed
     dispatches retain their quote and three consecutive exceptions stop admission.
     Otherwise a dispatched failure stops immediately, preserving probe protocols. Successful
@@ -93,7 +94,10 @@ class Admission:
             self.stop_reason = self.stop_reason or "max_calls"
             return False, "max_calls"
         if ceiling_micro > self.remaining_micro:
-            self.stop_reason = self.stop_reason or "quote_above_remaining_cap"
+            # A quote is one call's worst case, not the rehearsal's: the call is refused
+            # and the run goes on. The router probes every seat's feasibility at twice
+            # its quote, so a sticky stop here ended whole runs on a probe for a seat
+            # whose worst case alone exceeds the cap, before any call was made.
             return False, "quote_above_remaining_cap"
         return True, ""
 

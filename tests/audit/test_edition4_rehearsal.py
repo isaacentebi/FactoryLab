@@ -203,6 +203,16 @@ def test_admission_counts_attempts_and_stops_on_overrun_or_unknown_bill():
     assert table.admission.stop_reason == "non_authoritative_table_cost"
 
 
+def test_a_quote_above_the_remaining_cap_refuses_that_call_and_admission_goes_on():
+    admission = rehearsal.Admission(cap_micro=1_000, max_calls=10)
+    assert admission.can_admit(1_001) == (False, "quote_above_remaining_cap")
+    with pytest.raises(rehearsal.RehearsalRefused, match="quote_above_remaining_cap"):
+        admission.admit(1_001)
+    assert admission.stop_reason is None and admission.refusals == 1
+    assert admission.can_admit(1_000) == (True, "")
+    admission.admit(1_000)
+
+
 def test_admission_uses_canonical_provider_failure_billing_classification():
     manifest = rehearsal.effective_manifest(load_manifest(WORLD))
 
