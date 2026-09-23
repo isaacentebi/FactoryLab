@@ -32,6 +32,14 @@ provider = "fake"
 input_usd_per_mtok = "3"
 output_usd_per_mtok = "15"
 
+# A fourth, for a meta that shares a family with no judge and no producer: a meta
+# never reads a chain on its own family (the #132 review, item 3).
+[[models]]
+id = "fake-gemini"
+provider = "fake"
+input_usd_per_mtok = "1"
+output_usd_per_mtok = "5"
+
 [[assemblies]]
 id = "seed-observer"
 role = "producer"
@@ -100,7 +108,7 @@ max_tokens = 128
 [[assemblies]]
 id = "meta-b"
 role = "meta"
-model_id = "fake-opus"
+model_id = "fake-gemini"
 accepts = ["Verdict"]
 emits = ["MetaVerdict"]
 max_tokens = 128

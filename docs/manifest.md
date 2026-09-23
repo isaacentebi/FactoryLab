@@ -330,23 +330,36 @@ carry case of `scripts/calibrate_seats.py` exactly.
 A world whose seeds emit a `Verdict` is refused at load unless all of these hold
 (`WorldManifest.evaluator_population_problems` names each failure):
 
-- **Evaluators are not the minority.** Evaluator seats (every seed with a verdict,
-  conformity or counter reward shape: judges, metas, adversarial judges) are at
-  least as many as producer seats (every seed with a judged or exposure shape,
-  antagonists included). Essay II.III: "more evaluators consuming more compute and
-  performing more invocations than agents engaged in production".
+- **Producers are the minority.** Evaluator seats (every seed with a verdict,
+  conformity or counter reward shape: judges, metas, adversarial judges) strictly
+  outnumber producer seats (every seed with a judged or exposure shape, antagonists
+  included). Essay II.III.b: producers are "now established to be the minority of the
+  superdark factory's population". After launch the population's own registrations
+  and retirements are never refused for the mix they make; the kernel ledgers
+  `population.evaluator_majority` (`held`, the counts, the cause) each time the
+  majority is lost or regained. The evaluators' share of compute is not enforced: the
+  seed observation `evaluator_compute_share` (evaluator-role compute over all compute
+  in the window, rent included) is published every window for a card to price.
 - **At least three model families serve the evaluator tier.** A family is the
   foundation model, not the route (`runtime/families.py: model_family`):
   `venice:z-ai-glm-5-3-flash` and `z-ai/glm-5.3-flash` are one family, and so are
   `openai/gpt-5.6-sol` and `openai/gpt-5.6-luna`. A `fake-` test double is its own.
-- **Two judges a return are possible** (while `multi_judge_share > 0`): every judged
-  kind a seed emits is accepted by judges on at least `multi_judge_count` families
-  other than its author's.
+- **Every return has a judge off its author's family**, and two judges are possible
+  while `multi_judge_share > 0`: every judged kind a seed emits is accepted by judges
+  on at least `multi_judge_count` families other than its author's.
+- **Every chain a tier can be asked to grade has a reader.** Each (judge, producer)
+  pair of families a Verdict can carry is read by a meta on neither; when any seed
+  reads MetaVerdicts, each (grader, graded) pair a MetaVerdict can carry is read by a
+  seed on neither, to every depth the roster reaches. Every adversarial judge can
+  read some Verdict the roster makes.
 
-Routing never draws a judging seat (a verdict, conformity or counter shape) for a
-subject authored on its own family, at any tier (`route.excluded`, reason
-`same-family`); a draw every seat of which is barred for this subject opens no
-decision (`tick.quiet`). Edition 5, edition 3 and their capital-loop copy fail all
+Routing never draws a judging seat (a verdict, conformity or counter shape) on the
+family of either of the two nearest authors of the chain it would judge: a judge
+avoids the producer's family, a meta the judge's and the producer's, a grader of a
+meta the meta's and the judge's (`route.excluded`, reason `same-family`;
+`RoutingMixin._chain_families` argues the depth). The tier above a meta is counted
+the same way. A draw every eligible seat of which is barred is ledgered
+`route.barred` and counted (`stats.route_barred`); it opens no decision. Edition 5, edition 3 and their capital-loop copy fail all
 three checks and no longer load (R8); `worlds/edition6-capital-loop.toml` replaces
 the capital loop's world.
 
@@ -478,7 +491,10 @@ learners").
 
 **The adversarial judge** (role `adversary`, kind `CounterVerdict`, reward shape
 `counter`) reads a first-tier Verdict and the return it judged, and answers its own
-verdict `q` on that return. When the world measures the return (the same mark or
+verdict `q` on that return. It is drawn when the verdict is given, in the same tick,
+before the cascade (every other reader of a Verdict is drawn at the cascade's
+release), and it is shown the world exactly as the judge it re-judges was shown it,
+frozen at that verdict; a counter made in a later tick is censored. When the world measures the return (the same mark or
 final measurement its judges are rewarded on), it settles on
 `0.5 + 0.5 * ((1 - (q - y)^2) - (1 - (v - y)^2))` (`counter-v1`, `counter.settled`),
 `v` the verdict it read: a proper rule in `q`, 0.5 for a counter that repeats the
@@ -504,7 +520,10 @@ judge's, meta's and adversarial judge's request as `early_warning`, never into a
 producer's, and two seed observations summarise it for cards (`ews_variance`,
 `ews_autocorrelation`); both are withheld from `last_closed_window_values`.
 Evaluators may forecast `drawdown_exceeds` or `failure_within` to say a regression
-is coming; each settles on the realized drawdown or failure.
+is coming; each settles on the realized drawdown or failure. `failure_within` counts
+only failures the forecaster's lineage did not cause: a chaos fault drawn for a tick,
+and a per-call fault, an order rejection or a liquidation on a decision of another
+lineage.
 
 **Form is not a grade.** A judgement with no verdict or conformity in [0, 1], a
 model refusal, or one whose target is refused settles censored

@@ -411,7 +411,12 @@ def evaluation_layer(events: list[dict[str, Any]]) -> dict[str, Any]:
     evaluator_cost = sum(cost[r] for r in ("evaluator", "meta", "adversary"))
     total_cost = sum(cost.values())
     ews = [e for e in events if e.get("kind") == "ews.window"]
+    barred = [e for e in events if e.get("kind") == "route.barred"]
     return {
+        # Draws whose every eligible reader was barred by family: a subject nobody
+        # could judge (the #132 review, item 3).
+        "route_barred": len(barred),
+        "route_barred_by_kind": dict(collections.Counter(e.get("event_kind") for e in barred)),
         "judged_returns": judged,
         "multi_judged_returns": multi,
         "multi_judged_share": round(multi / judged, 3) if judged else None,

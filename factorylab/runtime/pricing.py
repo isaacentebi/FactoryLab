@@ -82,6 +82,9 @@ class MeasureWindow:
     # Every invocation's metered cost plus retained-storage rent, in micro-USD: the
     # window's compute burn (``burn_per_window``; charter audit M6).
     compute_spend_micro: int = 0
+    # The part of it the evaluator roles spent (judges, adversarial judges and every
+    # tier of meta): ``evaluator_compute_share``'s numerator (the #132 review, item 2).
+    evaluator_spend_micro: int = 0
     # The early-warning summaries of the score series at this window's close
     # (``runtime.ews``): evaluator-facing, never a public window fact.
     ews_variance: float | None = None
@@ -206,6 +209,8 @@ class PricingMixin:
         for name, value in evidence.items():
             sample[name] += value
         self.window.compute_spend_micro += ret.cost
+        if observed_role in ("evaluator", "meta"):
+            self.window.evaluator_spend_micro += ret.cost
         return ret
 
     def _record_pricing_fills(self, events) -> None:

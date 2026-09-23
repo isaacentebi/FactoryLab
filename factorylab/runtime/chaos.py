@@ -80,8 +80,12 @@ class ChaosMixin:
                             "n": self.n, **fields, "ts": self.clock.now_ns})
         if 0 <= self.n < len(self.events_log):
             # A ``failure_within`` forecast reads the events of its window
-            # (``settlement.vocabulary``): a fault is a failure in the world of the factory.
-            self.events_log[self.n].setdefault("faults", []).append(fault)
+            # (``settlement.vocabulary``): a fault is a failure in the world of the factory,
+            # attributed to the seat whose call it struck (None for a tick's fault), so
+            # a forecaster cannot be paid for faults it triggered itself.
+            handle = fields.get("handle")
+            self.events_log[self.n].setdefault("faults", []).append(
+                {"fault": fault, "seat": self.handle_to_assembly.get(handle) if handle else None})
 
     def _chaos_tool_fault(self, tool_id: str, spec: dict, handle: str) -> dict | None:
         """The answer a faulted seat tool call gets instead of running, or None.

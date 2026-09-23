@@ -1173,6 +1173,13 @@ class Runtime(
         # judge's decision waits on that and on the tier above (ruling R1).
         self._open_evaluation(handle, about=about, q=verdict, evaluator_id=sample.chosen,
                               tier=tier)
+        if tier == 1 and (about in self.reference_mids or self._acted(about)):
+            # What this judge was shown of the world, kept for an adversarial judge
+            # that re-judges its verdict (``_counter_step``): the counter reads the
+            # same world the verdict was made in, never a later one.
+            self.verdict_views[handle] = {
+                "world": {k: v for k, v in inputs["actor_context"].items() if k != "seats"},
+                "early_warning": inputs["early_warning"], "tick": self.ticks_consumed}
         self._emit(
             EventKind.VERDICT,
             {
@@ -1353,14 +1360,20 @@ class Runtime(
                               definition_version=DEF_COUNTER, sampling_ref=None)
             return
         about = payload.get("about_handle")
+        view = self.verdict_views.get(payload.get("evaluator_handle"))
+        own = self._operating_context(sample.chosen, self._world_block())
         inputs = {
             "verdict": {"verdict": payload.get("verdict"),
                         "rationale": payload.get("rationale", "")},
             "producer_outputs": judged_outputs(payload.get("producer_outputs", {})),
             "charter": self._charter_text(),
             "subject_handle": about,
-            "early_warning": self._early_warning_view(),
-            "actor_context": self._operating_context(sample.chosen, self._world_block()),
+            # The world exactly as the judge it re-judges was shown it, frozen at that
+            # verdict (the #132 review, item 1): its edge may be a better reading of
+            # the same evidence, never fresher prices. Its own seat row is its own.
+            "early_warning": view["early_warning"] if view is not None else None,
+            "actor_context": ({**view["world"], "seats": own["seats"]} if view is not None
+                              else own),
         }
         inputs.update(self._action_policy_input(sample.chosen))  # private
         inputs["your_state"] = self.working_state.render(sample.chosen)
@@ -1398,6 +1411,12 @@ class Runtime(
                 or not isinstance(about, str)):
             self._censor_judgement(handle, "a counter-verdict reads a first-tier verdict "
                                            "on a return")
+            return
+        if view is None or view["tick"] != self.ticks_consumed:
+            # Only a counter made in the tick of the verdict it read, on that verdict's
+            # frozen view, is a prediction on equal information.
+            self._censor_judgement(handle, "a counter-verdict reads a verdict in the tick "
+                                           "it was given")
             return
         self.decision_subjects[handle] = payload.get("evaluator_handle") or about
         if self._consequence_known(about, 1):

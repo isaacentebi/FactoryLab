@@ -426,6 +426,12 @@ class BootstrapMixin:
         # Adversarial judges' counter-verdicts awaiting the world's measurement of the
         # return they re-judged (``FeedbackMixin._settle_counters``).
         self.pending_counters: dict[str, dict[str, Any]] = {}
+        # First-tier judge handle -> the world it was shown, frozen at its verdict, for
+        # an adversarial judge drawn when that verdict is given (``_counter_step``).
+        self.verdict_views: dict[str, dict[str, Any]] = {}
+        # Whether the live roster keeps its evaluator seats a strict majority, and the
+        # tick that was last measured (``_watch_evaluator_majority``).
+        self.evaluator_majority: bool | None = None
         # The chaos faults drawn for the tick now running (``runtime.chaos``).
         self.chaos_tick: dict[str, Any] = {}
         # Judged return -> [[judge handle, verdict], ...] that arrived while this event

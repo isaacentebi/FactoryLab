@@ -156,7 +156,7 @@ def test_runtime_runs_a_live_shaped_world_with_stub_venue_and_scripted_models() 
                 "input_usd_per_mtok": "1",
                 "output_usd_per_mtok": "5",
             }
-            for model_id in ("fake-haiku", "fake-opus", "fake-sonnet")
+            for model_id in ("fake-haiku", "fake-opus", "fake-sonnet", "fake-gemini")
         ],
         "assemblies": [
             {
@@ -177,7 +177,8 @@ def test_runtime_runs_a_live_shaped_world_with_stub_venue_and_scripted_models() 
                 "model_id": "fake-sonnet",
                 "accepts": ["ProducerReturn"],
             },
-            {"id": "meta-a", "role": "meta", "model_id": "fake-haiku", "accepts": ["Verdict"]},
+            # Off every (judge, producer) chain's families (the #132 review, item 3).
+            {"id": "meta-a", "role": "meta", "model_id": "fake-gemini", "accepts": ["Verdict"]},
         ],
         "novelty": {"share": 0.1, "window": "1d"},
         "charter": seed_charter_table(),

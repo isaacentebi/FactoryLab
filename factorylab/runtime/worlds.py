@@ -788,20 +788,28 @@ class WorldManifest:
         Guarantees one sentence per failed check, and none for a roster that seeds no
         judging at all (no seed emits a Verdict: an evaluation-free fixture, whose
         returns are visibly unjudged). The checks are facts about the world fixed at
-        the Stackelberg move (evaluations C1, M3, P6):
+        the Stackelberg move (evaluations C1, M3, P6; the #132 review, items 2, 3):
 
         * evaluator seats (every seed whose kinds read a subject as a judgement: a
-          verdict, a grade of the tier below, a counter-verdict) are at least as many
-          as producer seats (every seed whose returns settle on their readers'
-          verdicts, antagonists included): "more evaluators consuming more compute
-          and performing more invocations than agents engaged in production" (II.III);
+          verdict, a grade of the tier below, a counter-verdict) strictly outnumber
+          producer seats (every seed whose returns settle on their readers'
+          verdicts, antagonists included): producers are "now established to be the
+          minority of the superdark factory's population" (II.III.b);
         * at least three foundation-model families serve the evaluator tier (II.IV:
           a common foundation model is "a global forcing function"; a provider change
           is not a model change, ``runtime.families``);
-        * while ``evaluation.multi_judge_share`` is positive, every judged kind a seed
-          emits is accepted by judges on at least ``multi_judge_count`` families
-          other than its author's, so a multi-judged return can be read by that many
-          judges and never by one on its author's family (rulings §2, Evaluations).
+        * every judged kind a seed emits is accepted by judges off its author's
+          family, and while ``evaluation.multi_judge_share`` is positive by judges on
+          at least ``multi_judge_count`` such families (rulings §2, Evaluations);
+        * every chain a seeded tier can be asked to grade has a seeded reader: each
+          (judge, producer) pair of families a Verdict can carry is read by a meta
+          on neither, and, when any seed reads MetaVerdicts, each (grader, graded)
+          pair a MetaVerdict can carry is read by a seed on neither, to every depth
+          the roster reaches (the two-link family rule of
+          ``RoutingMixin._chain_families``);
+        * every adversarial judge can read some Verdict the roster makes: a sampled
+          minority need not read every chain, but a seat that can read none is a
+          seat routing can never draw.
         """
         from factorylab.cortex.registration import reward_contracts, seed_emits
         from factorylab.runtime.families import model_family
@@ -811,33 +819,66 @@ class WorldManifest:
         if not any("Verdict" in emits for emits in seeded.values()):
             return []
         shapes = {a.id: reward_contracts(seeded[a.id]) for a in self.assemblies}
+        family = {a.id: model_family(a.model_id) for a in self.assemblies}
         evaluators = [a for a in self.assemblies
                       if set(shapes[a.id].values()) & {"forecast", "conformity", "counter"}]
         producers = [a for a in self.assemblies if a not in evaluators
                      and set(shapes[a.id].values()) & {"judged", "exposure"}]
         problems = []
-        if len(evaluators) < len(producers):
-            problems.append(f"evaluator seats ({len(evaluators)}) are fewer than producer "
+        if len(evaluators) <= len(producers):
+            problems.append(f"evaluator seats ({len(evaluators)}) do not outnumber producer "
                             f"seats ({len(producers)})")
-        families = sorted({model_family(a.model_id) for a in evaluators})
+        families = sorted({family[a.id] for a in evaluators})
         if len(families) < 3:
             problems.append(f"{len(families)} model families serve the evaluator tier "
                             f"({', '.join(families) or 'none'}); at least 3 must")
-        if self.evaluation.multi_judge_share > 0:
-            need = self.evaluation.multi_judge_count
-            for author in producers:
-                family = model_family(author.model_id)
-                for kind, shape in shapes[author.id].items():
-                    if shape not in ("judged", "exposure"):
-                        continue
-                    readers = {model_family(j.model_id) for j in self.assemblies
-                               if kind in j.accepts and shapes[j.id].get("Verdict") == "forecast"}
-                    readers.discard(family)
-                    if len(readers) < need:
-                        problems.append(
-                            f"{author.id}'s {kind} is accepted by judges on {len(readers)} "
-                            f"families other than its own ({family}); "
-                            f"evaluation.multi_judge_count needs {need}")
+
+        def readers(kind: str, shape: str) -> list[AssemblySeed]:
+            return [a for a in self.assemblies if kind in a.accepts
+                    and shape in shapes[a.id].values()
+                    and (kind != "Verdict" or shape != "forecast")]
+
+        judges = {kind: [a for a in self.assemblies if kind in a.accepts
+                         and shapes[a.id].get("Verdict") == "forecast"]
+                  for kind in {k for s in shapes.values() for k in s}}
+        need = self.evaluation.multi_judge_count if self.evaluation.multi_judge_share > 0 else 1
+        verdict_chains: set[tuple[str, str]] = set()
+        for author in producers:
+            for kind, shape in shapes[author.id].items():
+                if shape not in ("judged", "exposure"):
+                    continue
+                off = {family[j.id] for j in judges.get(kind, ())} - {family[author.id]}
+                verdict_chains |= {(f, family[author.id]) for f in off}
+                if len(off) < need:
+                    problems.append(
+                        f"{author.id}'s {kind} is accepted by judges on {len(off)} "
+                        f"families other than its own ({family[author.id]}); "
+                        + (f"evaluation.multi_judge_count needs {need}" if need > 1
+                           else "a judge off its family must read it"))
+        metas = readers("Verdict", "conformity")
+        graded: set[tuple[str, str]] = set()
+        if metas:
+            for chain in sorted(verdict_chains):
+                able = sorted({family[m.id] for m in metas} - set(chain))
+                if not able:
+                    problems.append(f"no meta reads a Verdict by a {chain[0]} judge on a "
+                                    f"{chain[1]} return off both families")
+                graded |= {(f, chain[0]) for f in able}
+        upper = readers("MetaVerdict", "conformity")
+        if upper:
+            seen: set[tuple[str, str]] = set()
+            while graded - seen:
+                chain = sorted(graded - seen)[0]
+                seen.add(chain)
+                able = sorted({family[m.id] for m in upper} - set(chain))
+                if not able:
+                    problems.append(f"no seat reads a MetaVerdict by a {chain[0]} grader of "
+                                    f"a {chain[1]} judgement off both families")
+                graded |= {(f, chain[0]) for f in able}
+        for adversary in readers("Verdict", "counter"):
+            if not any(family[adversary.id] not in chain for chain in verdict_chains):
+                problems.append(f"adversarial judge {adversary.id} ({family[adversary.id]}) "
+                                "can read no Verdict the roster makes off its chain's families")
         return problems
 
     def _validate_evaluator_population(self) -> None:

@@ -60,6 +60,8 @@ class RunStats:
     transfer_intents: int = 0
     exposures_settled: int = 0
     exposures_won: int = 0
+    # Draws whose every eligible reader was barred by family (``route.barred``).
+    route_barred: int = 0
     # Adversarial judges' counter-verdicts the world scored (evaluations M1).
     counters_settled: int = 0
     # Chaos faults injected, by kind (``runtime.chaos``; essay II.III.b).

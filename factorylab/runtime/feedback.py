@@ -606,13 +606,44 @@ class FeedbackMixin:
                                     "predicate": f.predicate_id, "window": self.window.index,
                                     "ts": self.clock.now_ns})
             public = {"public_window": since}
+        events = tuple(self.events_log[start + 1 : self.n + 1])
+        if f.predicate_id == "failure_within":
+            public["independent_failures"] = self._independent_failures(f.evaluator_id, events)
         return WindowFacts(
             balance_at_forecast=self.balance_at[start],
             balance_at_settlement=self.wallet.balance,
             min_balance_in_window=min(window_balances) if window_balances else self.wallet.balance,
-            events=tuple(self.events_log[start + 1 : self.n + 1]),
+            events=events,
             **public,
         )
+
+    def _independent_failures(self, forecaster: str, events: tuple) -> int:
+        """Failures in ``events`` the forecaster's own lineage did not cause (``failure_within``).
+
+        Guarantees a count of: chaos faults drawn for a tick (no seat's action draws
+        them); chaos faults on calls by a seat of another lineage; OrderRejected events
+        and liquidation fills whose order belongs to a decision of another lineage, or
+        to no decision this world knows. Anything the forecaster's lineage caused is
+        left out, so a forecast cannot manufacture its own outcome (the #132 review,
+        item 4).
+        """
+        lineage = self.budget.lineage(forecaster)
+
+        def own(seat: str | None) -> bool:
+            return seat is not None and self.budget.lineage(seat) == lineage
+
+        count = 0
+        for event in events:
+            for fault in event.get("faults", ()):
+                if isinstance(fault, dict) and not own(fault.get("seat")):
+                    count += 1
+            kind, payload = event.get("kind"), event.get("payload") or {}
+            liquidation = kind == EventKind.FILL and payload.get("liquidation") is True
+            if kind == EventKind.ORDER_REJECTED or liquidation:
+                handle = self._order_owner(payload.get("order_id"))
+                if not own(self.handle_to_assembly.get(handle) if handle else None):
+                    count += 1
+        return count
 
     def _deliver_verdict_to_inbox(self, about: str, score: Any, *, judge_handle: str) -> None:
         """A verdict on a seat's return reaches that seat, whenever it lands (C1).
@@ -1417,7 +1448,7 @@ class FeedbackMixin:
         # its backstop.
         horizon = self.ticks_consumed - backstop - timeout
         for kept in (self.consequence_scores, self.world_outcomes, self.reference_mids,
-                     self.marked_outcomes, self.late_verdicts):
+                     self.marked_outcomes, self.late_verdicts, self.verdict_views):
             for handle in [h for h, v in kept.items()
                            if (v[1] if isinstance(v, tuple) else v["tick"]) < horizon]:
                 del kept[handle]

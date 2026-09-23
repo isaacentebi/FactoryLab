@@ -71,9 +71,13 @@ def _without(raw: dict, *seats: str) -> dict:
 
 def test_a_world_whose_evaluators_are_the_minority_is_refused():
     raw = _without(_edition6(), "judge-mechanics", "judge-base-rate", "meta-audit")
-    with pytest.raises(ValueError, match=r"evaluator seats \(5\) are fewer than producer "
+    with pytest.raises(ValueError, match=r"evaluator seats \(5\) do not outnumber producer "
                                          r"seats \(6\)"):
         manifest_from_dict(raw)
+    # A tie is not a majority (the #132 review, item 2: producers are "the minority").
+    tied = _without(_edition6(), "judge-mechanics", "judge-base-rate")
+    with pytest.raises(ValueError, match=r"evaluator seats \(6\) do not outnumber"):
+        manifest_from_dict(tied)
 
 
 def test_an_evaluator_monoculture_is_refused_and_a_provider_change_does_not_help():
@@ -127,19 +131,24 @@ def test_an_unknown_chaos_key_is_refused():
 
 
 def _authors_and_readers(rt):
-    """(reader seat, the seat that authored what it read) for every judging decision."""
+    """(reader seat, the authors of the two nearest links it read) for every judgement."""
     pairs = []
     for handle, about in rt.decision_subjects.items():
-        reader, author = rt.handle_to_assembly.get(handle), rt.handle_to_assembly.get(about)
-        if reader is None or author is None or reader not in rt.assemblies:
+        reader = rt.handle_to_assembly.get(handle)
+        authors = [rt.handle_to_assembly.get(h)
+                   for h in (about, rt.decision_subjects.get(about)) if h is not None]
+        authors = [a for a in authors if a is not None]
+        if reader is None or not authors or reader not in rt.assemblies:
             continue
         if rt._judging(reader):
-            pairs.append((reader, author))
+            pairs.append((reader, authors))
     return pairs
 
 
 @pytest.mark.gate
-def test_no_seat_ever_judges_work_authored_on_its_own_family():
+def test_no_seat_ever_judges_a_chain_authored_on_its_own_family():
+    """A judge avoids the producer's family; a meta the judge's and the producer's; a
+    grader of a meta the meta's and the judge's (the #132 review, item 3)."""
     from factorylab.runtime.loop import Runtime
 
     rt = Runtime(load_manifest("scripted"), events=60, seed=2, initial_balance_micro=None,
@@ -147,7 +156,9 @@ def test_no_seat_ever_judges_work_authored_on_its_own_family():
     rt.run()
     pairs = _authors_and_readers(rt)
     assert len(pairs) > 20
-    assert all(rt._family(reader) != rt._family(author) for reader, author in pairs)
+    assert any(len(authors) == 2 for _reader, authors in pairs)
+    for reader, authors in pairs:
+        assert rt._family(reader) not in {rt._family(a) for a in authors}, (reader, authors)
 
 
 @pytest.mark.gate
@@ -296,11 +307,80 @@ def test_a_counter_on_a_return_the_world_never_measures_is_censored():
     _producer, event = _produce_hold(rt)  # a bare hold: no world outcome
     judge = _judge(rt, event, "eval-c")
     rt._settle_arrived_verdicts()
+    assert judge not in rt.verdict_views  # no view is kept for a verdict nobody may counter
     counter = _counter(rt, judge, 0.2)
-    _advance(rt, 2)
-    (settled,) = _rows(rt, "counter.settled", handle=counter)
-    assert settled["score"] is None
+    assert not _rows(rt, "counter.opened", handle=counter)
     assert rt.queue.history(counter)[0].status is SettleStatus.CENSORED
+
+
+def _capture_requests(rt):
+    seen = []
+    original = rt._request
+
+    def record(handle, description, inputs, *args, **kwargs):
+        seen.append((handle, inputs))
+        return original(handle, description, inputs, *args, **kwargs)
+
+    rt._request = record
+    return seen
+
+
+def test_a_counter_reads_the_world_the_judge_read_never_a_later_one():
+    """The #132 review, item 1: the counter's edge may not be fresher information."""
+    rt = _adversarial_runtime(counterfactual={"coin": "BTC", "side": "buy"}, verdicts=(0.9,))
+    _mids(rt, BTC="100")
+    _producer, event = _produce_hold(rt)
+    seen = _capture_requests(rt)
+    judge = _judge(rt, event, "eval-c")
+    judged = next(inputs for handle, inputs in seen if handle == judge)
+    frozen = rt.verdict_views[judge]
+    # The world moves inside the tick: a print lands, a window's statistics change.
+    _mids(rt, BTC="150")
+    rt.stats.early_warning = {"window": 99, "series": {"verdict": []}}
+    rt.clock.now_ns += 1
+    counter_handle = _consequence_decision(rt, "adv-a", CH_COUNTER)
+    rt._counter_step(rt.return_events[judge], counter_handle, SimpleNamespace(chosen="adv-a"),
+                     rt.queue.get(counter_handle).deadline_ns)
+    (_h, shown), = [(h, i) for h, i in seen if h == counter_handle]
+    assert shown["early_warning"] == judged["early_warning"] == frozen["early_warning"]
+    for key, value in judged["actor_context"].items():
+        if key != "seats":
+            assert shown["actor_context"][key] == value, key
+    assert "150" not in str(shown["actor_context"])
+
+
+def test_a_counter_made_after_its_verdicts_tick_is_censored():
+    rt = _adversarial_runtime(counterfactual={"coin": "BTC", "side": "buy"}, verdicts=(0.9,))
+    _mids(rt, BTC="100")
+    _producer, event = _produce_hold(rt)
+    judge = _judge(rt, event, "eval-c")
+    rt.ticks_consumed += 1  # a tick later: the world has moved on since the verdict
+    counter = _counter(rt, judge, 0.1)
+    assert not _rows(rt, "counter.opened", handle=counter)
+    (censored,) = _rows(rt, "evaluation.censored", handle=counter)
+    assert "tick it was given" in censored["reason"]
+
+
+@pytest.mark.gate
+def test_adversarial_judges_are_drawn_when_the_verdict_is_given():
+    from factorylab.runtime.loop import Runtime
+
+    base = load_manifest("scripted")
+    adversary = AssemblySeed(id="adv-a", model_id="fake-sonnet", accepts=("Verdict",),
+                             role="adversary", max_tokens=128)
+    manifest = replace(base, assemblies=(*base.assemblies, adversary),
+                       evaluation=replace(base.evaluation, adversarial_share=0.5))
+    rt = Runtime(manifest, events=60, seed=1, initial_balance_micro=None, ledger_path=None,
+                 router_gamma=0.1)
+    rt.run()
+    items = rt.ledger._recovery_items()
+    opened = [i for i in items if i["kind"] == "counter.opened"]
+    assert opened
+    # Every counter the router drew read its verdict in the tick it was given, on the
+    # judge's frozen view: none was censored for reading late.
+    assert not [i for i in items if i["kind"] == "evaluation.censored"
+                and "tick it was given" in i["reason"]]
+    assert not rt.verdict_views  # every frozen view was consumed when its verdict was routed
 
 
 def test_the_adversarial_share_caps_counters_and_no_requester_can_hire_one():
@@ -458,11 +538,40 @@ def test_a_world_under_heavy_chaos_conserves_money_and_records_every_fault():
 
 
 def test_a_fault_is_a_failure_a_forecast_can_settle_on():
-    facts = WindowFacts(10, 10, 10, ({"kind": "Tick", "payload": {}, "faults": ["stale_mids"]},))
+    tick = WindowFacts(10, 10, 10, ({"kind": "Tick", "payload": {},
+                                     "faults": [{"fault": "stale_mids", "seat": None}]},))
+    call = WindowFacts(10, 10, 10, ({"kind": "Tick", "payload": {},
+                                     "faults": [{"fault": "tool_withheld", "seat": "x"}]},))
     quiet = WindowFacts(10, 10, 10, ({"kind": "Tick", "payload": {}},))
     params = {"horizon_events": 5}
-    assert Observer().observe("failure_within", params, facts) == 1
+    assert Observer().observe("failure_within", params, tick) == 1
+    # Without the runtime's count, only a tick's fault (no seat can draw it) is evidence.
+    assert Observer().observe("failure_within", params, call) == 0
     assert Observer().observe("failure_within", params, quiet) == 0
+    counted = replace(call, independent_failures=0)
+    assert Observer().observe("failure_within", params, counted) == 0
+
+
+def test_a_forecaster_cannot_manufacture_its_own_failure(monkeypatch):
+    """The #132 review, item 4: a fault on the forecaster's own call, or its own
+    lineage's rejected order, is not a failure it may be paid for predicting."""
+    rt = _chaotic(tool_withheld=0.5)
+    rt.n = len(rt.events_log) - 1
+    rt.handle_to_assembly.update({"h-own": "eval-a", "h-other": "eval-b"})
+    rt._chaos_fault("tool_withheld", handle="h-own", tool="t")
+    own_only = (dict(rt.events_log[rt.n]),)
+    assert rt._independent_failures("eval-a", own_only) == 0
+    assert rt._independent_failures("eval-b", own_only) == 1
+    rt._chaos_fault("tool_withheld", handle="h-other", tool="t")
+    assert rt._independent_failures("eval-a", (dict(rt.events_log[rt.n]),)) == 1
+    rt.events_log[rt.n]["faults"] = []
+    rt._chaos_fault("stale_mids")
+    tick_fault = (dict(rt.events_log[rt.n]),)
+    assert rt._independent_failures("eval-a", tick_fault) == 1
+    monkeypatch.setattr(rt, "_order_owner", lambda order_id: "h-own")
+    rejected = ({"kind": "OrderRejected", "payload": {"order_id": "7"}},)
+    assert rt._independent_failures("eval-a", rejected) == 0
+    assert rt._independent_failures("eval-b", rejected) == 1
 
 
 # --- early warning: live, and the evaluators' (R3, M2) -------------------------------
@@ -551,3 +660,97 @@ def test_a_world_under_chaos_resumes_mid_tick_and_replays_identically(tmp_path):
     resumed = resume_world(manifest, str(path))
     resumed["stats"]["resumes"] = 0
     assert resumed == run_world(manifest, events=20, seed=1)
+
+
+# --- the #132 review: compute share, a lost majority, and whole chains -----------------
+
+
+def test_evaluator_compute_share_is_an_observation_a_card_may_price():
+    from factorylab.runtime.observations import observation_for
+    from factorylab.runtime.pricing import MeasureWindow
+
+    share = observation_for("evaluator_compute_share")
+    assert share.measure(MeasureWindow(1, 100, compute_spend_micro=400,
+                                       evaluator_spend_micro=300)) == 0.75
+    assert share.measure(MeasureWindow(1, 100)) is None
+
+
+@pytest.mark.gate
+def test_evaluator_compute_share_is_measured_every_window_and_published():
+    from factorylab.runtime.loop import Runtime
+
+    base = load_manifest("scripted")
+    manifest = replace(base, novelty=replace(base.novelty, window_ns=10_000_000_000))
+    rt = Runtime(manifest, events=60, seed=1, initial_balance_micro=None,
+                 ledger_path=None, router_gamma=0.1)
+    rt.run()
+    windows = [i for i in rt.ledger._recovery_items() if i["kind"] == "price.window"]
+    shares = [w["observations"].get("evaluator_compute_share") for w in windows]
+    assert any(s is not None and 0 < s < 1 for s in shares)
+    assert "evaluator_compute_share" in rt._public_observations()["last_closed_window_values"]
+
+
+def test_a_lost_evaluator_majority_is_ledgered_never_refused():
+    rt = _consequence_runtime()
+    for seat in ("eval-a", "eval-b"):
+        rt._retire_assembly(seat, "p")
+    assert not _rows(rt, "population.evaluator_majority")
+    rt._retire_assembly("eval-c", "p")  # three evaluators left against three producers
+    (lost,) = _rows(rt, "population.evaluator_majority")
+    assert lost["held"] is False and (lost["evaluators"], lost["producers"]) == (3, 3)
+    rt._retire_assembly("eval-d", "p")
+    assert len(_rows(rt, "population.evaluator_majority")) == 1  # once per change
+
+
+def test_a_meta_avoids_the_judges_family_and_the_producers():
+    rt = _consequence_runtime()
+    rt.handle_to_assembly.update({"p": "seed-decider", "j": "eval-b"})  # opus, sonnet
+    rt.decision_subjects["j"] = "p"
+    verdict = Event("v", EventKind.VERDICT, 0, {"about_handle": "p", "evaluator_handle": "j"},
+                    "runtime")
+    assert rt._chain_families(verdict) == {"fake-opus", "fake-sonnet"}
+    assert rt._chain_families(verdict, depth=1) == {"fake-sonnet"}
+    # A meta about to grade that judge is graded above only off its own family and the
+    # judge's: the tier above respects family too.
+    higher = rt._higher_tier_universe("meta-a", verdict)
+    assert all(rt._family(a) not in {"fake-haiku", "fake-sonnet"} for a in higher)
+
+
+def test_a_roster_whose_metas_cannot_read_a_chain_is_refused():
+    raw = _edition6()
+    for seat in raw["assemblies"]:
+        if seat["role"] == "meta":
+            seat["model_id"] = "openai/gpt-5.6-luna"
+    raw["assemblies"].append({**next(a for a in raw["assemblies"] if a["id"] == "meta-audit"),
+                              "id": "meta-extra", "model_id": "z-ai/glm-5.3-flash"})
+    with pytest.raises(ValueError, match="no meta reads a Verdict by a glm judge on a gpt "
+                                         "return off both families"):
+        manifest_from_dict(raw)
+
+
+def test_an_adversary_that_can_read_no_chain_is_refused():
+    base = load_manifest("scripted")
+    blind = AssemblySeed(id="adv-a", model_id="fake-haiku", accepts=("Verdict",),
+                         role="adversary", max_tokens=128)
+    only_haiku = replace(base, assemblies=tuple(
+        replace(a, model_id="fake-haiku") if a.role == "producer" else a
+        for a in base.assemblies) + (blind,))
+    problems = only_haiku.evaluator_population_problems()
+    assert any("adversarial judge adv-a" in p for p in problems) or any(
+        "fake-haiku" in p for p in problems)
+
+
+@pytest.mark.gate
+def test_a_draw_with_every_reader_barred_is_ledgered_and_counted():
+    from factorylab.runtime.loop import Runtime
+
+    rt = Runtime(load_manifest("scripted"), events=40, seed=1, initial_balance_micro=None,
+                 ledger_path=None, router_gamma=0.1)
+    # The meta off every chain retires: verdicts whose chain holds the other meta's
+    # family have no reader left, and the kernel says so.
+    rt._retire_assembly("meta-b", "test")
+    rt.run()
+    barred = _rows(rt, "route.barred")
+    assert barred and rt.stats.route_barred == len(barred)
+    assert all(row["event_kind"] == "Verdict" for row in barred)
+

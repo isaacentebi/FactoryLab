@@ -90,12 +90,13 @@ def test_a_manifest_hashes_what_it_says_and_a_default_is_no_exception():
     region became typed data beside its holdouts and interval (charter audit P2, M3),
     and again when W4's judges came to accept Exposure (primitive audit F12), and again
     when Wave 5a added the evaluation keys and [chaos] and gave the roster a third
-    model family (evaluations C1, M1, P6); each time it is a new v0."""
+    model family (evaluations C1, M1, P6), and again when a fourth gave a meta a family
+    no chain holds (the #132 review); each time it is a new v0."""
     scripted = load_manifest("scripted")
     assert '"forecast_horizon_events":10' in scripted.canonical_json()
     assert '"chaos":{"connector_timeout":0.0' in scripted.canonical_json()
     assert scripted.manifest_hash() == (
-        "97d9c18e7783601f75c9bb4612695c12573bcb7e7f3691674901fca3a0b3c4f9"
+        "07fb9c4f035f78afc30d7623678624562e062b0bebedba86e65bb15f04f9f34d"
     )
 
     implicit = manifest_from_dict(_base())

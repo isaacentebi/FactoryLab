@@ -329,6 +329,19 @@ CATALOGUE: tuple[Observation, ...] = (
         lambda w: getattr(w, "ews_autocorrelation", None),
         (-1.0, 1.0),
     ),
+    # Essay II.III: "more evaluators consuming more compute ... than agents engaged in
+    # production". Not enforced: the seat majority is manifest physics, and what share
+    # of compute the evaluators spend is the charter's to price (the #132 review).
+    Observation(
+        "evaluator_compute_share",
+        "Compute the evaluator roles (judges, adversarial judges, every tier of meta) "
+        "spent in the window over all compute spent in it, retained-storage rent "
+        "included.",
+        "fraction",
+        lambda w: _ratio(getattr(w, "evaluator_spend_micro", 0),
+                         getattr(w, "compute_spend_micro", 0)),
+        (0.0, 1.0),
+    ),
     Observation(
         "burn_per_window",
         "Compute spent in the window: every invocation's metered cost plus "

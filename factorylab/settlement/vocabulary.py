@@ -153,9 +153,11 @@ SEED_VOCABULARY = (
     # caused a real failure in the world of the factory" (evaluations M2).
     _seed(
         "failure_within",
-        "At least one operational failure occurred in the window: an OrderRejected "
-        "event, a liquidation fill, or a chaos fault (a venue read unavailable, stale "
-        "mids, a withheld tool result, a connector timeout).",
+        "At least one operational failure the world caused independently of the "
+        "forecaster occurred in the window: a chaos fault drawn for a tick (venue reads "
+        "unavailable, stale mids), or a chaos fault (a withheld tool result, a connector "
+        "timeout), an OrderRejected event or a liquidation fill on a decision outside "
+        "the forecaster's lineage.",
     ),
 )
 
@@ -326,6 +328,9 @@ class WindowFacts:
     min_balance_in_window: int
     events: tuple[dict, ...]
     public_window: dict | None = None
+    #: The failures in the window the forecaster's own lineage did not cause, as the
+    #: runtime counts them for ``failure_within`` (None when no runtime counted).
+    independent_failures: int | None = None
 
     def __post_init__(self) -> None:
         for balance in (
@@ -385,11 +390,17 @@ class Observer:
         if predicate_id == "rejected_within":
             return int(any(event["kind"] == EventKind.ORDER_REJECTED for event in facts.events))
         if predicate_id == "failure_within":
+            # The #132 review, item 4: a failure the forecaster could cause itself (a
+            # call it made that a fault struck, an order of its own refused) would let
+            # it manufacture its own outcome. The runtime counts only what its lineage
+            # did not cause; without that count, only the faults the kernel draws for a
+            # tick, which no seat's action can trigger, are evidence.
+            if facts.independent_failures is not None:
+                return int(facts.independent_failures > 0)
             return int(any(
-                event["kind"] == EventKind.ORDER_REJECTED or event.get("faults")
-                or (event["kind"] == EventKind.FILL
-                    and event["payload"].get("liquidation") is True)
-                for event in facts.events))
+                fault.get("seat") is None
+                for event in facts.events for fault in event.get("faults", ())
+                if isinstance(fault, Mapping)))
         return int(
             any(
                 event["kind"] == EventKind.FILL

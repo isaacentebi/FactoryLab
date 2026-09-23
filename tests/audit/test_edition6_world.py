@@ -32,7 +32,7 @@ def test_edition5_is_refused_for_its_evaluator_population():
     with pytest.raises(ValueError, match="evaluator population") as refused:
         load_manifest(EDITION5)
     reason = str(refused.value)
-    assert "evaluator seats (4) are fewer than producer seats (5)" in reason
+    assert "evaluator seats (4) do not outnumber producer seats (5)" in reason
     assert "2 model families serve the evaluator tier" in reason
 
 
@@ -45,9 +45,11 @@ def test_edition6_seeds_the_evaluator_population():
     evaluators = [s for s in world.assemblies if s.role in ("evaluator", "meta", "adversary")]
     assert len(evaluators) == 8 and roles.count("producer") + roles.count("antagonist") == 6
     assert len({model_family(s.model_id) for s in evaluators}) >= 3
-    # The standing tier above the metas, the adversarial judge, and the swap-based
-    # antagonist reading the one kind its Blum-Mansour router routes.
-    assert any(s.accepts == ("MetaVerdict",) for s in world.assemblies)
+    # Metas on three families that read MetaVerdicts too, the adversarial judge, and the
+    # swap-based antagonist reading the one kind its Blum-Mansour router routes.
+    metas = [s for s in world.assemblies if s.role == "meta"]
+    assert len({model_family(s.model_id) for s in metas}) == 3
+    assert all("MetaVerdict" in s.accepts for s in metas)
     assert any(s.role == "adversary" for s in world.assemblies)
     core = [s for s in world.assemblies if "Tick" in s.accepts]
     assert [s.role for s in core] == ["antagonist"]

@@ -897,6 +897,7 @@ class GovernanceMixin:
             if custom:
                 self.kind_reward_shapes.update(shapes)
             self.retired_assemblies.discard(prop.id)
+            self._watch_evaluator_majority(f"register:{prop.id}")
             for kind in prop.accepts:
                 self._open_epoch(kind)
             self._emit(

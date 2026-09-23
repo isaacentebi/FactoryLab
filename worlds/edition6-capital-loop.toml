@@ -50,14 +50,15 @@
 # three. Added, each on a family already on the menu, each with a one-sentence prior:
 #  - two judges, on deepseek and qwen, so four families judge and a multi-judged return
 #    finds two judges off its author's family;
-#  - a standing tier-three meta on deepseek that reads MetaVerdicts, and both metas
-#    read MetaVerdicts as well as Verdicts, so recursion deepens past two tiers;
+#  - a third meta, on deepseek; all three metas read Verdicts and MetaVerdicts, so
+#    recursion deepens past two tiers and every chain has a reader off its families;
 #  - an adversarial judge on deepseek (role `adversary`), paid by how far its own
 #    verdict beat the verdict it read when the world measured the return;
 #  - a second antagonist, on qwen, reading Tick through a Blum-Mansour router, beside
 #    the first's mean-based EXP3 draw on WorldUpdate (II.III.b: the adversarial layer
 #    holds "healthy mixes of mean-based and swap-based learners").
-# Fourteen seats: eight evaluators, six producers (antagonists included).
+# Fourteen seats: eight evaluators, six producers (antagonists included). The kernel
+# requires a strict evaluator majority, and no seat reads a chain on its own family.
 #
 # THE ROSTER IS UNRATIFIED. The roster digest hashes every seat's system_prompt and
 # initial_state, so this roster is not the one edition 5's charter was ratified on.
@@ -337,12 +338,14 @@ max_tokens = "provider"
 effort = "low"
 initial_state = { lens = "Your starting prior is that apparent evaluator competence or failure usually admits a plausible alternative explanation.", open_questions = [], active_commitments = [] }
 
-# The standing tier above the metas (evaluations C7): it reads MetaVerdicts only.
+# The third meta family (evaluations C7; the #132 review, item 3): a meta never shares
+# a family with the judge it grades nor that judge's producer, so the metas span three
+# families and every (judge, producer) pair has a reader; it reads MetaVerdicts too.
 [[assemblies]]
 id = "meta-audit"
 role = "meta"
 model_id = "deepseek/deepseek-v4.1-flash"
-accepts = ["MetaVerdict"]
+accepts = ["Verdict", "MetaVerdict"]
 max_tokens = "provider"
 effort = "low"
 initial_state = { lens = "Your starting prior is that a grade of a grade inherits the blind spots of the first grade.", open_questions = [], active_commitments = [] }
