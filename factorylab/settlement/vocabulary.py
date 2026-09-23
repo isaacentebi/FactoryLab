@@ -148,6 +148,15 @@ SEED_VOCABULARY = (
         "Minimum window balance is below (1 - fraction) times balance at forecast.",
         drawdown=True,
     ),
+    # Essay II.III.b: "a judge that flagged some anomalous behavior should be duly
+    # incentivized only if that anomalous behavior preceded a true regression or
+    # caused a real failure in the world of the factory" (evaluations M2).
+    _seed(
+        "failure_within",
+        "At least one operational failure occurred in the window: an OrderRejected "
+        "event, a liquidation fill, or a chaos fault (a venue read unavailable, stale "
+        "mids, a withheld tool result, a connector timeout).",
+    ),
 )
 
 # Kernel-only commitment: deliberately absent from SEED_VOCABULARY and Observer.
@@ -375,6 +384,12 @@ class Observer:
             )
         if predicate_id == "rejected_within":
             return int(any(event["kind"] == EventKind.ORDER_REJECTED for event in facts.events))
+        if predicate_id == "failure_within":
+            return int(any(
+                event["kind"] == EventKind.ORDER_REJECTED or event.get("faults")
+                or (event["kind"] == EventKind.FILL
+                    and event["payload"].get("liquidation") is True)
+                for event in facts.events))
         return int(
             any(
                 event["kind"] == EventKind.FILL

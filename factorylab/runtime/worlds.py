@@ -13,7 +13,7 @@ import hashlib
 import json
 import re
 import tomllib
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, field, fields, replace
 from decimal import Decimal
 from math import isfinite
 from pathlib import Path
@@ -353,6 +353,34 @@ def _tick_horizon(ev: dict, name: str, default: int) -> Any:
 
 
 @dataclass(frozen=True)
+class ChaosSpec:
+    """The chaos actuator's fault rates (essay II.III.b: a chaos monkey; evaluations M1).
+
+    Each rate is the probability, drawn from the runtime's seeded stream, that one
+    real operational fault reaches what the seats experience: per tick, every venue
+    read a seat makes that tick answers unavailable (``venue_unavailable``) or the
+    mids a seat is shown stay those of the tick before (``stale_mids``); per call, a
+    population tool's result is withheld (``tool_withheld``) or a connector fetch
+    times out (``connector_timeout``). No fault moves money: none fills, charges,
+    credits or refunds anything, and none reaches order placement, collateral,
+    settlement, custody or the safety path (``runtime.chaos``). Zero draws nothing.
+    """
+
+    venue_unavailable: float = 0.0
+    stale_mids: float = 0.0
+    tool_withheld: float = 0.0
+    connector_timeout: float = 0.0
+
+
+#: The most judges one return may be drawn for (``evaluation.multi_judge_count``).
+MAX_JUDGES_PER_RETURN = 5
+
+#: The largest rate a chaos fault may be drawn at: faults are a bounded minority of
+#: what seats experience, never the world itself.
+MAX_CHAOS_RATE = 0.5
+
+
+@dataclass(frozen=True)
 class NoveltySpec:
     share: float
     window_ns: int
@@ -511,6 +539,7 @@ class WorldManifest:
     kill: KillSpec = KillSpec()
     providers: ProvidersSpec = ProvidersSpec()
     prompt: PromptSpec = PromptSpec()
+    chaos: ChaosSpec = ChaosSpec()
     tick_interval_ns: int = 10 * NS_PER_SECOND
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -878,6 +907,21 @@ class WorldManifest:
         scale = self.evaluation.opportunity_scale_bps
         if type(scale) not in (int, float) or not isfinite(scale) or scale <= 0:
             raise ValueError("evaluation.opportunity_scale_bps must be a positive number")
+        share = self.evaluation.multi_judge_share
+        if type(share) not in (int, float) or not isfinite(share) or not 0 <= share <= 1:
+            raise ValueError("evaluation.multi_judge_share must be finite and in [0, 1]")
+        count = self.evaluation.multi_judge_count
+        if type(count) is not int or not 2 <= count <= MAX_JUDGES_PER_RETURN:
+            raise ValueError("evaluation.multi_judge_count must be an integer in "
+                             f"[2, {MAX_JUDGES_PER_RETURN}]")
+        reads = self.evaluation.meta_read_share
+        if type(reads) not in (int, float) or not isfinite(reads) or not 0 < reads <= 1:
+            raise ValueError("evaluation.meta_read_share must be finite and in (0, 1]")
+        for name in ("venue_unavailable", "stale_mids", "tool_withheld", "connector_timeout"):
+            rate = getattr(self.chaos, name)
+            if (type(rate) not in (int, float) or not isfinite(rate)
+                    or not 0 <= rate <= MAX_CHAOS_RATE):
+                raise ValueError(f"chaos.{name} must be finite and in [0, {MAX_CHAOS_RATE}]")
         for a in self.assemblies:
             if not isinstance(a.role, str) or not a.role.strip():
                 raise ValueError(f"assembly {a.id} has an empty role label")
@@ -1314,6 +1358,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         kill=_manifest_kill(d.get("kill")),
         providers=_manifest_providers(d.get("providers")),
         prompt=_manifest_prompt(d.get("prompt")),
+        chaos=_manifest_chaos(d.get("chaos")),
         extra={k: v for k, v in d.items() if k.startswith("x_")},
     )
     m.validate()
@@ -1427,6 +1472,16 @@ def _manifest_polymarket(raw: Any) -> PolymarketSpec:
                                       default.max_orders_per_window),
         seed=raw.get("seed", default.seed),
     )
+
+
+def _manifest_chaos(raw: Any) -> ChaosSpec:
+    """The ``[chaos]`` table: four fault rates, each absent at zero."""
+    if raw is None:
+        return ChaosSpec()
+    names = {f.name for f in fields(ChaosSpec)}
+    if not isinstance(raw, dict) or set(raw) - names:
+        raise ValueError("chaos accepts only " + ", ".join(sorted(names)))
+    return ChaosSpec(**raw)
 
 
 def _manifest_prompt(raw: Any) -> PromptSpec:

@@ -589,6 +589,10 @@ class ThinkingMixin:
             self._address_fill_to_inbox(dict(ev.payload))
         if kind not in ROUTINE_KINDS or kind == "WorldUpdate":
             return
+        if kind == "MarketMid" and getattr(self, "_chaos_active", lambda _f: False)("stale_mids"):
+            # A stale-mids fault: this tick's prints do not reach the seats' folds
+            # (runtime.chaos); the world's own record keeps them.
+            return
         self.subscription_book.observe(
             self._live_seats(), kind, dict(ev.payload), ev.ts_ns, now=self.tick_index)
 

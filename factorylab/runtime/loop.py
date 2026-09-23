@@ -42,6 +42,7 @@ from factorylab.kernel.termination import DORMANT
 from factorylab.learners.router import Sample
 from factorylab.runtime.bootstrap import BootstrapMixin
 from factorylab.runtime.cadence import settle_forecasts
+from factorylab.runtime.chaos import ChaosMixin
 from factorylab.runtime.composition import CompositionMixin
 from factorylab.runtime.compute import ComputeMixin
 from factorylab.runtime.feedback import (
@@ -122,6 +123,8 @@ class Runtime(
     # The charter's markets (charter audit M1, M2) read and publish through the
     # governance, pricing and schematics methods below them, so they come first.
     MarketsMixin,
+    # The chaos actuator (evaluations M1) only withholds or ages what seats are shown.
+    ChaosMixin,
     SchematicsMixin,
     ThinkingMixin,
     RoutingMixin,
@@ -325,6 +328,7 @@ class Runtime(
             self._sampling_actuator()
         self._observe_delivered_event(ev)
         if ev.kind is EventKind.TICK:
+            self._chaos_tick()  # seat-facing faults only (runtime.chaos)
             self._reconcile_orders()
             if getattr(self, "polymarket", None) is not None:
                 from factorylab.runtime import polymarket
@@ -867,6 +871,7 @@ class Runtime(
                 # has always worked this way, and the mids read is the same kind of
                 # fact. GPT-6 third reading, §11: "missing data stays unavailable".
                 payload["mids_unavailable"] = type(exc).__name__
+            self._seat_tick_view(payload)
         if ev.kind is EventKind.WORLD_UPDATE and sample.chosen != NOOP:
             # C2: the event carries the world every subscriber could have read; the
             # seat that was drawn reads its own fold, which reaches back to the last

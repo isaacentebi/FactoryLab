@@ -917,6 +917,10 @@ class ComputeMixin:
         except (KeyError, ConnectorRefused, ValueError) as exc:
             reason = "unknown connector" if isinstance(exc, KeyError) else str(exc)
             return self._connector_refused(handle, reason, **fields)
+        if not preflight and self._chaos_call("connector_timeout", handle=handle,
+                                              tool="connector.fetch"):
+            # A timeout before anything is fetched or metered (runtime.chaos).
+            return self._connector_refused(handle, "timeout", **fields)
         window, count = self.connector_calls.get(action_id, (self.window.index, 0))
         if window != self.window.index:
             count = 0
@@ -1244,6 +1248,10 @@ class ComputeMixin:
                                 "reason": self.WRITE_REFUSAL, "ts": self.clock.now_ns})
             return {"error": self.WRITE_REFUSAL}, 0
         spec = self.tool_specs[tool_id]
+        fault = self._chaos_tool_fault(tool_id, spec, handle)
+        if fault is not None:
+            # Decided before the meter reserves: a fault moves no money (runtime.chaos).
+            return fault, 0
         price = int(spec["price_micro_per_call"])
 
         def execute() -> dict:
