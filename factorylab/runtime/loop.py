@@ -50,6 +50,7 @@ from factorylab.runtime.feedback import (
 )
 from factorylab.runtime.governance import GovernanceMixin
 from factorylab.runtime.live import LiveClock, Reconciler
+from factorylab.runtime.markets import MarketsMixin
 from factorylab.runtime.pricing import PricingMixin
 from factorylab.runtime.resume import decode, encode, runtime_state
 from factorylab.runtime.routing import ContractQueue, PopulationEvent, RoutingMixin
@@ -112,6 +113,9 @@ def judge_view(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 class Runtime(
+    # The charter's markets (charter audit M1, M2) read and publish through the
+    # governance, pricing and schematics methods below them, so they come first.
+    MarketsMixin,
     SchematicsMixin,
     ThinkingMixin,
     RoutingMixin,

@@ -144,6 +144,39 @@ class PriceController:
     it (``P + I >= lambda_max``) *and* the violation is still growing
     (anti-windup). With ``Kp = Kd = 0`` the law is the integral alone.
 
+    Feed-forward (essay II.IV.a: "Adopting a futarchic model also changes the PID
+    controller … A futarchic λ, however, is necessarily forward-looking—the market
+    continually reprices based on the expectation of constraint violations"). The
+    runtime may pass ``anticipated``: the change in the card's violation that the
+    conditional forecasts on open motions expect, ``ê - v``, where each forecast
+    reads ``max(0, v + sign * q * step)`` (``charter.market.branch_violation``) and
+    only forecasts that stay liable enter (see ``runtime.markets``). While the card
+    violates (``v > 0``) the law adds ``F = Kp * max(anticipated, -v)``, so the
+    proportional part prices the expected violation, ``P + F = Kp * max(0, ê)``,
+    while ``I`` and ``D`` stay on realized measurement. A card inside its region
+    takes no feed-forward: the market may move a price the world has already made
+    nonzero, never create one. The combination is argued this way:
+
+    - the backward terms remain the only memory. ``I`` still integrates realized
+      violation alone and ``D`` still answers a measured move, so a market that is
+      wrong cannot wind the integral up or down: its error reaches the price only
+      through ``F``, for as long as the forecasts stand, and vanishes when they
+      settle;
+    - ``F`` uses the gain the charter already committed for converting violation into
+      price, ``Kp``, so no new constant enters and a world with ``Kp = 0`` is
+      exactly as backward-looking as it was;
+    - ``|F| <= Kp * step`` for any one forecast, in either direction: relief and
+      deepening are read symmetrically, one promise resolution at most, so no single
+      forecast can cancel ``P``;
+    - ``P + F >= 0``, so a card still out of its region is never priced below its
+      accumulated integral (the same guarantee ``D`` keeps);
+    - every forecast that moves ``F`` is scored whichever branch the committee takes
+      (a seat's undecided-motion forecasts count only as a pair on both branches), so
+      moving the price is never free and a mispriced ``F`` is an arbitrage the
+      adversarial population profits by correcting.
+
+    Without ``anticipated`` the law is the backward PID above, unchanged.
+
     The price is clipped to ``[0, lambda_max]``.
     """
 
@@ -284,14 +317,25 @@ class PriceController:
             return 0.0
         return violation(region, value)
 
-    def observe(self, card_id: str, value: float, window_end_event: int) -> None:
+    def observe(self, card_id: str, value: float, window_end_event: int, *,
+                holdout: float = 0.0, anticipated: float | None = None) -> None:
         """Ledger each accepted update or skipped window before any state/clock changes.
 
         Nonnegative event indices double as logical nanosecond timestamps for
         this loop, not wall time. Accepted indices strictly increase per card.
         Saturation means the requested price was outside the bounds; max_step
         measures the largest absolute change after clipping.
+
+        ``holdout`` is the violation the card's failed holdouts add
+        (``charter.holdout_violation``), added to its region violation.
+        ``anticipated`` is the market's expected change
+        in the violation, for the feed-forward term (see the class docstring).
         """
+        holdout = _number(holdout, "holdout")
+        if anticipated is not None:
+            anticipated = _number(anticipated, "anticipated")
+        if holdout < 0:
+            raise ValueError("holdout violation must be nonnegative")
         state = self.__cards[card_id]
         value = _number(value, "value")
         if type(window_end_event) is not int or window_end_event < 0:
@@ -310,8 +354,12 @@ class PriceController:
                 }
             )
             return
-        violation = self.violation(card_id, value)
+        violation = self.violation(card_id, value) + holdout
         requested, integral, terms = self._pid(state, value, violation)
+        if anticipated is not None and violation > 0:
+            feed_forward = self.__kp * max(anticipated, -violation)
+            requested += feed_forward
+            terms = {**terms, "f": feed_forward, "anticipated": anticipated}
         price = min(self.__lambda_max, max(0.0, requested))
         saturated = requested < 0 or requested > self.__lambda_max
         updated = replace(
@@ -338,6 +386,7 @@ class PriceController:
             "saturated": saturated,
             "window_end_event": window_end_event,
             **terms,
+            **({"holdout": holdout} if holdout else {}),
         }
         self.__ledger.append(entry)
         self.__cards[card_id] = updated

@@ -113,11 +113,16 @@ class CharterBook:
                                  "does not carry")
         resulting = {c.id: c for c in charter.cards if c.id not in amendment.remove}
         resulting.update((c.id, c) for c in (*amendment.replace, *amendment.add))
+        if amendment.holdout is not None:
+            appended, reason = _append_holdout(charter, amendment.holdout)
+            if reason is not None:
+                raise ValueError(reason)
+            resulting[appended.id] = appended
         effect = amendment.predicted_effect
         if effect.observation is None and effect.card_id not in ids | set(resulting):
             raise ValueError("predicted_effect.card_id must name a current or proposed card")
-        if (tuple(resulting.values()) == charter.cards
-                and not amendment.proposed_prices and amendment.tick_interval is None):
+        if (tuple(resulting.values()) == charter.cards and not amendment.proposed_prices
+                and amendment.tick_interval is None and amendment.holdout is None):
             raise ValueError("amendment leaves the charter unchanged")
         validate_observation_bindings(tuple(resulting.values()))
 
@@ -267,13 +272,21 @@ class CharterBook:
                 cards.pop(card_id, None)
             for card in (*amendment.replace, *amendment.add):
                 cards[card.id] = card
-            patched = tuple(cards.values())
             reason = None
+            if amendment.holdout is not None:
+                # Appended to the card as it stands now: a cards motion activated during
+                # the holdout's trial is kept, never reverted by a frozen copy.
+                appended, reason = _append_holdout(current, amendment.holdout)
+                if appended is not None:
+                    cards[appended.id] = appended
+            patched = tuple(cards.values())
             unknown_norm = next((card for card in (*amendment.replace, *amendment.add)
                                  if card.norm not in current.norms), None)
             unpriced = next((card_id for card_id, _ in amendment.proposed_prices
                              if card_id not in cards), None)
-            if unknown_norm is not None:
+            if reason is not None:
+                pass  # the holdout cannot be appended to the card as it stands
+            elif unknown_norm is not None:
                 # A norm edition removed the norm this card interprets (essay II.IV.a:
                 # the norm layer sits behind a read-only wall).
                 reason = (f"card {unknown_norm.id} names norm {unknown_norm.norm}, which "
@@ -282,7 +295,7 @@ class CharterBook:
                 reason = f"lambda names card {unpriced}, which edition {current.edition} " \
                          "does not carry"
             elif (patched == current.cards and not amendment.proposed_prices
-                    and amendment.tick_interval is None):
+                    and amendment.tick_interval is None and amendment.holdout is None):
                 # An earlier activation already made this exact change; proposal
                 # time checked a base edition that no longer states the effect.
                 reason = "amendment leaves the charter unchanged"
@@ -432,3 +445,22 @@ def validate_observation_bindings(cards) -> None:
                     f"card {card.id} observation: already named by live card {previous.id} "
                     "for the same role"
                 )
+
+
+def _append_holdout(charter: Charter, holdout: tuple[str, str]):
+    """The card with one more holdout, as the edition carries it; or None and why not.
+
+    Refused when the edition no longer carries the card, or the card already holds a
+    version of the predicate (a cards motion during the trial may have added or kept
+    one).
+    """
+    from dataclasses import replace
+
+    card_id, entry = holdout
+    card = next((c for c in charter.cards if c.id == card_id), None)
+    if card is None:
+        return None, (f"holdout names card {card_id}, which edition {charter.edition} "
+                      "does not carry")
+    if entry.split("@")[0] in {h.split("@")[0] for h in card.holdout}:
+        return None, f"card {card_id} already holds predicate {entry.split('@')[0]}"
+    return replace(card, holdout=(*card.holdout, entry)), None

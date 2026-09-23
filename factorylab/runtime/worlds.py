@@ -19,7 +19,7 @@ from math import isfinite
 from pathlib import Path
 from typing import Any
 
-from factorylab.charter.charter import Charter, MetricCard, Norm
+from factorylab.charter.charter import Charter, MetricCard, Norm, stated_region
 from factorylab.charter.provenance import (
     PROVENANCE_FIELDS,
     charter_content,
@@ -612,7 +612,7 @@ class WorldManifest:
 
         The namespace keeps a funded world's client order IDs out of every other
         world's; the two digests bind the loaded cards and the roster that voted them
-        to the exact artifact ``scripts/ratify_charter.py`` exported. The same digest
+        to the exact artifact ``scripts/charter_session.py`` exported. The same digest
         functions serve both, so an existing ratified artifact verifies unchanged.
         """
         from factorylab.charter.provenance import roster_hash
@@ -991,16 +991,28 @@ def _manifest_charter(raw: Any) -> tuple[Charter, tuple[tuple[str, float], ...]]
         if not isinstance(row, dict):
             raise ValueError(f"card #{index} fields: expected a table")
         card_id = row.get("id", f"#{index}")
-        for name in MetricCard.__dataclass_fields__:
-            if name == "window":
-                continue
+        # Charter audit P2: a card states its region as typed data (``region``), or
+        # as the historical sentence (``acceptable_region``); ``holdout`` is optional.
+        required = [name for name in MetricCard.__dataclass_fields__
+                    if name not in ("window", "region", "holdout")]
+        if row.get("region") is None:
+            required.append("acceptable_region")
+        for name in required:
             if not isinstance(row.get(name), str) or not row[name].strip():
                 raise ValueError(f"card {card_id} {name}: must be a nonempty string")
         window = row.get("window")
         if isinstance(window, dict) and "per" not in window:
             window = {**window, "per": None}  # TOML has no null literal.
-        cards.append(MetricCard(**{name: row[name] for name in MetricCard.__dataclass_fields__
-                                   if name != "window"}, window=window))
+        try:
+            cards.append(MetricCard(
+                **{name: row[name] for name in MetricCard.__dataclass_fields__
+                   if name not in ("window", "region", "holdout")},
+                region=stated_region(row), holdout=tuple(row.get("holdout") or ()),
+                window=window))
+        except (TypeError, ValueError) as exc:
+            message = str(exc)
+            raise ValueError(message if message.startswith(f"card {card_id}")
+                             else f"card {card_id}: {message}") from None
         if "lambda" in row:
             prices.append((card_id, row["lambda"]))
     return Charter(edition, tuple(norms), tuple(cards)), tuple(prices)

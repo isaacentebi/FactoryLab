@@ -80,10 +80,17 @@ class PolicyProvider(ScriptedProvider):
     prompts the real seats would be sent are rendered and measured.
     """
 
+    #: Test plumbing for the charter's markets (charter audit M1, M2): two lambda
+    #: motions the scripted seats vote through and down, so both branches resolve.
+    MOTIONS = (("market-enact", 0.2, "decrease"), ("market-reject", 0.05, "increase"))
+
     def __init__(self, world: Path) -> None:
         super().__init__()
         self.manifest = load_manifest(world)
         self.decisions = 0
+        cards = self.manifest.charter.cards
+        self.card = cards[0].id if cards else None
+        self.proposed: list[str] = []
 
     def catalogue(self) -> list[CatalogueEntry]:
         """Every manifest model, at its manifest price, with a native output window."""
@@ -107,7 +114,9 @@ class PolicyProvider(ScriptedProvider):
         elif desc.startswith("Assess"):
             reply = {"conformity": 0.8, "rationale": "scripted meta"}
         elif desc.startswith("Vote"):
-            reply = {"vote": True, "reason": "scripted yes"}
+            # Plumbing: a motion named for rejection is voted down, every other up.
+            motion = str((inputs.get("amendment") or {}).get("id", ""))
+            reply = {"vote": not motion.endswith("reject"), "reason": "scripted ballot"}
         elif desc.startswith("Testify"):
             reply = {"assessment": "scripted testimony"}
         elif desc == CHILD_TASK:
@@ -120,7 +129,6 @@ class PolicyProvider(ScriptedProvider):
                              cost_micro=1)
 
     def _decide(self, inputs: dict[str, Any]) -> dict[str, Any]:
-        tool_listed = getattr(self, "tool_listed", False)
         if "tool_results" in inputs:
             # The PR121 journey: after a tool trade, report it as "order" with no fields.
             wrote = any(str(r.get("tool", "")).startswith("venue.place")
@@ -130,6 +138,38 @@ class PolicyProvider(ScriptedProvider):
                     {"action": "hold", "rationale": "read the venue; nothing to do"})
         self.decisions += 1
         n = self.decisions
+        reply = self._decide_trade(inputs, n)
+        return {**reply, **self._markets(n)}
+
+    def _markets(self, n: int) -> dict[str, Any]:
+        """Plumbing for the charter's markets: a lambda post, motions, branch forecasts.
+
+        Every third decision posts a price for the first charter card; decisions 3
+        and 6 propose the two lambda motions; every other decision forecasts both
+        branches of the motions proposed so far. Refusals (a second post in a window,
+        a motion already decided) are the kernel's to ledger.
+        """
+        if self.card is None:
+            return {}
+        out: dict[str, Any] = {}
+        if n % 3 == 0:
+            out["shadow_prices"] = {self.card: round(0.05 + 0.05 * (n % 4), 2)}
+        index = n // 3 - 1
+        if n % 3 == 0 and 0 <= index < len(self.MOTIONS):
+            motion, price, direction = self.MOTIONS[index]
+            self.proposed.append(motion)
+            out["register"] = [{"kind": "amendment", "id": motion,
+                                "lambda": {self.card: price},
+                                "predicted_effect": {"card_id": self.card,
+                                                     "direction": direction, "window": 1}}]
+        elif n % 2 == 0 and self.proposed:
+            out["motion_forecasts"] = [
+                {"motion": motion, "branch": branch, "q": q}
+                for motion in self.proposed for branch, q in (("enact", 0.7), ("reject", 0.4))]
+        return out
+
+    def _decide_trade(self, inputs: dict[str, Any], n: int) -> dict[str, Any]:
+        tool_listed = getattr(self, "tool_listed", False)
         mid = (inputs.get("payload") or {}).get("mids", {}).get("BTC")
         # W4 plumbing, not a behaviour: one population tool is offered until it is
         # listed, then called now and then by whichever seat is drawn, and a request
@@ -250,6 +290,7 @@ def scorecard(events: list[dict[str, Any]]) -> dict[str, Any]:
                                               3) if opportunity else None)},
         "reward_chain": reward_chain(events),
         "composition": composition(events),
+        "charter_markets": charter_markets(events),
         "orders": {"intents": dict(intents),
                    "reported_not_placed": kinds.get("order.reported", 0),
                    "refused": kinds.get("order.refused", 0),
@@ -368,6 +409,54 @@ def composition(events: list[dict[str, Any]]) -> dict[str, Any]:
         "tool_builder_credit_sum": round(sum(e.get("credit") or 0 for e in tool_credits), 6),
         # Registering decisions that settled on their verdict and their tool's use.
         "tool_builder_settlements_credited": len(builders),
+    }
+
+
+def charter_markets(events: list[dict[str, Any]]) -> dict[str, Any]:
+    """How far the charter's markets reached (charter audit M1, M2, P1), from the diary.
+
+    Posted lambda: posts, their settlements and mean score, refusals. Motions: the
+    conditional forecasts and ballots graded on each branch, the voided ones, and
+    the feed-forward term's reach into the price law.
+    """
+    def kinds(kind: str) -> list[dict[str, Any]]:
+        return [e for e in events if e.get("kind") == kind]
+
+    settled = [e for e in kinds("lambda_post.settled") if e.get("status") == "settled"]
+    outcomes = kinds("policy.outcome")
+    graded: dict[str, dict[str, Any]] = {}
+    for e in outcomes:
+        if e.get("status") != "settled":
+            continue
+        key = f"{'forecast' if e.get('forecast') else 'ballot'}:{e.get('branch', 'enact')}"
+        row = graded.setdefault(key, {"n": 0, "score_sum": 0.0})
+        row["n"] += 1
+        row["score_sum"] = round(row["score_sum"] + float(e.get("score") or 0.0), 6)
+    anticipated = [e for e in kinds("price.update") if "anticipated" in e]
+    moved = [e for e in anticipated if e["f"]]
+    return {
+        "lambda_posts": {"posted": len(kinds("lambda_post.posted")), "settled": len(settled),
+                         "mean_score": (round(statistics.fmean(e["score"] for e in settled), 4)
+                                        if settled else None),
+                         "censored": sum(e.get("status") == "censored"
+                                         for e in kinds("lambda_post.settled")),
+                         "refused": len(kinds("lambda_post.refused")),
+                         "aggregates": len(kinds("lambda_post.aggregate")),
+                         "targets": sorted({round(e["realized"], 4) for e in settled})},
+        "margins": {"read": len(kinds("price.margin")),
+                    "identified": sum(e.get("shadow_price") is not None
+                                      for e in kinds("price.margin"))},
+        "motions": {"proposed": len(kinds("charter.propose")),
+                    "enacted": len(kinds("charter.activate")),
+                    "rejected": len(kinds("policy.rejected")),
+                    "forecasts": len(kinds("policy.forecast")),
+                    "forecasts_refused": len(kinds("motion_forecast.refused")),
+                    "void": dict(collections.Counter(e.get("branch")
+                                                     for e in kinds("policy.void"))),
+                    "graded": graded},
+        "feed_forward": {"price_updates": len(anticipated), "moved": len(moved),
+                         "f_min": min((e["f"] for e in moved), default=None),
+                         "f_max": max((e["f"] for e in moved), default=None)},
     }
 
 

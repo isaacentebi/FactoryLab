@@ -16,11 +16,17 @@
 #
 # THE ROSTER IS UNRATIFIED. The roster digest hashes every seat's system_prompt and
 # initial_state, so this roster is not the one edition 5's charter was ratified on.
-# The charter table below is edition 5's, unchanged: the charter is the population's
-# to change, not the architect's. Its `ratified_sha256` and `roster_sha256` are left
-# out rather than claimed, because they bind that charter to edition 5's roster. Before
+# The charter table below is edition 5's with one change in its norm layer, which is
+# the human house's, not the factory's (essay II.IV.a): the *fidelity* norm keeps its
+# value and drops its procedural clause, "A judge identifying such a conflict must
+# name the value, the measurement, the evidence and the uncertainty, and make the
+# claim open to challenge" (charter audit S2). That clause was a plan for evaluators
+# behind the read-only wall; the factory may propose a card or a holdout for it. The
+# cards are the population's to change, not the architect's, and are unchanged. The
+# `ratified_sha256` and `roster_sha256` are left out rather than claimed, because they
+# bind edition 5's charter to edition 5's roster. Before
 # any funded launch, the population must re-ratify on this roster with
-# scripts/ratify_charter.py (it makes live model calls), and the export's digests go
+# scripts/charter_session.py (it makes live model calls), and the export's digests go
 # back into [charter]; a mainnet load refuses this file until then.
 name = "edition6-testnet-rehearsal"
 seed = 3
@@ -364,7 +370,7 @@ norms = [
   { id = "epistemic integrity", definition = "Make commitments answerable to evidence and preserve the ability to discover that they were wrong; a changed criterion does not rewrite what was promised." },
   { id = "durable agency", definition = "Steward the resources and capabilities that make future worthwhile choices possible; spending for an enduring capability can be good stewardship, maintaining a dead institution is not." },
   { id = "bounded reciprocity", definition = "Do not finance the factory's advantage by imposing unconsented costs on outsiders." },
-  { id = "fidelity", definition = "Measurements are defeasible evidence of the values, not substitutes for them. A favorable measurement is insufficient when supported consequences contradict the value it represents. A judge identifying such a conflict must name the value, the measurement, the evidence and the uncertainty, and make the claim open to challenge. Missing measurement alone is not evidence of failure." },
+  { id = "fidelity", definition = "Measurements are defeasible evidence of the values, not substitutes for them. A favorable measurement is insufficient when supported consequences contradict the value it represents. Missing measurement alone is not evidence of failure." },
 ]
 
 [[charter.cards]]

@@ -24,7 +24,8 @@ if TYPE_CHECKING:
 # The per-decision attribution the runtime keeps on the same window object
 # is not a public window fact and never reaches a registered observation.
 PRIVATE_WINDOW_FIELDS = ("decisions", "closed_values", "closed_regions", "closed_shares",
-                         "closed_cards", "closed_prices", "series_discarded")
+                         "closed_cards", "closed_prices", "closed_holdouts",
+                         "series_discarded")
 MAX_WORLD_SAMPLES = 1024
 # Fields holding a public quantity filed under a private identity: a decision
 # handle, an evaluator's assembly id. The quantity is disclosed, the identity is
@@ -679,9 +680,18 @@ class ObservationBook:
         """
         if not observation.registered:
             return observation.measure(window)
-        if self._run is None:
+        return self.value_of_facts(observation, window_facts(window))
+
+    def value_of_facts(self, observation: Observation, facts: dict) -> float | None:
+        """Run a registered observation on facts already made public, with the same range rule.
+
+        The facts are the caller's: a closed window's (``window_facts``) or one
+        scope's share of them (``charter.measurement.scope_facts``). Either way the
+        code is handed numbers and never the identity they were filed under.
+        """
+        if not observation.registered or self._run is None:
             return None
-        value, _error = self._run(observation.code, window_facts(window))
+        value, _error = self._run(observation.code, facts)
         if value is None:
             return None
         lo, hi = observation.unit_range
