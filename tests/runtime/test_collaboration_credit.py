@@ -329,10 +329,14 @@ def test_the_hold_is_bounded_by_its_window_and_its_deadline(monkeypatch):
     rt._settle_composed()
     (settled,) = rt.queue.history(author)
     assert (settled.definition_version, settled.score) == (DEF_VERDICT, pytest.approx(0.8))
-    # A decision whose kernel deadline comes first settles on the last event before it.
+    # A decision whose tick cutoff comes first settles on the last tick before it.
     rt2, author2 = _tool_world(monkeypatch)
     _verdicts(rt2, author2, 0.6)
-    rt2.clock.now_ns = FAR - rt2.tick_clock.interval_ns
+    rt2.decision_ticks[author2][1] = rt2.ticks_consumed + 3  # sooner than the window
+    rt2.ticks_consumed += 1
+    rt2._settle_composed()
+    assert rt2.queue.get(author2).status is SettleStatus.PENDING
+    rt2.ticks_consumed += 1
     rt2._settle_composed()
     assert rt2.queue.history(author2)[0].score == pytest.approx(0.6)
 

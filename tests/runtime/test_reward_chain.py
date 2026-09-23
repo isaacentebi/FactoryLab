@@ -572,22 +572,22 @@ def test_the_meta_tier_reads_a_verdict_the_world_will_never_grade_first():
         "rt")
     assert rt._cascade_priority(bare_verdict) == 1
     assert rt._cascade_priority(world_verdict) == 0
-    gate = CascadeGate(5, opened_ns=0)
-    gate, _ = gate.add(bare_verdict, priority=rt._cascade_priority)
+    gate = CascadeGate(5, opened=0)
+    gate, _ = gate.add(bare_verdict, now=0, priority=rt._cascade_priority)
     late_world = Event("v-world-2", EventKind.VERDICT, 10, dict(world_verdict.payload), "rt")
-    _none, released = gate.add(late_world, priority=rt._cascade_priority)
+    _none, released = gate.add(late_world, now=10, priority=rt._cascade_priority)
     assert released.payload["evaluator_handle"] == "j-2"
     # Without the priority the latest completed arrival (the world-graded one) is read.
-    plain, _ = CascadeGate(5, opened_ns=0).add(bare_verdict)
-    _none, unprioritised = plain.add(late_world)
+    plain, _ = CascadeGate(5, opened=0).add(bare_verdict, now=0)
+    _none, unprioritised = plain.add(late_world, now=10)
     assert unprioritised.payload["evaluator_handle"] == "j-1"
     # A Verdict published above tier one is windowed at its tier and read by its verdict.
     upper = Event("v-upper", EventKind.VERDICT, 0, {"about_handle": "j-1",
                                                     "evaluator_handle": "j-3",
                                                     "verdict": 0.2, "tier": 2}, "rt")
-    gate2, _ = CascadeGate(5, opened_ns=0).add(upper)
+    gate2, _ = CascadeGate(5, opened=0).add(upper, now=0)
     _none, released2 = gate2.add(Event("v-upper-2", EventKind.VERDICT, 10,
-                                       dict(upper.payload, evaluator_handle="j-4"), "rt"))
+                                       dict(upper.payload, evaluator_handle="j-4"), "rt"), now=10)
     assert released2.payload["window"]["mean"] == pytest.approx(0.2)
 
 

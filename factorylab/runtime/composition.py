@@ -23,6 +23,7 @@ from factorylab.cortex.registration import ToolProposal
 from factorylab.cortex.request import ChildRequest, Request, public_return
 from factorylab.kernel.queue import PropensityRecord, SettleStatus
 from factorylab.learners.router import Sample
+from factorylab.runtime.clockwork import deadline_ticks
 from factorylab.runtime.feedback import composed_reward
 from factorylab.runtime.routing import _KeyedLearner
 from factorylab.runtime.shared import (
@@ -67,8 +68,8 @@ class CompositionMixin:
         Guarantees a hold only on a pending decision on the verdict channel (the
         decision that registered the tool, before its judges have settled it). The
         window closes after ``verdict_timeout_ticks + consequence_backstop_ticks``
-        world ticks, or on the last event before the decision's kernel deadline,
-        whichever comes first: past that deadline the kernel has already credited
+        world ticks, or on the last event before the decision's tick cutoff,
+        whichever comes first: past that cutoff the kernel has already credited
         its router neutrally, and a later settlement could train nothing (§I.b:
         reward must find "the exact decision (and the exact propensity) that
         produced it"). Any other registering decision (a judge's, a ballot's) is
@@ -204,7 +205,7 @@ class CompositionMixin:
             actor = self.queue.get(parent.handle).actor
             record = PropensityRecord((target,), (1.,), target, 0, actor, "parent-selected")
             sample = Sample((target,), (1.,), target, 0, actor, "parent-selected", ())
-            deadline = parent.deadline_ns
+            cutoff = self.queue.deadline_tick(parent.handle)
         else:
             drawn = self._draw_executor(action_id, parent.handle, item.target)
             if isinstance(drawn, str):
@@ -212,20 +213,25 @@ class CompositionMixin:
             sample, snapshot = drawn
             target, actor, record = sample.chosen, sample.learner_id, self._propensity(sample)
             # A drawn child settles only after its requester (the collaboration
-            # credit), so its router's cutoff reaches one verdict window past its
-            # parent's: a credit that arrives in time trains the router once.
-            deadline = parent.deadline_ns + (
-                (self.ev.verdict_timeout_ticks + 2) * self.tick_clock.interval_ns)
+            # credit), so its router's cutoff reaches one verdict horizon, with its
+            # ratio slack, past its parent's: a credit that arrives in time trains the
+            # router once. Counted in world ticks (time audit T3).
+            cutoff = self.queue.deadline_tick(parent.handle)
+            if cutoff is not None:
+                cutoff += deadline_ticks(self.ev.verdict_timeout_ticks, self.m.timing.min_ratio)
         # A child spends its parent's money: whatever the parent's remaining request
         # ceiling says, the ceiling never exceeds what the parent's own decision may
         # spend now, so a fresh executor cannot be bought compute the parent lacks.
         ceiling = min(ceiling, max(0, self._compute_available(parent.handle)))
         channels = self._return_channels(target)
         channel = next(iter(channels.values()))
+        # A parent opened before the tick record keeps its wall deadline for its child.
+        cutoff_kw = ({"deadline_tick": cutoff} if cutoff is not None
+                     else {"deadline_ns": parent.deadline_ns})
         handle = self.queue.open(
             actor=actor, event_id=f"child-{parent.handle}", propensity=record,
-            channel=channel, deadline_ns=deadline, parent_handle=parent.handle,
-            cost_ceiling=ceiling, return_channels=channels)
+            channel=channel, parent_handle=parent.handle,
+            cost_ceiling=ceiling, return_channels=channels, **cutoff_kw)
         if snapshot is not None:
             self.snapshot_keys[handle] = snapshot
         forwarded = self._forwarded_propensity(handle, item, actor)
@@ -401,7 +407,7 @@ class CompositionMixin:
         it registered (a builder). A requester's credit closes when the requester
         closed or past the consequence backstop; a tool hold closes at the end of
         its window (``_hold_for_tool_use``); every signal closes on the last event
-        before the decision's own kernel deadline, so the settlement always reaches
+        before the decision's own tick cutoff, so the settlement always reaches
         the router that drew it. Its verdict is waited for no longer than an
         ordinary return's (``verdict_timeout_ticks``). With no signal it settles
         censored, as an unjudged return does. A decision's population-tool uses are
@@ -421,8 +427,11 @@ class CompositionMixin:
                       key=lambda p: p.handle)
         for pend in held:
             age = self._tick_age(pend)
-            due = self.clock.now_ns + self.tick_clock.interval_ns >= self.queue.get(
-                pend.handle).deadline_ns
+            # The last event before the decision's tick cutoff (time audit T3).
+            cutoff = self.queue.deadline_tick(pend.handle)
+            due = (self.ticks_consumed + 1 >= cutoff if cutoff is not None
+                   else self.clock.now_ns + self.tick_clock.interval_ns
+                   >= self.queue.get(pend.handle).deadline_ns)
             if pend.requester is not None and not pend.credit_closed and (
                     due or self.queue.get(pend.requester).status not in open_states
                     or age > timeout + backstop):

@@ -282,6 +282,8 @@ class PricingMixin:
         retained = {index for origins in self.price_origins.values() for index in origins.values()}
         self.price_windows = {index: window for index, window in self.price_windows.items()
                               if index == self.window.index or index in retained}
+        # A final decision is never cut off again: its tick record goes (time audit T3).
+        self.queue.forget_ticks()
 
     def _observe_delivered_event(self, ev: Event) -> None:
         """Only ledgered deliveries contribute window samples or start observation trials."""

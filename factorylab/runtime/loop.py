@@ -378,7 +378,7 @@ class Runtime(
         self._censor_stale_judgements()
         # A requested child settles once its requester has (the collaboration credit).
         self._settle_composed()
-        self.stats.timeouts += len(self.queue.expire(self.clock.now_ns))
+        self.stats.timeouts += len(self.queue.expire_due())
         self._deliver_returns()
         self.ledger.append({"kind": "runtime.event_done", "n": self.n})
         self.balance_at.append(self.wallet.balance)
@@ -453,9 +453,14 @@ class Runtime(
         if self.live:
             self.stats.reconciliations += 1
             self._emit(EventKind.RECONCILED, snapshot, source="kernel")
-        handles = [d.handle for d in self.queue.outstanding() if d.deadline_ns <= now_ns]
+        # A cutoff counts world ticks (time audit T3): an outage consumed none, so only
+        # a decision whose tick cutoff had already passed times out here. One restored
+        # from a checkpoint that predates the tick record keeps its wall deadline.
+        handles = [d.handle for d in self.queue.outstanding()
+                   if (d.deadline_ns <= now_ns if self.queue.deadline_tick(d.handle) is None
+                       else self.queue.deadline_tick(d.handle) <= self.ticks_consumed)]
         self.ledger.append({"kind": "resume.timeouts", "handles": handles, "n": self.n})
-        self.stats.timeouts += len(self.queue.expire(now_ns))
+        self.stats.timeouts += len(self.queue.expire_due())
         self._deliver_returns()
         self.ledger.append(
             {

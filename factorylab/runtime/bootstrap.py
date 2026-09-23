@@ -118,6 +118,25 @@ class BootstrapMixin:
         self.seed = manifest.seed if seed is None else seed
         self.rng = random.Random(self.seed)
         self.cascade: dict[int, CascadeGate] = {}
+        # The factory's clock (essay II.IV.b-c; time audit T1-T3): measured loops and
+        # the derived schedules of the loops they command, all in world ticks.
+        from factorylab.runtime.clockwork import Clockwork
+
+        self.clockwork = Clockwork(min_ratio=manifest.timing.min_ratio,
+                                   jitter_fraction=manifest.timing.jitter_fraction,
+                                   seed=self.seed, sample=manifest.timing.cadence_sample)
+        # handle -> [opened tick, cutoff tick] for every decision not yet final.
+        self.decision_ticks: dict[str, list[int]] = {}
+        # World ticks consumed: the one clock domain every loop counts in (T3).
+        self.ticks_consumed = 0
+        # card id -> the tick its price last moved (time audit T2).
+        self.card_clock: dict[str, int] = {}
+        # Whether a governance tier fits between the slowest loop and the world (T7).
+        self.governance_viable = True
+        # event kind -> the tick a grown menu started waiting for its epoch (T6).
+        self.pending_epochs: dict[str, int] = {}
+        # Where the treasury caps' own wall-clock windows are counted from (T1, T13).
+        self.cap_anchor_ns: int | None = None
         self.clock = SimClock(0) if _journal is None else _journal.clock
         if self.live and _journal is None:
             self.clock.now_ns = (

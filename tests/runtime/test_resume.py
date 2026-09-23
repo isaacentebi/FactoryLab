@@ -371,7 +371,9 @@ def test_unacknowledged_live_model_call_books_uncertainty_without_resubmission(t
     restored._ledger_lock.close()
 
 
-def test_live_resume_reconciles_open_position_and_times_out_outage_deadlines(tmp_path):
+def test_live_resume_reconciles_open_position_and_an_outage_reaches_no_tick_cutoff(tmp_path):
+    """A cutoff counts world ticks (time audit T3): an outage consumed none, so a resume
+    past every wall-clock deadline times nothing out; the tick cutoffs still stand."""
     base = load_manifest("scripted")
     m = replace(
         base, exchange=replace(base.exchange, kind="hyperliquid", coins=("BTC",))
@@ -399,11 +401,12 @@ def test_live_resume_reconciles_open_position_and_times_out_outage_deadlines(tmp
     assert venue.orders_sent == orders_sent  # replay made no duplicate venue submissions
     diary = items(path, m)
     timeouts = [i for i in diary if i["kind"] == "resume.timeouts"][-1]
-    assert set(timeouts["handles"]) == {d.handle for d in outstanding}
+    assert timeouts["handles"] == []
     for d in outstanding:
-        assert restored.queue.get(d.handle).status == SettleStatus.TIMED_OUT
+        assert restored.queue.get(d.handle).status == SettleStatus.PENDING
+        assert restored.queue.deadline_tick(d.handle) > restored.ticks_consumed
         history = restored.queue.history(d.handle)
-        assert sum(r.status == SettleStatus.TIMED_OUT for r in history) == 1
+        assert not any(r.status == SettleStatus.TIMED_OUT for r in history)
     reconcile = [i for i in diary if i["kind"] == "resume.reconcile"][-1]
     assert reconcile["positions"] and reconcile["venue_equity_usd"] is not None
     assert restored.stats.resumes == 1 and restored.wallet.check_conservation()

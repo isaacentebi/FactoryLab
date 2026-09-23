@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-import random
 from dataclasses import dataclass, field
+from math import ceil
 from statistics import fmean
 from typing import Any
 
 from factorylab.kernel.events import Event, EventKind
 from factorylab.kernel.queue import LearningReturn, SettleStatus
 from factorylab.kernel.wallet import Infeasible
-from factorylab.learners.base import BanditFeedback
-from factorylab.runtime.cascade import CascadeGate, event_tier, release_window_ns
+from factorylab.learners.base import NEUTRAL_REWARD, BanditFeedback
+from factorylab.runtime.cascade import CascadeGate, event_tier, release_window
+from factorylab.runtime.clockwork import deadline_ticks, tick_ns
 from factorylab.runtime.grounded import (
     OPPORTUNITY_DEFINITION,
     declined_trade,
@@ -29,6 +30,7 @@ from factorylab.runtime.shared import (
     DEF_EVALUATION,
     DEF_EXPOSURE,
     DEF_VERDICT,
+    MAX_FORECAST_HORIZON,
     NOOP,
     _to_plain,
 )
@@ -296,34 +298,39 @@ class FeedbackMixin:
     def _cascade_arrival(self, ev: Event) -> Event | None:
         """Ledger every arrival and release before changing buffers or routing upward.
 
-        Separation is time and completed evidence (§6.C). The window's duration
-        is drawn once, from the runtime's own reproducible stream, with the
-        jitter the manifest already precommits; arrivals never shorten it.
+        Separation is time and completed evidence (§6.C), counted in world ticks.
+        A window's duration is drawn once, when it opens, as ``min_ratio`` times the
+        measured period of the loop it gates (time audit T10): how long a return this
+        tier judges takes to reach the scored outcome its judgement is evidence of
+        (the producer's scored loop at tier one, the evaluator's above it), never
+        below one tick. The jitter is continuous and the tier's own
+        (``clockwork.jitter_draw``); arrivals never shorten a window.
         """
+        from factorylab.runtime.clockwork import jitter_draw
+
         tier = event_tier(ev)
         gate = self.cascade.get(tier)
-        rng = random.Random()
-        rng.setstate(self.rng.getstate())
+        now = self.ticks_consumed
         if gate is None:
-            gate = CascadeGate(
-                release_window_ns(
-                    self.m.timing.min_ratio,
-                    self.m.timing.jitter_fraction,
-                    rng.random(),
-                    self.tick_clock.interval_ns,
-                ),
-                opened_ns=ev.ts_ns,
-            )
-        next_gate, released = gate.add(ev, complete=self._cascade_evidence_complete,
+            inner = self.clockwork.measured(
+                "scored:producer" if tier == 1 else "scored:evaluator")
+            loop = f"cascade:{tier}"
+            count = self.clockwork.loops.get(loop, {}).get("fires", 0) + 1
+            window = release_window(self.m.timing.min_ratio, self.m.timing.jitter_fraction,
+                                    jitter_draw(self.clockwork.seed, loop, count), inner)
+            self.clockwork.loops[loop] = {"opened": now, "due": now + ceil(window),
+                                          "period": window, "inner": inner, "fires": count}
+            gate = CascadeGate(window, opened=now)
+        next_gate, released = gate.add(ev, now=now, complete=self._cascade_evidence_complete,
                                        priority=self._cascade_priority)
         self.ledger.append(
             {
                 "kind": "cascade.arrival",
                 "tier": tier,
                 "event_id": ev.id,
-                "window_ns": gate.window_ns,
-                "opened_ns": gate.opened_ns,
-                "elapsed_ns": gate.elapsed(ev.ts_ns),
+                "window_ticks": gate.window,
+                "opened_tick": gate.opened,
+                "elapsed_ticks": gate.elapsed(now),
                 "ts": self.clock.now_ns,
             }
         )
@@ -340,7 +347,6 @@ class FeedbackMixin:
                     "ts": self.clock.now_ns,
                 }
             )
-        self.rng.setstate(rng.getstate())
         if next_gate is None:
             self.cascade.pop(tier, None)
         else:
@@ -366,7 +372,7 @@ class FeedbackMixin:
             if not isinstance(pid, str) or pid not in known or q is None:
                 continue
             horizon = params.get(known[pid].horizon_param, self.ev.forecast_horizon_events)
-            if type(horizon) is not int or not 1 <= horizon <= 200:
+            if type(horizon) is not int or not 1 <= horizon <= MAX_FORECAST_HORIZON:
                 continue
             params = dict(params, **{known[pid].horizon_param: horizon})
             try:
@@ -378,7 +384,10 @@ class FeedbackMixin:
                     evaluator_id=evaluator_id,
                     event_id=f"forecast-{evaluator_handle}",
                     q=q,
-                    deadline_ns=self.clock.now_ns + (horizon + 2) * self.tick_clock.interval_ns * 4,
+                    # The horizon counts world ticks and the cutoff adds a ratio slack
+                    # (time audit T3): converted here only because the queue shows it.
+                    deadline_ns=self.clock.now_ns + deadline_ticks(
+                        horizon, self.m.timing.min_ratio) * tick_ns(self.tick_clock),
                     parent_handle=evaluator_handle,
                     now_event=self.n,
                     horizon=horizon,
@@ -395,7 +404,7 @@ class FeedbackMixin:
                                   "window_cursor": window_cursor(self.window)}
                 self.book.seal(forecast_type(
                     fh, evaluator_id, about, pid, params, q, self.n, self.n + horizon, "",
-                    **population))
+                    self.ticks_consumed + horizon, **population))
             except (ValueError, KeyError):
                 continue
             self.stats.forecasts_sealed += 1
@@ -406,12 +415,12 @@ class FeedbackMixin:
         """Guarantees a forecast-shaped invocation settles once, on all its resolved predictions.
 
         It earns their mean, or settles censored (priced when it left one of them
-        avoidably unresolved). A decision that timed out first settles too: its
-        deadline is wall time while its forecasts' horizons count events, so an
-        outage or a stalled loop can expire it before they come due, and the queue
-        keeps a late settlement's right for exactly that. Its learners were credited
-        once, neutrally, at the cutoff and are not trained again; the late
-        settlement is what puts the charter's price on the decision's record.
+        avoidably unresolved). A decision that timed out first settles too (the
+        queue keeps a late settlement's right): its cutoff and its forecasts'
+        horizons both count ticks, so this happens only when a prediction's horizon
+        outran the invocation's own. Its router was credited once, at the cutoff,
+        and is not trained again; the late settlement is what puts the charter's
+        price on the decision's record.
         """
         from factorylab.cortex.registration import measured_role
 
@@ -900,7 +909,7 @@ class FeedbackMixin:
                 # it, whoever forecast it (the seed observation consequence_paid_off_rate).
                 self.window.consequences_settled += 1
                 self.window.consequences_paid_off += int(payoff.y == 1)
-        settled = self.settler.settle_due(self.n, self._facts_for)
+        settled = self.settler.settle_due(self.n, self._facts_for, tick=self.ticks_consumed)
         for result in settled:
             parent = self.queue.get(result.handle).parent_handle
             if parent in self.forecast_returns and result.brier is not None:
@@ -1680,8 +1689,14 @@ class FeedbackMixin:
         # Booked only for a round that trained the router: the seat's own baseline, the
         # delay abstentions wait for and the scales they are priced on all describe
         # rounds the router learned from, never one that trained nothing.
-        target.latency[0] += max(0, self.clock.now_ns - decision.opened_ns)
-        target.latency[1] += 1
+        opened = self.queue.opened_tick(lr.handle)
+        if opened is not None:
+            # The router's own loop, in world ticks (time audit T3): the delay its
+            # abstentions wait and the period its epochs and gain steps respect (T6).
+            ticks = max(0, self.ticks_consumed - opened)
+            target.latency[0] += ticks
+            target.latency[1] += 1
+            self.clockwork.record(f"router:{state.kind}", ticks)
         if settled:
             target.observed.record(prop.chosen, reward)
             target.definitions[lr.definition_version] = (
@@ -1705,15 +1720,19 @@ class FeedbackMixin:
         """Owe ``state`` one abstention credit, due when a seat round would be learned.
 
         Guarantees the credit is applied exactly once, at the drawn NOOP's logged
-        propensity, no earlier than its open time plus the mean delay the router's
-        learned seat rounds took (its kernel deadline while there is none), and that
-        a swap router's frozen round is detached now and survives a checkpoint in
-        ``noop_credits``.
+        propensity, no earlier than its open tick plus the mean delay, in world
+        ticks, the router's learned seat rounds took (its tick cutoff while there is
+        none), and that a swap router's frozen round is detached now and survives a
+        checkpoint in ``noop_credits``.
         """
         p, executed = state.learner.inner.take_for(key) if key is not None else (None, None)
         total, count = self._successor_state(state).latency
-        due = decision.opened_ns + total // count if count else decision.deadline_ns
-        self.noop_credits[decision.handle] = {"router": state.learner.id, "due_ns": due,
+        opened = self.queue.opened_tick(decision.handle)
+        opened = self.ticks_consumed if opened is None else opened
+        cutoff = self.queue.deadline_tick(decision.handle)
+        due = (opened + -(-total // count) if count
+               else cutoff if cutoff is not None else self.ticks_consumed)
+        self.noop_credits[decision.handle] = {"router": state.learner.id, "due_tick": due,
                                               "p": p, "executed": executed}
         self._credit_abstentions()
 
@@ -1723,7 +1742,9 @@ class FeedbackMixin:
         routers = {st.learner.id: st
                    for st in self._all_router_states() + list(self.retired_routers.values())}
         for handle, credit in list(self.noop_credits.items()):
-            if credit["due_ns"] > now:
+            # A credit owed before the tick clock keeps the wall-clock due it was owed at.
+            if (credit["due_ns"] > now if "due_tick" not in credit
+                    else credit["due_tick"] > self.ticks_consumed):
                 continue
             del self.noop_credits[handle]
             drawer = routers.get(credit["router"])

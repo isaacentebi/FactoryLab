@@ -331,9 +331,24 @@ class DecisionQueue:
         """Emit score-zero timeout penalties once, preserving all late settlement rights."""
         if type(now_ns) is not int or now_ns < 0:
             raise ValueError("now_ns must be nonnegative integer nanoseconds")
+        return self.time_out(
+            [d.handle for d in self.outstanding() if d.deadline_ns <= now_ns], now_ns)
+
+    def time_out(self, handles: list[str], now_ns: int) -> list[str]:
+        """Time out exactly the named pending decisions, once each, at ``now_ns``.
+
+        The caller owns the clock a cutoff is counted in (the runtime counts world
+        ticks, essay II.IV.b-c); the queue owns the penalty. Guarantees the same
+        score-zero timeout return ``expire`` emits, at most one per decision, a
+        late settlement's right preserved, and a handle that is not pending
+        (already timed out or settled) left untouched. An unknown handle raises.
+        """
+        if type(now_ns) is not int or now_ns < 0:
+            raise ValueError("now_ns must be nonnegative integer nanoseconds")
         expired = []
-        for decision in self.outstanding():
-            if decision.deadline_ns > now_ns:
+        for handle in handles:
+            decision = self.__decisions[handle]
+            if decision.status is not SettleStatus.PENDING:
                 continue
             penalty = LearningReturn(
                 decision.handle, "timeout", 0.0, "timeout-v1", SettleStatus.TIMED_OUT, None

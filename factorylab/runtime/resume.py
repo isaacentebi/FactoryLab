@@ -77,6 +77,7 @@ def _record_types() -> dict[str, type]:
     from factorylab.kernel.registry import Contract, PriceSpec, ResourceBounds
     from factorylab.kernel.wallet import DripSchedule, ReleaseSchedule, Reservation
     from factorylab.runtime.cascade import CascadeGate
+    from factorylab.runtime.clockwork import Clockwork
     from factorylab.runtime.feedback import PendingJudgement
     from factorylab.runtime.governance import Retirement, WorkAssemblySpec
     from factorylab.runtime.pricing import MeasureWindow
@@ -117,7 +118,7 @@ def _record_types() -> dict[str, type]:
         LotOrder, LotTable, Payoff, ReturnAccount, _Standing, WorldEvent, WorldEventKind,
         AccountState, Fill, FundingEvent, FundingPayment, Order, OrderResult, Position,
         SpotBalance, SellerModel, Commitment, ExecutionReceipt, LearningReceipt,
-        CatalogueEntry, ModelRequest, ModelResponse, TokenPrice, PaymentQuote,
+        CatalogueEntry, ModelRequest, ModelResponse, TokenPrice, PaymentQuote, Clockwork,
     )
     return {cls.__name__: cls for cls in classes}
 
@@ -254,6 +255,9 @@ _RETIRED_PENDING = frozenset({"verdict.norm", "verdict.subject"})
 # ``upward_releases``: the unread UpwardBuffer (time audit T9).
 _RETIRED_FIELDS = {
     "_CardState": frozenset({"relief_window"}),
+    # A cascade window measured in wall nanoseconds (time audit T3, T10): the gate
+    # restores as a tick window due at its next completed arrival.
+    "CascadeGate": frozenset({"window_ns", "opened_ns"}),
     "RunStats": frozenset({"upward_releases"}),
     # The charter-window verdict commitment's fields (ruling R1).
     "PendingJudgement": frozenset({"judge", "cards", "window", "payoff_beat", "awaits_payoff",
@@ -641,6 +645,17 @@ _RUNTIME_FIELDS = (
     # Venue effects by custody, per decision, until its outcome settles: the
     # consequence line reports them beside provider cost (edition 3, C5).
     "venue_deltas",
+    # The clock (time audit T1-T3): the measured loops and derived schedules, and each
+    # open decision's tick cutoff. An older checkpoint has neither: its meters start
+    # empty, every derived loop opens afresh, and its decisions keep the wall-clock
+    # deadlines they were opened with.
+    "clockwork", "decision_ticks",
+    # Each card's last price move, the governance tier's viability, the epochs a
+    # speed limit deferred, and the treasury caps' anchor (time audit T2, T6, T7,
+    # T13). An older checkpoint has none: prices move on their next new sample, a
+    # tier is taken as viable until measured, no epoch waits, and the anchor is
+    # rebuilt from the treasury's own window.
+    "card_clock", "governance_viable", "pending_epochs", "cap_anchor_ns",
 )
 # Runtime fields read through a property with no setter, and the attribute behind it.
 _RUNTIME_BACKING = {

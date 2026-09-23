@@ -1,5 +1,6 @@
 from dataclasses import replace
 from decimal import Decimal
+from math import ceil
 
 import pytest
 
@@ -136,6 +137,8 @@ def test_cascade_release_is_ledger_first_and_fast_fallback_keeps_timeout(monkeyp
     for event in events[:2]:
         assert runtime._cascade_arrival(event) is None
     before = runtime.cascade[2]
+    # The window's duration is ticks (time audit T3, T10): it has elapsed at the third.
+    runtime.ticks_consumed = ceil(before.window)
     rng_before = runtime.rng.getstate()
     append = runtime.ledger.append
 
@@ -184,6 +187,7 @@ def test_a_meta_grades_the_representative_and_the_unread_siblings_borrow_nothing
     ]
     for event in events[:2]:
         assert runtime._cascade_arrival(event) is None
+    runtime.ticks_consumed = ceil(runtime.cascade[2].window)
     released = runtime._cascade_arrival(events[2])
     assert released is not None
     judged = Event(
