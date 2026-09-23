@@ -23,9 +23,10 @@ if TYPE_CHECKING:
 
 # The per-decision attribution the runtime keeps on the same window object
 # is not a public window fact and never reaches a registered observation.
+# The early-warning summaries are the evaluators' (``runtime.ews``), not a public fact.
 PRIVATE_WINDOW_FIELDS = ("decisions", "closed_values", "closed_regions", "closed_shares",
                          "closed_cards", "closed_prices", "closed_holdouts",
-                         "series_discarded")
+                         "series_discarded", "ews_variance", "ews_autocorrelation")
 MAX_WORLD_SAMPLES = 1024
 # Fields holding a public quantity filed under a private identity: a decision
 # handle, an evaluator's assembly id. The quantity is disclosed, the identity is
@@ -308,6 +309,26 @@ CATALOGUE: tuple[Observation, ...] = (
     # Essay II.IV: "speed is categorically indistinguishable from a specific approach
     # to cash burn" (charter audit M6). A clock motion predicts its effect on this, or
     # on an observation the population registered.
+    # Essay II.III.a, ruling R3, evaluations M2: the early-warning statistics, live. The
+    # full table (every series at k, 2k and 4k windows) is shown to the evaluators;
+    # these two summarise it so a card may price critical slowing down.
+    Observation(
+        "ews_variance",
+        "The largest population variance among the score series (mean verdict, mean "
+        "meta grade, consequence skill, evaluator disagreement), each over its shortest "
+        "complete span of k, 2k or 4k closed windows.",
+        "score variance",
+        lambda w: getattr(w, "ews_variance", None),
+        (0.0, 1.0),
+    ),
+    Observation(
+        "ews_autocorrelation",
+        "The largest centred lag-one autocorrelation among the same score series over "
+        "the same spans.",
+        "correlation",
+        lambda w: getattr(w, "ews_autocorrelation", None),
+        (-1.0, 1.0),
+    ),
     Observation(
         "burn_per_window",
         "Compute spent in the window: every invocation's metered cost plus "

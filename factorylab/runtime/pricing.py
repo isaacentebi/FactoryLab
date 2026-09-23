@@ -82,6 +82,10 @@ class MeasureWindow:
     # Every invocation's metered cost plus retained-storage rent, in micro-USD: the
     # window's compute burn (``burn_per_window``; charter audit M6).
     compute_spend_micro: int = 0
+    # The early-warning summaries of the score series at this window's close
+    # (``runtime.ews``): evaluator-facing, never a public window fact.
+    ews_variance: float | None = None
+    ews_autocorrelation: float | None = None
 
 
 #: The definition of a censored settlement that carries a price: its decision left
@@ -397,6 +401,7 @@ class PricingMixin:
             if eid in evaluators and (v.get("n") or v.get("verdict_n"))
         ]
         w = replace(self.window, forecast_skills=skills)
+        history, series = self._early_warning_open(w)
         book = self.observations
         named = {normalise(c.observation) for c in self.charter.cards}
         for oid, entry in self.registered_observations.items():
@@ -426,6 +431,7 @@ class PricingMixin:
         # Typed windows. A card may name a registered observation.
         card_values = measure_cards(self.charter.cards, self.card_samples, w, observations=book)
         card_values = {cid: value for cid, value in card_values.items() if cid in self.regions}
+        self._early_warning_close(w, history, series, card_values)
         # A decision settling late is priced on the window it worked in.
         self.window.closed_values = dict(card_values)
         self.window.closed_regions = dict(self.regions)
@@ -484,6 +490,54 @@ class PricingMixin:
         self._ledger_unattributed()
         close_window(self, values)
         self._prune_price_evidence()
+
+    def _early_warning_open(self, w: MeasureWindow) -> tuple[list[dict], dict]:
+        """This window's score profile joins the history, and its summaries are measured.
+
+        Essay II.III.a, ruling R3, evaluations M2: variance and lag-one
+        autocorrelation at several timescales, and ensemble disagreement, computed
+        online at every window close. The score series are read with the seed
+        measures themselves, before any observation is valued, so the two summary
+        observations (``ews_variance``, ``ews_autocorrelation``) are values of this
+        window like any other and a card may price them.
+        """
+        from factorylab.runtime import ews
+        from factorylab.runtime.observations import SEEDS
+
+        k = self.m.immune.k
+        values = {oid: SEEDS[oid].measure(w) for oid in (
+            "verdict_mean", "meta_verdict_mean", "forecast_skill", "evaluator_disagreement")}
+        profile = {**ews.score_profile(values), "balance": self.wallet.balance / 1_000_000}
+        history = ews.history_with(self.stats.ews_history, w.index, profile, k)
+        series = ews.table(history, [], k)
+        w.ews_variance, w.ews_autocorrelation = ews.summary(series)
+        self.window.ews_variance, self.window.ews_autocorrelation = (
+            w.ews_variance, w.ews_autocorrelation)
+        return history, series
+
+    def _early_warning_close(self, w: MeasureWindow, history: list[dict], series: dict,
+                             card_values: dict[str, float]) -> None:
+        """Add the cards' series and publish the table to the evaluators; ledger it.
+
+        Guarantees the published table carries every series ``early_warnings`` reads
+        (the score series, each card's value series and the wallet balance) at k, 2k
+        and 4k windows, and that the record is the evaluators' (``ews.view``), never
+        a producer's.
+        """
+        from factorylab.runtime import ews
+
+        k = self.m.immune.k
+        history[-1]["profile"].update({f"card:{cid}": value for cid, value in card_values.items()})
+        self.stats.ews_history = history
+        cards = sorted({f"card:{c.id}" for c in self.charter.cards})
+        table = ews.table(history, cards, k)
+        summary = {"ews_variance": w.ews_variance, "ews_autocorrelation": w.ews_autocorrelation}
+        self.stats.early_warning = {"window": w.index, "spans_windows": [k, 2 * k, 4 * k],
+                                    "summary": summary, "series": table}
+        supported = sorted(name for name, scales in table.items()
+                           if any(s.get("variance") is not None for s in scales))
+        self.ledger.append({"kind": "ews.window", "window": w.index, "summary": summary,
+                            "supported_series": supported, "ts": self.clock.now_ns})
 
     def _anticipated_violation(self, card_id: str, value: float) -> float | None:
         """The market's expected change in a card's violation, or None without a market.

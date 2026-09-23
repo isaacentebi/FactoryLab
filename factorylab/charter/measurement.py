@@ -524,6 +524,10 @@ def measure_card(card: MetricCard, samples: CardSamples, observations=None) -> d
                 for key, value in other.items():
                     if key in ("index", "equity_start_micro"):
                         continue
+                    if key in ("ews_variance", "ews_autocorrelation"):
+                        # A statistic of the latest close, not a quantity to add.
+                        merged[key] = value if value is not None else merged[key]
+                        continue
                     if key == "max_position_notional_micro":
                         present = [v for v in (merged[key], value) if v is not None]
                         merged[key] = max(present) if present else None

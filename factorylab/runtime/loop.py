@@ -1072,6 +1072,9 @@ class Runtime(
             "world": self._world_block(),
             "your_state": self.working_state.render(sample.chosen),
             "unread_outcomes": self.outcomes.unread(sample.chosen),
+            # Variance, autocorrelation and ensemble disagreement, live (II.III.a):
+            # the evaluators' reading of the stack, never a producer's (M2).
+            "early_warning": self._early_warning_view(),
             **self._action_policy_input(sample.chosen),  # private
             # Evaluation is a commission, not an obligation (§6.B): a subject, a
             # scope, an evidence horizon and a budget, which may be declined.
@@ -1230,6 +1233,7 @@ class Runtime(
             },
             "producer_outputs": judged_outputs(payload.get("producer_outputs", {})),
             "charter": self._charter_text(),
+            "early_warning": self._early_warning_view(),
             # A meta judge reads the verdict like a machine, as a first-tier judge
             # reads a return (C7): its own operating access, not the whole world.
             "actor_context": self._operating_context(sample.chosen, self._world_block()),

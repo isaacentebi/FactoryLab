@@ -979,9 +979,13 @@ class SchematicsMixin:
         observed is here. The two are different questions and a seat reading
         either should not have to sort one out of the other.
         """
+        from factorylab.runtime.ews import EWS_OBSERVATIONS
+
+        # The early-warning summaries are the evaluators' (ruling R3, evaluations M2).
         return {
-            "last_closed_window_values": dict(self.stats.last_window_values),
-            "recent_mids": {c: list(v) for c, v in self.recent_mids.items()},
+            "last_closed_window_values": {k: v for k, v in self.stats.last_window_values.items()
+                                          if k not in EWS_OBSERVATIONS},
+            "recent_mids": {c: list(v) for c, v in self._seat_recent_mids().items()},
         }
 
     def _catalogue_view(self) -> dict[str, Any]:
