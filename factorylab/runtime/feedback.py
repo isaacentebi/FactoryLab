@@ -1934,7 +1934,10 @@ class FeedbackMixin:
         if sample is None:
             return neutral, 0.0
         roles = sample.get("menu_roles") or {sample["role"]: 1.0}
-        penalty = sum(weight * self._penalty_for(role, handle)
+        # Each role's price is measured with the abstention scoped in that role (the
+        # Wave 2 review, item 8b): a less-weighted role's floor and attribution are
+        # that role's, never the role the window filed the abstention under.
+        penalty = sum(weight * self._penalty_for(role, handle, as_role=role)
                       for role, weight in sorted(roles.items()))
         return min(1.0, max(0.0, neutral - penalty)), penalty
 

@@ -671,8 +671,14 @@ class PricingMixin:
                                else self.controller.price(card.id)))
         return priced
 
-    def _penalty_terms(self, cards: str, handle: str | None) -> list[dict]:
-        """Late decisions keep their own windows; current windows use observed causal prefixes."""
+    def _penalty_terms(self, cards: str, handle: str | None, *,
+                       as_role: str | None = None) -> list[dict]:
+        """Late decisions keep their own windows; current windows use observed causal prefixes.
+
+        ``as_role`` scopes ``handle`` in that role wherever a share is measured by role,
+        whatever role its window recorded: an abstention priced on each role its draw
+        could have woken is measured as a decision of that role (``_priced_abstention``).
+        """
         terms = []
         origins = self.price_origins.get(handle, {})
         for card, observation, window, price in self._priced_cards(origins):
@@ -691,14 +697,16 @@ class PricingMixin:
             weight = price * amount
             owner = None
             share = 1.0 if handle is None else self._decision_share(
-                window, handle, observation.id, card.answers_for, region, values[card.id]
+                window, handle, observation.id, card.answers_for, region, values[card.id],
+                as_role=as_role,
             )
             if handle is not None and observation.id == "cost_per_return":
                 share = self._cost_share(card, window, handle, share)
             elif handle is not None and amount > 0 and observation.id not in _EXACT_SHARES:
                 scopes = (self.card_samples.scopes if window.closed_values is None
                           else window.closed_scopes).get(card.id) or {}
-                attributed = self._attributed_share(window, handle, card, region, scopes)
+                attributed = self._attributed_share(window, handle, card, region, scopes,
+                                                    as_role=as_role)
                 if attributed is not None:
                     share, owner = attributed
             term = {"card_id": card.id, "observation": observation.id,
@@ -718,7 +726,8 @@ class PricingMixin:
         return sample["role"] if sample is not None else self._decision_role(handle)
 
     def _attributed_share(self, window, handle: str, card, region,
-                          scopes: dict[str, float]) -> tuple[float, str | None] | None:
+                          scopes: dict[str, float], *,
+                          as_role: str | None = None) -> tuple[float, str | None] | None:
         """Route a scoped card's violation onto the scopes whose own samples violate it.
 
         A card measured per assembly (or per role) is the mean of its scopes, so
@@ -738,11 +747,12 @@ class PricingMixin:
         total = sum(excess.values())
         if total <= 0:
             return None
-        own = self._scope_of(window, handle, per)
+        own = (as_role if as_role is not None and per == "role"
+               else self._scope_of(window, handle, per))
         if not excess.get(own):
             return 0.0, own
         peers = {h for h, d in window.decisions.items()
-                 if (d["invocations"] or d["ok"] or not d["cost"])
+                 if h != handle and (d["invocations"] or d["ok"] or not d["cost"])
                  and self._scope_of(window, h, per) == own}
         peers.add(handle)
         part = excess[own] / total
@@ -817,12 +827,14 @@ class PricingMixin:
         total = sum(shares.values())
         return {h: float(amount / total) for h, amount in shares.items()} if total else {}
 
-    def _decision_share(self, window, handle, observation, role, region, value) -> float:
+    def _decision_share(self, window, handle, observation, role, region, value, *,
+                        as_role: str | None = None) -> float:
         """Attributable violations use own contributions; other observations divide by support.
 
         A generic share never falls below ``prices.min_blame_share``: splitting
         participation across many decisions cannot dilute what each one carries
-        of a violation below that floor.
+        of a violation below that floor. ``as_role`` counts ``handle`` among that
+        role's decisions, whatever role its window recorded.
         """
         samples = window.decisions
         own = samples.get(handle, {})
@@ -847,14 +859,17 @@ class PricingMixin:
             # retained-storage charge falling due where it never responded —
             # made no response this observation reads, so it does not take a
             # share of the violation and does not dilute the shares that do.
-            n = sum(role == "all" or d["role"] == role for d in samples.values()
+            n = sum(role == "all"
+                    or (as_role if h == handle and as_role is not None else d["role"]) == role
+                    for h, d in samples.items()
                     if d["invocations"] or d["ok"] or not d["cost"])
             return max(self.m.prices.min_blame_share, 1 / max(1, n))
         return min(1.0, numerator / denominator) if denominator > 0 else 0.0
 
-    def _penalty_for(self, cards: str, handle: str | None = None) -> float:
+    def _penalty_for(self, cards: str, handle: str | None = None, *,
+                     as_role: str | None = None) -> float:
         """Cap the total pressure, then allocate its penalty-weighted contribution share."""
-        terms = self._penalty_terms(cards, handle)
+        terms = self._penalty_terms(cards, handle, as_role=as_role)
         total = sum(t["weight"] for t in terms)
         if total <= 0:
             return 0.0
