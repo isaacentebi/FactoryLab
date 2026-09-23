@@ -691,11 +691,30 @@ def _http_request():
 
 
 def _sibling_runs(output_dir: Path | None) -> tuple[Path, ...]:
-    """Earlier runs beside this one (``work/capital-loop/<run>``) that kept a diary."""
+    """Earlier runs beside this one (``work/capital-loop/<run>``) that kept a diary.
+
+    Guarantees the kill witness a run writes beside its own directory
+    (``factorylab.runtime.witness.WITNESS_DIR``) is never taken for a run: it holds
+    witness lines and no ledger key, so reading it as a run refused every capital-loop
+    launch after the first. A directory of that name holding a ledger key is a run and
+    is read like any other (a run may not be named so; see ``_refuse_reserved_out``).
+    """
+    from factorylab.runtime.witness import WITNESS_DIR
+
     if output_dir is None:
         return ()
-    return tuple(sorted(p for p in output_dir.parent.iterdir()
-                        if p != output_dir and (p / "ledger.jsonl").exists()))
+    return tuple(sorted(
+        p for p in output_dir.parent.iterdir()
+        if p != output_dir and (p / "ledger.jsonl").exists()
+        and not (p.name == WITNESS_DIR and not (p / "ledger.jsonl.key").exists())))
+
+
+def _refuse_reserved_out(output_dir: Path | None) -> None:
+    """Guarantees no run is written where the kill witness lives beside runs."""
+    from factorylab.runtime.witness import WITNESS_DIR
+
+    if output_dir is not None and output_dir.name == WITNESS_DIR:
+        raise RehearsalRefused("output_dir_reserved_for_witness")
 
 
 def _denied_rails(capital_loop: bool) -> list[str]:
@@ -758,6 +777,9 @@ def run_rehearsal(
     report_path = None
     if out is not None:
         output_dir = Path(out)
+        # Before anything is created: a refused launch must not leave a run directory
+        # where the private kill witness lives (the #142 review).
+        _refuse_reserved_out(output_dir)
         output_dir.mkdir(parents=True, exist_ok=False)
         report_path = output_dir / "report.json"
     admission = Admission(cap_micro, max_calls, recover_provider_failures=True)
