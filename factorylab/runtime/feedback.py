@@ -1554,9 +1554,9 @@ class FeedbackMixin:
         distribution it is attributed to. The router's record prices the choice of
         who acted; this one prices what the actor chose to do, over the action set
         the actor declared. A decision with no observed score (censored,
-        inapplicable, or past its cutoff) is credited the learner's neutral
-        estimate for the action (its own observed mean, else zero consequence), as
-        the router's are.
+        inapplicable, or past its cutoff) is credited zero consequence, never the
+        action's own long-run mean (time audit T4), less the price its settlement
+        carries, as the router's are.
         """
         assembly_id = self.assembly_rounds.pop(handle, None)
         if assembly_id is None:
@@ -1567,7 +1567,7 @@ class FeedbackMixin:
         declared = self.queue.declared_propensity(handle)
         imputed = reward is None
         if declared is not None and reward is None:
-            reward = _priced(learner.observed.neutral(declared.chosen), priced)
+            reward = _priced(NEUTRAL_REWARD, priced)
         if reward is None or declared is None:
             try:
                 learner.discard_for(handle)
@@ -1612,15 +1612,18 @@ class FeedbackMixin:
     def _learn_router_return(self, state: Any, lr: LearningReturn) -> None:
         """Train a router once per decision it drew, on the evidence that decision has.
 
-        The rule (defects 2 and 4): a decision's cutoff is its kernel deadline. Its
-        first outcome is its one update. A score that settled it before the cutoff
-        is observed and trains the router at that score. A decision that closed
-        without an observed score (censored, inapplicable) or reached its cutoff
-        unscored (timed out) is not a zero: it is credited the router's neutral
-        estimate for the arm drawn (``ObservedRewards.neutral``: that arm's own
-        observed mean, else the router's zero consequence). A score that arrives after the
-        cutoff still settles the decision for the kernel -- its money, its
-        standing, its history -- but trains no learner a second time.
+        The rule (defects 2 and 4): a decision's cutoff is its tick cutoff (its own
+        horizon plus a ratio slack, time audit T3). Its first outcome is its one
+        update. A score that settled it before the cutoff is observed and trains the
+        router at that score. A decision that closed without an observed score
+        (censored, inapplicable) or reached its cutoff unscored (timed out) is not a
+        zero, and it is not the arm's own long-run mean either: a population paid
+        long-run averages "ceases to produce variation" (essay II.IV.b; time audit
+        T4). It is credited the router's zero-consequence reward (``RouterState.
+        neutral``: what a woken seat that delivered nothing scores), less the price
+        its settlement carries. A score that arrives after the cutoff still settles
+        the decision for the kernel -- its money, its standing, its history -- but
+        trains no learner a second time.
 
         An abstention (NOOP) is credited the router's zero-consequence reward
         (``RouterState.neutral``), whatever its settlement: waking nobody is worth
@@ -1672,9 +1675,10 @@ class FeedbackMixin:
                                 "penalty": penalty, "reward": reward,
                                 "ts": self.clock.now_ns})
         else:
-            # The seat's own baseline on the live successor, less any charter price
-            # its settlement carries (routers-learn + charter-price-bites).
-            reward = _priced(target.observed.neutral(prop.chosen, target.neutral()), lr)
+            # The router's zero-consequence baseline on the live successor, never the
+            # arm's own mean (time audit T4), less any charter price its settlement
+            # carries (routers-learn + charter-price-bites).
+            reward = _priced(target.neutral(), lr)
         if reward is None:
             if key is not None:
                 state.learner.inner.discard_for(key)
