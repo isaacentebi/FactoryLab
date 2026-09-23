@@ -111,8 +111,10 @@ start_cash_usd = "120"
 [[models]]
 id = "deepseek/deepseek-v4.1-flash"
 provider = "openrouter"
+# Ceilings at or above the route's list price (OpenRouter, 23 September 2026: $0.04 in,
+# $0.64 out); metering charges what the provider reports.
 input_usd_per_mtok = "0.15"
-output_usd_per_mtok = "0.60"
+output_usd_per_mtok = "0.70"
 reasoning = { enabled = false }
 # Never silently authorize a more expensive fallback than the route that was validated
 # (GPT-6 §10.2): OpenRouter routes only to providers that honour these parameters.
@@ -282,7 +284,7 @@ initial_state = { lens = "Your starting prior is that an outcome is noisy eviden
 [[assemblies]]
 id = "judge-fidelity"
 role = "evaluator"
-model_id = "z-ai/glm-5.3-flash"
+model_id = "minimax/minimax-m3"
 accepts = ["ProducerReturn", "Exposure"]
 max_tokens = "provider"
 effort = "low"
