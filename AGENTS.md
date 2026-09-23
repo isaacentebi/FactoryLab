@@ -67,7 +67,9 @@ architecture.
    - The signal that grades an evaluator sits outside the loop it judges.
 7. **Evaluations (§III).**
    - Online and continuous, never offline gates or predefined rubrics.
-   - Evaluators are the majority of the population and of compute.
+   - Producers are the minority of the population (a load-time invariant). Chapter II
+     expects evaluators to consume more compute too ("likely"). That share is observed
+     and priceable through the charter, not imposed by fiat.
    - Most evaluators are mean-based learners.
    - Evaluations are recursive (evaluations of evaluations).
    - Model families are heterogeneous: a shared foundation model is a forcing
