@@ -159,6 +159,17 @@ output_usd_per_mtok = "0.50"
 reasoning = { effort = "low" }
 extra_body = { provider = { require_parameters = true } }
 
+# A fifth family for the evaluator tier. Qwen 3.8 flash produced 11 of the 15 malformed
+# answers in the last live batch (mostly "field is outside enum" as a judge), so it keeps
+# one seat; MiniMax M3 is also sold by Venice, the rail the factory can refill itself.
+[[models]]
+id = "minimax/minimax-m3"
+provider = "openrouter"
+input_usd_per_mtok = "0.30"
+output_usd_per_mtok = "1.20"
+reasoning = { enabled = false }
+extra_body = { provider = { require_parameters = true } }
+
 # The one frontier seat: tier-3 meta-audit, which grades the metas and fires a handful of
 # times per few hundred ticks, so frontier judgement where it has the most leverage.
 [[models]]
@@ -240,7 +251,7 @@ initial_state = { lens = "Your starting prior is that an observed pattern is wea
 [[assemblies]]
 id = "constructor"
 role = "producer"
-model_id = "qwen/qwen3.8-flash"
+model_id = "minimax/minimax-m3"
 accepts = ["WorldUpdate", "Fill"]
 max_tokens = "provider"
 effort = "low"
@@ -282,7 +293,7 @@ initial_state = { lens = "Your starting prior is that a favourable measurement c
 [[assemblies]]
 id = "judge-mechanics"
 role = "evaluator"
-model_id = "qwen/qwen3.8-flash"
+model_id = "minimax/minimax-m3"
 accepts = ["ProducerReturn", "Exposure"]
 max_tokens = "provider"
 effort = "low"
@@ -302,7 +313,7 @@ initial_state = { lens = "Your starting prior is that most outcomes in a quiet m
 [[assemblies]]
 id = "meta-calibration"
 role = "meta"
-model_id = "qwen/qwen3.8-flash"
+model_id = "minimax/minimax-m3"
 accepts = ["Verdict", "MetaVerdict"]
 max_tokens = "provider"
 effort = "low"
