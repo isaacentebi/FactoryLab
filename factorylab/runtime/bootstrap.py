@@ -479,6 +479,12 @@ class BootstrapMixin:
         # unhistoried tool action whose result its next model round reads. Emptied
         # when the invocation returns, so a checkpoint never holds an entry.
         self.niche_rounds: dict[str, str] = {}
+        # Each seat's use of the period's niche, against ``novelty.seat_share`` of it:
+        # {"start_tick", "cap" (the period's share), "used": {seat: micro-USD}}.
+        self.niche_use: dict[str, Any] = {}
+        # The thrash charge each open core-router round carries (versioning C2): the
+        # price in force at its draw times the router's own movement. Only nonzero.
+        self.thrash_charges: dict[str, float] = {}
         # Time audit T14: when each loop's configuration last changed, and the
         # lifespans recorded since the immune organ last closed a window.
         self.config_ticks: dict[str, int] = {}

@@ -397,6 +397,9 @@ class NoveltySpec:
 
     share: float
     trials: int = 3  # settled consequences that end an assembly's protected trial
+    #: The most of one consequence period's niche one seat's unhistoried actions may
+    #: use (ruling R5; the #134 review), so no seat can starve the registration trials.
+    seat_share: float = 0.25
 
 
 @dataclass(frozen=True)
@@ -1001,6 +1004,10 @@ class WorldManifest:
         if (type(self.novelty.share) not in (int, float)
                 or not isfinite(self.novelty.share) or not 0 < self.novelty.share <= 1):
             raise ValueError("novelty share must be in (0, 1]")
+        seat_share = self.novelty.seat_share
+        if (type(seat_share) not in (int, float) or isinstance(seat_share, bool)
+                or not isfinite(seat_share) or not 0 < seat_share <= 1):
+            raise ValueError("novelty.seat_share must be in (0, 1]")
         for name, value, minimum in (
             ("novelty.trials", self.novelty.trials, 1),
             ("committee.min_settled", self.committee.min_settled, 1),
@@ -1455,7 +1462,8 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         exchange=exchange,
         models=models,
         assemblies=assemblies,
-        novelty=NoveltySpec(nov.get("share", 0.1), nov.get("trials", 3)),
+        novelty=NoveltySpec(nov.get("share", 0.1), nov.get("trials", 3),
+                             nov.get("seat_share", 0.25)),
         committee=_committee(d.get("committee", {})),
         immune=_manifest_immune(d.get("immune", {})),
         timing=TimingSpec(

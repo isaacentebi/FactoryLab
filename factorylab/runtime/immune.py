@@ -15,11 +15,13 @@ report also replays (``versioning.versions.diagnose``). The answers:
   bounded by ``prices.penalty_cap`` like every card penalty; see ``thrash_penalty``
   for why that bound is kept.
 * **thrash**: "penalize the duration of spectral-gap volatility, incentivizing the
-  surplus-retaining core of no-swap-regret learners to stabilize": the version gap's
-  volatility is priced by the charter's one price law, a PID whose integral
-  accumulates how long the volatility lasts (``THRASH_CARD``), and the price is
-  subtracted from the rewards of the no-swap-regret routers and of their
-  abstentions (``FeedbackMixin._thrash_charge``).
+  surplus-retaining core of no-swap-regret learners to stabilize": the diagnosis's
+  unsettledness (the version gap's volatility, oscillation, abandoned versions,
+  short-lived configurations) is priced by the charter's one price law, a PID whose
+  integral accumulates how long it lasts (``THRASH_CARD``), and each round of a
+  no-swap-regret router, abstentions included, is charged that price times the
+  router's own policy movement (``FeedbackMixin._thrash_charged``): holding still
+  is what lowers the charge.
 * **learning death**: "delivered as a fact about the world", never as a response:
   the novelty reserve is usable by unhistoried actions of every seat (ruling R5,
   ``RoutingMixin._niche_action``). The organ only holds the exploration gain it
@@ -74,9 +76,13 @@ def thrash_controller(ledger, manifest) -> PriceController:
 def thrash_penalty(rt) -> dict:
     """Update the thrash price from the volatility just read, and the penalty it sets.
 
-    Guarantees the penalty is ``min(lambda * v, prices.penalty_cap)``, where ``v``
-    is the volatility's distance above ``immune.tv_threshold`` in the gap's own
-    units, and zero while the volatility is unsupported or inside that bound.
+    Guarantees the price observes ``u``, the diagnosis's unsettledness (the
+    largest of the gap series' volatility, a periodic oscillation, abandoned
+    versions and short-lived configurations, ``versions.diagnose``), and the
+    penalty is ``min(lambda * v, prices.penalty_cap)``, where ``v`` is ``u``'s
+    distance above ``immune.tv_threshold``, zero while it is unsupported or inside
+    that bound. The penalty is the published reading; what a round is charged is
+    the price times the router's own movement (``FeedbackMixin._thrash_charged``).
 
     ``prices.penalty_cap`` binds this and the stable-failure ratchet alike (versioning
     audit P4 asked whether it should). It is kept: a reward is a unit-interval score,
@@ -89,15 +95,14 @@ def thrash_penalty(rt) -> dict:
     and the ratchet keeps winding the card's integral, which keeps the price after
     the attractor is left.
     """
-    state = rt.stats.versions
-    volatility = state.get("volatility")
+    unsettled = rt.stats.versions.get("unsettled")
     controller = rt.thrash_controller
-    if volatility is not None:
-        controller.observe(THRASH_CARD, volatility, window_end_event=rt.n)
+    if unsettled is not None:
+        controller.observe(THRASH_CARD, unsettled, window_end_event=rt.n)
     price = controller.price(THRASH_CARD)
-    violation = controller.violation(THRASH_CARD, volatility) if volatility is not None else 0.0
+    violation = controller.violation(THRASH_CARD, unsettled) if unsettled is not None else 0.0
     penalty = min(price * violation, rt.m.prices.penalty_cap)
-    return {"volatility": volatility, "violation": violation, "lambda": price,
+    return {"unsettled": unsettled, "violation": violation, "lambda": price,
             "penalty": penalty}
 
 
@@ -298,7 +303,7 @@ def close_window(rt, values: dict[str, float]) -> None:
         "regions": {f"card:{cid}": asdict(region) for cid, region in regions.items()},
     }
     rt.lifespan_log = []
-    windows = [*rt.stats.immune_windows, current][-horizon:]
+    windows = [*rt.stats.immune_windows, current][-live.retention(horizon, k):]
     state, events = live.advance(rt.stats.versions or live.fresh(), windows, k=k,
                                  horizon=horizon, tv_threshold=spec.tv_threshold, **bins)
     for event in events:
@@ -316,6 +321,7 @@ def close_window(rt, values: dict[str, float]) -> None:
     flags = diagnosed.pop("flags")
     evidence = {"window": current["index"], **diagnosed}
     rt.stats.immune_windows = windows
+    state["unsettled"] = diagnosed["unsettled"]  # what the thrash price observes
     rt.stats.versions = state
     rt.stats.pathologies = flags
     for kind, detected in flags.items():

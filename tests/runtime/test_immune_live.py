@@ -56,14 +56,15 @@ def test_every_closed_window_is_read_into_live_versions_and_settling_reaches_gov
     # The launch settles by the factory's own dynamics: governance measures revisions.
     assert not _items(rt, "governance.settling")
     rt.charter = replace(rt.charter, edition=rt.charter.edition + 1)
-    for _ in range(5):
+    for _ in range(2 * rt.m.immune.k + 1):
         _close(rt, 1.0, registrations=0, organ_due=False)
     settled = [s for s in _items(rt, "version.settled") if s["cause"] == "charter"]
     assert [s["settled"] for s in settled] == [True]
     governance = _items(rt, "governance.settling")
     assert governance[-1]["settling_ticks"] == settled[0]["ticks"] > 0
     assert rt.cadence.slowest_period_events() >= settled[0]["ticks"]
-    assert len(rt.stats.immune_windows) == rt.m.timing.min_ratio * rt.m.immune.k
+    ratio, k = rt.m.timing.min_ratio, rt.m.immune.k
+    assert len(rt.stats.immune_windows) == ratio * max(k, ratio)
     window = _items(rt, "immune.window")[-1]
     assert {"gap", "rolling_gap", "card_gap", "volatility", "tick", "terms",
             "frontier_invocation", "thrash"} <= set(window)
@@ -91,43 +92,112 @@ def test_a_charter_edition_and_a_change_of_terms_each_open_a_version():
 # --- thrash, priced (versioning C2) ----------------------------------------------------
 
 
-def test_the_thrash_price_integrates_the_duration_of_volatility_and_leaks_after():
+def test_the_thrash_price_integrates_the_duration_of_unsettledness_and_leaks_after():
     rt = make_runtime()
     prices = []
     for _ in range(5):
         rt.n += 10
-        rt.stats.versions = {"volatility": 0.6}
+        rt.stats.versions = {"unsettled": 0.6}
         prices.append(immune.thrash_penalty(rt))
     lambdas = [p["lambda"] for p in prices]
     assert lambdas == sorted(lambdas) and lambdas[-1] > lambdas[0]
     assert prices[-1]["penalty"] == pytest.approx(
         min(lambdas[-1] * 0.4, rt.m.prices.penalty_cap))
     rt.n += 10
-    rt.stats.versions = {"volatility": 0.1}  # inside the bound: settled
+    rt.stats.versions = {"unsettled": 0.1}  # inside the bound: settled
     settled = immune.thrash_penalty(rt)
     assert settled["penalty"] == 0 and settled["lambda"] < lambdas[-1]
-    rt.stats.versions = {"volatility": None}
+    rt.stats.versions = {"unsettled": None}
     assert immune.thrash_penalty(rt)["penalty"] == 0
 
 
-def test_the_thrash_price_charges_the_core_and_its_abstentions_never_the_frontier():
+def _draw(state, probs):
+    from factorylab.learners.router import Sample
+
+    seats = [a for a in state.universe if a != NOOP][:len(probs) - 1]
+    return Sample((*seats, NOOP), tuple(probs), NOOP, 1, state.learner.id, "h", ())
+
+
+def test_a_core_router_that_stops_moving_pays_less_and_the_frontier_nothing():
+    """The #134 review: a charge every round bore alike is a constant shift no-regret
+    learners ignore. Each round is charged the price times the router's own movement,
+    so holding its policy still is what lowers it (essay II.II.b)."""
     rt = make_runtime()
     rt.m = replace(rt.m, evaluation=replace(rt.m.evaluation, no_swap_regret_kinds=("Tick",)))
-    rt.window.thrash_penalty = 0.2
+    rt.stats.thrash = {"lambda": 0.4}
     core, frontier = rt.routers["Tick"][0], rt.routers["MarketMid"][0]
-    assert rt._thrash_charged(core, "no-origin", 0.7) == pytest.approx(0.5)
-    assert rt._thrash_charged(core, "no-origin", 0.1) == 0.0
-    assert rt._thrash_charged(frontier, "no-origin", 0.7) == 0.7
-    charged = len(_items(rt, "thrash.charged"))
+    cap = rt.m.prices.penalty_cap
+    rt._record_movement(core, _draw(core, (0.8, 0.1, 0.1)), "h1")  # the first draw
+    rt._record_movement(core, _draw(core, (0.1, 0.8, 0.1)), "h2")  # moved: TV 0.7
+    rt._record_movement(core, _draw(core, (0.1, 0.8, 0.1)), "h3")  # held still
+    assert "h1" not in rt.thrash_charges and "h3" not in rt.thrash_charges
+    assert rt.thrash_charges["h2"] == pytest.approx(0.4 * 0.7)
+    moved, still = rt._thrash_charged(core, "h2", 0.7), rt._thrash_charged(core, "h3", 0.7)
+    assert still == pytest.approx((0.7 + cap) / (1 + cap)) and moved < still
+    assert still - moved == pytest.approx(0.28 / (1 + cap))
+    # One affine map: a low reward loses the same charge as a high one, never clipped.
+    rt.thrash_charges.update(lo=0.28, hi=0.28)
+    assert (rt._thrash_charged(core, "x", 0.05) - rt._thrash_charged(core, "lo", 0.05)
+            == pytest.approx(rt._thrash_charged(core, "y", 0.95)
+                             - rt._thrash_charged(core, "hi", 0.95)))
+    rt._record_movement(frontier, _draw(frontier, (0.8, 0.2)), "f1")
+    rt._record_movement(frontier, _draw(frontier, (0.2, 0.8)), "f2")
+    assert "f2" not in rt.thrash_charges and rt._thrash_charged(frontier, "f2", 0.7) == 0.7
+    # Waking nobody pays it too (ruling R9).
     handle = rt.queue.open(
         actor=core.learner.id, event_id="noop", channel="verdict", deadline_ns=10**18,
         parent_handle=None, cost_ceiling=0,
         propensity=PropensityRecord((NOOP,), (1.0,), NOOP, 0, core.learner.id, "state"))
+    rt.thrash_charges[handle] = 0.3
     rt.noop_credits[handle] = {"router": core.learner.id, "due_tick": rt.ticks_consumed,
                                "p": None, "executed": None}
     rt._credit_abstentions()
-    abstained = _items(rt, "thrash.charged")[charged:]
-    assert [i["handle"] for i in abstained] == [handle]  # waking nobody pays it too
+    assert [i["handle"] for i in _items(rt, "thrash.charged")][-1] == handle
+    assert handle not in rt.thrash_charges
+
+
+def test_period_two_and_period_three_oscillations_are_flagged_and_priced():
+    for label, series in (("period 2", [0, 3] * 12), ("period 3", [0, 1, 3] * 8)):
+        rt = _organ()
+        for registrations in series:
+            _close(rt, 1.0, registrations=registrations, organ_due=False)
+        flags = _items(rt, "pathology.thrash")
+        assert flags and all(f["period"] in (2, 3) for f in flags), label
+        assert rt.stats.thrash["lambda"] > 0 and rt.stats.thrash["penalty"] > 0, label
+
+
+def test_the_launch_warm_up_is_not_priced_as_thrash():
+    rt = _organ()
+    for well_formed in (0.2, 0.5, 0.8, *[1.0] * 12):  # a drift into one attractor
+        _close(rt, well_formed, registrations=0, organ_due=False)
+    assert not _items(rt, "pathology.thrash")
+    assert all(w["thrash"]["penalty"] == 0 for w in _items(rt, "immune.window"))
+
+
+def test_stationary_random_behaviour_is_rarely_flagged_as_thrash():
+    """iid draws over three cells never change distribution: at the manifests' k = 3,
+    about 3% of windows are flagged (measured over 40 seeds x 80 windows); this pins
+    it below 6%."""
+    import random
+
+    from factorylab.versioning.versions import replay
+
+    spec, ratio = load_manifest("scripted").immune, load_manifest("scripted").timing.min_ratio
+    region = {"card:x": {"kind": "max", "lo": None, "hi": 0.5, "scale": 1.0}}
+    flagged = total = 0
+    for seed in range(12):
+        draw = random.Random(seed)
+        windows = [{"index": i, "tick": 10 * i, "charter_edition": 1, "terms": "t",
+                    "regions": region, "profile": {"card:x": draw.choice((0.3, 1.0, 2.0)),
+                                                   "registrations": 0, "revision": 0}}
+                   for i in range(60)]
+        readings = replay(windows, k=spec.k, horizon=ratio * spec.k,
+                          tv_threshold=spec.tv_threshold, gap_threshold=spec.gap_threshold,
+                          registration_bins=spec.registration_bins,
+                          revision_bins=spec.revision_bins)[20:]
+        flagged += sum(r["diagnosis"]["flags"]["thrash"] for r in readings)
+        total += len(readings)
+    assert flagged / total < 0.06
 
 
 def test_immune_decay_is_gone_and_a_manifest_naming_it_is_refused():
@@ -220,6 +290,111 @@ def test_an_unhistoried_action_of_a_historied_seat_may_spend_the_niche():
     rt.queue.record_actions(handle, {rt._tool_action(tool)})
     _settle(rt, handle)
     assert not rt._novelty_compute(_open(rt, seat), reason)  # it has a reward trail now
+
+
+def test_censored_work_closes_the_niche_for_that_action():
+    """The #134 review: one seat re-entered the niche 21 times, 20 of them censored.
+    A delivered return or a propensity record, censored or not, is history."""
+    rt = make_runtime()
+    rt._manage_reserve_window()
+    seat, reason = "seed-decider", "tool:venue.positions"
+    handle = _open(rt, seat)
+    assert rt._novelty_compute(handle, reason)
+    rt.queue.record_actions(handle, {rt._tool_action("venue.positions")})
+    rt.queue.settle(handle, channel="verdict", score=0.0, status=SettleStatus.CENSORED,
+                    definition_version="verdict-v1", sampling_ref=None)
+    assert not rt._novelty_compute(_open(rt, seat), reason)
+
+
+def test_one_seat_cannot_take_more_than_its_share_of_the_periods_niche():
+    rt = make_runtime()
+    rt._manage_reserve_window()
+    seat, reason = "seed-decider", "tool:venue.positions"
+    room = rt._niche_room(seat)
+    assert room == int(rt.niche_use["cap"] * rt.m.novelty.seat_share) > 0
+    handle = _open(rt, seat)
+    assert rt._novelty_protection(handle, reason) == min(rt.reserve.remaining(), room)
+    rt._niche_spent(seat, room, room)
+    assert rt._niche_room(seat) == 0 and not rt._novelty_compute(handle, reason)
+    assert rt._novelty_compute(_open(rt, "seed-observer"), reason)  # another seat's own
+    rt.ticks_consumed += rt._consequence_period()
+    rt._open_niche_period()  # a new consequence period: a new share
+    assert rt._niche_room(seat) > 0
+    bad = replace(rt.m, novelty=replace(rt.m.novelty, seat_share=0.0))
+    with pytest.raises(ValueError, match="seat_share"):
+        bad.validate()
+    assert '"seat_share":0.25' in rt.m.canonical_json()  # hashed (R8)
+
+
+def test_a_ballot_is_never_niche_covered():
+    rt = make_runtime()
+    rt._manage_reserve_window()
+    parent = _open(rt, "seed-decider")
+    ballot = _open(rt, "eval-a", parent=parent, channel="policy")
+    assert not rt._novelty_compute(ballot, "tool:venue.positions")
+    assert not rt._novelty_compute(_open(rt, "eval-a", channel="policy"),
+                                   "tool:venue.positions")
+
+
+def test_niche_cover_reaches_only_the_call_and_the_one_round_that_reads_it(monkeypatch):
+    from factorylab.cortex.request import Return
+
+    rt = make_runtime()
+    rt._manage_reserve_window()
+    seat = "seed-decider"
+    model = f"model:{rt.assemblies[seat].spec.model_id}"
+    known = _open(rt, seat)  # venue.mids has history for this seat; venue.positions not
+    rt.queue.record_actions(known, {rt._tool_action("venue.mids")})
+    _settle(rt, known)
+    handle = _open(rt, seat)
+    seen = []
+    replies = iter([
+        Return(handle, {}, 0, "ok", tool_calls=({"tool": "venue.positions", "args": {}},)),
+        Return(handle, {}, 0, "ok", tool_calls=({"tool": "venue.mids", "args": {}},)),
+        Return(handle, {"action": "hold"}, 0, "ok"),
+    ])
+
+    def compute(_action, request):
+        seen.append((rt._novelty_compute(handle, model), request.cost_ceiling))
+        return next(replies)
+
+    monkeypatch.setattr(rt, "_invoke_compute", compute)
+    req = rt._request(handle, "Produce", {}, {"type": "object"}, 10**15, "verdict")
+    rt._invoke(seat, replace(req, cost_ceiling=100_000), "producer")
+    assert [covered for covered, _ceiling in seen] == [False, True, False]
+    assert seen[2][1] <= seen[1][1] and seen[2][1] <= 100_000  # the ceiling restored
+    assert handle not in rt.niche_rounds
+    assert [i["action"] for i in _items(rt, "niche.action") if i["handle"] == handle] == [
+        rt._tool_action("venue.positions")]
+
+
+def test_a_newcomer_held_at_the_exploration_floor_is_quarantined():
+    """The #134 review: with gamma > 0 a quarantined newcomer still gets gamma/N, so
+    "never drawn" cannot be the test; an incumbent-locked router is flagged and a
+    healthy mixed one is not."""
+    from factorylab.learners.router import Sample
+    from factorylab.runtime.immune import gamma
+
+    rt = make_runtime()
+    state = rt.routers["Tick"][0]
+    incumbent, newcomer = "seed-decider", "fresh"
+    rt.assemblies[newcomer] = rt.assemblies[incumbent]
+    monkeypatch_unhistoried = {newcomer}
+    rt._unhistoried = lambda a: a in monkeypatch_unhistoried
+    floor = gamma(state.learner) / 3
+    locked = Sample((incumbent, newcomer, NOOP), (1 - 2 * floor, floor, floor), incumbent, 1,
+                    state.learner.id, "h", ())
+    for _ in range(4):
+        rt._watch_abstention(state, locked)
+    (row,) = [r for r in rt.frontier_invocation() if r["router"] == state.learner.id]
+    assert row["quarantined"] and not row["uninvoked"]
+    state.watch = {}
+    mixed = Sample((incumbent, newcomer, NOOP), (0.5, 0.4, 0.1), newcomer, 1,
+                   state.learner.id, "h", ())
+    rt._watch_abstention(state, locked)
+    rt._watch_abstention(state, mixed)
+    (row,) = [r for r in rt.frontier_invocation() if r["router"] == state.learner.id]
+    assert not row["quarantined"]
 
 
 def test_the_learning_death_grant_is_gone():

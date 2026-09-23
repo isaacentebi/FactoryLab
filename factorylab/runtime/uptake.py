@@ -63,7 +63,8 @@ def _subject(prop: Any) -> tuple[str, str] | tuple[None, None]:
     if isinstance(prop, AssemblyProposal):
         return "assembly", prop.id
     if isinstance(prop, ServiceProposal):
-        return "assembly", prop.program_id
+        # A service is taken up by a paid receipt, not by an invocation (#134 review).
+        return "service", prop.program_id
     return None, None
 
 
@@ -114,14 +115,21 @@ class UptakeMixin:
         self.handle_to_assembly[handle] = assembly
         return handle
 
-    def _taken_up(self, kind: str, ident: str, by: str) -> None:
-        """Another lineage used an open registration: its uptake is realized."""
+    def _taken_up(self, kind: str, ident: str, by: str | None) -> None:
+        """Another lineage used an open registration: its uptake is realized.
+
+        ``by`` is the seat that used it; None is a user outside the factory (a paid
+        service receipt, a router's draw), never the builder's lineage.
+        """
         record = self.uptake.get(f"{kind}:{ident}")
-        if (record is not None and not record["taken"] and by in self.assemblies
-                and self.budget.lineage(by) != record["lineage"]):
-            record["taken"] = True
-            self.ledger.append({"kind": "uptake.taken", "registration": f"{kind}:{ident}",
-                                "tick": self.ticks_consumed, "ts": self.clock.now_ns})
+        if record is None or record["taken"]:
+            return
+        if by is not None and (by not in self.assemblies
+                               or self.budget.lineage(by) == record["lineage"]):
+            return
+        record["taken"] = True
+        self.ledger.append({"kind": "uptake.taken", "registration": f"{kind}:{ident}",
+                            "tick": self.ticks_consumed, "ts": self.clock.now_ns})
 
     def _run_tool(self, action_id: str, handle: str, call: dict[str, Any], *,
                   slot: str = "tool:0") -> tuple[dict, int]:
@@ -130,14 +138,25 @@ class UptakeMixin:
         return result
 
     def _invoke(self, action_id, req, role, *, child=False):
-        record = self.uptake.get(f"assembly:{action_id}")
-        if record is not None and not record["taken"]:
-            # A registered assembly drawn to work: someone other than its builder took
-            # it up (the router or a requester, never the builder choosing itself).
-            record["taken"] = True
-            self.ledger.append({"kind": "uptake.taken", "registration": f"assembly:{action_id}",
-                                "tick": self.ticks_consumed, "ts": self.clock.now_ns})
+        if f"assembly:{action_id}" in self.uptake:
+            # A registered assembly put to work: by its router's draw (no requester),
+            # or by the seat whose decision requested it, which must be of another
+            # lineage than the builder's (the #134 review: self-use is no uptake).
+            try:
+                parent = self.queue.get(req.handle).parent_handle
+            except KeyError:
+                parent = None
+            requester = self._liable_seat(parent) if parent is not None else None
+            if parent is None or requester is not None:
+                self._taken_up("assembly", action_id, requester)
         return super()._invoke(action_id, req, role, child=child)
+
+    def _book_income(self, item: dict) -> None:
+        """A verified paid receipt for a registered service is its uptake (#134 review)."""
+        super()._book_income(item)
+        program = item.get("program") or item.get("service")
+        if isinstance(program, str) and type(item.get("micro")) is int and item["micro"] > 0:
+            self._taken_up("service", program, None)
 
     # --- forecasts -------------------------------------------------------------------
 
@@ -265,12 +284,13 @@ class UptakeMixin:
             "a registration (tool, observation, assembly or service) is open for "
             "timing.min_ratio measured consequence periods, in world ticks, from "
             "registration (world.uptake, until_tick). It is taken up when another lineage "
-            "calls the tool, a charter card names the observation, or the assembly is "
-            "invoked; y = 1 then, y = 0 at until_tick. A judging seat's forecast q scores "
-            "1 - (q - y)^2 on its own policy decision. The registering seat's uptake "
-            "decision settles at the first window close after a forecast at Q, the median "
-            "of the forecasts' q weighted by each forecaster's (1/2 + sum of its settled "
-            "uptake scores) / (1 + their count); at y its correction decision settles "
-            "1/2 + (y - Q)/2. With no forecast before y the uptake decision settles y. "
-            "Each score returns to the seat's durable identity")
+            "calls the tool, a charter card names the observation, the assembly is drawn "
+            "by its router or requested by another lineage, or a paid receipt for the "
+            "service is verified; y = 1 then, y = 0 at until_tick. A judging seat's "
+            "forecast q scores 1 - (q - y)^2 on its own policy decision. The registering "
+            "seat's uptake decision settles at the first window close after a forecast at "
+            "Q, the median of the forecasts' q weighted by each forecaster's (1/2 + sum "
+            "of its settled uptake scores) / (1 + their count); at y its correction "
+            "decision settles 1/2 + (y - Q)/2. With no forecast before y the uptake "
+            "decision settles y. Each score returns to the seat's durable identity")
         return block

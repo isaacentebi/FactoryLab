@@ -447,8 +447,10 @@ def immune(events: list[dict[str, Any]]) -> dict[str, Any]:
     the pathology flags by kind and the responses the organ applied; what the niche
     for unhistoried actions spent (ruling R5); the thrash price; the dependency
     concentration the window observations measured (time audit T15); the uptake
-    market (T18); and whether the learning-death diagnosis the organ ledgered is the
-    one the forensic replay of its own window records reaches.
+    market (T18); and the learning-death signals window by window, with whether the
+    forensic replay of the organ's own records reproduces its flags. That replay is
+    self-consistency (the same code over the same records), not a second detector:
+    the detector's scenarios are pinned by tests.
     """
     windows = [e for e in events if e.get("kind") == "immune.window"]
     boundaries = [e for e in events if e.get("kind") == "version.boundary"]
@@ -473,8 +475,7 @@ def immune(events: list[dict[str, Any]]) -> dict[str, Any]:
         if e.get("kind") == "niche.action":
             niche_handles.add(e.get("handle"))
         elif e.get("kind") == "novelty.compute":
-            reason = str(e.get("reason") or "")
-            if reason.startswith("tool:") or e.get("handle") in niche_handles:
+            if e.get("handle") in niche_handles:
                 niche_used += int(e.get("used") or 0)
             else:
                 seat_used += int(e.get("used") or 0)
@@ -507,7 +508,12 @@ def immune(events: list[dict[str, Any]]) -> dict[str, Any]:
             "priced_windows": sum(1 for t in thrash if (t.get("penalty") or 0) > 0),
             "max_lambda": round(max((t.get("lambda") or 0 for t in thrash), default=0), 4),
             "max_penalty": round(max((t.get("penalty") or 0 for t in thrash), default=0), 4),
-            "charged_sum": round(sum(e.get("charge") or 0 for e in charged), 4)},
+            "charged_sum": round(sum(e.get("charge") or 0 for e in charged), 4),
+            "signals": {name: sum(1 for w in windows if w.get(field))
+                        for name, field in (("unsettled", "unsettled"),
+                                            ("periodic", "period"),
+                                            ("abandoned", "abandoned"),
+                                            ("short_lived", "short_lived"))}},
         "dependency_concentration": {
             name: ({"mean": round(statistics.fmean(v), 3), "max": round(max(v), 3)}
                    if v else None) for name, v in concentration.items()},
@@ -515,18 +521,19 @@ def immune(events: list[dict[str, Any]]) -> dict[str, Any]:
                    for kind in ("open", "forecast", "anticipated", "taken", "settled")},
         "config_lifespans_short": sum(1 for e in events if e.get("kind") == "config.lifespan"
                                       and e.get("ratio", 1) < 1),
-        "learning_death_agreement": _learning_death_agreement(events, windows),
+        "learning_death": _learning_death_signals(events, windows),
     }
 
 
-def _learning_death_agreement(events: list[dict[str, Any]],
-                              windows: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """The live learning-death flags against the forensic replay of the same records.
+def _learning_death_signals(events: list[dict[str, Any]],
+                            windows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The learning-death flags and the frontier signals under them, and replay consistency.
 
-    The organ ledgers every window it read (``immune.window``); replaying those
-    records through ``versioning.versions.replay`` must reach the flags it acted on.
-    Also the two frontier signals inside the diagnosis, window by window: routers
-    left uninvoked, and unhistoried seats offered and never drawn.
+    Windows with a frontier router left uninvoked and with one quarantining its
+    newcomers at the exploration floor; ``replay_self_consistency`` is the share of
+    windows whose ledgered flag the forensic replay of the organ's own records
+    (``versioning.versions.replay``) reproduces: a check that the reader and the
+    organ run one predicate, not evidence that the predicate is right.
     """
     from factorylab.versioning.versions import replay
 
@@ -550,11 +557,10 @@ def _learning_death_agreement(events: list[dict[str, Any]],
     forensic = [r["diagnosis"]["flags"]["learning_death"] for r in readings]
     uninvoked = sum(1 for w in windows if (w.get("frontier") or {}).get("uninvoked_routers"))
     quarantined = sum(1 for w in windows
-                      if ((w.get("frontier") or {}).get("unhistoried") or {}).get("offered")
-                      and not w["frontier"]["unhistoried"].get("mass"))
-    return {"live_flags": sum(live), "forensic_flags": sum(forensic),
-            "agreement": round(sum(a == b for a, b in zip(live, forensic, strict=True))
-                               / len(live), 3),
+                      if (w.get("frontier") or {}).get("quarantined_routers"))
+    return {"flags": sum(live), "replayed_flags": sum(forensic),
+            "replay_self_consistency": round(
+                sum(a == b for a, b in zip(live, forensic, strict=True)) / len(live), 3),
             "uninvoked_windows": uninvoked, "quarantined_windows": quarantined}
 
 

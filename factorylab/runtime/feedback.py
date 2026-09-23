@@ -1876,8 +1876,8 @@ class FeedbackMixin:
             return
         if keyed and key is None:
             return  # its frozen round is already spent: nothing trains, nothing is booked
-        reward = self._thrash_charged(state, lr.handle, reward)
-        fb = BanditFeedback(prop.chosen, reward, prop.probs[prop.action_ids.index(prop.chosen)])
+        charged = self._thrash_charged(state, lr.handle, reward)
+        fb = BanditFeedback(prop.chosen, charged, prop.probs[prop.action_ids.index(prop.chosen)])
         if target is not state:
             p, executed = state.learner.inner.take_for(key) if keyed else (None, None)
             learned = self._apply_router_round(state, lr.handle, p, executed, fb)
@@ -2009,28 +2009,34 @@ class FeedbackMixin:
         return min(1.0, max(0.0, neutral - penalty)), penalty
 
     def _thrash_charged(self, state: Any, handle: str, reward: float) -> float:
-        """A no-swap-regret router's reward less the thrash price in force when it drew.
+        """A no-swap-regret router's reward, less the thrash charge on its own movement.
 
         Essay II.II.b: "in the case of thrash, one should penalize the duration of
         spectral-gap volatility, incentivizing the surplus-retaining core of
-        no-swap-regret learners to stabilize" (versioning audit C2). The charge is the
-        thrash penalty of the window the round was drawn in (``MeasureWindow.
-        thrash_penalty``; the live window's for a round with no recorded origin), on
-        the routers of the kinds in ``evaluation.no_swap_regret_kinds`` only, woken
-        rounds and abstentions alike. The result stays in [0, 1]; a charge is ledgered.
+        no-swap-regret learners to stabilize" (versioning audit C2). A charge every
+        round bore alike would be a constant shift a no-regret learner ignores (the
+        #134 review), so each round is charged ``c = min(prices.penalty_cap, lambda *
+        m)``: the thrash price in force when the round was drawn times the router's
+        own policy movement at that draw (``RoutingMixin._record_movement``, the TV
+        from its previous draw). A router that holds its policy still is charged
+        nothing; abstentions are charged the same way (ruling R9).
+
+        Guarantees the charged reward is ``(r + cap - c) / (1 + cap)`` for every round
+        of a core router, charged or not: one affine map, so no clip at 0 lets a
+        low-reward arm escape part of its charge and an uncharged round sits on the
+        same scale as a charged one. Rounds of other routers are untouched. A charge
+        is ledgered (``thrash.charged``).
         """
         if state.kind not in self.m.evaluation.no_swap_regret_kinds:
             return reward
-        origin = self.price_origins.get(handle, {}).get("origin")
-        window = self.price_windows.get(origin, self.window)
-        charge = window.thrash_penalty
-        if charge <= 0:
-            return reward
-        charged = min(1.0, max(0.0, reward - charge))
-        self.ledger.append({"kind": "thrash.charged", "handle": handle,
-                            "router": state.learner.id, "window": window.index,
-                            "charge": charge, "reward_before": reward, "reward": charged,
-                            "ts": self.clock.now_ns})
+        cap = self.m.prices.penalty_cap
+        charge = self.thrash_charges.pop(handle, 0.0)
+        charged = (reward + cap - charge) / (1.0 + cap)
+        if charge > 0:
+            self.ledger.append({"kind": "thrash.charged", "handle": handle,
+                                "router": state.learner.id, "charge": charge,
+                                "reward_before": reward, "reward": charged,
+                                "ts": self.clock.now_ns})
         return charged
 
     def _router_owed_abstention(self, learner_id: str) -> bool:

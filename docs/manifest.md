@@ -387,6 +387,7 @@ public facts) keeps every print.
 | Key | Type | Default | Cast | Meaning |
 |---|---|---|---|---|
 | `trials` | int >= 1 | 3 | hard | Settled consequences delivered to a population assembly before its protected trial ends (A13). Replaces `trial_invocations`, which counted model calls; continuations and children do not count. |
+| `seat_share` | number in (0, 1] | 0.25 | hard | The most of one consequence period's share of the novelty reserve one seat's unhistoried actions (tool calls and the rounds that read them) may use, so no seat starves the registration trials (ruling R5; the #134 review). |
 | `max_lifetime_windows` | int >= 1 | 6 | hard | Reserve windows after registration after which the trial ends regardless of deliveries (A13). |
 
 ### Ledger evidence these keys produce
@@ -989,15 +990,19 @@ ratcheted price like any other: a penalty that took the whole unit reward from
 every arm would leave no difference to learn from, and the essay warns that gain
 ramped unchecked overshoots into thrash.
 
-Thrash is priced (essay II.II.b, versioning audit C2): the volatility of the
-version gap series above `immune.tv_threshold`, in the gap's own units, is priced by
-the charter's PID law and gains (`prices.eta`, `kp`, `kd`, `decay`, `lambda_max`), so
-its integral accumulates the duration of the volatility. The penalty
-`min(lambda * v, prices.penalty_cap)` is in force for the next window and is
-subtracted from the reward of every round a router of
-`evaluation.no_swap_regret_kinds` draws in it, its abstentions included
-(`thrash.charged`). It is published in `world.adaptive_scoring.thrash_price`.
-The thrash price's controller resumes with the checkpoint (`thrash_controller`).
+Thrash is priced (essay II.II.b, versioning audit C2): the diagnosis's
+unsettledness `u` (below) above `immune.tv_threshold` is priced by the charter's PID
+law and gains (`prices.eta`, `kp`, `kd`, `decay`, `lambda_max`), so its integral
+accumulates how long the thrash lasts. A round a router of
+`evaluation.no_swap_regret_kinds` draws, its abstentions included, carries
+`c = min(prices.penalty_cap, lambda * m)`, `m` the total-variation distance between
+that draw's distribution and the router's previous draw's: the router's own policy
+movement, so holding still is what lowers it (a charge every round bore alike would
+be a constant shift a no-regret learner ignores). The router learns
+`(r + penalty_cap - c) / (1 + penalty_cap)` for every round, charged or not, one
+affine map with no clip (`thrash.charged`). The price is published in
+`world.adaptive_scoring.thrash_price`; its controller resumes with the checkpoint
+(`thrash_controller`), and each open round's charge with `thrash_charges`.
 
 ## The clock (Chapter II §IV.b-c; time audit T1-T13)
 
@@ -1196,18 +1201,21 @@ uses pricing's typed card measurements and frozen `closed_regions`, not raw
 observation-id values or later live regions.
 
 **Live versioning** (`versioning/live.py`; essay II.II, versioning audit M1-M3).
-Every closed window joins the retained horizon (`timing.min_ratio × immune.k`
-windows). A charter edition change or a change of the world's terms (its own
-tools' kinds and prices, and the manifest models' prices; never the population's
-own tools or connectors) opens a version at once; behaviour opens one when two
-complete adjacent k-window blocks inside the current version differ by more than
-`immune.tv_threshold` (`version.boundary`, with its cause). A version's gap is
-the operator's gap bound over its retained windows once it has k of them;
-`rolling_gap` is the same over the whole horizon and `card_gap` over the cards
-alone. The gap bound is `1 - min_t delta(P^t)^(1/t)` for t up to the number of
+Every closed window joins the retained windows (`timing.min_ratio × max(immune.k,
+timing.min_ratio)`; the rolling operator reads the last `timing.min_ratio × immune.k`).
+A charter edition change or a change of the world's terms (its own tools' kinds and
+prices, and the manifest models' prices; never the population's own tools or
+connectors) opens a version at once. Behaviour opens one when the last k windows
+differ from the rest of the version by more than `immune.tv_threshold` plus the
+sampling allowance `1/2 sum_i sqrt(q_i (1 - q_i) (1/k + 1/n))` over the rest's
+occupancy `q` (n windows), at k consecutive closes (`version.boundary`, with its
+cause). A version's gap is the operator's gap bound over the transitions it has
+counted over its whole life, read once it has 2k windows; its series restarts at
+every boundary. `rolling_gap` is the same over the rolling horizon and `card_gap`
+over the cards alone. The gap bound is `1 - min_t delta(P^t)^(1/t)` for t up to the number of
 occupied cells, a cell never seen leaving taking the sample's occupancy as its
-row. A version settles at the first close where the last k windows differ from the
-k before them by less than `immune.tv_threshold` (`version.settled`); a version
+row. A version settles at the first close, 2k windows or more into it, where the
+last k windows are within that bound of the rest (`version.settled`); a version
 superseded first leaves its age as a lower bound. The settling of a version a
 revision opened (a charter edition or a change of terms) reaches the governance
 cadence (`governance.settling`) and joins its slowest period, and such a version's
@@ -1219,29 +1227,40 @@ over a diary.
 **The predicate** (`versioning/versions.py: diagnose`), at every closed window over
 the last k windows. Stable failure: a nonempty set of cards violated in every
 tail window that measured them (activity never enters it) while `card_gap` is at
-least `immune.gap_threshold`. Thrash: the version gap series over the last 2k
-windows moves by more than `immune.tv_threshold` on average; or two versions in a
-row were superseded before they settled and the current one has not; or a
-configuration lifespan recorded in the tail was shorter than the latency of the
-loop that corrects it (`config.lifespan`: a seat's contract version against the
-consequence loop, a router's epoch against its rounds, a charter edition against
-governance's slowest loop; time audit T14). Learning death: one cell over the
-tail, no registration or revision, and the frontier gone: a frontier
-(non-core) router whose every draw in every tail window gave NOOP at least
-`1 - gamma` (`uninvoked_routers`), or unhistoried seats offered and never drawn.
-Card compliance never enters it (versioning audit P1). Each `immune.window` item
+least `immune.gap_threshold`. Thrash, and its unsettledness `u`, the largest of
+four signals: the version gap series over its last 2k readings moves by more than
+`immune.tv_threshold` on average (`u` = that mean change); the retained windows'
+cells repeat with a period p in [2, `timing.min_ratio`] for `timing.min_ratio`
+cycles (`period`; `u` = 1); two versions in a row, launch excepted, were superseded
+before they settled and the current one has not (`u` = 1); or a configuration
+lifespan recorded in the tail was shorter than the latency of the loop that
+corrects it (`config.lifespan`: a seat's contract version against the consequence
+loop, a router's epoch against its rounds, a charter edition against governance's
+slowest loop; time audit T14; `u` = 1 - lifespan / latency). Stationary random
+behaviour over three cells is flagged in about 3% of windows at k = 3. Learning
+death: one cell over the tail, no registration or revision, and the frontier gone:
+a frontier (non-core) router whose every draw in every tail window gave NOOP at
+least `1 - gamma` (`uninvoked_routers`, whatever the reason), or one that in every
+tail window held each unhistoried seat it offered within `(1 +
+immune.tv_threshold) * gamma / N` while a historied seat held more than all the
+other arms together (`quarantined_routers`). Card compliance never enters it
+(versioning audit P1). Each `immune.window` item
 publishes the profile, the flags and their evidence, the routers' draws, the
 lifespans, the terms digest and the thrash price.
 
 **The niche** (essay II.II.b, ruling R5). Learning death is not answered by a
 response; it is prevented by the world. An *unhistoried action* is kernel physics
-(`DecisionQueue.record_actions`, `has_action_history`): an action label a return
-declared, or a (tool, kind) it called, for which no settled decision of that
-assembly has a reward trail. The novelty reserve is usable by an unhistoried
-assembly's own model calls (its trial), by every tool call that is an unhistoried
-action of the calling assembly, and by the model round that reads that call's
-result in the same decision (`niche.action`, `novelty.compute`), for seats past
-their first record as much as new ones. A requested child's calls are its parent's.
+(`DecisionQueue.record_actions`, `has_action_history`): a (tool, kind) that no
+decision of that assembly carrying a propensity record or a delivered return
+(settled, censored, inapplicable or timed out) has taken. A free-text action label
+is never an action: a fresh string would make any decision look new. The novelty
+reserve is usable by an unhistoried assembly's own model calls (its trial), by
+every tool call that is an unhistoried action of the calling assembly, and by the
+one model round that reads that call's result in the same decision; after it the
+decision's own ceiling is restored (`niche.action`, `novelty.compute`). This holds
+for seats past their first record as much as new ones, up to `novelty.seat_share`
+of the period's share per seat. A requested child's calls are its parent's, and a
+committee ballot's are never covered.
 The kernel never chooses the action; the eligibility and the reserve are published
 in `world.mechanics.novelty` and `world.reserve`. The learning-death grant is
 deleted (versioning audit P2).

@@ -94,9 +94,6 @@ class MeasureWindow:
     # (``runtime.ews``): evaluator-facing, never a public window fact.
     ews_variance: float | None = None
     ews_autocorrelation: float | None = None
-    # The thrash price in force while this window is open (``immune.thrash_penalty``):
-    # what a no-swap-regret router's round drawn in it is charged (versioning C2).
-    thrash_penalty: float = 0.0
     # The window's model calls by the provider that served them and by the foundation
     # family of the model (essay II.IV.c, entrainment; time audit T15). The dependency
     # observations read these; the names are not a public window fact.
@@ -311,11 +308,11 @@ class PricingMixin:
             self.clock.now_ns, max(0, self.wallet.unlocked),
             accrued=Fraction(min(period, ceil(schedule["period"])), period))
         self.reserve_window_start = self.clock.now_ns
+        self._open_niche_period()
         self.market_index = None
         self.stats.reserve_windows += 1
         self.window = MeasureWindow(self.stats.reserve_windows, self._equity_micro(),
-                                    opened_tick=now, due_tick=schedule["due"],
-                                    thrash_penalty=self.stats.thrash.get("penalty", 0.0))
+                                    opened_tick=now, due_tick=schedule["due"])
         from factorylab.runtime.continuity import charge_window as charge_state_window
 
         charge_state_window(self)  # a seat's working state pays byte-time rent
@@ -388,6 +385,15 @@ class PricingMixin:
 
     def _prune_price_evidence(self) -> None:
         """Completed decisions release old attribution windows after their totals are frozen."""
+        for handle in tuple(self.thrash_charges):
+            # A charge is spent when its round trains; a round that closed and whose
+            # router has read every return it was owed will never train.
+            decision = self.queue.get(handle)
+            if (decision.status not in (SettleStatus.PENDING, SettleStatus.TIMED_OUT)
+                    and handle not in self.noop_credits
+                    and len(self.queue.returns_for(decision.actor))
+                    <= self.delivered_seen.get(decision.actor, 0)):
+                del self.thrash_charges[handle]
         for handle in tuple(self.price_origins):
             if (self.queue.get(handle).status not in (SettleStatus.PENDING, SettleStatus.TIMED_OUT)
                     and handle not in self.pending and handle not in self.pending_exposure

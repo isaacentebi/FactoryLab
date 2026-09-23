@@ -27,10 +27,9 @@ if TYPE_CHECKING:
 PRIVATE_WINDOW_FIELDS = ("decisions", "closed_values", "closed_regions", "closed_shares",
                          "closed_cards", "closed_prices", "closed_holdouts",
                          "series_discarded", "ews_variance", "ews_autocorrelation",
-                         # The thrash price in force is the runtime's charge, and the
-                         # provider and family names are text; the observations below
-                         # publish their concentration, not the names.
-                         "thrash_penalty", "calls_by_provider", "calls_by_family")
+                         # The provider and family names are text; the observations
+                         # below publish their concentration, not the names.
+                         "calls_by_provider", "calls_by_family")
 MAX_WORLD_SAMPLES = 1024
 # Fields holding a public quantity filed under a private identity: a decision
 # handle, an evaluator's assembly id. The quantity is disclosed, the identity is

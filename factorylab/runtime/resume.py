@@ -613,6 +613,12 @@ _RUNTIME_FIELDS = (
     # Time audit T14: each loop's last configuration change and the lifespans not yet
     # read by the immune organ. An older checkpoint has neither: no lifespan yet.
     "config_ticks", "lifespan_log",
+    # Ruling R5: each seat's use of the period's niche. An older checkpoint has none:
+    # the next reserve window opens a period.
+    "niche_use",
+    # Versioning C2: the thrash charge each open core-router round carries. An older
+    # checkpoint has none: its rounds are charged nothing.
+    "thrash_charges",
     # Time audit T18: open registrations' uptake records and each forecaster's settled
     # record. An older checkpoint has neither: nothing is open, nobody has standing.
     "uptake", "uptake_standing",
