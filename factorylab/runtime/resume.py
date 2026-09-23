@@ -464,10 +464,13 @@ class RecoveryJournal:
                 billing = {"status": status,
                            "unbilled": isinstance(classify_provider_failure(failure),
                                                   UnbilledFailure)}
-                from factorylab.world.openai_wire import CALL_EXPIRED
 
-                if str(failure).endswith(CALL_EXPIRED):
-                    billing["expired"] = True
+            from factorylab.world.openai_wire import CALL_EXPIRED
+
+            if str(failure).endswith(CALL_EXPIRED):
+                # The call outlived its caller's deadline (time audit T8); the replay
+                # reads that from the recorded outcome, whatever the rail.
+                billing["expired"] = True
             self.append({"kind": "io.result", "call": seq, "error": error,
                          **({"reason": reason} if reason is not None else {}),
                          **({"carry": carry} if carry is not None else {}), **billing})
@@ -489,8 +492,8 @@ def _read_only(name: str) -> bool:
             "search_markets", "market", "market_of_token", "midpoint"):
         return True  # the public Polymarket reads (world/polymarket.py)
     return name.rsplit(".", 1)[-1] in (
-        # The safety path's wall-clock read (time audit T8).
-        "now_ns",
+        # The safety path's wall-clock and delivered-tick reads (time audit T8).
+        "now_ns", "tick_ns",
         "mids", "account", "funding", "fills", "candles", "order_book", "funding_history",
         "open_orders", "balance_micro", "balance_of", "affordable", "catalogue", "discover",
         "quote", "fetch",
@@ -531,6 +534,10 @@ def _recorded_error(name: str, reason: str | None = None, *,
         return cls(status, "Provider request failed")
     if name == "Pending":
         return Pending(reason or "treasury rail unavailable", carry=carry)
+    if expired:
+        from factorylab.world.openai_wire import CALL_EXPIRED
+
+        return cls(f"external call failed ({name}): {CALL_EXPIRED}")
     if name == "RailError":
         return RailError(reason or "treasury rail unavailable")
     return cls(f"external call failed ({name})")
@@ -669,6 +676,8 @@ _RUNTIME_FIELDS = (
     # tier is taken as viable until measured, no epoch waits, and the anchor is
     # rebuilt from the treasury's own window.
     "card_clock", "governance_viable", "pending_epochs", "cap_anchor_ns",
+    # The tick each watcher last paid for (T8): a safety sweep charges none twice.
+    "watcher_ticks",
 )
 # Runtime fields read through a property with no setter, and the attribute behind it.
 _RUNTIME_BACKING = {
@@ -705,7 +714,8 @@ _DERIVED_STATE = {
     "ReceiptBook._ReceiptBook__execution_by_handle": "derived per-handle execution index",
     "FakeTreasury._balances_memo": "the scripted rail's balances, keyed on what they read",
     "Runtime._safety_ns": "the safety path's last wall read, reset at every event's start",
-    "FakeTreasury.tick_index": "the world tick the runtime states before every treasury tick",
+    "Runtime._safety_stop": "a terminal state the safety path saw, reset at every event's "
+                            "start; the event's own termination check acts on it",
     "FakeTreasury.forward_wait_ticks": "the runtime restates it before every treasury tick "
                                        "from the manifest floor and the measured capital loop",
 }

@@ -129,11 +129,15 @@ class Clockwork:
         rows.append(ticks)
         del rows[:-self.sample]
 
-    def measured(self, name: str, floor: int = 1) -> int:
-        """The p90 closure of loop ``name`` in ticks, never below ``floor`` (at least one)."""
+    def measured(self, name: str, floor: int = 1, *, support: int = 1) -> int:
+        """The p90 closure of loop ``name`` in ticks, never below ``floor`` (at least one).
+
+        With fewer than ``support`` closures the meter reports ``floor``: a sample
+        that small is not evidence of the loop's period.
+        """
         rows = self.latencies.get(name)
         floor = max(1, floor)
-        return max(floor, p90(rows)) if rows else floor
+        return max(floor, p90(rows)) if rows and len(rows) >= support else floor
 
     def mean(self, name: str) -> float | None:
         """The mean closure of loop ``name`` in ticks, or None before its first closure."""

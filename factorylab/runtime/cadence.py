@@ -130,10 +130,7 @@ class GovernanceCadence:
                      default=0)
         settling = max(self._settling, default=0)
         probe = (self._current_event - self._probe["opened"]) if self._probe else 0
-        capital = 0
-        if self._capital:
-            ordered = sorted(self._capital)
-            capital = ordered[(9 * len(ordered) + 9) // 10 - 1]
+        capital = self.capital_period_events() or 0
         return max(self.consequence_period_events(), oldest, settling, probe, capital)
 
     def record_capital(self, *, transfer_id: str, latency_ticks: int, latency_ns: int) -> None:
@@ -146,8 +143,13 @@ class GovernanceCadence:
         self._capital.append(latency_ticks)
 
     def capital_period_events(self) -> int | None:
-        """The capital loop's p90 closure in ticks, or None before a conversion finalized."""
-        if not self._capital:
+        """The capital loop's p90 closure in ticks, or None without enough support.
+
+        The same support floor the consequence loop needs (``timing.min_support``):
+        a handful of conversions is not evidence of the rail's period, and one that
+        happened to straddle a stall must not set it.
+        """
+        if len(self._capital) < self._min_support:
             return None
         ordered = sorted(self._capital)
         return ordered[(9 * len(ordered) + 9) // 10 - 1]
@@ -216,7 +218,7 @@ class GovernanceCadence:
         Essay II.IV.c: "A factory whose versions stabilize monthly inside market
         conditions that are comprehensively repriced weekly has no viable
         governance tier." Viable when ``min_ratio × slowest`` fits within both the
-        run's remaining length and the world's repricing period, in ticks.
+        run's whole length and the world's repricing period, in ticks.
         """
         needed = self._min_ratio * self.slowest_period_events()
         bounds = {name: value for name, value in (("run_ticks", run_ticks),

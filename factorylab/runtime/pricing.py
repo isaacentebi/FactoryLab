@@ -321,13 +321,22 @@ class PricingMixin:
         on the settle loop of the role it answers for (every role's slowest for a
         card that answers for all): a price changes the rewards of that role's
         decisions, and its effect returns only when they settle (time audit T2).
+
+        The forecast loop's period is what forecasters chose: a seat may seal a
+        horizon of up to 200 ticks, and a p90 it stretches would slow the very
+        price that bills its unresolved commitments. So that meter counts only
+        with the consequence loop's support (``timing.min_support``) and never
+        beyond the consequence backstop, the physics' bound on how long any
+        consequence is allowed to wait; a longer horizon is the seat's choice, not
+        a period of the world the price must wait out.
         """
         from factorylab.charter.measurement import FORECAST_ROWS
 
         observation = normalise(card.observation)
         if card.window.kind == "forecasts" or (
                 card.window.kind == "windows" and observation in FORECAST_ROWS):
-            return self.clockwork.measured("forecast")
+            return min(self.clockwork.measured("forecast", support=self.m.timing.min_support),
+                       self.ev.consequence_backstop_ticks)
         if card.answers_for != "all":
             return self.clockwork.measured(f"settle:{card.answers_for}")
         return max((self.clockwork.measured(name) for name in self.clockwork.latencies
@@ -600,19 +609,21 @@ class PricingMixin:
         """Ledger when a governance tier stops, or starts again, to fit (time audit T7).
 
         Essay II.IV.c: governance lives "between an upper bound of sampling noise
-        and a lower bound of 'lagging the world'". ``min_ratio`` times the slowest
-        loop must fit within the ticks the run has left and the world's repricing
-        period (``timing.world_repricing``, converted at the delivered tick). Each
-        change of state is one ledger entry; the state is published in the world
-        block. Nothing here accelerates a loop: that is left to the charter.
+        and a lower bound of 'lagging the world'". Nonviable means that band is
+        empty for this world: ``min_ratio`` times the slowest loop does not fit
+        within the world's whole run or its repricing period
+        (``timing.world_repricing``, converted at the delivered tick). A run nearing
+        its end is not a world without a governance tier, so the bound is the total
+        run length, never the ticks left. Each change of state is one ledger entry;
+        the state is published in the world block. Nothing here accelerates a loop:
+        that is left to the charter.
         """
         from factorylab.runtime.clockwork import ticks_for
 
-        left = max(0, getattr(self.tick_clock, "count", self.events_budget)
-                   - self.ticks_consumed)
+        run = getattr(self.tick_clock, "count", None) or self.events_budget
         repricing = self.m.timing.world_repricing_ns
         state = self.cadence.viability(
-            run_ticks=left,
+            run_ticks=run,
             world_ticks=ticks_for(repricing, self.tick_clock) if repricing else None)
         if state["viable"] != self.governance_viable:
             self.ledger.append({"kind": "governance.viable" if state["viable"]

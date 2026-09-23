@@ -259,32 +259,45 @@ def _discard_sorted(keys: list[tuple], key: tuple) -> None:
     del keys[bisect.bisect_left(keys, key)]
 
 
+class _Clocked:
+    """The runtime's clock around one model call, for every rail (Chapter II §IV.c; T8).
+
+    ``before_call`` is the safety pass run before the call, ``deadline_s`` the
+    deadline the runtime states for it (None where no environment pace is
+    measured), and ``expired`` what it does when the call outlives that deadline.
+    """
+
+    before_call: Any = None
+    deadline_s: Any = None
+    expired: Any = None
+
+    def clocked(self, req: ModelRequest, handle: str, complete) -> Metered[ModelResponse]:
+        """Guarantees the safety pass runs before the call, the call carries the
+        runtime's deadline, and a call that outlived it is reported as expired."""
+        if self.before_call is not None:
+            self.before_call()
+        deadline = self.deadline_s() if self.deadline_s is not None else None
+        if deadline is not None:
+            req = replace(req, timeout_s=deadline)
+        try:
+            return complete(req)
+        except BillingUncertain as exc:
+            if self.expired is not None and call_expired(exc):
+                self.expired(handle, req.timeout_s)
+            raise
+
+
 @dataclass
-class _ObservedMeteredModel(MeteredModel):
+class _ObservedMeteredModel(_Clocked, MeteredModel):
     record: Any = None
-    # The runtime's clock around one call (Chapter II §IV.c; time audit T8): the
-    # safety pass it runs before the call, the deadline it states for it, and what
-    # it does when the call outlives that deadline.
     before_call: Any = None
     deadline_s: Any = None
     expired: Any = None
 
     def complete(self, req: ModelRequest, *, handle: str) -> Metered[ModelResponse]:
-        """Expose already-debited vendor overruns to runtime evidence before returning.
-
-        Guarantees the safety pass runs before the call, the call carries the
-        runtime's deadline, and a call that outlived it is reported as expired.
-        """
-        if self.before_call is not None:
-            self.before_call()
-        if self.deadline_s is not None:
-            req = replace(req, timeout_s=self.deadline_s())
-        try:
-            metered = super().complete(req, handle=handle)
-        except BillingUncertain as exc:
-            if self.expired is not None and call_expired(exc):
-                self.expired(handle, req.timeout_s)
-            raise
+        """Expose already-debited vendor overruns to runtime evidence before returning."""
+        metered = self.clocked(req, handle,
+                               lambda r: MeteredModel.complete(self, r, handle=handle))
         if metered.overrun:
             self.record({"kind": "compute.overrun", "handle": handle,
                          "model_id": metered.result.model_id, "cost": metered.cost,
@@ -292,12 +305,21 @@ class _ObservedMeteredModel(MeteredModel):
         return metered
 
 
-class _ObservedX402Model(X402MeteredModel):
-    """Paid completions enter observations after metering, including during journal replay."""
+class _ObservedX402Model(_Clocked, X402MeteredModel):
+    """Paid completions enter observations after metering, including during journal replay.
+
+    A paid seller call runs on the runtime's clock like any other (Codex review of
+    #133): the safety pass before it, the tick-ratio deadline on it in a paced world.
+    """
+
+    def __init__(self, *args, before_call=None, deadline_s=None, expired=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.before_call, self.deadline_s, self.expired = before_call, deadline_s, expired
 
     def complete(self, req: ModelRequest, *, handle: str) -> Metered[ModelResponse]:
         """A positive committed request yields exactly one ledgered purchase observation."""
-        result = super().complete(req, handle=handle)
+        result = self.clocked(req, handle,
+                              lambda r: X402MeteredModel.complete(self, r, handle=handle))
         if result.cost > 0:
             self.record({"kind": "observation.market_purchase", "handle": handle})
         return result
@@ -483,6 +505,8 @@ class ComputeMixin:
                 meter,
                 record=self._record_market,
                 on_unaffordable=self._compute_failure,
+                before_call=self._safety_pass, deadline_s=self._call_deadline_s,
+                expired=self._call_expired,
             )
         asm = Assembly(spec, model, validator=self._validate_output_contract)
         self.assemblies[spec.id] = asm

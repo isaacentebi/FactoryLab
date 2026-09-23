@@ -133,6 +133,8 @@ class BootstrapMixin:
         self.card_clock: dict[str, int] = {}
         # Whether a governance tier fits between the slowest loop and the world (T7).
         self.governance_viable = True
+        # watcher seat -> the world tick its program price was last charged (T8).
+        self.watcher_ticks: dict[str, int] = {}
         # event kind -> the tick a grown menu started waiting for its epoch (T6).
         self.pending_epochs: dict[str, int] = {}
         # Where the treasury caps' own wall-clock windows are counted from (T1, T13).
@@ -368,6 +370,7 @@ class BootstrapMixin:
         self.wall = JournalProxy(WallClock(lambda: self.tick_clock, self.clock), self.ledger,
                                  "wall", deterministic=not self.live)
         self._safety_ns = self.clock.now_ns
+        self._safety_stop: str | None = None
         # Uncertain bills settle from the provider's own balance, read through the
         # journal like every other provider read so replay reproduces it.
         self.bill_settlement = BillSettlement(self._provider_balance, record=self._record_market)

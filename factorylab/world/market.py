@@ -109,10 +109,18 @@ def split_model_id(model_id: str) -> tuple[str, str]:
     return seller_root(seller), model
 
 
-def _request(transport: Transport, method: str, url: str, payload=None, headers=None):
+def _request(transport: Transport, method: str, url: str, payload=None, headers=None, *,
+             timeout: float | None = None):
+    """One market HTTP call; ``timeout`` is a completion's own deadline (time audit T8)."""
+    from factorylab.world.openai_wire import CALL_EXPIRED, expired
+
     try:
+        if timeout is not None and transport is http_request:
+            return transport(method, url, payload, headers or {}, timeout=timeout)
         return transport(method, url, payload, headers or {})
-    except Exception:
+    except Exception as exc:
+        if expired(exc):
+            raise X402Error(f"Market HTTP call: {CALL_EXPIRED}") from None
         raise X402Error("Market HTTP transport or response decoding failed") from None
 
 
@@ -475,7 +483,8 @@ class X402Provider:
                                   if quoted.resource is not None else {}),
                                **({"extensions": quoted.extensions}
                                   if quoted.extensions is not None else {})})
-            if quoted is not None else _request(self._transport, "POST", url, payload)
+            if quoted is not None else _request(self._transport, "POST", url, payload,
+                                                timeout=req.timeout_s)
         )
         if response.status == 402:
             quote = parse_quote(response)
@@ -498,8 +507,15 @@ class X402Provider:
                 return self._paid(req, url, payload, encoded, quote, client, record)
             except PaymentOutcomeUnknown:
                 raise
-            except Exception:
-                raise PaymentOutcomeUnknown("Submitted payment outcome is unknown") from None
+            except Exception as exc:
+                # A paid call that outlived its caller's deadline is still unknown: the
+                # seller may settle the authorization. Only the reason says it expired.
+                from factorylab.world.openai_wire import CALL_EXPIRED
+
+                expired = str(exc).endswith(CALL_EXPIRED)
+                raise PaymentOutcomeUnknown(
+                    "Submitted payment outcome is unknown"
+                    + (f": {CALL_EXPIRED}" if expired else "")) from None
         if not 200 <= response.status < 300:
             raise X402Error(f"Seller request failed (HTTP {response.status})")
         return self._response(req, response, None, None, record)
@@ -509,7 +525,7 @@ class X402Provider:
         """The paid half of ``complete``: one submission and its receipt. Every failure
         raised here happens after the authorization was sent."""
         response = _request(self._transport, "POST", url, payload,
-                            {"PAYMENT-SIGNATURE": encoded})
+                            {"PAYMENT-SIGNATURE": encoded}, timeout=req.timeout_s)
         settlement = None
         header = _header(response.headers, "payment-response", "x-payment-response")
         if header is not None:

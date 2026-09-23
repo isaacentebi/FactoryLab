@@ -31,6 +31,7 @@ from factorylab.runtime.clockwork import (
 from factorylab.runtime.loop import Runtime
 from factorylab.runtime.pricing import MeasureWindow
 from factorylab.runtime.worlds import load_manifest
+from factorylab.world.events import WorldEvent, WorldEventKind
 from factorylab.world.exchange import FakeExchange
 from factorylab.world.scripted import ScriptedProvider
 from tests.conftest import make_runtime
@@ -237,9 +238,9 @@ def test_a_learning_death_grant_lives_its_patience_and_is_not_reissued_while_it_
     assert len(_items(rt, "novelty.grant")) == 2
 
 
-def test_a_grown_menu_waits_one_measured_round_period_for_its_epoch(monkeypatch):
-    """Time audit T6: a speed limit on refactoring; a registration joins a routed kind
-    at most once per period of that router's own rounds."""
+def test_a_grown_menu_waits_min_ratio_measured_round_periods_for_its_epoch(monkeypatch):
+    """Time audit T6, Codex review of #133: a speed limit on refactoring; a registration
+    joins a routed kind at most once per min_ratio periods of that router's own rounds."""
     rt = make_runtime()
     kind = "Tick"
     state = rt.routers[kind][0]
@@ -251,7 +252,7 @@ def test_a_grown_menu_waits_one_measured_round_period_for_its_epoch(monkeypatch)
     rt._open_epoch(kind)
     assert "newcomer" not in state.universe and kind in rt.pending_epochs
     assert _items(rt, "epoch.deferred")[-1]["inner_ticks"] == 5
-    rt.ticks_consumed += 4
+    rt.ticks_consumed += rt.m.timing.min_ratio * 5 - 1
     rt._open_pending_epochs()
     assert "newcomer" not in rt.routers[kind][0].universe
     rt.ticks_consumed += 1
@@ -325,21 +326,76 @@ def test_a_promise_is_graded_no_sooner_than_min_ratio_consequence_periods():
 # --- money rails (T1, T13) -------------------------------------------------------------
 
 
-def test_the_capital_loop_is_measured_and_no_conversion_strands_faster_than_it(monkeypatch):
+def _confirm(rt, monkeypatch, ticks, *, outage_ns=0):
+    """One conversion finalizes after ``ticks`` ticks consumed and ``outage_ns`` of wall time."""
+    rt.ticks_consumed += 1
+    rt.clock.now_ns += outage_ns + ticks * rt.tick_clock.interval_ns
+    monkeypatch.setattr(rt.treasury, "tick", lambda now: [{
+        "status": "confirmed", "transfer_id": f"t-{rt.ticks_consumed}",
+        "latency_ticks": ticks, "latency_ns": outage_ns + ticks * rt.tick_clock.interval_ns}])
+    rt._tick_treasury()
+
+
+def test_the_reviewers_probe_an_outage_consumes_no_capital_loop_ticks(monkeypatch):
+    """Cold review of #133: two two-minute conversions and one spanning a 12 h outage set
+    a p90 of 4,320 ticks from wall time, pushing governance out 12,960 ticks and holding
+    the transfer slot 12 h. Latency is ticks consumed now, and a handful of conversions is
+    not evidence of the rail's period until the loop has the consequence loop's support."""
     rt = make_runtime()
     floor = rt.m.treasury.forward_wait_ticks
-    latency = (floor + 40) * rt.tick_clock.interval_ns
-    results = iter([[{"status": "confirmed", "transfer_id": "t-0", "latency_ns": latency}],
-                    []])
-    monkeypatch.setattr(rt.treasury, "tick", lambda now: next(results))
+    before = rt.cadence.slowest_period_events()
+    for outage in (0, 0, 12 * 3600 * 10**9):
+        _confirm(rt, monkeypatch, 12, outage_ns=outage)
+    assert [c["latency_ticks"] for c in _items(rt, "cadence.capital")] == [12, 12, 12]
+    assert rt.cadence.capital_period_events() is None  # three samples support nothing
+    assert rt.cadence.slowest_period_events() == before
+    assert rt._forward_wait_ticks() == floor == rt.treasury.forward_wait_ticks
+    support = rt.m.timing.min_support
+    for _ in range(support - 3):
+        _confirm(rt, monkeypatch, 40)
+    assert rt.cadence.capital_period_events() == 40
+    assert rt._forward_wait_ticks() == rt.m.timing.min_ratio * 40  # not max(floor, p90)
+    assert rt.cadence.slowest_period_events() == max(before, 40)
     rt._tick_treasury()
-    capital, = _items(rt, "cadence.capital")
-    assert capital["latency_ticks"] == floor + 40
-    assert rt.cadence.slowest_period_events() >= floor + 40
-    assert rt.clockwork.latencies["capital"] == [floor + 40]
-    rt._tick_treasury()
-    assert rt.treasury.forward_wait_ticks == floor + 40
-    assert rt.treasury.tick_index == rt.ticks_consumed
+    assert rt.treasury.forward_wait_ticks == rt.m.timing.min_ratio * 40
+
+
+def test_a_conversion_latency_is_ticks_consumed_and_survives_a_checkpoint():
+    from factorylab.kernel.ledger import Ledger
+    from factorylab.kernel.wallet import Wallet
+    from factorylab.world.treasury import FakeTreasury
+
+    ledger = Ledger()
+    wallet = Wallet(100_000_000, ledger, clock_ns=lambda: 0)
+    treasury = FakeTreasury(ledger, wallet, exchange=FakeExchange())
+    treasury.tick_index = 5
+    assert treasury.transfer("to_reserve", "10", handle="h", now_ns=1)["status"] == "submitted"
+    assert treasury.state["started_tick"] == 5
+    restored = FakeTreasury(ledger, wallet, exchange=FakeExchange())
+    restored.restore(treasury.snapshot())
+    assert restored.tick_index == 5
+    treasury.tick_index = 8
+    done = []
+    while not done:
+        done = [r for r in treasury.tick(10**15) if r.get("status") == "confirmed"]
+    assert done[0]["latency_ticks"] == 3  # eleven days of wall time are not ticks
+
+
+def test_a_treasury_session_counts_its_advances_as_ticks(tmp_path):
+    """The acceptance CLI advanced no tick, so a stall it recorded aged by the runtime's
+    ticks on resume. Each advance is now one tick of the session, checkpointed."""
+    from factorylab.runtime.treasury_cli import AcceptanceSession
+    from factorylab.world.treasury import FakeRail
+
+    wallet_rail = FakeRail(None)
+    wallet_rail.balances = lambda: {"venue": 50_000_000, "reserve": 0}
+    config = {"max_transfer_fee_micro": 2_000_000}
+    session = AcceptanceSession(tmp_path / "acceptance.jsonl", wallet_rail, config)
+    session.execute({"kind": "advance"}, 1)
+    session.execute({"kind": "advance"}, 2)
+    assert session.treasury.tick_index == 2
+    reopened = AcceptanceSession(tmp_path / "acceptance.jsonl", wallet_rail, config)
+    assert reopened.treasury.tick_index == 2
 
 
 def test_the_treasury_caps_count_their_own_wall_clock_window_not_the_pricing_window():
@@ -374,26 +430,97 @@ class _Expiring:
         raise OpenRouterError(None, CALL_EXPIRED)
 
 
-def test_a_call_is_bounded_by_the_delivered_tick_and_an_expired_one_times_its_decision_out():
+class _FakeTime:
+    def __init__(self):
+        self.t = 10**12
+
+    def now_ns(self):
+        return self.t
+
+
+def _live(ft, **kwargs):
+    from factorylab.runtime.live import LiveClock
+
+    return make_runtime(live=True, clock_source=LiveClock(
+        interval_ns=10**9, count=5, now_ns=ft.now_ns, sleep=lambda s: None), **kwargs)
+
+
+def _model(rt, provider, passes=None):
     from factorylab.runtime.compute import _ObservedMeteredModel
-    from factorylab.world.metering import BillingUncertain, Meter
+    from factorylab.world.metering import Meter
+
+    return _ObservedMeteredModel(
+        provider, rt.prices, Meter(rt.wallet), record=lambda e: None,
+        before_call=(lambda: passes.append(1)) if passes is not None else rt._safety_pass,
+        deadline_s=rt._call_deadline_s, expired=rt._call_expired)
+
+
+def _request():
     from factorylab.world.models import ModelRequest
 
-    rt = make_runtime()
+    return ModelRequest("fake-haiku", "s", ({"role": "user", "content": "x"},), max_tokens=10)
+
+
+def test_a_paced_call_is_bounded_by_the_delivered_tick_and_an_expired_one_times_out():
+    from factorylab.world.metering import BillingUncertain
+
+    rt = _live(_FakeTime())
+    assert rt._paced()
     assert rt._call_deadline_s() == rt.m.timing.min_ratio * rt.tick_clock.interval_ns / 1e9
     handle = _open(rt, horizon=20)
-    provider = _Expiring()
-    passes = []
-    model = _ObservedMeteredModel(provider, rt.prices, Meter(rt.wallet), record=lambda e: None,
-                                  before_call=lambda: passes.append(1),
-                                  deadline_s=rt._call_deadline_s, expired=rt._call_expired)
+    provider, passes = _Expiring(), []
     with pytest.raises(BillingUncertain):
-        model.complete(ModelRequest("fake-haiku", "s", ({"role": "user", "content": "x"},),
-                                    max_tokens=10), handle=handle)
+        _model(rt, provider, passes).complete(_request(), handle=handle)
     assert passes == [1] and provider.seen == [rt._call_deadline_s()]
     assert rt.queue.get(handle).status is SettleStatus.TIMED_OUT
     expired, = _items(rt, "decision.call_expired")
     assert expired["handle"] == handle and expired["tick"] == rt.ticks_consumed
+
+
+def test_an_unpaced_world_leaves_a_call_to_the_adapters_ceiling_and_a_replay_paces_it():
+    """The cold review's ruling: the per-call deadline serves requisite velocity, so it
+    applies where an environment's pace is measured (a live world, or a replay of a
+    diary's delivered gaps), and an unpaced virtual clock keeps only the finite ceiling."""
+    from scripts.fastloop import ReplayClock
+
+    unpaced = make_runtime()
+    assert not unpaced._paced() and unpaced._call_deadline_s() is None
+    from factorylab.world.metering import BillingUncertain
+
+    provider = _Expiring()
+    with pytest.raises(BillingUncertain):
+        _model(unpaced, provider, []).complete(_request(), handle=_open(unpaced, horizon=5))
+    assert provider.seen == [None]
+    replay = make_runtime(clock_source=ReplayClock(10**9, 10**9, 5, [4 * 10**9]))
+    assert list(replay.tick_clock.events())  # four-second gaps were delivered
+    assert replay._paced() and replay._call_deadline_s() == 12.0
+
+
+def test_a_terminal_state_the_safety_pass_sees_refuses_every_later_call_unbilled():
+    from factorylab.world.metering import UnbilledFailure
+
+    ft = _FakeTime()
+    rt = _live(ft)
+    rt.consequence_fills.poll = lambda _exchange: []
+    rt.termination.check = lambda *a, **k: "balance_zero"
+    rt._safety_ns = ft.t
+    ft.t += 10**9
+    calls, balance = [], rt.wallet.balance
+
+    class Counting:
+        name = "counting"
+
+        def complete(self, req):
+            calls.append(req)
+            raise AssertionError("no call is made once the world is terminal")
+
+    with pytest.raises(UnbilledFailure, match="terminal"):
+        _model(rt, Counting()).complete(_request(), handle=_open(rt, horizon=5))
+    assert _items(rt, "safety.pass")[-1]["terminal"] == "balance_zero"
+    with pytest.raises(UnbilledFailure, match="terminal"):  # latched: no second read needed
+        _model(rt, Counting()).complete(_request(), handle=_open(rt, horizon=5))
+    assert calls == [] and rt.wallet.balance == balance
+    rt._safety_stop = None  # a new event starts unlatched
 
 
 def test_the_safety_pass_runs_between_calls_only_once_a_delivered_tick_has_passed():
@@ -426,3 +553,148 @@ def test_the_safety_pass_runs_between_calls_only_once_a_delivered_tick_has_passe
     simulated = make_runtime()
     simulated._safety_pass()
     assert not _items(simulated, "safety.pass")  # a simulated clock never moves mid-event
+
+
+def test_a_fill_the_venue_makes_while_a_model_thinks_settles_between_tool_rounds_once():
+    """Tool writes an order, the market fills it during the next call's wait, the safety
+    pass settles the fill before that call, and the model answers. The decision acts
+    once and the fill is never processed twice."""
+    import json
+    from dataclasses import replace as replaced
+    from decimal import Decimal
+
+    from factorylab.runtime.live import LiveClock
+    from factorylab.world.models import ModelResponse
+    from tests.runtime.test_loop import _consequence_produce
+
+    ft = _FakeTime()
+
+    class LateFill(FakeExchange):
+        def fills(self, since_ns):
+            if self._resting:
+                self._mids["BTC"] = Decimal("98")
+                self._now_ns = ft.t
+                self._cross_resting()
+            return super().fills(since_ns)
+
+    class Slow:
+        name = "slow"
+
+        def __init__(self, *replies):
+            self.replies = list(replies)
+
+        def complete(self, req):
+            ft.t += 2 * 10**9  # each call takes two ticks of wall time
+            return ModelResponse(req.model_id, json.dumps(self.replies.pop(0)), 300, 40,
+                                 "end_turn")
+
+    base = load_manifest("scripted")
+    manifest = replaced(base, exchange=replaced(base.exchange, kind="hyperliquid",
+                                                coins=("BTC",)))
+    rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
+                 router_gamma=0.2, exchange=LateFill(coins=("BTC",),
+                                                     start_prices={"BTC": Decimal("100")},
+                                                     start_cash_usd=Decimal("1000")),
+                 provider=Slow({"action": "order", "tool_calls": [{
+                     "tool": "venue.place_limit",
+                     "args": {"coin": "BTC", "side": "buy", "size": "0.01", "price": "99"}}]},
+                     {"action": "order", "rationale": "bid resting"}),
+                 clock_source=LiveClock(interval_ns=10**9, count=5, now_ns=ft.now_ns,
+                                        sleep=lambda s: None))
+    rt.exchange.deterministic = True  # the fake computes collateral on demand
+    rt._safety_ns = ft.t
+    handle, event = _consequence_produce(rt)
+    kinds = [i["kind"] for i in rt.ledger._recovery_items() if i["kind"] in (
+        "order.intent", "tool.call", "consequence.fill", "fill.counted", "safety.pass")]
+    assert kinds == ["order.intent", "tool.call", "consequence.fill", "fill.counted",
+                     "safety.pass"]
+    assert _items(rt, "safety.pass")[-1]["fills"] == 1
+    assert event.payload["status"] == "ok" and event.payload["outputs"]["action"] == "order"
+    assert len([i for i in rt.order_intents.values() if i["handle"] == handle]) == 1
+    assert rt.consequence_fills.poll(rt.exchange) == []  # the tick finds nothing new
+    assert len(_items(rt, "fill.counted")) == 1
+
+
+def test_a_safety_sweep_charges_no_watcher_twice_in_one_tick(monkeypatch):
+    rt = make_runtime()
+    rt.subscription_book.watchers["seed-observer"] = {
+        "owner": "seed-decider", "trigger": {"kind": "mid_above", "coin": "BTC", "px": "1"},
+        "last": None}
+    monkeypatch.setattr(rt.subscription_book, "evaluate", lambda seat, observed: None)
+    balance = rt.wallet.balance
+    rt._evaluate_watchers()
+    charged = balance - rt.wallet.balance
+    assert charged == rt.m.prices.program_micro_per_call
+    rt._evaluate_watchers(sweep="safety-1")
+    rt._evaluate_watchers(sweep="safety-2")
+    assert balance - rt.wallet.balance == charged
+    assert [i["cost"] for i in _items(rt, "watcher.evaluated")] == [charged, 0, 0]
+    rt.ticks_consumed += 1  # a new tick: the sweep is the watcher's first evaluation
+    rt._evaluate_watchers(sweep="safety-3")
+    assert balance - rt.wallet.balance == 2 * charged
+
+
+def test_the_price_loop_does_not_wait_on_forecast_horizons_seats_chose():
+    """Seats seal horizons up to 200 ticks; the forecast meter counts only with support
+    and never past the consequence backstop, so a seat cannot delay its own price."""
+    rt = make_runtime()
+    card = next(c for c in rt.charter.cards if c.window.kind == "forecasts")
+    for _ in range(rt.m.timing.min_support - 1):
+        rt.clockwork.record("forecast", 200)
+    assert rt._card_inner(card) == 1  # below support: no evidence of the loop's period
+    rt.clockwork.record("forecast", 200)
+    assert rt._card_inner(card) == rt.ev.consequence_backstop_ticks
+
+
+def test_a_latched_terminal_state_ends_the_world_through_the_one_kill_path():
+    """Codex review of #133: a terminal safety pass is routed through the runtime's kill,
+    and routing draws nobody else in that event."""
+    rt = make_runtime()
+    rt._safety_stop = "balance_zero"
+    decisions = rt.stats.decisions
+    rt._route(rt._kernel_event(WorldEvent(WorldEventKind.TICK, rt.clock.now_ns, "clock",
+                                          {"index": 0})))
+    assert rt.stats.decisions == decisions
+    assert rt._check_termination() is True and rt.termination.final
+    assert _items(rt, "kill.production")[-1]["reason"] == "balance_zero"
+
+
+@pytest.mark.gate
+def test_replaying_the_journaled_wall_clock_reads_makes_the_same_safety_decisions(tmp_path):
+    """The safety pass reads wall time and the delivered tick through the journal: a
+    resume replays the tail from the run's own recorded instants, not its own clock, and
+    the append-checking diary refuses any replayed decision that differs."""
+    from factorylab.runtime.resume import resume_runtime
+    from factorylab.world.clock import ClockSource
+    from tests.runtime.test_resume import CountingVenue, stop_after
+    from tests.runtime.test_resume import make_runtime as ledgered_runtime
+
+    base = load_manifest("scripted")
+    m = replace(base, exchange=replace(base.exchange, kind="hyperliquid", coins=("BTC",)))
+    path = tmp_path / "wall.jsonl"
+    venue = CountingVenue()
+    rt = ledgered_runtime(m, path, exchange=venue,
+                          clock_source=ClockSource(10**9, 10**9, 8).events())
+    rt.events_budget = 8
+    reads = {"t": 0}
+
+    def fast_wall():  # every read is two ticks after the last: a pass is always due
+        reads["t"] += 2 * 10**9
+        return rt.clock.now_ns + reads["t"]
+
+    rt.wall.target.now_ns = fast_wall
+    stop_after(rt, lambda r, e: r.ticks_consumed == 6 and str(e.kind) == "Tick")
+    diary = rt.ledger._recovery_items()
+    snapshot = max(i["seq"] for i in diary if i["kind"] == "snapshot")
+    replayed = [i for i in diary if i["kind"] == "safety.pass" and i["seq"] > snapshot]
+    assert replayed  # the tail a resume replays contains safety decisions
+    assert {i["name"] for i in diary if i["kind"] == "io.call"} >= {"wall.now_ns",
+                                                                    "wall.tick_ns"}
+    # This process's wall clock stands still: a replay that consulted it would find no
+    # pass due and write a diary the append-checking ledger refuses.
+    restored = resume_runtime(m, str(path), exchange=venue, now_ns=rt.clock.now_ns,
+                              clock_source=ClockSource(10**9, 10**9, 8).events())
+    assert restored.ticks_consumed == rt.ticks_consumed and restored.n == rt.n
+    assert restored.stats.decisions == rt.stats.decisions
+    assert restored.subscription_book.state() == rt.subscription_book.state()
+    restored._ledger_lock.close()

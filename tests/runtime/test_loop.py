@@ -635,3 +635,41 @@ def test_position_peak_is_ledger_first_and_survives_flat_account(monkeypatch):
     assert rt.window.max_position_notional_micro == 6_000_000
 
 
+def test_a_paid_seller_call_runs_on_the_same_clock_as_every_other_call(market_http):
+    """Codex review of #133: an x402 assembly's calls get the safety pass and the paced
+    deadline, and an expired paid call is reported expired (its payment still unknown)."""
+    from types import SimpleNamespace as NS
+
+    from factorylab.runtime.compute import _ObservedX402Model
+    from factorylab.world.market import PaymentOutcomeUnknown
+    from factorylab.world.metering import BillingUncertain, Meter
+    from factorylab.world.models import ModelRequest
+    from tests.world.test_market import MODEL
+
+    rt = _market_runtime(market_http)
+    _register_test_seller(rt)
+    wired = rt.assemblies["market-buyer"].model
+    assert isinstance(wired, _ObservedX402Model)
+    assert (wired.before_call, wired.deadline_s, wired.expired) == (
+        rt._safety_pass, rt._call_deadline_s, rt._call_expired)
+    seen, passes, expired = [], [], []
+
+    class Seller:
+        def quote(self, req):
+            seen.append(("quote", req.timeout_s))
+            return NS(amount_micro=1)
+
+        def complete(self, req, *, record=None, quoted=None):
+            seen.append(("complete", req.timeout_s))
+            raise PaymentOutcomeUnknown("Submitted payment outcome is unknown: "
+                                        "Call deadline expired")
+
+    model = _ObservedX402Model(Seller(), wired.prices, Meter(rt.wallet), record=lambda e: None,
+                               on_unaffordable=lambda h: None,
+                               before_call=lambda: passes.append(1), deadline_s=lambda: 7.0,
+                               expired=lambda h, t: expired.append((h, t)))
+    with pytest.raises(BillingUncertain):
+        model.complete(ModelRequest(MODEL, "s", ({"role": "user", "content": "x"},),
+                                    max_tokens=10), handle="h-1")
+    assert passes == [1] and seen == [("quote", 7.0), ("complete", 7.0)]
+    assert expired == [("h-1", 7.0)]

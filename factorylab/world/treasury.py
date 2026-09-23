@@ -170,8 +170,10 @@ class Treasury:
         if type(forward_wait_ticks) is not int or forward_wait_ticks < 1:
             raise ValueError("forward_wait_ticks must be a positive integer")
         # How long a prepare stall may last before a recoverable strand, in world ticks
-        # (time audit T13). The runtime raises it to the capital loop's measured
-        # closure each tick and states the tick it is on in ``tick_index``.
+        # (time audit T13). The runtime restates it each tick (the declared floor, or
+        # min_ratio times the capital loop's supported p90) and states the tick it
+        # is on in ``tick_index``, which a checkpoint carries: a conversion's latency
+        # and a stall's age are ticks consumed, so an outage adds nothing to either.
         self.forward_wait_ticks = forward_wait_ticks
         self.tick_index = 0
         if type(fee_ceiling_micro) is not int or fee_ceiling_micro < 0:
@@ -589,6 +591,7 @@ class Treasury:
                 "receipts": [],
                 "principal_moved": False,
                 "started_ns": now_ns,
+                "started_tick": self.tick_index,
                 "route_data": {},
                 "attempts": 0,
                 "last_send_ns": now_ns,
@@ -857,7 +860,11 @@ class Treasury:
                     "received_micro": finished["received_micro"],
                     "fees_micro": finished["fees_micro"],
                     "tx_refs": deepcopy(finished["receipts"]),
-                    # Open to finalized: one closure of the capital loop (time audit T13).
+                    # Open to finalized: one closure of the capital loop (time audit T13),
+                    # in ticks consumed. Wall time rides beside it as provenance only; a
+                    # transfer opened before the tick record has no tick latency.
+                    "latency_ticks": (max(0, self.tick_index - finished["started_tick"])
+                                      if "started_tick" in finished else None),
                     "latency_ns": max(0, now_ns - finished.get("started_ns", now_ns)),
                 }
             ]
@@ -1178,6 +1185,7 @@ class Treasury:
                 "fake_reserve": self.rail.reserve if self.rail.name in SCRIPTED_RAILS else None,
                 "fake_venice": self.rail.venice if self.rail.name in SCRIPTED_RAILS else None,
                 "venice_window": self.venice_window,
+                **({"tick_index": self.tick_index} if self.tick_index else {}),
                 "venice_spent": self.venice_spent,
                 "forward_spent": self.forward_spent,
                 "income": self.income,
@@ -1220,6 +1228,7 @@ class Treasury:
         self.pots_observed_ns = saved.get("pots_observed_ns")
         self.venice_window, self.venice_spent = saved["venice_window"], saved["venice_spent"]
         self.forward_spent = saved.get("forward_spent", 0)  # checkpoints predate forwarding
+        self.tick_index = saved.get("tick_index", 0)  # and the tick record
         self.venice_authorized_micro = saved.get("venice_authorized_micro", 0)
         self.income = {**_fresh_income(), **saved.get("income", {})}  # and income classes
         if saved["fake_reserve"] is not None:

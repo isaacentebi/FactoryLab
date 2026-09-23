@@ -151,6 +151,12 @@ class WallClock:
             return int(clock.now_ns())
         return int(self.sim.now_ns)
 
+    def tick_ns(self) -> int:
+        """The delivered tick interval now: the slower of the measured and declared gap."""
+        from factorylab.runtime.clockwork import tick_ns
+
+        return int(tick_ns(self.tick_clock()))
+
 
 @dataclass
 class LiveVenue:

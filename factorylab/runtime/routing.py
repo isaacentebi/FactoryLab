@@ -809,7 +809,7 @@ class RoutingMixin:
                 return
         states = list(self.routers.get(kind, []))
         for state in states:
-            if self.wallet.dead:
+            if self.wallet.dead or self._safety_stop is not None:
                 break
             self._route_with(state, ev)
 
@@ -1068,13 +1068,16 @@ class RoutingMixin:
 
         Essay II.IV.b: "some speed limit needs to be applied to the velocity with
         which the factory refactors itself, allowing feedback loops the time they
-        need to actually close". A router's menu grows at most once per measured
-        period of its own rounds, in ticks: a registration waits for the rounds
-        drawn over the old menu to be learned before the menu changes again.
+        need to actually close". A router's menu grows at most once per
+        ``min_ratio`` measured periods of its own rounds, in ticks: a registration
+        waits for the rounds drawn over the old menu to be learned before the menu
+        changes again.
         """
         opened = self.clockwork.opened(f"epoch:{kind}")
         inner = self.clockwork.measured(f"router:{kind}")
-        return opened is None or self.ticks_consumed - opened >= inner
+        # §IV.c: the loop changing a router's action set is an outer loop over that
+        # router's rounds, so it keeps the same min_ratio separation (Codex review).
+        return opened is None or self.ticks_consumed - opened >= self.m.timing.min_ratio * inner
 
     def _open_pending_epochs(self) -> None:
         """Open every deferred epoch whose speed limit has passed."""

@@ -124,11 +124,11 @@ settings".
 | Key | Type | Default / seed | Hard cast? |
 | --- | --- | --- | --- |
 | `treasury.max_venice_per_window` | Exact USD decimal string or integer, nonnegative | `"10"` (10,000,000 micro-USD) | Configured resource bound per `treasury.cap_window`, fixed for a run; not amendable through metric cards |
-| `treasury.cap_window` | Duration, at least `timing.min_ratio` declared ticks | `"1h"` | The Venice and forwarding-fee caps' own wall-clock window, counted from launch. A money rail runs in wall time, so its rate cap is a duration and never the pricing window (time audit T1, T13) |
+| `treasury.cap_window` | Duration, at least `timing.min_ratio` declared ticks | `"1h"` | The Venice and forwarding-fee caps' own wall-clock window, counted from launch. A declared money bound, not derived from any measured loop: a money rail runs in wall time, so its rate cap is a duration, and it no longer borrows the pricing window (time audit T1, T13) |
 | `treasury.cctp_forwarding` | `"never"`, `"on_empty_gas"` or `"always"` | `"on_empty_gas"` | Configured route rule, fixed for a run |
 | `treasury.max_forward_fee_usd` | Exact USD decimal string, nonnegative | `"0.30"` ($0.10 of headroom over the $0.20 quoted on both networks) | Hard bound on the on-chain forwarding fee quote per exit; a higher quote refuses before signing |
 | `treasury.max_forward_fees_per_window` | Exact USD decimal string or integer, nonnegative | `"1"` | Per-cap-window cap on forwarding fees quoted for submitted exits; a failed exit still counts |
-| `treasury.forward_wait_ticks` | Integer, at least `timing.min_ratio` | `360` | Declared floor, in world ticks, on how long a forwarded mint or a hybrid top-up may stay undone before the exit strands recoverably. The runtime raises it to the capital loop's measured p90 conversion (open to finalized) in ticks, so nothing strands faster than the rail delivers (time audit T13). `treasury.forward_wait_windows` is refused |
+| `treasury.forward_wait_ticks` | Integer, at least `timing.min_ratio` | `360` | Declared wait, in world ticks, before a forwarded mint or a hybrid top-up that stays undone strands recoverably. Once `timing.min_support` conversions have finalized, the wait is derived instead: `timing.min_ratio` times the capital loop's p90 conversion (open to finalized, in ticks consumed, so an outage adds nothing) (time audit T13). `treasury.forward_wait_windows` is refused |
 | `treasury.venice_network` | Absent, or `"base-mainnet"` | Absent | Hybrid capital-loop rehearsal: `to_venice` buys real Venice credit from the Base mainnet reserve and pays for it in the testnet pots with a shadow send (docs/architecture/capital-loop-rehearsal.md). Refused on a mainnet venue and without `venice_shadow_sink` |
 | `treasury.venice_shadow_sink` | Nonzero EVM address, only with `venice_network` | Absent | Where the shadow leg's testnet USDC goes; must be an existing Hyperliquid testnet account outside every observed pot |
 | `treasury.max_venice_total_usd` | Exact USD, positive; required with `venice_network`, refused without it | Absent | Absolute bound on real USDC ever authorized for Venice in the world, re-authorizations included; the counter is checkpointed |
@@ -903,7 +903,9 @@ end) and for money rails. No manifest key casts a window: `novelty.window`,
   `min_ratio × slowest`.
 * **Prices** move only on a new settled sample in the card's scope and no
   faster than `min_ratio` times the loop the card's samples come from
-  (`price.skipped` with `no_new_sample` or `ratio`).
+  (`price.skipped` with `no_new_sample` or `ratio`). A forecast card's loop is the
+  forecast meter, which counts only with `timing.min_support` settlements and never
+  beyond the consequence backstop: a horizon a seat chose cannot delay its own price.
 * **Cutoffs**: a decision's cutoff is its horizon in ticks plus
   `ceil(horizon / min_ratio)`: 27 ticks for a 20-tick verdict timeout, 80 for a
   60-tick backstop, `h + ceil(h/3)` for a forecast of horizon `h`. A forecast
@@ -915,22 +917,32 @@ end) and for money rails. No manifest key casts a window: `novelty.window`,
   the reserve never holds more than one period's share (`novelty.window` items
   carry `carried`, `accrued` and `cap`). A trial's patience is `min_ratio`
   measured consequence periods. A grown router menu opens its epoch at most once
-  per measured period of that router's rounds (`epoch.deferred`).
+  per `min_ratio` measured periods of that router's rounds (`epoch.deferred`).
 * **Governance**: each activation opens a settling probe (`governance.probe`);
   the time until every read card's score series returns to the band it held
   before, at any level, is its settling time (`governance.settling`), part of the
   slowest period. A probe unsettled after `min_ratio` consequence periods closes
   with its age as a lower bound. `governance.nonviable` / `governance.viable`
-  record each change in whether `min_ratio × slowest` fits the run's remaining
-  ticks and the world's repricing period.
-* **Money rails**: each conversion's open-to-finalized latency is a
-  `cadence.capital` sample; the caps count `treasury.cap_window` of wall time.
-* **Requisite velocity (T8)**: a model call's deadline is `min_ratio` delivered
-  ticks (`ModelRequest.timeout_s`, never above the adapter's ceiling); a call
-  that outlives it times its decision out (`decision.call_expired`). Before every
-  model call, once a delivered tick of wall time has passed in the event, a live
-  world settles venue fills, reconciles orders and settles watchers
-  (`safety.pass`), reading its wall clock through the journal. No thread is used.
+  record each change in whether `min_ratio × slowest` fits the run's whole length
+  and the world's repricing period: nonviable means the band is empty for this
+  world, never that the run is near its end.
+* **Money rails**: each conversion's open-to-finalized latency, in ticks
+  consumed, is a `cadence.capital` sample. It joins the slowest period and sets
+  the forward wait only with `timing.min_support` samples. The caps count
+  `treasury.cap_window` of wall time, a declared bound.
+* **Requisite velocity (T8)**: where the environment's pace is measured (a live
+  world, or `fastloop --gaps-from`), a model call's deadline is `min_ratio`
+  delivered ticks (`ModelRequest.timeout_s`, never above the adapter's ceiling),
+  for every rail, x402 sellers included; an unpaced virtual clock keeps only the
+  adapter's finite ceiling. A call that outlives its deadline times its decision
+  out (`decision.call_expired`). Before every model call, once a delivered tick of
+  wall time has passed in the event, a live world settles venue fills, reconciles
+  orders and settles watchers (`safety.pass`), reading its wall clock and delivered
+  tick through the journal. A watcher pays its program price once per world tick,
+  so a sweep inside a tick it paid for is free. A terminal state the pass sees is
+  latched: later calls in the event are refused unbilled, routing draws no one
+  else, and the event's termination check kills the world through the one kill
+  path. No thread is used.
 
 ## Timing interpretation
 
