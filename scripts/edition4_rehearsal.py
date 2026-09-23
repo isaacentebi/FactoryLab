@@ -691,11 +691,20 @@ def _http_request():
 
 
 def _sibling_runs(output_dir: Path | None) -> tuple[Path, ...]:
-    """Earlier runs beside this one (``work/capital-loop/<run>``) that kept a diary."""
+    """Earlier runs beside this one (``work/capital-loop/<run>``) that kept a diary.
+
+    Guarantees the kill witness a run writes beside its own directory
+    (``factorylab.runtime.witness.WITNESS_DIR``) is never taken for a run: it holds
+    witness lines, not a diary, and has no ledger key, so reading it as a run refused
+    every capital-loop launch after the first.
+    """
+    from factorylab.runtime.witness import WITNESS_DIR
+
     if output_dir is None:
         return ()
     return tuple(sorted(p for p in output_dir.parent.iterdir()
-                        if p != output_dir and (p / "ledger.jsonl").exists()))
+                        if p != output_dir and p.name != WITNESS_DIR
+                        and (p / "ledger.jsonl").exists()))
 
 
 def _denied_rails(capital_loop: bool) -> list[str]:

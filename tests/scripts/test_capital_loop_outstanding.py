@@ -192,3 +192,17 @@ def test_the_rehearsal_runner_runs_the_launch_check_before_anything_is_built(
     assert '"reserve_usdc_micro": 10000000' in printed
     floor = load_manifest("worlds/edition6-capital-loop.toml").treasury.venice_reserve_floor_micro
     assert f'"venice_reserve_floor_micro": {floor}' in printed
+
+
+def test_the_kill_witness_beside_a_run_is_not_a_sibling_run(tmp_path):
+    # The second live capital-loop launch (23 September 2026) refused with
+    # run_ledger_key_missing on work/capital-loop/.witness, the kill witness the first
+    # run wrote beside itself.
+    from factorylab.runtime.witness import WITNESS_DIR
+    from scripts import edition4_rehearsal as rehearsal
+
+    write_run(tmp_path / "earlier")
+    witness = tmp_path / WITNESS_DIR
+    witness.mkdir()
+    (witness / "ledger.jsonl").write_text("{}\n")
+    assert rehearsal._sibling_runs(tmp_path / "now") == (tmp_path / "earlier",)
