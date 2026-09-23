@@ -29,6 +29,7 @@ from factorylab.runtime.shared import (
     DEF_EVALUATION,
     DEF_EXPOSURE,
     DEF_VERDICT,
+    MAX_FORECAST_HORIZON,
     NOOP,
     REQUEST_ROUTER,
     assembly_rewards,
@@ -93,13 +94,34 @@ class ContractQueue:
     def __getattr__(self, name):
         return getattr(self.queue, name)
 
-    def open(self, *, return_channels=None, **kwargs):
-        """Every possible variant is declared before the first metered call."""
+    def open(self, *, return_channels=None, horizon_ticks=None, deadline_tick=None, **kwargs):
+        """Every possible variant is declared before the first metered call.
+
+        A decision's cutoff is counted in world ticks (essay II.IV.b-c; time audit
+        T3): ``horizon_ticks`` is the loop it waits on and the cutoff adds a ratio
+        slack to it (``clockwork.deadline_ticks``); ``deadline_tick`` states an
+        absolute cutoff tick (a child inheriting its parent's). The kernel's
+        ``deadline_ns`` is the same cutoff converted at the delivered tick, shown to
+        the seat and never compared: only the tick cutoff times a decision out. A
+        caller that still states a wall-clock deadline has it converted once, here.
+        """
+        from factorylab.runtime.clockwork import deadline_ticks, tick_ns, ticks_for
+
+        rt = self.runtime
+        now_tick, now_ns = rt.ticks_consumed, rt.clock.now_ns
+        interval = tick_ns(rt.tick_clock)
+        if horizon_ticks is not None:
+            deadline_tick = now_tick + deadline_ticks(horizon_ticks, rt.m.timing.min_ratio)
+        if deadline_tick is not None:
+            kwargs["deadline_ns"] = now_ns + max(0, deadline_tick - now_tick) * interval
+        else:
+            deadline_tick = now_tick + ticks_for(kwargs["deadline_ns"] - now_ns, rt.tick_clock)
         if return_channels:
             return_channels = dict(return_channels)
             if len(set(return_channels.values())) > 1:
                 kwargs["channel"] = "emits"
         handle = self.queue.open(**kwargs)
+        rt.decision_ticks[handle] = [now_tick, deadline_tick]
         if return_channels:
             self.runtime.ledger.append({"kind": "decision.contract", "handle": handle,
                                         "return_channels": return_channels})
@@ -139,6 +161,50 @@ class ContractQueue:
         decision = self.queue.get(handle)
         return replace(decision, channel=self._channel(handle, decision.channel))
 
+    def opened_tick(self, handle: str) -> int | None:
+        """The world tick a decision opened at, or None for one opened before the tick record."""
+        clock = self.runtime.decision_ticks.get(handle)
+        return None if clock is None else clock[0]
+
+    def deadline_tick(self, handle: str) -> int | None:
+        """The world tick a decision is cut off at, or None for one without a tick cutoff."""
+        clock = self.runtime.decision_ticks.get(handle)
+        return None if clock is None else clock[1]
+
+    def expire_due(self) -> list[str]:
+        """Time out every pending decision whose tick cutoff has passed (time audit T3).
+
+        Guarantees a cutoff is reached by ticks consumed, never by wall time: a
+        stalled loop or a slow tick does not expire a decision whose horizon has
+        not elapsed. A decision restored from a checkpoint that predates the tick
+        record keeps the wall-clock deadline it was opened with.
+        """
+        rt = self.runtime
+        now_tick, now_ns = rt.ticks_consumed, rt.clock.now_ns
+        due = []
+        for decision in self.queue.outstanding():
+            cutoff = self.deadline_tick(decision.handle)
+            if (decision.deadline_ns <= now_ns) if cutoff is None else cutoff <= now_tick:
+                due.append(decision.handle)
+        return self.queue.time_out(due, now_ns)
+
+    def forget_ticks(self) -> None:
+        """Drop the tick record of every decision whose outcome is final.
+
+        A final decision is never cut off again and its router has learned it in
+        the event that settled it, so only pending and timed-out ones (whose late
+        settlement still reaches a learner) keep their record.
+        """
+        rt = self.runtime
+        for handle in list(rt.decision_ticks):
+            try:
+                status = self.queue.get(handle).status
+            except KeyError:
+                del rt.decision_ticks[handle]
+                continue
+            if status not in (SettleStatus.PENDING, SettleStatus.TIMED_OUT):
+                del rt.decision_ticks[handle]
+
     def outstanding(self, actor=None):
         return [self.get(d.handle) for d in self.queue.outstanding(actor)]
 
@@ -152,7 +218,21 @@ class ContractQueue:
         """
         if channel != self.get(handle).channel:
             raise ValueError("settlement must address the selected return channel")
+        first = self.queue.get(handle).status is SettleStatus.PENDING
         result = self.queue.settle(handle, channel=self.queue.get(handle).channel, **kwargs)
+        opened = self.opened_tick(handle)
+        if first and opened is not None:
+            # The settle loop of this decision's measured role (time audit T2): how long
+            # a return waits for the signal its learners and its cards are fed from, a
+            # censoring at its horizon included. The scored loop is the same closure
+            # when a real score closed it: what a judgement of that role waits on
+            # before its evidence is complete (the cascade's inner loop, T10).
+            rt = self.runtime
+            role = rt._decision_role(handle)
+            ticks = max(0, rt.ticks_consumed - opened)
+            rt.clockwork.record(f"settle:{role}", ticks)
+            if kwargs.get("status") == SettleStatus.SETTLED:
+                rt.clockwork.record(f"scored:{role}", ticks)
         hook = getattr(self.runtime, "_settled", None)
         if hook is not None:
             hook(handle, kwargs)
@@ -244,8 +324,8 @@ class RouterState:
     # The live router that replaced this one: a retired router's settled rounds
     # train its successor, so no reward is spent on a copy that never samples again.
     successor: str | None = None
-    # [total ns, rounds]: how long this router's learned seat rounds took to be
-    # learned, the delay an abstention's credit is deferred by.
+    # [total ticks, rounds]: how long this router's learned seat rounds took to be
+    # learned, in world ticks, the delay an abstention's credit is deferred by.
     latency: list[int] = field(default_factory=lambda: [0, 0])
     # definition -> learned seat rounds settled under it: the scales this router's
     # rewards are on, and so what an abstention is worth to it (``neutral``).
@@ -283,7 +363,7 @@ class RouterState:
         if self.successor is not None:
             saved["successor"] = self.successor
         if self.latency[1]:
-            saved["latency"] = list(self.latency)
+            saved["latency_ticks"] = list(self.latency)
         if self.definitions:
             saved["definitions"] = dict(self.definitions)
         if self.watch:
@@ -305,7 +385,9 @@ class RouterState:
         router = Router(learner, lambda _k: [a for a in universe if a != NOOP])
         return cls(state["kind"], universe, learner, router, state["epoch"],
                    state.get("seed_gamma", 0.1), ObservedRewards(state.get("observed")),
-                   state.get("successor"), list(state.get("latency", [0, 0])),
+                   # A router saved before the tick clock measured its delay in wall
+                   # nanoseconds ("latency"): that sample is not read, and restarts.
+                   state.get("successor"), list(state.get("latency_ticks", [0, 0])),
                    dict(state.get("definitions", {})), dict(state.get("watch", {})))
 
 
@@ -561,13 +643,14 @@ class RoutingMixin:
 
         A population assembly's trial ends when ``novelty.trials`` settled
         consequences have been delivered to it (continuations and children do not
-        count) or ``novelty.max_lifetime_windows`` have passed since its
-        registration, whichever comes first: the lifetime ends the trial even when
-        no consequence ever arrived, so silence is not an unbounded entitlement
-        (essay II.IV.b: the compensation period must be shorter than the lifetime).
-        The window after a learning-death flag grants one more trial. A seed
-        assembly has no registration window; it is protected until its first
-        settled record.
+        count) or its patience has passed since its registration, whichever comes
+        first: the lifetime ends the trial even when no consequence ever arrived, so
+        silence is not an unbounded entitlement. Its patience is ``min_ratio``
+        measured consequence periods in ticks (``_patience``; time audit T5), so the
+        consequence that pays it can arrive inside it (essay II.IV.b: the
+        compensation period must be shorter than the lifetime). A live learning-death
+        grant adds one more trial. A seed assembly has no registration tick; it is
+        protected until its first settled record.
         """
         try:
             population = self.registry.get(action_id).provenance != "seed"
@@ -575,8 +658,9 @@ class RoutingMixin:
             population = False
         if not population:
             return not self.queue.has_history(action_id)
-        born = self.stats.registered_window.get(action_id, self.stats.reserve_windows)
-        if self.stats.reserve_windows - born >= self.m.novelty.max_lifetime_windows:
+        # Registered before the tick clock: its patience counts from the first read.
+        born = self.stats.registered_tick.setdefault(action_id, self.ticks_consumed)
+        if self.ticks_consumed - born >= self._patience():
             return False
         if not self.queue.has_history(action_id):
             return True
@@ -584,12 +668,18 @@ class RoutingMixin:
         return delivered < self.m.novelty.trials or self._novelty_grant_open(action_id)
 
     def _novelty_grant_open(self, assembly_id: str) -> bool:
-        """A learning-death grant is one extra trial per assembly, live only in the window
-        it was issued for and spent by that assembly's first delivered trial beyond the
-        base allowance; an unspent grant expires at the next boundary."""
+        """A learning-death grant is one extra trial per assembly, live for its patience.
+
+        Live from its issue until ``until_tick`` (time audit T5) and spent by that
+        assembly's first delivered trial beyond the base allowance. A grant issued
+        before the tick clock is live only in the window it was issued for.
+        """
         grant = self.novelty_grant
-        return (grant["window"] == self.stats.reserve_windows
-                and assembly_id not in grant["consumed"])
+        if assembly_id in grant["consumed"]:
+            return False
+        if "until_tick" in grant:
+            return self.ticks_consumed < grant["until_tick"]
+        return grant["window"] is not None and grant["window"] == self.stats.reserve_windows
 
     def _register_with_trial(self, contract: Contract, handle: str, amount: int,
                              *, refuse: str = ""):
@@ -763,7 +853,7 @@ class RoutingMixin:
             # routers of one kind never put two judges of a family on one return.
             judged = self._judged_return(event)
             for state in states:
-                if self.wallet.dead:
+                if self.wallet.dead or self._safety_stop is not None:
                     break
                 exclude = frozenset(a for a in drawn if a != NOOP) if judged else frozenset()
                 chosen = self._route_with(state, event, exclude=exclude,
@@ -793,7 +883,7 @@ class RoutingMixin:
             if not readable:
                 return
             for state in list(self.routers.get(str(ev.kind), [])):
-                if self.wallet.dead:
+                if self.wallet.dead or self._safety_stop is not None:
                     break
                 self._route_with(state, ev, phase="emission")
         finally:
@@ -877,7 +967,7 @@ class RoutingMixin:
                             "subject": self._event_subject(ev), "first": list(seats),
                             "draws": self.ev.multi_judge_count, "ts": self.clock.now_ns})
         for draw in range(len(drawn), self.ev.multi_judge_count):
-            if self.wallet.dead:
+            if self.wallet.dead or self._safety_stop is not None:
                 break
             exclude = frozenset(seats)
             chosen = self._route_with(states[0], ev, exclude=exclude, draw=draw)
@@ -1032,27 +1122,25 @@ class RoutingMixin:
                                     "reason": reason, "ts": self.clock.now_ns})
         channels = self._return_channels(sample.chosen, ev)
         channel = next(iter(channels.values()), CH_VERDICT)
-        deadline = (
-            self.clock.now_ns + (self.ev.verdict_timeout_ticks + 2) * self.tick_clock.interval_ns
-        )
+        # A decision's cutoff is the loop it waits on, in world ticks, plus a ratio
+        # slack (time audit T3, T12): a producer's return waits on its judges.
+        horizon = self.ev.verdict_timeout_ticks
         if set(channels.values()) & {CH_FAST, CH_CONFORMITY, CH_EXPOSURE, CH_CONSEQUENCE,
                                      CH_COUNTER}:
             # An evaluator decision is graded against its judged decision's measured
             # outcome and an exposure against its judges' (ruling R1), so each lives as
             # long as the return's backstop, like a forecast.
-            deadline = self.clock.now_ns + (
-                (self.ev.consequence_backstop_ticks + 2) * self.tick_clock.interval_ns * 4
-            )
+            horizon = self.ev.consequence_backstop_ticks
         if CH_CONSEQUENCE in channels.values():
-            # A population forecast may select any of the admitted 1..200 event
-            # horizons; its invocation must not expire before its predictions.
-            deadline = max(deadline, self.clock.now_ns + 202 * self.tick_clock.interval_ns * 4)
+            # A population forecast may select any admitted horizon; its invocation
+            # must not be cut off before its predictions come due.
+            horizon = max(horizon, MAX_FORECAST_HORIZON)
         handle = self.queue.open(
             actor=sample.learner_id,
             event_id=ev.id,
             propensity=self._propensity(sample),
             channel=channel,
-            deadline_ns=deadline,
+            horizon_ticks=horizon,
             parent_handle=None,
             cost_ceiling=(self.wallet.unhistoried_available
                           if sample.chosen != NOOP and self._unhistoried(sample.chosen)
@@ -1083,7 +1171,7 @@ class RoutingMixin:
             # A routine paid wake is what a cadence floor counts the ticks between,
             # and it ends whatever sleep the seat had bought itself.
             book.woke(sample.chosen, now=self.tick_index)
-        self._assembly_step(ev, handle, sample, deadline)
+        self._assembly_step(ev, handle, sample, self.queue.get(handle).deadline_ns)
         return sample.chosen
 
     def _abstention_roles(self, sample: Sample) -> dict[str, float]:
@@ -1192,15 +1280,59 @@ class RoutingMixin:
         return {kind: return_channel(kind, shapes.get(kind, defaults[kind]), higher=bool(higher))
                 for kind in kinds}
 
+    def _epoch_due(self, kind: str) -> bool:
+        """Whether a kind's routers may open a new epoch now (time audit T6).
+
+        Essay II.IV.b: "some speed limit needs to be applied to the velocity with
+        which the factory refactors itself, allowing feedback loops the time they
+        need to actually close". A router's menu grows at most once per
+        ``min_ratio`` measured periods of its own rounds, in ticks: a registration
+        waits for the rounds drawn over the old menu to be learned before the menu
+        changes again.
+        """
+        opened = self.clockwork.opened(f"epoch:{kind}")
+        inner = self.clockwork.measured(f"router:{kind}")
+        # §IV.c: the loop changing a router's action set is an outer loop over that
+        # router's rounds, so it keeps the same min_ratio separation (Codex review).
+        return opened is None or self.ticks_consumed - opened >= self.m.timing.min_ratio * inner
+
+    def _open_pending_epochs(self) -> None:
+        """Open every deferred epoch whose speed limit has passed."""
+        for kind in list(self.pending_epochs):
+            self._open_epoch(kind)
+
     def _open_epoch(self, kind: str) -> None:
         universe = self._universe_for(kind)
         entry = {"kind": "epoch", "event_kind": kind, "universe": universe, "ts": self.clock.now_ns}
         states = self.routers.get(kind)
+        now = self.ticks_consumed
         if not states:
             self._build_router(kind, self._seed_learner_kind(kind), self.router_gamma)
             self.ledger.append({**entry, "carried": False})
             self.stats.epochs += 1
+            self.clockwork.loops[f"epoch:{kind}"] = {"opened": now, "due": now, "period": 1.0,
+                                                    "inner": 1, "fires": 1}
             return
+        # Only a grown menu waits: a retirement is already cadence-gated, and a router
+        # must never keep drawing an assembly that left.
+        grows = (any(set(universe) > set(st.universe) for st in states)
+                 and not any(set(st.universe) - set(universe) for st in states))
+        if grows and not self._epoch_due(kind):
+            if kind not in self.pending_epochs:
+                self.ledger.append({"kind": "epoch.deferred", "event_kind": kind,
+                                    "universe": universe, "tick": now,
+                                    "since_tick": self.clockwork.opened(f"epoch:{kind}"),
+                                    "inner_ticks": self.clockwork.measured(f"router:{kind}"),
+                                    "ts": self.clock.now_ns})
+                self.pending_epochs[kind] = now
+            return
+        self.pending_epochs.pop(kind, None)
+        if any(universe != st.universe for st in states):
+            previous = self.clockwork.loops.get(f"epoch:{kind}", {})
+            self.clockwork.loops[f"epoch:{kind}"] = {
+                "opened": now, "due": now, "period": 1.0,
+                "inner": self.clockwork.measured(f"router:{kind}"),
+                "fires": previous.get("fires", 0) + 1}
         for i, state in enumerate(list(states)):
             if universe == state.universe:
                 continue

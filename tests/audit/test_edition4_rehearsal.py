@@ -377,7 +377,8 @@ def test_runner_report_records_effective_manifest_and_uses_denied_market(monkeyp
     assert critical["selected_total_calls"] == 9
     assert critical["selected_total_elapsed_ns"] == 105
     assert critical["selected_mean_elapsed_ns"] == "35/3"
-    assert report["factors"]["roster_preserved"] is True  # edition 6: the rehearsal keeps the roster
+    # Edition 6: the rehearsal keeps the roster.
+    assert report["factors"]["roster_preserved"] is True
     assert report["factors"]["completion_allowance"] == "provider"
     assert report["factors"]["reasoning"]["actual_reasoning_provenance"] == {
         "status": "unknown",

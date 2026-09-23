@@ -9,7 +9,7 @@ from factorylab.runtime.worlds import manifest_from_dict
 from tests.conftest import make_runtime
 from tests.runtime.test_connectors import decision, ledger_items
 
-#: One micro-USD per byte per two-minute scripted window, stated as a byte-day rate (C3).
+#: One micro-USD per byte per two minutes, stated as a byte-day rate (C3).
 PER_WINDOW_RATE = "720"
 
 
@@ -20,7 +20,9 @@ def test_working_state_rent_is_charged_by_byte_time_once():
     handle = decision(rt)
     head = rt.working_state.put("seed-decider", {"fact": "kept"}, handle=handle)
     before = rt.wallet.balance
-    rt.clock.now_ns += rt.m.novelty.window_ns
+    # Two minutes of wall time pass and the price loop falls due (its period is ticks).
+    rt.clock.now_ns += 120_000_000_000
+    rt.clockwork.force("price", rt.ticks_consumed)
     rt._manage_reserve_window()
     assert rt.wallet.balance == before - head["bytes"]
     assert ledger_items(rt, "state.rent")[-1]["cost"] == head["bytes"]
@@ -34,7 +36,7 @@ def _world(**tables):
     return {"name": "x", "initial_balance_usd": "10", "charter": seed_charter_table(),
             "models": [{"id": "m", "input_usd_per_mtok": "1", "output_usd_per_mtok": "5"}],
             "assemblies": [{"id": "a", "model_id": "m"}],
-            "novelty": {"share": 0.1, "window": "1h"}, "immune": {"price_step": 0.05},
+            "novelty": {"share": 0.1}, "immune": {"price_step": 0.05},
             **tables}
 
 

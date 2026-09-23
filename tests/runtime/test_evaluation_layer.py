@@ -166,8 +166,8 @@ def test_a_multi_judged_return_is_read_by_judges_on_two_other_families():
     from factorylab.runtime.loop import Runtime
 
     base = load_manifest("scripted")
-    manifest = replace(base, evaluation=replace(base.evaluation, multi_judge_share=1.0),
-                       novelty=replace(base.novelty, window_ns=10_000_000_000))
+    # Every window is derived from the loop it commands (time audit T1).
+    manifest = replace(base, evaluation=replace(base.evaluation, multi_judge_share=1.0))
     rt = Runtime(manifest, events=60, seed=2, initial_balance_micro=None, ledger_path=None,
                  router_gamma=0.1)
     rt.run()
@@ -215,7 +215,10 @@ def test_metas_are_graded_by_a_tier_above_and_the_tiers_read_a_share_of_each_win
 
     manifest = _recursive(load_manifest("scripted"))
     manifest.validate()
-    rt = Runtime(manifest, events=80, seed=1, initial_balance_micro=None, ledger_path=None,
+    # The tier-two window is min_ratio times the judges' scored loop (time audit T10):
+    # a judge settles on its world outcome, about a backstop, so metas' grades reach the
+    # tier above after a few of those loops, not in the first eighty ticks.
+    rt = Runtime(manifest, events=200, seed=1, initial_balance_micro=None, ledger_path=None,
                  router_gamma=0.1)
     rt.run()
     items = rt.ledger._recovery_items()
@@ -582,8 +585,7 @@ def test_early_warning_is_computed_at_every_close_and_shown_only_to_evaluators()
     from factorylab.runtime.loop import Runtime
 
     base = load_manifest("scripted")
-    manifest = replace(base, evaluation=replace(base.evaluation, multi_judge_share=1.0),
-                       novelty=replace(base.novelty, window_ns=10_000_000_000))
+    manifest = replace(base, evaluation=replace(base.evaluation, multi_judge_share=1.0))
     rt = Runtime(manifest, events=150, seed=1, initial_balance_micro=None, ledger_path=None,
                  router_gamma=0.1)
     requests = []
@@ -638,8 +640,7 @@ def test_a_world_under_chaos_resumes_mid_tick_and_replays_identically(tmp_path):
 
     base = load_manifest("scripted")
     manifest = replace(base, chaos=replace(base.chaos, venue_unavailable=0.4, stale_mids=0.4,
-                                           tool_withheld=0.4, connector_timeout=0.4),
-                       novelty=replace(base.novelty, window_ns=2 * base.tick_interval_ns))
+                                           tool_withheld=0.4, connector_timeout=0.4))
     path = tmp_path / "chaos.jsonl"
     rt = Runtime(manifest, events=20, seed=1, initial_balance_micro=None,
                  ledger_path=str(path), router_gamma=.1)
@@ -680,7 +681,7 @@ def test_evaluator_compute_share_is_measured_every_window_and_published():
     from factorylab.runtime.loop import Runtime
 
     base = load_manifest("scripted")
-    manifest = replace(base, novelty=replace(base.novelty, window_ns=10_000_000_000))
+    manifest = base  # every window is derived from the loop it commands (time audit T1)
     rt = Runtime(manifest, events=60, seed=1, initial_balance_micro=None,
                  ledger_path=None, router_gamma=0.1)
     rt.run()

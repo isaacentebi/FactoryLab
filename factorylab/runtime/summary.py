@@ -90,6 +90,8 @@ class RunStats:
     # settled consequences delivered per assembly (the novelty reserve's trials)
     consequences_by_assembly: dict[str, int] = field(default_factory=dict)
     registered_window: dict[str, int] = field(default_factory=dict)  # assembly -> window index
+    # assembly -> the world tick it registered at: where its patience counts from (T5)
+    registered_tick: dict[str, int] = field(default_factory=dict)
     immune_windows: list[dict] = field(default_factory=list)
     pathologies: dict[str, bool] = field(default_factory=lambda: {
         "stable_failure": False, "thrash": False, "learning_death": False,

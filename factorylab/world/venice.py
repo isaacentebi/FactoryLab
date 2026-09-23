@@ -13,7 +13,7 @@ from urllib import error
 
 from factorylab.kernel.money import nonnegative_usd_micro
 from factorylab.world.models import CatalogueEntry, ModelRequest, ModelResponse, TokenPrice
-from factorylab.world.openai_wire import dispatched, parse_completion
+from factorylab.world.openai_wire import CALL_EXPIRED, dispatched, expired, parse_completion
 from factorylab.world.x402 import VENICE_URL, X402Client, http_request, redact
 
 #: How much of a completion's `reasoning_content` the diary keeps. Enough to see
@@ -146,6 +146,9 @@ class VeniceProvider:
         self._key_env = key_env
         self._base_url = base_url.rstrip("/")
         self._transport = transport or self._default_transport
+        # The deadline of the completion in flight (``ModelRequest.timeout_s``), set
+        # only for the duration of that one call.
+        self._call_timeout: float | None = None
         self._reasoning_models = frozenset(reasoning_models)
         self._reasoning_config = deepcopy(dict(reasoning_config or {}))
         self._web_config = deepcopy(dict(web_config or {}))
@@ -161,7 +164,8 @@ class VeniceProvider:
             headers = {}  # The Venice catalogue is public.
         else:
             raise VeniceError(None, "Set VENICE_API_KEY or RESERVE_PRIVATE_KEY", sent=False)
-        response = http_request(method, self._base_url + path, payload, headers)
+        response = http_request(method, self._base_url + path, payload, headers,
+                                timeout=self._call_timeout)
         if not 200 <= response.status < 300:
             raise VeniceError(response.status, "HTTP request failed")
         return response.body
@@ -187,7 +191,8 @@ class VeniceProvider:
                 ) from None
             except (error.URLError, ConnectionError, TimeoutError) as exc:
                 if method != "GET" or attempt == 1:
-                    raise VeniceError(None, "Connection failed", sent=dispatched(exc)) from None
+                    raise VeniceError(None, CALL_EXPIRED if expired(exc) else "Connection failed",
+                                      sent=dispatched(exc)) from None
             except Exception as exc:
                 raise VeniceError(
                     None, "Transport or response decoding failed", sent=dispatched(exc)
@@ -279,7 +284,11 @@ class VeniceProvider:
             payload["tool_choice"] = tool_choice
         if parallel_tool_calls is not None:
             payload["parallel_tool_calls"] = parallel_tool_calls
-        response = self._request("POST", "/chat/completions", payload)
+        self._call_timeout = req.timeout_s
+        try:
+            response = self._request("POST", "/chat/completions", payload)
+        finally:
+            self._call_timeout = None
         wire = parse_completion(response, error=VeniceError)
         try:
             serving_id = "venice:" + (wire.model or wire_id).removeprefix("venice:")

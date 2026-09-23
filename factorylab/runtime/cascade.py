@@ -25,38 +25,25 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from math import ceil, isfinite
+from math import isfinite
 from statistics import fmean
 
 from factorylab.kernel.events import Event, EventKind
 
 
-def release_threshold(min_ratio: int, jitter_fraction: float, draw: float) -> int:
-    """Preserve the minimum separation, with bounded upward jitter from a supplied draw."""
-    if type(min_ratio) is not int or min_ratio < 3:
-        raise ValueError("cascade min_ratio must be an integer >= 3")
-    if not isfinite(jitter_fraction) or jitter_fraction < 0:
-        raise ValueError("jitter_fraction must be finite and nonnegative")
-    if not isfinite(draw) or not 0 <= draw < 1:
-        raise ValueError("draw must be in [0, 1)")
-    jitter = ceil(min_ratio * jitter_fraction)
-    return min_ratio + int(draw * (jitter + 1))
+def release_window(min_ratio: int, jitter_fraction: float, draw: float, inner_ticks: int) -> float:
+    """The precommitted, jittered duration one tier's window covers, in world ticks.
 
-
-def release_window_ns(
-    min_ratio: int, jitter_fraction: float, draw: float, observation_window_ns: int
-) -> int:
-    """The precommitted, jittered duration one tier's window covers.
-
-    The unit is the scope's observation window — the interval the world reports
-    itself over, from the tick clock the charter fixes — and the count is the
-    same jittered minimum separation the cascade always used, drawn once per
-    window from the runtime's own reproducible stream. What changes is that the
-    number is a duration rather than a number of messages.
+    Essay II.IV.c: the queue enforces "a minimum cascade control ratio (e.g.,
+    3:1+) before returning verdicts into the next evaluatory tier", and the
+    deferral is "diversified (jittered)". The ratio is taken against the measured
+    period of the loop the window gates (time audit T10): how long a judged
+    return takes to reach its outcome, in ticks, never below one tick. The
+    jitter is continuous and only lengthens, so ``min_ratio × inner`` is a floor.
     """
-    if type(observation_window_ns) is not int or observation_window_ns <= 0:
-        raise ValueError("the observation window must be positive integer nanoseconds")
-    return release_threshold(min_ratio, jitter_fraction, draw) * observation_window_ns
+    from factorylab.runtime.clockwork import derived_period
+
+    return derived_period(min_ratio, jitter_fraction, inner_ticks, draw)
 
 
 def event_tier(event: Event) -> int:
@@ -80,27 +67,34 @@ def event_tier(event: Event) -> int:
 
 @dataclass(frozen=True)
 class CascadeGate:
-    """A window over a duration; no window releases early or crosses evaluatory tiers."""
+    """A window over a duration in world ticks; none releases early or crosses tiers.
 
-    window_ns: int
-    opened_ns: int = 0
+    ``window`` is the drawn duration in ticks (continuous), ``opened`` the tick
+    the window opened at. A gate saved before the tick clock carries neither
+    and restores as a one-tick window open since tick zero: due at its next
+    completed arrival.
+    """
+
+    window: float = 1.0
+    opened: int = 0
     arrivals: tuple[Event, ...] = ()
 
     def __post_init__(self) -> None:
-        if type(self.window_ns) is not int or self.window_ns <= 0:
-            raise ValueError("window_ns must be positive integer nanoseconds")
-        if type(self.opened_ns) is not int or self.opened_ns < 0:
-            raise ValueError("opened_ns must be nonnegative integer nanoseconds")
+        if (type(self.window) not in (int, float) or not isfinite(self.window)
+                or self.window <= 0):
+            raise ValueError("window must be a positive number of ticks")
+        if type(self.opened) is not int or self.opened < 0:
+            raise ValueError("opened must be a nonnegative tick")
         object.__setattr__(self, "arrivals", tuple(self.arrivals))
         if len({event_tier(e) for e in self.arrivals}) > 1:
             raise ValueError("a gate cannot mix tiers")
 
-    def elapsed(self, now_ns: int) -> int:
-        """How much of this window's duration has passed."""
-        return max(0, now_ns - self.opened_ns)
+    def elapsed(self, now: int) -> int:
+        """How many ticks of this window's duration have passed."""
+        return max(0, now - self.opened)
 
     def add(
-        self, event: Event, *, complete: Callable[[Event], bool] | None = None,
+        self, event: Event, *, now: int, complete: Callable[[Event], bool] | None = None,
         priority: Callable[[Event], int] | None = None,
     ) -> tuple[CascadeGate | None, Event | None]:
         """Release one completed arrival, enriched with its window's evidence.
@@ -116,7 +110,7 @@ class CascadeGate:
         if self.arrivals and event_tier(self.arrivals[0]) != tier:
             raise ValueError("a gate cannot mix tiers")
         arrivals = (*self.arrivals, event)
-        if self.elapsed(event.ts_ns) < self.window_ns:
+        if self.elapsed(now) < self.window:
             return replace(self, arrivals=arrivals), None
         verdicts = event.kind is EventKind.VERDICT
         key = "verdict" if verdicts else "score"
@@ -135,8 +129,8 @@ class CascadeGate:
         window = {
             "count": len(finished),
             "arrivals": len(arrivals),
-            "window_ns": self.window_ns,
-            "elapsed_ns": self.elapsed(event.ts_ns),
+            "window_ticks": self.window,
+            "elapsed_ticks": self.elapsed(now),
             "mean": fmean(scores),
             "min": min(scores),
             "max": max(scores),

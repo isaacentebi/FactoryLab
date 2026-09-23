@@ -11,7 +11,13 @@ from urllib import error, request
 
 from factorylab.kernel.money import nonnegative_usd_micro, usd_to_micro
 from factorylab.world.models import CatalogueEntry, ModelRequest, ModelResponse
-from factorylab.world.openai_wire import dispatched, parse_completion
+from factorylab.world.openai_wire import (
+    CALL_EXPIRED,
+    call_timeout,
+    dispatched,
+    expired,
+    parse_completion,
+)
 from factorylab.world.x402 import MODEL_COMPLETION_TIMEOUT_S
 
 #: Control-plane reads are bounded tightly. A paid completion gets a long idle-socket
@@ -78,6 +84,9 @@ class OpenRouterProvider:
                     None, "Extra body cannot override the bounded completion request",
                     sent=False)
         self._transport = transport if transport is not None else self._default_transport
+        # The deadline of the completion in flight (``ModelRequest.timeout_s``), set
+        # only for the duration of that one call.
+        self._call_timeout: float | None = None
 
     def _redact(self, body: str) -> str:
         key = os.environ.get(self._key_env)
@@ -99,13 +108,22 @@ class OpenRouterProvider:
             method=method,
         )
         opener = request.build_opener(_NoRedirect())
-        timeout = (MODEL_COMPLETION_TIMEOUT_S if method == "POST" and path == "/chat/completions"
+        timeout = (call_timeout(self._call_timeout, MODEL_COMPLETION_TIMEOUT_S)
+                   if method == "POST" and path == "/chat/completions"
                    else MODEL_HTTP_TIMEOUT_S)
         with opener.open(req, timeout=timeout) as response:
             body = response.read().decode("utf-8", errors="replace")
             if not 200 <= response.status < 300:
                 raise OpenRouterError(response.status, self._redact(body))
             return json.loads(body)
+
+    def _post_completion(self, payload: dict, timeout_s: float | None) -> dict:
+        """One completion POST under its caller's deadline, restored afterwards."""
+        self._call_timeout = timeout_s
+        try:
+            return self._request("POST", "/chat/completions", payload)
+        finally:
+            self._call_timeout = None
 
     def _request(self, method: str, path: str, payload: dict | None = None) -> dict:
         attempts = 2 if method == "GET" else 1
@@ -125,7 +143,8 @@ class OpenRouterProvider:
             except (error.URLError, ConnectionError, TimeoutError) as exc:
                 if attempt + 1 == attempts:
                     raise OpenRouterError(
-                        None, "Connection failed", sent=dispatched(exc)
+                        None, CALL_EXPIRED if expired(exc) else "Connection failed",
+                        sent=dispatched(exc)
                     ) from None
             except Exception as exc:
                 # Arbitrary transport/decoder exceptions may contain request headers.
@@ -175,7 +194,7 @@ class OpenRouterProvider:
         elif req.effort in {"low", "medium", "high"} and base_id in self._reasoning_models:
             payload["reasoning"] = {"effort": req.effort}
         wire = parse_completion(
-            self._request("POST", "/chat/completions", payload), error=OpenRouterError
+            self._post_completion(payload, req.timeout_s), error=OpenRouterError
         )
         cost = wire.usage.get("cost")
         cost_micro = None

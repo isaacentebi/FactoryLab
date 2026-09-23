@@ -24,6 +24,11 @@ class Forecast:
     made_at_event: int
     due_at_event: int
     seal: str = ""
+    #: The world tick this forecast comes due at (essay II.IV.b-c; time audit T3): a
+    #: horizon counts ticks, never internal events. ``made_at_event`` still indexes
+    #: the event record its facts are read from. None (a forecast sealed before the
+    #: tick clock) comes due at ``due_at_event``.
+    due_at_tick: int | None = None
 
     def __post_init__(self) -> None:
         for value in (self.handle, self.evaluator_id, self.about_handle):
@@ -33,6 +38,8 @@ class Forecast:
         _require_event_index(self.due_at_event, "due_at_event")
         if self.due_at_event <= self.made_at_event:
             raise ValueError("due_at_event must exceed made_at_event")
+        if self.due_at_tick is not None:
+            _require_event_index(self.due_at_tick, "due_at_tick")
         _validate_params(self.predicate_id, self.params, kernel=True)
         if not isinstance(self.seal, str):
             raise ValueError("seal must be a string")
@@ -74,7 +81,9 @@ class ForecastBook:
         payload = {
             field.name: getattr(forecast, field.name)
             for field in fields(forecast)
+            # A forecast without a tick due date seals exactly as it always did.
             if field.name != "seal"
+            and not (field.name == "due_at_tick" and forecast.due_at_tick is None)
         }
         digest = hashlib.sha256(canonical(payload)).hexdigest()
         sealed = replace(forecast, seal=digest)
@@ -90,14 +99,21 @@ class ForecastBook:
         self.__requested[sealed.evaluator_id] = self.requested(sealed.evaluator_id) + 1
         return sealed
 
-    def due(self, n: int) -> list[Forecast]:
-        """Return only unsettled forecasts due by n, in their original seal order."""
+    def due(self, n: int, tick: int | None = None) -> list[Forecast]:
+        """Return only unsettled forecasts due by event n or world tick ``tick``, in seal order.
+
+        A forecast with a tick due date is due by the tick alone (time audit T3);
+        one without is due by the event index, as it was sealed.
+        """
         _require_event_index(n, "n")
+        if tick is not None:
+            _require_event_index(tick, "tick")
         forecasts = self.__forecasts
         return [
             forecast
             for forecast in map(forecasts.__getitem__, self._open())
-            if forecast.due_at_event <= n
+            if (forecast.due_at_event <= n if forecast.due_at_tick is None or tick is None
+                else forecast.due_at_tick <= tick)
         ]
 
     def mark_settled(self, handle: str) -> None:

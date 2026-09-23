@@ -43,7 +43,8 @@ class PredicateForecast(Forecast):
         _validate_params(self.predicate_id, self.params, predicate=self.predicate)
         # Reuse the seed record's identity, probability, event and immutable-parameter checks.
         checked = Forecast(self.handle, self.evaluator_id, self.about_handle, "wallet_up",
-                           self.params, self.q, self.made_at_event, self.due_at_event, self.seal)
+                           self.params, self.q, self.made_at_event, self.due_at_event, self.seal,
+                           self.due_at_tick)
         object.__setattr__(self, "params", checked.params)
         if self.window_cursor is not None:
             if not isinstance(self.window_cursor, Mapping):
@@ -151,7 +152,8 @@ class Settler:
         self.__recorded: dict[str, float] = {}
 
     def settle_due(
-        self, n: int, facts_for: Callable[[Forecast], WindowFacts | None]
+        self, n: int, facts_for: Callable[[Forecast], WindowFacts | None], *,
+        tick: int | None = None,
     ) -> list[Settled]:
         """Return due outcomes in seal order; only accepted observed settlements train history.
 
@@ -167,7 +169,7 @@ class Settler:
         # question -> (baseline q, uninformative) as it stood before its answer
         before: dict[str, tuple[float, bool]] = {}
         answered: set[str] = set()  # questions whose one observation is recorded
-        for forecast in self.__book.due(n):
+        for forecast in self.__book.due(n, tick):
             if forecast.predicate_id == RETURN_PAID_OFF.id:
                 continue
             facts = facts_for(forecast)

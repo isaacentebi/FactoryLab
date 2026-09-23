@@ -9,6 +9,10 @@ from factorylab.cortex.registration import REWARD_SHAPES, reward_contracts
 
 NOOP = "NOOP"
 
+#: The longest horizon, in world ticks, a population forecast may seal: the
+#: predicate vocabulary's admitted range is 1..MAX_FORECAST_HORIZON.
+MAX_FORECAST_HORIZON = 200
+
 
 CH_FAST, CH_VERDICT, CH_CONFORMITY, CH_CONSEQUENCE = "fast", "verdict", "conformity", "consequence"
 

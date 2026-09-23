@@ -197,3 +197,25 @@ def test_returns_for_matches_a_scan_of_every_delivery_the_queue_made(
         assert queue.returns_for(actor) == tuple(
             item for owner, item in every if owner == actor
         )
+
+
+def test_time_out_names_its_decisions_and_emits_one_penalty_each(queue, open_decision):
+    """The runtime owns the clock a cutoff counts in (ticks, time audit T3); the queue
+    owns the penalty. A named pending decision times out once, whatever its wall
+    deadline; one already timed out or settled is untouched; an unknown handle raises."""
+    early, late, settled = open_decision(), open_decision(), open_decision()
+    settle(queue, settled)
+    # A deadline far in the future is no protection: the caller's cutoff decides.
+    assert queue.time_out([early, settled], 0) == [early]
+    assert queue.time_out([early], 1) == []
+    assert queue.get(early).status == SettleStatus.TIMED_OUT
+    assert queue.get(late).status == SettleStatus.PENDING
+    assert queue.get(settled).status == SettleStatus.SETTLED
+    assert [r.status for r in queue.history(early)] == [SettleStatus.TIMED_OUT]
+    assert queue.returns_for("learner")[-1].channel == "timeout"
+    with pytest.raises(KeyError):
+        queue.time_out(["decision-404"], 1)
+    with pytest.raises(ValueError):
+        queue.time_out([late], -1)
+    settle(queue, early, score=0.9)  # the late settlement's right survives
+    assert queue.get(early).status == SettleStatus.SETTLED

@@ -1584,15 +1584,11 @@ class GovernanceMixin:
             lid = f"assembly:{assembly_id}"
             # Policy outcomes may await cadence and then a declared number of windows.
             # This covers the remaining experiment, rather than expiring after the ballot call.
-            deadline = self.clock.now_ns + (
-                self.events_budget + self.ev.consequence_backstop_ticks
-            ) * self.m.max_tick_ns + (
-                am.predicted_effect.window * self.m.novelty.window_ns)
             handle = self.queue.open(
                 actor=lid, event_id=event_id,
                 propensity=PropensityRecord((assembly_id,), (1.,), assembly_id, 0, lid,
                                             "direct-committee-seat"),
-                channel="policy", deadline_ns=deadline,
+                channel="policy", horizon_ticks=self._policy_horizon(am.predicted_effect.window),
                 parent_handle=parent, cost_ceiling=max(0, self.wallet.available),
             )
             self.ledger.append({"kind": "committee.decision", "event_id": event_id,
@@ -1963,7 +1959,8 @@ class GovernanceMixin:
                 actor=lid, event_id=event_id,
                 propensity=PropensityRecord((assembly_id,), (1.,), assembly_id, 0, lid,
                                             "direct-committee-seat"),
-                channel="policy", deadline_ns=self.clock.now_ns + self.m.novelty.window_ns,
+                channel="policy", horizon_ticks=self.clockwork.period(
+                    "price", default=self.m.timing.min_ratio),
                 parent_handle=None, cost_ceiling=max(0, self.wallet.available),
             )
             self.ledger.append({"kind": "committee.decision", "event_id": event_id,
@@ -2098,6 +2095,7 @@ class GovernanceMixin:
             values = measure_card(vote["card"], self.card_samples, observations)
             activated = {**vote, "baseline": fmean(values.values()) if values else None,
                          "activation_window": self.window.index,
+                         "activation_tick": self.ticks_consumed,
                          "region": vote["region"] or region_for(
                              vote["card"], rolling=self.rolling, observations=observations)}
             self.ledger.append({"kind": "policy.activated", **activated})
@@ -2124,14 +2122,43 @@ class GovernanceMixin:
         yes = float(bool(vote["vote"]))
         return yes if branch == "enact" else 1.0 - yes
 
+    def _policy_horizon(self, windows: int) -> int:
+        """The ticks a policy decision may wait: the rest of the run, then its grading.
+
+        Covers the cadence it may await, the declared windows after activation at the
+        price loop's current period, and the grading floor (``_policy_floor``), so a
+        ballot is never cut off before the promise it bet on is graded.
+        """
+        window = self.clockwork.period("price", default=self.m.timing.min_ratio)
+        return (self.events_budget + self.ev.consequence_backstop_ticks
+                + windows * window + self._policy_floor())
+
+    def _policy_floor(self) -> int:
+        """Ticks after activation before a promise may be graded (time audit T2).
+
+        Policy grading is an outer loop over the consequence loop the activated
+        change acts through: grading it sooner than ``min_ratio`` measured
+        consequence periods would grade governance on "the unfinished transients of
+        the controlled loop" (essay II.IV.c).
+        """
+        return self.m.timing.min_ratio * self.cadence.consequence_period_events()
+
     def _close_policy_window(self, index: int) -> None:
-        """Each vote is graded once at its declared post-activation boundary, or censored."""
+        """Each vote is graded once at its declared post-activation boundary, or censored.
+
+        Its boundary is the later of the declared window count and the grading floor
+        (``_policy_floor``) in ticks since activation. A vote activated before the
+        tick clock is graded by its window count alone.
+        """
         self._close_challenge_window(index)  # both series of every trial, ledgered
         remaining = []
+        floor = self._policy_floor()
         for vote in self.pending_votes:
             activation = vote["activation_window"]
             effect = vote["prediction"]
-            if activation is None or index < activation + effect.window - 1:
+            tick = vote.get("activation_tick")
+            if (activation is None or index < activation + effect.window - 1
+                    or (tick is not None and self.ticks_consumed - tick < floor)):
                 remaining.append(vote)
                 continue
             values = measure_card(vote["card"], self.card_samples, self._policy_observations(vote))

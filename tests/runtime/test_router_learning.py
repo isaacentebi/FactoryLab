@@ -58,29 +58,33 @@ def test_an_abstention_is_credited_the_neutral_reward_not_the_pooled_mean():
 def test_an_abstention_is_credited_on_the_seats_clock_through_a_resume():
     """NOOP settles at once while a seat's score takes the feedback delay; crediting NOOP
     at once would keep it a whole delay ahead of every seat. Its credit waits for the
-    mean delay the router's seat rounds took, and a checkpoint keeps what is owed."""
+    mean delay the router's seat rounds took, and a checkpoint keeps what is owed. The
+    delay is counted in world ticks (time audit T3): wall time alone moves nothing."""
     rt = make_runtime()
     state, _lid = _router(rt)
     arm = next(a for a in state.universe if a != NOOP)
-    delay = 5_000_000_000
+    delay = 5
     seat = _drawn(rt, state, arm)
-    rt.clock.now_ns += delay
+    rt.ticks_consumed += delay
+    rt.clock.now_ns += 10**15  # a stalled loop: an hour of wall time is no tick
     _settle(rt, seat, SettleStatus.SETTLED, 0.9)
     rt._deliver_returns()
     assert state.latency == [delay, 1]
+    assert rt.clockwork.latencies[f"router:{state.kind}"] == [delay]
     abstain = _drawn(rt, state, NOOP)
     _settle(rt, abstain, SettleStatus.INAPPLICABLE)
     rt._deliver_returns()
     owed = _weights(state)
-    assert rt.noop_credits[abstain]["due_ns"] == rt.clock.now_ns + delay
+    assert rt.noop_credits[abstain]["due_tick"] == rt.ticks_consumed + delay
     restored = make_runtime()
     restore_runtime(restored, runtime_state(rt))
     live, _ = _router(restored)
     assert _weights(live) == owed and live.latency == [delay, 1]
-    restored.clock.now_ns += delay - 1
+    restored.ticks_consumed += delay - 1
+    restored.clock.now_ns += 10**15
     restored._deliver_returns()
     assert _weights(live) == owed  # not yet due
-    restored.clock.now_ns += 1
+    restored.ticks_consumed += 1
     restored._deliver_returns()
     weights = _weights(live)
     floor = min(weights.values())
@@ -252,7 +256,8 @@ def test_a_plain_router_credits_an_abstention_once_whatever_returns_repeat():
                            channel="test", deadline_ns=rt.clock.now_ns + 1, parent_handle=None,
                            cost_ceiling=0)
     rt.clock.now_ns += 1
-    rt.queue.expire(rt.clock.now_ns)
+    rt.ticks_consumed += 1  # the cutoff is a tick (time audit T3)
+    assert rt.queue.expire_due() == [handle]
     rt._deliver_returns()
     once = _weights(state)
     assert once[NOOP] > min(once.values())  # credited at its deadline

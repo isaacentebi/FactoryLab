@@ -253,9 +253,15 @@ class TreasurySpec:
     # $0.10 of headroom over the $0.20 the deployed CoreDepositWallet quotes on both networks.
     max_forward_fee_micro: int = 300_000
     max_forward_fees_per_window: int = 1_000_000
-    # Reserve windows a forwarded mint may stay unobserved before the exit is stranded
-    # (recoverably) and the treasury admits new transfers again.
-    forward_wait_windows: int = 2
+    # World ticks a forwarded mint (or a hybrid top-up) may stay undone before the exit
+    # is stranded (recoverably) and the treasury admits new transfers again. A declared
+    # floor: the runtime raises it to the capital loop's measured p90 closure, so a
+    # conversion is never stranded faster than the rail delivers (time audit T13).
+    forward_wait_ticks: int = 360
+    # The Venice and forwarding-fee caps' own period, a wall-clock duration: money rails
+    # run in wall time, so a rate cap is stated there and never borrows the pricing
+    # window (time audit T1, T13).
+    cap_window_ns: int = 3600 * NS_PER_SECOND
     # The hybrid capital-loop rehearsal (docs/architecture/capital-loop-rehearsal.md):
     # "base-mainnet" buys real Venice credit from the Base mainnet reserve while the
     # venue stays on testnet, and a shadow leg sends the same $5 of testnet USDC from
@@ -382,10 +388,15 @@ MAX_CHAOS_RATE = 0.5
 
 @dataclass(frozen=True)
 class NoveltySpec:
+    """The niche for unhistoried actions (essay II.II.b; ruling R5).
+
+    ``share`` is one consequence period's share of the spendable budget, accrued as
+    a flow (time audit T6). A trial's patience is not cast here: it is ``min_ratio``
+    measured consequence periods (time audit T5).
+    """
+
     share: float
-    window_ns: int
     trials: int = 3  # settled consequences that end an assembly's protected trial
-    max_lifetime_windows: int = 6  # windows after registration that end it regardless
 
 
 @dataclass(frozen=True)
@@ -444,10 +455,18 @@ class ClockSpec:
 
 @dataclass(frozen=True)
 class TimingSpec:
+    """The relational dynamics of the clock (essay II.IV.c), never its bands.
+
+    ``world_repricing_ns`` is the world's own repricing period, a fact about the
+    world (a venue's funding interval): governance is viable only while
+    ``min_ratio`` times the slowest loop fits within it. None states no bound.
+    """
+
     min_ratio: int = 3
     jitter_fraction: float = 0.2
     cadence_sample: int = 200
     min_support: int = 30
+    world_repricing_ns: int | None = None
 
 
 @dataclass(frozen=True)
@@ -556,9 +575,19 @@ class WorldManifest:
     # ---- derived
 
     @property
-    def max_tick_ns(self) -> int:
-        """Return the largest integer interval satisfying the reserve-window ratio."""
-        return self.novelty.window_ns // self.timing.min_ratio
+    def max_tick_ns(self) -> int | None:
+        """The slowest tick at which a governance tier can keep up with the world, or None.
+
+        Essay II.IV.c: governance must not lag the world. Its period is at least
+        ``min_ratio`` consequence backstops, so a tick is admissible while that many
+        ticks fit within the world's repricing period. A world that states no
+        repricing period has no upper bound here.
+        """
+        repricing = self.timing.world_repricing_ns
+        if repricing is None:
+            return None
+        return repricing // (self.timing.min_ratio
+                             * self.evaluation.consequence_backstop_events)
 
     def price_table(self) -> PriceTable:
         t = PriceTable()
@@ -934,9 +963,15 @@ class WorldManifest:
                 raise ValueError(f"treasury.{budget_field} must be nonnegative integer money")
         if self.treasury.cctp_forwarding not in ("never", "on_empty_gas", "always"):
             raise ValueError("treasury.cctp_forwarding must be never, on_empty_gas or always")
-        windows = self.treasury.forward_wait_windows
-        if type(windows) is not int or windows < 1:
-            raise ValueError("treasury.forward_wait_windows must be a positive integer")
+        wait = self.treasury.forward_wait_ticks
+        if type(wait) is not int or wait < self.timing.min_ratio:
+            raise ValueError("treasury.forward_wait_ticks must be an integer of at least "
+                             "timing.min_ratio ticks")
+        cap_window = self.treasury.cap_window_ns
+        if (type(cap_window) is not int
+                or cap_window < self.timing.min_ratio * self.tick_interval_ns):
+            # The cap is an outer loop over the ticks transfers are attempted on.
+            raise ValueError("treasury.cap_window must be at least timing.min_ratio ticks")
         # A forwarded exit's burn carries maxFee up to the CCTP cap plus the forwarding cap;
         # the mint step must still fit the transfer fee cap after the principal burned.
         if (self.treasury.withdrawal_fee_micro + self.treasury.cctp_max_fee_micro
@@ -969,7 +1004,6 @@ class WorldManifest:
             raise ValueError("novelty share must be in (0, 1]")
         for name, value, minimum in (
             ("novelty.trials", self.novelty.trials, 1),
-            ("novelty.max_lifetime_windows", self.novelty.max_lifetime_windows, 1),
             ("committee.min_settled", self.committee.min_settled, 1),
             ("committee.seats", self.committee.seats, 3),
             ("tools.max_depth", self.tools.max_depth, 0),
@@ -1031,8 +1065,6 @@ class WorldManifest:
         for a in self.assemblies:
             if not isinstance(a.role, str) or not a.role.strip():
                 raise ValueError(f"assembly {a.id} has an empty role label")
-        if self.novelty.window_ns <= 0:
-            raise ValueError("novelty window must be positive")
         if type(self.timing.cadence_sample) is not int or self.timing.cadence_sample < 1:
             raise ValueError("timing.cadence_sample must be a positive integer")
         if type(self.timing.min_support) is not int or self.timing.min_support < 1:
@@ -1044,9 +1076,22 @@ class WorldManifest:
             raise ValueError("timing min_ratio must be an integer at least 3")
         if type(self.clock.min_tick_ns) is not int or self.clock.min_tick_ns <= 0:
             raise ValueError("clock.min_tick must be positive integer nanoseconds")
+        repricing = self.timing.world_repricing_ns
+        if repricing is not None and (type(repricing) is not int or repricing <= 0):
+            raise ValueError("timing.world_repricing must be a positive duration")
+        maximum = self.max_tick_ns
         if (type(self.tick_interval_ns) is not int
-                or not self.clock.min_tick_ns <= self.tick_interval_ns <= self.max_tick_ns):
+                or self.tick_interval_ns < self.clock.min_tick_ns
+                or (maximum is not None and self.tick_interval_ns > maximum)):
             raise ValueError("tick_interval must lie within clock.min_tick and derived max_tick")
+        # Time audit T2, the load half of the 3:1 rule: a horizon a decision waits on is
+        # an outer loop over the tick its judges and outcomes arrive on.
+        for name, value in (
+                ("evaluation.verdict_timeout_ticks", self.evaluation.verdict_timeout_events),
+                ("evaluation.consequence_backstop_ticks",
+                 self.evaluation.consequence_backstop_events)):
+            if value < self.timing.min_ratio:
+                raise ValueError(f"{name} must be at least timing.min_ratio ticks")
         if self.exchange.kind not in ("fake", "hyperliquid"):
             raise ValueError("unknown exchange kind")
         if self.exchange.mainnet and self.name != "funded":
@@ -1389,6 +1434,16 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
     if "trial_invocations" in nov:
         raise ValueError("novelty.trial_invocations was replaced by novelty.trials "
                          "(settled consequences, not invocations)")
+    # Time audit T1, T5, T11: the windows are derived, never cast. A manifest naming
+    # one would describe a clock the kernel does not run, so it is refused (R8).
+    for key, why in (("window", "the measurement window is the price loop's derived period"),
+                     ("max_lifetime_windows", "a trial's patience is min_ratio measured "
+                                              "consequence periods")):
+        if key in nov:
+            raise ValueError(f"novelty.{key} was removed (time audit): {why}")
+    if "forward_wait_windows" in (d.get("treasury") or {}):
+        raise ValueError("treasury.forward_wait_windows was replaced by "
+                         "treasury.forward_wait_ticks (time audit T13)")
     tim = d.get("timing", {})
     term = d.get("termination", {})
     m = WorldManifest(
@@ -1398,14 +1453,15 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         exchange=exchange,
         models=models,
         assemblies=assemblies,
-        novelty=NoveltySpec(nov.get("share", 0.1), duration_ns(nov.get("window", "1d")),
-                            nov.get("trials", 3), nov.get("max_lifetime_windows", 6)),
+        novelty=NoveltySpec(nov.get("share", 0.1), nov.get("trials", 3)),
         committee=_committee(d.get("committee", {})),
         immune=_manifest_immune(d.get("immune", {})),
         timing=TimingSpec(
             int(tim.get("min_ratio", 3)), float(tim.get("jitter_fraction", 0.2)),
             tim.get("cadence_sample", 200),
             tim.get("min_support", 30),
+            (duration_ns(tim["world_repricing"]) if tim.get("world_repricing") is not None
+             else None),
         ),
         termination=TerminationSpec(
             usd_to_micro(term.get("balance_floor_usd", 0), rounding="exact"),
@@ -1452,7 +1508,8 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             max_forward_fee_micro=usd_to_micro(
                 (d.get("treasury") or {}).get("max_forward_fee_usd", "0.30"), rounding="exact"),
             max_forward_fees_per_window=usd_to_micro(forward_cap, rounding="exact"),
-            forward_wait_windows=(d.get("treasury") or {}).get("forward_wait_windows", 2),
+            forward_wait_ticks=(d.get("treasury") or {}).get("forward_wait_ticks", 360),
+            cap_window_ns=duration_ns((d.get("treasury") or {}).get("cap_window", "1h")),
             venice_network=(d.get("treasury") or {}).get("venice_network"),
             venice_shadow_sink=(d.get("treasury") or {}).get("venice_shadow_sink"),
             max_venice_total_micro=_optional_usd(d, "max_venice_total_usd"),

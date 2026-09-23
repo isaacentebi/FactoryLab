@@ -180,7 +180,7 @@ def test_runtime_runs_a_live_shaped_world_with_stub_venue_and_scripted_models() 
             # Off every (judge, producer) chain's families (the #132 review, item 3).
             {"id": "meta-a", "role": "meta", "model_id": "fake-gemini", "accepts": ["Verdict"]},
         ],
-        "novelty": {"share": 0.1, "window": "1d"},
+        "novelty": {"share": 0.1},
         "charter": seed_charter_table(),
         "immune": {"price_step": 0.05},
     }

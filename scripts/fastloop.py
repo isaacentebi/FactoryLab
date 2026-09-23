@@ -14,10 +14,16 @@ The scorecard measures plumbing, cost and prompt size. ``producer_actions`` is a
 observation and never a target: no prompt change may be justified by an action-mix
 delta (Chapter II §I.a, Carroll's robust simplicity; Chapter II rulings R12).
 
+``--gaps-from events.json`` replays the tick gaps a real diary delivered instead
+of ticking at exactly the declared interval: the virtual clock at the declared
+tick hid every timing failure the wall clock produced (Chapter II §IV.b-c; time
+audit T3). The scorecard's ``clock`` block reads the loops, cutoffs and rounds.
+
 Examples::
 
     uv run python scripts/fastloop.py score work/population-pr121/live/events.json
     uv run python scripts/fastloop.py run --provider scripted --ticks 20
+    uv run python scripts/fastloop.py run --ticks 120 --gaps-from work/population-e5a/events.json
     uv run python scripts/fastloop.py run --provider live --ticks 30 --cap-usd 2
     uv run python scripts/fastloop.py run --provider live --ticks 30 --seeds 1,2,3,4
 
@@ -41,6 +47,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from factorylab.runtime.worlds import load_manifest  # noqa: E402
+from factorylab.world.clock import ClockSource  # noqa: E402
+from factorylab.world.events import WorldEvent, WorldEventKind  # noqa: E402
 from factorylab.world.models import CatalogueEntry, ModelRequest, ModelResponse  # noqa: E402
 from factorylab.world.scripted import (  # noqa: E402
     ScriptedProvider,
@@ -222,6 +230,55 @@ class PolicyProvider(ScriptedProvider):
                                "params": {"horizon_events": 10}}]}
 
 
+# --- delivered tick gaps -------------------------------------------------------------
+
+def delivered_gaps(path: Path) -> list[int]:
+    """The gaps, in nanoseconds, between the ticks a diary actually delivered."""
+    events = json.loads(Path(path).read_text())
+    stamps = [int((e.get("event") or {}).get("ts_ns") or e.get("ts") or 0) for e in events
+              if e.get("kind") == "event" and (e.get("event") or {}).get("kind") == "Tick"]
+    gaps = [b - a for a, b in zip(stamps, stamps[1:], strict=False) if b > a]
+    if not gaps:
+        raise ValueError(f"{path} delivered fewer than two ticks")
+    return gaps
+
+
+class ReplayClock(ClockSource):
+    """The seeded virtual clock, ticking at a real diary's delivered gaps in order.
+
+    It cycles through the recorded gaps, so a run longer than the diary keeps the
+    same distribution. Like the wall clock it reports the mean of its latest
+    delivered gaps as ``measured_interval_ns`` while ``interval_ns`` stays the
+    declared tick, so every conversion sees what a live world would.
+    """
+
+    def __init__(self, start_ns: int, interval_ns: int, count: int, gaps: list[int]) -> None:
+        super().__init__(start_ns, interval_ns, count)
+        self.recorded = list(gaps)
+        self.delivered: list[int] = []
+
+    def _events(self, drips=None):
+        while self.index < self.count:
+            gap = self.recorded[(self.index - 1) % len(self.recorded)]
+            ts = self.start_ns if self.last_ns is None else self.last_ns + gap
+            if self.last_ns is not None:
+                self.delivered = [*self.delivered[-63:], ts - self.last_ns]
+            self.last_ns = self.last_event_ns = ts
+            i = self.index
+            self.index += 1
+            yield WorldEvent(WorldEventKind.TICK, ts, self.source, {"index": i})
+
+    def measured_interval_ns(self) -> int:
+        """The mean of the latest delivered gaps, the declared interval before any."""
+        if not self.delivered:
+            return self.interval_ns
+        return max(1, sum(self.delivered) // len(self.delivered))
+
+    def intervals(self) -> dict:
+        return {"declared_ns": self.interval_ns, "measured_ns": self.measured_interval_ns(),
+                "samples": len(self.delivered)}
+
+
 # --- the scorecard ------------------------------------------------------------------
 
 def _pct(values: list[int], q: float) -> int:
@@ -304,6 +361,67 @@ def scorecard(events: list[dict[str, Any]]) -> dict[str, Any]:
                    "reported_not_placed": kinds.get("order.reported", 0),
                    "refused": kinds.get("order.refused", 0),
                    "infeasible": kinds.get("order.infeasible", 0)},
+        "clock": clock(events),
+    }
+
+
+def clock(events: list[dict[str, Any]]) -> dict[str, Any]:
+    """The factory's loops and cutoffs, from the diary alone (time audit T1-T8).
+
+    Plumbing counts, never targets (rulings R12): delivered tick gaps; each
+    derived loop's firings and the periods drawn, in ticks and as a ratio to its
+    inner loop; decision cutoffs by channel; rounds a cutoff credited whose real
+    score arrived later; rounds that trained nothing; price moves and holds; the
+    immune organ's diagnoses and acts; deferred epochs; governance viability.
+    """
+    stamps = [int((e.get("event") or {}).get("ts_ns") or 0) for e in events
+              if e.get("kind") == "event" and (e.get("event") or {}).get("kind") == "Tick"]
+    gaps = sorted(b - a for a, b in zip(stamps, stamps[1:], strict=False))
+    channel = {e.get("handle"): e.get("channel") for e in events
+               if e.get("kind") == "decision.open"}
+    timed_out = [((e.get("return") or {}).get("handle")) for e in events
+                 if e.get("kind") == "decision.timeout"]
+    late = {(e.get("return") or {}).get("handle") for e in events
+            if e.get("kind") == "decision.settle"} & set(timed_out)
+    loops: dict[str, dict[str, Any]] = {}
+    for e in events:
+        if e.get("kind") != "clock.loop":
+            continue
+        row = loops.setdefault(e["loop"], {"fires": 0, "periods": [], "inner": []})
+        row["fires"] += 1
+        row["periods"].append(e["period_ticks"])
+        row["inner"].append(e["inner_ticks"])
+    table = {name: {"fires": row["fires"],
+                    "period_ticks_mean": round(statistics.fmean(row["periods"]), 2),
+                    "inner_ticks_mean": round(statistics.fmean(row["inner"]), 2),
+                    "ratio_min": round(min(p / i for p, i in zip(row["periods"], row["inner"],
+                                                                 strict=True)), 2)}
+             for name, row in sorted(loops.items())}
+    skipped = collections.Counter(e.get("reason") for e in events
+                                  if e.get("kind") == "price.skipped")
+    immune = [e for e in events if e.get("kind") == "immune.window"]
+    return {
+        "tick_gap_s": ({"p50": round(gaps[len(gaps) // 2] / 1e9, 2),
+                        "mean": round(statistics.fmean(gaps) / 1e9, 2),
+                        "p90": round(_pct(gaps, 0.9) / 1e9, 2),
+                        "max": round(gaps[-1] / 1e9, 2)} if gaps else None),
+        "loops": table,
+        "price_windows": sum(1 for e in events if e.get("kind") == "price.window"),
+        "price_updates": sum(1 for e in events if e.get("kind") == "price.update"),
+        "price_skipped": dict(skipped),
+        "immune": {"diagnosed": len(immune),
+                   "acted": sum(1 for e in immune if e.get("acts", True)),
+                   "gain_steps": sum(1 for e in events if e.get("kind") == "immune.gain")},
+        "sampling_moves": sum(1 for e in events
+                              if e.get("kind") in ("sampling.raise", "sampling.lower")),
+        "timeouts": dict(collections.Counter(str(channel.get(h)) for h in timed_out)),
+        "timeouts_total": len(timed_out),
+        "cutoff_then_scored": len(late),
+        "rounds_unlearned": sum(1 for e in events if e.get("kind") == "propensity.unlearned"),
+        "epochs_deferred": sum(1 for e in events if e.get("kind") == "epoch.deferred"),
+        "novelty_grants": sum(1 for e in events if e.get("kind") == "novelty.grant"),
+        "governance": {k: sum(1 for e in events if e.get("kind") == f"governance.{k}")
+                       for k in ("nonviable", "viable", "probe", "settling")},
     }
 
 
@@ -563,7 +681,8 @@ def simulation_manifest(world: Path, seed: int, vault_tools: bool = False) -> An
 
 
 def run(provider_kind: str, ticks: int, world: Path, out: Path, cap_usd: str,
-        seed: int, vault_depositor_usd: str | None = None) -> dict[str, Any]:
+        seed: int, vault_depositor_usd: str | None = None,
+        gaps_from: Path | None = None) -> dict[str, Any]:
     """``vault_depositor_usd`` opts the world into the vault surface and scripts one
     outside depositor into every vault the factory creates, who leaves ten steps later;
     the fake's vaults earn nothing on their own, so the depositor pays no commission
@@ -581,11 +700,16 @@ def run(provider_kind: str, ticks: int, world: Path, out: Path, cap_usd: str,
     provider = rehearsal.PrepaidProvider(inner, manifest, admission)
     started = time.monotonic()
     card: dict[str, Any] = {"provider": provider_kind, "out": str(target)}
+    clock_source = None
+    if gaps_from is not None:
+        interval = manifest.tick_interval_ns
+        clock_source = ReplayClock(interval, interval, ticks, delivered_gaps(gaps_from))
+        card["gaps_from"] = str(gaps_from)
     try:
         runtime = Runtime(manifest, events=ticks, seed=manifest.seed,
                           initial_balance_micro=None,
                           ledger_path=str(target / "ledger.jsonl"), router_gamma=0.1,
-                          provider=provider, kill_at_end=True)
+                          provider=provider, kill_at_end=True, clock_source=clock_source)
         if vault_depositor_usd:
             runtime.exchange.vault_depositor_usd = Decimal(vault_depositor_usd)
             runtime.exchange.vault_depositor_steps = 10
@@ -622,6 +746,7 @@ def combine(cards: list[dict[str, Any]]) -> dict[str, Any]:
             "ticks", "calls", "invocations", "malformed_reasons", "producer_actions",
             "producer_settlements", "orders", "opportunity_cost", "composition")
             if card.get(k) is not None})
+    total["clock_by_seed"] = [c.get("clock") for c in cards]
     # Averages and rates are recomputed from the seeds, never summed.
     holds = total.get("opportunity_cost", {})
     total["opportunity_cost"] = {
@@ -694,7 +819,8 @@ def run_seeds(args: argparse.Namespace, seeds: list[int]) -> dict[str, Any]:
          "--ticks", str(args.ticks), "--world", str(args.world), "--out", str(args.out),
          "--cap-usd", args.cap_usd, "--seed", str(seed),
          *(["--vault-depositor-usd", args.vault_depositor_usd]
-           if args.vault_depositor_usd else [])],
+           if args.vault_depositor_usd else []),
+         *(["--gaps-from", str(args.gaps_from)] if args.gaps_from else [])],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=ROOT) for seed in seeds]
     cards = []
     for seed, proc in zip(seeds, procs, strict=True):
@@ -724,6 +850,8 @@ def main(argv: list[str] | None = None) -> int:
                         "many USD into each vault the factory creates")
     r.add_argument("--seeds", default=None,
                    help="comma-separated seeds run in parallel processes, e.g. 1,2,3,4")
+    r.add_argument("--gaps-from", type=Path, default=None,
+                   help="replay the tick gaps this diary (events.json) delivered, in order")
     args = parser.parse_args(argv)
     if args.command == "score":
         print_card(scorecard(json.loads(args.events.read_text())))
@@ -733,7 +861,7 @@ def main(argv: list[str] | None = None) -> int:
         print_card(card)
         return 0 if all(c.get("status") == "completed" for c in card["seeds"]) else 1
     card = run(args.provider, args.ticks, args.world, args.out, args.cap_usd, args.seed,
-               args.vault_depositor_usd)
+               args.vault_depositor_usd, args.gaps_from)
     print_card(card)
     return 0 if card.get("status") == "completed" else 1
 

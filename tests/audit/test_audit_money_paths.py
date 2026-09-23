@@ -65,6 +65,9 @@ def test_replay_of_an_interrupted_event_does_not_charge_undispatched_model_calls
                           if i["seq"] < call["seq"] and i["kind"].startswith("wallet."))
     lines = (tmp_path / "w.jsonl").read_bytes().splitlines(keepends=True)
     (tmp_path / "w.jsonl").write_bytes(b"".join(lines[: call["seq"] + 1]))
+    # A process dying at this call could not have written the head of a snapshot after it
+    # (price windows close every few ticks now, time audit T1).
+    (tmp_path / "w.jsonl.head").unlink(missing_ok=True)
     provider = RecordedProvider()
     rt = resume_runtime(m, path, provider=provider, exchange=Venue(),
                         clock_source=ClockSource(1_000_000_000, 1_000_000_000, 8).events(),

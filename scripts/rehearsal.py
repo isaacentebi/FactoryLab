@@ -61,7 +61,9 @@ def preflight(world: Path, charter_path: Path) -> dict:
                    c.acceptable_region else "absolute region; sample support still required"}
                   for c in manifest.charter.cards],
         "tick_interval_ns": manifest.tick_interval_ns,
-        "price_window_ns": manifest.novelty.window_ns,
+        # The price window is the price loop's derived period in ticks (time audit T1):
+        # at least timing.min_ratio ticks, drawn at run time from the measured loops.
+        "price_window_min_ticks": manifest.timing.min_ratio,
         "governance_floor_ns_at_declared_tick": manifest.timing.min_ratio
         * manifest.evaluation.consequence_backstop_events * manifest.tick_interval_ns,
         "duration": "10m", "deadline_semantics": "finish an in-progress cascade",

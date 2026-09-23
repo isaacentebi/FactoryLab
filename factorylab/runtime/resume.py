@@ -77,6 +77,7 @@ def _record_types() -> dict[str, type]:
     from factorylab.kernel.registry import Contract, PriceSpec, ResourceBounds
     from factorylab.kernel.wallet import DripSchedule, ReleaseSchedule, Reservation
     from factorylab.runtime.cascade import CascadeGate
+    from factorylab.runtime.clockwork import Clockwork
     from factorylab.runtime.feedback import PendingJudgement
     from factorylab.runtime.governance import Retirement, WorkAssemblySpec
     from factorylab.runtime.pricing import MeasureWindow
@@ -117,7 +118,7 @@ def _record_types() -> dict[str, type]:
         LotOrder, LotTable, Payoff, ReturnAccount, _Standing, WorldEvent, WorldEventKind,
         AccountState, Fill, FundingEvent, FundingPayment, Order, OrderResult, Position,
         SpotBalance, SellerModel, Commitment, ExecutionReceipt, LearningReceipt,
-        CatalogueEntry, ModelRequest, ModelResponse, TokenPrice, PaymentQuote,
+        CatalogueEntry, ModelRequest, ModelResponse, TokenPrice, PaymentQuote, Clockwork,
     )
     return {cls.__name__: cls for cls in classes}
 
@@ -254,6 +255,9 @@ _RETIRED_PENDING = frozenset({"verdict.norm", "verdict.subject"})
 # ``upward_releases``: the unread UpwardBuffer (time audit T9).
 _RETIRED_FIELDS = {
     "_CardState": frozenset({"relief_window"}),
+    # A cascade window measured in wall nanoseconds (time audit T3, T10): the gate
+    # restores as a tick window due at its next completed arrival.
+    "CascadeGate": frozenset({"window_ns", "opened_ns"}),
     "RunStats": frozenset({"upward_releases"}),
     # The charter-window verdict commitment's fields (ruling R1).
     "PendingJudgement": frozenset({"judge", "cards", "window", "payoff_beat", "awaits_payoff",
@@ -395,7 +399,8 @@ class RecoveryJournal:
                     raise _recorded_error(item["error"], item.get("reason"),
                                           status=item.get("status"),
                                           unbilled=item.get("unbilled", False),
-                                          carry=item.get("carry"))
+                                          carry=item.get("carry"),
+                                          expired=item.get("expired", False))
                 return result
             if name in ("exchange.place", "exchange.close", "exchange.cancel",
                         "exchange.vault_create", "exchange.vault_transfer"):
@@ -459,6 +464,13 @@ class RecoveryJournal:
                 billing = {"status": status,
                            "unbilled": isinstance(classify_provider_failure(failure),
                                                   UnbilledFailure)}
+
+            from factorylab.world.openai_wire import CALL_EXPIRED
+
+            if str(failure).endswith(CALL_EXPIRED):
+                # The call outlived its caller's deadline (time audit T8); the replay
+                # reads that from the recorded outcome, whatever the rail.
+                billing["expired"] = True
             self.append({"kind": "io.result", "call": seq, "error": error,
                          **({"reason": reason} if reason is not None else {}),
                          **({"carry": carry} if carry is not None else {}), **billing})
@@ -480,6 +492,8 @@ def _read_only(name: str) -> bool:
             "search_markets", "market", "market_of_token", "midpoint"):
         return True  # the public Polymarket reads (world/polymarket.py)
     return name.rsplit(".", 1)[-1] in (
+        # The safety path's wall-clock and delivered-tick reads (time audit T8).
+        "now_ns", "tick_ns",
         "mids", "account", "funding", "fills", "candles", "order_book", "funding_history",
         "open_orders", "balance_micro", "balance_of", "affordable", "catalogue", "discover",
         "quote", "fetch",
@@ -493,7 +507,7 @@ def _read_only(name: str) -> bool:
 
 def _recorded_error(name: str, reason: str | None = None, *,
                     status: int | None = None, unbilled: bool = False,
-                    carry: dict | None = None) -> Exception:
+                    carry: dict | None = None, expired: bool = False) -> Exception:
     from factorylab.world.evm import Pending, RailError
     from factorylab.world.exchange import VenueUnavailable
     from factorylab.world.market import PaymentOutcomeUnknown
@@ -511,9 +525,19 @@ def _recorded_error(name: str, reason: str | None = None, *,
             from factorylab.world import metering
 
             cls = metering.OpenRouterError if cls is OpenRouterError else metering.VeniceError
+        if expired:
+            # The call outlived the deadline its caller stated (time audit T8): the
+            # runtime reads that from the recorded outcome, so a replay reads it too.
+            from factorylab.world.openai_wire import CALL_EXPIRED
+
+            return cls(status, CALL_EXPIRED)
         return cls(status, "Provider request failed")
     if name == "Pending":
         return Pending(reason or "treasury rail unavailable", carry=carry)
+    if expired:
+        from factorylab.world.openai_wire import CALL_EXPIRED
+
+        return cls(f"external call failed ({name}): {CALL_EXPIRED}")
     if name == "RailError":
         return RailError(reason or "treasury rail unavailable")
     return cls(f"external call failed ({name})")
@@ -648,6 +672,19 @@ _RUNTIME_FIELDS = (
     # Venue effects by custody, per decision, until its outcome settles: the
     # consequence line reports them beside provider cost (edition 3, C5).
     "venue_deltas",
+    # The clock (time audit T1-T3): the measured loops and derived schedules, and each
+    # open decision's tick cutoff. An older checkpoint has neither: its meters start
+    # empty, every derived loop opens afresh, and its decisions keep the wall-clock
+    # deadlines they were opened with.
+    "clockwork", "decision_ticks",
+    # Each card's last price move, the governance tier's viability, the epochs a
+    # speed limit deferred, and the treasury caps' anchor (time audit T2, T6, T7,
+    # T13). An older checkpoint has none: prices move on their next new sample, a
+    # tier is taken as viable until measured, no epoch waits, and the anchor is
+    # rebuilt from the treasury's own window.
+    "card_clock", "governance_viable", "pending_epochs", "cap_anchor_ns",
+    # The tick each watcher last paid for (T8): a safety sweep charges none twice.
+    "watcher_ticks",
 )
 # Runtime fields read through a property with no setter, and the attribute behind it.
 _RUNTIME_BACKING = {
@@ -683,6 +720,11 @@ _DERIVED_STATE = {
     "ReceiptBook._ReceiptBook__execution_ids": "derived global execution-receipt cursor",
     "ReceiptBook._ReceiptBook__execution_by_handle": "derived per-handle execution index",
     "FakeTreasury._balances_memo": "the scripted rail's balances, keyed on what they read",
+    "Runtime._safety_ns": "the safety path's last wall read, reset at every event's start",
+    "Runtime._safety_stop": "a terminal state the safety path saw, reset at every event's "
+                            "start; the event's own termination check acts on it",
+    "FakeTreasury.forward_wait_ticks": "the runtime restates it before every treasury tick "
+                                       "from the manifest floor and the measured capital loop",
 }
 # Transient: belongs to this process or this file, not to the world.
 _TRANSIENT_STATE = {
@@ -710,7 +752,10 @@ _COMPONENT_FIELDS = (
     ("book", "_ForecastBook__", ("forecasts", "settled", "requested")),
     ("baseline", "_PrevalenceBaseline__", ("counts",)),
     ("cadence", "_", ("latencies", "last_activation_ns", "waiting", "deferred",
-                       "current_event", "last_activation_event", "outstanding", "min_support")),
+                       "current_event", "last_activation_event", "outstanding", "min_support",
+                       # Time audit T7, T13: settling times, the card series, the open
+                       # probe and the capital loop. An older checkpoint has none.
+                       "settling", "series", "probe", "capital")),
     ("standing", "_ConsequenceStanding__", ("min_coverage", "evaluators")),
     ("settler", "_Settler__", ("snapshots", "recorded")),
     ("charter_book", "_CharterBook__", (
@@ -979,6 +1024,10 @@ def restore_runtime(rt, state: dict) -> None:
                 continue
             if name == "bill_settlement" and name not in components:
                 # Older checkpoints predate bill settlement; the next read takes a reference.
+                continue
+            if (name == "cadence" and field in ("settling", "series", "probe", "capital")
+                    and field not in components[name]):
+                # Older checkpoints predate the settling and capital loops: none measured.
                 continue
             setattr(getattr(rt, name), prefix + field, components[name][field])
     rt.prices.prices = decode(state["prices"])

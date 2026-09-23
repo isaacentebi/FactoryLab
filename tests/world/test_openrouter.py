@@ -147,10 +147,14 @@ def test_balance_rounds_down(remaining, expected):
     assert transport.calls == [("GET", "/key", None)]
 
 
-@pytest.mark.parametrize("failure", [error.URLError("offline"), ConnectionError(), TimeoutError()])
-def test_post_never_retried_on_connection_failure(req, failure):
+@pytest.mark.parametrize("failure,reason", [
+    (error.URLError("offline"), "Connection failed"), (ConnectionError(), "Connection failed"),
+    # A socket that timed out is the call outliving its deadline (time audit T8).
+    (TimeoutError(), "Call deadline expired"),
+    (error.URLError(TimeoutError()), "Call deadline expired")])
+def test_post_never_retried_on_connection_failure(req, failure, reason):
     transport = FakeTransport([failure])
-    with pytest.raises(OpenRouterError, match="Connection failed"):
+    with pytest.raises(OpenRouterError, match=reason):
         OpenRouterProvider(transport=transport).complete(req)
     assert len(transport.calls) == 1
 
@@ -276,3 +280,30 @@ def test_reported_zero_and_overrun_preserve_accounting(completion, req, cost, ex
     assert result.cost == expected
     assert result.overrun == max(0, expected - model.ceiling(req))
     assert wallet.balance == 1000 - result.cost and wallet.reserved == 0
+
+
+def test_a_completion_is_sent_under_its_callers_deadline_never_above_the_ceiling(
+        completion, req):
+    """Time audit T8: the runtime states a call's deadline as a ratio of its delivered
+    tick; the adapter applies it to that one POST and keeps its own ceiling above it."""
+    from dataclasses import replace as replaced
+
+    from factorylab.world.openai_wire import call_timeout
+    from factorylab.world.x402 import MODEL_COMPLETION_TIMEOUT_S
+
+    seen = []
+    provider = OpenRouterProvider()
+
+    def transport(method, path, payload):
+        seen.append((path, provider._call_timeout))
+        return completion
+
+    provider._transport = transport
+    provider.complete(replaced(req, timeout_s=30.0))
+    provider.complete(req)
+    assert seen == [("/chat/completions", 30.0), ("/chat/completions", None)]
+    assert provider._call_timeout is None
+    assert call_timeout(None, MODEL_COMPLETION_TIMEOUT_S) == MODEL_COMPLETION_TIMEOUT_S
+    assert call_timeout(30.0, MODEL_COMPLETION_TIMEOUT_S) == 30.0
+    assert call_timeout(5000.0, MODEL_COMPLETION_TIMEOUT_S) == MODEL_COMPLETION_TIMEOUT_S
+    assert call_timeout(0.01, MODEL_COMPLETION_TIMEOUT_S) == 1.0

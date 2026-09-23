@@ -40,6 +40,14 @@ class GovernanceCadence:
         self._last_activation_ns = 0
         self._waiting: dict[str, None] = {}
         self._deferred: dict[str, int] = {}
+        # Essay II.IV.c, time audit T7: the settling times measured after activations
+        # (system identification), the per-card score series they are read from, and
+        # the probe of the latest activation while its series has not settled.
+        self._settling: deque[int] = deque(maxlen=sample)
+        self._series: dict[str, list[float]] = {}
+        self._probe: dict | None = None
+        # Time audit T13: the capital loop's closures, open to finalized, in ticks.
+        self._capital: deque[int] = deque(maxlen=sample)
 
     def configure(self, *, min_support: int) -> None:
         """Bind the immutable manifest support requirement before the runtime starts."""
@@ -98,8 +106,8 @@ class GovernanceCadence:
         self._outstanding.pop(handle, None)
         self._current_event = max(self._current_event, settled_event)
 
-    def slowest_period_events(self) -> int:
-        """Keep the committed consequence horizon beneath p90 and outstanding forecast age.
+    def consequence_period_events(self) -> int:
+        """The consequence loop in ticks: the backstop, or the p90 settlement above it.
 
         A pooled sample of quick completions cannot disprove an unfinished slow
         loop. The backstop remains the conservative floor even after warm-up.
@@ -108,9 +116,117 @@ class GovernanceCadence:
         if len(self._latencies) >= self._min_support:
             ordered = sorted(self._latencies)
             estimate = max(estimate, ordered[(9 * len(ordered) + 9) // 10 - 1])
+        return estimate
+
+    def slowest_period_events(self) -> int:
+        """The slowest loop governance commands, in ticks (essay II.IV.c).
+
+        The largest of: the consequence loop; the oldest outstanding forecast; the
+        settling time measured after activations, and the age of the latest
+        activation's unsettled score series (time audit T7); and the capital
+        loop's p90 closure (T13). An unfinished loop is never read as a fast one.
+        """
         oldest = max((self._current_event - opened for opened in self._outstanding.values()),
                      default=0)
-        return max(estimate, oldest)
+        settling = max(self._settling, default=0)
+        probe = (self._current_event - self._probe["opened"]) if self._probe else 0
+        capital = self.capital_period_events() or 0
+        return max(self.consequence_period_events(), oldest, settling, probe, capital)
+
+    def record_capital(self, *, transfer_id: str, latency_ticks: int, latency_ns: int) -> None:
+        """One conversion reached finality: the capital loop closed once (time audit T13)."""
+        if type(latency_ticks) is not int or latency_ticks < 0:
+            raise ValueError("a closure takes a nonnegative number of ticks")
+        self._ledger.append({"kind": "cadence.capital", "transfer_id": transfer_id,
+                             "latency_ticks": latency_ticks, "latency_ns": latency_ns,
+                             "event": self._current_event})
+        self._capital.append(latency_ticks)
+
+    def capital_period_events(self) -> int | None:
+        """The capital loop's p90 closure in ticks, or None without enough support.
+
+        The same support floor the consequence loop needs (``timing.min_support``):
+        a handful of conversions is not evidence of the rail's period, and one that
+        happened to straddle a stall must not set it.
+        """
+        if len(self._capital) < self._min_support:
+            return None
+        ordered = sorted(self._capital)
+        return ordered[(9 * len(ordered) + 9) // 10 - 1]
+
+    def open_probe(self, *, amendment_id: str) -> None:
+        """An activation is the deliberate intent revision whose settling is measured.
+
+        Essay II.IV.c: "inject a small, deliberate intent revision and measure how
+        long the output distribution takes to return to a settled distribution".
+        The band each card's series settled in before the activation is the one
+        its series must return to; a card with no settled band before is not read.
+        """
+        bands = {card: max(values) - min(values)
+                 for card, values in self._series.items()
+                 if len(values) >= self._min_ratio}
+        self._ledger.append({"kind": "governance.probe", "amendment_id": amendment_id,
+                             "event": self._current_event, "cards": sorted(bands)})
+        # With no settled band before the revision there is nothing to read its
+        # settling against: the probe is not held open on a measurement it lacks.
+        self._probe = ({"amendment_id": amendment_id, "opened": self._current_event,
+                        "bands": bands, "after": {}} if bands else None)
+
+    def observe_scores(self, values: dict[str, float]) -> None:
+        """Retain each card's latest window values and close the probe once they settle.
+
+        Guarantees the probe settles at the first close where every read card has
+        at least ``min_ratio`` values since the activation and their spread is
+        within the band it held before, at whatever new level. Its settling time,
+        in ticks, joins the slowest period (time audit T7).
+        """
+        for card, value in values.items():
+            rows = self._series.setdefault(card, [])
+            rows.append(float(value))
+            del rows[:-self._min_ratio]
+        probe = self._probe
+        if probe is None:
+            return
+        for card, value in values.items():
+            if card in probe["bands"]:
+                rows = probe["after"].setdefault(card, [])
+                rows.append(float(value))
+                del rows[:-self._min_ratio]
+        bands = probe["bands"]
+        settled = all(
+            len(probe["after"].get(card, ())) >= self._min_ratio
+            and max(probe["after"][card]) - min(probe["after"][card]) <= band
+            for card, band in bands.items())
+        ticks = self._current_event - probe["opened"]
+        # A series still unsettled after min_ratio consequence periods is closed with its
+        # age as a lower bound, so one revision the world never settles cannot stop the
+        # governance loop for the life of the world; the bound still slows it.
+        censored = not settled and ticks >= self._min_ratio * self.consequence_period_events()
+        if settled or censored:
+            self._ledger.append({"kind": "governance.settling",
+                                 "amendment_id": probe["amendment_id"],
+                                 "opened_event": probe["opened"],
+                                 "settled_event": self._current_event,
+                                 "settling_ticks": ticks, "settled": settled,
+                                 "cards": sorted(bands)})
+            self._settling.append(ticks)
+            self._probe = None
+
+    def viability(self, *, run_ticks: int | None, world_ticks: int | None) -> dict:
+        """Whether a governance tier fits between sampling noise and lagging the world.
+
+        Essay II.IV.c: "A factory whose versions stabilize monthly inside market
+        conditions that are comprehensively repriced weekly has no viable
+        governance tier." Viable when ``min_ratio × slowest`` fits within both the
+        run's whole length and the world's repricing period, in ticks.
+        """
+        needed = self._min_ratio * self.slowest_period_events()
+        bounds = {name: value for name, value in (("run_ticks", run_ticks),
+                                                  ("world_ticks", world_ticks))
+                  if value is not None}
+        limit = min(bounds.values(), default=None)
+        return {"viable": limit is None or needed <= limit, "needed_ticks": needed,
+                "slowest_ticks": self.slowest_period_events(), **bounds}
 
     def slowest_period_ns(self, tick_interval_ns: int | TickClock) -> int:
         """Convert at the slower of the delivered gap and the interval now declared.
@@ -203,6 +319,7 @@ class GovernanceCadence:
         self._last_activation_event = self._current_event
         self._waiting.pop(amendment_id, None)
         self._deferred.pop(amendment_id, None)
+        self.open_probe(amendment_id=amendment_id)
 
     def world_block(self, tick_interval_ns: int | TickClock) -> dict:
         """Expose measured duration, UTC activation timestamp and approved waiting ids only."""

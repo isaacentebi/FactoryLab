@@ -130,6 +130,35 @@ class LiveClock:
 
 
 @dataclass
+class WallClock:
+    """The wall clock the safety path reads between model calls (time audit T8).
+
+    Read through the journal, so a replay reads the instant the run read and makes
+    the same safety decisions. It is the wall clock the world's ticks are paced
+    against (``LiveClock.now_ns``, injectable); a world whose ticks are not paced
+    against wall time does not move inside an event, so it reads the event's
+    simulated instant.
+    """
+
+    tick_clock: Callable[[], Any]
+    sim: Any = None
+    name: str = "wall"
+
+    def now_ns(self) -> int:
+        """Nanoseconds now on the clock the world's ticks are paced against."""
+        clock = self.tick_clock()
+        if isinstance(clock, LiveClock):
+            return int(clock.now_ns())
+        return int(self.sim.now_ns)
+
+    def tick_ns(self) -> int:
+        """The delivered tick interval now: the slower of the measured and declared gap."""
+        from factorylab.runtime.clockwork import tick_ns
+
+        return int(tick_ns(self.tick_clock()))
+
+
+@dataclass
 class LiveVenue:
     """Adapts a real ``Exchange`` to per-tick world events.
 

@@ -1,8 +1,17 @@
-"""Protected, expiring novelty entitlements independent of wallet creation."""
+"""Protected novelty entitlements, accrued as a flow, independent of wallet creation.
+
+Essay II.II.b asks for "some share of compute and write access ... usable only in
+the context of unhistoried actions". The share is a flow (time audit T6): one
+flow period's share of the spendable budget accrues over that period, whatever
+the number of windows it is cut into, and the entitlement never exceeds one
+period's share. How long a period is, and how much of one a window covers, is the
+runtime's clock (``runtime.clockwork``); the reserve guarantees the bound.
+"""
 
 from collections.abc import Callable
 from dataclasses import replace
 from decimal import Decimal
+from fractions import Fraction
 from time import time_ns
 
 from factorylab.kernel.ledger import Ledger
@@ -17,7 +26,6 @@ class NoveltyReserve:
     def __init__(
         self,
         share: float,
-        window_ns: int,
         *,
         has_history: Callable[[str], bool],
         ledger: Ledger,
@@ -28,12 +36,9 @@ class NoveltyReserve:
         fraction = Decimal(str(share))
         if not fraction.is_finite() or not 0 < fraction <= 1:
             raise ValueError("novelty share must be in (0, 1]")
-        if type(window_ns) is not int or window_ns <= 0:
-            raise ValueError("window_ns must be a positive integer")
         if not callable(has_history):
             raise TypeError("history predicate is required")
         self.__fraction = fraction
-        self.__window_ns = window_ns
         self.__history = has_history
         self.__ledger = ledger
         self.__clock = clock_ns
@@ -47,26 +52,38 @@ class NoveltyReserve:
         """The protected share is immutable and represented exactly in reserve arithmetic."""
         return self.__fraction
 
-    @property
-    def window_ns(self) -> int:
-        """The window duration is immutable for this reserve's lifetime."""
-        return self.__window_ns
+    def open_window(self, now_ns: int, window_spend_budget: Money, *,
+                    accrued: Fraction = Fraction(1)) -> None:
+        """Start the next window, carrying the unspent flow and adding what accrued.
 
-    def open_window(self, now_ns: int, window_spend_budget: Money) -> None:
-        """Start a nonoverlapping window, discarding unused entitlements from its predecessor."""
+        Guarantees the new entitlement is ``min(cap, carried + cap × accrued)``,
+        where ``cap`` is one flow period's share of ``window_spend_budget`` and
+        ``carried`` what the previous window left unspent: however often windows
+        open, the reserve never holds more than one period's share, and a window
+        that covers ``accrued`` of a period adds only that part of it. A window
+        opens strictly after its predecessor and ends when the next one opens.
+        Unconsumed registration receipts of the predecessor are voided.
+        """
         require_money(window_spend_budget, nonnegative=True)
         if type(now_ns) is not int or now_ns < 0:
             raise ValueError("now_ns must be nonnegative integer nanoseconds")
-        if self.__start is not None and now_ns < self.__start + self.__window_ns:
+        if not isinstance(accrued, Fraction | int) or not 0 <= accrued <= 1:
+            raise ValueError("accrued is an exact fraction of one flow period in [0, 1]")
+        if self.__start is not None and now_ns <= self.__start:
             raise Infeasible("cannot reopen or overlap a reserve window")
         numerator, denominator = self.__fraction.as_integer_ratio()
-        amount = window_spend_budget * numerator // denominator
+        cap = window_spend_budget * numerator // denominator
+        accrued = Fraction(accrued)
+        carried = self.__remaining if self._active() else 0
+        amount = min(cap, carried + cap * accrued.numerator // accrued.denominator)
         self.__ledger.append(
             {
                 "kind": "novelty.window",
                 "ts": now_ns,
                 "amount": amount,
-                "expired": self.__remaining,
+                "carried": carried,
+                "accrued": str(accrued),
+                "cap": cap,
                 "budget": window_spend_budget,
             }
         )
@@ -75,12 +92,7 @@ class NoveltyReserve:
         self.__receipts.clear()
 
     def _active(self) -> bool:
-        now = self.__clock()
-        return (
-            self.__start is not None
-            and self.__start <= now < self.__start + self.__window_ns
-            and not self.__ledger.final
-        )
+        return self.__start is not None and not self.__ledger.final
 
     def reserve_for(self, contract: Contract, amount: Money) -> Reservation:
         """Issue a one-use entitlement only for a fresh contract in an active window."""

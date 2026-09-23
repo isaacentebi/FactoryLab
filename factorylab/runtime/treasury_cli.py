@@ -114,6 +114,10 @@ class AcceptanceSession:
             result = self.treasury.transfer(operation["direction"], operation["usd"],
                                             handle="testnet-acceptance", now_ns=self.clock.now_ns)
         elif operation["kind"] == "advance":
+            # One advance is one tick of this session's world: a stall's age and a
+            # conversion's latency count advances, checkpointed with the treasury, so a
+            # resumed session neither strands a stall early nor forgets its age.
+            self.treasury.tick_index += 1
             result = {"completed": self.treasury.tick(self.clock.now_ns)}
         else:
             raise ValueError("unknown acceptance operation")

@@ -346,21 +346,22 @@ max_tokens = "provider"
 effort = "low"
 initial_state = { lens = "Your starting prior is that a judge's approval tracks presentation more closely than outcome.", open_questions = [], active_commitments = [] }
 
-# The novelty window is also the charter's pricing window: a card is measured and its
-# price revised once per window close. At "1h" against a 10-second tick a 60-360 tick
-# rehearsal (10 minutes to an hour) closed no window at all, so no price ever moved and
-# the immune organ, which needs k + 1 = 4 closed windows, never ran. One minute is six
-# ticks per window (timing.min_ratio 3 caps the tick at 20s), so 60 ticks close ten.
+# The novelty share is a flow per measured consequence period, and a trial's patience is
+# timing.min_ratio of those periods (time audit T5, T6). Neither the pricing window nor any
+# other loop period is cast here: each is derived from the loop it commands (time audit
+# T1, T2, T11).
 [novelty]
 trials = 3
-max_lifetime_windows = 6
 share = 0.1
-window = "1m"
 
 [timing]
 cadence_sample = 200
 min_ratio = 3
 jitter_fraction = 0.2
+# The world's own repricing period, a fact about the venue: Hyperliquid settles perp
+# funding every hour. Governance is viable only while timing.min_ratio times the
+# slowest loop fits inside it (essay II.IV.c; time audit T7).
+world_repricing = "1h"
 
 [evaluation]
 consequence_backstop_events = 60
@@ -471,7 +472,7 @@ id = "censorship-bound"
 norm = "epistemic integrity"
 description = "Attributable, avoidably unresolved accepted commitments over the eligible commitments due in the responsible scope, with a ceiling, so a seat answers for the promises it never let the world settle. A commitment not yet due is not in the sample; documented external unobservability without owner fault, and events the seat never committed to observe, are excluded; no eligible sample is unmeasured, never zero. Accountability is the commitment owner, including responsibility delegated at acceptance. Explicitly provisional: replace, reprice or remove it."
 units = "fraction"
-window = { kind = "forecasts", n = 10, per = "assembly" }
+window = { kind = "forecasts", n = 25, per = "assembly" }
 acceptable_region = "at most 0.30"
 observation = "avoidably_unresolved_share"
 answers_for = "all"

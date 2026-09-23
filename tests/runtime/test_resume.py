@@ -71,7 +71,7 @@ original = rt._process_event
 def interrupt(event):
     result = original(event)
     stop = (rt.n == 250 if sys.argv[2] == 'event250' else
-            rt.ticks_consumed == 125 and str(event.kind) == 'Tick')
+            rt.ticks_consumed == 126 and str(event.kind) == 'Tick')
     if stop:
         os.kill(os.getpid(), signal.SIGKILL)
     return result
@@ -243,7 +243,6 @@ def test_snapshot_and_tail_restore_all_state_with_delayed_router_and_assembly_me
     base = load_manifest("scripted")
     m = replace(
         base,
-        novelty=replace(base.novelty, window_ns=2 * base.tick_interval_ns),
         assemblies=tuple(replace(a, memory_policy="handle-scoped") for a in base.assemblies),
     )
     if endowed:
@@ -253,10 +252,12 @@ def test_snapshot_and_tail_restore_all_state_with_delayed_router_and_assembly_me
             (base.tick_interval_ns + 1, 1_000), (NS_PER_DAY, m.initial_balance_micro - 1_000))))
     path = tmp_path / "state.jsonl"
     rt = make_runtime(m, path)
-    rt.events_budget = 6
+    rt.events_budget = 9
     rt._build_router("Tick", "blum_mansour", 0.2)
     rt._build_router("Tick", "exp3", 0.3, replace=False)
-    stop_after(rt, lambda r, e: r.ticks_consumed == 4 and str(e.kind) == "Tick")
+    # A price window is at least min_ratio ticks (time audit T1): by tick seven two
+    # windows have opened after the launch, each a snapshot.
+    stop_after(rt, lambda r, e: r.ticks_consumed == 7 and str(e.kind) == "Tick")
     if endowed:
         assert rt.dormancy is not None and rt.wallet.released_tranches == 1
         assert rt.wallet.locked == m.initial_balance_micro - 1_000
@@ -371,7 +372,9 @@ def test_unacknowledged_live_model_call_books_uncertainty_without_resubmission(t
     restored._ledger_lock.close()
 
 
-def test_live_resume_reconciles_open_position_and_times_out_outage_deadlines(tmp_path):
+def test_live_resume_reconciles_open_position_and_an_outage_reaches_no_tick_cutoff(tmp_path):
+    """A cutoff counts world ticks (time audit T3): an outage consumed none, so a resume
+    past every wall-clock deadline times nothing out; the tick cutoffs still stand."""
     base = load_manifest("scripted")
     m = replace(
         base, exchange=replace(base.exchange, kind="hyperliquid", coins=("BTC",))
@@ -399,11 +402,12 @@ def test_live_resume_reconciles_open_position_and_times_out_outage_deadlines(tmp
     assert venue.orders_sent == orders_sent  # replay made no duplicate venue submissions
     diary = items(path, m)
     timeouts = [i for i in diary if i["kind"] == "resume.timeouts"][-1]
-    assert set(timeouts["handles"]) == {d.handle for d in outstanding}
+    assert timeouts["handles"] == []
     for d in outstanding:
-        assert restored.queue.get(d.handle).status == SettleStatus.TIMED_OUT
+        assert restored.queue.get(d.handle).status == SettleStatus.PENDING
+        assert restored.queue.deadline_tick(d.handle) > restored.ticks_consumed
         history = restored.queue.history(d.handle)
-        assert sum(r.status == SettleStatus.TIMED_OUT for r in history) == 1
+        assert not any(r.status == SettleStatus.TIMED_OUT for r in history)
     reconcile = [i for i in diary if i["kind"] == "resume.reconcile"][-1]
     assert reconcile["positions"] and reconcile["venue_equity_usd"] is not None
     assert restored.stats.resumes == 1 and restored.wallet.check_conservation()

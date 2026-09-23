@@ -10,9 +10,7 @@ from factorylab.kernel.wallet import Infeasible, Wallet
 
 def test_invariant_5_incumbents_cannot_consume_novelty_share(ledger, clock, contract_factory):
     history = {"incumbent"}
-    reserve = NoveltyReserve(
-        0.25, 10, has_history=history.__contains__, ledger=ledger, clock_ns=clock
-    )
+    reserve = NoveltyReserve(0.25, has_history=history.__contains__, ledger=ledger, clock_ns=clock)
     reserve.open_window(100, 100)
     with pytest.raises(Infeasible, match="history"):
         reserve.reserve_for(contract_factory(id="incumbent"), 1)
@@ -23,36 +21,45 @@ def test_invariant_5_incumbents_cannot_consume_novelty_share(ledger, clock, cont
     assert reserve.remaining() == 5
 
 
-def test_invariant_5_windows_expire_and_cannot_be_reopened_for_extra_budget(
+def test_invariant_5_windows_cannot_be_reopened_for_extra_budget(
     ledger,
     clock,
     contract_factory,
 ):
-    reserve = NoveltyReserve(0.25, 10, has_history=lambda _: False, ledger=ledger, clock_ns=clock)
-    reserve.open_window(100, 100)
+    """The share is a flow (time audit T6): however often windows open, the reserve never
+    holds more than one flow period's share, and a window cannot open twice at an instant."""
+    from fractions import Fraction
+
+    reserve = NoveltyReserve(0.25, has_history=lambda _: False, ledger=ledger, clock_ns=clock)
+    reserve.open_window(100, 100, accrued=Fraction(1, 2))
+    assert reserve.remaining() == 12  # half a period of a 25 share
     contract = contract_factory()
     receipt = reserve.reserve_for(contract, 5)
     with pytest.raises(Infeasible, match="overlap"):
         reserve.open_window(100, 1000)
-    clock.now = 110
-    assert reserve.remaining() == 0
-    with pytest.raises(Infeasible):
-        reserve.reserve_for(contract, 1)
+    with pytest.raises(Infeasible, match="overlap"):
+        reserve.open_window(99, 1000)
+    # Reopening at once, over and over, never raises the entitlement past one share.
+    for now in range(101, 111):
+        reserve.open_window(now, 100, accrued=Fraction(1))
+        assert reserve.remaining() == 25
+    reserve.open_window(111, 100, accrued=Fraction(0))
+    assert reserve.remaining() == 25  # carried, never more than the cap
+    # A receipt from an earlier window does not survive the next opening.
     with pytest.raises(PermissionError):
         Registry(ledger).register(contract, "h", receipt)
-    reserve.open_window(110, 20)
-    assert reserve.remaining() == 5
-    with pytest.raises(PermissionError):
-        Registry(ledger).register(contract, "h", receipt)
+    reserve.open_window(112, 20, accrued=Fraction(1))
+    assert reserve.remaining() == 5  # the cap follows the budget the window opens on
+    for bad in (Fraction(-1, 2), Fraction(3, 2), 0.5):
+        with pytest.raises(ValueError, match="accrued"):
+            reserve.open_window(200, 100, accrued=bad)
     with pytest.raises(AttributeError):
         reserve.share = 0
-    with pytest.raises(AttributeError):
-        reserve.window_ns = 1
 
 
 def test_novelty_reservations_are_not_money_or_wallet_holds(ledger, clock, contract_factory):
     wallet = Wallet(100, ledger, clock_ns=clock)
-    reserve = NoveltyReserve(0.1, 10, has_history=lambda _: False, ledger=ledger, clock_ns=clock)
+    reserve = NoveltyReserve(0.1, has_history=lambda _: False, ledger=ledger, clock_ns=clock)
     reserve.open_window(100, 100)
     receipt = reserve.reserve_for(contract_factory(), 10)
     with pytest.raises(Infeasible):
@@ -62,9 +69,7 @@ def test_novelty_reservations_are_not_money_or_wallet_holds(ledger, clock, contr
 
 def test_registration_rechecks_history_and_rejects_receipt_copy(ledger, clock, contract_factory):
     history = set()
-    reserve = NoveltyReserve(
-        0.5, 10, has_history=history.__contains__, ledger=ledger, clock_ns=clock
-    )
+    reserve = NoveltyReserve(0.5, has_history=history.__contains__, ledger=ledger, clock_ns=clock)
     reserve.open_window(100, 100)
     contract = contract_factory()
     receipt = reserve.reserve_for(contract, 10)
@@ -80,9 +85,7 @@ def test_reserve_arithmetic_uses_integers_even_at_low_decimal_precision(ledger, 
     budget = 10**60 + 7
     with localcontext() as context:
         context.prec = 2
-        reserve = NoveltyReserve(
-            0.125, 10, has_history=lambda _: False, ledger=ledger, clock_ns=clock
-        )
+        reserve = NoveltyReserve(0.125, has_history=lambda _: False, ledger=ledger, clock_ns=clock)
         reserve.open_window(100, budget)
     assert reserve.remaining() == budget // 8
 
@@ -90,12 +93,12 @@ def test_reserve_arithmetic_uses_integers_even_at_low_decimal_precision(ledger, 
 @pytest.mark.parametrize("share", [0, -0.1, 1.1, float("nan"), True])
 def test_reserve_cannot_be_abolished_or_malformed(share, ledger):
     with pytest.raises((ValueError, TypeError)):
-        NoveltyReserve(share, 10, has_history=lambda _: False, ledger=ledger)
+        NoveltyReserve(share, has_history=lambda _: False, ledger=ledger)
 
 
 def protected_wallet(ledger, clock):
     wallet = Wallet(100, ledger, clock_ns=clock)
-    reserve = NoveltyReserve(0.25, 10, has_history=lambda _: False,
+    reserve = NoveltyReserve(0.25, has_history=lambda _: False,
                              ledger=ledger, clock_ns=clock)
     wallet.bind_novelty(reserve, lambda handle, reason: handle == "new" and reason == "model")
     reserve.open_window(clock.now, 100)

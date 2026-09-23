@@ -1,6 +1,5 @@
 """C10 in the runtime: genesis split, routing feasibility, manifest field, resume."""
 
-from dataclasses import replace
 
 import pytest
 
@@ -69,8 +68,7 @@ def test_exhausted_entitlement_is_infeasible_for_routing_not_insolvency():
 
 
 def test_entitlements_restore_exactly_after_a_crash(tmp_path):
-    base = load_manifest("scripted")
-    m = replace(base, novelty=replace(base.novelty, window_ns=2 * base.tick_interval_ns))
+    m = load_manifest("scripted")
     path = tmp_path / "entitlement.jsonl"
     rt = Runtime(m, events=140, seed=1, initial_balance_micro=None, ledger_path=str(path),
                  router_gamma=.1)

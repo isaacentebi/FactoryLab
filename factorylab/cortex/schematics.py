@@ -500,7 +500,8 @@ class SchematicsMixin:
             "tools": self._published_tool_specs(),
             "reserve": {"protected": self.reserve.remaining(), "units": "micro-USD",
                         "trials": self.m.novelty.trials,
-                        "max_lifetime_windows": self.m.novelty.max_lifetime_windows},
+                        "patience_ticks": self._patience(),
+                        "flow_period_ticks": self._consequence_period()},
             "novelty_reserve_remaining_usd": str(money_to_usd(self.reserve.remaining())),
             "addressing": _ADDRESSING,
             "governance": {**self.cadence.world_block(self.tick_clock),
@@ -586,7 +587,8 @@ class SchematicsMixin:
                            "timeout_s": self.m.connectors.timeout_s,
                            "call_price_micro": self.m.connectors.call_price_micro,
                            "max_calls_per_window": self.m.connectors.max_calls_per_window,
-                           "window_ns": self.m.novelty.window_ns,
+                           "window_ticks": self.clockwork.period(
+                               "price", default=self.m.timing.min_ratio),
                            "origin_denylist": list(self.m.connectors.origin_denylist),
                            "method": "GET",
                            "optional_fields": ["pay", "max_call_usd"],
@@ -650,7 +652,12 @@ class SchematicsMixin:
             "clock": {
                 "tick_interval": _duration_str(self.tick_clock.interval_ns),
                 "min_tick": _duration_str(self.m.clock.min_tick_ns),
-                "max_tick": _duration_str(self.m.max_tick_ns),
+                "max_tick": (_duration_str(self.m.max_tick_ns)
+                             if self.m.max_tick_ns is not None else None),
+                # Every loop in world ticks: the measured ones and the derived schedules
+                # (time audit T1-T3), and whether a governance tier fits (T7).
+                "loops": self.clockwork.table(),
+                "governance_viable": self.governance_viable,
             },
             "reserved_return_fields": reserved_return_fields(
                 max_children=self.m.tools.max_children,
@@ -928,13 +935,21 @@ class SchematicsMixin:
 
     def _observation_window(self) -> dict[str, Any]:
         """The window these observations were drawn over, and how fresh each source is."""
+        from factorylab.runtime.clockwork import tick_ns
+
         start = self.reserve_window_start
-        span = self.m.novelty.window_ns
+        due = self.window.due_tick
+        span = (None if due is None
+                else max(0, due - self.window.opened_tick) * tick_ns(self.tick_clock))
         return {
             "window_index": self.window.index,
             "tick_index": self.tick_index,
+            "start_tick": self.window.opened_tick,
+            "due_tick": due,
             "start_utc": _utc(start),
-            "ends_utc": _utc(start + span) if type(start) is int else None,
+            # The window closes on ticks; its end in wall time is the delivered tick's
+            # conversion, an estimate (time audit T3).
+            "ends_utc": _utc(start + span) if type(start) is int and span is not None else None,
             "now_utc": _utc(self.clock.now_ns),
             "source_freshness": self._market_data_as_of(),
         }
@@ -1613,10 +1628,12 @@ class SchematicsMixin:
                 "boundary as the next edition, after each seated delegate's recorded, "
                 "non-binding testimony. Cards on a removed norm are refused",
             },
-            "novelty": {"share": nov.share, "window_ns": nov.window_ns,
-                        "window": _duration_str(nov.window_ns),
-                        "trials": nov.trials,
-                        "max_lifetime_windows": nov.max_lifetime_windows},
+            "novelty": {"share": nov.share, "trials": nov.trials,
+                        "flow": "share of the spendable budget per measured consequence "
+                        "period, accrued window by window and never more than one period's "
+                        "share at once",
+                        "patience": "timing.min_ratio measured consequence periods, in "
+                        "world ticks, from registration"},
             "controller": {
                 "law": "pid",
                 "eta": pr.eta, "kp": pr.kp, "kd": pr.kd, "decay": pr.decay,
@@ -1637,19 +1654,21 @@ class SchematicsMixin:
             "the decay the immune controller borrows — are in world.adaptive_scoring, and "
             "controller.decay and consequence_mix above are what they were committed at",
             "treasury": {"max_venice_per_window_micro": self.m.treasury.max_venice_per_window,
+                         "cap_window": _duration_str(self.m.treasury.cap_window_ns),
                          "venice_tranche_usd": "5",
                          "cctp_forwarding": self.m.treasury.cctp_forwarding,
                          "max_forward_fee_micro": self.m.treasury.max_forward_fee_micro,
                          "max_forward_fees_per_window_micro":
                              self.m.treasury.max_forward_fees_per_window,
-                         "forward_wait_windows": self.m.treasury.forward_wait_windows,
+                         "forward_wait_ticks": self.m.treasury.forward_wait_ticks,
                          "exit_route": "to_reserve burns USDC on HyperCore and mints it on "
                          "Base. Spot HYPE in the venue account pays the Core gas charge: buy it "
                          "on HYPE/USDC; HYPE spent as that charge is not a fill. The mint is "
                          "self-paid when the reserve holds Base ETH; otherwise Circle forwards "
                          "it for the on-chain fee quoted in pots.gas, bounded per transfer and "
-                         "per reserve window. pots.gas names the branch and any blocker. A "
-                         "forwarded mint unobserved for forward_wait_windows reserve windows "
+                         "per cap_window. pots.gas names the branch and any blocker. A "
+                         "forwarded mint unobserved for forward_wait_ticks world ticks (or the "
+                         "capital loop's measured p90 conversion, if longer) "
                          "strands recoverably (pots.stranded): its burned principal stays "
                          "held and re-checked, and new transfers are admitted.",
                          "return_route": "to_venue needs reserve Base ETH and HyperEVM HYPE "
@@ -1883,8 +1902,8 @@ class SchematicsMixin:
                 "proposal returns its trial to the window and its reason reaches the "
                 "proposer's outcome inbox; a registered assembly keeps protected compute until "
                 f"{self.m.novelty.trials} settled consequences have been delivered to it or "
-                f"{self.m.novelty.max_lifetime_windows} windows have passed since registration "
-                "(continuations and children do not count; a learning-death window grants one "
-                "more)"
+                f"{self.m.timing.min_ratio} measured consequence periods have passed since "
+                "registration (continuations and children do not count; a live learning-death "
+                "grant adds one more)"
             ),
         }

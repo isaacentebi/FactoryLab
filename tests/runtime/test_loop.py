@@ -1,5 +1,6 @@
 from dataclasses import replace
 from decimal import Decimal
+from math import ceil
 
 import pytest
 
@@ -42,12 +43,11 @@ def test_crash_world_wipes_its_venue_without_spending_its_compute_authority() ->
 
 
 def test_determinism_same_seed_same_summary() -> None:
-    base = load_manifest("scripted")
-    m = replace(base, novelty=replace(base.novelty, window_ns=20_000_000_000))
-    a = run_world(m, events=45, seed=7)
-    b = run_world(m, events=45, seed=7)
-    # Forty-five events reach an immune window, a router replacement and a price update
-    # (thirty did while judges were scored for forecasting holds already resolved).
+    m = load_manifest("scripted")  # every window is derived from the loops it commands
+    a = run_world(m, events=70, seed=7)
+    b = run_world(m, events=70, seed=7)
+    # Seventy events reach an immune window, a router replacement and a price update: a
+    # card is priced once its sample is in, on its own loop (time audit T1, T2).
     assert a["stats"]["immune_windows"] and a["stats"]["routers_replaced"]
     assert a["stats"]["price_updates"]
     a.pop("aggregates", None)
@@ -136,6 +136,8 @@ def test_cascade_release_is_ledger_first_and_fast_fallback_keeps_timeout(monkeyp
     for event in events[:2]:
         assert runtime._cascade_arrival(event) is None
     before = runtime.cascade[2]
+    # The window's duration is ticks (time audit T3, T10): it has elapsed at the third.
+    runtime.ticks_consumed = ceil(before.window)
     rng_before = runtime.rng.getstate()
     append = runtime.ledger.append
 
@@ -184,6 +186,7 @@ def test_a_meta_grades_the_representative_and_the_unread_siblings_borrow_nothing
     ]
     for event in events[:2]:
         assert runtime._cascade_arrival(event) is None
+    runtime.ticks_consumed = ceil(runtime.cascade[2].window)
     released = runtime._cascade_arrival(events[2])
     assert released is not None
     judged = Event(
@@ -498,10 +501,16 @@ def _market_runtime(market_http, *, provider=None, events=10, treasury=None, see
 
 
 def _register_test_seller(runtime):
+    from fractions import Fraction
+
     from factorylab.cortex.registration import AssemblyProposal, ModelProposal
     from tests.world.test_market import MODEL
 
     runtime._manage_reserve_window()
+    # A whole flow period's share accrued (time audit T6): the registrations are funded.
+    runtime.clock.now_ns += 1
+    runtime.reserve.open_window(runtime.clock.now_ns, max(0, runtime.wallet.unlocked),
+                                accrued=Fraction(1))
     runtime._register("proposal", ModelProposal(MODEL))
     runtime._register("proposal", AssemblyProposal(
         "market-buyer", "producer", MODEL, "Return JSON.", ("Tick",), 16, "low",
@@ -626,3 +635,41 @@ def test_position_peak_is_ledger_first_and_survives_flat_account(monkeypatch):
     assert rt.window.max_position_notional_micro == 6_000_000
 
 
+def test_a_paid_seller_call_runs_on_the_same_clock_as_every_other_call(market_http):
+    """Codex review of #133: an x402 assembly's calls get the safety pass and the paced
+    deadline, and an expired paid call is reported expired (its payment still unknown)."""
+    from types import SimpleNamespace as NS
+
+    from factorylab.runtime.compute import _ObservedX402Model
+    from factorylab.world.market import PaymentOutcomeUnknown
+    from factorylab.world.metering import BillingUncertain, Meter
+    from factorylab.world.models import ModelRequest
+    from tests.world.test_market import MODEL
+
+    rt = _market_runtime(market_http)
+    _register_test_seller(rt)
+    wired = rt.assemblies["market-buyer"].model
+    assert isinstance(wired, _ObservedX402Model)
+    assert (wired.before_call, wired.deadline_s, wired.expired) == (
+        rt._safety_pass, rt._call_deadline_s, rt._call_expired)
+    seen, passes, expired = [], [], []
+
+    class Seller:
+        def quote(self, req):
+            seen.append(("quote", req.timeout_s))
+            return NS(amount_micro=1)
+
+        def complete(self, req, *, record=None, quoted=None):
+            seen.append(("complete", req.timeout_s))
+            raise PaymentOutcomeUnknown("Submitted payment outcome is unknown: "
+                                        "Call deadline expired")
+
+    model = _ObservedX402Model(Seller(), wired.prices, Meter(rt.wallet), record=lambda e: None,
+                               on_unaffordable=lambda h: None,
+                               before_call=lambda: passes.append(1), deadline_s=lambda: 7.0,
+                               expired=lambda h, t: expired.append((h, t)))
+    with pytest.raises(BillingUncertain):
+        model.complete(ModelRequest(MODEL, "s", ({"role": "user", "content": "x"},),
+                                    max_tokens=10), handle="h-1")
+    assert passes == [1] and seen == [("quote", 7.0), ("complete", 7.0)]
+    assert expired == [("h-1", 7.0)]
