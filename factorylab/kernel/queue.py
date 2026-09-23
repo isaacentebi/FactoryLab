@@ -10,27 +10,20 @@ from time import time_ns
 from factorylab.kernel.ledger import Ledger
 from factorylab.kernel.money import Money, require_money
 
-#: The two kinds of action a seat can take (essay II.II.b; ruling R5): what its
-#: return declared it did (its action label), or a tool of a kind it called.
-ACTION_LABEL, ACTION_TOOL = "label", "tool"
+#: An action a seat can take is an effect in the world (essay II.II.b; ruling R5): a
+#: tool of a kind it called. A free-text label a return declares is not one: a fresh
+#: string would make any action look new, so labels never name an action here.
+ACTION_TOOL = "tool"
 
 
-def action_key(*, label: str | None = None, tool: str | None = None,
-               kind: str | None = None) -> str:
-    """The name of one action: ``label:<label>``, or ``tool:<kind>:<tool>``.
+def action_key(*, tool: str, kind: str) -> str:
+    """The name of one action, ``tool:<kind>:<tool>``: a tool of a published kind.
 
     Essay II.II.b: learning death is prevented by a niche "usable only in the
     context of unhistoried actions (decisions that arrive carrying no propensity
-    record and no reward trail)". An action is either the label a return declared
-    for what it did, or a (tool, kind) it called; exactly one of the two is named.
-    Guarantees one key per action, whoever takes it.
+    record and no reward trail)". Guarantees one key per (tool, kind), whoever
+    calls it.
     """
-    if (label is None) == (tool is None):
-        raise ValueError("an action is a label or a (tool, kind), exactly one of them")
-    if label is not None:
-        if not isinstance(label, str) or not label.strip():
-            raise ValueError("an action label is a nonempty string")
-        return f"{ACTION_LABEL}:{label}"
     if (not isinstance(tool, str) or not tool.strip()
             or not isinstance(kind, str) or not kind.strip()):
         raise ValueError("a tool action names a nonempty tool and kind")
@@ -38,9 +31,8 @@ def action_key(*, label: str | None = None, tool: str | None = None,
 
 
 def _is_action_key(key: object) -> bool:
-    return isinstance(key, str) and (
-        (key.startswith(f"{ACTION_LABEL}:") and len(key) > len(ACTION_LABEL) + 1)
-        or (key.startswith(f"{ACTION_TOOL}:") and key.count(":") >= 2))
+    return (isinstance(key, str) and key.startswith(f"{ACTION_TOOL}:")
+            and key.count(":") >= 2 and all(key.split(":", 2)))
 
 
 class SettleStatus(StrEnum):
@@ -172,7 +164,8 @@ class DecisionQueue:
         # as a second propensity on the handle the router already opened.
         self.__declared: dict[str, list[PropensityRecord]] = {}
         # The actions each decision took (``action_key``), and per contract the
-        # actions that carry a reward trail: a settled decision that took them.
+        # actions that are historied: taken by a decision that carries a propensity
+        # record or a delivered return.
         self.__actions: dict[str, frozenset[str]] = {}
         self.__settled_actions: dict[str, set[str]] = {}
 
@@ -246,15 +239,18 @@ class DecisionQueue:
             "propensity": propensity, "index": len(self.__declared.get(handle, ())) + 1,
         })
         self.__declared.setdefault(handle, []).append(propensity)
+        self._history(handle)
 
     def record_actions(self, handle: str, keys) -> None:
-        """Log the actions an open decision took; they gain history only when it settles.
+        """Log the actions an open decision took; they are historied once it has a trail.
 
-        Guarantees that an action key joins its contract's reward trail
-        (``has_action_history``) only through a SETTLED outcome of a decision that
-        recorded it: a censored, inapplicable or timed-out decision leaves no trail.
-        Actions can only be added while the decision is open, and only as
-        ``action_key`` names; the record is evidence and never changes addressing.
+        Essay II.II.b: an unhistoried action is one "carrying no propensity record and
+        no reward trail". Guarantees that an action key becomes historied for the
+        decision's contract (``has_action_history``) as soon as that decision carries
+        a declared propensity record or any delivered return (settled, censored,
+        inapplicable or a timeout), in whichever order they arrive. Actions can only
+        be added while the decision is open, and only as ``action_key`` names; the
+        record is evidence and never changes addressing.
         """
         decision = self.__decisions[handle]
         keys = frozenset(keys)
@@ -268,12 +264,20 @@ class DecisionQueue:
         self.__ledger.append({"kind": "decision.actions", "ts": self.__clock(),
                               "handle": handle, "actions": sorted(added)})
         self.__actions[handle] = self.__actions.get(handle, frozenset()) | added
+        self._history(handle)
+
+    def _history(self, handle: str) -> None:
+        """A decision with a propensity record or a delivered return historicizes its actions."""
+        taken = self.__actions.get(handle)
+        if taken and (self.__declared.get(handle) or self.__returns.get(handle)):
+            chosen = self.__decisions[handle].propensity.chosen
+            self.__settled_actions.setdefault(chosen, set()).update(taken)
 
     def has_action_history(self, contract_id: str, key: str) -> bool:
-        """Whether a settled decision of ``contract_id`` took the action ``key``.
+        """Whether a decision of ``contract_id`` with a propensity record or a delivered
+        return took the action ``key``.
 
-        An action without it is *unhistoried* for that contract (essay II.II.b):
-        no decision of the contract that carried it has a reward trail.
+        An action without it is *unhistoried* for that contract (essay II.II.b).
         """
         return key in self.__settled_actions.get(contract_id, ())
 
@@ -389,9 +393,7 @@ class DecisionQueue:
         self.__returns[handle].append(retained)
         if status == SettleStatus.SETTLED:
             self.__settled_contracts.add(decision.propensity.chosen)
-            taken = self.__actions.get(handle)
-            if taken:
-                self.__settled_actions.setdefault(decision.propensity.chosen, set()).update(taken)
+        self._history(handle)
         if actor is not None:
             delivered = replace(original, channel=mapped_channel)
             self.__deliveries.setdefault(actor, []).append(delivered)
@@ -429,6 +431,7 @@ class DecisionQueue:
             self.__decisions[decision.handle] = replace(decision, status=SettleStatus.TIMED_OUT)
             self.__pending.pop(decision.handle, None)
             self.__returns[decision.handle].append(penalty)
+            self._history(decision.handle)
             if actor is not None:
                 self.__deliveries.setdefault(actor, []).append(penalty)
             expired.append(decision.handle)

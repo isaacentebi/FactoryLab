@@ -44,5 +44,6 @@ def test_a_novelty_seats_cover_counts_the_pool_once(clock):
     rt._novelty_compute = lambda _h, _r: True
     rt._protected_share = lambda _seat: pool
     rt.queue = type("Q", (), {"get": staticmethod(
-        lambda _h: type("D", (), {"propensity": type("P", (), {"chosen": seat})()})())})()
+        lambda _h: type("D", (), {"propensity": type("P", (), {"chosen": seat})(),
+                                 "channel": "verdict"})())})()
     assert rt._novelty_protection(handle, "model:m") == pool
