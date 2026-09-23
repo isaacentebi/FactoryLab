@@ -191,9 +191,10 @@ output_usd_per_mtok = "0.50"
 reasoning = { effort = "low" }
 extra_body = { provider = { require_parameters = true } }
 
-# A fifth family for the evaluator tier. Qwen 3.8 flash produced 11 of the 15 malformed
-# answers in the last live batch (mostly "field is outside enum" as a judge), so it keeps
-# one seat; MiniMax M3 is also sold by Venice, the rail the factory can refill itself.
+# A fifth family for the evaluator tier. The seed roster is chosen on cost, latency and
+# conformance to the I/O contract, never on what seats decide (AGENTS.md, rule 2): in the
+# last live batch 11 of the 15 answers the contract could not parse were Qwen 3.8 flash's,
+# so it keeps one seat, and a seat may move back to it by model proposal.
 [[models]]
 id = "minimax/minimax-m3"
 provider = "openrouter"

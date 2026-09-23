@@ -38,6 +38,9 @@ architecture.
    - No carve-outs or prompt patches for a model's past mistakes.
    - Never justify a change by a behaviour-mix delta ("they hold too much"). That is
      the architect optimizing toward its own "better", which is Class 2.
+   - The seed roster is the architect's one model choice. It is made on cost, latency
+     and conformance to the I/O contract (answers the kernel can parse), never on what
+     the seats decide. After genesis, seats move between models only by model proposal.
 3. **Physics is enforced, not announced (§II.b).** The kernel is the hard cast.
    - Never restate a kernel rule as an instruction, a warning or an invitation in
      request or system text ("do X", "you will be scored on Y, so…").
