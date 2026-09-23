@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+from factorylab.runtime.worlds import load_manifest
 from scripts import fastloop
 
 EDITION6 = Path(__file__).parents[2] / "worlds/edition6-testnet-rehearsal.toml"
@@ -10,7 +11,8 @@ EDITION6 = Path(__file__).parents[2] / "worlds/edition6-testnet-rehearsal.toml"
 def test_the_scripted_population_posts_lambda_proposes_motions_and_forecasts_both_branches():
     policy = fastloop.PolicyProvider(EDITION6)
     replies = {n: policy._markets(n) for n in range(1, 9)}
-    assert replies[3]["shadow_prices"] == {"censorship-bound": 0.2}
+    first = load_manifest(str(EDITION6)).charter.cards[0].id
+    assert replies[3]["shadow_prices"] == {first: 0.2}
     assert replies[3]["register"][0]["id"] == "market-enact"
     assert replies[6]["register"][0]["id"] == "market-reject"
     assert {(f["motion"], f["branch"]) for f in replies[4]["motion_forecasts"]} == {

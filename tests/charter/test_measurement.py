@@ -46,3 +46,14 @@ def test_cost_per_attempt_counts_every_response_and_cost_per_return_only_success
         "all": pytest.approx(10_900)}
     assert measure_card(_card("cost_per_return", kind="windows", n=1, per=None), samples) == {
         "all": pytest.approx(1_000)}
+
+
+def test_global_windows_merge_flat_counters_and_nested_scores():
+    # Edition 6's own charter (23 September 2026) was the first with a global windows
+    # card over n > 1; merging calls_by_family, a flat {family: count}, crashed the world.
+    samples = CardSamples()
+    samples.closed(MeasureWindow(1, 1, calls_by_family={"gpt": 2, "xiaomi": 2}))
+    samples.closed(MeasureWindow(2, 1, calls_by_family={"gpt": 4}))
+    card = MetricCard("card", NORM, "d", "u", MetricWindow("windows", 2, None), "at most 1",
+                      "family_concentration", "all")
+    assert measure_card(card, samples) == {"all": pytest.approx(6 / 8)}

@@ -1,0 +1,2296 @@
+{
+  "world": "edition6-testnet-rehearsal",
+  "roster_sha256": "2dbe4b41e657a2a1dbe6c71145a06af9ef1c74ea64c2d273c48f99b59fa3abf6",
+  "norms": [
+    {
+      "id": "consequential usefulness",
+      "definition": "Create things or changes that others have reason to value; uptake by an independent counterparty is evidence, internal applause is a hypothesis."
+    },
+    {
+      "id": "epistemic integrity",
+      "definition": "Make commitments answerable to evidence and preserve the ability to discover that they were wrong; a changed criterion does not rewrite what was promised."
+    },
+    {
+      "id": "durable agency",
+      "definition": "Steward the resources and capabilities that make future worthwhile choices possible; spending for an enduring capability can be good stewardship, maintaining a dead institution is not."
+    },
+    {
+      "id": "bounded reciprocity",
+      "definition": "Do not finance the factory's advantage by imposing unconsented costs on outsiders."
+    },
+    {
+      "id": "fidelity",
+      "definition": "Measurements are defeasible evidence of the values, not substitutes for them. A favorable measurement is insufficient when supported consequences contradict the value it represents. Missing measurement alone is not evidence of failure."
+    }
+  ],
+  "draft": {
+    "seats": [
+      {
+        "alias": "seat-1",
+        "assembly_id": "empirical",
+        "role": "producer"
+      },
+      {
+        "alias": "seat-2",
+        "assembly_id": "judge-base-rate",
+        "role": "evaluator"
+      },
+      {
+        "alias": "seat-3",
+        "assembly_id": "meta-calibration",
+        "role": "meta"
+      },
+      {
+        "alias": "seat-4",
+        "assembly_id": "judge-adversary",
+        "role": "adversary"
+      },
+      {
+        "alias": "seat-5",
+        "assembly_id": "antagonist",
+        "role": "antagonist"
+      }
+    ],
+    "proposals": [
+      {
+        "key": "p01",
+        "proposer": "empirical",
+        "raw": {
+          "id": "independent-uptake",
+          "norm": "consequential usefulness",
+          "description": "Share of selected producer returns whose accepted registration, tool, observation, assembly, or service is subsequently taken up by an independent lineage; assess only eligible settled outcomes and treat missing evidence as unmeasured.",
+          "units": "fraction",
+          "window": {
+            "kind": "windows",
+            "n": 25,
+            "per": null
+          },
+          "region": {
+            "rule": "at least",
+            "lo": 0.2
+          },
+          "observation": "revision_rate",
+          "answers_for": "producer",
+          "reason": "Independent uptake, rather than activity or internal approval, is the clearest available evidence that work created value for others."
+        },
+        "price": null,
+        "problem": null,
+        "ballots": {
+          "seat-1": true,
+          "seat-2": true,
+          "seat-3": true,
+          "seat-4": true,
+          "seat-5": false
+        },
+        "card": {
+          "id": "independent-uptake",
+          "norm": "consequential usefulness",
+          "description": "Share of selected producer returns whose accepted registration, tool, observation, assembly, or service is subsequently taken up by an independent lineage; assess only eligible settled outcomes and treat missing evidence as unmeasured.",
+          "units": "fraction",
+          "window": {
+            "kind": "windows",
+            "n": 25,
+            "per": null
+          },
+          "region": {
+            "rule": "at least",
+            "lo": 0.2
+          },
+          "observation": "revision_rate",
+          "answers_for": "producer"
+        }
+      },
+      {
+        "key": "p02",
+        "proposer": "empirical",
+        "raw": {
+          "id": "forecast-skill-floor",
+          "norm": "epistemic integrity",
+          "description": "Mean paired forecast skill against the pre-outcome prevalence baseline for settled forecasts, with unresolved commitments tracked separately by the existing censorship-bound card.",
+          "units": "score difference",
+          "window": {
+            "kind": "forecasts",
+            "n": 25,
+            "per": "assembly"
+          },
+          "region": {
+            "rule": "at least",
+            "lo": 0
+          },
+          "observation": "forecast_skill",
+          "answers_for": "all",
+          "reason": "A forecast should add predictive information beyond the base rate, while the separate unresolved-commitment measure preserves accountability for promises that do not settle."
+        },
+        "price": null,
+        "problem": null,
+        "ballots": {
+          "seat-1": true,
+          "seat-2": true,
+          "seat-3": true,
+          "seat-4": true,
+          "seat-5": false
+        },
+        "card": {
+          "id": "forecast-skill-floor",
+          "norm": "epistemic integrity",
+          "description": "Mean paired forecast skill against the pre-outcome prevalence baseline for settled forecasts, with unresolved commitments tracked separately by the existing censorship-bound card.",
+          "units": "score difference",
+          "window": {
+            "kind": "forecasts",
+            "n": 25,
+            "per": "assembly"
+          },
+          "region": {
+            "rule": "at least",
+            "lo": 0.0
+          },
+          "observation": "forecast_skill",
+          "answers_for": "all"
+        }
+      },
+      {
+        "key": "p03",
+        "proposer": "empirical",
+        "raw": {
+          "id": "avoidable-unresolved-ceiling",
+          "norm": "epistemic integrity",
+          "description": "Attributable, avoidably unresolved accepted commitments over eligible commitments due in the responsible scope; exclude commitments not yet due and documented external unobservability without owner fault, and treat no eligible sample as unmeasured.",
+          "units": "fraction",
+          "window": {
+            "kind": "forecasts",
+            "n": 25,
+            "per": "assembly"
+          },
+          "region": {
+            "rule": "at most",
+            "hi": 0.3
+          },
+          "observation": "avoidably_unresolved_share",
+          "answers_for": "all",
+          "reason": "This makes answerability about due commitments explicit without treating legitimate uncertainty or not-yet-due work as failure."
+        },
+        "price": null,
+        "problem": null,
+        "ballots": {
+          "seat-1": true,
+          "seat-2": true,
+          "seat-3": true,
+          "seat-4": true,
+          "seat-5": true
+        },
+        "card": {
+          "id": "avoidable-unresolved-ceiling",
+          "norm": "epistemic integrity",
+          "description": "Attributable, avoidably unresolved accepted commitments over eligible commitments due in the responsible scope; exclude commitments not yet due and documented external unobservability without owner fault, and treat no eligible sample as unmeasured.",
+          "units": "fraction",
+          "window": {
+            "kind": "forecasts",
+            "n": 25,
+            "per": "assembly"
+          },
+          "region": {
+            "rule": "at most",
+            "hi": 0.3
+          },
+          "observation": "avoidably_unresolved_share",
+          "answers_for": "all"
+        }
+      },
+      {
+        "key": "p04",
+        "proposer": "empirical",
+        "raw": {
+          "id": "compute-burn-ceiling",
+          "norm": "durable agency",
+          "description": "Total metered invocation compute plus retained-storage rent per closed window.",
+          "units": "micro-USD per window",
+          "window": {
+            "kind": "windows",
+            "n": 25,
+            "per": null
+          },
+          "region": {
+            "rule": "at most",
+            "hi": 10000000
+          },
+          "observation": "burn_per_window",
+          "answers_for": "all",
+          "reason": "Monitoring total burn helps preserve resources for future worthwhile choices without assuming that every capability-building expense is wasteful."
+        },
+        "price": null,
+        "problem": null,
+        "ballots": {
+          "seat-1": true,
+          "seat-2": false,
+          "seat-3": true,
+          "seat-4": true,
+          "seat-5": true
+        },
+        "card": {
+          "id": "compute-burn-ceiling",
+          "norm": "durable agency",
+          "description": "Total metered invocation compute plus retained-storage rent per closed window.",
+          "units": "micro-USD per window",
+          "window": {
+            "kind": "windows",
+            "n": 25,
+            "per": null
+          },
+          "region": {
+            "rule": "at most",
+            "hi": 10000000.0
+          },
+          "observation": "burn_per_window",
+          "answers_for": "all"
+        }
+      },
+      {
+        "key": "p05",
+        "proposer": "empirical",
+        "raw": {
+          "id": "outsider-cost-discipline",
+          "norm": "bounded reciprocity",
+          "description": "Mean cost over all selected responses, failures included, including the retained-storage charge assigned to those responses but never counting storage as a response.",
+          "units": "micro-USD per attempt",
+          "window": {
+            "kind": "returns",
+            "n": 25,
+            "per": "assembly"
+          },
+          "region": {
+            "rule": "at most",
+            "hi": 1000000
+          },
+          "observation": "cost_per_attempt",
+          "answers_for": "all",
+          "reason": "Cost per attempt makes resource burdens visible across failures as well as successes, supporting scrutiny of whether the factory's operation is imposing avoidable costs."
+        },
+        "price": null,
+        "problem": null,
+        "ballots": {
+          "seat-1": true,
+          "seat-2": false,
+          "seat-3": true,
+          "seat-4": true,
+          "seat-5": false
+        },
+        "card": {
+          "id": "outsider-cost-discipline",
+          "norm": "bounded reciprocity",
+          "description": "Mean cost over all selected responses, failures included, including the retained-storage charge assigned to those responses but never counting storage as a response.",
+          "units": "micro-USD per attempt",
+          "window": {
+            "kind": "returns",
+            "n": 25,
+            "per": "assembly"
+          },
+          "region": {
+            "rule": "at most",
+            "hi": 1000000.0
+          },
+          "observation": "cost_per_attempt",
+          "answers_for": "all"
+        }
+      },
+      {
+        "key": "p06",
+        "proposer": "empirical",
+        "raw": {
+          "id": "evidence-and-uncertainty",
+          "norm": "fidelity",
+          "description": "Share of selected forecast outcomes censored among resolved outcomes; interpret alongside consequence evidence and never treat missing measurement alone as failure.",
+          "units": "fraction",
+          "window": {
+            "kind": "forecasts",
+            "n": 25,
+            "per": "assembly"
+          },
+          "region": {
+            "rule": "at most",
+            "hi": 0.3
+          },
+          "observation": "censored_share",
+          "answers_for": "all",
+          "reason": "Tracking censorship helps flag limits in the evidence while the charter's fidelity norm prevents that proxy from replacing judgment about actual consequences."
+        },
+        "price": null,
+        "problem": "did not win a majority",
+        "ballots": {
+          "seat-1": false,
+          "seat-2": false,
+          "seat-3": true,
+          "seat-4": true,
+          "seat-5": false
+        },
+        "card": {
+          "id": "evidence-and-uncertainty",
+          "norm": "fidelity",
+          "description": "Share of selected forecast outcomes censored among resolved outcomes; interpret alongside consequence evidence and never treat missing measurement alone as failure.",
+          "units": "fraction",
+          "window": {
+            "kind": "forecasts",
+            "n": 25,
+            "per": "assembly"
+          },
+          "region": {
+            "rule": "at most",
+            "hi": 0.3
+          },
+          "observation": "censored_share",
+          "answers_for": "all"
+        }
+      },
+      {
+        "key": "p07",
+        "proposer": "constructor",
+        "raw": {
+          "id": "value-realised",
+          "answers_for": "producer",
+          "description": "Mean selected return_paid_off outcome on settled producer returns; a return's outcomes is 1 only when its realised or marked P&L exceeds its own compute and tool cost, so a producer answer that costs more than it earns, or earned nothing it kept, fails this card.",
+          "lambda": 0.3,
+          "norm": "consequential usefulness",
+          "observation": "consequence_paid_off_rate",
+          "reason": "Use an independent counterparty's signal \u2014 the world's own measurement of whether a producer's return paid for itself \u2014 as the bar that the consequential usefulness norm demands and that internal applause cannot satisfy.",
+          "region": {
+            "rule": "at least",
+            "lo": 0.5
+          },
+          "units": "fraction paid off",
+          "window": {
+            "kind": "returns",
+            "n": 25,
+            "per": "assembly"
+          }
+        },
+        "price": null,
+        "problem": "card value-realised window: consequence_paid_off_rate cannot be measured over returns",
+        "ballots": {}
+      },
+      {
+        "key": "p08",
+        "proposer": "constructor",
+        "raw": {
+          "id": "no-claim-unkept",
+          "answers_for": "all",
+          "description": "Attributable, avoidably unresolved accepted commitments over the eligible commitments due in the responsible scope; commitments not yet due are excluded, documented external unobservability and events the seat never committed to are excluded, and no eligible sample is unmeasured.",
+          "lambda": 0.4,
+          "norm": "epistemic integrity",
+          "observation": "avoidably_unresolved_share",
+          "reason": "Reaffirm the standing censorship-bound card on the same measurement so the chamber can revisit its price once it has its own evidence, rather than trust the seed ceiling on the floor of governance history.",
+          "region": {
+            "rule": "at most",
+            "hi": 0.3
+          },
+          "units": "fraction unresolved",
+          "window": {
+            "kind": "forecasts",
+            "n": 25,
+            "per": "assembly"
+          }
+        },
+        "price": 0.4,
+        "problem": "preflight: card no-claim-unkept observation: already named by live card avoidable-unresolved-ceiling for the same role",
+        "ballots": {
+          "seat-1": true,
+          "seat-2": true,
+          "seat-3": true,
+          "seat-4": true,
+          "seat-5": true
+        },
+        "card": {
+          "id": "no-claim-unkept",
+          "norm": "epistemic integrity",
+          "description": "Attributable, avoidably unresolved accepted commitments over the eligible commitments due in the responsible scope; commitments not yet due are excluded, documented external unobservability and events the seat never committed to are excluded, and no eligible sample is unmeasured.",
+          "units": "fraction unresolved",
+          "window": {
+            "kind": "forecasts",
+            "n": 25,
+            "per": "assembly"
+          },
+          "region": {
+            "rule": "at most",
+            "hi": 0.3
+          },
+          "observation": "avoidably_unresolved_share",
+          "answers_for": "all"
+        }
+      },
+      {
+        "key": "p09",
+        "proposer": "constructor",
+        "raw": {
+          "id": "evidence-without-truth",
+          "answers_for": "all",
+          "description": "Mean of the four score series the early-warning scan reads \u2014 verdict mean, meta mean, consequence skill, evaluator disagreement \u2014 over a window of closed windows; a high reading here is a value that is well measured and yet drifting from the consequences it stands for, the case the fidelity norm names.",
+          "lambda": 0.25,
+          "norm": "fidelity",
+          "observation": "verdict_mean",
+          "reason": "Watch for the failure mode fidelity warns of: favourable measurements on a series whose supported consequences are moving the other way, so the chamber can reprice verdict-dependent cards before applause crowds out truth.",
+          "region": {
+            "rule": "at most",
+            "hi": 0.8
+          },
+          "units": "score",
+          "window": {
+            "kind": "windows",
+            "n": 16,
+            "per": null
+          }
+        },
+        "price": 0.25,
+        "problem": "did not win a majority",
+        "ballots": {
+          "seat-1": false,
+          "seat-2": false,
+          "seat-3": false,
+          "seat-4": true,
+          "seat-5": false
+        },
+        "card": {
+          "id": "evidence-without-truth",
+          "norm": "fidelity",
+          "description": "Mean of the four score series the early-warning scan reads \u2014 verdict mean, meta mean, consequence skill, evaluator disagreement \u2014 over a window of closed windows; a high reading here is a value that is well measured and yet drifting from the consequences it stands for, the case the fidelity norm names.",
+          "units": "score",
+          "window": {
+            "kind": "windows",
+            "n": 16,
+            "per": null
+          },
+          "region": {
+            "rule": "at most",
+            "hi": 0.8
+          },
+          "observation": "verdict_mean",
+          "answers_for": "all"
+        }
+      },
+      {
+        "key": "p10",
+        "proposer": "constructor",
+        "raw": {
+          "id": "regime-drift",
+          "answers_for": "all",
+          "description": "Largest centred lag-one autocorrelation among the early-warning score series over the last complete span of closed windows; a high reading means the same drift repeats window after window instead of correcting.",
+          "lambda": 0.2,
+          "norm": "durable agency",
+          "observation": "ews_autocorrelation",
+          "reason": "Catch the pattern that erodes durable agency: persistent autocorrelation in the score series is the signature of an institution that has stopped discovering it was wrong, and the chamber should raise cost while that continues.",
+          "region": {
+            "rule": "at most",
+            "hi": 0.6
+          },
+          "units": "correlation",
+          "window": {
+            "kind": "windows",
+            "n": 16,
+            "per": null
+          }
+        },
+        "price": null,
+        "problem": "card regime-drift window: measurement preflight produced no value",
+        "ballots": {}
+      },
+      {
+        "key": "p11",
+        "proposer": "constructor",
+        "raw": {
+          "id": "no-imposition",
+          "answers_for": "antagonist",
+          "description": "Share of settled antagonist exposures the antagonists won (their counterfactual view of the world beat the producers'), which is the residual after a return's externality is reconciled; a high share means the factory's advantage is being financed by unconsented costs on outsiders.",
+          "lambda": 0.3,
+          "norm": "bounded reciprocity",
+          "observation": "exposure_win_rate",
+          "reason": "Bounded reciprocity is violated when outsider settlements keep going the wrong way; measure it on the antagonist channel, where the world already names a counterparty, so the card's evidence is the counterparty's outcome rather than a self-report.",
+          "region": {
+            "rule": "at most",
+            "hi": 0.6
+          },
+          "units": "fraction",
+          "window": {
+            "kind": "windows",
+            "n": 16,
+            "per": null
+          }
+        },
+        "price": 0.3,
+        "problem": "did not win a majority",
+        "ballots": {
+          "seat-1": false,
+          "seat-2": false,
+          "seat-3": true,
+          "seat-4": true,
+          "seat-5": false
+        },
+        "card": {
+          "id": "no-imposition",
+          "norm": "bounded reciprocity",
+          "description": "Share of settled antagonist exposures the antagonists won (their counterfactual view of the world beat the producers'), which is the residual after a return's externality is reconciled; a high share means the factory's advantage is being financed by unconsented costs on outsiders.",
+          "units": "fraction",
+          "window": {
+            "kind": "windows",
+            "n": 16,
+            "per": null
+          },
+          "region": {
+            "rule": "at most",
+            "hi": 0.6
+          },
+          "observation": "exposure_win_rate",
+          "answers_for": "antagonist"
+        }
+      },
+      {
+        "key": "p12",
+        "proposer": "constructor",
+        "raw": {
+          "id": "stewardship-not-autopilot",
+          "answers_for": "all",
+          "description": "Compute the factory spent in the window \u2014 every invocation's metered cost plus retained-storage rent \u2014 expressed as a ratio of starting equity so stewardship is read against the resource base rather than in absolute units.",
+          "lambda": 0.2,
+          "norm": "durable agency",
+          "observation": "burn_per_window",
+          "reason": "Durable agency is about preserving the capacity for worthwhile future choices, and a window's burn scaled to equity lets the chamber detect burn that consumes the option to act later, separate from absolute spend.",
+          "region": {
+            "rule": "at most",
+            "hi": 0.25
+          },
+          "units": "ratio of equity",
+          "window": {
+            "kind": "windows",
+            "n": 16,
+            "per": null
+          }
+        },
+        "price": 0.2,
+        "problem": "did not win a majority",
+        "ballots": {
+          "seat-1": false,
+          "seat-2": false,
+          "seat-3": true,
+          "seat-4": true,
+          "seat-5": false
+        },
+        "card": {
+          "id": "stewardship-not-autopilot",
+          "norm": "durable agency",
+          "description": "Compute the factory spent in the window \u2014 every invocation's metered cost plus retained-storage rent \u2014 expressed as a ratio of starting equity so stewardship is read against the resource base rather than in absolute units.",
+          "units": "ratio of equity",
+          "window": {
+            "kind": "windows",
+            "n": 16,
+            "per": null
+          },
+          "region": {
+            "rule": "at most",
+            "hi": 0.25
+          },
+          "observation": "burn_per_window",
+          "answers_for": "all"
+        }
+      },
+      {
+        "key": "p13",
+        "proposer": "constructor",
+        "raw": {
+          "id": "judge-fit",
+          "answers_for": "evaluator",
+          "description": "Mean population standard deviation across judges of the same return in the window (at least two judges, repeats averaged per judge); high disagreement is a judge stack that is internally inconsistent and unlikely to be earning its keep.",
+          "lambda": 0.2,
+          "norm": "epistemic integrity",
+          "observation": "evaluator_disagreement",
+          "reason": "Epistemic integrity on the evaluator side is the judges agreeing on what they read; pooling disagreement across judges of the same return, with repeats averaged, makes this measurable without attributing disagreement to a single seat.",
+          "region": {
+            "rule": "at most",
+            "hi": 0.15
+          },
+          "units": "score std",
+          "window": {
+            "kind": "windows",
+            "n": 16,
+            "per": null
+          }
+        },
+        "price": 0.2,
+        "problem": "did not win a majority",
+        "ballots": {
+          "seat-1": false,
+          "seat-2": false,
+          "seat-3": true,
+          "seat-4": true,
+          "seat-5": false
+        },
+        "card": {
+          "id": "judge-fit",
+          "norm": "epistemic integrity",
+          "description": "Mean population standard deviation across judges of the same return in the window (at least two judges, repeats averaged per judge); high disagreement is a judge stack that is internally inconsistent and unlikely to be earning its keep.",
+          "units": "score std",
+          "window": {
+            "kind": "windows",
+            "n": 16,
+            "per": null
+          },
+          "region": {
+            "rule": "at most",
+            "hi": 0.15
+          },
+          "observation": "evaluator_disagreement",
+          "answers_for": "evaluator"
+        }
+      },
+      {
+        "key": "p14",
+        "proposer": "opportunity",
+        "raw": {
+          "id": "independent-consequence",
+          "norm": "consequential usefulness",
+          "description": "Share of settled selected consequences that are paid off.",
+          "units": "fraction",
+          "window": {
+            "kind": "windows",
+            "n": 10,
+            "per": null
+          },
+          "region": {
+            "rule": "at least",
+            "lo": 0.5
+          },
+          "observation": "consequence_paid_off_rate",
+          "answers_for": "producer",
+          "reason": "Paid-off consequences provide evidence of value beyond internal approval, while the threshold avoids treating activity alone as usefulness."
+        },
+        "price": null,
+        "problem": null,
+        "ballots": {
+          "seat-1": true,
+          "seat-2": false,
+          "seat-3": true,
+          "seat-4": true,
+          "seat-5": true
+        },
+        "card": {
+          "id": "independent-consequence",
+          "norm": "consequential usefulness",
+          "description": "Share of settled selected consequences that are paid off.",
+          "units": "fraction",
+          "window": {
+            "kind": "windows",
+            "n": 10,
+            "per": null
+          },
+          "region": {
+            "rule": "at least",
+            "lo": 0.5
+          },
+          "observation": "consequence_paid_off_rate",
+          "answers_for": "producer"
+        }
+      },
+      {
+        "key": "p15",
+        "proposer": "opportunity",
+        "raw": {
+          "id": "forecast-calibration-skill",
+          "norm": "epistemic integrity",
+          "description": "Mean selected forecast Brier score minus its paired pre-outcome prevalence-baseline Brier score.",
+          "units": "score difference",
+          "window": {
+            "kind": "forecasts",
+            "n": 25,
+            "per": "assembly"
+          },
+          "region": {
+            "rule": "at least",
+            "lo": 0
+          },
+          "observation": "forecast_skill",
+          "answers_for": "evaluator",
+          "reason": "Requiring forecasts to improve on a prevalence baseline rewards evidence-responsive judgment rather than confident but uninformative predictions."
+        },
+        "price": null,
+        "problem": "preflight: card forecast-calibration-skill observation: already named by live card forecast-skill-floor for the same role",
+        "ballots": {
+          "seat-1": true,
+          "seat-2": true,
+          "seat-3": true,
+          "seat-4": true,
+          "seat-5": false
+        },
+        "card": {
+          "id": "forecast-calibration-skill",
+          "norm": "epistemic integrity",
+          "description": "Mean selected forecast Brier score minus its paired pre-outcome prevalence-baseline Brier score.",
+          "units": "score difference",
+          "window": {
+            "kind": "forecasts",
+            "n": 25,
+            "per": "assembly"
+          },
+          "region": {
+            "rule": "at least",
+            "lo": 0.0
+          },
+          "observation": "forecast_skill",
+          "answers_for": "evaluator"
+        }
+      },
+      {
+        "key": "p16",
+        "proposer": "opportunity",
+        "raw": {
+          "id": "bounded-compute-burn",
+          "norm": "durable agency",
+          "description": "Compute spend in each closed window, including retained-storage rent.",
+          "units": "micro-USD per window",
+          "window": {
+            "kind": "windows",
+            "n": 10,
+            "per": null
+          },
+          "region": {
+            "rule": "at most",
+            "hi": 10000000
+          },
+          "observation": "burn_per_window",
+          "answers_for": "all",
+          "reason": "A visible spending ceiling encourages preserving resources for future worthwhile choices without implying that every capability-building expense is wasteful."
+        },
+        "price": null,
+        "problem": "preflight: card bounded-compute-burn observation: already named by live card compute-burn-ceiling for the same role",
+        "ballots": {
+          "seat-1": true,
+          "seat-2": false,
+          "seat-3": true,
+          "seat-4": true,
+          "seat-5": true
+        },
+        "card": {
+          "id": "bounded-compute-burn",
+          "norm": "durable agency",
+          "description": "Compute spend in each closed window, including retained-storage rent.",
+          "units": "micro-USD per window",
+          "window": {
+            "kind": "windows",
+            "n": 10,
+            "per": null
+          },
+          "region": {
+            "rule": "at most",
+            "hi": 10000000.0
+          },
+          "observation": "burn_per_window",
+          "answers_for": "all"
+        }
+      },
+      {
+        "key": "p17",
+        "proposer": "opportunity",
+        "raw": {
+          "id": "avoidable-outside-cost-proxy",
+          "norm": "bounded reciprocity",
+          "description": "Peak observed absolute marked notional on one coin divided by starting equity.",
+          "units": "ratio",
+          "window": {
+            "kind": "windows",
+            "n": 10,
+            "per": null
+          },
+          "region": {
+            "rule": "at most",
+            "hi": 1
+          },
+          "observation": "position_concentration",
+          "answers_for": "producer",
+          "reason": "Limiting concentrated exposure is a cautious, measurable proxy for constraining risk that could spill onto others, though it cannot establish consent or capture every external cost."
+        },
+        "price": null,
+        "problem": "did not win a majority",
+        "ballots": {
+          "seat-1": false,
+          "seat-2": false,
+          "seat-3": false,
+          "seat-4": true,
+          "seat-5": false
+        },
+        "card": {
+          "id": "avoidable-outside-cost-proxy",
+          "norm": "bounded reciprocity",
+          "description": "Peak observed absolute marked notional on one coin divided by starting equity.",
+          "units": "ratio",
+          "window": {
+            "kind": "windows",
+            "n": 10,
+            "per": null
+          },
+          "region": {
+            "rule": "at most",
+            "hi": 1.0
+          },
+          "observation": "position_concentration",
+          "answers_for": "producer"
+        }
+      },
+      {
+        "key": "p18",
+        "proposer": "opportunity",
+        "raw": {
+          "id": "fidelity-countercheck",
+          "norm": "fidelity",
+          "description": "Share of selected settled consequences that are paid off; interpret alongside documented consequences and treat missing measurement as unmeasured, not failure.",
+          "units": "fraction",
+          "window": {
+            "kind": "windows",
+            "n": 10,
+            "per": null
+          },
+          "region": {
+            "rule": "at least",
+            "lo": 0.5
+          },
+          "observation": "consequence_paid_off_rate",
+          "answers_for": "all",
+          "reason": "This consequence measure is defeasible evidence, so it should be read against supported outcomes and never let an absent sample count as a failing value."
+        },
+        "price": null,
+        "problem": "preflight: card fidelity-countercheck observation: already named by live card independent-consequence for the same role",
+        "ballots": {
+          "seat-1": true,
+          "seat-2": true,
+          "seat-3": true,
+          "seat-4": true,
+          "seat-5": true
+        },
+        "card": {
+          "id": "fidelity-countercheck",
+          "norm": "fidelity",
+          "description": "Share of selected settled consequences that are paid off; interpret alongside documented consequences and treat missing measurement as unmeasured, not failure.",
+          "units": "fraction",
+          "window": {
+            "kind": "windows",
+            "n": 10,
+            "per": null
+          },
+          "region": {
+            "rule": "at least",
+            "lo": 0.5
+          },
+          "observation": "consequence_paid_off_rate",
+          "answers_for": "all"
+        }
+      },
+      {
+        "key": "p19",
+        "proposer": "judge-base-rate",
+        "raw": {
+          "id": "usefulness-paid-off",
+          "norm": "consequential usefulness",
+          "description": "At least half of settled selected forecast consequences are positive return_paid_off outcomes.",
+          "units": "fraction",
+          "window": {
+            "kind": "forecasts",
+            "n": 25,
+            "per": "assembly"
+          },
+          "region": {
+            "rule": "at least",
+            "lo": 0.5
+          },
+          "observation": "consequence_paid_off_rate",
+          "answers_for": "producer",
+          "reason": "Independent, settled consequences are stronger evidence of value to others than internal approval."
+        },
+        "price": null,
+        "problem": "preflight: card usefulness-paid-off observation: already named by live card independent-consequence for the same role",
+        "ballots": {
+          "seat-1": true,
+          "seat-2": false,
+          "seat-3": true,
+          "seat-4": true,
+          "seat-5": true
+        },
+        "card": {
+          "id": "usefulness-paid-off",
+          "norm": "consequential usefulness",
+          "description": "At least half of settled selected forecast consequences are positive return_paid_off outcomes.",
+          "units": "fraction",
+          "window": {
+            "kind": "forecasts",
+            "n": 25,
+            "per": "assembly"
+          },
+          "region": {
+            "rule": "at least",
+            "lo": 0.5
+          },
+          "observation": "consequence_paid_off_rate",
+          "answers_for": "producer"
+        }
+      },
+      {
+        "key": "p20",
+        "proposer": "judge-base-rate",
+        "raw": {
+          "id": "forecast-skill-nonnegative",
+          "norm": "epistemic integrity",
+          "description": "Keep mean selected forecast Brier score no worse than its paired pre-outcome prevalence baseline.",
+          "units": "score difference",
+          "window": {
+            "kind": "forecasts",
+            "n": 25,
+            "per": "assembly"
+          },
+          "region": {
+            "rule": "at most",
+            "hi": 0
+          },
+          "observation": "forecast_skill",
+          "answers_for": "all",
+          "reason": "Comparing forecasts with a pre-outcome baseline rewards commitments that are informative and checkable."
+        },
+        "price": null,
+        "problem": "preflight: card forecast-skill-nonnegative observation: already named by live card forecast-skill-floor for the same role",
+        "ballots": {
+          "seat-1": true,
+          "seat-2": true,
+          "seat-3": true,
+          "seat-4": true,
+          "seat-5": false
+        },
+        "card": {
+          "id": "forecast-skill-nonnegative",
+          "norm": "epistemic integrity",
+          "description": "Keep mean selected forecast Brier score no worse than its paired pre-outcome prevalence baseline.",
+          "units": "score difference",
+          "window": {
+            "kind": "forecasts",
+            "n": 25,
+            "per": "assembly"
+          },
+          "region": {
+            "rule": "at most",
+            "hi": 0.0
+          },
+          "observation": "forecast_skill",
+          "answers_for": "all"
+        }
+      },
+      {
+        "key": "p21",
+        "proposer": "judge-base-rate",
+        "raw": {
+          "id": "compute-burn-ceiling",
+          "norm": "durable agency",
+          "description": "Keep total compute spend, including retained-storage rent, at or below 1000000 micro-USD per closed window.",
+          "units": "micro-USD per window",
+          "window": {
+            "kind": "windows",
+            "n": 5,
+            "per": null
+          },
+          "region": {
+            "rule": "at most",
+            "hi": 1000000
+          },
+          "observation": "burn_per_window",
+          "answers_for": "all",
+          "reason": "Monitoring total burn encourages stewardship of resources needed for future worthwhile choices without treating all spending as waste."
+        },
+        "price": null,
+        "problem": "preflight: card compute-burn-ceiling observation: already named by live card compute-burn-ceiling for the same role",
+        "ballots": {
+          "seat-1": true,
+          "seat-2": false,
+          "seat-3": true,
+          "seat-4": true,
+          "seat-5": true
+        },
+        "card": {
+          "id": "compute-burn-ceiling",
+          "norm": "durable agency",
+          "description": "Keep total compute spend, including retained-storage rent, at or below 1000000 micro-USD per closed window.",
+          "units": "micro-USD per window",
+          "window": {
+            "kind": "windows",
+            "n": 5,
+            "per": null
+          },
+          "region": {
+            "rule": "at most",
+            "hi": 1000000.0
+          },
+          "observation": "burn_per_window",
+          "answers_for": "all"
+        }
+      },
+      {
+        "key": "p22",
+        "proposer": "judge-base-rate",
+        "raw": {
+          "id": "censoring-ceiling",
+          "norm": "fidelity",
+          "description": "Keep censored outcomes at or below half of resolved outcomes in the selected scope.",
+          "units": "fraction",
+          "window": {
+            "kind": "forecasts",
+            "n": 25,
+            "per": "assembly"
+          },
+          "region": {
+            "rule": "at most",
+            "hi": 0.5
+          },
+          "observation": "censored_share",
+          "answers_for": "all",
+          "reason": "A ceiling can flag weak evaluability while fidelity requires treating missing measurement as unmeasured rather than as proof of failure."
+        },
+        "price": null,
+        "problem": "did not win a majority",
+        "ballots": {
+          "seat-1": false,
+          "seat-2": false,
+          "seat-3": true,
+          "seat-4": true,
+          "seat-5": false
+        },
+        "card": {
+          "id": "censoring-ceiling",
+          "norm": "fidelity",
+          "description": "Keep censored outcomes at or below half of resolved outcomes in the selected scope.",
+          "units": "fraction",
+          "window": {
+            "kind": "forecasts",
+            "n": 25,
+            "per": "assembly"
+          },
+          "region": {
+            "rule": "at most",
+            "hi": 0.5
+          },
+          "observation": "censored_share",
+          "answers_for": "all"
+        }
+      },
+      {
+        "key": "p23",
+        "proposer": "meta-countercase",
+        "raw": {
+          "id": "uptake-follow-through",
+          "norm": "consequential usefulness",
+          "description": "Share of settled consequences on returns the seat produced that were paid off, so a seat answers for whether its work was taken up rather than merely delivered.",
+          "units": "fraction",
+          "window": {
+            "kind": "forecasts",
+            "n": 25,
+            "per": "assembly"
+          },
+          "region": {
+            "rule": "at least",
+            "lo": 0.4
+          },
+          "observation": "consequence_paid_off_rate",
+          "answers_for": "producer",
+          "reason": "Independent uptake, not internal applause, is the only evidence the norm names, and this is the closest settled measure of it.",
+          "lambda": 0.2
+        },
+        "price": 0.2,
+        "problem": "preflight: card uptake-follow-through observation: already named by live card independent-consequence for the same role",
+        "ballots": {
+          "seat-1": true,
+          "seat-2": false,
+          "seat-3": true,
+          "seat-4": true,
+          "seat-5": true
+        },
+        "card": {
+          "id": "uptake-follow-through",
+          "norm": "consequential usefulness",
+          "description": "Share of settled consequences on returns the seat produced that were paid off, so a seat answers for whether its work was taken up rather than merely delivered.",
+          "units": "fraction",
+          "window": {
+            "kind": "forecasts",
+            "n": 25,
+            "per": "assembly"
+          },
+          "region": {
+            "rule": "at least",
+            "lo": 0.4
+          },
+          "observation": "consequence_paid_off_rate",
+          "answers_for": "producer"
+        }
+      },
+      {
+        "key": "p24",
+        "proposer": "meta-countercase",
+        "raw": {
+          "id": "declared-not-resolved",
+          "norm": "epistemic integrity",
+          "description": "Attributable, avoidably unresolved accepted commitments over the eligible commitments due in the responsible scope, with a ceiling, so a seat answers for the promises it never let the world settle.",
+          "units": "fraction",
+          "window": {
+            "kind": "forecasts",
+            "n": 25,
+            "per": "assembly"
+          },
+          "region": {
+            "rule": "at most",
+            "lo": 0.3
+          },
+          "observation": "avoidably_unresolved_share",
+          "answers_for": "all",
+          "reason": "A commitment left unsettled is the direct failure of answerability to evidence, and the exclusions keep documented external unobservability from counting against a seat.",
+          "lambda": 0.3
+        },
+        "price": null,
+        "problem": "card declared-not-resolved region: region.lo does not belong to rule at most",
+        "ballots": {}
+      },
+      {
+        "key": "p25",
+        "proposer": "meta-countercase",
+        "raw": {
+          "id": "censored-outcomes-bound",
+          "norm": "epistemic integrity",
+          "description": "Censored outcomes over resolved outcomes, so a seat cannot keep its record clean by letting evidence go missing instead of being wrong.",
+          "units": "fraction",
+          "window": {
+            "kind": "windows",
+            "n": 10,
+            "per": "assembly"
+          },
+          "region": {
+            "rule": "at most",
+            "lo": 0.4
+          },
+          "observation": "censored_share",
+          "answers_for": "all",
+          "reason": "Missing measurement alone is not failure, but a seat whose outcomes mostly vanish has stopped preserving the ability to discover it was wrong.",
+          "lambda": 0.2
+        },
+        "price": null,
+        "problem": "card censored-outcomes-bound region: region.lo does not belong to rule at most",
+        "ballots": {}
+      },
+      {
+        "key": "p26",
+        "proposer": "meta-countercase",
+        "raw": {
+          "id": "evaluator-spend-share",
+          "norm": "durable agency",
+          "description": "Share of a window's compute, retained-storage rent included, that went to evaluator roles, so grading cannot quietly eat the capability that makes future choices possible.",
+          "units": "fraction",
+          "window": {
+            "kind": "windows",
+            "n": 10,
+            "per": null
+          },
+          "region": {
+            "rule": "at most",
+            "lo": 0.5
+          },
+          "observation": "evaluator_compute_share",
+          "answers_for": "evaluator",
+          "reason": "Stewardship of the resource base requires seeing when judging the work costs more than the work, without presuming a verdict on any single spend.",
+          "lambda": 0.2
+        },
+        "price": null,
+        "problem": "card evaluator-spend-share region: region.lo does not belong to rule at most",
+        "ballots": {}
+      },
+      {
+        "key": "p27",
+        "proposer": "meta-countercase",
+        "raw": {
+          "id": "retained-storage-burn",
+          "norm": "durable agency",
+          "description": "Compute spent in the window, every invocation's metered cost plus retained-storage rent, so state kept past its usefulness shows up as the ongoing cost it is.",
+          "units": "micro-USD per window",
+          "window": {
+            "kind": "windows",
+            "n": 10,
+            "per": null
+          },
+          "region": {
+            "rule": "below the median of the previous window"
+          },
+          "observation": "burn_per_window",
+          "answers_for": "all",
+          "reason": "Maintaining a dead institution is the case the norm warns against, and rent is where that maintenance hides.",
+          "lambda": 0.1
+        },
+        "price": 0.1,
+        "problem": "did not win a majority",
+        "ballots": {
+          "seat-1": false,
+          "seat-2": false,
+          "seat-3": false,
+          "seat-4": true,
+          "seat-5": false
+        },
+        "card": {
+          "id": "retained-storage-burn",
+          "norm": "durable agency",
+          "description": "Compute spent in the window, every invocation's metered cost plus retained-storage rent, so state kept past its usefulness shows up as the ongoing cost it is.",
+          "units": "micro-USD per window",
+          "window": {
+            "kind": "windows",
+            "n": 10,
+            "per": null
+          },
+          "region": {
+            "rule": "below the median of the previous window"
+          },
+          "observation": "burn_per_window",
+          "answers_for": "all"
+        }
+      },
+      {
+        "key": "p28",
+        "proposer": "meta-countercase",
+        "raw": {
+          "id": "provider-concentration-bound",
+          "norm": "durable agency",
+          "description": "Largest share of a window's model calls served by one provider, so dependence on a single rail is visible before it becomes an outage.",
+          "units": "fraction",
+          "window": {
+            "kind": "windows",
+            "n": 10,
+            "per": null
+          },
+          "region": {
+            "rule": "at most",
+            "lo": 0.8
+          },
+          "observation": "provider_concentration",
+          "answers_for": "all",
+          "reason": "Optionality is a capability future choices depend on, and its erosion is gradual and easy to miss.",
+          "lambda": 0.2
+        },
+        "price": null,
+        "problem": "card provider-concentration-bound region: region.lo does not belong to rule at most",
+        "ballots": {}
+      },
+      {
+        "key": "p29",
+        "proposer": "meta-countercase",
+        "raw": {
+          "id": "family-concentration-bound",
+          "norm": "durable agency",
+          "description": "Largest share of a window's model calls made on one foundation model family, whichever route served them, so routing around a bad provider is not mistaken for real diversification.",
+          "units": "fraction",
+          "window": {
+            "kind": "windows",
+            "n": 10,
+            "per": null
+          },
+          "region": {
+            "rule": "at most",
+            "lo": 0.8
+          },
+          "observation": "family_concentration",
+          "answers_for": "all",
+          "reason": "Diversity across rails that all land on the same family is not diversity, and only this measure sees through the routes.",
+          "lambda": 0.2
+        },
+        "price": null,
+        "problem": "card family-concentration-bound region: region.lo does not belong to rule at most",
+        "ballots": {}
+      },
+      {
+        "key": "p30",
+        "proposer": "meta-countercase",
+        "raw": {
+          "id": "evaluator-disagreement-floor",
+          "norm": "fidelity",
+          "description": "Mean population standard deviation across judges of the same return, so a panel that has quietly converged on one reading is visible as the lost evidence it is.",
+          "units": "score standard deviation",
+          "window": {
+            "kind": "windows",
+            "n": 10,
+            "per": null
+          },
+          "region": {
+            "rule": "at least",
+            "lo": 0.05
+          },
+          "observation": "evaluator_disagreement",
+          "answers_for": "evaluator",
+          "reason": "Measurements are defeasible evidence, and agreement with no spread is a warning that the disagreement that would correct them has stopped being generated.",
+          "lambda": 0.2
+        },
+        "price": 0.2,
+        "problem": "did not win a majority",
+        "ballots": {
+          "seat-1": false,
+          "seat-2": false,
+          "seat-3": false,
+          "seat-4": true,
+          "seat-5": false
+        },
+        "card": {
+          "id": "evaluator-disagreement-floor",
+          "norm": "fidelity",
+          "description": "Mean population standard deviation across judges of the same return, so a panel that has quietly converged on one reading is visible as the lost evidence it is.",
+          "units": "score standard deviation",
+          "window": {
+            "kind": "windows",
+            "n": 10,
+            "per": null
+          },
+          "region": {
+            "rule": "at least",
+            "lo": 0.05
+          },
+          "observation": "evaluator_disagreement",
+          "answers_for": "evaluator"
+        }
+      },
+      {
+        "key": "p31",
+        "proposer": "meta-countercase",
+        "raw": {
+          "id": "forecast-skill-floor",
+          "norm": "fidelity",
+          "description": "Mean selected forecast Brier minus its paired pre-outcome prevalence-baseline Brier, so a seat whose predictions do worse than the base rate cannot be carried by a favorable mean.",
+          "units": "score difference",
+          "window": {
+            "kind": "forecasts",
+            "n": 25,
+            "per": "assembly"
+          },
+          "region": {
+            "rule": "at least",
+            "lo": 0.0
+          },
+          "observation": "forecast_skill",
+          "answers_for": "all",
+          "reason": "A favorable measurement is insufficient when the underlying predictions do not beat the base rate, which is exactly what this paired score isolates.",
+          "lambda": 0.3
+        },
+        "price": 0.3,
+        "problem": "preflight: card forecast-skill-floor observation: already named by live card forecast-skill-floor for the same role",
+        "ballots": {
+          "seat-1": true,
+          "seat-2": true,
+          "seat-3": true,
+          "seat-4": true,
+          "seat-5": true
+        },
+        "card": {
+          "id": "forecast-skill-floor",
+          "norm": "fidelity",
+          "description": "Mean selected forecast Brier minus its paired pre-outcome prevalence-baseline Brier, so a seat whose predictions do worse than the base rate cannot be carried by a favorable mean.",
+          "units": "score difference",
+          "window": {
+            "kind": "forecasts",
+            "n": 25,
+            "per": "assembly"
+          },
+          "region": {
+            "rule": "at least",
+            "lo": 0.0
+          },
+          "observation": "forecast_skill",
+          "answers_for": "all"
+        }
+      },
+      {
+        "key": "p32",
+        "proposer": "meta-countercase",
+        "raw": {
+          "id": "well-formed-floor",
+          "norm": "fidelity",
+          "description": "Successful responses over selected invocation responses, including ballots, so a seat whose output mostly fails to parse cannot be credited on the fraction that happened to land.",
+          "units": "fraction",
+          "window": {
+            "kind": "returns",
+            "n": 25,
+            "per": "assembly"
+          },
+          "region": {
+            "rule": "at least",
+            "lo": 0.9
+          },
+          "observation": "well_formed_rate",
+          "answers_for": "all",
+          "reason": "A missing or malformed measurement is not evidence of failure, but it also must not be silently dropped from the record that judges the seat.",
+          "lambda": 0.2
+        },
+        "price": 0.2,
+        "problem": null,
+        "ballots": {
+          "seat-1": true,
+          "seat-2": false,
+          "seat-3": true,
+          "seat-4": true,
+          "seat-5": true
+        },
+        "card": {
+          "id": "well-formed-floor",
+          "norm": "fidelity",
+          "description": "Successful responses over selected invocation responses, including ballots, so a seat whose output mostly fails to parse cannot be credited on the fraction that happened to land.",
+          "units": "fraction",
+          "window": {
+            "kind": "returns",
+            "n": 25,
+            "per": "assembly"
+          },
+          "region": {
+            "rule": "at least",
+            "lo": 0.9
+          },
+          "observation": "well_formed_rate",
+          "answers_for": "all"
+        }
+      },
+      {
+        "key": "p33",
+        "proposer": "meta-audit",
+        "raw": {
+          "id": "settled-usefulness",
+          "norm": "consequential usefulness",
+          "description": "At least half of eligible settled producer consequences should have a positive return_paid_off outcome; periods without eligible settlements remain unmeasured.",
+          "units": "fraction",
+          "window": {
+            "kind": "forecasts",
+            "n": 25,
+            "per": "role"
+          },
+          "region": {
+            "rule": "at least",
+            "lo": 0.5
+          },
+          "observation": "consequence_paid_off_rate",
+          "answers_for": "producer",
+          "lambda": 0.1,
+          "reason": "Settled consequences provide stronger evidence of usefulness than internal approval, without requiring any quota of actions."
+        },
+        "price": 0.1,
+        "problem": "preflight: card settled-usefulness observation: already named by live card independent-consequence for the same role",
+        "ballots": {
+          "seat-1": true,
+          "seat-2": false,
+          "seat-3": true,
+          "seat-4": true,
+          "seat-5": true
+        },
+        "card": {
+          "id": "settled-usefulness",
+          "norm": "consequential usefulness",
+          "description": "At least half of eligible settled producer consequences should have a positive return_paid_off outcome; periods without eligible settlements remain unmeasured.",
+          "units": "fraction",
+          "window": {
+            "kind": "forecasts",
+            "n": 25,
+            "per": "role"
+          },
+          "region": {
+            "rule": "at least",
+            "lo": 0.5
+          },
+          "observation": "consequence_paid_off_rate",
+          "answers_for": "producer"
+        }
+      },
+      {
+        "key": "p34",
+        "proposer": "meta-audit",
+        "raw": {
+          "id": "forecast-baseline",
+          "norm": "epistemic integrity",
+          "description": "Resolved forecasts should, on average, have Brier loss no worse than their paired pre-outcome prevalence baselines.",
+          "units": "score difference",
+          "window": {
+            "kind": "forecasts",
+            "n": 25,
+            "per": "assembly"
+          },
+          "region": {
+            "rule": "at most",
+            "hi": 0
+          },
+          "observation": "forecast_skill",
+          "answers_for": "all",
+          "lambda": 0.1,
+          "reason": "A pre-outcome baseline tests whether stated probabilities add information without changing a promise after its result is known."
+        },
+        "price": 0.1,
+        "problem": "preflight: card forecast-baseline observation: already named by live card forecast-skill-floor for the same role",
+        "ballots": {
+          "seat-1": true,
+          "seat-2": true,
+          "seat-3": false,
+          "seat-4": true,
+          "seat-5": true
+        },
+        "card": {
+          "id": "forecast-baseline",
+          "norm": "epistemic integrity",
+          "description": "Resolved forecasts should, on average, have Brier loss no worse than their paired pre-outcome prevalence baselines.",
+          "units": "score difference",
+          "window": {
+            "kind": "forecasts",
+            "n": 25,
+            "per": "assembly"
+          },
+          "region": {
+            "rule": "at most",
+            "hi": 0.0
+          },
+          "observation": "forecast_skill",
+          "answers_for": "all"
+        }
+      },
+      {
+        "key": "p35",
+        "proposer": "meta-audit",
+        "raw": {
+          "id": "response-validity",
+          "norm": "durable agency",
+          "description": "At least 95% of invocation responses should be well formed, with insufficient samples left unmeasured.",
+          "units": "fraction",
+          "window": {
+            "kind": "returns",
+            "n": 25,
+            "per": "assembly"
+          },
+          "region": {
+            "rule": "at least",
+            "lo": 0.95
+          },
+          "observation": "well_formed_rate",
+          "answers_for": "all",
+          "lambda": 0.05,
+          "reason": "Parseable responses preserve the ability to act and learn while avoiding charges for unusable work."
+        },
+        "price": 0.05,
+        "problem": "preflight: card response-validity observation: already named by live card well-formed-floor for the same role",
+        "ballots": {
+          "seat-1": false,
+          "seat-2": false,
+          "seat-3": true,
+          "seat-4": true,
+          "seat-5": true
+        },
+        "card": {
+          "id": "response-validity",
+          "norm": "durable agency",
+          "description": "At least 95% of invocation responses should be well formed, with insufficient samples left unmeasured.",
+          "units": "fraction",
+          "window": {
+            "kind": "returns",
+            "n": 25,
+            "per": "assembly"
+          },
+          "region": {
+            "rule": "at least",
+            "lo": 0.95
+          },
+          "observation": "well_formed_rate",
+          "answers_for": "all"
+        }
+      },
+      {
+        "key": "p36",
+        "proposer": "antagonist",
+        "raw": {
+          "id": "usefulness-paid-off",
+          "norm": "consequential usefulness",
+          "description": "Share of settled producer consequences that paid off; interpret this as defeasible evidence of value, not a substitute for independent uptake or contrary evidence.",
+          "units": "fraction",
+          "window": {
+            "kind": "returns",
+            "n": 5,
+            "per": "assembly"
+          },
+          "region": {
+            "rule": "at least",
+            "lo": 0.5
+          },
+          "observation": "consequence_paid_off_rate",
+          "answers_for": "producer",
+          "reason": "A paid-off consequence is evidence that work delivered value beyond internal approval."
+        },
+        "price": null,
+        "problem": "card usefulness-paid-off window: consequence_paid_off_rate cannot be measured over returns",
+        "ballots": {}
+      },
+      {
+        "key": "p37",
+        "proposer": "antagonist",
+        "raw": {
+          "id": "forecast-calibration",
+          "norm": "epistemic integrity",
+          "description": "Mean selected forecast Brier score minus its paired pre-outcome prevalence-baseline Brier score; values at or below zero indicate forecasts beat that baseline.",
+          "units": "score difference",
+          "window": {
+            "kind": "forecasts",
+            "n": 5,
+            "per": "assembly"
+          },
+          "region": {
+            "rule": "at most",
+            "hi": 0
+          },
+          "observation": "forecast_skill",
+          "answers_for": "all",
+          "reason": "Comparison with a pre-outcome baseline tests whether stated uncertainty tracks evidence rather than mere confidence."
+        },
+        "price": null,
+        "problem": "preflight: card forecast-calibration observation: already named by live card forecast-skill-floor for the same role",
+        "ballots": {
+          "seat-1": true,
+          "seat-2": true,
+          "seat-3": false,
+          "seat-4": true,
+          "seat-5": true
+        },
+        "card": {
+          "id": "forecast-calibration",
+          "norm": "epistemic integrity",
+          "description": "Mean selected forecast Brier score minus its paired pre-outcome prevalence-baseline Brier score; values at or below zero indicate forecasts beat that baseline.",
+          "units": "score difference",
+          "window": {
+            "kind": "forecasts",
+            "n": 5,
+            "per": "assembly"
+          },
+          "region": {
+            "rule": "at most",
+            "hi": 0.0
+          },
+          "observation": "forecast_skill",
+          "answers_for": "all"
+        }
+      },
+      {
+        "key": "p38",
+        "proposer": "antagonist",
+        "raw": {
+          "id": "response-cost-bound",
+          "norm": "durable agency",
+          "description": "Mean cost over every selected response, failed ones included; retained-storage rent is added to response costs and is not counted as a response.",
+          "units": "micro-USD per attempt",
+          "window": {
+            "kind": "returns",
+            "n": 5,
+            "per": "assembly"
+          },
+          "region": {
+            "rule": "at most",
+            "hi": 100000
+          },
+          "observation": "cost_per_attempt",
+          "answers_for": "all",
+          "reason": "Keeping typical response costs bounded helps preserve resources for future worthwhile work without treating all expenditure as waste."
+        },
+        "price": null,
+        "problem": "preflight: card response-cost-bound observation: already named by live card outsider-cost-discipline for the same role",
+        "ballots": {
+          "seat-1": false,
+          "seat-2": false,
+          "seat-3": true,
+          "seat-4": true,
+          "seat-5": true
+        },
+        "card": {
+          "id": "response-cost-bound",
+          "norm": "durable agency",
+          "description": "Mean cost over every selected response, failed ones included; retained-storage rent is added to response costs and is not counted as a response.",
+          "units": "micro-USD per attempt",
+          "window": {
+            "kind": "returns",
+            "n": 5,
+            "per": "assembly"
+          },
+          "region": {
+            "rule": "at most",
+            "hi": 100000.0
+          },
+          "observation": "cost_per_attempt",
+          "answers_for": "all"
+        }
+      },
+      {
+        "key": "p39",
+        "proposer": "antagonist",
+        "raw": {
+          "id": "judgement-resolution",
+          "norm": "fidelity",
+          "description": "Attributable, avoidably unresolved accepted commitments over eligible commitments due in the responsible scope; no eligible sample is unmeasured, not zero.",
+          "units": "fraction",
+          "window": {
+            "kind": "forecasts",
+            "n": 5,
+            "per": "assembly"
+          },
+          "region": {
+            "rule": "at most",
+            "hi": 0.3
+          },
+          "observation": "avoidably_unresolved_share",
+          "answers_for": "evaluator",
+          "reason": "Tracking avoidable non-resolution supports answerability while excluding not-yet-due or externally unobservable commitments."
+        },
+        "price": null,
+        "problem": "preflight: card judgement-resolution observation: already named by live card avoidable-unresolved-ceiling for the same role",
+        "ballots": {
+          "seat-1": true,
+          "seat-2": true,
+          "seat-3": true,
+          "seat-4": true,
+          "seat-5": true
+        },
+        "card": {
+          "id": "judgement-resolution",
+          "norm": "fidelity",
+          "description": "Attributable, avoidably unresolved accepted commitments over eligible commitments due in the responsible scope; no eligible sample is unmeasured, not zero.",
+          "units": "fraction",
+          "window": {
+            "kind": "forecasts",
+            "n": 5,
+            "per": "assembly"
+          },
+          "region": {
+            "rule": "at most",
+            "hi": 0.3
+          },
+          "observation": "avoidably_unresolved_share",
+          "answers_for": "evaluator"
+        }
+      },
+      {
+        "key": "p40",
+        "proposer": "antagonist",
+        "raw": {
+          "id": "compute-burden",
+          "norm": "bounded reciprocity",
+          "description": "Compute spent in the window, including invocation costs and retained-storage rent; use as a resource-burden signal rather than proof that outsiders were or were not harmed.",
+          "units": "micro-USD per window",
+          "window": {
+            "kind": "windows",
+            "n": 5,
+            "per": null
+          },
+          "region": {
+            "rule": "at most",
+            "hi": 1000000
+          },
+          "observation": "burn_per_window",
+          "answers_for": "all",
+          "reason": "Monitoring aggregate resource use can flag burdens needing scrutiny, while the norm still requires evidence about consent and external costs."
+        },
+        "price": null,
+        "problem": "did not win a majority",
+        "ballots": {
+          "seat-1": false,
+          "seat-2": false,
+          "seat-3": false,
+          "seat-4": true,
+          "seat-5": false
+        },
+        "card": {
+          "id": "compute-burden",
+          "norm": "bounded reciprocity",
+          "description": "Compute spent in the window, including invocation costs and retained-storage rent; use as a resource-burden signal rather than proof that outsiders were or were not harmed.",
+          "units": "micro-USD per window",
+          "window": {
+            "kind": "windows",
+            "n": 5,
+            "per": null
+          },
+          "region": {
+            "rule": "at most",
+            "hi": 1000000.0
+          },
+          "observation": "burn_per_window",
+          "answers_for": "all"
+        }
+      },
+      {
+        "key": "p41",
+        "proposer": "antagonist-core",
+        "raw": {
+          "answers_for": "all",
+          "description": "Mean successful response cost in the selected rows; global closed windows use successful producer returns. A retained-storage charge adds to what those responses cost and is never counted as one of them.",
+          "id": "cost_per_return",
+          "lambda": 0,
+          "norm": "durable agency",
+          "observation": "cost_per_return",
+          "reason": "Stewardship requires tracking the compute resources consumed by successful operations to ensure future choices remain possible.",
+          "region": {
+            "rule": "at most"
+          },
+          "units": "micro-USD per return",
+          "window": {
+            "kind": "returns",
+            "n": 10,
+            "per": null
+          }
+        },
+        "price": null,
+        "problem": "card cost_per_return region: region.hi must be a finite number",
+        "ballots": {}
+      },
+      {
+        "key": "p42",
+        "proposer": "antagonist-core",
+        "raw": {
+          "answers_for": "producer",
+          "description": "Share of selected responses declaring noop or hold; global closed windows use producer returns.",
+          "id": "noop_share",
+          "lambda": 0,
+          "norm": "consequential usefulness",
+          "observation": "noop_share",
+          "reason": "Uptake by independent counterparties is evidence of value, so a high rate of non-action suggests a failure to create things others have reason to value.",
+          "region": {
+            "rule": "below the median of the previous window"
+          },
+          "units": "fraction",
+          "window": {
+            "kind": "returns",
+            "n": 20,
+            "per": "assembly"
+          }
+        },
+        "price": 0.0,
+        "problem": "did not win a majority",
+        "ballots": {
+          "seat-1": false,
+          "seat-2": false,
+          "seat-3": false,
+          "seat-4": true,
+          "seat-5": false
+        },
+        "card": {
+          "id": "noop_share",
+          "norm": "consequential usefulness",
+          "description": "Share of selected responses declaring noop or hold; global closed windows use producer returns.",
+          "units": "fraction",
+          "window": {
+            "kind": "returns",
+            "n": 20,
+            "per": "assembly"
+          },
+          "region": {
+            "rule": "below the median of the previous window"
+          },
+          "observation": "noop_share",
+          "answers_for": "producer"
+        }
+      },
+      {
+        "key": "p43",
+        "proposer": "antagonist-core",
+        "raw": {
+          "answers_for": "evaluator",
+          "description": "Mean evaluator verdict; forecast selectors use the verdicts attached to resolved forecasts, grouped by the judged return's assembly or role.",
+          "id": "verdict_mean",
+          "lambda": 0,
+          "norm": "fidelity",
+          "observation": "verdict_mean",
+          "reason": "Measurements are defeasible evidence of values, so tracking the mean verdict ensures that internal applause aligns with supported consequences rather than substituting for them.",
+          "region": {
+            "rule": "between"
+          },
+          "units": "score",
+          "window": {
+            "kind": "windows",
+            "n": 5,
+            "per": null
+          }
+        },
+        "price": null,
+        "problem": "card verdict_mean region: region.lo must be a finite number",
+        "ballots": {}
+      },
+      {
+        "key": "p44",
+        "proposer": "antagonist-core",
+        "raw": {
+          "answers_for": "meta",
+          "description": "Compute the evaluator roles (judges, adversarial judges, every tier of meta) spent in the window over all compute spent in it, retained-storage rent included.",
+          "id": "evaluator_compute_share",
+          "lambda": 0,
+          "norm": "bounded reciprocity",
+          "observation": "evaluator_compute_share",
+          "reason": "The factory must not finance its advantage by imposing unconsented costs on outsiders, so limiting the share of resources spent on self-evaluation preserves external utility.",
+          "region": {
+            "rule": "at most"
+          },
+          "units": "fraction",
+          "window": {
+            "kind": "windows",
+            "n": 10,
+            "per": null
+          }
+        },
+        "price": null,
+        "problem": "card evaluator_compute_share region: region.hi must be a finite number",
+        "ballots": {}
+      },
+      {
+        "key": "p45",
+        "proposer": "antagonist-core",
+        "raw": {
+          "answers_for": "all",
+          "description": "Censored outcomes over resolved outcomes; forecast selectors use forecast records, global closed windows also include judgements and exposures.",
+          "id": "censored_share",
+          "lambda": 0,
+          "norm": "epistemic integrity",
+          "observation": "censored_share",
+          "reason": "Preserving the ability to discover that commitments were wrong requires minimizing censored outcomes where evidence cannot settle the promise.",
+          "region": {
+            "rule": "at most"
+          },
+          "units": "fraction",
+          "window": {
+            "kind": "forecasts",
+            "n": 25,
+            "per": null
+          }
+        },
+        "price": null,
+        "problem": "card censored_share region: region.hi must be a finite number",
+        "ballots": {}
+      }
+    ]
+  },
+  "lambda_dollars": {
+    "work/fastloop/ab2-control/live-20260923-104810-s1/events.json": {
+      "source": "price.margin",
+      "windows": 0,
+      "cards": {}
+    }
+  },
+  "approved": true,
+  "adopt": {
+    "seats": [
+      {
+        "alias": "seat-1",
+        "assembly_id": "antagonist",
+        "role": "antagonist"
+      },
+      {
+        "alias": "seat-2",
+        "assembly_id": "judge-base-rate",
+        "role": "evaluator"
+      },
+      {
+        "alias": "seat-3",
+        "assembly_id": "meta-calibration",
+        "role": "meta"
+      },
+      {
+        "alias": "seat-4",
+        "assembly_id": "judge-adversary",
+        "role": "adversary"
+      },
+      {
+        "alias": "seat-5",
+        "assembly_id": "empirical",
+        "role": "producer"
+      }
+    ],
+    "ballots": [
+      {
+        "seat": {
+          "alias": "seat-1",
+          "assembly_id": "antagonist",
+          "role": "antagonist"
+        },
+        "model": "openai/gpt-6-luna",
+        "valid": true,
+        "adopt": false,
+        "reason": "The forecast-skill card requires 25 forecasts per assembly, but this charter provides no eligible forecast sample and could make it unmeasurable."
+      },
+      {
+        "seat": {
+          "alias": "seat-2",
+          "assembly_id": "judge-base-rate",
+          "role": "evaluator"
+        },
+        "model": "openai/gpt-6-luna",
+        "valid": true,
+        "adopt": false,
+        "reason": "The charter repeats the avoidable-unresolved commitment ceiling as a new card while the existing censorship-bound card already measures it."
+      },
+      {
+        "seat": {
+          "alias": "seat-3",
+          "assembly_id": "meta-calibration",
+          "role": "meta"
+        },
+        "model": "xiaomi/mimo-v2.6-flash",
+        "valid": true,
+        "adopt": true,
+        "reason": "The charter's seven cards span all five norms with well-formed windows, observations, and regions consistent with the card contract, giving a coherent edition 1 baseline."
+      },
+      {
+        "seat": {
+          "alias": "seat-4",
+          "assembly_id": "judge-adversary",
+          "role": "adversary"
+        },
+        "model": "deepseek/deepseek-v4.1-flash",
+        "valid": true,
+        "adopt": true,
+        "reason": "No reason to reject: the cards only add measurement horizons, each is preflightable against the seed observations, the copyright-bound card is preserved unchanged, and adoption establishes a falsifiable baseline without imposing any immediate cost on this seat."
+      },
+      {
+        "seat": {
+          "alias": "seat-5",
+          "assembly_id": "empirical",
+          "role": "producer"
+        },
+        "model": "openai/gpt-6-luna",
+        "valid": true,
+        "adopt": true,
+        "reason": "The cards are preflightable, align metrics with the stated norms, and explicitly treat insufficient evidence as unmeasured."
+      }
+    ]
+  },
+  "charter_sha256": "b3fa16508315238f03726a600d20a4a58566c8fe80c9e290174b6c2f9478ac59",
+  "calls": [
+    {
+      "assembly_id": "mechanism",
+      "role": "producer",
+      "model_id": "deepseek/deepseek-v4.1-flash",
+      "purpose": "propose",
+      "cost_micro": 6353,
+      "stop_reason": "length",
+      "error": "malformed or incomplete reply (stop_reason=length)",
+      "text": "{\"cards\":[{\"id\":\"censor-bound-returns\",\"norm\":\"epistemic integrity\",\"description\":\"Attributable, avoidably unresolved accepted commitments over eligible commitments due in the responsible scope, measured on settled returns so a seat answers for promises it never let the world settle.\",\"units\":\"fraction\",\"window\":{\"kind\":\"returns\",\"n\":25,\"per\":\"assembly\"},\"region\":{\"rule\":\"at most\",\"lo\":0.0,\"hi\":0.3},\"observation\":\"avoidably_unresolved_share\",\"answers_for\":\"all\",\"reason\":\"Unresolved-but-answerable commitments are the clearest sign a seat is hiding from evidence rather than seeking it.\"},{\"id\":\"forecast-skill-floor\",\"norm\":\"epistemic integrity\",\"description\":\"Mean Brier improvement of a seat's forecasts over the paired prevalence baseline, so confident predictions must beat a naive base rate to count.\",\"units\":\"score difference\",\"window\":{\"kind\":\"forecasts\",\"n\":40,\"per\":\"assembly\"},\"region\":{\"rule\":\"above\",\"lo\":0.0},\"observation\":\"forecast_skill\",\"answers_for\":\"all\",\"reason\":\"A forecaster whose skill does not exceed the base rate is producing noise, not calibration.\"},{\"id\":\"consequence-payoff\",\"norm\":\"consequential usefulness\",\"description\":\"Share of a seat's settled consequences whose return paid off, the world's own verdict on whether the work mattered to anyone outside the seat.\",\"units\":\"fraction\",\"window\":{\"kind\":\"returns\",\"n\":30,\"per\":\"assembly\"},\"region\":{\"rule\":\"at least\",\"lo\":0.2},\"observation\":\"consequence_paid_off_rate\",\"answers_for\":\"producer\",\"reason\":\"Uptake by the world, not internal applause, is the evidence that a created thing was worth making.\"},{\"id\":\"noop-drag\",\"norm\":\"consequential usefulness\",\"description\":\"Share of a seat's responses that declared noop or hold, a floor on stasis so a seat cannot bank its budget by declining to act.\",\"units\":\"fraction\",\"window\":{\"kind\":\"returns\",\"n\":30,\"per\":\"assembly\"},\"region\":{\"rule\":\"at most\",\"lo\":0.0,\"hi\":0.6},\"observation\":\"noop_share\",\"answers_for\":\"producer\",\"reason\":\"A seat that mostly holds is not exercising the agency its endowment was meant to fund.\"},{\"id\":\"burn-ceiling\",\"norm\":\"durable agency\",\"description\":\"Compute spent in a window including retained-storage rent, a ceiling that keeps present work from consuming the resources future worthwhile choices depend on.\",\"units\":\"micro-USD per window\",\"window\":{\"kind\":\"windows\",\"n\":6,\"per\":null},\"region\":{\"rule\":\"at most\",\"lo\":0.0,\"hi\":5000000.0},\"observation\":\"burn_per_window\",\"answers_for\":\"all\",\"reason\":\"Stewardship of the capability that makes later choices possible requires a visible bound on what each window may consume.\"},{\"id\":\"provider-concentration-bound\",\"norm\":\"durable agency\",\"description\":\"Largest share of a window's model calls served by one provider, so no single rail failure can strand the factory's capability.\",\"units\":\"fraction\",\"window\":{\"kind\":\"windows\",\"n\":6,\"per\":null},\"region\":{\"rule\":\"at most\",\"lo\":0.0,\"hi\":0.8},\"observation\":\"provider_concentration\",\"answers_for\":\"all\",\"reason\":\"A capability that depends on one counterparty is not durable, and concentration is the measurable form of that dependence.\"},{\"id\":\"family-concentration-bound\",\"norm\":\"durable agency\",\"description\":\"Largest share of a window's model calls made on one foundation model family regardless of route, guarding against silent monoculture behind diverse providers.\",\"units\":\"fraction\",\"window\":{\"kind\":\"windows\",\"n\":6,\"per\":null},\"region\":{\"rule\":\"at most\",\"lo\":0.0,\"hi\":0.85},\"observation\":\"family_concentration\",\"answers_for\":\"all\",\"reason\":\"Route diversity is cosmetic if every route serves the same model family, so the family share must be bounded separately.\"},{\"id\":\"evaluator-compute-ceiling\",\"norm\":\"durable agency\",\"description\":\"Share of window compute spent on evaluator roles, judges, adversarial judges and every meta tier, capped so judgement does not crowd out the production it judges.\",\"units\":\"fraction\",\"window\":{\"kind\":\"windows\",\"n\":6,\"per\":null},\"region\":{\"rule\":\"at most\",\"lo\":0.0,\"hi\":0.5},\"observation\":\"evaluator_compute_share\",\"answers_for\":\"all\",\"reason\":\"An institution that spends more on grading itself than on doing work is maintaining overhead, not capability.\"},{\"id\":\"verdict-disagreement-ceiling\",\"norm\":\"fidelity\",\"description\":\"Mean population standard deviation across judges of the same return, a ceiling that flags verdicts whose spread shows the measurement is not tracking a shared value.\",\"units\":\"score standard deviation\",\"window\":{\"kind\":\"windows\",\"n\":8,\"per\":null},\"region\":{\"rule\":\"at most\",\"lo\":0.0,\"hi\":0.35},\"observation\":\"evaluator_disagreement\",\"answers_for\":\"evaluator\",\"reason\":\"When judges disagree beyond noise, the favorable mean is a poor substitute for the value it claims to represent.\"},{\"id\":\"censored-share-ceiling\",\"norm\":\"fidelity\",\"description\":\"Censored outcomes over resolved outcomes, a ceiling so missing measurement is kept visible rather than quietly read as success or failure.\",\"units\":\"fraction\",\"window\":{\"kind\":\"forecasts\",\"n\":40,\"per\":\"assembly\"},\"region\":{\"rule\":\"at most\",\"lo\":0.0,\"hi\":0.4},\"observation\":\"censored_share\",\"answers_for\":\"all\",\"reason\":\"Censoring is where measurement silently leaves the sample, and a bounded share keeps the remaining evidence honest.\"},{\"id\":\"well-formed-floor\",\"norm\":\"fidelity\",\"description\":\"Successful responses over selected invocation responses including ballots, a floor ensuring the measurements drawn from returns rest on parseable answers rather than malformed noise.\",\"units\":\"fraction\",\"window\":{\"kind\":\"returns\",\"n\":30,\"per\":\"assembly\"},\"region\":{\"rule\":\"at least\",\"lo\":0.8},\"observation\":\"well_formed_rate\",\"answers_for\":\"all\",\"reason\":\"Every score computed over malformed returns is evidence of nothing, so the well-formed share must be held high.\"},{\"id\":\"tool-call-bound\",\"norm\":\"bounded reciprocity\",\"description\":\"Mean attempted tool calls per response, failures included, capped so a seat's exploration does not impose unconsented load on the tools and sellers it queries.\",\"units\":\"count per return\",\"window\":{\"kind\":\"returns\",\"n\":30,\"per\":\"assembly\"},\"region\":{\"rule\":\"at most\",\"lo\":0.0,\"hi\":4.0},\"observation\":\"tool_calls\",\"answers_for\":\"all\",\"reason\":\"Externally hosted tools absorb the cost of every call a seat makes, so unbounded calling is a cost pushed onto outsiders.\"},{\"id\":\"position-concentration-ceiling\",\"norm\":\"bounded reciprocity\",\"description\":\"Peak absolute marked notional on one coin over starting equity, capped so a seat cannot"
+    },
+    {
+      "assembly_id": "empirical",
+      "role": "producer",
+      "model_id": "openai/gpt-6-luna",
+      "purpose": "propose",
+      "cost_micro": 4740,
+      "stop_reason": "stop",
+      "error": null,
+      "text": "{\"cards\":[{\"id\":\"independent-uptake\",\"norm\":\"consequential usefulness\",\"description\":\"Share of selected producer returns whose accepted registration, tool, observation, assembly, or service is subsequently taken up by an independent lineage; assess only eligible settled outcomes and treat missing evidence as unmeasured.\",\"units\":\"fraction\",\"window\":{\"kind\":\"windows\",\"n\":25,\"per\":null},\"region\":{\"rule\":\"at least\",\"lo\":0.2},\"observation\":\"revision_rate\",\"answers_for\":\"producer\",\"reason\":\"Independent uptake, rather than activity or internal approval, is the clearest available evidence that work created value for others.\"},{\"id\":\"forecast-skill-floor\",\"norm\":\"epistemic integrity\",\"description\":\"Mean paired forecast skill against the pre-outcome prevalence baseline for settled forecasts, with unresolved commitments tracked separately by the existing censorship-bound card.\",\"units\":\"score difference\",\"window\":{\"kind\":\"forecasts\",\"n\":25,\"per\":\"assembly\"},\"region\":{\"rule\":\"at least\",\"lo\":0},\"observation\":\"forecast_skill\",\"answers_for\":\"all\",\"reason\":\"A forecast should add predictive information beyond the base rate, while the separate unresolved-commitment measure preserves accountability for promises that do not settle.\"},{\"id\":\"avoidable-unresolved-ceiling\",\"norm\":\"epistemic integrity\",\"description\":\"Attributable, avoidably unresolved accepted commitments over eligible commitments due in the responsible scope; exclude commitments not yet due and documented external unobservability without owner fault, and treat no eligible sample as unmeasured.\",\"units\":\"fraction\",\"window\":{\"kind\":\"forecasts\",\"n\":25,\"per\":\"assembly\"},\"region\":{\"rule\":\"at most\",\"hi\":0.3},\"observation\":\"avoidably_unresolved_share\",\"answers_for\":\"all\",\"reason\":\"This makes answerability about due commitments explicit without treating legitimate uncertainty or not-yet-due work as failure.\"},{\"id\":\"compute-burn-ceiling\",\"norm\":\"durable agency\",\"description\":\"Total metered invocation compute plus retained-storage rent per closed window.\",\"units\":\"micro-USD per window\",\"window\":{\"kind\":\"windows\",\"n\":25,\"per\":null},\"region\":{\"rule\":\"at most\",\"hi\":10000000},\"observation\":\"burn_per_window\",\"answers_for\":\"all\",\"reason\":\"Monitoring total burn helps preserve resources for future worthwhile choices without assuming that every capability-building expense is wasteful.\"},{\"id\":\"outsider-cost-discipline\",\"norm\":\"bounded reciprocity\",\"description\":\"Mean cost over all selected responses, failures included, including the retained-storage charge assigned to those responses but never counting storage as a response.\",\"units\":\"micro-USD per attempt\",\"window\":{\"kind\":\"returns\",\"n\":25,\"per\":\"assembly\"},\"region\":{\"rule\":\"at most\",\"hi\":1000000},\"observation\":\"cost_per_attempt\",\"answers_for\":\"all\",\"reason\":\"Cost per attempt makes resource burdens visible across failures as well as successes, supporting scrutiny of whether the factory's operation is imposing avoidable costs.\"},{\"id\":\"evidence-and-uncertainty\",\"norm\":\"fidelity\",\"description\":\"Share of selected forecast outcomes censored among resolved outcomes; interpret alongside consequence evidence and never treat missing measurement alone as failure.\",\"units\":\"fraction\",\"window\":{\"kind\":\"forecasts\",\"n\":25,\"per\":\"assembly\"},\"region\":{\"rule\":\"at most\",\"hi\":0.3},\"observation\":\"censored_share\",\"answers_for\":\"all\",\"reason\":\"Tracking censorship helps flag limits in the evidence while the charter's fidelity norm prevents that proxy from replacing judgment about actual consequences.\"}]}"
+    },
+    {
+      "assembly_id": "constructor",
+      "role": "producer",
+      "model_id": "minimax/minimax-m3",
+      "purpose": "propose",
+      "cost_micro": 9366,
+      "stop_reason": "stop",
+      "error": null,
+      "text": "{\"cards\": [{\"id\": \"value-realised\", \"answers_for\": \"producer\", \"description\": \"Mean selected return_paid_off outcome on settled producer returns; a return's outcomes is 1 only when its realised or marked P&L exceeds its own compute and tool cost, so a producer answer that costs more than it earns, or earned nothing it kept, fails this card.\", \"lambda\": 0.3, \"norm\": \"consequential usefulness\", \"observation\": \"consequence_paid_off_rate\", \"reason\": \"Use an independent counterparty's signal \u2014 the world's own measurement of whether a producer's return paid for itself \u2014 as the bar that the consequential usefulness norm demands and that internal applause cannot satisfy.\", \"region\": {\"rule\": \"at least\", \"lo\": 0.5}, \"units\": \"fraction paid off\", \"window\": {\"kind\": \"returns\", \"n\": 25, \"per\": \"assembly\"}}, {\"id\": \"no-claim-unkept\", \"answers_for\": \"all\", \"description\": \"Attributable, avoidably unresolved accepted commitments over the eligible commitments due in the responsible scope; commitments not yet due are excluded, documented external unobservability and events the seat never committed to are excluded, and no eligible sample is unmeasured.\", \"lambda\": 0.4, \"norm\": \"epistemic integrity\", \"observation\": \"avoidably_unresolved_share\", \"reason\": \"Reaffirm the standing censorship-bound card on the same measurement so the chamber can revisit its price once it has its own evidence, rather than trust the seed ceiling on the floor of governance history.\", \"region\": {\"rule\": \"at most\", \"hi\": 0.3}, \"units\": \"fraction unresolved\", \"window\": {\"kind\": \"forecasts\", \"n\": 25, \"per\": \"assembly\"}}, {\"id\": \"evidence-without-truth\", \"answers_for\": \"all\", \"description\": \"Mean of the four score series the early-warning scan reads \u2014 verdict mean, meta mean, consequence skill, evaluator disagreement \u2014 over a window of closed windows; a high reading here is a value that is well measured and yet drifting from the consequences it stands for, the case the fidelity norm names.\", \"lambda\": 0.25, \"norm\": \"fidelity\", \"observation\": \"verdict_mean\", \"reason\": \"Watch for the failure mode fidelity warns of: favourable measurements on a series whose supported consequences are moving the other way, so the chamber can reprice verdict-dependent cards before applause crowds out truth.\", \"region\": {\"rule\": \"at most\", \"hi\": 0.8}, \"units\": \"score\", \"window\": {\"kind\": \"windows\", \"n\": 16, \"per\": null}}, {\"id\": \"regime-drift\", \"answers_for\": \"all\", \"description\": \"Largest centred lag-one autocorrelation among the early-warning score series over the last complete span of closed windows; a high reading means the same drift repeats window after window instead of correcting.\", \"lambda\": 0.2, \"norm\": \"durable agency\", \"observation\": \"ews_autocorrelation\", \"reason\": \"Catch the pattern that erodes durable agency: persistent autocorrelation in the score series is the signature of an institution that has stopped discovering it was wrong, and the chamber should raise cost while that continues.\", \"region\": {\"rule\": \"at most\", \"hi\": 0.6}, \"units\": \"correlation\", \"window\": {\"kind\": \"windows\", \"n\": 16, \"per\": null}}, {\"id\": \"no-imposition\", \"answers_for\": \"antagonist\", \"description\": \"Share of settled antagonist exposures the antagonists won (their counterfactual view of the world beat the producers'), which is the residual after a return's externality is reconciled; a high share means the factory's advantage is being financed by unconsented costs on outsiders.\", \"lambda\": 0.3, \"norm\": \"bounded reciprocity\", \"observation\": \"exposure_win_rate\", \"reason\": \"Bounded reciprocity is violated when outsider settlements keep going the wrong way; measure it on the antagonist channel, where the world already names a counterparty, so the card's evidence is the counterparty's outcome rather than a self-report.\", \"region\": {\"rule\": \"at most\", \"hi\": 0.6}, \"units\": \"fraction\", \"window\": {\"kind\": \"windows\", \"n\": 16, \"per\": null}}, {\"id\": \"stewardship-not-autopilot\", \"answers_for\": \"all\", \"description\": \"Compute the factory spent in the window \u2014 every invocation's metered cost plus retained-storage rent \u2014 expressed as a ratio of starting equity so stewardship is read against the resource base rather than in absolute units.\", \"lambda\": 0.2, \"norm\": \"durable agency\", \"observation\": \"burn_per_window\", \"reason\": \"Durable agency is about preserving the capacity for worthwhile future choices, and a window's burn scaled to equity lets the chamber detect burn that consumes the option to act later, separate from absolute spend.\", \"region\": {\"rule\": \"at most\", \"hi\": 0.25}, \"units\": \"ratio of equity\", \"window\": {\"kind\": \"windows\", \"n\": 16, \"per\": null}}, {\"id\": \"judge-fit\", \"answers_for\": \"evaluator\", \"description\": \"Mean population standard deviation across judges of the same return in the window (at least two judges, repeats averaged per judge); high disagreement is a judge stack that is internally inconsistent and unlikely to be earning its keep.\", \"lambda\": 0.2, \"norm\": \"epistemic integrity\", \"observation\": \"evaluator_disagreement\", \"reason\": \"Epistemic integrity on the evaluator side is the judges agreeing on what they read; pooling disagreement across judges of the same return, with repeats averaged, makes this measurable without attributing disagreement to a single seat.\", \"region\": {\"rule\": \"at most\", \"hi\": 0.15}, \"units\": \"score std\", \"window\": {\"kind\": \"windows\", \"n\": 16, \"per\": null}}]}"
+    },
+    {
+      "assembly_id": "opportunity",
+      "role": "producer",
+      "model_id": "openai/gpt-6-luna",
+      "purpose": "propose",
+      "cost_micro": 740,
+      "stop_reason": "stop",
+      "error": null,
+      "text": "{\n  \"cards\": [\n    {\n      \"id\": \"independent-consequence\",\n      \"norm\": \"consequential usefulness\",\n      \"description\": \"Share of settled selected consequences that are paid off.\",\n      \"units\": \"fraction\",\n      \"window\": {\n        \"kind\": \"windows\",\n        \"n\": 10,\n        \"per\": null\n      },\n      \"region\": {\n        \"rule\": \"at least\",\n        \"lo\": 0.5\n      },\n      \"observation\": \"consequence_paid_off_rate\",\n      \"answers_for\": \"producer\",\n      \"reason\": \"Paid-off consequences provide evidence of value beyond internal approval, while the threshold avoids treating activity alone as usefulness.\"\n    },\n    {\n      \"id\": \"forecast-calibration-skill\",\n      \"norm\": \"epistemic integrity\",\n      \"description\": \"Mean selected forecast Brier score minus its paired pre-outcome prevalence-baseline Brier score.\",\n      \"units\": \"score difference\",\n      \"window\": {\n        \"kind\": \"forecasts\",\n        \"n\": 25,\n        \"per\": \"assembly\"\n      },\n      \"region\": {\n        \"rule\": \"at least\",\n        \"lo\": 0\n      },\n      \"observation\": \"forecast_skill\",\n      \"answers_for\": \"evaluator\",\n      \"reason\": \"Requiring forecasts to improve on a prevalence baseline rewards evidence-responsive judgment rather than confident but uninformative predictions.\"\n    },\n    {\n      \"id\": \"bounded-compute-burn\",\n      \"norm\": \"durable agency\",\n      \"description\": \"Compute spend in each closed window, including retained-storage rent.\",\n      \"units\": \"micro-USD per window\",\n      \"window\": {\n        \"kind\": \"windows\",\n        \"n\": 10,\n        \"per\": null\n      },\n      \"region\": {\n        \"rule\": \"at most\",\n        \"hi\": 10000000\n      },\n      \"observation\": \"burn_per_window\",\n      \"answers_for\": \"all\",\n      \"reason\": \"A visible spending ceiling encourages preserving resources for future worthwhile choices without implying that every capability-building expense is wasteful.\"\n    },\n    {\n      \"id\": \"avoidable-outside-cost-proxy\",\n      \"norm\": \"bounded reciprocity\",\n      \"description\": \"Peak observed absolute marked notional on one coin divided by starting equity.\",\n      \"units\": \"ratio\",\n      \"window\": {\n        \"kind\": \"windows\",\n        \"n\": 10,\n        \"per\": null\n      },\n      \"region\": {\n        \"rule\": \"at most\",\n        \"hi\": 1\n      },\n      \"observation\": \"position_concentration\",\n      \"answers_for\": \"producer\",\n      \"reason\": \"Limiting concentrated exposure is a cautious, measurable proxy for constraining risk that could spill onto others, though it cannot establish consent or capture every external cost.\"\n    },\n    {\n      \"id\": \"fidelity-countercheck\",\n      \"norm\": \"fidelity\",\n      \"description\": \"Share of selected settled consequences that are paid off; interpret alongside documented consequences and treat missing measurement as unmeasured, not failure.\",\n      \"units\": \"fraction\",\n      \"window\": {\n        \"kind\": \"windows\",\n        \"n\": 10,\n        \"per\": null\n      },\n      \"region\": {\n        \"rule\": \"at least\",\n        \"lo\": 0.5\n      },\n      \"observation\": \"consequence_paid_off_rate\",\n      \"answers_for\": \"all\",\n      \"reason\": \"This consequence measure is defeasible evidence, so it should be read against supported outcomes and never let an absent sample count as a failing value.\"\n    }\n  ]\n}"
+    },
+    {
+      "assembly_id": "judge-consequence",
+      "role": "evaluator",
+      "model_id": "deepseek/deepseek-v4.1-flash",
+      "purpose": "propose",
+      "cost_micro": 6349,
+      "stop_reason": "length",
+      "error": "malformed or incomplete reply (stop_reason=length)",
+      "text": "{\n  \"cards\": [\n    {\n      \"id\": \"consequence-uptake-floor\",\n      \"norm\": \"consequential usefulness\",\n      \"description\": \"Paid-off rate of independently settled consequences; a card whose favorable reading can only be sustained by consequences an independent counterparty actually settled.\",\n      \"units\": \"fraction\",\n      \"window\": {\n        \"kind\": \"windows\",\n        \"n\": 6,\n        \"per\": \"assembly\"\n      },\n      \"region\": {\n        \"rule\": \"at least\",\n        \"lo\": 0.45\n      },\n      \"observation\": \"consequence_paid_off_rate\",\n      \"answers_for\": \"producer\",\n      \"reason\": \"Uptake by an independent counterparty, not internal applause, is the evidence the norm demands, so the card reads the paid-off rate of consequences settled outside the producer's own lineage.\"\n    },\n    {\n      \"id\": \"commitment-resolution-ceiling\",\n      \"norm\": \"epistemic integrity\",\n      \"description\": \"Attributable, avoidably unresolved accepted commitments over the eligible commitments due in the responsible scope; a promise the seat quietly let lapse is a violation even when nothing measured it.\",\n      \"units\": \"fraction\",\n      \"window\": {\n        \"kind\": \"forecasts\",\n        \"n\": 25,\n        \"per\": \"assembly\"\n      },\n      \"region\": {\n        \"rule\": \"at most\",\n        \"lo\": 0.3\n      },\n      \"observation\": \"avoidably_unresolved_share\",\n      \"answers_for\": \"all\",\n      \"reason\": \"A seat that keeps its commitments answerable to evidence and lets the world settle them cannot leave this share high, and the observation already excludes faultless external unobservability.\"\n    },\n    {\n      \"id\": \"burn-rate-bound\",\n      \"norm\": \"durable agency\",\n      \"description\": \"Compute spent in the window, metered invocations plus retained-storage rent; a card that scowls when a single window's spend is large relative to the factory's own scale.\",\n      \"units\": \"fraction\",\n      \"window\": {\n        \"kind\": \"windows\",\n        \"n\": 4,\n        \"per\": null\n      },\n      \"region\": {\n        \"rule\": \"at most\",\n        \"lo\": 0.5\n      },\n      \"observation\": \"burn_per_window\",\n      \"answers_for\": \"all\",\n      \"reason\": \"Stewardship of the resources that make future worthwhile choices possible requires a visible ceiling on how fast a window can eat them.\"\n    },\n    {\n      \"id\": \"concentration-bound\",\n      \"norm\": \"bounded reciprocity\",\n      \"description\": \"Largest share of a window's model calls served by one provider; a card that flags dependence on a single rail whose failure would offload its cost onto outsiders.\",\n      \"units\": \"fraction\",\n      \"window\": {\n        \"kind\": \"windows\",\n        \"n\": 4,\n        \"per\": null\n      },\n      \"region\": {\n        \"rule\": \"at most\",\n        \"lo\": 0.7\n      },\n      \"observation\": \"provider_concentration\",\n      \"answers_for\": \"all\",\n      \"reason\": \"Concentrating on one provider, like any unpaid externality, finances the factory's advantage by exposing others to a rail it does not control.\"\n    },\n    {\n      \"id\": \"measurement-fidelity-floor\",\n      \"norm\": \"fidelity\",\n      \"description\": \"Share of selected responses declaring noop or hold; a floor that keeps the factory from substituting a favorable activity count for the values the activity was supposed to serve.\",\n      \"units\": \"fraction\",\n      \"window\": {\n        \"kind\": \"returns\",\n        \"n\": 20,\n        \"per\": \"role\"\n      },\n      \"region\": {\n        \"rule\": \"at most\",\n        \"lo\": 0.6\n      },\n      \"observation\": \"noop_share\",\n      \"answers_for\": \"all\",\n      \"reason\": \"Measurements are defeasible evidence of the values, not substitutes; a factory that reads well only by counting noop responses has stopped measuring what it claims to value.\"\n    },\n    {\n      \"id\": \"forecast-skill-floor\",\n      \"norm\": \"epistemic integrity\",\n      \"description\": \"Mean forecast Brier minus paired prevalence-baseline Brier; forecasts must beat the base rate or the seat is betting without having earned the right to.\",\n      \"units\": \"score difference\",\n      \"window\": {\n        \"kind\": \"forecasts\",\n        \"n\": 25,\n        \"per\": \"assembly\"\n      },\n      \"region\": {\n        \"rule\": \"above\",\n        \"lo\": 0.0\n      },\n      \"observation\": \"forecast_skill\",\n      \"answers_for\": \"all\",\n      \"reason\": \"A commitment answerable to evidence must at least outperform the prevalence baseline; a changed criterion cannot rewrite what was promised, and a forecast that never beat the base rate was never a forecast.\"\n    },\n    {\n      \"id\": \"judge-agreement-ceiling\",\n      \"norm\": \"fidelity\",\n      \"description\": \"Mean population standard deviation across judges of the same return; a card that flags judging whose readings are so scattered that the verdict mean is not evidence of the underlying value.\",\n      \"units\": \"score standard deviation\",\n      \"window\": {\n        \"kind\": \"windows\",\n        \"n\": 4,\n        \"per\": null\n      },\n      \"region\": {\n        \"rule\": \"at most\",\n        \"lo\": 0.2\n      },\n      \"observation\": \"evaluator_disagreement\",\n      \"answers_for\": \"evaluator\",\n      \"reason\": \"Measurements are defeasible evidence, not substitutes: when judges of the same return disagree this widely the mean verdict is a measurement artifact, not a reading of the value.\"\n    },\n    {\n      \"id\": \"censored-share-ceiling\",\n      \"norm\": \"durable agency\",\n      \"description\": \"Censored outcomes over resolved outcomes, including judgements and exposures; a card that charges a seat for losing the ability to discover whether its own commitments settled.\",\n      \"units\": \"fraction\",\n      \"window\": {\n        \"kind\": \"windows\",\n        \"n\": 6,\n        \"per\": null\n      },\n      \"region\": {\n        \"rule\": \"at most\",\n        \"lo\": 0.4\n      },\n      \"observation\": \"censored_share\",\n      \"answers_for\": \"all\",\n      \"reason\": \"Preserving the ability to discover that a commitment was wrong is stewardship of future capability, and a censored outcome is a capability quietly surrendered.\"\n    },\n    {\n      \"id\": \"tool-call-cost-ceiling\",\n      \"norm\": \"durable agency\",\n      \"description\": \"Mean attempted tool calls per selected response, failures included; a card that bounds how much of a decision's budget is spent probing rather than acting.\",\n      \"units\": \"count per return\",\n      \"window\": {\n        \""
+    },
+    {
+      "assembly_id": "judge-fidelity",
+      "role": "evaluator",
+      "model_id": "xiaomi/mimo-v2.6-flash",
+      "purpose": "propose",
+      "cost_micro": 5487,
+      "stop_reason": "length",
+      "error": "malformed or incomplete reply (stop_reason=length)",
+      "text": "{\"cards\":[{\"id\":\"uptake-bound\",\"norm\":\"consequential usefulness\",\"description\":\"Share of selected responses with accepted registrations or activated amendments held at a floor, so a seat must keep proposing things other lineages and the charter can take up rather than merely produce motion.\",\"units\":\"fraction\",\"window\":{\"kind\":\"returns\",\"n\":20,\"per\":\"assembly\"},\"region\":{\"rule\":\"at least\",\"lo\":0.05},\"observation\":\"revision_rate\",\"answers_for\":\"producer\",\"lambda\":0.2,\"reason\":\"Uptake by an independent counterparty, not internal applause, is what makes a change consequential, and a rising revision rate is its observable trace.\"},{\"id\":\"forecast-skill-floor\",\"norm\":\"epistemic integrity\",\"description\":\"Mean forecast Brier minus its paired pre-outcome prevalence-baseline Brier held at or above zero, so commitments must beat the base rate they were priced against rather than merely be stated.\",\"units\":\"score difference\",\"window\":{\"kind\":\"forecasts\",\"n\":30,\"per\":\"assembly\"},\"region\":{\"rule\":\"at least\",\"lo\":0.0},\"observation\":\"forecast_skill\",\"answers_for\":\"all\",\"lambda\":0.3,\"reason\":\"A commitment is answerable to evidence only when it demonstrably beats the prevalence baseline, preserving the ability to discover it was wrong.\"},{\"id\":\"burn-per-window-cap\",\"norm\":\"durable agency\",\"description\":\"Compute spent in the window, metered cost plus retained-storage rent, capped so spending leaves resources for future worthwhile choices.\",\"units\":\"micro-USD per window\",\"window\":{\"kind\":\"windows\",\"n\":10,\"per\":null},\"region\":{\"rule\":\"at most\",\"hi\":6000000},\"observation\":\"burn_per_window\",\"answers_for\":\"all\",\"lambda\":0.15,\"reason\":\"A seat's entitlement is finite and each window's burn directly shortens the runway available for future choices that matter.\"},{\"id\":\"provider-concentration-cap\",\"norm\":\"durable agency\",\"description\":\"Largest share of the window's model calls served by a single provider held below a ceiling so no one rail's failure can disable the population's capacity.\",\"units\":\"fraction\",\"window\":{\"kind\":\"windows\",\"n\":10,\"per\":null},\"region\":{\"rule\":\"below\",\"hi\":0.8},\"observation\":\"provider_concentration\",\"answers_for\":\"all\",\"lambda\":0.1,\"reason\":\"Capability that depends on one provider is a capability that provider can withdraw, so diversification is stewardship of the means of future work.\"},{\"id\":\"family-concentration-cap\",\"norm\":\"durable agency\",\"description\":\"Largest share of the window's model calls on one foundation model family held below a ceiling so a family-wide defect does not take out the population's judgement at once.\",\"units\":\"fraction\",\"window\":{\"kind\":\"windows\",\"n\":10,\"per\":null},\"region\":{\"rule\":\"below\",\"hi\":0.8},\"observation\":\"family_concentration\",\"answers_for\":\"all\",\"lambda\":0.1,\"reason\":\"A shared failure mode across one model family would degrade every dependent seat simultaneously, which endangers future choice rather than merely current output.\"},{\"id\":\"burn-per-return-cap\",\"norm\":\"bounded reciprocity\",\"description\":\"Mean cost of successful responses capped so the factory does not fund its own advantage by draining shared reserves beyond the value it returns.\",\"units\":\"micro-USD per return\",\"window\":{\"kind\":\"returns\",\"n\":30,\"per\":\"assembly\"},\"region\":{\"rule\":\"at most\",\"hi\":250000},\"observation\":\"cost_per_return\",\"answers_for\":\"producer\",\"lambda\":0.2,\"reason\":\"Every micro-USD a seat spends on a return is drawn from a shared pot, so disproportionate burn imposes an unconsented cost on the other lineages.\"},{\"id\":\"evaluator-compute-share-cap\",\"norm\":\"bounded reciprocity\",\"description\":\"Compute spent on evaluator roles in the window over all compute spent in it, rent included, capped so judging does not consume the budget work needs.\",\"units\":\"fraction\",\"window\":{\"kind\":\"windows\",\"n\":10,\"per\":null},\"region\":{\"rule\":\"at most\",\"hi\":0.5},\"observation\":\"evaluator_compute_share\",\"answers_for\":\"all\",\"lambda\":0.15,\"reason\":\"An over-weighted evaluation tier taxes every producer's share of the common compute, financing oversight by imposing cost on others without their consent.\"},{\"id\":\"censorship-bound\",\"norm\":\"epistemic integrity\",\"description\":\"Attributable, avoidably unresolved accepted commitments over the eligible commitments due in the responsible scope, held at a ceiling so a seat answers for the promises it never let the world settle; a commitment not yet due is not in the sample, documented external unobservability without owner fault and events never committed to observe are excluded, and no eligible sample is unmeasured, never zero.\",\"units\":\"fraction\",\"window\":{\"kind\":\"forecasts\",\"n\":25,\"per\":\"assembly\"},\"region\":{\"rule\":\"at most\",\"hi\":0.3},\"observation\":\"avoidably_unresolved_share\",\"answers_for\":\"all\",\"lambda\":0.2,\"reason\":\"Leaving commitments unresolved destroys the evidence that would show they were wrong, which is precisely what epistemic integrity forbids.\"},{\"id\":\"censored-share-cap\",\"norm\":\"fidelity\",\"description\":\"Censored outcomes over resolved outcomes held at a ceiling, because a measurement that never lands cannot serve as defeasible evidence of anything.\",\"units\":\"fraction\",\"window\":{\"kind\":\"forecasts\",\"n\":30,\"per\":\"assembly\"},\"region\":{\"rule\":\"at most\",\"hi\":0.4},\"observation\":\"censored_share\",\"answers_for\":\"all\",\"lambda\":0.15,\"reason\":\"Fidelity requires measurements that can actually inform judgement; a measurement that is always censored is no longer evidence of the value it names.\"},{\"id\":\"verdict-mean-floor\",\"norm\":\"fidelity\",\"description\":\"Mean evaluator verdict held at a floor as a sanity check on whether the judgement channel still reflects value rather than drifting into cheap approval.\",\"units\":\"score\",\"window\":{\"kind\":\"windows\",\"n\":15,\"per\":\"role\"},\"region\":{\"rule\":\"at least\",\"lo\":0.35},\"observation\":\"verdict_mean\",\"answers_for\":\"evaluator\",\"lambda\":0.2,\"reason\":\"Verdicts are only defeasible evidence if they track the work's worth, and a persistently depressed mean signals the channel has lost contact with the value it represents.\"},{\"id\":\"evaluator-disagreement-cap\",\"norm\":\"fidelity\",\"description\":\"Mean population standard deviation across judges of the same return held at a ceiling so no single verdict is read as the measurement when judges materially disagree.\",\"units\":\"score standard deviation\",\"window\":{\"kind\":\"windows\",\"n\":15,\"per\":null},\"region\":{\"rule\":\"at most\",\"hi\":0.35},\"observation\":\"evaluator_disagreement\",\"answers_for\":\"evaluator\",\"lambda\":0.15,\"reason\":\"When judges disagree sharply, any single favourable score is weak evidence of the underlying value rather than a substitute for it.\"},{\"id\":\"consequence-paid-off-floor\",\"norm\":\"fidelity\",\"description\":\"Positive return_paid_off outcomes over selected settled consequences held at a floor, so favourable verdicts are not credited when the supported consequences contradict them.\",\"units\":\"fraction\",\"window\":{\"kind\":\""
+    },
+    {
+      "assembly_id": "judge-mechanics",
+      "role": "evaluator",
+      "model_id": "xiaomi/mimo-v2.6-flash",
+      "purpose": "propose",
+      "cost_micro": 526,
+      "stop_reason": "length",
+      "error": "malformed or incomplete reply (stop_reason=length)",
+      "text": "{\"cards\": [{\"answers_for\": \"all\", \"description\": \"Mean selected forecast Brier minus its paired pre-outcome prevalence-baseline Brier, so commitments are priced against what was already known at the time they were made.\", \"id\": \"forecast-beats-base-rate\", \"lambda\": 0.5, \"norm\": \"epistemic integrity\", \"observation\": \"forecast_skill\", \"reason\": \"A commitment that only matches the base rate never exposed itself to being wrong.\", \"region\": {\"hi\": 0, \"lo\": 0, \"rule\": \"above\"}, \"units\": \"score difference\", \"window\": {\"kind\": \"forecasts\", \"n\": 25, \"per\": null}}, {\"answers_for\": \"all\", \"description\": \"Censored outcomes over resolved outcomes, keeping the share of judgements and bets that never reached an answer low enough that learning still happens.\", \"id\": \"censorship-bound\", \"lambda\": 0.4, \"norm\": \"epistemic integrity\", \"observation\": \"censored_share\", \"reason\": \"A window full of censored outcomes is a window in which nothing could be found wrong.\", \"region\": {\"hi\": 0.4, \"lo\": 0, \"rule\": \"at most\"}, \"units\": \"fraction\", \"window\": {\"kind\": \"forecasts\", \"n\": 25, \"per\": null}}, {\"answers_for\": \"all\", \"description\": \"Positive return_paid_off outcomes over selected settled consequences, tracking whether decisions actually paid off rather than merely being well-regarded.\", \"id\": \"consequences-pay-off\", \"lambda\": 0.5, \"norm\": \"consequential usefulness\", \"observation\": \"consequence_paid_off_rate\", \"reason\": \"Independent uptake is the evidence this norm names, and a settled consequence is the closest the ledger gets to it.\", \"region\": {\"hi\": 0.5, \"lo\": 0, \"rule\": \"above\"}, \"units\": \"fraction\", \"window\": {\"kind\": \"windows\", \"n\": 5, \"per\": null}}, {\"answers_for\": \"all\", \"description\": \"Share of selected responses with accepted registrations or activated amendments, keeping new capability entering the population from drying up.\", \"id\": \"revision-rate-floor\", \"lambda\": 0.3, \"norm\": \"durable agency\", \"observation\": \"revision_rate\", \"reason\": \"Future choices require capabilities that are still being built, not only ones already built.\", \"region\": {\"hi\": 0, \"lo\": 0, \"rule\": \"above\"}, \"units\": \"fraction\", \"window\": {\"kind\": \"returns\", \"n\": 40, \"per\": null}}, {\"answers_for\": \"all\", \"description\": \"Compute spent in the window over every invocation's metered cost plus retained-storage rent, bounding how fast the population converts its endowment into spend.\", \"id\": \"burn-per-window-ceiling\", \"lambda\": 0.4, \"norm\": \"durable agency\", \"observation\": \"burn_per_window\", \"reason\": \"Runway is the resource that makes any future choice possible, so its rate of consumption is stewardship made measurable.\", \"region\": {\"hi\": 250000, \"lo\": 0, \"rule\": \"at most\"}, \"units\": \"micro-USD per window\", \"window\": {\"kind\": \"windows\", \"n\": 5, \"per\": null}}, {\"answers_for\": \"all\", \"description\": \"The largest share of the window's model calls that one provider served, keeping dependence on any single supplier bounded.\", \"id\": \"provider-concentration-bound\", \"lambda\": 0.3, \"norm\": \"durable agency\", \"observation\": \"provider_concentration\", \"reason\": \"A single point of supply failure can extinguish the capability the endowment was meant to preserve.\", \"region\": {\"hi\": 0.9, \"lo\": 0, \"rule\": \"at most\"}, \"units\": \"fraction\", \"window\": {\"kind\": \"windows\", \"n\": 5, \"per\": null}}, {\"answers_for\": \"all\", \"description\": \"Peak observed absolute marked notional on one coin over starting equity, keeping outsized single-asset exposure from dominating the account.\", \"id\": \"position-concentration-bound\", \"lambda\": 0.4, \"norm\": \"bounded reciprocity\", \"observation\": \"position_concentration\", \"reason\": \"Concentrated, leveraged exposure converts the factory's risk into losses the surrounding balance sheet did not consent to absorb.\", \"region\": {\"hi\": 0.8, \"lo\": 0, \"rule\": \"at most\"}, \"units\": \"ratio\", \"window\": {\"kind\": \"windows\", \"n\": 5, \"per\": null}}, {\"answers_for\": \"all\", \"description\": \"Mean cost over every selected response, failed ones included, so attempts that produced nothing are still charged to whoever made them.\", \"id\": \"cost-per-attempt-ceiling\", \"lambda\": 0.3, \"norm\": \"bounded reciprocity\", \"observation\": \"cost_per_attempt\", \"reason\": \"Resources spent on failed attempts are still drawn from a shared pot, and pricing them honestly is not shifting their cost onto others.\", \"region\": {\"hi\": 15000, \"lo\": 0, \"rule\": \"at most\"}, \"units\": \"micro-USD per attempt\", \"window\": {\"kind\": \"returns\", \"n\": 40, \"per\": null}}, {\"answers_for\": \"all\", \"description\": \"Mean evaluator verdict, checked against the supported consequences it certifies, so a favorable score cannot stand when outcomes contradict it.\", \"id\": \"verdict-versus-consequence\", \"lambda\": 0.5, \"norm\": \"fidelity\", \"observation\": \"verdict_mean\", \"reason\": \"This norm exists precisely to keep a comfortable measurement from substituting for the value it claims to represent.\", \"region\": {\"hi\": 0.6, \"lo\": 0.4, \"rule\": \"between\"}, \"units\": \"score\", \"window\": {\"kind\": \"windows\", \"n\": 10, \"per\": null}}, {\"answers_for\": \"all\", \"description\": \"Mean population std across judges of the same return, keeping disagreement wide enough that verdicts are still genuinely independent readings.\", \"id\": \"evaluator-disagreement-floor\", \"lambda\": 0.2, \"norm\": \"fidelity\", \"observation\": \"evaluator_disagreement\", \"reason\": \"Perfectly agreeing judges may be reading a cue rather than the world, and this norm warns against trusting such agreement uncritically.\", \"region\": {\"hi\": 0, \"lo\": 0, \"rule\": \"above\"}, \"units\": \"score standard deviation\", \"window\": {\"kind\": \"windows\", \"n\": 10, \"per\": null}}, {\"answers_for\": \"all\", \"description\": \"Attributable, avoidably unresolved accepted commitments over the eligible commitments due in the responsible scope, with a ceiling so"
+    },
+    {
+      "assembly_id": "judge-base-rate",
+      "role": "evaluator",
+      "model_id": "openai/gpt-6-luna",
+      "purpose": "propose",
+      "cost_micro": 729,
+      "stop_reason": "stop",
+      "error": null,
+      "text": "{\"cards\":[{\"id\":\"usefulness-paid-off\",\"norm\":\"consequential usefulness\",\"description\":\"At least half of settled selected forecast consequences are positive return_paid_off outcomes.\",\"units\":\"fraction\",\"window\":{\"kind\":\"forecasts\",\"n\":25,\"per\":\"assembly\"},\"region\":{\"rule\":\"at least\",\"lo\":0.5},\"observation\":\"consequence_paid_off_rate\",\"answers_for\":\"producer\",\"reason\":\"Independent, settled consequences are stronger evidence of value to others than internal approval.\"},{\"id\":\"forecast-skill-nonnegative\",\"norm\":\"epistemic integrity\",\"description\":\"Keep mean selected forecast Brier score no worse than its paired pre-outcome prevalence baseline.\",\"units\":\"score difference\",\"window\":{\"kind\":\"forecasts\",\"n\":25,\"per\":\"assembly\"},\"region\":{\"rule\":\"at most\",\"hi\":0},\"observation\":\"forecast_skill\",\"answers_for\":\"all\",\"reason\":\"Comparing forecasts with a pre-outcome baseline rewards commitments that are informative and checkable.\"},{\"id\":\"compute-burn-ceiling\",\"norm\":\"durable agency\",\"description\":\"Keep total compute spend, including retained-storage rent, at or below 1000000 micro-USD per closed window.\",\"units\":\"micro-USD per window\",\"window\":{\"kind\":\"windows\",\"n\":5,\"per\":null},\"region\":{\"rule\":\"at most\",\"hi\":1000000},\"observation\":\"burn_per_window\",\"answers_for\":\"all\",\"reason\":\"Monitoring total burn encourages stewardship of resources needed for future worthwhile choices without treating all spending as waste.\"},{\"id\":\"censoring-ceiling\",\"norm\":\"fidelity\",\"description\":\"Keep censored outcomes at or below half of resolved outcomes in the selected scope.\",\"units\":\"fraction\",\"window\":{\"kind\":\"forecasts\",\"n\":25,\"per\":\"assembly\"},\"region\":{\"rule\":\"at most\",\"hi\":0.5},\"observation\":\"censored_share\",\"answers_for\":\"all\",\"reason\":\"A ceiling can flag weak evaluability while fidelity requires treating missing measurement as unmeasured rather than as proof of failure.\"}]}"
+    },
+    {
+      "assembly_id": "meta-calibration",
+      "role": "meta",
+      "model_id": "xiaomi/mimo-v2.6-flash",
+      "purpose": "propose",
+      "cost_micro": 526,
+      "stop_reason": "length",
+      "error": "malformed or incomplete reply (stop_reason=length)",
+      "text": "{\"cards\": [{\"answers_for\": \"all\", \"description\": \"Mean cost over every selected response, failed ones included, held below a per-attempt ceiling so compute spent on failures does not quietly drain the endowment that funds future choices.\", \"id\": \"attempt-cost-bound\", \"lambda\": 0.3, \"norm\": \"durable agency\", \"observation\": \"cost_per_attempt\", \"reason\": \"Stewardship requires bounding the cost of attempts, not just successes, because failed calls still consume the shared resource that future decisions depend on.\", \"region\": {\"hi\": 100000, \"rule\": \"at most\"}, \"units\": \"micro-USD per attempt\", \"window\": {\"kind\": \"returns\", \"n\": 25, \"per\": null}}, {\"answers_for\": \"all\", \"description\": \"Positive outcomes over selected settled consequences, requiring a floor so that claimed value is corroborated by measured results rather than internal applause.\", \"id\": \"consequence-backed-floor\", \"lambda\": 0.5, \"norm\": \"consequential usefulness\", \"observation\": \"consequence_paid_off_rate\", \"reason\": \"Uptake and payoff measured by the world are the available evidence that value reached an independent counterparty, so a floor keeps the population honest about usefulness.\", \"region\": {\"lo\": 0.4, \"rule\": \"at least\"}, \"units\": \"fraction\", \"window\": {\"kind\": \"windows\", \"n\": 5, \"per\": null}}, {\"answers_for\": \"all\", \"description\": \"Censored outcomes over resolved outcomes, capped so that commitments and verdicts are kept answerable to evidence instead of being left permanently unsettled.\", \"id\": \"censorship-cap\", \"lambda\": 0.4, \"norm\": \"epistemic integrity\", \"observation\": \"censored_share\", \"reason\": \"Epistemic integrity requires that promises actually meet evidence; excessive censoring removes the possibility of discovering that a commitment was wrong.\", \"region\": {\"hi\": 0.5, \"rule\": \"at most\"}, \"units\": \"fraction\", \"window\": {\"kind\": \"forecasts\", \"n\": 25, \"per\": \"assembly\"}}, {\"answers_for\": \"all\", \"description\": \"Mean selected forecast Brier minus its paired baseline Brier, held above a floor so forecasters add signal beyond the prevalence base rate.\", \"id\": \"forecast-skill-floor\", \"lambda\": 0.4, \"norm\": \"fidelity\", \"observation\": \"forecast_skill\", \"reason\": \"Fidelity asks whether measurements track the value they stand for; skill over baseline is the direct check that forecasts carry real information rather than echoing priors.\", \"region\": {\"lo\": 0.0, \"rule\": \"at least\"}, \"units\": \"score difference\", \"window\": {\"kind\": \"forecasts\", \"n\": 25, \"per\": \"assembly\"}}, {\"answers_for\": \"all\", \"description\": \"Mean evaluator verdict held within a band, so neither a reflexively harsh nor a reflexively generous judging culture is mistaken for accurate evaluation.\", \"id\": \"verdict-calibration-band\", \"lambda\": 0.3, \"norm\": \"fidelity\", \"observation\": \"verdict_mean\", \"reason\": \"A verdict mean drifting to an extreme is evidence the measurement has decoupled from the value it purports to represent, which fidelity explicitly warns against.\", \"region\": {\"hi\": 0.9, \"lo\": 0.2, \"rule\": \"between\"}, \"units\": \"score\", \"window\": {\"kind\": \"windows\", \"n\": 5, \"per\": \"role\"}}, {\"answers_for\": \"all\", \"description\": \"Share of selected responses declaring noop or hold, kept below a ceiling so seats do not convert every wake into inaction while still consuming compute.\", \"id\": \"noop-share-cap\", \"lambda\": 0.2, \"norm\": \"consequential usefulness\", \"observation\": \"noop_share\", \"reason\": \"Persistent inaction spends the endowment without producing anything others have reason to value, so a ceiling keeps deliberation pointed at outcomes.\", \"region\": {\"hi\": 0.9, \"rule\": \"at most\"}, \"units\": \"fraction\", \"window\": {\"kind\": \"returns\", \"n\": 25, \"per\": \"role\"}}, {\"answers_for\": \"all\", \"description\": \"Share of selected responses with accepted registrations or activated amendments, kept below a ceiling so capability-building does not become churn that erodes the reserve.\", \"id\": \"revision-thrash-cap\", \"lambda\": 0.3, \"norm\": \"durable agency\", \"observation\": \"revision_rate\", \"reason\": \"Durable agency favors building enduring capability, but excessive re-registration spends resources rebuilding rather than stewarding what already exists.\", \"region\": {\"hi\": 0.8, \"rule\": \"at most\"}, \"units\": \"fraction\", \"window\": {\"kind\": \"returns\", \"n\": 25, \"per\": \"assembly\"}}, {\"answers_for\": \"all\", \"description\": \"Mean attempted tool calls per selected response, kept below a ceiling so exploration of tools does not outpace the budget that sustains future exploration.\", \"id\": \"tool-call-budget\", \"lambda\": 0.2, \"norm\": \"durable agency\", \"observation\": \"tool_calls\", \"reason\": \"Tool calls are the cheapest way to burn an entitlement; bounding them keeps a single window from starving later ones of the ability to act.\", \"region\": {\"hi\": 4.0, \"rule\": \"at most\"}, \"units\": \"count per return\", \"window\": {\"kind\": \"returns\", \"n\": 25, \"per\": \"assembly\"}}, {\"answers_for\": \"all\", \"description\": \"Compute spent in the window, kept below a ceiling so per-window burn never approaches the rate that would make the endowment's runway unmanageably short.\", \"id\": \"window-burn-bound\", \"lambda\": 0.4, \"norm\": \"durable agency\", \"observation\": \"burn_per_window\", \"reason\": \"Runway is the precondition for every future worthwhile choice, so bounding each window's burn is the most direct way to keep agency durable.\", \"region\": {\"hi\": 500000, \"rule\": \"at most\"}, \"units\": \"micro-USD per window\", \"window\": {\"kind\": \"windows\", \"n\": 5, \"per\": null}}, {\"answers_for\": \"all\", \"description\": \"Compute the evaluator roles spent in the window over all compute spent in it, capped so the machinery of judging does not eat the resources meant for doing.\", \"id\": \"evaluator-share-cap\", \"lambda\": 0.3, \"norm\": \"durable agency\", \"observation\": \"evaluator_compute_share\", \"reason\": \"Evaluation is necessary but consumes the same finite endowment as production; letting it dominate spending hollows out the capacity to create future value.\", \"region\": {\"hi\": 0.7, \"rule\": \"at most\"}, \""
+    },
+    {
+      "assembly_id": "meta-countercase",
+      "role": "meta",
+      "model_id": "deepseek/deepseek-v4.1-flash",
+      "purpose": "propose",
+      "cost_micro": 919,
+      "stop_reason": "stop",
+      "error": null,
+      "text": "{\"cards\":[{\"id\":\"uptake-follow-through\",\"norm\":\"consequential usefulness\",\"description\":\"Share of settled consequences on returns the seat produced that were paid off, so a seat answers for whether its work was taken up rather than merely delivered.\",\"units\":\"fraction\",\"window\":{\"kind\":\"forecasts\",\"n\":25,\"per\":\"assembly\"},\"region\":{\"rule\":\"at least\",\"lo\":0.4},\"observation\":\"consequence_paid_off_rate\",\"answers_for\":\"producer\",\"reason\":\"Independent uptake, not internal applause, is the only evidence the norm names, and this is the closest settled measure of it.\",\"lambda\":0.2},{\"id\":\"declared-not-resolved\",\"norm\":\"epistemic integrity\",\"description\":\"Attributable, avoidably unresolved accepted commitments over the eligible commitments due in the responsible scope, with a ceiling, so a seat answers for the promises it never let the world settle.\",\"units\":\"fraction\",\"window\":{\"kind\":\"forecasts\",\"n\":25,\"per\":\"assembly\"},\"region\":{\"rule\":\"at most\",\"lo\":0.3},\"observation\":\"avoidably_unresolved_share\",\"answers_for\":\"all\",\"reason\":\"A commitment left unsettled is the direct failure of answerability to evidence, and the exclusions keep documented external unobservability from counting against a seat.\",\"lambda\":0.3},{\"id\":\"censored-outcomes-bound\",\"norm\":\"epistemic integrity\",\"description\":\"Censored outcomes over resolved outcomes, so a seat cannot keep its record clean by letting evidence go missing instead of being wrong.\",\"units\":\"fraction\",\"window\":{\"kind\":\"windows\",\"n\":10,\"per\":\"assembly\"},\"region\":{\"rule\":\"at most\",\"lo\":0.4},\"observation\":\"censored_share\",\"answers_for\":\"all\",\"reason\":\"Missing measurement alone is not failure, but a seat whose outcomes mostly vanish has stopped preserving the ability to discover it was wrong.\",\"lambda\":0.2},{\"id\":\"evaluator-spend-share\",\"norm\":\"durable agency\",\"description\":\"Share of a window's compute, retained-storage rent included, that went to evaluator roles, so grading cannot quietly eat the capability that makes future choices possible.\",\"units\":\"fraction\",\"window\":{\"kind\":\"windows\",\"n\":10,\"per\":null},\"region\":{\"rule\":\"at most\",\"lo\":0.5},\"observation\":\"evaluator_compute_share\",\"answers_for\":\"evaluator\",\"reason\":\"Stewardship of the resource base requires seeing when judging the work costs more than the work, without presuming a verdict on any single spend.\",\"lambda\":0.2},{\"id\":\"retained-storage-burn\",\"norm\":\"durable agency\",\"description\":\"Compute spent in the window, every invocation's metered cost plus retained-storage rent, so state kept past its usefulness shows up as the ongoing cost it is.\",\"units\":\"micro-USD per window\",\"window\":{\"kind\":\"windows\",\"n\":10,\"per\":null},\"region\":{\"rule\":\"below the median of the previous window\"},\"observation\":\"burn_per_window\",\"answers_for\":\"all\",\"reason\":\"Maintaining a dead institution is the case the norm warns against, and rent is where that maintenance hides.\",\"lambda\":0.1},{\"id\":\"provider-concentration-bound\",\"norm\":\"durable agency\",\"description\":\"Largest share of a window's model calls served by one provider, so dependence on a single rail is visible before it becomes an outage.\",\"units\":\"fraction\",\"window\":{\"kind\":\"windows\",\"n\":10,\"per\":null},\"region\":{\"rule\":\"at most\",\"lo\":0.8},\"observation\":\"provider_concentration\",\"answers_for\":\"all\",\"reason\":\"Optionality is a capability future choices depend on, and its erosion is gradual and easy to miss.\",\"lambda\":0.2},{\"id\":\"family-concentration-bound\",\"norm\":\"durable agency\",\"description\":\"Largest share of a window's model calls made on one foundation model family, whichever route served them, so routing around a bad provider is not mistaken for real diversification.\",\"units\":\"fraction\",\"window\":{\"kind\":\"windows\",\"n\":10,\"per\":null},\"region\":{\"rule\":\"at most\",\"lo\":0.8},\"observation\":\"family_concentration\",\"answers_for\":\"all\",\"reason\":\"Diversity across rails that all land on the same family is not diversity, and only this measure sees through the routes.\",\"lambda\":0.2},{\"id\":\"evaluator-disagreement-floor\",\"norm\":\"fidelity\",\"description\":\"Mean population standard deviation across judges of the same return, so a panel that has quietly converged on one reading is visible as the lost evidence it is.\",\"units\":\"score standard deviation\",\"window\":{\"kind\":\"windows\",\"n\":10,\"per\":null},\"region\":{\"rule\":\"at least\",\"lo\":0.05},\"observation\":\"evaluator_disagreement\",\"answers_for\":\"evaluator\",\"reason\":\"Measurements are defeasible evidence, and agreement with no spread is a warning that the disagreement that would correct them has stopped being generated.\",\"lambda\":0.2},{\"id\":\"forecast-skill-floor\",\"norm\":\"fidelity\",\"description\":\"Mean selected forecast Brier minus its paired pre-outcome prevalence-baseline Brier, so a seat whose predictions do worse than the base rate cannot be carried by a favorable mean.\",\"units\":\"score difference\",\"window\":{\"kind\":\"forecasts\",\"n\":25,\"per\":\"assembly\"},\"region\":{\"rule\":\"at least\",\"lo\":0.0},\"observation\":\"forecast_skill\",\"answers_for\":\"all\",\"reason\":\"A favorable measurement is insufficient when the underlying predictions do not beat the base rate, which is exactly what this paired score isolates.\",\"lambda\":0.3},{\"id\":\"well-formed-floor\",\"norm\":\"fidelity\",\"description\":\"Successful responses over selected invocation responses, including ballots, so a seat whose output mostly fails to parse cannot be credited on the fraction that happened to land.\",\"units\":\"fraction\",\"window\":{\"kind\":\"returns\",\"n\":25,\"per\":\"assembly\"},\"region\":{\"rule\":\"at least\",\"lo\":0.9},\"observation\":\"well_formed_rate\",\"answers_for\":\"all\",\"reason\":\"A missing or malformed measurement is not evidence of failure, but it also must not be silently dropped from the record that judges the seat.\",\"lambda\":0.2}]}"
+    },
+    {
+      "assembly_id": "meta-audit",
+      "role": "meta",
+      "model_id": "openai/gpt-6-sol",
+      "purpose": "propose",
+      "cost_micro": 93486,
+      "stop_reason": "stop",
+      "error": null,
+      "text": "{\n  \"cards\": [\n    {\n      \"id\": \"settled-usefulness\",\n      \"norm\": \"consequential usefulness\",\n      \"description\": \"At least half of eligible settled producer consequences should have a positive return_paid_off outcome; periods without eligible settlements remain unmeasured.\",\n      \"units\": \"fraction\",\n      \"window\": {\"kind\": \"forecasts\", \"n\": 25, \"per\": \"role\"},\n      \"region\": {\"rule\": \"at least\", \"lo\": 0.5},\n      \"observation\": \"consequence_paid_off_rate\",\n      \"answers_for\": \"producer\",\n      \"lambda\": 0.1,\n      \"reason\": \"Settled consequences provide stronger evidence of usefulness than internal approval, without requiring any quota of actions.\"\n    },\n    {\n      \"id\": \"forecast-baseline\",\n      \"norm\": \"epistemic integrity\",\n      \"description\": \"Resolved forecasts should, on average, have Brier loss no worse than their paired pre-outcome prevalence baselines.\",\n      \"units\": \"score difference\",\n      \"window\": {\"kind\": \"forecasts\", \"n\": 25, \"per\": \"assembly\"},\n      \"region\": {\"rule\": \"at most\", \"hi\": 0},\n      \"observation\": \"forecast_skill\",\n      \"answers_for\": \"all\",\n      \"lambda\": 0.1,\n      \"reason\": \"A pre-outcome baseline tests whether stated probabilities add information without changing a promise after its result is known.\"\n    },\n    {\n      \"id\": \"response-validity\",\n      \"norm\": \"durable agency\",\n      \"description\": \"At least 95% of invocation responses should be well formed, with insufficient samples left unmeasured.\",\n      \"units\": \"fraction\",\n      \"window\": {\"kind\": \"returns\", \"n\": 25, \"per\": \"assembly\"},\n      \"region\": {\"rule\": \"at least\", \"lo\": 0.95},\n      \"observation\": \"well_formed_rate\",\n      \"answers_for\": \"all\",\n      \"lambda\": 0.05,\n      \"reason\": \"Parseable responses preserve the ability to act and learn while avoiding charges for unusable work.\"\n    }\n  ]\n}"
+    },
+    {
+      "assembly_id": "judge-adversary",
+      "role": "adversary",
+      "model_id": "deepseek/deepseek-v4.1-flash",
+      "purpose": "propose",
+      "cost_micro": 1028,
+      "stop_reason": "length",
+      "error": "malformed or incomplete reply (stop_reason=length)",
+      "text": "{\n  \"cards\": [\n    {\n    \"id\": \"uptake-follows-usefulness\",\n    \"norm\": \"consequential usefulness\",\n    \"description\": \"Share of a seat's registered tools, observations and assemblies that an independent lineage took up before their uptake window closed, pooled over the factory's producer scopes.\",\n    \"units\": \"fraction\",\n    \"window\": {\"kind\": \"windows\", \"n\": 8, \"per\": null},\n    \"region\": {\"rule\": \"at least\", \"lo\": 0.2},\n    \"observation\": \"revision_rate\",\n    \"answers_for\": \"producer\",\n    \"reason\": \"Consequential usefulness is evidenced by independent uptake, and a low revision_rate over closed windows is the nearest settled proxy for work nobody else chose to reuse.\"\n    },\n    {\n    \"id\": \"answerable-commitments\",\n    \"norm\": \"epistemic integrity\",\n    \"description\": \"Mean avoidably unresolved accepted commitments over eligible due commitments, grouped by the assembly that owned them, so a seat that never lets the world settle its promises is visible.\",\n    \"units\": \"fraction\",\n    \"window\": {\"kind\": \"returns\", \"n\": 20, \"per\": \"assembly\"},\n    \"region\": {\"rule\": \"at most\", \"lo\": 0.0, \"hi\": 0.3},\n    \"observation\": \"avoidably_unresolved_share\",\n    \"answers_for\": \"all\",\n    \"reason\": \"Epistemic integrity requires commitments answerable to evidence, and this measure names only avoidable non-resolution rather than counting genuinely unobservable ones against a seat.\"\n    },\n    {\n    \"id\": \"compute-not-rent\",\n    \"norm\": \"durable agency\",\n    \"description\": \"Share of window compute spent on evaluator roles (judges, adversarial judges, every meta tier), retained-storage rent included, as a ceiling on overhead before any production happens.\",\n    \"units\": \"fraction\",\n    \"window\": {\"kind\": \"windows\", \"n\": 6, \"per\": null},\n    \"region\": {\"rule\": \"at most\", \"lo\": 0.0, \"hi\": 0.5},\n    \"observation\": \"evaluator_compute_share\",\n    \"answers_for\": \"all\",\n    \"reason\": \"Durable agency means keeping resources for future worthwhile choices, so an evaluator apparatus that eats most of each window's burn is a stewardship failure even while it grades honestly.\"\n    },\n    {\n    \"id\": \"no-single-supplier\",\n    \"norm\": \"bounded reciprocity\",\n    \"description\": \"Largest share of the window's model calls served by one provider, capped so no seat's advantage rests on a single counterparty's terms being imposed on everyone else.\",\n    \"units\": \"fraction\",\n    \"window\": {\"kind\": \"windows\", \"n\": 6, \"per\": null},\n    \"region\": {\"rule\": \"at most\", \"lo\": 0.0, \"hi\": 0.8},\n    \"observation\": \"provider_concentration\",\n    \"answers_for\": \"all\",\n    \"reason\": \"Bounded reciprocity forbids financing the factory's advantage through unconsented costs on outsiders, and single-provider dependence is where such costs get passed along invisibly.\"\n    },\n    {\n    \"id\": \"verdicts-track-outcomes\",\n    \"norm\": \"fidelity\",\n    \"description\": \"Mean consequence-paid-off rate over settled consequences, grouped by judging role, so a favourable verdict mean that supported consequences contradict is caught rather than rewarded.\",\n    \"units\": \"fraction\",\n    \"window\": {\"kind\": \"forecasts\", \"n\": 25, \"per\": \"role\"},\n    \"region\": {\"rule\": \"at least\", \"lo\": 0.4},\n    \"observation\": \"consequence_paid_off_rate\",\n    \"answers_for\": \"evaluator\",\n    \"reason\": \"Fidelity treats measurements as defeasible evidence of the values, so this card refuses to let a high verdict_mean stand when the settled outcomes behind it do not pay off.\"\n    },\n    {\n    \"id\": \"forecast-skill-positive\",\n    \"norm\": \"epistemic integrity\",\n    \"description\": \"Mean forecast Brier minus its paired prevalence-baseline Brier, pooled across forecasters, as a floor that a seat claiming foresight must clear.\",\n    \"units\": \"score difference\",\n    \"window\": {\"kind\": \"forecasts\", \"n\": 25, \"per\": null},\n    \"region\": {\"rule\": \"above\", \"lo\": 0.0},\n    \"observation\": \"forecast_skill\",\n    \"answers_for\": \"all\",\n    \"reason\": \"Epistemic integrity demands commitments answerable to evidence, and a forecaster beating only the prevalence baseline is not yet offering evidence it can be wrong about.\"\n    },\n    {\n    \"id\": \"malformed-returns-bound\",\n    \"norm\": \"consequential usefulness\",\n    \"description\": \"Successful responses over selected invocation responses, including ballots, grouped by producer assembly, as a floor on returns that are actually usable by others.\",\n    \"units\": \"fraction\",\n    \"window\": {\"kind\": \"returns\", \"n\": 20, \"per\": \"assembly\"},\n    \"region\": {\"rule\": \"at least\", \"lo\": 0.9},\n    \"observation\": \"well_formed_rate\",\n    \"answers_for\": \"producer\",\n    \"reason\": \"A return nobody can parse cannot be useful to an independent counterparty, so well-formedness is the minimum condition of consequential usefulness rather than a separate virtue.\"\n    },\n    {\n    \"id\": \"disagreement-not-hidden\",\n    \"norm\": \"fidelity\",\n    \"description\": \"Mean population standard deviation across judges of the same return, requiring at least two judges in the window, as a ceiling that keeps genuine disagreement visible instead of smoothed away.\",\n    \"units\": \"score standard deviation\",\n    \"window\": {\"kind\": \"windows\", \"n\": 6, \"per\": null},\n    \"region\": {\"rule\": \"below\", \"lo\": 0.0, \"hi\": 0.25},\n    \"observation\": \"evaluator_disagreement\",\n    \"answers_for\": \"evaluator\",\n    \"reason\": \"Fidelity treats a favourable measurement as insufficient evidence, and a judging population that never disagrees is producing a measurement that has stopped being evidence.\"\n    },\n    {\n    \"id\": \"registry-churn-bounded\",\n    \"norm\": \"durable agency\",\n    \"description\": \"Registration rejections in the window as a ceiling, so a seat that keeps proposing registrations the world refuses is spending scarce agency on churn rather than capability.\",\n    \"units\": \"count\",\n    \"window\": {\"kind\": \"windows\", \"n\": 6, \"per\": null},\n    \"region\": {\"rule\": \"at most\", \"lo\": 0.0, \"hi\": 5.0},\n    \"observation\": \"registration_rejections\",\n    \"answers_for\": \"all"
+    },
+    {
+      "assembly_id": "antagonist",
+      "role": "antagonist",
+      "model_id": "openai/gpt-6-luna",
+      "purpose": "propose",
+      "cost_micro": 890,
+      "stop_reason": "stop",
+      "error": null,
+      "text": "{\n  \"cards\": [\n    {\n      \"id\": \"usefulness-paid-off\",\n      \"norm\": \"consequential usefulness\",\n      \"description\": \"Share of settled producer consequences that paid off; interpret this as defeasible evidence of value, not a substitute for independent uptake or contrary evidence.\",\n      \"units\": \"fraction\",\n      \"window\": {\n        \"kind\": \"returns\",\n        \"n\": 5,\n        \"per\": \"assembly\"\n      },\n      \"region\": {\n        \"rule\": \"at least\",\n        \"lo\": 0.5\n      },\n      \"observation\": \"consequence_paid_off_rate\",\n      \"answers_for\": \"producer\",\n      \"reason\": \"A paid-off consequence is evidence that work delivered value beyond internal approval.\"\n    },\n    {\n      \"id\": \"forecast-calibration\",\n      \"norm\": \"epistemic integrity\",\n      \"description\": \"Mean selected forecast Brier score minus its paired pre-outcome prevalence-baseline Brier score; values at or below zero indicate forecasts beat that baseline.\",\n      \"units\": \"score difference\",\n      \"window\": {\n        \"kind\": \"forecasts\",\n        \"n\": 5,\n        \"per\": \"assembly\"\n      },\n      \"region\": {\n        \"rule\": \"at most\",\n        \"hi\": 0\n      },\n      \"observation\": \"forecast_skill\",\n      \"answers_for\": \"all\",\n      \"reason\": \"Comparison with a pre-outcome baseline tests whether stated uncertainty tracks evidence rather than mere confidence.\"\n    },\n    {\n      \"id\": \"response-cost-bound\",\n      \"norm\": \"durable agency\",\n      \"description\": \"Mean cost over every selected response, failed ones included; retained-storage rent is added to response costs and is not counted as a response.\",\n      \"units\": \"micro-USD per attempt\",\n      \"window\": {\n        \"kind\": \"returns\",\n        \"n\": 5,\n        \"per\": \"assembly\"\n      },\n      \"region\": {\n        \"rule\": \"at most\",\n        \"hi\": 100000\n      },\n      \"observation\": \"cost_per_attempt\",\n      \"answers_for\": \"all\",\n      \"reason\": \"Keeping typical response costs bounded helps preserve resources for future worthwhile work without treating all expenditure as waste.\"\n    },\n    {\n      \"id\": \"judgement-resolution\",\n      \"norm\": \"fidelity\",\n      \"description\": \"Attributable, avoidably unresolved accepted commitments over eligible commitments due in the responsible scope; no eligible sample is unmeasured, not zero.\",\n      \"units\": \"fraction\",\n      \"window\": {\n        \"kind\": \"forecasts\",\n        \"n\": 5,\n        \"per\": \"assembly\"\n      },\n      \"region\": {\n        \"rule\": \"at most\",\n        \"hi\": 0.3\n      },\n      \"observation\": \"avoidably_unresolved_share\",\n      \"answers_for\": \"evaluator\",\n      \"reason\": \"Tracking avoidable non-resolution supports answerability while excluding not-yet-due or externally unobservable commitments.\"\n    },\n    {\n      \"id\": \"compute-burden\",\n      \"norm\": \"bounded reciprocity\",\n      \"description\": \"Compute spent in the window, including invocation costs and retained-storage rent; use as a resource-burden signal rather than proof that outsiders were or were not harmed.\",\n      \"units\": \"micro-USD per window\",\n      \"window\": {\n        \"kind\": \"windows\",\n        \"n\": 5,\n        \"per\": null\n      },\n      \"region\": {\n        \"rule\": \"at most\",\n        \"hi\": 1000000\n      },\n      \"observation\": \"burn_per_window\",\n      \"answers_for\": \"all\",\n      \"reason\": \"Monitoring aggregate resource use can flag burdens needing scrutiny, while the norm still requires evidence about consent and external costs.\"\n    }\n  ]\n}"
+    },
+    {
+      "assembly_id": "antagonist-core",
+      "role": "antagonist",
+      "model_id": "qwen/qwen3.8-flash",
+      "purpose": "propose",
+      "cost_micro": 6386,
+      "stop_reason": "stop",
+      "error": null,
+      "text": "{\n  \"cards\": [\n    {\n      \"answers_for\": \"all\",\n      \"description\": \"Mean successful response cost in the selected rows; global closed windows use successful producer returns. A retained-storage charge adds to what those responses cost and is never counted as one of them.\",\n      \"id\": \"cost_per_return\",\n      \"lambda\": 0,\n      \"norm\": \"durable agency\",\n      \"observation\": \"cost_per_return\",\n      \"reason\": \"Stewardship requires tracking the compute resources consumed by successful operations to ensure future choices remain possible.\",\n      \"region\": {\n        \"rule\": \"at most\"\n      },\n      \"units\": \"micro-USD per return\",\n      \"window\": {\n        \"kind\": \"returns\",\n        \"n\": 10,\n        \"per\": null\n      }\n    },\n    {\n      \"answers_for\": \"producer\",\n      \"description\": \"Share of selected responses declaring noop or hold; global closed windows use producer returns.\",\n      \"id\": \"noop_share\",\n      \"lambda\": 0,\n      \"norm\": \"consequential usefulness\",\n      \"observation\": \"noop_share\",\n      \"reason\": \"Uptake by independent counterparties is evidence of value, so a high rate of non-action suggests a failure to create things others have reason to value.\",\n      \"region\": {\n        \"rule\": \"below the median of the previous window\"\n      },\n      \"units\": \"fraction\",\n      \"window\": {\n        \"kind\": \"returns\",\n        \"n\": 20,\n        \"per\": \"assembly\"\n      }\n    },\n    {\n      \"answers_for\": \"evaluator\",\n      \"description\": \"Mean evaluator verdict; forecast selectors use the verdicts attached to resolved forecasts, grouped by the judged return's assembly or role.\",\n      \"id\": \"verdict_mean\",\n      \"lambda\": 0,\n      \"norm\": \"fidelity\",\n      \"observation\": \"verdict_mean\",\n      \"reason\": \"Measurements are defeasible evidence of values, so tracking the mean verdict ensures that internal applause aligns with supported consequences rather than substituting for them.\",\n      \"region\": {\n        \"rule\": \"between\"\n      },\n      \"units\": \"score\",\n      \"window\": {\n        \"kind\": \"windows\",\n        \"n\": 5,\n        \"per\": null\n      }\n    },\n    {\n      \"answers_for\": \"meta\",\n      \"description\": \"Compute the evaluator roles (judges, adversarial judges, every tier of meta) spent in the window over all compute spent in it, retained-storage rent included.\",\n      \"id\": \"evaluator_compute_share\",\n      \"lambda\": 0,\n      \"norm\": \"bounded reciprocity\",\n      \"observation\": \"evaluator_compute_share\",\n      \"reason\": \"The factory must not finance its advantage by imposing unconsented costs on outsiders, so limiting the share of resources spent on self-evaluation preserves external utility.\",\n      \"region\": {\n        \"rule\": \"at most\"\n      },\n      \"units\": \"fraction\",\n      \"window\": {\n        \"kind\": \"windows\",\n        \"n\": 10,\n        \"per\": null\n      }\n    },\n    {\n      \"answers_for\": \"all\",\n      \"description\": \"Censored outcomes over resolved outcomes; forecast selectors use forecast records, global closed windows also include judgements and exposures.\",\n      \"id\": \"censored_share\",\n      \"lambda\": 0,\n      \"norm\": \"epistemic integrity\",\n      \"observation\": \"censored_share\",\n      \"reason\": \"Preserving the ability to discover that commitments were wrong requires minimizing censored outcomes where evidence cannot settle the promise.\",\n      \"region\": {\n        \"rule\": \"at most\"\n      },\n      \"units\": \"fraction\",\n      \"window\": {\n        \"kind\": \"forecasts\",\n        \"n\": 25,\n        \"per\": null\n      }\n    }\n  ]\n}"
+    },
+    {
+      "assembly_id": "empirical",
+      "role": "producer",
+      "model_id": "openai/gpt-6-luna",
+      "purpose": "vote",
+      "cost_micro": 5160,
+      "stop_reason": "stop",
+      "error": null,
+      "text": "{\"votes\":[{\"proposal\":\"p01\",\"vote\":true,\"reason\":\"Independent lineage uptake is direct evidence of consequential usefulness; eligible settled outcomes and missing-evidence handling are appropriately specified.\"},{\"proposal\":\"p02\",\"vote\":true,\"reason\":\"A paired baseline skill floor supports evidence-answerable commitments, and unresolved commitments are tracked separately rather than mistaken for settled forecasts.\"},{\"proposal\":\"p03\",\"vote\":true,\"reason\":\"Measures avoidable unresolved commitments while excluding not-yet-due and faultless external-unobservability cases; no sample remains unmeasured.\"},{\"proposal\":\"p04\",\"vote\":true,\"reason\":\"Metered compute and storage rent are relevant stewardship costs, with an absolute ceiling that is measurable, though not a complete measure of durable agency.\"},{\"proposal\":\"p05\",\"vote\":true,\"reason\":\"Including failed attempts and allocated storage costs discourages shifting resource burdens to others; it is a useful bounded-reciprocity burden signal.\"},{\"proposal\":\"p06\",\"vote\":false,\"reason\":\"Censored outcomes divided by resolved outcomes is not a share of all outcomes and can exceed one; it does not cleanly measure the stated missing-evidence concern.\"},{\"proposal\":\"p08\",\"vote\":true,\"reason\":\"This is a clear accountability measure for due commitments, appropriately excluding external unobservability without fault and treating an empty eligible sample as unmeasured.\"},{\"proposal\":\"p09\",\"vote\":false,\"reason\":\"The observation is verdict_mean, not the described combination of four score series or a measure of drift from consequences; the card's interpretation and measurement do not match.\"},{\"proposal\":\"p11\",\"vote\":false,\"reason\":\"Antagonist exposure wins are not established as the residual measure of externality or unconsented costs. Treating a high win rate as proof of imposition is unsupported.\"},{\"proposal\":\"p12\",\"vote\":false,\"reason\":\"Burn divided by starting equity is measurable, but an equity-relative ceiling does not by itself establish stewardship or capability preservation, and the stated threshold lacks grounding.\"},{\"proposal\":\"p13\",\"vote\":false,\"reason\":\"Judge disagreement alone does not establish poor evaluator fit or whether the stack earns its keep; low disagreement can also conceal lost evidence.\"},{\"proposal\":\"p14\",\"vote\":true,\"reason\":\"Paid-off settled consequences are relevant direct evidence of usefulness and the observation matches the measure.\"},{\"proposal\":\"p15\",\"vote\":true,\"reason\":\"Paired Brier skill against the pre-outcome baseline is a relevant, evidence-grounded epistemic-integrity measure.\"},{\"proposal\":\"p16\",\"vote\":true,\"reason\":\"Compute plus retained-storage rent is a transparent resource-use signal relevant to durable agency; the threshold is measurable.\"},{\"proposal\":\"p17\",\"vote\":false,\"reason\":\"Single-coin position concentration is not a reliable measure of outsiders' unconsented costs, so it does not faithfully represent bounded reciprocity.\"},{\"proposal\":\"p18\",\"vote\":true,\"reason\":\"Paid-off consequences provide a useful fidelity countercheck when considered alongside documented consequences and treated as unmeasured when evidence is missing.\"},{\"proposal\":\"p19\",\"vote\":true,\"reason\":\"A settled positive paid-off consequence rate is relevant evidence of usefulness, and the specified forecast scope and threshold are measurable.\"},{\"proposal\":\"p20\",\"vote\":true,\"reason\":\"Nonnegative paired forecast skill requires forecasts to perform at least as well as the baseline, supporting epistemic integrity.\"},{\"proposal\":\"p21\",\"vote\":true,\"reason\":\"Total compute and storage spend are measurable stewardship costs; a fixed per-window cap is a defensible resource-burden constraint.\"},{\"proposal\":\"p22\",\"vote\":false,\"reason\":\"Censored outcomes over resolved outcomes is not the fraction censored among all outcomes and can exceed one; the ratio and threshold are therefore misleading.\"},{\"proposal\":\"p23\",\"vote\":true,\"reason\":\"Paid-off consequences on the producer's own work make usefulness answerable to outcomes rather than mere delivery, with a measurable eligible sample.\"},{\"proposal\":\"p27\",\"vote\":false,\"reason\":\"A requirement to fall below the previous window's median is internally unclear for a single previous-window value and enforces perpetual decline, not sound stewardship.\"},{\"proposal\":\"p30\",\"vote\":false,\"reason\":\"A minimum evaluator disagreement rewards noise rather than evidence quality; genuine disagreement may be informative, but an arbitrary floor is not fidelity.\"},{\"proposal\":\"p31\",\"vote\":true,\"reason\":\"Paired forecast Brier skill is directly measurable against a pre-outcome baseline and its floor supports fidelity to evidence.\"},{\"proposal\":\"p32\",\"vote\":true,\"reason\":\"Well-formed response rate is a relevant operational condition for reliable evidence and the card properly requires a high success floor.\"},{\"proposal\":\"p33\",\"vote\":true,\"reason\":\"A settled paid-off consequence rate for producer outcomes is useful, role-scoped evidence with sensible no-sample treatment.\"},{\"proposal\":\"p34\",\"vote\":true,\"reason\":\"Resolved forecasts performing no worse than their paired prevalence baselines is a well-defined epistemic-integrity criterion.\"},{\"proposal\":\"p35\",\"vote\":false,\"reason\":\"Response validity is relevant, but assigning it to durable agency is a weak normative fit; it measures execution quality rather than stewardship of future capabilities.\"},{\"proposal\":\"p37\",\"vote\":true,\"reason\":\"This pairs forecast skill with a baseline and uses the correct nonpositive direction for beating that baseline.\"},{\"proposal\":\"p38\",\"vote\":false,\"reason\":\"Per-attempt cost is measurable but is only a narrow and incomplete proxy for durable agency, and the very short sample window can make the cap unstable.\"},{\"proposal\":\"p39\",\"vote\":true,\"reason\":\"Avoidably unresolved due commitments are a relevant fidelity check, and the card correctly leaves no eligible sample unmeasured.\"},{\"proposal\":\"p40\",\"vote\":false,\"reason\":\"Compute burden can indicate resource use but does not measure outsider harm; labeling it bounded reciprocity risks substituting an unrelated cost signal for evidence of unconsented costs.\"},{\"proposal\":\"p42\",\"vote\":false,\"reason\":\"A target below the prior window's noop/hold median can incentivize action for its own sake; no quota applies, and noop or hold may be the responsible choice.\"}]}"
+    },
+    {
+      "assembly_id": "judge-base-rate",
+      "role": "evaluator",
+      "model_id": "openai/gpt-6-luna",
+      "purpose": "vote",
+      "cost_micro": 964,
+      "stop_reason": "stop",
+      "error": null,
+      "text": "{\"votes\":[{\"proposal\":\"p01\",\"vote\":true,\"reason\":\"Independent lineage uptake directly evidences consequential usefulness; settled eligibility and missing-evidence handling are appropriate.\"},{\"proposal\":\"p02\",\"vote\":true,\"reason\":\"Paired Brier skill against a prevalence baseline makes commitments answerable to evidence; unresolved commitments are separately covered.\"},{\"proposal\":\"p03\",\"vote\":true,\"reason\":\"Measures avoidable unresolved commitments with sensible exclusions and no-sample handling, supporting accountable commitments.\"},{\"proposal\":\"p04\",\"vote\":false,\"reason\":\"Absolute compute burn is a weak durable-agency measure without relating expenditure to resources, capability, or value; the ceiling is also arbitrary.\"},{\"proposal\":\"p05\",\"vote\":false,\"reason\":\"Response cost does not establish that outsiders bear unconsented costs; cost discipline alone is not bounded reciprocity.\"},{\"proposal\":\"p06\",\"vote\":false,\"reason\":\"Censoring share is useful diagnostic context, but treating a favorable upper bound as a fidelity metric risks conflating missing evidence with value failure.\"},{\"proposal\":\"p08\",\"vote\":true,\"reason\":\"Appropriately measures attributable avoidable non-resolution of due commitments and treats an empty sample as unmeasured.\"},{\"proposal\":\"p09\",\"vote\":false,\"reason\":\"The observation is verdict_mean, not the described combined early-warning series; a high verdict mean cannot measure drift from consequences.\"},{\"proposal\":\"p11\",\"vote\":false,\"reason\":\"The asserted equivalence between antagonist wins and imposed outsider costs is not established; the rate alone is only a proxy and can misstate reciprocity.\"},{\"proposal\":\"p12\",\"vote\":false,\"reason\":\"Burn as a fraction of starting equity is still not a measure of stewardship or preserved future agency, and does not account for capability gained.\"},{\"proposal\":\"p13\",\"vote\":false,\"reason\":\"Evaluator disagreement is not a reliable measure of judge quality or epistemic integrity; low disagreement may reflect valid agreement, not poor fit.\"},{\"proposal\":\"p14\",\"vote\":false,\"reason\":\"The broad settled-consequence payoff rate lacks the eligibility and missing-measurement qualifications needed to support a reliable usefulness card.\"},{\"proposal\":\"p15\",\"vote\":true,\"reason\":\"Paired forecast Brier skill against a pre-outcome baseline is an evidence-based, interpretable epistemic-integrity measure.\"},{\"proposal\":\"p16\",\"vote\":false,\"reason\":\"Absolute compute burn does not establish durable agency, and the proposed ceiling has no stated relation to resources or worthwhile capability.\"},{\"proposal\":\"p17\",\"vote\":false,\"reason\":\"Position concentration is not evidence of unconsented costs to outsiders; the proxy is misaligned with bounded reciprocity.\"},{\"proposal\":\"p18\",\"vote\":true,\"reason\":\"A payoff-rate countercheck is relevant evidence, and explicitly requires contextual consequences and treats missing measurement as unmeasured, consistent with fidelity.\"},{\"proposal\":\"p19\",\"vote\":false,\"reason\":\"A positive payoff threshold for selected forecast consequences is a narrow proxy for usefulness and lacks explicit missing-sample and independent-uptake safeguards.\"},{\"proposal\":\"p20\",\"vote\":true,\"reason\":\"Requiring forecast skill no worse than the paired baseline provides a clear, evidence-grounded epistemic-integrity floor.\"},{\"proposal\":\"p21\",\"vote\":false,\"reason\":\"A fixed absolute compute limit has no grounding in available resources or future agency and could penalize worthwhile capability spending.\"},{\"proposal\":\"p22\",\"vote\":false,\"reason\":\"Censoring is not itself evidence of failed fidelity; an arbitrary ceiling risks treating unavailable outcomes as poor performance.\"},{\"proposal\":\"p23\",\"vote\":false,\"reason\":\"A payoff share for producer returns does not establish independent uptake, and its forecast window is an imprecise match for return consequences.\"},{\"proposal\":\"p27\",\"vote\":false,\"reason\":\"A requirement to beat the previous window's median is unstable and not a defensible stewardship target; lower burn need not mean better stewardship.\"},{\"proposal\":\"p30\",\"vote\":false,\"reason\":\"A minimum disagreement floor wrongly treats evaluator disagreement as inherently desirable; agreement may be accurate, and disagreement alone does not ensure fidelity.\"},{\"proposal\":\"p31\",\"vote\":true,\"reason\":\"Forecast Brier skill versus a paired base-rate baseline is a direct and interpretable test of evidential performance.\"},{\"proposal\":\"p32\",\"vote\":false,\"reason\":\"Well-formed response rate is operational reliability, not a sufficient measure of fidelity; validly formatted responses may still be wrong.\"},{\"proposal\":\"p33\",\"vote\":false,\"reason\":\"The payoff rate may be useful, but this card omits explicit missing-sample handling and measures settled outcomes without establishing independent uptake.\"},{\"proposal\":\"p34\",\"vote\":true,\"reason\":\"A no-worse-than-baseline forecast skill criterion directly supports answerable, evidence-based commitments.\"},{\"proposal\":\"p35\",\"vote\":false,\"reason\":\"Response validity is not durable agency itself; the fixed threshold is not justified as a stewardship measure.\"},{\"proposal\":\"p37\",\"vote\":true,\"reason\":\"The paired Brier-minus-baseline measure is an appropriate epistemic-integrity test, with the direction of the bound correctly specified.\"},{\"proposal\":\"p38\",\"vote\":false,\"reason\":\"Per-attempt cost is not a direct measure of durable agency, and the low sample window and arbitrary cap weaken it further.\"},{\"proposal\":\"p39\",\"vote\":true,\"reason\":\"Avoidable unresolved commitments are attributable and due-scoped, and no eligible sample is correctly unmeasured.\"},{\"proposal\":\"p40\",\"vote\":false,\"reason\":\"The description correctly warns that compute burden does not prove outsider harm, so it is not an adequate bounded-reciprocity metric.\"},{\"proposal\":\"p42\",\"vote\":false,\"reason\":\"A target below the previous window's noop share encourages activity regardless of whether action creates valued consequences; no quota to avoid noop is warranted.\"}]}"
+    },
+    {
+      "assembly_id": "meta-calibration",
+      "role": "meta",
+      "model_id": "xiaomi/mimo-v2.6-flash",
+      "purpose": "vote",
+      "cost_micro": 5698,
+      "stop_reason": "stop",
+      "error": null,
+      "text": "{\"votes\":[{\"proposal\":\"p01\",\"vote\":true,\"reason\":\"Directly measures independent uptake of producer work, the charter's own evidence for consequential usefulness; settled-only, missing-as-unmeasured treatment respects fidelity.\"},{\"proposal\":\"p02\",\"vote\":true,\"reason\":\"Forecast skill vs. baseline with unresolved commitments handled by the existing censorship-bound card avoids double-counting; a non-negative floor is a reasonable epistemic integrity bar.\"},{\"proposal\":\"p03\",\"vote\":true,\"reason\":\"Well-specified avoidable-unresolved ceiling with proper exclusions (not-yet-due, external unobservability) and unmeasured-not-zero handling; duplicates the standing censorship-bound card but with clearer wording, acceptable.\"},{\"proposal\":\"p04\",\"vote\":true,\"reason\":\"A ceiling on per-window compute burn in absolute micro-USD is a simple stewardship guardrail consistent with durable agency.\"},{\"proposal\":\"p05\",\"vote\":true,\"reason\":\"Mean cost per attempt including failures and storage rent is a legitimate resource-burden signal for bounded reciprocity; the description correctly frames it as cost discipline, not proof of harm.\"},{\"proposal\":\"p06\",\"vote\":true,\"reason\":\"Censorship share ceiling with explicit fidelity caveats (interpret alongside consequences, missingness alone isn't failure) matches the norm's letter.\"},{\"proposal\":\"p08\",\"vote\":true,\"reason\":\"Substantively identical to p03 and the standing censorship-bound card with careful exclusions; no defect found.\"},{\"proposal\":\"p09\",\"vote\":false,\"reason\":\"Averaging four heterogeneous score series (verdict mean, meta mean, consequence skill, disagreement) into one mean and capping at 0.8 conflates incommensurable quantities; a high reading isn't clearly a violation, and the observation named (verdict_mean) doesn't match the described composite.\"},{\"proposal\":\"p11\",\"vote\":true,\"reason\":\"Exposure win rate is a reasonable proxy for outsiders bearing unconsented costs, and the description is candid that it measures the residual after reconciliation; a 0.6 ceiling is defensible for bounded reciprocity.\"},{\"proposal\":\"p12\",\"vote\":true,\"reason\":\"Expressing burn as a ratio of starting equity reads stewardship against the resource base, a better form than an absolute dollar cap; consistent with durable agency.\"},{\"proposal\":\"p13\",\"vote\":true,\"reason\":\"A ceiling on inter-judge disagreement flags an inconsistent panel and is a sensible epistemic integrity check on evaluation quality.\"},{\"proposal\":\"p14\",\"vote\":true,\"reason\":\"Share of settled consequences paid off is a direct, consequence-grounded measure of usefulness; short window (10) is a minor concern but unmeasured-when-short is handled.\"},{\"proposal\":\"p15\",\"vote\":true,\"reason\":\"Brier skill vs. paired prevalence baseline with a non-negative floor is a clean epistemic integrity test.\"},{\"proposal\":\"p16\",\"vote\":true,\"reason\":\"Same substance as p04 (per-window compute ceiling including storage), shorter window; reasonable stewardship guardrail.\"},{\"proposal\":\"p17\",\"vote\":false,\"reason\":\"Single-coin position concentration is a risk/limit metric, not evidence of unconsented outsider costs; mislabels a proxy for the bounded reciprocity norm without a defensible link.\"},{\"proposal\":\"p18\",\"vote\":true,\"reason\":\"Consequence paid-off share framed explicitly as a fidelity countercheck with missingness treated as unmeasured matches the norm's letter about measurement vs. supported consequences.\"},{\"proposal\":\"p19\",\"vote\":true,\"reason\":\"Half of settled forecast consequences positive is a straightforward consequential usefulness floor with proper settled-sample framing.\"},{\"proposal\":\"p20\",\"vote\":true,\"reason\":\"Region rule 'at most 0.0' on a score difference defined as Brier minus baseline: values <= 0 mean forecasts beat the baseline, matching the description; this is the correct orientation (p34/p37 have it inverted).\"},{\"proposal\":\"p21\",\"vote\":true,\"reason\":\"Tighter per-window compute ceiling (1e6 micro-USD, n=5) is a valid stewardship guardrail, though shorter window gives noisier readings.\"},{\"proposal\":\"p22\",\"vote\":true,\"reason\":\"A 0.5 censoring ceiling complements the stricter censorship-bound card; reasonable fidelity guardrail.\"},{\"proposal\":\"p23\",\"vote\":true,\"reason\":\"Consequence paid-off share scoped to the seat's own produced returns with a 0.4 floor is a fair uptake/follow-through test for consequential usefulness.\"},{\"proposal\":\"p27\",\"vote\":false,\"reason\":\"'Below the median of the previous window' as a rule for a burn measure forces perpetual reduction with no absolute anchor; pathological under a growing workload and not clearly a durable-agency value.\"},{\"proposal\":\"p30\",\"vote\":false,\"reason\":\"Requiring evaluator disagreement to be at least 0.05 rewards panel discord as such; loss of independent signal is real but a floor on disagreement penalizes legitimate convergence and inverts the usual diagnostic.\"},{\"proposal\":\"p31\",\"vote\":true,\"reason\":\"Same forecast-skill floor as p02 but framed under fidelity: a sub-baseline mean cannot be excused by a favorable aggregate, exactly the norm's concern.\"},{\"proposal\":\"p32\",\"vote\":true,\"reason\":\"Well-formed response floor including ballots is a sound fidelity precondition: malformed output can't be credited on the fraction that parsed.\"},{\"proposal\":\"p33\",\"vote\":true,\"reason\":\"Settled producer consequences with positive payoff, unmeasured when no eligible sample; consistent with consequential usefulness and fidelity.\"},{\"proposal\":\"p34\",\"vote\":false,\"reason\":\"Region rule 'at most 0.0' on forecast_skill where skill is defined as Brier minus baseline: the description says 'no worse than baseline' but Brier-minus-baseline <= 0 is the correct sign only if skill is baseline-minus-Brier; as defined, values <= 0 mean the forecast beat baseline... however the observation's unit_range and p15/p31 use 'at least 0.0' for the same orientation, so this card's orientation contradicts its peers and is ambiguous as written.\"},{\"proposal\":\"p35\",\"vote\":true,\"reason\":\"95% well-formed floor with insufficient samples unmeasured is a reasonable capability/validity guardrail for durable agency.\"},{\"proposal\":\"p37\",\"vote\":false,\"reason\":\"Same orientation issue as p34: 'at most 0.0' conflicts with p02/p15/p31 which use 'at least 0.0' for the identical observation and stated intent; ambiguity over which sign convention holds makes the card unsafe to enact, plus a very short window (n=5).\"},{\"proposal\":\"p38\",\"vote\":true,\"reason\":\"Per-attempt cost ceiling including failures and storage rent, with correct handling of storage not counting as a response; sensible durable-agency bound.\"},{\"proposal\":\"p39\",\"vote\":true,\"reason\":\"Avoidably-unresolved ceiling scoped to evaluators with unmeasured-not-zero rule; a legitimate fidelity accountability measure, though it overlaps the standing censorship-bound card.\"},{\"proposal\":\"p40\",\"vote\":false,\"reason\":\"Own compute spend is not a bounded-reciprocity metric: spending one's own budget doesn't impose unconsented costs on outsiders, and the description itself concedes it is not proof of harm; norm mismatch.\"},{\"proposal\":\"p42\",\"vote\":false,\"reason\":\"Forcing noop/hold share below the previous window's median penalizes restraint itself; declining to act can be the right choice, and inactivity imposes no cost on outsiders, so this neither measures usefulness nor respects the norm.\"}]}"
+    },
+    {
+      "assembly_id": "judge-adversary",
+      "role": "adversary",
+      "model_id": "deepseek/deepseek-v4.1-flash",
+      "purpose": "vote",
+      "cost_micro": 13671,
+      "stop_reason": "stop",
+      "error": null,
+      "text": "{\"votes\": [{\"proposal\": \"p01\", \"vote\": true, \"reason\": \"Independent uptake is the operational reading of consequential usefulness: a registration, tool or service only counts once an unrelated lineage takes it up, so internal applause cannot carry it. Assessing only eligible settled outcomes and leaving missing evidence unmeasured matches the fidelity norm, and the window (25 windows, at least 0.2) is a modest, defeasible bar.\"}, {\"proposal\": \"p02\", \"vote\": true, \"reason\": \"Skill against the pre-outcome prevalence baseline is the cleanest test of epistemic integrity: it preserves the ability to discover that forecasts were wrong and cannot be gamed by favorable means. Tracking unresolved commitments separately on the existing censorship-bound card avoids double-counting censoring as failure.\"}, {\"proposal\": \"p03\", \"vote\": true, \"reason\": \"A ceiling on avoidably unresolved commitments is the direct commitment-keeping measure, and the card correctly excludes not-yet-due commitments, documented external unobservability without fault, and treats no eligible sample as unmeasured. That is a defensible reading of epistemic integrity without punishing honest censoring.\"}, {\"proposal\": \"p04\", \"vote\": true, \"reason\": \"An absolute compute ceiling is a blunt but real stewardship signal: total metered invocation plus retained-storage rent per closed window is the resource actually spent. Since burn is the only observed liability here and equity is small, a hard cap protects durable agency even if it is less well-scaled than a ratio card.\"}, {\"proposal\": \"p05\", \"vote\": true, \"reason\": \"Cost over all selected responses, failures included, with storage rent charged to responses but never counted as one, is the honest denominator for bounded reciprocity in this low-equity world. A 1,000,000 micro-USD-per-attempt ceiling is generous enough not to bite spuriously while still catching bleed.\"}, {\"proposal\": \"p06\", \"vote\": true, \"reason\": \"Censored share is a measurement of what we cannot see, and the card explicitly says to interpret it alongside consequence evidence and never treat missing measurement alone as failure. That is exactly the fidelity norm's defeasible reading; a 0.3 ceiling pairs with the existing censorship-bound card rather than replacing it.\"}, {\"proposal\": \"p08\", \"vote\": true, \"reason\": \"This restates the censorship-bound card with the same observation and region but adds a lambda, making the price explicit and the definition slightly tighter. The definition is sound (attributable, avoidable, due, no eligible sample unmeasured), so the duplicate is redundant rather than wrong, and redundancy on a core commitment is low risk.\"}, {\"proposal\": \"p09\", \"vote\": true, \"reason\": \"This is the fidelity norm made operational: a high combined reading of verdict mean, meta mean, consequence skill and evaluator disagreement flags values that are well measured yet drifting from the consequences they stand for. No single component is conclusive, but the composite is a reasonable early-warning, and a 0.8 ceiling is cautious.\"}, {\"proposal\": \"p11\", \"vote\": true, \"reason\": \"The antagonist exposure win rate is the residual after externality reconciliation, which is the best available direct proxy for the bounded reciprocity norm: a high share means the factory's edge is being financed by unconsented costs. A 0.6 ceiling is permissive but the measurement is the right one.\"}, {\"proposal\": \"p12\", \"vote\": true, \"reason\": \"Reading burn as a ratio of starting equity is strictly better than the absolute ceilings (p04/p16/p21/p40): stewardship should be judged against the resource base, and this card is the one that does so. A 25% per-window equity burn ceiling is loose but directionally correct.\"}, {\"proposal\": \"p13\", \"vote\": true, \"reason\": \"Judge disagreement, computed as the mean within-return population standard deviation across at least two judges, is a sound stability check on the evaluator stack. High disagreement means evaluations are internally inconsistent and probably not earning their keep, so a 0.15 ceiling on epistemic-integrity grounds is defensible.\"}, {\"proposal\": \"p14\", \"vote\": true, \"reason\": \"Consequence paid-off rate over settled selected consequences is a direct, uptake-flavored measure of consequential usefulness, and the window of 10 closed windows is short enough to see the current regime. The 0.5 floor is a reasonable midpoint given the current zero-history state.\"}, {\"proposal\": \"p15\", \"vote\": true, \"reason\": \"Forecast calibration skill for the evaluator role is the same proper scoring rule as p02 but scoped to judges, which is where forecast skill actually matters. The definition is unambiguous (paired Brier minus prevalence baseline) and the at-least-zero requirement is the minimum for claims of calibration to mean anything.\"}, {\"proposal\": \"p16\", \"vote\": true, \"reason\": \"A shorter-window duplicate of the compute ceiling, with the same 10,000,000 micro-USD cap over 10 closed windows. It is redundant with p04 but not harmful, and a shorter window is arguably more responsive to current bleeding; this is a low-stakes yes.\"}, {\"proposal\": \"p17\", \"vote\": true, \"reason\": \"Peak single-coin notional over starting equity is a reasonable proxy for the unconsented-risk channel that bounded reciprocity cares about, especially given the venue has no positions and zero leverage. A ratio-of-1.0 cap is a sane concentration limit even before any trading starts.\"}, {\"proposal\": \"p18\", \"vote\": true, \"reason\": \"This is the same paid-off-rate measurement as p14 but with explicit fidelity language: interpret alongside documented consequences and treat missing measurement as unmeasured, not failure. The caveat is what keeps a favorable number from substituting for the value, so it improves on the bare version.\"}, {\"proposal\": \"p19\", \"vote\": true, \"reason\": \"At least half of settled selected forecast consequences being positive return_paid_off outcomes is a direct, consequential test of usefulness, and its window (25 forecasts per assembly) is appropriate. It complements rather than duplicates the forecast-skill cards because it looks at paid-off outcomes, not calibration.\"}, {\"proposal\": \"p20\", \"vote\": true, \"reason\": \"Keeping mean forecast Brier no worse than the prevalence baseline is the same content as p02/p15/p31/p34, but expressed as an upper bound of 0.0 on the skill difference. That is the correct direction (skill at or above baseline) and a reasonable, minimally redundant card.\"}, {\"proposal\": \"p21\", \"vote\": true, \"reason\": \"This is the tightest compute ceiling proposed: 1,000,000 micro-USD per closed window over only 5 windows. Given equity of 120 USD and available authority of 6.86 USD, a one-dollar-per-window cap is aggressive but not impossibly so, and if the world is idle it simply will not bind.\"}, {\"proposal\": \"p22\", \"vote\": true, \"reason\": \"A 0.5 censoring ceiling is looser than p06's 0.3 and looser than the existing censorship-bound lambda-0.1 card, so it is the least punitive formulation. It is still a valid ceiling on an observable failure mode, and redundancy at a looser level is not a reason to refuse.\"}, {\"proposal\": \"p23\", \"vote\": true, \"reason\": \"Share of settled consequences on the seat's own returns that were paid off is exactly the producer-scoped reading of consequential usefulness, and the answer is whether work was taken up, not merely delivered. A 0.4 floor over 25 forecasts per assembly is a modest bar.\"}, {\"proposal\": \"p27\", \"vote\": true, \"reason\": \"Keeping burn below the median of the previous window is a self-referential but sensible stewardship signal: it detects drift upward in retained-storage and invocation cost without needing an arbitrary absolute threshold. The lambda of 0.1 keeps its penalty small while the measurement accumulates.\"}, {\"proposal\": \"p30\", \"vote\": true, \"reason\": \"A floor on evaluator disagreement is the right complement to p13: if the panel has quietly converged on one reading, the lost evidence should be visible. A 0.05 minimum standard deviation is a low, honest bar, and the card is explicitly a fidelity measurement rather than a verdict.\"}, {\"proposal\": \"p31\", \"vote\": true, \"reason\": \"This is the fidelity-named version of the forecast skill floor: a seat whose predictions do worse than the base rate cannot be carried by a favorable mean. It duplicates p02/p20/p34 in measurement but adds the explicit anti-laundering framing, which is the point of the norm.\"}, {\"proposal\": \"p32\", \"vote\": true, \"reason\": \"A 0.9 floor on well-formed responses, counting ballots and including failures, prevents a seat from being credited only on the fraction that happened to parse. This is a basic fidelity check and the card correctly scopes it to selected invocation responses per assembly.\"}, {\"proposal\": \"p33\", \"vote\": true, \"reason\": \"The producer-role paid-off floor is the same construct as p23 but partitioned by role rather than assembly, which is the appropriate scope for a producer answering for its own settled work. Periods without eligible settlements stay unmeasured, matching the fidelity caveat.\"}, {\"proposal\": \"p34\", \"vote\": true, \"reason\": \"Resolved forecasts having Brier no worse than their paired baselines is the same requirement as p02/p20/p31, here with a small lambda (0.1). The measurement is unambiguous and the direction is right, so redundancy is not a reason to refuse and the price is gentle.\"}, {\"proposal\": \"p35\", \"vote\": true, \"reason\": \"A 0.95 well-formed floor is stricter than p32's 0.9 and is tagged durable agency rather than fidelity, but the underlying requirement (responses must parse and insufficient samples stay unmeasured) is sound. The stricter threshold risks more false positives, yet the card's language keeps insufficient samples unmeasured.\"}, {\"proposal\": \"p37\", \"vote\": true, \"reason\": \"This is the short-window (5 forecasts) version of the forecast-skill-at-or-above-baseline requirement, expressed as an upper bound of 0.0. The direction is correct and the short window gives faster feedback, though it will be noisier than p02's 25-forecast window.\"}, {\"proposal\": \"p38\", \"vote\": true, \"reason\": \"A 100,000 micro-USD-per-attempt ceiling on mean cost over all selected responses, failures included, with storage rent added to response costs and not counted as a response, is a tight but honest unit-economics bound. It complements the absolute burn ceilings and directly guards stewardship.\"}, {\"proposal\": \"p39\", \"vote\": true, \"reason\": \"Scoping the avoidably-unresolved-commitment measure to the evaluator role is appropriate because judges are where unresolved judgement commitments are most likely to accumulate, and the card keeps no-eligible-sample as unmeasured. It duplicates p03/p08 in observation but adds a useful role scope.\"}, {\"proposal\": \"p40\", \"vote\": true, \"reason\": \"This is the compute-burden card framed explicitly as a bounded-reciprocity signal and correctly warns that it is a resource-burden indicator, not proof of outsider harm. Labelling it as a signal rather than a verdict is the right epistemic stance, and the 1,000,000 micro-USD cap is workable.\"}, {\"proposal\": \"p42\", \"vote\": true, \"reason\": \"A noop/hold share below the previous window's median is a reasonable activity signal and the answer set is scoped correctly to producer decisions. The relative threshold avoids an arbitrary absolute bar, and the card does not treat missing samples as failure.\"}]}"
+    },
+    {
+      "assembly_id": "antagonist",
+      "role": "antagonist",
+      "model_id": "openai/gpt-6-luna",
+      "purpose": "vote",
+      "cost_micro": 1033,
+      "stop_reason": "stop",
+      "error": null,
+      "text": "{\"votes\":[{\"proposal\":\"p01\",\"vote\":false,\"reason\":\"The revision-rate observation counts accepted registrations or activated amendments, not subsequent independent uptake; it does not measure the stated norm.\"},{\"proposal\":\"p02\",\"vote\":false,\"reason\":\"The description and threshold require skill at least zero, but the registered forecast_skill is Brier loss minus baseline, where non-worse performance is at most zero.\"},{\"proposal\":\"p03\",\"vote\":true,\"reason\":\"Measures attributable avoidable unresolved commitments, excludes not-yet-due and owner-fault-free unobservable cases, and correctly treats no eligible sample as unmeasured.\"},{\"proposal\":\"p04\",\"vote\":true,\"reason\":\"Burn per window is a relevant, directly measured resource-burden signal for durable agency; the ceiling is interpretable, though not by itself a complete stewardship test.\"},{\"proposal\":\"p05\",\"vote\":false,\"reason\":\"The cost observation is valid, but average response cost does not establish that outsiders bear no unconsented costs; it is not an adequate bounded-reciprocity measure.\"},{\"proposal\":\"p06\",\"vote\":false,\"reason\":\"The censored-share observation has the right direction, but the proposed denominator is wrong: the observation is censored outcomes over resolved outcomes, not a share among all outcomes.\"},{\"proposal\":\"p08\",\"vote\":true,\"reason\":\"This is a well-specified avoidable-unresolved ceiling with appropriate exclusions and unmeasured handling; it operationalizes answerability without counting commitments not yet due.\"},{\"proposal\":\"p09\",\"vote\":false,\"reason\":\"It names verdict_mean, so it measures only one of the four score series described; a high verdict mean does not identify divergence from consequences or fidelity failure.\"},{\"proposal\":\"p11\",\"vote\":false,\"reason\":\"The description treats antagonist wins as the residual of externality reconciliation, but the observation only records winning exposure settlements and does not establish that outsiders incurred unconsented costs.\"},{\"proposal\":\"p12\",\"vote\":false,\"reason\":\"The observation is absolute burn_per_window, not burn divided by starting equity; the stated ratio and units are unsupported by the selected observation.\"},{\"proposal\":\"p13\",\"vote\":false,\"reason\":\"Disagreement is measurable, but low judge disagreement does not demonstrate evaluator fitness or epistemic integrity; it could reflect shared error or lost diversity.\"},{\"proposal\":\"p14\",\"vote\":true,\"reason\":\"The consequence-paid-off rate is a direct, available outcome measure relevant to whether selected consequences were realized.\"},{\"proposal\":\"p15\",\"vote\":false,\"reason\":\"The observation is forecast_skill (Brier minus baseline), which should be at most zero to indicate skill; this card requires at least zero.\"},{\"proposal\":\"p16\",\"vote\":true,\"reason\":\"The card matches the burn_per_window measurement and provides a straightforward resource-burden ceiling for durable agency.\"},{\"proposal\":\"p17\",\"vote\":false,\"reason\":\"Position concentration is a trading-risk proxy, not evidence that outsiders were harmed or that costs were imposed without consent; the norm is not established by this metric.\"},{\"proposal\":\"p18\",\"vote\":true,\"reason\":\"Paid-off consequences offer a useful countercheck against favorable measurements, and the card explicitly requires interpretation alongside documented consequences and treats missing data as unmeasured.\"},{\"proposal\":\"p19\",\"vote\":true,\"reason\":\"The paid-off rate is a relevant measure of realized usefulness; the forecast selector is supported and the threshold is explicit.\"},{\"proposal\":\"p20\",\"vote\":false,\"reason\":\"The direction is reversed: forecast_skill is Brier loss minus baseline, so non-worse-than-baseline requires at most zero, not at least zero.\"},{\"proposal\":\"p21\",\"vote\":true,\"reason\":\"The observation directly measures compute spend including storage rent, and the absolute ceiling is a relevant stewardship constraint.\"},{\"proposal\":\"p22\",\"vote\":false,\"reason\":\"Censored outcomes over resolved outcomes is a ratio that can exceed one; it is not the stated share of all outcomes, so the fraction ceiling is misleading.\"},{\"proposal\":\"p23\",\"vote\":true,\"reason\":\"The consequence-paid-off rate gives producers an outcome-based signal of whether their work was taken up, rather than merely delivered.\"},{\"proposal\":\"p27\",\"vote\":false,\"reason\":\"The observation is supported, but a requirement to spend below the previous window's median is an unstable relative target that can force continual cuts regardless of capability value or useful investment.\"},{\"proposal\":\"p30\",\"vote\":false,\"reason\":\"A minimum disagreement floor treats agreement as inherently suspect; disagreement alone is not evidence of fidelity, and the threshold could reward noise rather than better measurement.\"},{\"proposal\":\"p31\",\"vote\":true,\"reason\":\"The forecast_skill direction is correctly set to at least zero, meaning Brier loss is no better than baseline; this is a relevant fidelity countercheck against unsupported forecasts.\"},{\"proposal\":\"p32\",\"vote\":true,\"reason\":\"Well-formed responses are directly measured and a high floor supports reliable evidence handling; the card has an adequate sample window.\"},{\"proposal\":\"p33\",\"vote\":true,\"reason\":\"The consequence-paid-off rate directly tracks settled producer consequences, limits the scope to the producer role, and correctly leaves periods without eligible settlements unmeasured.\"},{\"proposal\":\"p34\",\"vote\":true,\"reason\":\"The direction is correct: a Brier-minus-baseline score at most zero means forecasts are no worse than the pre-outcome prevalence baseline.\"},{\"proposal\":\"p35\",\"vote\":true,\"reason\":\"Response validity is directly observed, the minimum is explicit, and insufficient samples are appropriately left unmeasured.\"},{\"proposal\":\"p37\",\"vote\":true,\"reason\":\"This correctly requires forecast Brier loss minus baseline to be at most zero, with a forecast sample window supported by the observation.\"},{\"proposal\":\"p38\",\"vote\":true,\"reason\":\"Cost per attempt matches the observation, includes failures and allocated storage cost, and provides a relevant resource-burden bound.\"},{\"proposal\":\"p39\",\"vote\":true,\"reason\":\"The avoidably unresolved share is directly relevant to answerability, and it correctly treats an empty eligible sample as unmeasured.\"},{\"proposal\":\"p40\",\"vote\":false,\"reason\":\"Compute burn can signal resource burden, but it cannot establish whether outsiders bear unconsented costs; assigning it to bounded reciprocity confuses internal resource use with external harm.\"},{\"proposal\":\"p42\",\"vote\":false,\"reason\":\"A relative noop-share target can penalize prudent holds or reward unnecessary activity; it is not a sound measure of consequential usefulness.\"}]}"
+    },
+    {
+      "assembly_id": "antagonist",
+      "role": "antagonist",
+      "model_id": "openai/gpt-6-luna",
+      "purpose": "adopt",
+      "cost_micro": 4034,
+      "stop_reason": "stop",
+      "error": null,
+      "text": ""
+    },
+    {
+      "assembly_id": "judge-base-rate",
+      "role": "evaluator",
+      "model_id": "openai/gpt-6-luna",
+      "purpose": "adopt",
+      "cost_micro": 342,
+      "stop_reason": "stop",
+      "error": null,
+      "text": ""
+    },
+    {
+      "assembly_id": "meta-calibration",
+      "role": "meta",
+      "model_id": "xiaomi/mimo-v2.6-flash",
+      "purpose": "adopt",
+      "cost_micro": 4666,
+      "stop_reason": "stop",
+      "error": null,
+      "text": ""
+    },
+    {
+      "assembly_id": "judge-adversary",
+      "role": "adversary",
+      "model_id": "deepseek/deepseek-v4.1-flash",
+      "purpose": "adopt",
+      "cost_micro": 9590,
+      "stop_reason": "stop",
+      "error": null,
+      "text": ""
+    },
+    {
+      "assembly_id": "empirical",
+      "role": "producer",
+      "model_id": "openai/gpt-6-luna",
+      "purpose": "adopt",
+      "cost_micro": 342,
+      "stop_reason": "stop",
+      "error": null,
+      "text": ""
+    }
+  ],
+  "cost_micro": 183025
+}

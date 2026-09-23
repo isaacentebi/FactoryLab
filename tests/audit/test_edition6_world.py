@@ -9,7 +9,9 @@ Wave 5a grew the roster to the evaluator population the kernel now requires
 here as history, past the one check it fails.
 """
 
+import tomllib
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -66,12 +68,12 @@ def test_every_seat_runs_on_the_seed_system_prompt_with_a_one_sentence_prior():
         assert "not" not in lens.lower().split(), seat.id
 
 
-def test_the_charter_is_edition_5s_and_the_roster_claims_no_ratification(monkeypatch):
+def test_the_charter_is_the_populations_own_and_pins_this_roster(monkeypatch):
     five, six = _history(EDITION5, monkeypatch), load_manifest(EDITION6)
-    # Charter audit S2: the norm house keeps fidelity's value and drops its procedure;
-    # every card and every other norm is edition 5's.
-    assert six.charter.cards == five.charter.cards
-    assert six.charter_prices == five.charter_prices
+    # Essay II.IV.a: the architect supplies norms only. The norms are edition 5's (the
+    # norm house keeps fidelity's value and drops its procedure, charter audit S2); the
+    # cards are the ones edition 6's own population drafted and adopted on 23 September
+    # 2026 (docs/charter/edition6-ratified.toml).
     assert [str(n) for n in six.charter.norms] == [str(n) for n in five.charter.norms]
     for old, new in zip(five.charter.norms, six.charter.norms, strict=True):
         if str(new) != "fidelity":
@@ -79,11 +81,22 @@ def test_the_charter_is_edition_5s_and_the_roster_claims_no_ratification(monkeyp
     fidelity = next(n for n in six.charter.norms if str(n) == "fidelity")
     assert "defeasible evidence of the values" in fidelity.definition
     assert "A judge identifying such a conflict must" not in fidelity.definition
-    assert six.charter_content_sha256 != five.charter_content_sha256
-    assert six.charter_ratified_sha256 is None and six.charter_roster_sha256 is None
-    assert roster_hash(six) != roster_hash(five)
+    ratified = tomllib.loads(Path("docs/charter/edition6-ratified.toml").read_text())
+    assert [c.id for c in six.charter.cards] == [c["id"] for c in ratified["charter"]["cards"]]
+    assert six.charter.cards != five.charter.cards
+    # The pins verify: the loaded cards hash to the ratified digest and the roster to the
+    # roster that voted, so a funded copy passes charter provenance ...
+    assert six.charter_content_sha256 == six.charter_ratified_sha256
+    assert roster_hash(six) == six.charter_roster_sha256 != roster_hash(five)
     assert six.exchange.client_namespace is None and six.exchange.principal_usd is None
     funded = replace(six, name="funded", exchange=replace(
         six.exchange, mainnet=True, client_namespace="0" * 32))
-    with pytest.raises(ValueError, match="ratified_sha256"):
-        funded.validate()
+    funded._validate_funded_admission()
+    # ... and refuses a roster the charter was not ratified on, or an edited charter.
+    moved = replace(funded, assemblies=funded.assemblies[1:])
+    with pytest.raises(ValueError, match="roster differs"):
+        moved._validate_funded_admission()
+    edited = replace(funded, charter_content_sha256="0" * 64)
+    with pytest.raises(ValueError, match="differs from the ratified charter digest"):
+        edited._validate_funded_admission()
+
