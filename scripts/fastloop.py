@@ -119,6 +119,11 @@ class PolicyProvider(ScriptedProvider):
         desc = _description_from_prompt(text)
         if desc.startswith(("Give verdict", "Evaluate")):
             reply = self._judge(inputs, req.model_id)
+            if f'"tool:{HALF_SPREAD["id"]}"' in text:
+                # Plumbing (time audit T18): a judge forecasts the scripted tool's uptake
+                # while it is open on world.uptake, so anticipatory settlement is reached.
+                reply["uptake_forecasts"] = [{"registration": f"tool:{HALF_SPREAD['id']}",
+                                              "q": 0.6}]
         elif desc.startswith("Give your own verdict"):
             # Plumbing (Wave 5a): an adversarial judge's counter-verdict, one step off
             # the verdict it read, so both the counter and its settlement are reached.
@@ -357,6 +362,7 @@ def scorecard(events: list[dict[str, Any]]) -> dict[str, Any]:
         "evaluation_layer": evaluation_layer(events),
         "composition": composition(events),
         "charter_markets": charter_markets(events),
+        "immune": immune(events),
         "orders": {"intents": dict(intents),
                    "reported_not_placed": kinds.get("order.reported", 0),
                    "refused": kinds.get("order.refused", 0),
@@ -419,10 +425,143 @@ def clock(events: list[dict[str, Any]]) -> dict[str, Any]:
         "cutoff_then_scored": len(late),
         "rounds_unlearned": sum(1 for e in events if e.get("kind") == "propensity.unlearned"),
         "epochs_deferred": sum(1 for e in events if e.get("kind") == "epoch.deferred"),
-        "novelty_grants": sum(1 for e in events if e.get("kind") == "novelty.grant"),
         "governance": {k: sum(1 for e in events if e.get("kind") == f"governance.{k}")
-                       for k in ("nonviable", "viable", "probe", "settling")},
+                       for k in ("nonviable", "viable", "settling")},
     }
+
+
+def _launch_manifest(events: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The genesis manifest a diary's Launch event carries, when it carries one."""
+    for e in events:
+        event = e.get("event") or {}
+        if e.get("kind") == "event" and event.get("kind") == "Launch":
+            manifest = (event.get("payload") or {}).get("manifest")
+            return manifest if isinstance(manifest, dict) else None
+    return None
+
+
+def immune(events: list[dict[str, Any]]) -> dict[str, Any]:
+    """Versions, pathologies and their priced answers, from the diary alone (versioning M4).
+
+    Observations, never targets (rulings R12): the live versions and each one's gap;
+    the pathology flags by kind and the responses the organ applied; what the niche
+    for unhistoried actions spent (ruling R5); the thrash price; the dependency
+    concentration the window observations measured (time audit T15); the uptake
+    market (T18); and the learning-death signals window by window, with whether the
+    forensic replay of the organ's own records reproduces its flags. That replay is
+    self-consistency (the same code over the same records), not a second detector:
+    the detector's scenarios are pinned by tests.
+    """
+    windows = [e for e in events if e.get("kind") == "immune.window"]
+    boundaries = [e for e in events if e.get("kind") == "version.boundary"]
+    closed = [b["closed"] for b in boundaries]
+    last = windows[-1] if windows else {}
+    versions = [{"version": c["version"], "cause": c["cause"], "windows": [
+        c["start_window"], c["end_window"]], "gap": c["gap"],
+        "settling_ticks": c["settling_ticks"]} for c in closed]
+    if last:
+        versions.append({"version": last.get("version"), "cause": (
+            boundaries[-1]["cause"] if boundaries else "launch"), "windows": [
+            boundaries[-1]["window"] if boundaries else 1, last.get("window")],
+            "gap": last.get("gap"), "settling_ticks": None, "open": True})
+    flags = collections.Counter(kind for w in windows
+                                for kind, on in (w.get("flags") or {}).items() if on)
+    gains = collections.Counter(e.get("pathology") for e in events
+                                if e.get("kind") == "immune.gain")
+    kinds = collections.Counter(e.get("kind") for e in events)
+    niche_handles: set[str] = set()
+    niche_used = seat_used = 0
+    for e in events:
+        if e.get("kind") == "niche.action":
+            niche_handles.add(e.get("handle"))
+        elif e.get("kind") == "novelty.compute":
+            if e.get("handle") in niche_handles:
+                niche_used += int(e.get("used") or 0)
+            else:
+                seat_used += int(e.get("used") or 0)
+    thrash = [w.get("thrash") or {} for w in windows]
+    charged = [e for e in events if e.get("kind") == "thrash.charged"]
+    concentration: dict[str, list[float]] = {"provider_concentration": [],
+                                             "family_concentration": []}
+    for e in events:
+        if e.get("kind") == "price.window":
+            for name, series in concentration.items():
+                value = (e.get("observations") or {}).get(name)
+                if value is not None:
+                    series.append(value)
+    return {
+        "windows": len(windows),
+        "versions": versions,
+        "version_boundaries": dict(collections.Counter(b["cause"] for b in boundaries)),
+        "settled": sum(1 for e in events if e.get("kind") == "version.settled"
+                       and e.get("settled")),
+        "pathology_windows": dict(flags),
+        "responses": {"gain_steps": dict(gains),
+                      "price_ratchets": kinds.get("immune.price_ratchet", 0),
+                      "thrash_charges": len(charged),
+                      "acted_windows": sum(1 for w in windows if w.get("acts"))},
+        "niche": {"actions": kinds.get("niche.action", 0),
+                  "action_spend_micro": niche_used,
+                  "seat_trial_spend_micro": seat_used,
+                  "registrations": kinds.get("novelty.reserve", 0)},
+        "thrash_price": {
+            "priced_windows": sum(1 for t in thrash if (t.get("penalty") or 0) > 0),
+            "max_lambda": round(max((t.get("lambda") or 0 for t in thrash), default=0), 4),
+            "max_penalty": round(max((t.get("penalty") or 0 for t in thrash), default=0), 4),
+            "charged_sum": round(sum(e.get("charge") or 0 for e in charged), 4),
+            "signals": {name: sum(1 for w in windows if w.get(field))
+                        for name, field in (("unsettled", "unsettled"),
+                                            ("periodic", "period"),
+                                            ("abandoned", "abandoned"),
+                                            ("short_lived", "short_lived"))}},
+        "dependency_concentration": {
+            name: ({"mean": round(statistics.fmean(v), 3), "max": round(max(v), 3)}
+                   if v else None) for name, v in concentration.items()},
+        "uptake": {kind: kinds.get(f"uptake.{kind}", 0)
+                   for kind in ("open", "forecast", "anticipated", "taken", "settled")},
+        "config_lifespans_short": sum(1 for e in events if e.get("kind") == "config.lifespan"
+                                      and e.get("ratio", 1) < 1),
+        "learning_death": _learning_death_signals(events, windows),
+    }
+
+
+def _learning_death_signals(events: list[dict[str, Any]],
+                            windows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The learning-death flags and the frontier signals under them, and replay consistency.
+
+    Windows with a frontier router left uninvoked and with one quarantining its
+    newcomers at the exploration floor; ``replay_self_consistency`` is the share of
+    windows whose ledgered flag the forensic replay of the organ's own records
+    (``versioning.versions.replay``) reproduces: a check that the reader and the
+    organ run one predicate, not evidence that the predicate is right.
+    """
+    from factorylab.versioning.versions import replay
+
+    manifest = _launch_manifest(events)
+    if not windows or manifest is None or not isinstance(manifest.get("immune"), dict):
+        return None
+    spec = manifest["immune"]
+    k = spec["k"]
+    horizon = (manifest.get("timing") or {}).get("min_ratio", 3) * k
+    records = [{"index": w["window"], "tick": w.get("tick", w["window"]),
+                "charter_edition": w.get("charter_edition"), "terms": w.get("terms"),
+                "profile": w.get("profile") or {}, "regions": w.get("regions") or {},
+                **({"frontier_invocation": w["frontier_invocation"]}
+                   if "frontier_invocation" in w else {}),
+                "lifespans": w.get("lifespans") or []} for w in windows]
+    readings = replay(records, k=k, horizon=horizon, tv_threshold=spec["tv_threshold"],
+                      gap_threshold=spec["gap_threshold"],
+                      registration_bins=tuple(spec["registration_bins"]),
+                      revision_bins=tuple(spec["revision_bins"]))
+    live = [bool((w.get("flags") or {}).get("learning_death")) for w in windows]
+    forensic = [r["diagnosis"]["flags"]["learning_death"] for r in readings]
+    uninvoked = sum(1 for w in windows if (w.get("frontier") or {}).get("uninvoked_routers"))
+    quarantined = sum(1 for w in windows
+                      if (w.get("frontier") or {}).get("quarantined_routers"))
+    return {"flags": sum(live), "replayed_flags": sum(forensic),
+            "replay_self_consistency": round(
+                sum(a == b for a, b in zip(live, forensic, strict=True)) / len(live), 3),
+            "uninvoked_windows": uninvoked, "quarantined_windows": quarantined}
 
 
 def reward_chain(events: list[dict[str, Any]]) -> dict[str, Any]:
@@ -747,6 +886,7 @@ def combine(cards: list[dict[str, Any]]) -> dict[str, Any]:
             "producer_settlements", "orders", "opportunity_cost", "composition")
             if card.get(k) is not None})
     total["clock_by_seed"] = [c.get("clock") for c in cards]
+    total["immune_by_seed"] = [c.get("immune") for c in cards]
     # Averages and rates are recomputed from the seeds, never summed.
     holds = total.get("opportunity_cost", {})
     total["opportunity_cost"] = {

@@ -397,6 +397,9 @@ class NoveltySpec:
 
     share: float
     trials: int = 3  # settled consequences that end an assembly's protected trial
+    #: The most of one consequence period's niche one seat's unhistoried actions may
+    #: use (ruling R5; the #134 review), so no seat can starve the registration trials.
+    seat_share: float = 0.25
 
 
 @dataclass(frozen=True)
@@ -443,7 +446,6 @@ class ImmuneSpec:
     gap_threshold: float = 0.8
     gain_step: float = 0.05
     gamma_max: float = 0.5
-    decay_step: float = 0.1
     registration_bins: tuple[float, ...] = (0.0, 2.0)
     revision_bins: tuple[float, ...] = (0.0,)
 
@@ -1002,6 +1004,10 @@ class WorldManifest:
         if (type(self.novelty.share) not in (int, float)
                 or not isfinite(self.novelty.share) or not 0 < self.novelty.share <= 1):
             raise ValueError("novelty share must be in (0, 1]")
+        seat_share = self.novelty.seat_share
+        if (type(seat_share) not in (int, float) or isinstance(seat_share, bool)
+                or not isfinite(seat_share) or not 0 < seat_share <= 1):
+            raise ValueError("novelty.seat_share must be in (0, 1]")
         for name, value, minimum in (
             ("novelty.trials", self.novelty.trials, 1),
             ("committee.min_settled", self.committee.min_settled, 1),
@@ -1013,7 +1019,7 @@ class WorldManifest:
         ):
             if type(value) is not int or value < minimum:
                 raise ValueError(f"{name} must be an integer >= {minimum}")
-        for name in ("tv_threshold", "gap_threshold", "gain_step", "gamma_max", "decay_step"):
+        for name in ("tv_threshold", "gap_threshold", "gain_step", "gamma_max"):
             value = getattr(self.immune, name)
             if type(value) not in (int, float) or not isfinite(value) or not 0 < value <= 1:
                 raise ValueError(f"immune.{name} must be finite and in (0, 1]")
@@ -1229,6 +1235,9 @@ def _manifest_immune(raw: Any) -> ImmuneSpec:
         raise ValueError("immune must be a table")
     if "bins" in raw:
         raise ValueError("immune.bins was removed: the three region-relative bins are fixed")
+    if "decay_step" in raw:
+        raise ValueError("immune.decay_step was removed: thrash is priced by its duration "
+                         "(the thrash PID), never answered by lowering card prices")
     if "price_step" not in raw:
         raise ValueError("immune.price_step is required: the stable-failure ratchet's "
                          "lambda step per window")
@@ -1453,7 +1462,8 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         exchange=exchange,
         models=models,
         assemblies=assemblies,
-        novelty=NoveltySpec(nov.get("share", 0.1), nov.get("trials", 3)),
+        novelty=NoveltySpec(nov.get("share", 0.1), nov.get("trials", 3),
+                             nov.get("seat_share", 0.25)),
         committee=_committee(d.get("committee", {})),
         immune=_manifest_immune(d.get("immune", {})),
         timing=TimingSpec(

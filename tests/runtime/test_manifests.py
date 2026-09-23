@@ -126,13 +126,15 @@ def test_a_manifest_hashes_what_it_says_and_a_default_is_no_exception():
     model family (evaluations C1, M1, P6), and again when a fourth gave a meta a family
     no chain holds (the #132 review), and again when the clock stopped casting windows
     (time audit T1, T5, T13: the novelty window and lifetime left, the treasury caps
-    gained their own duration and the forward wait its ticks); each time it is a new
-    v0."""
+    gained their own duration and the forward wait its ticks), and again when thrash
+    came to be priced and immune.decay_step left (versioning audit C2), and again when
+    novelty.seat_share capped one seat's share of the niche (ruling R5); each time it is
+    a new v0."""
     scripted = load_manifest("scripted")
     assert '"forecast_horizon_events":10' in scripted.canonical_json()
     assert '"chaos":{"connector_timeout":0.0' in scripted.canonical_json()
     assert scripted.manifest_hash() == (
-        "22b6c345abc80ba48592890941e28bdecd8e6e0e02547ffe0b3f03f6589ea615"
+        "e318e37e0693f975e277ee4c3ef347bf30105d94704c3a0b38565ebb86077860"
     )
 
     implicit = manifest_from_dict(_base())

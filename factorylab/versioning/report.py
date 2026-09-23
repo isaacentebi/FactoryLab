@@ -11,7 +11,17 @@ from math import isfinite
 
 from factorylab.versioning.operator import cell_series, transition_operator
 from factorylab.versioning.series import card_names, ordered, windows
-from factorylab.versioning.versions import early_warnings, pathologies, settling, versions
+from factorylab.versioning.versions import (
+    early_warnings,
+    pathologies,
+    replay,
+    settling,
+    versions,
+)
+
+#: The cascade's minimum ratio (essay II.IV.c, "3:1 at a minimum"), used for the
+#: horizon only when a diary predates the manifest's own ``timing.min_ratio``.
+ESSAY_MIN_RATIO = 3
 
 
 def manifest_parameters(items: list[dict]) -> dict:
@@ -32,7 +42,8 @@ def manifest_parameters(items: list[dict]) -> dict:
                                  ensure_ascii=False, allow_nan=False)
             if hashlib.sha256(genesis.encode()).hexdigest() != items[0]["prev_hash"]:
                 raise ValueError("launch manifest differs from ledger genesis")
-        return dict(manifest["immune"])
+        timing = manifest.get("timing") if isinstance(manifest.get("timing"), dict) else {}
+        return {**manifest["immune"], "min_ratio": timing.get("min_ratio", ESSAY_MIN_RATIO)}
     raise ValueError("versions requires the genesis manifest's immune settings")
 
 
@@ -40,19 +51,22 @@ def summary(
     items: list[dict], *, window_items: int = 200, k: int | None = None,
     tv_threshold: float | None = None, gap_threshold: float | None = None,
     registration_bins: tuple[float, ...] | None = None,
-    revision_bins: tuple[float, ...] | None = None,
+    revision_bins: tuple[float, ...] | None = None, min_ratio: int | None = None,
 ) -> dict:
     """Return deterministic analysis using the genesis settings or explicit caller parameters.
 
-    Runtime window observations are reclassified with the live predicate; recorded
-    flags are never treated as conclusions. Analysis cannot silently use different
-    numeric defaults from the world whose ledger it describes.
+    Runtime window observations are replayed through the live versioning and the
+    live predicate (``versions.replay``); recorded flags are never treated as
+    conclusions. Analysis cannot silently use different numeric defaults from the
+    world whose ledger it describes.
     """
     items = ordered(items)
     supplied = dict(k=k, tv_threshold=tv_threshold, gap_threshold=gap_threshold,
                     registration_bins=registration_bins, revision_bins=revision_bins)
     committed = manifest_parameters(items) if any(v is None for v in supplied.values()) else {}
     params = {name: committed[name] if value is None else value for name, value in supplied.items()}
+    params["min_ratio"] = (min_ratio if min_ratio is not None
+                           else committed.get("min_ratio", ESSAY_MIN_RATIO))
     k = params["k"]
     tv_threshold, gap_threshold = params["tv_threshold"], params["gap_threshold"]
     registration_bins = tuple(params["registration_bins"])
@@ -78,7 +92,11 @@ def summary(
     operator.update(dimensions=discretized["dimensions"], cuts=discretized["cuts"],
                     durable=operator["gap_bound"] is not None
                     and operator["gap_bound"] >= gap_threshold)
-    spans = versions(groups, cells, k=k, tv_threshold=tv_threshold)
+    bins = {"registration_bins": registration_bins, "revision_bins": revision_bins}
+    horizon = params["min_ratio"] * k
+    readings = replay(groups, k=k, horizon=horizon, tv_threshold=tv_threshold,
+                      gap_threshold=gap_threshold, **bins)
+    spans = versions(groups, readings, gap_threshold=gap_threshold, **bins)
     return {
         "params": {
             "window_items": window_items,
@@ -87,16 +105,15 @@ def summary(
             "gap_threshold": gap_threshold,
             "registration_bins": list(registration_bins),
             "revision_bins": list(revision_bins),
+            "min_ratio": params["min_ratio"],
+            "horizon": horizon,
         },
         "windows": groups,
         "operator": operator,
         "versions": spans,
-        "pathologies": pathologies(
-            groups, cells, spans, k=k, registration_bins=registration_bins,
-            revision_bins=revision_bins
-        ),
+        "pathologies": pathologies(groups, readings, spans),
         "ews": early_warnings(groups, spans, cards, k=k),
-        "settling": settling(items, groups, cells, k=k, tv_threshold=tv_threshold),
+        "settling": settling(readings),
     }
 
 
@@ -120,7 +137,9 @@ def render(report: dict) -> str:
     for span in report["versions"]:
         lines.append(
             f"Version {span['start_window']}..{span['end_window']}: "
-            f"{span['duration']} windows, charter {span['charter_edition']}"
+            f"{span['duration']} windows, charter {span['charter_edition']}, "
+            f"opened by {span['cause']}, gap {_display(span['gap'])}"
+            f"{' (durable)' if span['durable'] else ''}"
         )
     if not report["pathologies"]:
         lines.append("Pathology evidence: none")

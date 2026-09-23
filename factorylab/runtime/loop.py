@@ -75,6 +75,7 @@ from factorylab.runtime.shared import (
 )
 from factorylab.runtime.subscriptions import SubscriptionBook, ThinkingMixin
 from factorylab.runtime.summary import SummaryMixin, _as_unit
+from factorylab.runtime.uptake import UptakeMixin
 from factorylab.runtime.vault import VaultMixin
 from factorylab.runtime.venue import VenueMixin
 from factorylab.runtime.worlds import WorldManifest
@@ -120,6 +121,9 @@ def judge_view(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 class Runtime(
+    # Anticipatory settlement of registrations (time audit T18) reads registrations,
+    # tool calls and invocations, and posts through the markets' refusals.
+    UptakeMixin,
     # The charter's markets (charter audit M1, M2) read and publish through the
     # governance, pricing and schematics methods below them, so they come first.
     MarketsMixin,

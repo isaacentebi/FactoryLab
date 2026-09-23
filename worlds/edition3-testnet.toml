@@ -315,7 +315,6 @@ tv_threshold = 0.2
 gap_threshold = 0.8
 gain_step = 0.05
 gamma_max = 0.5
-decay_step = 0.1
 
 # The reserve this repository's reserve.key derives; LiveRail refuses any other.
 [treasury]

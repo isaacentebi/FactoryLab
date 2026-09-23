@@ -1590,8 +1590,8 @@ class SchematicsMixin:
 
         Guarantees every number here is one the manifest committed or an amendment
         activated, and none is one the runtime's own adaptation moves between
-        calls: the sampling actuator's consequence mix and the immune
-        controller's decay are named here and published in
+        calls: the sampling actuator's consequence mix and the thrash price are
+        named here and published in
         ``world.adaptive_scoring``, which moves with them. That is what lets this
         block sit in the prompt's stable prefix, which an adaptation must not
         invalidate.
@@ -1633,7 +1633,34 @@ class SchematicsMixin:
                         "period, accrued window by window and never more than one period's "
                         "share at once",
                         "patience": "timing.min_ratio measured consequence periods, in "
-                        "world ticks, from registration"},
+                        "world ticks, from registration",
+                        "eligible": "a registration's trial amount; a model call of an "
+                        "assembly with no settled decision, until its trial ends; a tool "
+                        "call of a (tool, kind) that no decision of the calling assembly "
+                        "carrying a propensity record or a delivered return (settled, "
+                        "censored or timed out) has made, and the one model call that "
+                        "reads its result in the same decision. A requested child's calls "
+                        "are its parent's; a ballot's are not eligible. A tool call may "
+                        "spend up to world.reserve.protected beyond the assembly's own "
+                        "entitlement, and an assembly's tool calls and their reading "
+                        "calls together at most seat_share of one flow period's share",
+                        "seat_share": nov.seat_share},
+            "thrash_price": (
+                "g is the operator's gap bound counted over the current version's whole "
+                "life, read once the version has 2 * immune.k windows; its series restarts "
+                "at every version. u is the largest of: the mean absolute change between "
+                "successive g over the last 2 * immune.k readings; 1 when the behaviour "
+                "repeats with a period p in [2, timing.min_ratio] for timing.min_ratio "
+                "cycles; 1 when two versions in a row, launch excepted, ended unsettled "
+                "and the current one has not settled; 1 - lifespan / latency for a "
+                "configuration outlived by the loop that corrects it. v = max(0, u - "
+                "immune.tv_threshold); lambda follows the controller's recurrence with v "
+                "(world.adaptive_scoring.thrash_price). A round a router of "
+                "evaluation.no_swap_regret_kinds draws, abstentions included, carries c = "
+                "min(prices.penalty_cap, lambda * m), m the total-variation distance "
+                "between that draw's distribution and the router's previous draw's; its "
+                "reward r is learned as (r + prices.penalty_cap - c) / (1 + "
+                "prices.penalty_cap)"),
             "controller": {
                 "law": "pid",
                 "eta": pr.eta, "kp": pr.kp, "kd": pr.kd, "decay": pr.decay,
@@ -1651,8 +1678,8 @@ class SchematicsMixin:
             "consequence_mix": self.ev.consequence_share,
             "adaptive": "the committed values are here; the two the runtime moves between "
             "calls — the consequence mix the sampling actuator raises and steps back, and "
-            "the decay the immune controller borrows — are in world.adaptive_scoring, and "
-            "controller.decay and consequence_mix above are what they were committed at",
+            "the thrash price — are in world.adaptive_scoring, and consequence_mix above "
+            "is what it was committed at",
             "treasury": {"max_venice_per_window_micro": self.m.treasury.max_venice_per_window,
                          "cap_window": _duration_str(self.m.treasury.cap_window_ns),
                          "venice_tranche_usd": "5",
@@ -1693,9 +1720,12 @@ class SchematicsMixin:
         byte-identical. What each value was committed at stays in
         ``world.mechanics``.
         """
+        thrash = getattr(self, "stats", None) and self.stats.thrash or {}
         return {
             "consequence_mix": getattr(self, "consequence_mix", self.ev.consequence_share),
-            "controller_decay": self.controller.snapshot()["parameters"]["decay"],
+            # The thrash price in force (world.mechanics.thrash_price): it moves each window.
+            "thrash_price": {"lambda": thrash.get("lambda", 0.0),
+                             "penalty": thrash.get("penalty", 0.0)},
             "committed": "world.mechanics carries the committed value of each of these; a "
             "difference is this runtime's own adaptation, not an amendment",
         }
@@ -1903,7 +1933,8 @@ class SchematicsMixin:
                 "proposer's outcome inbox; a registered assembly keeps protected compute until "
                 f"{self.m.novelty.trials} settled consequences have been delivered to it or "
                 f"{self.m.timing.min_ratio} measured consequence periods have passed since "
-                "registration (continuations and children do not count; a live learning-death "
-                "grant adds one more)"
+                "registration (continuations and children do not count); an assembly past "
+                "its trial reaches the reserve through the calls world.mechanics.novelty."
+                "eligible names"
             ),
         }

@@ -768,10 +768,12 @@ def _cmd_wake(args: argparse.Namespace) -> int:
 
 
 def _cmd_versions(args: argparse.Namespace) -> int:
-    """Behaviour-based versions, pathologies and early warnings over a dead world's diary.
+    """The forensic reader: a dead world's versions, pathologies and early warnings.
 
-    Thresholds come from the genesis manifest carried by Launch. Read-only;
-    needs the released key like postmortem.
+    It replays the same live versioning and predicate the immune organ ran while
+    the world was alive (``versioning.live``, ``versions.diagnose``), with the
+    thresholds from the genesis manifest carried by Launch. Read-only; needs the
+    released key like postmortem.
     """
     from factorylab.versioning.reader import read_diary
     from factorylab.versioning.report import render, summary

@@ -404,14 +404,67 @@ class ComputeMixin:
     def _novelty_protection(self, handle: str, reason: str) -> int:
         """The protected share for one reservation: the seat's, for exactly the calls
         the wallet already classifies as protected (an unhistoried seat's own model
-        calls), or the pool bridge routing granted this call where that is larger; the
-        bridge alone otherwise."""
+        calls), the novelty reserve alone for an unhistoried action of a seat past
+        its trial (``_niche_action``; ruling R5), or the pool bridge routing granted
+        this call where that is larger; the bridge alone otherwise."""
         bridged = self.entitlement_bridges.get(handle, 0)
         if not self._novelty_compute(handle, reason):
             return bridged
+        seat = self.queue.get(handle).propensity.chosen
+        if not reason.startswith("model:") or self._niche_action(handle, reason) is not None:
+            # An unhistoried action's call: the niche spends only from the novelty
+            # reserve (essay II.II.b), never the commons a seat's first trial draws on,
+            # and no more of it than the seat's share of the period leaves.
+            return max(min(self.reserve.remaining(), self._niche_room(seat)), bridged)
         # Both are drawn on the same unallocated pool, so the cover is the larger of
         # the two, never their sum: adding them let one call spend the pool twice.
-        return max(self._protected_share(self.queue.get(handle).propensity.chosen), bridged)
+        return max(self._protected_share(seat), bridged)
+
+    def _niche_call(self, handle: str, action_id: str, tool: str) -> str | None:
+        """The unhistoried action a tool call about to be made is, ledgered once, or None.
+
+        Guarantees ``niche.action`` names each (decision, action) the niche admits
+        once, and that the decision's model rounds after the call read its result
+        inside the niche (``niche_rounds``). A child's call is its parent's
+        subcontracting and never qualifies (``_novelty_compute``).
+        """
+        reason = f"tool:{tool}"
+        if not self._novelty_compute(handle, reason):
+            return None
+        key = self._niche_action(handle, reason)
+        if key is not None:
+            self.ledger.append({"kind": "niche.action", "handle": handle,
+                                "assembly_id": action_id, "action": key,
+                                "reserve_remaining": self.reserve.remaining(),
+                                "room": self._niche_room(action_id),
+                                "ts": self.clock.now_ns})
+        return key
+
+    def _niche_spent(self, seat: str, remaining_before: int, cost: int) -> int:
+        """Book what one niche call used against the seat's share of the period.
+
+        The reserve allocated ``min(ceiling, remaining)`` to the hold and returns
+        what the cost did not use, so the call used ``min(remaining, cost)``.
+        """
+        used = max(0, min(remaining_before, cost))
+        if used:
+            rows = self.niche_use.setdefault("used", {})
+            rows[seat] = rows.get(seat, 0) + used
+        return used
+
+    def _open_niche_period(self) -> None:
+        """Start a new period of seat shares once a consequence period has passed.
+
+        Essay II.II.b; the niche is a flow per consequence period (time audit T6), and
+        each seat's share of it is counted over the same period.
+        """
+        now, period = self.ticks_consumed, self._consequence_period()
+        start = self.niche_use.get("start_tick")
+        cap = max(0, self.wallet.unlocked) * self.reserve.share
+        if start is None or now - start >= period:
+            self.niche_use = {"start_tick": now, "cap": int(cap), "used": {}}
+        else:
+            self.niche_use["cap"] = max(self.niche_use.get("cap", 0), int(cap))
 
     def _world_chars(self, world: Any) -> int:
         """The rendered size of a request's world block, the part of every prompt that
@@ -1547,6 +1600,8 @@ class ComputeMixin:
         # prompt (``Assembly.build_model_request``), so it is inside every ceiling
         # priced from this request and a parent cannot forge its child's.
         effects: list[str] = []  # venue and treasury writes, children: the action so far
+        taken: set[str] = set()  # the tool actions this decision dispatched (action_key)
+        niche_spent = 0  # what this decision's unhistoried actions used of the niche
         ret = self._invoke_compute(action_id, req)
         # The routing bridge buys only the routed call. Reads and children spend
         # the liable seat's remaining cover, never a fresh claim on the commons.
@@ -1579,6 +1634,9 @@ class ComputeMixin:
                 req = replace(req, inputs={**req.inputs,
                                           "your_state": self.working_state.render(action_id)})
         total_cost = ret.cost
+        # The decision's own ceiling; the niche only ever widens it for one tool call
+        # and the one round that reads its result, then it is restored.
+        base_ceiling = req.cost_ceiling
         prior_results: list[dict] = []
         previous_results: list[dict] = []
         tool_round = 0
@@ -1624,6 +1682,14 @@ class ComputeMixin:
                     learned = True
                     continue
                 price = self._tool_price_bound(call)
+                # Essay II.II.b, ruling R5: an unhistoried action may spend the novelty
+                # reserve beyond this decision's own ceiling; the kernel's reservation
+                # still enforces exactly what the wallet and the seat may cover.
+                niche = self._niche_call(req.handle, action_id, str(call.get("tool")))
+                niche_before = self.reserve.remaining()
+                req = replace(req, cost_ceiling=base_ceiling + niche_spent + (
+                    min(niche_before, self._niche_room(action_id))
+                    if niche is not None else 0))
                 # A slot is a client identity: it names the round as well as the
                 # position, so two rounds of one decision cannot collide on one
                 # order id and an intended second write is never read as a repeat.
@@ -1653,6 +1719,11 @@ class ComputeMixin:
                     else:
                         result, cost = self._run_tool(action_id, req.handle, call, slot=slot)
                     dispatched = True
+                    taken.add(self._tool_action(str(call.get("tool"))))
+                    if niche is not None:
+                        niche_spent += self._niche_spent(action_id, niche_before, cost)
+                        # The one round that reads this result is compute the action uses.
+                        self.niche_rounds[req.handle] = niche
                 tool_cost += cost
                 # A venue write the venue has not yet acknowledged is its own outcome:
                 # the intent is durable and the reconciler finalises it under the
@@ -1800,8 +1871,16 @@ class ComputeMixin:
                 # The invocation's usage is the final provider call's usage. Keep
                 # the diagnostic identity aligned with that same continuation.
                 prompt_cache = _safe_prompt_cache_identity(assembly, follow)
+            reading = self.niche_rounds.get(req.handle)
+            niche_before = self.reserve.remaining()
             ret = (Return(req.handle, {"reason": "wallet exhausted"}, 0, "failed")
                    if self.wallet.dead else self._invoke_compute(action_id, follow))
+            if reading is not None:
+                # The niche covers this one reading round and nothing after it: the
+                # entry is cleared and the decision's own ceiling restored (ruling R5).
+                niche_spent += self._niche_spent(action_id, niche_before, ret.cost)
+                self.niche_rounds.pop(req.handle, None)
+            req = replace(req, cost_ceiling=base_ceiling + niche_spent)
             if ret.status != "failed":
                 for entry in delivered_reads:
                     body = entry.get("result")
@@ -1926,7 +2005,11 @@ class ComputeMixin:
             self.window.ok += 1
             if role == "producer":
                 self.window.costs.append(ret.cost)
-        self._record_declared_propensity(action_id, req, ret, role, effects=tuple(effects))
+        record = self._record_declared_propensity(action_id, req, ret, role,
+                                                  effects=tuple(effects))
+        # The actions this decision took gain a reward trail when it settles (ruling R5).
+        self._record_actions(req.handle, taken, record)
+        self.niche_rounds.pop(req.handle, None)
         self._apply_continuity(
             action_id, req.handle, ret, working_state_handled=working_state_handled)
         ret = replace(ret, dropped=tuple(dropped))
@@ -1938,6 +2021,21 @@ class ComputeMixin:
                 error=ret.outputs["validation_error"])
         del self.ledger.connector_bodies[body_mark:]
         return ret
+
+    def _record_actions(self, handle: str, taken: set[str], record: Any) -> None:
+        """Log the (tool, kind) actions a decision took on its handle (ruling R5).
+
+        A declared action label is not an action here: a fresh string would make any
+        decision look new (the #134 review). ``record`` is the propensity the decision
+        now carries, after which its actions are historied.
+        """
+        keys = set(taken)
+        if not keys:
+            return
+        try:
+            self.queue.record_actions(handle, keys)
+        except (KeyError, ValueError):
+            return  # a handle that closed already keeps the trail it had
 
     def _report_dropped_sections(self, seat: str, handle: str,
                                  dropped: tuple[dict[str, Any], ...], *,

@@ -583,7 +583,12 @@ def test_a_window_whose_every_draw_parked_at_noop_is_the_frontier_signal():
     window = rt.window.index
     for p in (0.95, 0.92, 0.97):
         rt._watch_abstention(state, _draw_at(state, p))
-    assert state.watch == {"window": window, "draws": 3, "min_p": 0.92}
+    watch = dict(state.watch)
+    # Versioning P1: the draws also carry the mass they put on unhistoried seats.
+    offered, mass = watch.pop("unhistoried_offered"), watch.pop("unhistoried_mass")
+    watch.pop("fresh_ratio_max"), watch.pop("incumbent_min")
+    assert watch == {"window": window, "draws": 3, "min_p": 0.92}
+    assert offered == 3 and mass == pytest.approx(0.05 + 0.08 + 0.03)
     (row,) = [r for r in rt.frontier_invocation() if r["router"] == lid]
     assert row["uninvoked"] and row["draws"] == 3 and row["min_p_noop"] == 0.92
     assert row["floor"] == pytest.approx(0.9)
@@ -603,7 +608,9 @@ def test_one_draw_that_woke_a_seat_in_earnest_keeps_the_frontier_invoked():
     assert not row["uninvoked"]
     rt.window.index += 1
     rt._watch_abstention(state, _draw_at(state, 0.99))  # a new window's draw starts anew
-    assert state.watch == {"window": rt.window.index, "draws": 1, "min_p": 0.99}
+    assert {k: state.watch[k] for k in ("window", "draws", "min_p")} == {
+        "window": rt.window.index, "draws": 1, "min_p": 0.99}
+    assert state.watch["unhistoried_offered"] == 1
 
 
 def test_the_immune_window_records_which_routers_left_their_frontier_uninvoked():

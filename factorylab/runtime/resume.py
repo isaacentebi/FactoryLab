@@ -244,6 +244,9 @@ _RETIRED_RUNTIME = frozenset({
     # sibling share they fed (ruling R1; evaluations P7, U2).
     "exposure_evidence", "pending_meta", "verdict_outcomes", "verdicts_closed_out",
     "verdicts_graded", "meta_waiting_since", "cascade_windows",
+    # The learning-death grant (versioning P2): the niche for unhistoried actions
+    # replaced it (ruling R5), so an older checkpoint's grant is not read.
+    "novelty_grant",
 })
 
 #: Pending channels of the deleted charter-window verdict commitments: a restored
@@ -606,7 +609,19 @@ _RUNTIME_FIELDS = (
     # Vault writes by client id, the vaults this world's seats created or hold, and
     # the cursor of the venue's vault ledger rows already read.
     "vault_intents", "vault_book", "vault_ledger_cursor_ns", "vault_ledger_seen",
-    "consequence_mix", "sampling_history", "novelty_grant",
+    "consequence_mix", "sampling_history",
+    # Time audit T14: each loop's last configuration change and the lifespans not yet
+    # read by the immune organ. An older checkpoint has neither: no lifespan yet.
+    "config_ticks", "lifespan_log",
+    # Ruling R5: each seat's use of the period's niche. An older checkpoint has none:
+    # the next reserve window opens a period.
+    "niche_use",
+    # Versioning C2: the thrash charge each open core-router round carries. An older
+    # checkpoint has none: its rounds are charged nothing.
+    "thrash_charges",
+    # Time audit T18: open registrations' uptake records and each forecaster's settled
+    # record. An older checkpoint has neither: nothing is open, nobody has standing.
+    "uptake", "uptake_standing",
     # The reward chain (ruling R1): exposure scores awaiting settlement, verdicts
     # collected while an event is routed, closed consequence scores, measured world
     # outcomes and the mids declined trades are priced from. Each defaults empty
@@ -721,6 +736,8 @@ _DERIVED_STATE = {
     "ReceiptBook._ReceiptBook__execution_by_handle": "derived per-handle execution index",
     "FakeTreasury._balances_memo": "the scripted rail's balances, keyed on what they read",
     "Runtime._safety_ns": "the safety path's last wall read, reset at every event's start",
+    "Runtime.niche_rounds": "an invocation's unhistoried tool action, emptied when the "
+                            "invocation returns",
     "Runtime._safety_stop": "a terminal state the safety path saw, reset at every event's "
                             "start; the event's own termination check acts on it",
     "FakeTreasury.forward_wait_ticks": "the runtime restates it before every treasury tick "
@@ -753,9 +770,9 @@ _COMPONENT_FIELDS = (
     ("baseline", "_PrevalenceBaseline__", ("counts",)),
     ("cadence", "_", ("latencies", "last_activation_ns", "waiting", "deferred",
                        "current_event", "last_activation_event", "outstanding", "min_support",
-                       # Time audit T7, T13: settling times, the card series, the open
-                       # probe and the capital loop. An older checkpoint has none.
-                       "settling", "series", "probe", "capital")),
+                       # Time audit T7, T13: settling times, the unsettled version, the
+                       # censored one and the capital loop. An older checkpoint has none.
+                       "settling", "unsettled", "censored", "capital")),
     ("standing", "_ConsequenceStanding__", ("min_coverage", "evaluators")),
     ("settler", "_Settler__", ("snapshots", "recorded")),
     ("charter_book", "_CharterBook__", (
@@ -766,6 +783,10 @@ _COMPONENT_FIELDS = (
         "sittings", "deferrals", "voters", "norm_editions",
     )),
     ("controller", "_PriceController__", (
+        "eta", "decay", "lambda_max", "min_window_events", "cards", "kp", "kd",
+    )),
+    # The thrash price (versioning C2). An older checkpoint has none: it starts at zero.
+    ("thrash_controller", "_PriceController__", (
         "eta", "decay", "lambda_max", "min_window_events", "cards", "kp", "kd",
     )),
     ("consequences", "", ("backstop", "table", "mids", "pending_orders", "deferred_events",
@@ -1025,9 +1046,12 @@ def restore_runtime(rt, state: dict) -> None:
             if name == "bill_settlement" and name not in components:
                 # Older checkpoints predate bill settlement; the next read takes a reference.
                 continue
-            if (name == "cadence" and field in ("settling", "series", "probe", "capital")
+            if (name == "cadence" and field in ("settling", "unsettled", "censored", "capital")
                     and field not in components[name]):
                 # Older checkpoints predate the settling and capital loops: none measured.
+                continue
+            if name == "thrash_controller" and name not in components:
+                # Older checkpoints predate the thrash price; it starts at zero.
                 continue
             setattr(getattr(rt, name), prefix + field, components[name][field])
     rt.prices.prices = decode(state["prices"])

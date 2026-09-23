@@ -222,22 +222,6 @@ def test_a_trial_is_protected_for_min_ratio_measured_consequence_periods_in_tick
     assert not rt._unhistoried("newcomer")
 
 
-def test_a_learning_death_grant_lives_its_patience_and_is_not_reissued_while_it_lives():
-    rt = make_runtime()
-    rt.stats.pathologies = {"learning_death": True}
-    rt._issue_novelty_grant()
-    grant = rt.novelty_grant
-    assert grant["until_tick"] == rt.ticks_consumed + rt._patience()
-    rt.ticks_consumed += 5
-    rt._issue_novelty_grant()
-    assert len(_items(rt, "novelty.grant")) == 1 and rt.novelty_grant is grant
-    assert rt._novelty_grant_open("seed-decider")
-    rt.ticks_consumed = grant["until_tick"]
-    assert not rt._novelty_grant_open("seed-decider")
-    rt._issue_novelty_grant()  # lapsed and still flagged: the next one
-    assert len(_items(rt, "novelty.grant")) == 2
-
-
 def test_a_grown_menu_waits_min_ratio_measured_round_periods_for_its_epoch(monkeypatch):
     """Time audit T6, Codex review of #133: a speed limit on refactoring; a registration
     joins a routed kind at most once per min_ratio periods of that router's own rounds."""
@@ -269,35 +253,37 @@ def _cadence(backstop=4):
                                      min_support=1)
 
 
-def test_settling_time_is_measured_after_an_activation_and_joins_the_slowest_loop():
+def test_a_versions_settling_time_joins_the_slowest_loop():
+    """Time audit T7, versioning M1: the live versioning measures settling for every
+    version; the cadence keeps it and no measurement of its own (wave 5b)."""
     ledger, cadence = _cadence()
-    for tick, value in enumerate((0.50, 0.52, 0.51), start=1):
-        cadence.advance(tick)
-        cadence.observe_scores({"card": value})
     cadence.advance(4)
-    cadence.activated("am", 0, 1)
-    for tick, value in ((6, 0.9), (9, 0.70), (12, 0.71), (15, 0.70)):
-        cadence.advance(tick)
-        cadence.observe_scores({"card": value})
+    cadence.track_version(version=2, opened=4, settled=False)
+    cadence.advance(15)
+    assert cadence.slowest_period_events() == 11  # the open version's age
+    cadence.record_settling(version=2, cause="charter", ticks=11, settled=True)
+    cadence.track_version(version=2, opened=4, settled=True)
     settling = [i for i in ledger._recovery_items() if i["kind"] == "governance.settling"]
-    assert settling and settling[-1]["settled"] and settling[-1]["settling_ticks"] == 11
+    assert settling[-1] == {**settling[-1], "version": 2, "cause": "charter",
+                            "settling_ticks": 11, "settled": True}
     assert cadence.slowest_period_events() == 11  # above the four-tick backstop
+    with pytest.raises(ValueError):
+        cadence.record_settling(version=3, cause="behaviour", ticks=-1, settled=True)
 
 
-def test_an_unsettled_revision_holds_governance_only_min_ratio_consequence_periods():
+def test_an_unsettled_version_holds_governance_only_min_ratio_consequence_periods():
     ledger, cadence = _cadence()
-    for tick, value in enumerate((0.50, 0.50, 0.50), start=1):
-        cadence.advance(tick)
-        cadence.observe_scores({"card": value})
-    cadence.activated("am", 0, 1)
-    cadence.advance(10)
+    cadence.track_version(version=1, opened=0, settled=False)
+    cadence.advance(7)
     assert cadence.slowest_period_events() == 7  # its age: unfinished is not fast
-    for tick in range(11, 30):
+    for tick in range(8, 30):
         cadence.advance(tick)
-        cadence.observe_scores({"card": float(tick % 2)})  # never settles
+        cadence.track_version(version=1, opened=0, settled=False)  # never settles
     settling = [i for i in ledger._recovery_items() if i["kind"] == "governance.settling"]
-    assert settling and settling[0]["settled"] is False
+    assert len(settling) == 1 and settling[0]["settled"] is False
     assert settling[0]["settling_ticks"] >= 3 * cadence.consequence_period_events()
+    # Censored once: the version's age no longer holds the loop, its bound still slows it.
+    assert cadence.slowest_period_events() == settling[0]["settling_ticks"]
 
 
 def test_governance_is_ledgered_nonviable_when_its_period_outlasts_the_run_or_the_world():

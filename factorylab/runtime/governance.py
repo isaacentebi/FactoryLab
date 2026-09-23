@@ -38,6 +38,7 @@ from factorylab.kernel.queue import PropensityRecord, SettleStatus
 from factorylab.kernel.registry import Contract, PriceSpec, ResourceBounds
 from factorylab.kernel.wallet import Infeasible
 from factorylab.runtime.cards import region_for
+from factorylab.runtime.immune import configuration_changed
 from factorylab.runtime.observations import (
     OBSERVATION_TIMEOUT_S,
     SEED_IDS,
@@ -897,6 +898,9 @@ class GovernanceMixin:
             if custom:
                 self.kind_reward_shapes.update(shapes)
             self.retired_assemblies.discard(prop.id)
+            # Time audit T14: a contract version replaces the seat's configuration; its
+            # decisions are corrected on the consequence loop.
+            configuration_changed(self, f"seat:{prop.id}", self._consequence_period())
             self._watch_evaluator_majority(f"register:{prop.id}")
             for kind in prop.accepts:
                 self._open_epoch(kind)
