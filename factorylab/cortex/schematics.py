@@ -961,6 +961,10 @@ class SchematicsMixin:
                             "reason": entry.get("reason", UNAVAILABLE)})
         return out
 
+    def _seat_recent_mids(self) -> dict[str, Any]:
+        """The mid prints a seat is shown; the chaos actuator may age them (runtime.chaos)."""
+        return self.recent_mids
+
     def _public_observations(self) -> dict[str, Any]:
         """Aggregated facts of the last closed window: values and prints.
 
@@ -975,9 +979,13 @@ class SchematicsMixin:
         observed is here. The two are different questions and a seat reading
         either should not have to sort one out of the other.
         """
+        from factorylab.runtime.ews import EWS_OBSERVATIONS
+
+        # The early-warning summaries are the evaluators' (ruling R3, evaluations M2).
         return {
-            "last_closed_window_values": dict(self.stats.last_window_values),
-            "recent_mids": {c: list(v) for c, v in self.recent_mids.items()},
+            "last_closed_window_values": {k: v for k, v in self.stats.last_window_values.items()
+                                          if k not in EWS_OBSERVATIONS},
+            "recent_mids": {c: list(v) for c, v in self._seat_recent_mids().items()},
         }
 
     def _catalogue_view(self) -> dict[str, Any]:
@@ -1551,8 +1559,9 @@ class SchematicsMixin:
         now = self.clock.now_ns
         limit = 2 * self.tick_clock.interval_ns
         out: dict[str, Any] = {}
+        seen = self._seat_recent_mids()
         for coin in sorted(self.venue_tools.coins) + sorted(self.venue_tools.spot_pairs):
-            prints = self.recent_mids.get(coin)
+            prints = seen.get(coin)
             if not prints:
                 out[coin] = {"as_of_utc": None, "age": None, "missing": True, "stale": True}
                 continue

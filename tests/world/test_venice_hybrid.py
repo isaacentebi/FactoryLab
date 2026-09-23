@@ -213,7 +213,7 @@ def test_a_hybrid_conversion_needs_the_venue_and_the_mainnet_reserve_to_cover_it
 
 
 def capital_loop():
-    return load_manifest("worlds/edition5-capital-loop.toml")
+    return load_manifest("worlds/edition6-capital-loop.toml")
 
 
 def test_the_mode_is_refused_on_mainnet_without_a_sink_and_off_its_one_network():
@@ -244,7 +244,7 @@ def test_real_money_mode_needs_an_absolute_bound_a_floor_and_a_pinned_payee(
     world = capital_loop()
     with pytest.raises(ValueError, match=message):
         replace(world, treasury=replace(world.treasury, **{field: value})).validate()
-    plain = load_manifest("worlds/edition5-testnet-rehearsal.toml")
+    plain = load_manifest("worlds/edition6-testnet-rehearsal.toml")
     if value is not None:
         with pytest.raises(ValueError, match="requires treasury.venice_network"):
             replace(plain, treasury=replace(plain.treasury, **{field: value})).validate()
@@ -257,13 +257,21 @@ def test_only_the_capital_loop_world_names_the_hybrid_keys():
 
     seen = 0
     for path in sorted(glob.glob("worlds/*.toml")):
-        treasury = json.loads(load_manifest(path).canonical_json())["treasury"]
-        hybrid_world = path.endswith("edition5-capital-loop.toml")
+        try:
+            world = load_manifest(path)
+        except ValueError as exc:
+            # R8: a world whose roster no longer meets the evaluator population the
+            # kernel requires is refused, and only the pre-Wave-5a editions are.
+            assert "evaluator population" in str(exc)
+            assert path.split("/")[-1].startswith(("edition3-", "edition5-"))
+            continue
+        treasury = json.loads(world.canonical_json())["treasury"]
+        hybrid_world = path.endswith("edition6-capital-loop.toml")
         for key in HYBRID_VENICE_KEYS:
             # R8: every key is hashed; only the capital-loop world gives these a value.
             assert (treasury[key] is not None) is hybrid_world
         seen += 1
-    assert seen >= 9
+    assert seen >= 7
     assert all(getattr(TreasurySpec(), key) is None for key in HYBRID_VENICE_KEYS)
 
 
@@ -292,7 +300,7 @@ def test_the_rehearsal_runner_admits_only_the_conversion_and_only_when_asked():
     assert kept.treasury.reserve_address == world.treasury.reserve_address
     assert kept.treasury.hyperevm_gas_budget_wei == kept.treasury.base_gas_budget_wei == 0
     with pytest.raises(rehearsal.RehearsalRefused, match="capital_loop_requires"):
-        rehearsal.effective_manifest(load_manifest("worlds/edition5-testnet-rehearsal.toml"),
+        rehearsal.effective_manifest(load_manifest("worlds/edition6-testnet-rehearsal.toml"),
                                      capital_loop=True)
 
     class Inner:

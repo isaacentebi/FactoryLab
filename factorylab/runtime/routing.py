@@ -16,13 +16,16 @@ from factorylab.kernel.registry import Contract
 from factorylab.learners.base import NEUTRAL_REWARD, ObservedRewards
 from factorylab.learners.exp3 import EXP3
 from factorylab.learners.router import Router, Sample
+from factorylab.runtime.families import model_family
 from factorylab.runtime.shared import (
     CH_CONFORMITY,
     CH_CONSEQUENCE,
+    CH_COUNTER,
     CH_EXPOSURE,
     CH_FAST,
     CH_VERDICT,
     DEF_COMPOSED,
+    DEF_COUNTER,
     DEF_EVALUATION,
     DEF_EXPOSURE,
     DEF_VERDICT,
@@ -33,6 +36,29 @@ from factorylab.runtime.shared import (
 )
 from factorylab.runtime.subscriptions import is_routine
 from factorylab.world.models import ModelRequest
+
+#: The reward shapes of a contract that reads its subject as a judgement: a verdict
+#: (``forecast``), a grade of the tier below (``conformity``), or a counter-verdict
+#: against another judge (``counter``).
+JUDGING_SHAPES = frozenset({"forecast", "conformity", "counter"})
+#: The adversarial layer's reward shapes (essay II.III.b): an antagonist's exposure
+#: and an adversarial judge's counter-verdict. Their routing mass is capped at
+#: ``evaluation.adversarial_share`` (the majority of evaluations stay
+#: non-adversarial), and neither may be hired by a requester.
+ADVERSARIAL_SHAPES = frozenset({"exposure", "counter"})
+#: Why a judging seat is barred from this subject by family: it shares a family with
+#: an author in the chain it would judge, or with a judge already drawn for it. A draw
+#: whose every seat is barred opens nothing and is counted (``route.barred``).
+BARRED = frozenset({"same-family", "family already drawn for this return"})
+#: Why a seat is off this draw's menu by the draw's own structure: it is not in this
+#: subject's universe, was already drawn for it, would re-judge a return the world
+#: will not measure, or reads this verdict in the other phase (``_route``).
+STRUCTURAL = frozenset({"self-judgement", "already drawn for this return", "no world outcome",
+                        "read at emission", "read at release"})
+#: How many authors of the chain being judged a judging seat's family must avoid: the
+#: author of its subject and the author of that subject's own subject
+#: (``RoutingMixin._chain_families`` argues the depth).
+CHAIN_DEPTH = 2
 
 
 @dataclass(frozen=True)
@@ -183,6 +209,9 @@ ZERO_CONSEQUENCE: Mapping[str, float] = MappingProxyType({
     # 1 - the judges' consequence score on the antagonist's return: an antagonist
     # whose return they predicted exactly as well as the base rate earns 0.5.
     DEF_EXPOSURE: 0.5,
+    # 0.5 + 0.5 * (the counter's Brier - the verdict's): a counter that repeats the
+    # verdict it read earns 0.5 whatever happens.
+    DEF_COUNTER: 0.5,
 })
 
 
@@ -374,17 +403,23 @@ class RoutingMixin:
             str(ev.kind), "about_handle")
         return ev.payload.get(key)
 
-    def _higher_tier_universe(self, chosen: str) -> list[str]:
+    def _higher_tier_universe(self, chosen: str, ev: Event | None = None) -> list[str]:
         """The assemblies that could judge the meta verdict ``chosen`` is about to emit.
 
         Nothing judges its own output , so the tier above this decision always
         excludes the meta making it: a recursive meta that is the only assembly
         accepting ``MetaVerdict`` is terminal on the tier it judges, and its
         conformity is graded against the consequence rather than waiting for
-        a verdict that no one can give.
+        a verdict that no one can give. Given the event ``chosen`` reads, a seat on
+        a family of the chain its judgement would carry (``chosen``'s own, and the
+        author of what ``chosen`` grades) could never be drawn for it, so it is not
+        a tier above it either (the #132 review, item 3).
         """
         kinds = (self.assemblies[chosen].spec.emits if chosen in self.assemblies
                  else ("MetaVerdict",))
+        barred: set[str] = set()
+        if ev is not None and chosen in self.assemblies:
+            barred = {self._family(chosen)} | self._chain_families(ev, depth=1)
         return sorted(
             a.spec.id
             for a in self.assemblies.values()
@@ -392,6 +427,7 @@ class RoutingMixin:
             and a.spec.id != chosen
             and a.spec.id not in self.retired_assemblies
             and set(assembly_rewards(a.spec).values()) & {"forecast", "conformity"}
+            and self._family(a.spec.id) not in barred
         )
 
     def _request_universe(self, kind: str) -> list[str]:
@@ -411,7 +447,7 @@ class RoutingMixin:
         live = [a.spec for a in self.assemblies.values()
                 if a.spec.id not in self.retired_assemblies
                 and self._commissioned_judge_refusal(a.spec.id) is None
-                and "exposure" not in assembly_rewards(a.spec).values()]
+                and not set(assembly_rewards(a.spec).values()) & ADVERSARIAL_SHAPES]
         emitters = sorted(s.id for s in live if kind in s.emits)
         return emitters or sorted(s.id for s in live if kind in s.accepts)
 
@@ -680,7 +716,8 @@ class RoutingMixin:
         """
         share = self.ev.adversarial_share
         adversaries = [a for a in dist if a in self.assemblies
-                       and "exposure" in assembly_rewards(self.assemblies[a].spec).values()]
+                       and set(assembly_rewards(self.assemblies[a].spec).values())
+                       & ADVERSARIAL_SHAPES]
         rest = [a for a in dist if a not in adversaries]
         mass = sum(dist[a] for a in adversaries)
         rest_mass = sum(dist[a] for a in rest)
@@ -713,15 +750,139 @@ class RoutingMixin:
         # buys no faster path to the tier above it by being registered under a new
         # name. Tier one is the seed Verdict; every conformity-shaped kind, seed or
         # population, is buffered with the others at the tier it judges.
-        if ev.kind is EventKind.VERDICT or conformity:
-            ev = self._cascade_arrival(ev)
-            if ev is None:
+        first_tier = ev.kind is EventKind.VERDICT and "tier" not in ev.payload
+        if first_tier:
+            self._draw_counters(ev)
+        released = ([ev] if not (ev.kind is EventKind.VERDICT or conformity)
+                    else self._cascade_releases(ev))
+        for event in released:
+            states = list(self.routers.get(kind, []))
+            drawn: list[str] = []
+            # A judged return's routers draw one after another, each excluding the judges
+            # already drawn for it and their families (the #132 Codex review): two
+            # routers of one kind never put two judges of a family on one return.
+            judged = self._judged_return(event)
+            for state in states:
+                if self.wallet.dead:
+                    break
+                exclude = frozenset(a for a in drawn if a != NOOP) if judged else frozenset()
+                chosen = self._route_with(state, event, exclude=exclude,
+                                          phase="release" if first_tier else None)
+                if chosen is not None:
+                    drawn.append(chosen)
+            self._draw_more_judges(event, states, drawn)
+
+    def _draw_counters(self, ev: Event) -> None:
+        """An adversarial judge reads a first-tier verdict when it is given (the #132 review).
+
+        Guarantees the draw happens while the verdict's event is routed, in the tick
+        the verdict was made, over the counter-shaped seats alone (every other seat
+        reads the verdict at the cascade's release), and only when some such seat
+        could read it: the world will measure the return, and the seat is off the
+        chain's families. The judge's frozen view (``verdict_views``) is consumed
+        here: a counter reads it or nothing does.
+        """
+        judge = ev.payload.get("evaluator_handle")
+        try:
+            chain = self._chain_families(ev)
+            readable = self._world_will_measure(ev) and any(
+                a in self.assemblies and a not in self.retired_assemblies
+                and "counter" in assembly_rewards(self.assemblies[a].spec).values()
+                and self._family(a) not in chain
+                for a in self._universe_for(str(ev.kind), ev))
+            if not readable:
                 return
-        states = list(self.routers.get(kind, []))
-        for state in states:
+            for state in list(self.routers.get(str(ev.kind), [])):
+                if self.wallet.dead:
+                    break
+                self._route_with(state, ev, phase="emission")
+        finally:
+            self.verdict_views.pop(judge, None)
+    def _judging(self, action_id: str) -> bool:
+        """Whether a contract reads its subject as a judgement: a verdict, a grade, a counter."""
+        spec = self.assemblies[action_id].spec
+        return bool(set(assembly_rewards(spec).values()) & JUDGING_SHAPES)
+
+    def _family(self, action_id: str) -> str | None:
+        """The foundation family a seat's current model belongs to (``families``)."""
+        asm = self.assemblies.get(action_id)
+        return None if asm is None else model_family(asm.spec.model_id)
+
+    def _author_family(self, ev: Event) -> str | None:
+        """The family of the seat that authored an event's subject, or None without one."""
+        author = self.handle_to_assembly.get(self._event_subject(ev) or "")
+        return self._family(author) if author is not None else None
+
+    def _chain_families(self, ev: Event, depth: int = CHAIN_DEPTH) -> set[str]:
+        """The families a seat that judges ``ev``'s subject must not share (the #132 review).
+
+        Guarantees the families of the authors of the first ``depth`` links of the
+        chain being judged: the subject's author, then the author of what that
+        subject itself judged (``decision_subjects``), and so on. A first-tier judge
+        avoids the producer's family; a meta avoids the judge it grades and that
+        judge's producer; a tier-three grader avoids the meta and the judge.
+
+        Why two links. A grade at tier t is a prediction of the consequence score of
+        the tier t-1 decision it reads, and that score is the world's scoring of the
+        tier t-1 decision's own prediction about tier t-2's work: exactly two authors
+        fix what a grade is about. A reader on either family would grade its own
+        family's reading, or its own family's work as another family read it (essay
+        II.IV: a shared foundation model is a forcing function; II.III.b: the classes
+        "are not permitted to collude"). A link further down reaches the reader only
+        through a reading by a foreign family, which these two links already keep
+        foreign. A whole-chain rule would need t+1 families at tier t, so the depth
+        of recursion would be set by the breadth of the model menu rather than by
+        the evaluators; at two links, three families sustain any depth (II.III:
+        "stacking to some arbitrary level").
+        """
+        families: set[str] = set()
+        subject = self._event_subject(ev)
+        for _ in range(depth):
+            author = self.handle_to_assembly.get(subject or "")
+            if author is None:
+                break
+            family = self._family(author)
+            if family is not None:
+                families.add(family)
+            subject = self.decision_subjects.get(subject)
+        return families
+
+    def _judged_return(self, ev: Event) -> bool:
+        """Whether an event is a return whose reward is its readers' verdicts."""
+        kind = str(ev.kind)
+        return (kind in ("ProducerReturn", "Exposure")
+                or self._kind_rewards().get(kind) in ("judged", "exposure"))
+
+    def _draw_more_judges(self, ev: Event, states: list, drawn: list[str]) -> None:
+        """A share of returns is drawn again, so two or more judges read it (P6, M2).
+
+        Guarantees: with probability ``evaluation.multi_judge_share``, drawn once per
+        judged return from the runtime's seeded stream and never drawn when the share
+        is zero, the return's first router draws again until it has drawn
+        ``evaluation.multi_judge_count`` times. Each further draw is an ordinary
+        routed decision with its own logged propensity, from the same learner over
+        its menu less every seat already drawn for this return and every seat on the
+        family of one already drawn (rulings §2: two or more judges "on different
+        model families (never the author's)"). NOOP stays on the menu: the router may
+        still decline to wake another judge. The judges' verdicts are averaged by the
+        reward chain (``_settle_arrived_verdicts``), and the spread between them is
+        the ensemble disagreement the early-warning statistics read (essay II.III.a).
+        """
+        share = self.ev.multi_judge_share
+        if (share <= 0 or not states or self.wallet.dead or not self._judged_return(ev)
+                or self.rng.random() >= share):
+            return
+        seats = [a for a in drawn if a != NOOP and a in self.assemblies]
+        self.ledger.append({"kind": "route.multi_judge", "event_id": ev.id,
+                            "subject": self._event_subject(ev), "first": list(seats),
+                            "draws": self.ev.multi_judge_count, "ts": self.clock.now_ns})
+        for draw in range(len(drawn), self.ev.multi_judge_count):
             if self.wallet.dead:
                 break
-            self._route_with(state, ev)
+            exclude = frozenset(seats)
+            chosen = self._route_with(states[0], ev, exclude=exclude, draw=draw)
+            if chosen is not None and chosen != NOOP:
+                seats.append(chosen)
 
     def _addressed_seat(self, ev: Event) -> str | None:
         """The one seat an event is addressed to, or None when the draw is open.
@@ -753,39 +914,89 @@ class RoutingMixin:
 
     def _quiet_tick(self, ev: Event, candidates: list[str],
                     excluded: dict[str, str]) -> bool:
-        """True when this draw reached nobody because the seats were asleep.
+        """True when this draw reached nobody because the seats were asleep or barred.
 
         A tick that routes to nobody is not an abstention; it is nothing. It is
         ledgered once, with how many seats were absent and why, and no decision
-        is opened. Unaffordability is left exactly as it was: a draw where any
-        seat was excluded for compute keeps the old path, because that exclusion
-        is what the insolvency streak is made of.
+        is opened. The same holds for a draw whose every seat is off its menu by
+        the draw's own structure, or barred from this subject by family
+        (``_route_with``): the router had nobody to choose, so a NOOP there would be
+        a round it never played. A barred draw is a subject no eligible reader can
+        judge, so it is ledgered ``route.barred`` and counted, never silent (the
+        #132 review, item 3). Unaffordability is left exactly as it was: a draw
+        where any seat was excluded for compute keeps the old path, because that
+        exclusion is what the insolvency streak is made of.
         """
         if not candidates or any(a not in excluded for a in candidates):
             return False
         reasons = {a: excluded[a] for a in candidates}
         if any(r.startswith("compute:") for r in reasons.values()):
             return False
-        if not any(r.startswith("asleep:") for r in reasons.values()):
+        known = BARRED | STRUCTURAL
+        barred = any(r in BARRED for r in reasons.values())
+        structural = (all(r in known or r.startswith("asleep:") for r in reasons.values())
+                      and any(r in known and r != "self-judgement" for r in reasons.values()))
+        if barred and all(r in known for r in reasons.values()):
+            self.stats.route_barred += 1
+            self.ledger.append({"kind": "route.barred", "n": self.n, "event_id": ev.id,
+                                "event_kind": str(ev.kind),
+                                "subject": self._event_subject(ev),
+                                "why": dict(sorted(reasons.items())), "ts": self.clock.now_ns})
+            return True
+        if not structural and not any(r.startswith("asleep:") for r in reasons.values()):
             return False
         self.ledger.append({"kind": "tick.quiet", "n": self.n, "event_id": ev.id,
                             "event_kind": str(ev.kind), "absent": len(reasons),
                             "why": dict(sorted(reasons.items())), "ts": self.clock.now_ns})
         return True
 
-    def _route_with(self, state: RouterState, ev: Event) -> None:
+    def _route_with(self, state: RouterState, ev: Event, *,
+                    exclude: frozenset[str] = frozenset(), draw: int = 0,
+                    phase: str | None = None) -> str | None:
+        """Draw one seat for ``ev`` from ``state``; the chosen seat, or None when quiet.
+
+        ``exclude`` names seats already drawn for this event (``_draw_more_judges``):
+        they and every seat on one of their families are off this draw's menu, and
+        ``draw`` numbers the draw so a keyed learner freezes a round per draw. A
+        first-tier verdict is drawn for twice (``_route``): at ``phase`` "emission"
+        only its counter-shaped readers are on the menu, at "release" only the rest.
+        """
         kind = str(ev.kind)
         def mix(dist):
             return self._cap_adversarial(self._mix_with_standing(dist))
 
-        key = f"{state.learner.id}:{self.n}"
+        key = (f"{state.learner.id}:{self.n}" + (f":{draw}" if draw else "")
+               + (":emission" if phase == "emission" else ""))
         if isinstance(state.learner, _KeyedLearner):
             state.learner.current_key = key
         universe = self._universe_for(kind, ev)
+        # Essay II.IV: a shared foundation model is a forcing function, and II.III.b
+        # forbids the producer and evaluator classes to collude. A seat that judges
+        # never shares a family with the authors of the chain it would judge, at any
+        # tier (evaluations P6; the #132 review, item 3).
+        chain = self._chain_families(ev)
+        taken = {self._family(a) for a in exclude}
 
         def feasible(action_id: str) -> tuple[bool, str]:
             if action_id not in universe:
                 return False, "self-judgement"
+            if action_id in exclude:
+                return False, "already drawn for this return"
+            counter = "counter" in assembly_rewards(self.assemblies[action_id].spec).values()
+            if phase == "emission" and not counter:
+                return False, "read at release"
+            if phase == "release" and counter:
+                return False, "read at emission"
+            judging = self._judging(action_id)
+            if judging and self._family(action_id) in chain:
+                return False, "same-family"
+            if judging and self._family(action_id) in taken:
+                return False, "family already drawn for this return"
+            if counter and not self._world_will_measure(ev):
+                # A counter-verdict is paid only by the world's measurement of the
+                # return it re-judges (``_settle_counters``): one the world will not
+                # measure could only ever settle censored.
+                return False, "no world outcome"
             asleep = self._asleep(action_id, ev)
             if asleep:
                 return False, asleep
@@ -799,7 +1010,7 @@ class RoutingMixin:
                 # A draw that opened no decision is no round: the snapshot the
                 # distribution froze for it would otherwise wait forever.
                 state.learner.inner.discard_for(key)
-            return
+            return None
         unaffordable = bool(candidates) and all(
             excluded.get(a, "").startswith("compute:") for a in candidates
         )
@@ -815,7 +1026,7 @@ class RoutingMixin:
         self._compute_unaffordable |= unaffordable
         self.stats.exclusions += len(sample.excluded)
         for assembly_id, reason in sample.excluded:
-            if reason == "self-judgement":
+            if reason in ("self-judgement", "same-family"):
                 self.ledger.append({"kind": "route.excluded", "event_id": ev.id,
                                     "router": state.learner.id, "assembly_id": assembly_id,
                                     "reason": reason, "ts": self.clock.now_ns})
@@ -824,7 +1035,8 @@ class RoutingMixin:
         deadline = (
             self.clock.now_ns + (self.ev.verdict_timeout_ticks + 2) * self.tick_clock.interval_ns
         )
-        if set(channels.values()) & {CH_FAST, CH_CONFORMITY, CH_EXPOSURE, CH_CONSEQUENCE}:
+        if set(channels.values()) & {CH_FAST, CH_CONFORMITY, CH_EXPOSURE, CH_CONSEQUENCE,
+                                     CH_COUNTER}:
             # An evaluator decision is graded against its judged decision's measured
             # outcome and an exposure against its judges' (ruling R1), so each lives as
             # long as the return's backstop, like a forecast.
@@ -872,6 +1084,7 @@ class RoutingMixin:
             # and it ends whatever sleep the seat had bought itself.
             book.woke(sample.chosen, now=self.tick_index)
         self._assembly_step(ev, handle, sample, deadline)
+        return sample.chosen
 
     def _abstention_roles(self, sample: Sample) -> dict[str, float]:
         """The roles an abstention stood in for: the draw's own odds over the woken arms.
@@ -881,10 +1094,14 @@ class RoutingMixin:
         contract is measured in (equal weights if the draw gave the seats no mass). A
         menu of one role is that role alone; a judge router whose menu also holds a
         producing seat stood in for both, in the proportion it would have woken them.
+        A draw that could wake no seat at all (each excluded, as an unaffordable one
+        is) stood in for the seats it excluded, equally.
         """
         mass: dict[str, float] = {}
         seats = [(a, p) for a, p in zip(sample.action_ids, sample.probs, strict=True)
                  if a != NOOP and a in self.assemblies]
+        if not seats:
+            seats = [(a, 0.0) for a, _why in sample.excluded if a in self.assemblies]
         total = sum(p for _a, p in seats)
         for action, p in seats:
             role = measured_role(self.assemblies[action].spec.emits)
@@ -950,7 +1167,7 @@ class RoutingMixin:
     def _return_channels(self, action_id: str, ev: Event | None = None) -> dict[str, str]:
         """Each output kind declares its reward contract, independent of the accepted event."""
         excluded = self._subject_authors(str(ev.kind), ev) if ev else set()
-        higher = set(self._higher_tier_universe(action_id)) - excluded
+        higher = set(self._higher_tier_universe(action_id, ev)) - excluded
         if action_id == NOOP:
             # Abstention shares a homogeneous menu's contract, including the four
             # shipped seeds. A mixed menu has no selected output and is inapplicable.
@@ -1052,3 +1269,33 @@ class RoutingMixin:
         self.budget.retire(assembly_id, f"retire:{proposal_id}")
         for kind in sorted(self.routers):
             self._open_epoch(kind)
+        self._watch_evaluator_majority(f"retire:{assembly_id}")
+
+    def _watch_evaluator_majority(self, cause: str) -> None:
+        """Ledger the moment the live roster's evaluator seats stop, or resume, outnumbering
+        its producer seats.
+
+        Essay II.III.b: producers are "now established to be the minority of the
+        superdark factory's population". The manifest refuses a world seeded without
+        that majority; after launch the population registers and retires its own
+        seats, and the kernel never refuses a registration for the mix it makes (the
+        #132 review, item 2): it records ``population.evaluator_majority`` with the
+        counts each time the majority is lost or regained, once per change. The
+        seeded roster is the first state; a world that never changes it records
+        nothing.
+        """
+        live = [a.spec for aid, a in self.assemblies.items()
+                if aid not in self.retired_assemblies]
+        shapes = [set(assembly_rewards(spec).values()) for spec in live]
+        evaluators = sum(1 for s in shapes if s & JUDGING_SHAPES)
+        producers = sum(1 for s in shapes if not s & JUDGING_SHAPES
+                        and s & {"judged", "exposure"})
+        held = evaluators > producers
+        before = self.evaluator_majority
+        if before is None:
+            before = self.m.evaluator_population_problems() == []
+        self.evaluator_majority = held
+        if held != before:
+            self.ledger.append({"kind": "population.evaluator_majority", "held": held,
+                                "evaluators": evaluators, "producers": producers,
+                                "cause": cause, "ts": self.clock.now_ns})

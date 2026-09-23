@@ -32,7 +32,7 @@ import json
 from collections import deque
 from typing import Any
 
-from factorylab.cortex.registration import measured_role
+from factorylab.cortex.registration import BUILTIN_RETURNS, measured_role
 from factorylab.cortex.request import Return, public_return
 from factorylab.cortex.sandbox import NoJail, jail_probe
 from factorylab.cortex.schematics import SchematicsMixin
@@ -42,6 +42,7 @@ from factorylab.kernel.termination import DORMANT
 from factorylab.learners.router import Sample
 from factorylab.runtime.bootstrap import BootstrapMixin
 from factorylab.runtime.cadence import settle_forecasts
+from factorylab.runtime.chaos import ChaosMixin
 from factorylab.runtime.composition import CompositionMixin
 from factorylab.runtime.compute import ComputeMixin
 from factorylab.runtime.feedback import (
@@ -53,13 +54,19 @@ from factorylab.runtime.live import LiveClock, Reconciler
 from factorylab.runtime.markets import MarketsMixin
 from factorylab.runtime.pricing import PricingMixin
 from factorylab.runtime.resume import decode, encode, runtime_state
-from factorylab.runtime.routing import ContractQueue, PopulationEvent, RoutingMixin
+from factorylab.runtime.routing import (
+    JUDGING_SHAPES,
+    ContractQueue,
+    PopulationEvent,
+    RoutingMixin,
+)
 from factorylab.runtime.shared import (
     CH_CONFORMITY,
     CH_EXPOSURE,
     CH_FAST,
     CH_VERDICT,
     DEF_CONFORMITY,
+    DEF_COUNTER,
     DEF_FAST,
     DEF_VERDICT,
     NOOP,
@@ -116,6 +123,8 @@ class Runtime(
     # The charter's markets (charter audit M1, M2) read and publish through the
     # governance, pricing and schematics methods below them, so they come first.
     MarketsMixin,
+    # The chaos actuator (evaluations M1) only withholds or ages what seats are shown.
+    ChaosMixin,
     SchematicsMixin,
     ThinkingMixin,
     RoutingMixin,
@@ -169,7 +178,7 @@ class Runtime(
         answers for its own cards and credit is never charged the requester's.
         """
         emitted = self.return_kinds.get(handle)
-        if emitted and emitted not in ("ProducerReturn", "Verdict", "MetaVerdict", "Exposure"):
+        if emitted and emitted not in BUILTIN_RETURNS:
             cards = measured_role(emitted)
         self.raw_scores[handle] = kwargs["score"]
         try:
@@ -196,7 +205,7 @@ class Runtime(
         return [a for a in universe
                 if a == NOOP or a not in excluded
                 or not set(assembly_rewards(self.assemblies[a].spec).values())
-                & {"forecast", "conformity"}]
+                & JUDGING_SHAPES]
 
     def _novelty_compute(self, handle: str, reason: str) -> bool:
         """A requested child spends its parent's money, never the protected share.
@@ -319,6 +328,7 @@ class Runtime(
             self._sampling_actuator()
         self._observe_delivered_event(ev)
         if ev.kind is EventKind.TICK:
+            self._chaos_tick()  # seat-facing faults only (runtime.chaos)
             self._reconcile_orders()
             if getattr(self, "polymarket", None) is not None:
                 from factorylab.runtime import polymarket
@@ -665,6 +675,8 @@ class Runtime(
             self._evaluator_step(ev, handle, sample, deadline)
         elif emits == ("MetaVerdict",):
             self._meta_step(ev, handle, sample, deadline)
+        elif emits == ("CounterVerdict",):
+            self._counter_step(ev, handle, sample, deadline)
         else:
             self._producer_step(ev, handle, sample, deadline)
 
@@ -683,6 +695,8 @@ class Runtime(
                            "rationale": {"type": "string"}, "forecasts": self._forecast_schema()}
                           if kind == "Verdict" else
                           {"conformity": unit} if kind == "MetaVerdict" else
+                          {"verdict": unit, "rationale": {"type": "string"}}
+                          if kind == "CounterVerdict" else
                           {"action": {"type": "string"}})
                 schema = {"type": "object", "properties": fields, "required": list(fields)}
             schemas.append({**schema, "properties": {
@@ -857,6 +871,7 @@ class Runtime(
                 # has always worked this way, and the mids read is the same kind of
                 # fact. GPT-6 third reading, §11: "missing data stays unavailable".
                 payload["mids_unavailable"] = type(exc).__name__
+            self._seat_tick_view(payload)
         if ev.kind is EventKind.WORLD_UPDATE and sample.chosen != NOOP:
             # C2: the event carries the world every subscriber could have read; the
             # seat that was drawn reads its own fold, which reaches back to the last
@@ -928,6 +943,9 @@ class Runtime(
                 return
             if shape == "conformity":
                 self._meta_step(ev, handle, sample, deadline, returned=ret)
+                return
+            if shape == "counter":
+                self._counter_step(ev, handle, sample, deadline, returned=ret)
                 return
             if emitted is None:
                 self.consequences.finish(handle, ret.cost)
@@ -1012,7 +1030,7 @@ class Runtime(
         same contract would be; every other child takes the seed path.
         """
         spec = self.assemblies[target].spec
-        if not any(k not in ("ProducerReturn", "Verdict", "MetaVerdict", "Exposure")
+        if not any(k not in BUILTIN_RETURNS
                    and shape != "judged" for k, shape in assembly_rewards(spec).items()):
             return super()._run_child(parent, item, handle, target, sample, req)
         self.handle_to_assembly[handle] = target
@@ -1054,6 +1072,9 @@ class Runtime(
             "world": self._world_block(),
             "your_state": self.working_state.render(sample.chosen),
             "unread_outcomes": self.outcomes.unread(sample.chosen),
+            # Variance, autocorrelation and ensemble disagreement, live (II.III.a):
+            # the evaluators' reading of the stack, never a producer's (M2).
+            "early_warning": self._early_warning_view(),
             **self._action_policy_input(sample.chosen),  # private
             # Evaluation is a commission, not an obligation (§6.B): a subject, a
             # scope, an evidence horizon and a budget, which may be declined.
@@ -1152,6 +1173,13 @@ class Runtime(
         # judge's decision waits on that and on the tier above (ruling R1).
         self._open_evaluation(handle, about=about, q=verdict, evaluator_id=sample.chosen,
                               tier=tier)
+        if tier == 1 and (about in self.reference_mids or self._acted(about)):
+            # What this judge was shown of the world, kept for an adversarial judge
+            # that re-judges its verdict (``_counter_step``): the counter reads the
+            # same world the verdict was made in, never a later one.
+            self.verdict_views[handle] = {
+                "world": {k: v for k, v in inputs["actor_context"].items() if k != "seats"},
+                "early_warning": inputs["early_warning"], "tick": self.ticks_consumed}
         self._emit(
             EventKind.VERDICT,
             {
@@ -1212,6 +1240,7 @@ class Runtime(
             },
             "producer_outputs": judged_outputs(payload.get("producer_outputs", {})),
             "charter": self._charter_text(),
+            "early_warning": self._early_warning_view(),
             # A meta judge reads the verdict like a machine, as a first-tier judge
             # reads a return (C7): its own operating access, not the whole world.
             "actor_context": self._operating_context(sample.chosen, self._world_block()),
@@ -1304,6 +1333,104 @@ class Runtime(
                 **({"about_handle": handle} if emitted != "MetaVerdict" else {}),
             },
         )
+
+    def _counter_step(self, ev: Event, handle: str, sample: Sample, deadline: int,
+                      *, returned: Return | None = None) -> None:
+        """An adversarial judge reads a verdict and gives its own on the return it judged.
+
+        Essay II.III.b: realized consequence is "sparse ... and shrinking", so it is
+        farmed "by inducing a level of adversarial activity", and the adversarial
+        layer "consists not only of evaluators but also of productive workers"
+        (evaluations M1). The counter-verdict is a prediction of the same measured
+        outcome the verdict it read predicts; it is paid only when the world measures
+        that return, on how far it beat that verdict (``_settle_counters``). It never
+        reaches the producer's reward or the judge's: the world grades both.
+
+        Guarantees a counter settles censored, never scored, when it read anything but
+        a first-tier verdict on a return, or a return whose outcome the world had
+        already given (a reading of the answer is not a prediction).
+        """
+        self._start_return(handle)
+        payload = _to_plain(ev.payload)
+        channel = self.queue.get(handle).channel
+        if sample.chosen == NOOP:
+            self.stats.noops += 1
+            self.queue.settle(handle, channel=channel, score=0.0,
+                              status=SettleStatus.INAPPLICABLE,
+                              definition_version=DEF_COUNTER, sampling_ref=None)
+            return
+        about = payload.get("about_handle")
+        view = self.verdict_views.get(payload.get("evaluator_handle"))
+        own = self._operating_context(sample.chosen, self._world_block())
+        inputs = {
+            "verdict": {"verdict": payload.get("verdict"),
+                        "rationale": payload.get("rationale", "")},
+            "producer_outputs": judged_outputs(payload.get("producer_outputs", {})),
+            "charter": self._charter_text(),
+            "subject_handle": about,
+            # The world exactly as the judge it re-judges was shown it, frozen at that
+            # verdict (the #132 review, item 1): its edge may be a better reading of
+            # the same evidence, never fresher prices. Its own seat row is its own.
+            "early_warning": view["early_warning"] if view is not None else None,
+            "actor_context": ({**view["world"], "seats": own["seats"]} if view is not None
+                              else own),
+        }
+        inputs.update(self._action_policy_input(sample.chosen))  # private
+        inputs["your_state"] = self.working_state.render(sample.chosen)
+        inputs["unread_outcomes"] = self.outcomes.unread(sample.chosen)
+        unit = {"type": "number", "minimum": 0, "maximum": 1}
+        schema = {
+            "type": "object",
+            "properties": {"verdict": unit, "rationale": {"type": "string"},
+                           "status": {"enum": ["cannot"]}, "reason": {"type": "string"},
+                           "propensity": {"type": "object"},
+                           "register": self._register_schema()},
+            "required": ["rationale"],
+        }
+        req = self._request(
+            handle,
+            "Give your own verdict 0-1 on the return this verdict judged, against the "
+            "charter; you may decline.",
+            inputs, schema, deadline, channel, propensity=payload.get("propensity"))
+        ret = (returned if returned is not None
+               else self._invoke(sample.chosen, req, "adversary"))
+        self.consequences.finish(handle, ret.cost)
+        self.handle_to_assembly[handle] = sample.chosen
+        self._apply_registrations(handle, ret)
+        answered = str(ret.outputs.get("status", "")).strip().lower()
+        if ret.status == "ok" and answered == "cannot":
+            self._settle_declined(handle, channel, str(ret.outputs.get("reason", ""))[:500]
+                                  or "the seat declined this commission")
+            return
+        q = _as_unit(ret.outputs.get("verdict")) if ret.status == "ok" else None
+        if q is None:
+            self._censor_judgement(handle, f"{ret.status}: no verdict in [0, 1]")
+            return
+        judged = _as_unit(payload.get("verdict"))
+        if (ev.kind is not EventKind.VERDICT or "tier" in payload or judged is None
+                or not isinstance(about, str)):
+            self._censor_judgement(handle, "a counter-verdict reads a first-tier verdict "
+                                           "on a return")
+            return
+        if view is None or view["tick"] != self.ticks_consumed:
+            # Only a counter made in the tick of the verdict it read, on that verdict's
+            # frozen view, is a prediction on equal information.
+            self._censor_judgement(handle, "a counter-verdict reads a verdict in the tick "
+                                           "it was given")
+            return
+        self.decision_subjects[handle] = payload.get("evaluator_handle") or about
+        if self._consequence_known(about, 1):
+            self.ledger.append({"kind": "evaluation.hindsight", "handle": handle,
+                                "about_handle": about, "tier": 1, "ts": self.clock.now_ns})
+            self._censor_judgement(handle, "the return's outcome was already known")
+            return
+        self.pending_counters[handle] = {
+            "about": about, "q": q, "judge_handle": payload.get("evaluator_handle"),
+            "judge_q": judged, "evaluator_id": sample.chosen, "tick": self.ticks_consumed,
+        }
+        self.ledger.append({"kind": "counter.opened", "handle": handle, "about_handle": about,
+                            "judge_handle": payload.get("evaluator_handle"), "q": q,
+                            "judge_q": judged, "ts": self.clock.now_ns})
 
 
 def run_world(

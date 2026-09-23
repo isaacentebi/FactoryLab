@@ -91,8 +91,13 @@ def test_a_judge_is_never_routed_to_its_own_childs_return_nor_to_its_own_output(
     runtime.n += 1
     runtime._route_with(state, child_return)
     excluded = [i for i in runtime.ledger._recovery_items() if i["kind"] == "route.excluded"]
-    assert {i["assembly_id"] for i in excluded} == {"eval-child"}
-    assert all(i["reason"] == "self-judgement" for i in excluded)
+    assert {i["assembly_id"] for i in excluded
+            if i["reason"] == "self-judgement"} == {"eval-child"}
+    # The other exclusions are the author's family (evaluations P6), never a judge
+    # on another family.
+    family = runtime._family("eval-child")
+    assert all(i["reason"] == "same-family" and runtime._family(i["assembly_id"]) == family
+               for i in excluded if i["reason"] != "self-judgement")
     # A judge's own verdict and a meta's own meta verdict are excluded on every kind.
     judge = _judge_handle(runtime)
     runtime.handle_to_assembly[judge] = "eval-a"

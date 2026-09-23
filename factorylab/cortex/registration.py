@@ -24,7 +24,7 @@ MAX_PROMPT_CHARS = 4000
 MAX_CONTRACT_DESCRIPTION_CHARS = 500
 MAX_PROPOSALS_PER_RETURN = 3
 LEARNERS = ("exp3", "blum_mansour")
-ROLES = ("producer", "evaluator", "meta", "antagonist")
+ROLES = ("producer", "evaluator", "meta", "antagonist", "adversary")
 # An assembly's declared action set is its own; the kernel bounds only its size.
 MAX_DECLARED_ACTIONS = 32
 MAX_ACTION_ID_CHARS = 64
@@ -33,18 +33,22 @@ MAX_ACTION_ID_CHARS = 64
 def seed_emits(role: str) -> tuple[str, ...]:
     """Expand a legacy seed label into an ordinary, replaceable output contract."""
     return {"producer": ("ProducerReturn",), "evaluator": ("Verdict",),
-            "meta": ("MetaVerdict",), "antagonist": ("Exposure",)}.get(
-                role, ("ProducerReturn",))
+            "meta": ("MetaVerdict",), "antagonist": ("Exposure",),
+            "adversary": ("CounterVerdict",)}.get(role, ("ProducerReturn",))
 
 
+# A counter-verdict is measured in its own scope: the adversarial judges are a
+# population the charter may price apart from the judges they read (essay II.III.b:
+# "the adversarial layer consists not only of evaluators but also of productive
+# workers"; the #132 Codex review).
 CONTRACT_ROLES = MappingProxyType({
     "ProducerReturn": "producer", "Verdict": "evaluator",
-    "MetaVerdict": "meta", "Exposure": "antagonist",
+    "MetaVerdict": "meta", "Exposure": "antagonist", "CounterVerdict": "adversary",
 })
-REWARD_SHAPES = ("judged", "forecast", "conformity", "exposure")
+REWARD_SHAPES = ("judged", "forecast", "conformity", "exposure", "counter")
 SEED_REWARD_SHAPES = MappingProxyType({
     "ProducerReturn": "judged", "Verdict": "forecast",
-    "MetaVerdict": "conformity", "Exposure": "exposure",
+    "MetaVerdict": "conformity", "Exposure": "exposure", "CounterVerdict": "counter",
 })
 
 
@@ -60,7 +64,8 @@ def measured_role(emits: str | tuple[str, ...] | None) -> str:
     return CONTRACT_ROLES.get(kinds[0], kinds[0]) if kinds else "producer"
 
 
-BUILTIN_RETURNS = frozenset({"ProducerReturn", "Verdict", "MetaVerdict", "Exposure"})
+BUILTIN_RETURNS = frozenset({"ProducerReturn", "Verdict", "MetaVerdict", "Exposure",
+                             "CounterVerdict"})
 # A metric card's accountability scope is either a role alias, ``all``, or an
 # emitted kind. These spellings name populations, so no emitted kind may take one
 # in any case: a kind and the scope that measures it must never be the same name.
@@ -79,7 +84,7 @@ def reward_contracts(
     emits: tuple[str, ...], declared: Any = None, *,
     registered: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
-    """Each emitted kind has one of four reward shapes; seed meanings remain fixed."""
+    """Each emitted kind has one of five reward shapes; seed meanings remain fixed."""
     if declared is None:
         declared = {}
     if not isinstance(declared, Mapping) or any(k not in emits for k in declared):
@@ -89,7 +94,8 @@ def reward_contracts(
         existing = SEED_REWARD_SHAPES.get(kind, (registered or {}).get(kind))
         shape = declared.get(kind, existing or "judged")
         if not isinstance(shape, str) or shape not in REWARD_SHAPES:
-            raise ValueError("reward shape must be judged, forecast, conformity or exposure")
+            raise ValueError("reward shape must be judged, forecast, conformity, exposure "
+                             "or counter")
         if kind in SEED_REWARD_SHAPES and shape != SEED_REWARD_SHAPES[kind]:
             raise ValueError("built-in reward shapes cannot be replaced")
         if existing is not None and shape != existing:

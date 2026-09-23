@@ -32,6 +32,22 @@ provider = "fake"
 input_usd_per_mtok = "1"
 output_usd_per_mtok = "5"
 
+# A third model family (Wave 5a): Chapter II's evaluator tier is served by at least
+# three, and a judge never reads a return authored on its own (evaluations C1, P6).
+[[models]]
+id = "fake-sonnet"
+provider = "fake"
+input_usd_per_mtok = "3"
+output_usd_per_mtok = "15"
+
+# A fourth, for a meta that shares a family with no judge and no producer: a meta
+# never reads a chain on its own family (the #132 review, item 3).
+[[models]]
+id = "fake-gemini"
+provider = "fake"
+input_usd_per_mtok = "1"
+output_usd_per_mtok = "5"
+
 [[assemblies]]
 id = "seed-observer"
 role = "producer"
@@ -46,7 +62,7 @@ model_id = "fake-opus"
 accepts = ["Tick", "Fill"]
 max_tokens = 512
 
-# Evaluators outnumber producers; two run on the other model family.
+# Evaluators outnumber producers and span three model families.
 [[assemblies]]
 id = "eval-a"
 role = "evaluator"
@@ -57,7 +73,7 @@ max_tokens = 256
 [[assemblies]]
 id = "eval-b"
 role = "evaluator"
-model_id = "fake-haiku"
+model_id = "fake-sonnet"
 accepts = ["ProducerReturn", "Exposure"]
 max_tokens = 256
 
@@ -92,7 +108,7 @@ max_tokens = 128
 [[assemblies]]
 id = "meta-b"
 role = "meta"
-model_id = "fake-haiku"
+model_id = "fake-gemini"
 accepts = ["Verdict"]
 max_tokens = 128
 

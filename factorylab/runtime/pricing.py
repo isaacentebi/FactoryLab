@@ -82,6 +82,13 @@ class MeasureWindow:
     # Every invocation's metered cost plus retained-storage rent, in micro-USD: the
     # window's compute burn (``burn_per_window``; charter audit M6).
     compute_spend_micro: int = 0
+    # The part of it the evaluator roles spent (judges, adversarial judges and every
+    # tier of meta): ``evaluator_compute_share``'s numerator (the #132 review, item 2).
+    evaluator_spend_micro: int = 0
+    # The early-warning summaries of the score series at this window's close
+    # (``runtime.ews``): evaluator-facing, never a public window fact.
+    ews_variance: float | None = None
+    ews_autocorrelation: float | None = None
 
 
 #: The definition of a censored settlement that carries a price: its decision left
@@ -202,6 +209,8 @@ class PricingMixin:
         for name, value in evidence.items():
             sample[name] += value
         self.window.compute_spend_micro += ret.cost
+        if observed_role in ("evaluator", "meta", "adversary"):
+            self.window.evaluator_spend_micro += ret.cost
         return ret
 
     def _record_pricing_fills(self, events) -> None:
@@ -397,6 +406,7 @@ class PricingMixin:
             if eid in evaluators and (v.get("n") or v.get("verdict_n"))
         ]
         w = replace(self.window, forecast_skills=skills)
+        history, series = self._early_warning_open(w)
         book = self.observations
         named = {normalise(c.observation) for c in self.charter.cards}
         for oid, entry in self.registered_observations.items():
@@ -426,6 +436,7 @@ class PricingMixin:
         # Typed windows. A card may name a registered observation.
         card_values = measure_cards(self.charter.cards, self.card_samples, w, observations=book)
         card_values = {cid: value for cid, value in card_values.items() if cid in self.regions}
+        self._early_warning_close(w, history, series, card_values)
         # A decision settling late is priced on the window it worked in.
         self.window.closed_values = dict(card_values)
         self.window.closed_regions = dict(self.regions)
@@ -484,6 +495,54 @@ class PricingMixin:
         self._ledger_unattributed()
         close_window(self, values)
         self._prune_price_evidence()
+
+    def _early_warning_open(self, w: MeasureWindow) -> tuple[list[dict], dict]:
+        """This window's score profile joins the history, and its summaries are measured.
+
+        Essay II.III.a, ruling R3, evaluations M2: variance and lag-one
+        autocorrelation at several timescales, and ensemble disagreement, computed
+        online at every window close. The score series are read with the seed
+        measures themselves, before any observation is valued, so the two summary
+        observations (``ews_variance``, ``ews_autocorrelation``) are values of this
+        window like any other and a card may price them.
+        """
+        from factorylab.runtime import ews
+        from factorylab.runtime.observations import SEEDS
+
+        k = self.m.immune.k
+        values = {oid: SEEDS[oid].measure(w) for oid in (
+            "verdict_mean", "meta_verdict_mean", "forecast_skill", "evaluator_disagreement")}
+        profile = {**ews.score_profile(values), "balance": self.wallet.balance / 1_000_000}
+        history = ews.history_with(self.stats.ews_history, w.index, profile, k)
+        series = ews.table(history, [], k)
+        w.ews_variance, w.ews_autocorrelation = ews.summary(series)
+        self.window.ews_variance, self.window.ews_autocorrelation = (
+            w.ews_variance, w.ews_autocorrelation)
+        return history, series
+
+    def _early_warning_close(self, w: MeasureWindow, history: list[dict], series: dict,
+                             card_values: dict[str, float]) -> None:
+        """Add the cards' series and publish the table to the evaluators; ledger it.
+
+        Guarantees the published table carries every series ``early_warnings`` reads
+        (the score series, each card's value series and the wallet balance) at k, 2k
+        and 4k windows, and that the record is the evaluators' (``ews.view``), never
+        a producer's.
+        """
+        from factorylab.runtime import ews
+
+        k = self.m.immune.k
+        history[-1]["profile"].update({f"card:{cid}": value for cid, value in card_values.items()})
+        self.stats.ews_history = history
+        cards = sorted({f"card:{c.id}" for c in self.charter.cards})
+        table = ews.table(history, cards, k)
+        summary = {"ews_variance": w.ews_variance, "ews_autocorrelation": w.ews_autocorrelation}
+        self.stats.early_warning = {"window": w.index, "spans_windows": [k, 2 * k, 4 * k],
+                                    "summary": summary, "series": table}
+        supported = sorted(name for name, scales in table.items()
+                           if any(s.get("variance") is not None for s in scales))
+        self.ledger.append({"kind": "ews.window", "window": w.index, "summary": summary,
+                            "supported_series": supported, "ts": self.clock.now_ns})
 
     def _anticipated_violation(self, card_id: str, value: float) -> float | None:
         """The market's expected change in a card's violation, or None without a market.
@@ -617,8 +676,14 @@ class PricingMixin:
                                else self.controller.price(card.id)))
         return priced
 
-    def _penalty_terms(self, cards: str, handle: str | None) -> list[dict]:
-        """Late decisions keep their own windows; current windows use observed causal prefixes."""
+    def _penalty_terms(self, cards: str, handle: str | None, *,
+                       as_role: str | None = None) -> list[dict]:
+        """Late decisions keep their own windows; current windows use observed causal prefixes.
+
+        ``as_role`` scopes ``handle`` in that role wherever a share is measured by role,
+        whatever role its window recorded: an abstention priced on each role its draw
+        could have woken is measured as a decision of that role (``_priced_abstention``).
+        """
         terms = []
         origins = self.price_origins.get(handle, {})
         for card, observation, window, price in self._priced_cards(origins):
@@ -637,14 +702,16 @@ class PricingMixin:
             weight = price * amount
             owner = None
             share = 1.0 if handle is None else self._decision_share(
-                window, handle, observation.id, card.answers_for, region, values[card.id]
+                window, handle, observation.id, card.answers_for, region, values[card.id],
+                as_role=as_role,
             )
             if handle is not None and observation.id == "cost_per_return":
                 share = self._cost_share(card, window, handle, share)
             elif handle is not None and amount > 0 and observation.id not in _EXACT_SHARES:
                 scopes = (self.card_samples.scopes if window.closed_values is None
                           else window.closed_scopes).get(card.id) or {}
-                attributed = self._attributed_share(window, handle, card, region, scopes)
+                attributed = self._attributed_share(window, handle, card, region, scopes,
+                                                    as_role=as_role)
                 if attributed is not None:
                     share, owner = attributed
             term = {"card_id": card.id, "observation": observation.id,
@@ -664,7 +731,8 @@ class PricingMixin:
         return sample["role"] if sample is not None else self._decision_role(handle)
 
     def _attributed_share(self, window, handle: str, card, region,
-                          scopes: dict[str, float]) -> tuple[float, str | None] | None:
+                          scopes: dict[str, float], *,
+                          as_role: str | None = None) -> tuple[float, str | None] | None:
         """Route a scoped card's violation onto the scopes whose own samples violate it.
 
         A card measured per assembly (or per role) is the mean of its scopes, so
@@ -684,11 +752,12 @@ class PricingMixin:
         total = sum(excess.values())
         if total <= 0:
             return None
-        own = self._scope_of(window, handle, per)
+        own = (as_role if as_role is not None and per == "role"
+               else self._scope_of(window, handle, per))
         if not excess.get(own):
             return 0.0, own
         peers = {h for h, d in window.decisions.items()
-                 if (d["invocations"] or d["ok"] or not d["cost"])
+                 if h != handle and (d["invocations"] or d["ok"] or not d["cost"])
                  and self._scope_of(window, h, per) == own}
         peers.add(handle)
         part = excess[own] / total
@@ -763,12 +832,14 @@ class PricingMixin:
         total = sum(shares.values())
         return {h: float(amount / total) for h, amount in shares.items()} if total else {}
 
-    def _decision_share(self, window, handle, observation, role, region, value) -> float:
+    def _decision_share(self, window, handle, observation, role, region, value, *,
+                        as_role: str | None = None) -> float:
         """Attributable violations use own contributions; other observations divide by support.
 
         A generic share never falls below ``prices.min_blame_share``: splitting
         participation across many decisions cannot dilute what each one carries
-        of a violation below that floor.
+        of a violation below that floor. ``as_role`` counts ``handle`` among that
+        role's decisions, whatever role its window recorded.
         """
         samples = window.decisions
         own = samples.get(handle, {})
@@ -793,14 +864,17 @@ class PricingMixin:
             # retained-storage charge falling due where it never responded —
             # made no response this observation reads, so it does not take a
             # share of the violation and does not dilute the shares that do.
-            n = sum(role == "all" or d["role"] == role for d in samples.values()
+            n = sum(role == "all"
+                    or (as_role if h == handle and as_role is not None else d["role"]) == role
+                    for h, d in samples.items()
                     if d["invocations"] or d["ok"] or not d["cost"])
             return max(self.m.prices.min_blame_share, 1 / max(1, n))
         return min(1.0, numerator / denominator) if denominator > 0 else 0.0
 
-    def _penalty_for(self, cards: str, handle: str | None = None) -> float:
+    def _penalty_for(self, cards: str, handle: str | None = None, *,
+                     as_role: str | None = None) -> float:
         """Cap the total pressure, then allocate its penalty-weighted contribution share."""
-        terms = self._penalty_terms(cards, handle)
+        terms = self._penalty_terms(cards, handle, as_role=as_role)
         total = sum(t["weight"] for t in terms)
         if total <= 0:
             return 0.0

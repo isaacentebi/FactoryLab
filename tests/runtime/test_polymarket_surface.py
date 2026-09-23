@@ -94,7 +94,13 @@ def test_no_world_in_the_repository_enables_event_markets():
     from pathlib import Path
 
     for path in sorted(Path(__file__).parents[2].joinpath("worlds").glob("*.toml")):
-        assert load_manifest(str(path)).polymarket.enabled is False, path.name
+        try:
+            world = load_manifest(str(path))
+        except ValueError as exc:
+            # A pre-Wave-5a roster the kernel refuses loads no surface at all (R8).
+            assert "evaluator population" in str(exc), path.name
+            continue
+        assert world.polymarket.enabled is False, path.name
 
 
 def test_published_tools_state_what_they_do_and_cost_and_carry_valid_examples():

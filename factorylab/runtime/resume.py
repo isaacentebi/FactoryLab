@@ -589,6 +589,13 @@ _RUNTIME_FIELDS = (
     # when an older checkpoint lacks it.
     "exposure_scores", "arrived_verdicts", "consequence_scores", "world_outcomes",
     "reference_mids", "marked_outcomes", "late_verdicts",
+    # Wave 5a (evaluations M1, P5): each judge's ordinary consequence tally, the
+    # adversarial judges' open counter-verdicts, and the chaos faults of the tick in
+    # progress. Each defaults empty when an older checkpoint lacks it.
+    "judge_ordinary", "pending_counters", "chaos_tick",
+    # The #132 review: judges' frozen views awaiting their counters, and whether the
+    # live roster still holds an evaluator majority. Both default on absence.
+    "verdict_views", "evaluator_majority",
     "card_samples", "price_windows", "price_origins",
     "retired_assemblies", "retirement_proposals", "return_kinds", "decision_subjects",
     "event_schemas",

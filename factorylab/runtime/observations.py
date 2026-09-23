@@ -23,9 +23,10 @@ if TYPE_CHECKING:
 
 # The per-decision attribution the runtime keeps on the same window object
 # is not a public window fact and never reaches a registered observation.
+# The early-warning summaries are the evaluators' (``runtime.ews``), not a public fact.
 PRIVATE_WINDOW_FIELDS = ("decisions", "closed_values", "closed_regions", "closed_shares",
                          "closed_cards", "closed_prices", "closed_holdouts",
-                         "series_discarded")
+                         "series_discarded", "ews_variance", "ews_autocorrelation")
 MAX_WORLD_SAMPLES = 1024
 # Fields holding a public quantity filed under a private identity: a decision
 # handle, an evaluator's assembly id. The quantity is disclosed, the identity is
@@ -308,6 +309,39 @@ CATALOGUE: tuple[Observation, ...] = (
     # Essay II.IV: "speed is categorically indistinguishable from a specific approach
     # to cash burn" (charter audit M6). A clock motion predicts its effect on this, or
     # on an observation the population registered.
+    # Essay II.III.a, ruling R3, evaluations M2: the early-warning statistics, live. The
+    # full table (every series at k, 2k and 4k windows) is shown to the evaluators;
+    # these two summarise it so a card may price critical slowing down.
+    Observation(
+        "ews_variance",
+        "The largest population variance among the score series (mean verdict, mean "
+        "meta grade, consequence skill, evaluator disagreement), each over its shortest "
+        "complete span of k, 2k or 4k closed windows.",
+        "score variance",
+        lambda w: getattr(w, "ews_variance", None),
+        (0.0, 1.0),
+    ),
+    Observation(
+        "ews_autocorrelation",
+        "The largest centred lag-one autocorrelation among the same score series over "
+        "the same spans.",
+        "correlation",
+        lambda w: getattr(w, "ews_autocorrelation", None),
+        (-1.0, 1.0),
+    ),
+    # Essay II.III: "more evaluators consuming more compute ... than agents engaged in
+    # production". Not enforced: the seat majority is manifest physics, and what share
+    # of compute the evaluators spend is the charter's to price (the #132 review).
+    Observation(
+        "evaluator_compute_share",
+        "Compute the evaluator roles (judges, adversarial judges, every tier of meta) "
+        "spent in the window over all compute spent in it, retained-storage rent "
+        "included.",
+        "fraction",
+        lambda w: _ratio(getattr(w, "evaluator_spend_micro", 0),
+                         getattr(w, "compute_spend_micro", 0)),
+        (0.0, 1.0),
+    ),
     Observation(
         "burn_per_window",
         "Compute spent in the window: every invocation's metered cost plus "

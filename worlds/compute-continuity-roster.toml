@@ -169,6 +169,17 @@ accepts = ["Verdict"]
 max_tokens = 800
 effort = "low"
 
+# A third meta family (the #132 review, item 3): a meta never shares a family with
+# the judge it grades nor that judge's producer, so every (judge, producer) pair of
+# families this roster makes needs a meta on neither.
+[[assemblies]]
+id = "meta-c"
+role = "meta"
+model_id = "openai/gpt-5.6-luna"
+accepts = ["Verdict"]
+max_tokens = 800
+effort = "low"
+
 [novelty]
 trials = 3
 max_lifetime_windows = 6

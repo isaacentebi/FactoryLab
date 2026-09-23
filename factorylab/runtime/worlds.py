@@ -13,7 +13,7 @@ import hashlib
 import json
 import re
 import tomllib
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, field, fields, replace
 from decimal import Decimal
 from math import isfinite
 from pathlib import Path
@@ -315,6 +315,15 @@ class EvaluationSpec:
     #: as a no-swap-regret learner (Blum-Mansour over EXP3 rows) instead of mean-based
     #: EXP3. Every other kind stays at the frontier. Empty keeps every earlier world.
     no_swap_regret_kinds: tuple[str, ...] = ()
+    #: Evaluations P6, M2: the share of judged returns drawn again until
+    #: ``multi_judge_count`` judges on distinct families (never the author's) read
+    #: them, which is what makes ensemble disagreement exist (essay II.III.a).
+    multi_judge_share: float = 0.3
+    multi_judge_count: int = 2
+    #: Evaluations C7: of each cascade window's completed judgements, the share
+    #: released to the tier above (at least one), so the tiers read a meaningful
+    #: share of what the tier below said rather than one representative a window.
+    meta_read_share: float = 0.5
 
     # Both horizons count world ticks consumed, not internal events (defect 1). The
     # field names predate that and are kept so every manifest keeps its meaning; the
@@ -341,6 +350,34 @@ def _tick_horizon(ev: dict, name: str, default: int) -> Any:
     if ticks is not None and events is not None and ticks != events:
         raise ValueError(f"evaluation.{name}_ticks and evaluation.{name}_events disagree")
     return ticks if ticks is not None else events if events is not None else default
+
+
+@dataclass(frozen=True)
+class ChaosSpec:
+    """The chaos actuator's fault rates (essay II.III.b: a chaos monkey; evaluations M1).
+
+    Each rate is the probability, drawn from the runtime's seeded stream, that one
+    real operational fault reaches what the seats experience: per tick, every venue
+    read a seat makes that tick answers unavailable (``venue_unavailable``) or the
+    mids a seat is shown stay those of the tick before (``stale_mids``); per call, a
+    population tool's result is withheld (``tool_withheld``) or a connector fetch
+    times out (``connector_timeout``). No fault moves money: none fills, charges,
+    credits or refunds anything, and none reaches order placement, collateral,
+    settlement, custody or the safety path (``runtime.chaos``). Zero draws nothing.
+    """
+
+    venue_unavailable: float = 0.0
+    stale_mids: float = 0.0
+    tool_withheld: float = 0.0
+    connector_timeout: float = 0.0
+
+
+#: The most judges one return may be drawn for (``evaluation.multi_judge_count``).
+MAX_JUDGES_PER_RETURN = 5
+
+#: The largest rate a chaos fault may be drawn at: faults are a bounded minority of
+#: what seats experience, never the world itself.
+MAX_CHAOS_RATE = 0.5
 
 
 @dataclass(frozen=True)
@@ -502,6 +539,7 @@ class WorldManifest:
     kill: KillSpec = KillSpec()
     providers: ProvidersSpec = ProvidersSpec()
     prompt: PromptSpec = PromptSpec()
+    chaos: ChaosSpec = ChaosSpec()
     tick_interval_ns: int = 10 * NS_PER_SECOND
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -744,6 +782,112 @@ class WorldManifest:
                     raise ValueError(f"assembly {a.id} emits {kind}, which settles on the "
                                      "verdicts of its readers, and no seed accepts it")
 
+    def evaluator_population_problems(self) -> list[str]:
+        """Every way the seeded roster falls short of Chapter II §III's evaluators.
+
+        Guarantees one sentence per failed check, and none for a roster that seeds no
+        judging at all (no seed emits a Verdict: an evaluation-free fixture, whose
+        returns are visibly unjudged). The checks are facts about the world fixed at
+        the Stackelberg move (evaluations C1, M3, P6; the #132 review, items 2, 3):
+
+        * evaluator seats (every seed whose kinds read a subject as a judgement: a
+          verdict, a grade of the tier below, a counter-verdict) strictly outnumber
+          producer seats (every seed whose returns settle on their readers'
+          verdicts, antagonists included): producers are "now established to be the
+          minority of the superdark factory's population" (II.III.b);
+        * at least three foundation-model families serve the evaluator tier (II.IV:
+          a common foundation model is "a global forcing function"; a provider change
+          is not a model change, ``runtime.families``);
+        * every judged kind a seed emits is accepted by judges off its author's
+          family, and while ``evaluation.multi_judge_share`` is positive by judges on
+          at least ``multi_judge_count`` such families (rulings §2, Evaluations);
+        * every chain a seeded tier can be asked to grade has a seeded reader: each
+          (judge, producer) pair of families a Verdict can carry is read by a meta
+          on neither, and, when any seed reads MetaVerdicts, each (grader, graded)
+          pair a MetaVerdict can carry is read by a seed on neither, to every depth
+          the roster reaches (the two-link family rule of
+          ``RoutingMixin._chain_families``);
+        * every adversarial judge can read some Verdict the roster makes: a sampled
+          minority need not read every chain, but a seat that can read none is a
+          seat routing can never draw.
+        """
+        from factorylab.cortex.registration import reward_contracts, seed_emits
+        from factorylab.runtime.families import model_family
+
+        seeded = {a.id: tuple(a.emits) if a.emits else seed_emits(a.role)
+                  for a in self.assemblies}
+        if not any("Verdict" in emits for emits in seeded.values()):
+            return []
+        shapes = {a.id: reward_contracts(seeded[a.id]) for a in self.assemblies}
+        family = {a.id: model_family(a.model_id) for a in self.assemblies}
+        evaluators = [a for a in self.assemblies
+                      if set(shapes[a.id].values()) & {"forecast", "conformity", "counter"}]
+        producers = [a for a in self.assemblies if a not in evaluators
+                     and set(shapes[a.id].values()) & {"judged", "exposure"}]
+        problems = []
+        if len(evaluators) <= len(producers):
+            problems.append(f"evaluator seats ({len(evaluators)}) do not outnumber producer "
+                            f"seats ({len(producers)})")
+        families = sorted({family[a.id] for a in evaluators})
+        if len(families) < 3:
+            problems.append(f"{len(families)} model families serve the evaluator tier "
+                            f"({', '.join(families) or 'none'}); at least 3 must")
+
+        def readers(kind: str, shape: str) -> list[AssemblySeed]:
+            return [a for a in self.assemblies if kind in a.accepts
+                    and shape in shapes[a.id].values()
+                    and (kind != "Verdict" or shape != "forecast")]
+
+        judges = {kind: [a for a in self.assemblies if kind in a.accepts
+                         and shapes[a.id].get("Verdict") == "forecast"]
+                  for kind in {k for s in shapes.values() for k in s}}
+        need = self.evaluation.multi_judge_count if self.evaluation.multi_judge_share > 0 else 1
+        verdict_chains: set[tuple[str, str]] = set()
+        for author in producers:
+            for kind, shape in shapes[author.id].items():
+                if shape not in ("judged", "exposure"):
+                    continue
+                off = {family[j.id] for j in judges.get(kind, ())} - {family[author.id]}
+                verdict_chains |= {(f, family[author.id]) for f in off}
+                if len(off) < need:
+                    problems.append(
+                        f"{author.id}'s {kind} is accepted by judges on {len(off)} "
+                        f"families other than its own ({family[author.id]}); "
+                        + (f"evaluation.multi_judge_count needs {need}" if need > 1
+                           else "a judge off its family must read it"))
+        metas = readers("Verdict", "conformity")
+        graded: set[tuple[str, str]] = set()
+        if metas:
+            for chain in sorted(verdict_chains):
+                able = sorted({family[m.id] for m in metas} - set(chain))
+                if not able:
+                    problems.append(f"no meta reads a Verdict by a {chain[0]} judge on a "
+                                    f"{chain[1]} return off both families")
+                graded |= {(f, chain[0]) for f in able}
+        upper = readers("MetaVerdict", "conformity")
+        if upper:
+            seen: set[tuple[str, str]] = set()
+            while graded - seen:
+                chain = sorted(graded - seen)[0]
+                seen.add(chain)
+                able = sorted({family[m.id] for m in upper} - set(chain))
+                if not able:
+                    problems.append(f"no seat reads a MetaVerdict by a {chain[0]} grader of "
+                                    f"a {chain[1]} judgement off both families")
+                graded |= {(f, chain[0]) for f in able}
+        for adversary in readers("Verdict", "counter"):
+            if not any(family[adversary.id] not in chain for chain in verdict_chains):
+                problems.append(f"adversarial judge {adversary.id} ({family[adversary.id]}) "
+                                "can read no Verdict the roster makes off its chain's families")
+        return problems
+
+    def _validate_evaluator_population(self) -> None:
+        """Refuse a world that seeds judging without the evaluators Chapter II requires."""
+        problems = self.evaluator_population_problems()
+        if problems:
+            raise ValueError("the evaluator population Chapter II §III requires is not seeded: "
+                             + "; ".join(problems))
+
     def validate(self) -> None:
         namespace = self.exchange.client_namespace
         if self.prompt.mode not in ("reference", "compact"):
@@ -869,6 +1013,21 @@ class WorldManifest:
         scale = self.evaluation.opportunity_scale_bps
         if type(scale) not in (int, float) or not isfinite(scale) or scale <= 0:
             raise ValueError("evaluation.opportunity_scale_bps must be a positive number")
+        share = self.evaluation.multi_judge_share
+        if type(share) not in (int, float) or not isfinite(share) or not 0 <= share <= 1:
+            raise ValueError("evaluation.multi_judge_share must be finite and in [0, 1]")
+        count = self.evaluation.multi_judge_count
+        if type(count) is not int or not 2 <= count <= MAX_JUDGES_PER_RETURN:
+            raise ValueError("evaluation.multi_judge_count must be an integer in "
+                             f"[2, {MAX_JUDGES_PER_RETURN}]")
+        reads = self.evaluation.meta_read_share
+        if type(reads) not in (int, float) or not isfinite(reads) or not 0 < reads <= 1:
+            raise ValueError("evaluation.meta_read_share must be finite and in (0, 1]")
+        for name in ("venue_unavailable", "stale_mids", "tool_withheld", "connector_timeout"):
+            rate = getattr(self.chaos, name)
+            if (type(rate) not in (int, float) or not isfinite(rate)
+                    or not 0 <= rate <= MAX_CHAOS_RATE):
+                raise ValueError(f"chaos.{name} must be finite and in [0, {MAX_CHAOS_RATE}]")
         for a in self.assemblies:
             if not isinstance(a.role, str) or not a.role.strip():
                 raise ValueError(f"assembly {a.id} has an empty role label")
@@ -934,6 +1093,7 @@ class WorldManifest:
             value = getattr(p, name)
             if type(value) not in (int, float) or not isfinite(value) or value < 0:
                 raise ValueError(f"prices.{name} must be finite and nonnegative")
+        self._validate_evaluator_population()
 
 
 def duration_ns(value: Any) -> int:
@@ -1202,6 +1362,9 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         sampling_step=ev.get("sampling_step", 0.1),
         sampling_cap=ev.get("sampling_cap", 0.7),
         no_swap_regret_kinds=_manifest_kinds(ev.get("no_swap_regret_kinds", [])),
+        multi_judge_share=ev.get("multi_judge_share", 0.3),
+        multi_judge_count=ev.get("multi_judge_count", 2),
+        meta_read_share=ev.get("meta_read_share", 0.5),
     )
     pr = d.get("prices") or {}
     for key in ("kappa", "controller"):
@@ -1302,6 +1465,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         kill=_manifest_kill(d.get("kill")),
         providers=_manifest_providers(d.get("providers")),
         prompt=_manifest_prompt(d.get("prompt")),
+        chaos=_manifest_chaos(d.get("chaos")),
         extra={k: v for k, v in d.items() if k.startswith("x_")},
     )
     m.validate()
@@ -1415,6 +1579,16 @@ def _manifest_polymarket(raw: Any) -> PolymarketSpec:
                                       default.max_orders_per_window),
         seed=raw.get("seed", default.seed),
     )
+
+
+def _manifest_chaos(raw: Any) -> ChaosSpec:
+    """The ``[chaos]`` table: four fault rates, each absent at zero."""
+    if raw is None:
+        return ChaosSpec()
+    names = {f.name for f in fields(ChaosSpec)}
+    if not isinstance(raw, dict) or set(raw) - names:
+        raise ValueError("chaos accepts only " + ", ".join(sorted(names)))
+    return ChaosSpec(**raw)
 
 
 def _manifest_prompt(raw: Any) -> PromptSpec:

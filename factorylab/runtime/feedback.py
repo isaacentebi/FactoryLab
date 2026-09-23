@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from statistics import fmean
 from typing import Any
 
@@ -23,9 +23,11 @@ from factorylab.runtime.routing import _KeyedLearner
 from factorylab.runtime.shared import (
     CH_CONFORMITY,
     CH_CONSEQUENCE,
+    CH_COUNTER,
     CH_EXPOSURE,
     CH_FAST,
     CH_VERDICT,
+    DEF_COUNTER,
     DEF_EVALUATION,
     DEF_EXPOSURE,
     DEF_VERDICT,
@@ -71,7 +73,38 @@ EVALUATION_UNSCORED = "evaluation-unscored-v1"
 VERDICT_BASE = "verdict:"
 EVALUATION_BASE = "evaluation_consequence"
 _CARDS_FOR_CHANNEL = {CH_VERDICT: "producer", CH_CONFORMITY: "evaluator",
-                      CH_EXPOSURE: "antagonist"}
+                      CH_EXPOSURE: "antagonist", CH_COUNTER: "adversary"}
+
+
+def exposure_score(consequences: list[float], ordinary: list[float]) -> float:
+    """An antagonist's reward: how much worse its judges did on its return than usual.
+
+    Guarantees ``0.5 + 0.5 * (mean(ordinary) - mean(consequences))`` in [0, 1], with no
+    clipping: ``consequences`` are the consequence scores (``consequence_score``, each in
+    [0, 1]) of the judges scored on the antagonist's return, and ``ordinary`` each of
+    those same judges' mean consequence score on ordinary returns, 0.5 (the base
+    rate's score) for a judge the world has not yet scored on one. An antagonist
+    whose judges did on its return exactly as they do elsewhere earns 0.5, and it
+    earns more only when it made them miss more than they usually miss: a judge that
+    is merely miscalibrated misses ordinary returns as much and pays nothing extra
+    (the Wave 2 review, item 6). Essay II.III.b: the adversarial layer farms realized
+    consequence; it is not paid for noise the judges carry everywhere.
+    """
+    return 0.5 + 0.5 * (fmean(ordinary) - fmean(consequences))
+
+
+def counter_score(q: float, judged: float, y: float) -> float:
+    """A counter-verdict's reward: how far its prediction beat the verdict it read.
+
+    Guarantees ``0.5 + 0.5 * ((1 - (q - y)^2) - (1 - (judged - y)^2))`` in [0, 1] with
+    no clipping. The verdict it read is fixed before the counter is made, so the
+    term the counter controls is its own Brier score: the rule is proper, and a
+    counter that repeats the verdict earns 0.5 whatever the world does. Essay
+    II.III.b: an adversarial judge is paid by realized consequence, "a judgment of
+    whether a given verdict predicted real downstream outcomes", and only when the
+    judge it read was the one the world proved wrong.
+    """
+    return 0.5 + 0.5 * ((1 - (q - y) ** 2) - (1 - (judged - y) ** 2))
 
 
 def consequence_score(brier: float, baseline_brier: float) -> float:
@@ -294,11 +327,24 @@ class FeedbackMixin:
         return int(not self._acted(about))
 
     def _cascade_arrival(self, ev: Event) -> Event | None:
+        """The representative one arrival releases upward, or None (``_cascade_releases``)."""
+        released = self._cascade_releases(ev)
+        return released[0] if released else None
+
+    def _cascade_releases(self, ev: Event) -> list[Event]:
         """Ledger every arrival and release before changing buffers or routing upward.
 
         Separation is time and completed evidence (§6.C). The window's duration
         is drawn once, from the runtime's own reproducible stream, with the
         jitter the manifest already precommits; arrivals never shorten it.
+
+        A window that releases hands the tier above its representative and, beside
+        it, the next completed arrivals by the same rank, until
+        ``evaluation.meta_read_share`` of its completed evidence is released (at
+        least the representative). Essay II.III: "evaluations of evaluations ...
+        stacking to some arbitrary level"; one reading a window left most verdicts
+        read by nobody above them (evaluations C7). Each carries the window it came
+        from, so the tier above still reads it as a distribution (II.IV.c).
         """
         tier = event_tier(ev)
         gate = self.cascade.get(tier)
@@ -345,10 +391,40 @@ class FeedbackMixin:
             self.cascade.pop(tier, None)
         else:
             self.cascade[tier] = next_gate
-        # The meta reads the window as a distribution (essay II.IV.c) and grades the
-        # representative it was released. The window's other verdicts were not read
-        # and borrow no grade (evaluations U2): each settles on its own signals.
-        return released
+        # The meta reads the window as a distribution (essay II.IV.c) and grades each
+        # arrival it was released. The window's other verdicts were not read and
+        # borrow no grade (evaluations U2): each settles on its own signals.
+        if released is None:
+            return []
+        return [released, *self._cascade_companions(gate, ev, released)]
+
+    def _cascade_companions(self, gate: CascadeGate, ev: Event, released: Event) -> list[Event]:
+        """The completed arrivals released beside a window's representative, best first.
+
+        Guarantees at most ``ceil(meta_read_share * completed) - 1`` of them, ranked as
+        the gate ranks its representative (``_cascade_priority``, then the latest),
+        each with the representative's window evidence and a ``cascade.release``
+        ledger item of its own.
+        """
+        from math import ceil
+
+        arrivals = [*gate.arrivals, ev]
+        finished = [(i, e) for i, e in enumerate(arrivals) if self._cascade_evidence_complete(e)]
+        reads = max(1, ceil(self.ev.meta_read_share * len(finished)))
+        ranked = sorted(finished, key=lambda item: (self._cascade_priority(item[1]), item[0]),
+                        reverse=True)
+        chosen = [e for _i, e in ranked if e.id != released.id][:reads - 1]
+        companions = []
+        for arrival in chosen:
+            companion = replace(arrival, payload={**arrival.payload,
+                                                  "window": released.payload["window"]})
+            self.ledger.append({"kind": "cascade.release", "tier": event_tier(ev),
+                                "event_id": arrival.id, "arrival_event_id": ev.id,
+                                "companion_of": released.id,
+                                "window": _to_plain(released.payload["window"]),
+                                "ts": self.clock.now_ns})
+            companions.append(companion)
+        return companions
 
     def _open_forecasts(
         self, evaluator_handle: str, evaluator_id: str, about: str, raw: Any
@@ -530,13 +606,44 @@ class FeedbackMixin:
                                     "predicate": f.predicate_id, "window": self.window.index,
                                     "ts": self.clock.now_ns})
             public = {"public_window": since}
+        events = tuple(self.events_log[start + 1 : self.n + 1])
+        if f.predicate_id == "failure_within":
+            public["independent_failures"] = self._independent_failures(f.evaluator_id, events)
         return WindowFacts(
             balance_at_forecast=self.balance_at[start],
             balance_at_settlement=self.wallet.balance,
             min_balance_in_window=min(window_balances) if window_balances else self.wallet.balance,
-            events=tuple(self.events_log[start + 1 : self.n + 1]),
+            events=events,
             **public,
         )
+
+    def _independent_failures(self, forecaster: str, events: tuple) -> int:
+        """Failures in ``events`` the forecaster's own lineage did not cause (``failure_within``).
+
+        Guarantees a count of: chaos faults drawn for a tick (no seat's action draws
+        them); chaos faults on calls by a seat of another lineage; OrderRejected events
+        and liquidation fills whose order belongs to a decision of another lineage, or
+        to no decision this world knows. Anything the forecaster's lineage caused is
+        left out, so a forecast cannot manufacture its own outcome (the #132 review,
+        item 4).
+        """
+        lineage = self.budget.lineage(forecaster)
+
+        def own(seat: str | None) -> bool:
+            return seat is not None and self.budget.lineage(seat) == lineage
+
+        count = 0
+        for event in events:
+            for fault in event.get("faults", ()):
+                if isinstance(fault, dict) and not own(fault.get("seat")):
+                    count += 1
+            kind, payload = event.get("kind"), event.get("payload") or {}
+            liquidation = kind == EventKind.FILL and payload.get("liquidation") is True
+            if kind == EventKind.ORDER_REJECTED or liquidation:
+                handle = self._order_owner(payload.get("order_id"))
+                if not own(self.handle_to_assembly.get(handle) if handle else None):
+                    count += 1
+        return count
 
     def _deliver_verdict_to_inbox(self, about: str, score: Any, *, judge_handle: str) -> None:
         """A verdict on a seat's return reaches that seat, whenever it lands (C1).
@@ -1220,7 +1327,13 @@ class FeedbackMixin:
                                       "consequence_score": round(score, 4)})
         self._count_consequence(rec.evaluator_id)
         if rec.about in self.pending_exposure:
-            self.exposure_scores.setdefault(rec.about, []).append(score)
+            self.exposure_scores.setdefault(rec.about, []).append([rec.evaluator_id, score])
+        else:
+            # What this judge scores on an ordinary return: the centre an exposure on
+            # its verdicts is measured from (``exposure_score``).
+            tally = self.judge_ordinary.setdefault(rec.evaluator_id, [0.0, 0])
+            tally[0] += score
+            tally[1] += 1
         self._close_consequence(rec.handle, score, rec)
 
     def _settle_late_verdicts(self) -> None:
@@ -1322,6 +1435,7 @@ class FeedbackMixin:
                 self._close_consequence(rec.handle, None, rec)
         self._settle_late_verdicts()
         self._settle_exposures()
+        self._settle_counters()
         for rec in records:
             if not rec.grade_closed and self._tick_age(rec) > timeout:
                 rec.grade_closed = True
@@ -1334,7 +1448,7 @@ class FeedbackMixin:
         # its backstop.
         horizon = self.ticks_consumed - backstop - timeout
         for kept in (self.consequence_scores, self.world_outcomes, self.reference_mids,
-                     self.marked_outcomes, self.late_verdicts):
+                     self.marked_outcomes, self.late_verdicts, self.verdict_views):
             for handle in [h for h, v in kept.items()
                            if (v[1] if isinstance(v, tuple) else v["tick"]) < horizon]:
                 del kept[handle]
@@ -1364,16 +1478,22 @@ class FeedbackMixin:
         if rec.channel == CH_FAST:
             self.stats.fast_settlements += 1
 
+    def _ordinary_consequence(self, judge: str | None) -> float:
+        """A judge's mean consequence score on ordinary returns; 0.5 before its first."""
+        total, count = self.judge_ordinary.get(judge, (0.0, 0)) if judge else (0.0, 0)
+        return total / count if count else 0.5
+
     def _settle_exposures(self) -> None:
-        """An antagonist earns by how wrong the judges' verdicts on its return were.
+        """An antagonist earns by how much worse than usual the judges' verdicts on it were.
 
         Guarantees a continuous reward, only where the world measured the return:
-        the mean over the judges scored on it of ``1 - consequence score``, so an
-        antagonist whose return the judges predicted no better than the base rate
-        earns 0.5 and one that fooled them earns more (II.III.b: the adversarial
-        layer farms realized consequence; evaluations S4 removed the fixed
-        endorsement threshold). A return no judge was scored on settles censored
-        once no judge is still waiting on it and its verdict window has passed.
+        ``exposure_score`` of the judges' consequence scores on it, centred on those
+        same judges' scores on ordinary returns (the Wave 2 review, item 6), so an
+        antagonist earns above 0.5 only when it made its judges miss more than they
+        miss elsewhere (II.III.b: the adversarial layer farms realized consequence;
+        evaluations S4 removed the fixed endorsement threshold). A return no judge
+        was scored on settles censored once no judge is still waiting on it and its
+        verdict window has passed.
         """
         timeout = self.ev.verdict_timeout_ticks
         for handle, opened in list(self.pending_exposure.items()):
@@ -1397,9 +1517,13 @@ class FeedbackMixin:
                 self.window.outcomes += 1
                 self.window.censored += 1
                 continue
-            score = fmean(1.0 - s for s in scores)
+            scored = [entry if isinstance(entry, list) else [None, entry] for entry in scores]
+            consequences = [float(s) for _judge, s in scored]
+            ordinary = [self._ordinary_consequence(judge) for judge, _s in scored]
+            score = exposure_score(consequences, ordinary)
             self.ledger.append({"kind": "exposure.settled", "handle": handle, "score": score,
-                                "judge_consequences": list(scores), "ts": self.clock.now_ns})
+                                "judge_consequences": consequences,
+                                "judge_ordinary": ordinary, "ts": self.clock.now_ns})
             self._settle_priced(handle, channel=CH_EXPOSURE, score=score,
                                 definition_version=DEF_EXPOSURE, sampling_ref=None,
                                 cards="antagonist")
@@ -1409,6 +1533,79 @@ class FeedbackMixin:
             if score > 0.5:
                 self.stats.exposures_won += 1
                 self.window.exposures_won += 1
+
+    def _world_will_measure(self, ev: Event) -> bool:
+        """Whether a first-tier verdict judged a return the world has yet to measure.
+
+        Guarantees True only for a Verdict (no tier) on a return that acted or named a
+        declined trade (``_final_outcome``'s two measurements) and whose outcome is not
+        already known; a bare hold has no world outcome at all.
+        """
+        if ev.kind is not EventKind.VERDICT or "tier" in ev.payload:
+            return False
+        about = ev.payload.get("about_handle")
+        if not isinstance(about, str) or self._consequence_known(about, 1):
+            return False
+        return about in self.reference_mids or self._acted(about)
+
+    def _early_warning_view(self) -> dict[str, Any]:
+        """The early-warning table an evaluator is shown (``runtime.ews``; ruling R3).
+
+        Guarantees the last window close's statistics and nothing else: it goes to
+        the seats that judge (judges, metas, adversarial judges), never into a
+        producer's request (evaluations M2).
+        """
+        from factorylab.runtime import ews
+
+        return ews.view(self.stats.early_warning)
+
+    def _settle_counters(self) -> None:
+        """Settle every counter-verdict whose return the world has measured (``counter_score``).
+
+        Guarantees the measurement is the one every verdict about that return is
+        rewarded on (``_reward_outcome``: its mark at the consequence horizon, or its
+        final measurement), so the counter and the verdict it read face one fact; a
+        return the world will never measure (a bare hold) or has not measured by the
+        consequence backstop settles the counter censored. A counter never touches
+        the judge's reward, the producer's or any standing: it is paid for exposing a
+        miss, not for grading anyone.
+        """
+        backstop = self.ev.consequence_backstop_ticks + self.ev.verdict_timeout_ticks
+        for handle, rec in sorted(self.pending_counters.items()):
+            state, y, kind, phase = self._reward_outcome(rec["about"])
+            if state == "open" and self.ticks_consumed - rec["tick"] <= backstop:
+                continue
+            del self.pending_counters[handle]
+            try:
+                status = self.queue.get(handle).status
+            except KeyError:
+                continue
+            if status not in (SettleStatus.PENDING, SettleStatus.TIMED_OUT):
+                continue
+            if state != "measured":
+                self.ledger.append({"kind": "counter.settled", "handle": handle,
+                                    "about_handle": rec["about"], "score": None,
+                                    "ts": self.clock.now_ns})
+                self.queue.settle(handle, channel=CH_COUNTER, score=0.0,
+                                  status=SettleStatus.CENSORED,
+                                  definition_version=DEF_COUNTER, sampling_ref=None)
+                self.stats.censored += 1
+                self.window.outcomes += 1
+                self.window.censored += 1
+                continue
+            score = counter_score(rec["q"], rec["judge_q"], y)
+            seq = self.ledger.append({
+                "kind": "counter.settled", "handle": handle, "about_handle": rec["about"],
+                "judge_handle": rec["judge_handle"], "q": rec["q"], "judge_q": rec["judge_q"],
+                "y": y, "outcome": kind, "phase": phase, "score": score,
+                "ts": self.clock.now_ns})
+            self.outcomes.append(rec["evaluator_id"], handle=handle, evidence=seq,
+                                 outcome={"judged_outcome": kind, "judged_y": round(y, 4),
+                                          "phase": phase, "counter_score": round(score, 4)})
+            self._settle_priced(handle, channel=CH_COUNTER, score=score,
+                                definition_version=DEF_COUNTER, sampling_ref=None,
+                                cards="adversary")
+            self.stats.counters_settled += 1
 
     def _censor_judgement(self, handle: str, reason: str) -> None:
         """A judgement the kernel could not use is charged its call and settles censored.
@@ -1768,7 +1965,10 @@ class FeedbackMixin:
         if sample is None:
             return neutral, 0.0
         roles = sample.get("menu_roles") or {sample["role"]: 1.0}
-        penalty = sum(weight * self._penalty_for(role, handle)
+        # Each role's price is measured with the abstention scoped in that role (the
+        # Wave 2 review, item 8b): a less-weighted role's floor and attribution are
+        # that role's, never the role the window filed the abstention under.
+        penalty = sum(weight * self._penalty_for(role, handle, as_role=role)
                       for role, weight in sorted(roles.items()))
         return min(1.0, max(0.0, neutral - penalty)), penalty
 

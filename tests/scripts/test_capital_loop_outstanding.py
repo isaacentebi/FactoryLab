@@ -136,7 +136,7 @@ def test_the_script_prints_every_authorization_and_flags_what_may_still_settle(
 
 
 def capital_loop_world():
-    return load_manifest("worlds/edition5-capital-loop.toml")
+    return load_manifest("worlds/edition6-capital-loop.toml")
 
 
 def test_the_launch_check_needs_the_chain_to_bound_what_a_fresh_run_can_spend():
@@ -175,14 +175,14 @@ def test_the_rehearsal_runner_runs_the_launch_check_before_anything_is_built(
 
     write_run(tmp_path / "runs" / "earlier")
     rpc = Rpc()
-    report = rehearsal.run_rehearsal("worlds/edition5-capital-loop.toml",
+    report = rehearsal.run_rehearsal("worlds/edition6-capital-loop.toml",
                                      out=tmp_path / "runs" / "now", capital_loop=True,
                                      capital_loop_transport=rpc, source_root=tmp_path,
                                      provider=object())
     assert report["status"] == "failed"
     assert report["refusal"]["reason"] == "previous_run_authorization_may_still_settle"
     rpc.final_ts = 3_001
-    report = rehearsal.run_rehearsal("worlds/edition5-capital-loop.toml",
+    report = rehearsal.run_rehearsal("worlds/edition6-capital-loop.toml",
                                      out=tmp_path / "runs" / "later", capital_loop=True,
                                      capital_loop_transport=rpc, source_root=tmp_path,
                                      provider=object())

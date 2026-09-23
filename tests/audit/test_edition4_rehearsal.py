@@ -15,7 +15,7 @@ from factorylab.world.models import CatalogueEntry, ModelRequest, ModelResponse
 from factorylab.world.openrouter import OpenRouterError
 from scripts import edition4_rehearsal as rehearsal
 
-WORLD = "worlds/edition3-rehearsal-5.toml"
+WORLD = "worlds/edition6-testnet-rehearsal.toml"
 
 
 @dataclass
@@ -29,6 +29,9 @@ class StubProvider:
             ("openai/gpt-5.6-sol", "0.00000200", "0.00001000", 128_000),
             ("venice:z-ai-glm-5-3-flash", "0.00000015", "0.00000050", 131_072),
             ("venice:qwen-3-8-flash", "0.00000014", "0.00000049", 131_072),
+            # Edition 6's OpenRouter routes of the same two models.
+            ("z-ai/glm-5.3-flash", "0.00000009", "0.00000030", 131_072),
+            ("qwen/qwen3.8-flash", "0.00000015", "0.00000047", 131_072),
             ("openai/gpt-5.6-luna", "0.00000020", "0.00000120", 128_000),
             ("openai/gpt-5.6-luna:online", "0.00000020", "0.00000120", 128_000),
         )
