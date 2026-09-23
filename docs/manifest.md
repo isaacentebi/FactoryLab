@@ -111,10 +111,17 @@ there is no automatic retry.
 (Chapter II §II.b: physics is enforced, not announced). It defaults to
 `"json_object"`, which asks the host for JSON syntax alone. `"json_schema"` hands
 the contract to the host's constrained decoder as `response_format.json_schema`
-(`strict: false`). The schema covers every reply shape the kernel accepts: the
-final answer, a continuation (a non-empty `tool_calls` or `requests`) and the
-refusal form (`status: "cannot"` with a `reason`). Every object the contract
-leaves open is marked open. On OpenRouter, `provider.require_parameters` is set
+(`strict: false`). The schema has one form for each reply shape the kernel
+distinguishes: the final answer, a continuation (a non-empty `tool_calls` or
+`requests`) and the refusal form (`status: "cannot"` with a `reason`). Each form
+is the intersection of what the kernel checks a reply against: the universal
+envelope, the fields the answer's kind owns, and the contract. A form the kernel
+cannot accept is not sent. For example, a closed contract that does not name
+`tool_calls` has no continuation through it. Every object the contract leaves
+open is marked open. What a schema cannot state (an answer order's semantics, a
+child request's checks, the runtime's validator) stays the kernel's alone.
+Hosts enforce the schema on a best-effort basis: the 23 September 2026 probes
+saw json_schema routes still return replies outside it. On OpenRouter, `provider.require_parameters` is set
 unless `extra_body` names it, as it is for `json_object`. The key is accepted only
 on `openrouter` and `venice` routes, and any other value is refused at load. It is
 fixed for the world's life. A route changes contract only in a new manifest; a

@@ -191,7 +191,8 @@ class Assembly:
             max_tokens=self.spec.max_tokens,
             effort=self.spec.effort,
             json_object=True,
-            response_schema=wire_schema(req.outcome_schema),
+            response_schema=wire_schema(req.outcome_schema, self.spec.emits,
+                                        policy=req.scoring_channel == "policy"),
         )
 
     def invoke(self, req: Request) -> Return:
@@ -1020,18 +1021,40 @@ def _validate_return(parsed: dict, schema: dict, kind: str | None = None) -> Non
         _check_child(child)
 
 
-def wire_schema(schema: Any) -> dict | None:
+def wire_schema(schema: Any, emits: Any = None, *, policy: bool = False) -> dict | None:
     """The contract as a provider's constrained decoder carries it, or None for no schema.
 
-    Guarantees every reply shape ``_validate_return`` accepts under ``schema`` is
-    admitted: the final answer, a continuation (a non-empty ``tool_calls`` or
-    ``requests`` beside whatever answer fields are already filled) and the refusal
-    form (``status: "cannot"`` with a string ``reason``). Every object the
-    contract leaves open is marked open (``additionalProperties: true``, the
-    JSON-schema default), so a decoder whose default is closed cannot forbid a
-    field the kernel accepts, such as ``working_state``. The kernel's own
-    validation stays the authority over what a reply means; this is its transport.
-    ``schema`` is never mutated.
+    ``emits`` is the executing seat's emitted kinds and ``policy`` marks a policy
+    ballot, exactly as ``answer_kind`` reads them.
+
+    Guarantees, for the answer forms ``_validate_return`` distinguishes (the final
+    answer, a continuation through a non-empty ``tool_calls`` or ``requests``, and
+    the refusal ``status: "cannot"`` with a string ``reason``):
+
+    - each form is the intersection of what the kernel checks a reply against: the
+      universal envelope (``reserved_return_fields``), the fields the answer's kind
+      owns (``kind_return_fields``) and the contract itself, so a reply that
+      satisfies the wire passes those checks (an optional section the contract
+      does not name binds only a form that requires nothing, since elsewhere the
+      kernel drops an invalid one rather than refusing the reply);
+    - a form the kernel cannot accept is not sent: a closed contract (one with
+      ``additionalProperties: false``) that does not name ``tool_calls`` or
+      ``requests`` has no continuation through it, and one that cannot hold
+      ``status``/``reason`` has no refusal;
+    - where two constraints cannot be intersected faithfully, the form they meet in
+      is dropped rather than sent looser, and with no form left the result is None
+      (the route then asks for JSON alone);
+    - every object left open is marked open (``additionalProperties: true``, the
+      JSON-schema default), so a decoder whose default is closed cannot forbid a
+      field the kernel accepts, such as ``working_state``.
+
+    What the wire cannot state stays the kernel's alone, and a wire-valid reply may
+    still fail it there: the answer-order rules of the producer kinds, a child
+    request's semantic checks (``_check_child``), and the runtime's own validator.
+    The kernel also accepts a few habits the wire does not produce: a null optional
+    field, ``reason`` read as a missing ``rationale``, and an invalid optional
+    section it drops. The kernel's validation stays the authority over what a reply
+    means; this is its transport. ``schema`` is never mutated.
     """
     # Chapter II §II.b: physics is enforced, not announced. The I/O contract is
     # physics, so it is handed to the decoder that samples the reply, not only
@@ -1039,47 +1062,190 @@ def wire_schema(schema: Any) -> dict | None:
     if not isinstance(schema, dict):
         return None
     schema = deepcopy(schema)
+    kinds = tuple(emits or ())
+    reserved = reserved_return_fields()
     forms: list[dict] = []
-    # The universal envelope's shape of each continuation list, which the kernel
-    # enforces whatever the contract says (``_validate_return``), under whatever the
-    # contract states of it. Its limits travel in the contract when the runtime
-    # states them; the kernel enforces them either way.
-    envelope = reserved_return_fields()
     for shape in _answer_shapes(schema):
-        properties = shape.get("properties")
-        properties = dict(properties) if isinstance(properties, dict) else {}
+        named = shape.get("properties")
+        named = named if isinstance(named, dict) else {}
+        checks = [reserved, *(kind_return_fields(k) for k in _shape_kinds(shape, kinds, policy))]
+        # A field the kernel checks strictly binds every form, and so do the two lists
+        # a continuation stands on. Any other optional section (``OPTIONAL_SECTIONS``)
+        # that does not validate is dropped, not refused, so it binds only where the
+        # contract names it: that keeps the wire the size of the contract. A final
+        # answer that requires nothing is the exception (below).
+        merged: dict | None = shape
+        for fields in checks:
+            strict = {k: v for k, v in fields.items()
+                      if k not in OPTIONAL_SECTIONS or k in named
+                      or k in ("tool_calls", "requests")}
+            if merged is not None:
+                # The contract leads, so its own field order is the order on the wire.
+                merged = _intersect(merged, {"type": "object", "properties": strict})
+        if merged is None:
+            continue  # the contract contradicts the envelope or its kind: see above
+        final: dict | None = merged
+        if not merged.get("required"):
+            # A reply of nothing but invalid optional sections is refused ("nothing in
+            # the return validated"), so in a final answer that requires nothing they
+            # all bind. The continuation and refusal forms require a field, so there
+            # an invalid optional section is only dropped.
+            for fields in checks:
+                if final is not None:
+                    final = _intersect(final, {"type": "object", "properties": fields})
+        if final is not None:
+            forms.append(final)
+        properties = merged.get("properties", {})
         for key in ("tool_calls", "requests"):
-            listed = properties.get(key)
-            properties[key] = {**envelope[key], **(listed if isinstance(listed, dict) else {})}
-        shape = {**shape, "properties": properties}
-        forms.append(shape)
-        for key in ("tool_calls", "requests"):
-            listed = properties[key]
-            if listed.get("maxItems", 1) == 0:
+            if key not in properties:
+                continue  # a closed contract without ``key``: the kernel refuses it
+            listed = _intersect(properties[key], {"minItems": 1})
+            if listed is None or listed.get("maxItems", 1) == 0:
                 continue  # this contract admits no continuation through ``key``
-            partial = _partial(shape)
-            partial["properties"] = {**properties, key: {
-                **listed, "minItems": max(1, listed.get("minItems", 0))}}
+            partial = _partial(merged)
+            partial["properties"] = {**properties, key: listed}
             partial["required"] = [key]
             forms.append(partial)
-        status = properties.get("status", {})
-        reason = properties.get("reason", {})
-        try:
-            validate_schema("cannot", status if isinstance(status, dict) else {})
-        except (ValueError, TypeError):
-            continue  # the contract's own status cannot say "cannot"
-        declared = reason.get("type") if isinstance(reason, dict) else None
-        if declared is not None and "string" not in (
-                declared if isinstance(declared, list) else [declared]):
-            continue  # nor can its reason be the string a refusal carries
-        refusal = _partial(shape)
-        refusal["properties"] = {**properties, "status": {"enum": ["cannot"]},
-                                 "reason": {**(reason if isinstance(reason, dict) else {}),
-                                            "type": "string"}}
+        if "status" not in properties or "reason" not in properties:
+            continue  # a closed contract that cannot carry the refusal form
+        status = _intersect(properties["status"], {"enum": ["cannot"]})
+        reason = _intersect(properties["reason"], {"type": "string"})
+        if status is None or reason is None:
+            continue  # the contract's own status or reason cannot say it
+        refusal = _partial(merged)
+        refusal["properties"] = {**properties, "status": status, "reason": reason}
         refusal["required"] = ["status", "reason"]
         forms.append(refusal)
+    if not forms:
+        return None
     # Every reply is an object (``_validate_return``'s envelope), so the root says so.
     return deepcopy(_open({"type": "object", "anyOf": forms}))
+
+
+def _shape_kinds(shape: dict, kinds: tuple[str, ...], policy: bool) -> tuple[str, ...]:
+    """The kinds whose owned fields bind a reply answering as ``shape``.
+
+    One emitted kind binds every reply (``answer_kind``). Among several, a shape
+    that pins ``emits`` to one of them is that kind's; a shape that does not may be
+    answered as any of them, so all of their fields bind it, which is never looser
+    than the one the kernel will apply.
+    """
+    if policy:
+        return ()
+    if len(kinds) <= 1:
+        return kinds
+    pinned = (shape.get("properties") or {}).get("emits")
+    enum = pinned.get("enum") if isinstance(pinned, dict) else None
+    if isinstance(enum, list) and len(enum) == 1 and enum[0] in kinds:
+        return (enum[0],)
+    return kinds
+
+
+_LOWER_BOUNDS = ("minimum", "exclusiveMinimum", "minItems")
+_UPPER_BOUNDS = ("maximum", "exclusiveMaximum", "maxItems")
+#: Keywords that only describe, never constrain: either side's is kept.
+_ANNOTATIONS = ("description", "title")
+
+
+def _intersect(a: Any, b: Any) -> dict | None:
+    """One schema that admits exactly what both ``a`` and ``b`` admit, or None.
+
+    Guarantees the result is never looser than either operand. Keywords that
+    appear in only one side are conjunctive as siblings and are kept as they are.
+    Where both sides state a keyword: ``properties`` intersect key by key (a
+    closed side's unnamed keys stay forbidden), ``required`` is the union,
+    ``type`` and ``enum`` are the common values, bounds take the tighter,
+    ``items`` and ``additionalProperties`` intersect. None means the pair cannot be
+    stated as one schema without ``allOf``, which hosts' decoders support unevenly,
+    or admits nothing at all.
+    """
+    if not isinstance(a, dict) or not isinstance(b, dict):
+        return None
+    if a == b:
+        return deepcopy(a)
+    out: dict[str, Any] = {}
+    for key in [*a, *(k for k in b if k not in a)]:
+        if key not in b or key not in a:
+            out[key] = deepcopy(a[key] if key in a else b[key])
+            continue
+        x, y = a[key], b[key]
+        if x == y or key in _ANNOTATIONS:
+            out[key] = deepcopy(x)
+        elif key == "type":
+            xs = x if isinstance(x, list) else [x]
+            ys = y if isinstance(y, list) else [y]
+            common = [t for t in xs if t in ys]
+            common += [t for t in ("integer",) if t not in common and (
+                (t in xs and "number" in ys) or (t in ys and "number" in xs))]
+            if not common:
+                return None
+            out[key] = common[0] if len(common) == 1 else common
+        elif key == "enum":
+            if not isinstance(x, list) or not isinstance(y, list):
+                return None
+            common = [v for v in x if any(type(v) is type(w) and v == w for w in y)]
+            if not common:
+                return None
+            out[key] = common
+        elif key == "required":
+            if not isinstance(x, list) or not isinstance(y, list):
+                return None
+            out[key] = [*x, *(k for k in y if k not in x)]
+        elif key in (*_LOWER_BOUNDS, *_UPPER_BOUNDS):
+            if not all(type(v) in (int, float) for v in (x, y)):
+                return None
+            out[key] = max(x, y) if key in _LOWER_BOUNDS else min(x, y)
+        elif key == "items":
+            items = _intersect(x, y)
+            if items is None:
+                return None
+            out[key] = items
+        elif key in ("properties", "additionalProperties"):
+            continue  # stated together below: each depends on the other side's
+        else:
+            return None  # e.g. two different anyOf: not one schema without allOf
+    if {"properties", "additionalProperties"} & {*a, *b}:
+        merged = _intersect_properties(a, b)
+        if merged is None:
+            return None
+        out.update(merged)
+    for lower, upper in (("minimum", "maximum"), ("minItems", "maxItems")):
+        if lower in out and upper in out and out[lower] > out[upper]:
+            return None
+    return out
+
+
+def _intersect_properties(a: dict, b: dict) -> dict | None:
+    """``properties`` and ``additionalProperties`` of the intersection of two object schemas."""
+    pa, pb = a.get("properties") or {}, b.get("properties") or {}
+    ea, eb = a.get("additionalProperties", True), b.get("additionalProperties", True)
+    if not isinstance(pa, dict) or not isinstance(pb, dict):
+        return None
+    properties: dict[str, Any] = {}
+    for name in [*pa, *(k for k in pb if k not in pa)]:
+        # A name one side does not list is governed there by its additionalProperties.
+        left = pa[name] if name in pa else ea
+        right = pb[name] if name in pb else eb
+        if left is False or right is False:
+            continue  # forbidden by a closed side: not listed, so still forbidden
+        left = {} if left is True else left
+        right = {} if right is True else right
+        shape = _intersect(left, right)
+        if shape is None:
+            return None
+        properties[name] = shape
+    if ea is False or eb is False:
+        extra: Any = False
+    elif ea is True or eb is True:
+        extra = eb if ea is True else ea
+    else:
+        extra = _intersect(ea, eb)
+        if extra is None:
+            return None
+    out: dict[str, Any] = {"properties": properties} if properties or pa or pb else {}
+    if "additionalProperties" in a or "additionalProperties" in b:
+        out["additionalProperties"] = extra
+    return out
 
 
 def _answer_shapes(schema: dict) -> list[dict]:
