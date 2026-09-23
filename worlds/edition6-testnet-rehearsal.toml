@@ -165,10 +165,10 @@ output_usd_per_mtok = "0.50"
 reasoning = { effort = "low" }
 extra_body = { provider = { require_parameters = true } }
 
-# A fifth family for the evaluator tier. The seed roster is chosen on cost, latency and
-# conformance to the I/O contract, never on what seats decide (AGENTS.md, rule 2): in the
-# last live batch 11 of the 15 answers the contract could not parse were Qwen 3.8 flash's,
-# so it keeps one seat, and a seat may move back to it by model proposal.
+# A fifth family, on the constructor producer seat. The seed roster is chosen on cost,
+# latency and conformance to the I/O contract, never on what seats decide (AGENTS.md,
+# rule 2): in the last live batch 11 of the 15 answers the contract could not parse were
+# Qwen 3.8 flash's, so it keeps one seat, and a seat may move back to it by model proposal.
 [[models]]
 id = "minimax/minimax-m3"
 provider = "openrouter"
@@ -189,15 +189,22 @@ output_usd_per_mtok = "10.00"
 reasoning = { effort = "low" }
 extra_body = { provider = { require_parameters = true } }
 
-# A sixth family on the menu, seated by no one: Xiaomi's MiMo v2.6 flash (OpenRouter, 21
-# September 2026: $0.14 in, $0.28 out). A seat reaches it only through a model proposal.
+# A sixth family, Xiaomi's MiMo v2.6 flash (OpenRouter, 21 September 2026: $0.14 in, $0.28
+# out), seated on two judges and the calibration meta. Chosen on cost, latency and I/O
+# conformance (AGENTS.md, rule 2) in a live A/B against MiniMax M3 in the same three seats,
+# 23 September 2026, 40 ticks x 4 seeds: $0.00068 against $0.00153 a call, 1/104 answers
+# the contract could not parse against 5/104, and no more stalls over 20 s than the
+# control. Its route prefers Xiaomi's own host: DeepInfra failed 8 of 20 timed calls, and
+# its retries were the 45-146 s stalls of an unpinned run. The other host stays a fallback
+# at the same price. The contract travels as json_object: under json_schema DeepInfra's
+# decoder looped on whitespace (docs/manifest.md, `contract`).
 [[models]]
 id = "xiaomi/mimo-v2.6-flash"
 provider = "openrouter"
 input_usd_per_mtok = "0.14"
 output_usd_per_mtok = "0.28"
 reasoning = { enabled = false }
-extra_body = { provider = { require_parameters = true } }
+extra_body = { provider = { order = ["xiaomi"], require_parameters = true } }
 
 [[models]]
 id = "openai/gpt-5.6-luna"
@@ -301,18 +308,18 @@ initial_state = { lens = "Your starting prior is that an outcome is noisy eviden
 [[assemblies]]
 id = "judge-fidelity"
 role = "evaluator"
-model_id = "minimax/minimax-m3"
+model_id = "xiaomi/mimo-v2.6-flash"
 accepts = ["ProducerReturn", "Exposure"]
 max_tokens = "provider"
 effort = "low"
 initial_state = { lens = "Your starting prior is that a favourable measurement can diverge from the value it is meant to represent.", open_questions = [], active_commitments = [] }
 
-# Two more judges on families already on the menu (evaluations C1, P6): four
+# Two more judges on families already on the menu (evaluations C1, P6): three
 # families judge, so no return is read only by its author's family.
 [[assemblies]]
 id = "judge-mechanics"
 role = "evaluator"
-model_id = "minimax/minimax-m3"
+model_id = "xiaomi/mimo-v2.6-flash"
 accepts = ["ProducerReturn", "Exposure"]
 max_tokens = "provider"
 effort = "low"
@@ -332,7 +339,7 @@ initial_state = { lens = "Your starting prior is that most outcomes in a quiet m
 [[assemblies]]
 id = "meta-calibration"
 role = "meta"
-model_id = "minimax/minimax-m3"
+model_id = "xiaomi/mimo-v2.6-flash"
 accepts = ["Verdict", "MetaVerdict"]
 max_tokens = "provider"
 effort = "low"
