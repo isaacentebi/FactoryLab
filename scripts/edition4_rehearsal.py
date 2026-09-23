@@ -61,7 +61,8 @@ class Admission:
     """Track independent admission and provider-bill bounds for one rehearsal.
 
     Guarantees: no admitted call starts above the remaining quote cap or call count;
-    a quote above the remaining cap refuses that call without stopping admission;
+    a feasibility probe whose quote is above the remaining cap is refused without
+    stopping admission, and an actual call above it stops admission;
     every completion attempt is counted. With population recovery enabled, failed
     dispatches retain their quote and three consecutive exceptions stop admission.
     Otherwise a dispatched failure stops immediately, preserving probe protocols. Successful
@@ -85,7 +86,7 @@ class Admission:
     def remaining_micro(self) -> int:
         return max(0, self.cap_micro - self.known_micro - self.uncertain_micro)
 
-    def can_admit(self, ceiling_micro: int) -> tuple[bool, str]:
+    def can_admit(self, ceiling_micro: int, *, probe: bool = False) -> tuple[bool, str]:
         if type(ceiling_micro) is not int or ceiling_micro < 0:
             return False, "invalid_quote"
         if self.stop_reason is not None:
@@ -94,10 +95,15 @@ class Admission:
             self.stop_reason = self.stop_reason or "max_calls"
             return False, "max_calls"
         if ceiling_micro > self.remaining_micro:
-            # A quote is one call's worst case, not the rehearsal's: the call is refused
-            # and the run goes on. The router probes every seat's feasibility at twice
-            # its quote, so a sticky stop here ended whole runs on a probe for a seat
-            # whose worst case alone exceeds the cap, before any call was made.
+            # The experimenter's spending bound on a rehearsal, outside the world: not
+            # factory architecture, and no seat's doing. The router probes every seat's
+            # feasibility at twice its quote, so a probe that does not fit only makes
+            # that seat infeasible; a sticky stop there ended whole runs on a probe for a
+            # seat whose worst case alone exceeds the cap, before any call was made. An
+            # actual call that does not fit still ends the rehearsal, so the cap never
+            # enters the experiment's data as a seat's failed return.
+            if not probe:
+                self.stop_reason = self.stop_reason or "quote_above_remaining_cap"
             return False, "quote_above_remaining_cap"
         return True, ""
 
@@ -206,7 +212,7 @@ class PrepaidProvider:
     def affordable(self, model_id: str, ceiling_micro: int) -> tuple[bool, str]:
         if not self._namespace_allowed(model_id):
             return False, "provider: rail denied"
-        allowed, reason = self.admission.can_admit(ceiling_micro)
+        allowed, reason = self.admission.can_admit(ceiling_micro, probe=True)
         if not allowed:
             return False, f"admission: {reason}"
         affordable = getattr(self.inner, "affordable", None)
