@@ -8,6 +8,8 @@ PROPENSITY block (information audit C1, C2, C7, P5, P8, U5).
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from factorylab.cortex.request import Return
 from factorylab.kernel.events import Event, EventKind
 from factorylab.runtime.shared import CH_CONFORMITY, CH_EXPOSURE, CH_FAST
@@ -83,12 +85,18 @@ def test_an_exposure_reaches_only_the_judges_whose_contract_accepts_it():
     rt = _consequence_runtime()
     event = _antagonist_return(rt)
     assert not [e for e in rt.internal if e.kind == EventKind.PRODUCER_RETURN]
-    assert "Exposure" not in rt.routers  # no seat in the scripted world accepts it
     base = load_manifest("scripted")
-    seats = tuple(replace(a, accepts=("ProducerReturn", "Exposure")) if a.id == "eval-a"
-                  else a for a in base.assemblies)
+    seats = tuple(replace(a, accepts=("ProducerReturn",))
+                  if a.id in ("eval-b", "eval-c", "eval-d") else a for a in base.assemblies)
     judged = _consequence_runtime(manifest=replace(base, assemblies=seats))
     assert judged._universe_for("Exposure", event)[:-1] == ["eval-a"]
+    # A roster that seeds judging must seed a reader for every kind that settles on
+    # readers; the load path refuses one whose antagonist nobody judges.
+    unread = replace(base, assemblies=tuple(
+        replace(a, accepts=("ProducerReturn",)) if a.role == "evaluator" else a
+        for a in base.assemblies))
+    with pytest.raises(ValueError, match="emits Exposure"):
+        unread.validate()
 
 
 def test_meta_judge_reads_the_machine_view_not_the_world(monkeypatch):

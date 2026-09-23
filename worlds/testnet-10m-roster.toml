@@ -90,7 +90,7 @@ effort = "low"
 id = "eval-a"
 role = "evaluator"
 model_id = "z-ai/glm-5.3-flash"
-accepts = ["ProducerReturn"]
+accepts = ["ProducerReturn", "Exposure"]
 max_tokens = 1500
 effort = "low"
 
@@ -98,7 +98,7 @@ effort = "low"
 id = "eval-b"
 role = "evaluator"
 model_id = "qwen/qwen3.7-flash"
-accepts = ["ProducerReturn"]
+accepts = ["ProducerReturn", "Exposure"]
 # A reasoning seed spends its budget on reasoning before any content; 3000 keeps
 # its answers from ending on `length`.
 max_tokens = 3000
@@ -108,7 +108,7 @@ effort = "low"
 id = "eval-c"
 role = "evaluator"
 model_id = "deepseek/deepseek-v4.1-flash"
-accepts = ["ProducerReturn"]
+accepts = ["ProducerReturn", "Exposure"]
 max_tokens = 3000
 effort = "low"
 
@@ -116,7 +116,7 @@ effort = "low"
 id = "eval-d"
 role = "evaluator"
 model_id = "openai/gpt-5.6-luna"
-accepts = ["ProducerReturn"]
+accepts = ["ProducerReturn", "Exposure"]
 max_tokens = 1500
 effort = "low"
 

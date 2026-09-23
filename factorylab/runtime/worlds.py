@@ -718,6 +718,32 @@ class WorldManifest:
         return ({str(k) for k in EventKind} | set(BUILTIN_RETURNS)
                 | {k for a in self.assemblies for k in (*a.accepts, *(a.emits or ()))})
 
+    def _validate_judged_kinds(self) -> None:
+        """Every seeded kind whose reward is its readers' verdicts has a seeded reader.
+
+        Guarantees that a kind a seed emits under the ``judged`` or ``exposure``
+        reward shape (a ProducerReturn, an Exposure, a manifest kind with no other
+        shape) is accepted by at least one seed. Such a return settles only on the
+        verdicts of the contracts that accept it (ruling R1; primitive audit F12:
+        a judge of Exposure declares it), so a roster that emits one with no reader
+        launches returns that act on the world and are never judged. The rule binds
+        a roster that seeds judging at all (some seed emits a Verdict); a roster
+        with no judge is an evaluation-free fixture, and every return it makes is
+        visibly unjudged rather than silently so.
+        """
+        from factorylab.cortex.registration import reward_contracts, seed_emits
+
+        seeded = {a.id: tuple(a.emits) if a.emits else seed_emits(a.role)
+                  for a in self.assemblies}
+        if not any("Verdict" in emits for emits in seeded.values()):
+            return
+        accepted = {k for a in self.assemblies for k in a.accepts}
+        for a in self.assemblies:
+            for kind, shape in reward_contracts(seeded[a.id]).items():
+                if shape in ("judged", "exposure") and kind not in accepted:
+                    raise ValueError(f"assembly {a.id} emits {kind}, which settles on the "
+                                     "verdicts of its readers, and no seed accepts it")
+
     def validate(self) -> None:
         namespace = self.exchange.client_namespace
         if self.prompt.mode not in ("reference", "compact"):
@@ -793,6 +819,7 @@ class WorldManifest:
         for a in self.assemblies:
             if a.model_id not in ids:
                 raise ValueError(f"assembly {a.id} uses unpriced model {a.model_id}")
+        self._validate_judged_kinds()
         if (type(self.novelty.share) not in (int, float)
                 or not isfinite(self.novelty.share) or not 0 < self.novelty.share <= 1):
             raise ValueError("novelty share must be in (0, 1]")

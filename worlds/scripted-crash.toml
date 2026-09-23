@@ -51,28 +51,28 @@ max_tokens = 512
 id = "eval-a"
 role = "evaluator"
 model_id = "fake-haiku"
-accepts = ["ProducerReturn"]
+accepts = ["ProducerReturn", "Exposure"]
 max_tokens = 256
 
 [[assemblies]]
 id = "eval-b"
 role = "evaluator"
 model_id = "fake-haiku"
-accepts = ["ProducerReturn"]
+accepts = ["ProducerReturn", "Exposure"]
 max_tokens = 256
 
 [[assemblies]]
 id = "eval-c"
 role = "evaluator"
 model_id = "fake-opus"
-accepts = ["ProducerReturn"]
+accepts = ["ProducerReturn", "Exposure"]
 max_tokens = 256
 
 [[assemblies]]
 id = "eval-d"
 role = "evaluator"
 model_id = "fake-opus"
-accepts = ["ProducerReturn"]
+accepts = ["ProducerReturn", "Exposure"]
 max_tokens = 256
 
 [[assemblies]]
