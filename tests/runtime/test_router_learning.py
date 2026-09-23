@@ -104,9 +104,11 @@ def test_an_unscored_arm_without_its_own_record_is_neutral_not_its_siblings_mean
 # that delivered nothing scores on it.
 _ZERO = {
     "verdict-v1": 0.5, "evaluation-v1": 0.5, "policy-promise-brier-v2": 0.5,
-    "brier-v1": 0.75, "forecast-mean-v1": 0.75, "exposure-v1": 0.5,
+    "brier-v1": 0.75, "forecast-mean-v1": 0.75, "exposure-v2": 0.5,
     # W4: a composed return settles on its verdict and its requester's score.
     "composed-v1": 0.5,
+    # W5a: a counter-verdict that repeats the verdict it read earns 0.5.
+    "counter-v1": 0.5,
 }
 
 
@@ -132,7 +134,7 @@ def test_the_table_names_every_scored_definition_the_runtime_settles_with():
     from factorylab.runtime.routing import ZERO_CONSEQUENCE
 
     scored = {shared.DEF_VERDICT, shared.DEF_EVALUATION, shared.DEF_EXPOSURE,
-              shared.DEF_COMPOSED}
+              shared.DEF_COMPOSED, shared.DEF_COUNTER}
     assert scored <= set(ZERO_CONSEQUENCE) and set(ZERO_CONSEQUENCE) == set(_ZERO)
 
 
@@ -370,8 +372,8 @@ def test_the_core_key_must_be_a_list():
     assert manifest_from_dict  # the parser this helper serves
 
 
-@pytest.mark.parametrize("name", ["edition5-testnet-rehearsal", "edition5-capital-loop"])
-def test_the_judge_tier_is_mean_based_in_the_edition5_worlds(name):
+@pytest.mark.parametrize("name", ["edition6-testnet-rehearsal", "edition6-capital-loop"])
+def test_the_judge_tier_is_mean_based_in_the_edition6_worlds(name):
     """Ruling R10: II.III asks for "a significantly higher population of mean-based
     no-regret judges than ... swap-based judges", so judge routing is EXP3."""
     world = load_manifest(name)

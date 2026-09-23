@@ -321,8 +321,12 @@ def test_the_antagonist_earns_by_how_wrong_the_judge_was_and_only_with_a_world_o
     _advance(rt, 2)
     (judged,) = _rows(rt, "verdict.consequence", handle=judge)
     (exposure,) = _rows(rt, "exposure.settled", handle=antagonist)
-    assert exposure["score"] == pytest.approx(1 - judged["score"]) and exposure["score"] > 0.5
-    assert rt.queue.history(antagonist)[0].definition_version == "exposure-v1"
+    # Centred on the judge's ordinary score (0.5 before it has one; the Wave 2 review,
+    # item 6): the antagonist earns above 0.5 only by making the judge miss more.
+    assert exposure["judge_ordinary"] == [0.5]
+    assert exposure["score"] == pytest.approx(0.5 + 0.5 * (0.5 - judged["score"]))
+    assert exposure["score"] > 0.5
+    assert rt.queue.history(antagonist)[0].definition_version == "exposure-v2"
     # A bare hold has no world outcome, so its antagonist earns nothing and loses nothing.
     bare = _runtime(verdicts=(0.9,))
     antagonist, event = _consequence_produce(bare, "antagonist-a", CH_EXPOSURE)

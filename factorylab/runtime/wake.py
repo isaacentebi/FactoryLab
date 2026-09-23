@@ -897,7 +897,7 @@ class _Snapshot(Ledger):
         """
         aggregates = {view: self.aggregate(view) for view in VIEWS}
         roles = {a.id: a.role for a in manifest.assemblies}
-        allowed = {"producer", "evaluator", "meta", "antagonist"}
+        allowed = {"producer", "evaluator", "meta", "antagonist", "adversary"}
         # Streaming projection avoids materialising the item diary. Identities
         # are only join keys here; unknown provenance never becomes public text.
         for item in self.items():

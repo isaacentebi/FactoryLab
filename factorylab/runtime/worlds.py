@@ -315,6 +315,15 @@ class EvaluationSpec:
     #: as a no-swap-regret learner (Blum-Mansour over EXP3 rows) instead of mean-based
     #: EXP3. Every other kind stays at the frontier. Empty keeps every earlier world.
     no_swap_regret_kinds: tuple[str, ...] = ()
+    #: Evaluations P6, M2: the share of judged returns drawn again until
+    #: ``multi_judge_count`` judges on distinct families (never the author's) read
+    #: them, which is what makes ensemble disagreement exist (essay II.III.a).
+    multi_judge_share: float = 0.3
+    multi_judge_count: int = 2
+    #: Evaluations C7: of each cascade window's completed judgements, the share
+    #: released to the tier above (at least one), so the tiers read a meaningful
+    #: share of what the tier below said rather than one representative a window.
+    meta_read_share: float = 0.5
 
     # Both horizons count world ticks consumed, not internal events (defect 1). The
     # field names predate that and are kept so every manifest keeps its meaning; the
@@ -1202,6 +1211,9 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         sampling_step=ev.get("sampling_step", 0.1),
         sampling_cap=ev.get("sampling_cap", 0.7),
         no_swap_regret_kinds=_manifest_kinds(ev.get("no_swap_regret_kinds", [])),
+        multi_judge_share=ev.get("multi_judge_share", 0.3),
+        multi_judge_count=ev.get("multi_judge_count", 2),
+        meta_read_share=ev.get("meta_read_share", 0.5),
     )
     pr = d.get("prices") or {}
     for key in ("kappa", "controller"):

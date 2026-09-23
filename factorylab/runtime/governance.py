@@ -15,6 +15,7 @@ from factorylab.charter.market import MOTION_FORECAST_DEFINITION, brier
 from factorylab.charter.measurement import measure_card, preflight_measurement
 from factorylab.cortex.assembly import AssemblySpec
 from factorylab.cortex.registration import (
+    BUILTIN_RETURNS,
     MAX_PROPOSALS_PER_RETURN,
     AssemblyProposal,
     ChallengeProposal,
@@ -146,7 +147,8 @@ class GovernanceMixin:
             return None
         kinds = set(assembly.spec.emits or ())
         shapes = set(assembly_rewards(assembly.spec).values())
-        if kinds & {"Verdict", "MetaVerdict"} or "conformity" in shapes:
+        if kinds & {"Verdict", "MetaVerdict", "CounterVerdict"} or shapes & {"conformity",
+                                                                             "counter"}:
             return COMMISSIONED_JUDGE_REFUSAL
         return None
 
@@ -845,8 +847,7 @@ class GovernanceMixin:
             declared_emits = prop.emits or tuple(prop.reward_shapes)
             shapes = reward_contracts(declared_emits, prop.reward_shapes,
                                       registered=self._kind_rewards())
-            custom = any(k not in ("ProducerReturn", "Verdict", "MetaVerdict", "Exposure")
-                         for k in declared_emits)
+            custom = any(k not in BUILTIN_RETURNS for k in declared_emits)
             if program:
                 from factorylab.cortex.assembly import ProgramAssemblySpec
 

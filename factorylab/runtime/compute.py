@@ -1099,7 +1099,7 @@ class ComputeMixin:
             decision = self.queue.get(ancestor)
             if decision.channel not in self.WRITING_CHANNELS:
                 return False
-            if self.return_kinds.get(ancestor) in ("Verdict", "MetaVerdict"):
+            if self.return_kinds.get(ancestor) in ("Verdict", "MetaVerdict", "CounterVerdict"):
                 return False
             if not self.consequences.account_open(ancestor):
                 return False

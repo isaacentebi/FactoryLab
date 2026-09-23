@@ -106,6 +106,8 @@ SEED_KIND_LINES: dict[str, str] = {
                    "of any tier above and the world's score of the grade",
     "Exposure": "an answer to the accepted event, which may act on the world; it settles "
                 "on how far its judges' verdicts missed its measured outcome",
+    "CounterVerdict": "a verdict in [0, 1] on the return another verdict judged; it settles "
+                      "on how far it beat that verdict against the measured outcome",
 }
 
 
@@ -716,6 +718,7 @@ KIND_RETURN_FIELDS: dict[str, dict[str, dict]] = {
     "Exposure": _ORDER_FIELDS,
     "Verdict": {"verdict": _UNIT, "payoff": _UNIT, "rationale": {"type": "string"}},
     "MetaVerdict": {"conformity": _UNIT, "rationale": {"type": "string"}},
+    "CounterVerdict": {"verdict": _UNIT, "rationale": {"type": "string"}},
 }
 
 

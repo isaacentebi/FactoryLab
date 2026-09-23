@@ -60,6 +60,14 @@ class RunStats:
     transfer_intents: int = 0
     exposures_settled: int = 0
     exposures_won: int = 0
+    # Adversarial judges' counter-verdicts the world scored (evaluations M1).
+    counters_settled: int = 0
+    # Chaos faults injected, by kind (``runtime.chaos``; essay II.III.b).
+    chaos_faults: dict[str, int] = field(default_factory=dict)
+    # The early-warning record (essay II.III.a; ruling R3): each closed window's
+    # score profile, the last 4k of them, and the statistics of the last close.
+    ews_history: list[dict] = field(default_factory=list)
+    early_warning: dict[str, Any] = field(default_factory=dict)
     price_updates: int = 0
     price_skipped: int = 0
     penalized_settlements: int = 0

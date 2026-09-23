@@ -419,7 +419,15 @@ class BootstrapMixin:
         self.pending_exposure: dict[str, int] = {}  # antagonist decision handle -> opened tick
         # The reward chain (ruling R1). Antagonist handle -> the consequence scores of
         # the judges scored on its return, until its exposure settles.
-        self.exposure_scores: dict[str, list[float]] = {}
+        self.exposure_scores: dict[str, list] = {}
+        # Each judge's consequence scores on ordinary (non-antagonist) returns, as
+        # [sum, count]: the centre its exposures are measured from (``exposure_score``).
+        self.judge_ordinary: dict[str, list] = {}
+        # Adversarial judges' counter-verdicts awaiting the world's measurement of the
+        # return they re-judged (``FeedbackMixin._settle_counters``).
+        self.pending_counters: dict[str, dict[str, Any]] = {}
+        # The chaos faults drawn for the tick now running (``runtime.chaos``).
+        self.chaos_tick: dict[str, Any] = {}
         # Judged return -> [[judge handle, verdict], ...] that arrived while this event
         # was routed; settled on their mean once routing is done.
         self.arrived_verdicts: dict[str, list[list]] = {}
