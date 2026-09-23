@@ -224,6 +224,45 @@ def test_admission_counts_attempts_and_stops_on_overrun_or_unknown_bill():
     assert table.admission.stop_reason == "non_authoritative_table_cost"
 
 
+def test_a_probe_above_the_whole_cap_is_infeasible_and_admission_goes_on():
+    admission = rehearsal.Admission(cap_micro=1_000, max_calls=10)
+    assert admission.can_admit(1_001, probe=True) == (False, "quote_above_cap")
+    assert admission.stop_reason is None
+    admission.admit(1_000)
+
+
+def test_a_probe_the_spent_cap_cannot_cover_ends_the_rehearsal():
+    # Codex review of #136: once the cap excludes every seat, the run must end rather
+    # than record NOOP decisions for the rest of its duration.
+    admission = rehearsal.Admission(cap_micro=1_000, max_calls=10)
+    admission.known_micro = 600
+    assert admission.can_admit(500, probe=True) == (False, "quote_above_remaining_cap")
+    assert admission.stop_reason == "quote_above_remaining_cap"
+
+
+def test_an_actual_call_above_the_remaining_cap_ends_the_rehearsal():
+    # Codex review of #136: a refused real call would otherwise enter the experiment
+    # as the seat's failed return, and later events would go on around it.
+    admission = rehearsal.Admission(cap_micro=1_000, max_calls=10)
+    with pytest.raises(rehearsal.RehearsalRefused, match="quote_above_remaining_cap"):
+        admission.admit(1_001)
+    assert admission.stop_reason == "quote_above_remaining_cap"
+    assert admission.can_admit(1, probe=True) == (False, "quote_above_remaining_cap")
+
+
+def test_a_seat_above_the_whole_cap_is_excluded_for_compute_and_admission_goes_on():
+    # Codex review of #136: the runtime's insolvency rule, over its live seats, decides
+    # when a menu excluded entirely for compute ends the world; the harness only reports.
+    manifest = rehearsal.effective_manifest(load_manifest(WORLD))
+    provider = rehearsal.PrepaidProvider(StubProvider(None), manifest,
+                                         rehearsal.Admission(cap_micro=1_000, max_calls=3))
+    model = manifest.assemblies[0].model_id
+    allowed, reason = provider.affordable(model, 1_001)
+    assert not allowed and reason.startswith("compute: ceiling 1001 exceeds rehearsal cap")
+    assert provider.admission.stop_reason is None
+    assert provider.affordable(model, 1_000) == (True, "")
+
+
 def test_admission_uses_canonical_provider_failure_billing_classification():
     manifest = rehearsal.effective_manifest(load_manifest(WORLD))
 
