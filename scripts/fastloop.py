@@ -362,8 +362,14 @@ def charter_markets(events: list[dict[str, Any]]) -> dict[str, Any]:
         "lambda_posts": {"posted": len(kinds("lambda_post.posted")), "settled": len(settled),
                          "mean_score": (round(statistics.fmean(e["score"] for e in settled), 4)
                                         if settled else None),
+                         "censored": sum(e.get("status") == "censored"
+                                         for e in kinds("lambda_post.settled")),
                          "refused": len(kinds("lambda_post.refused")),
-                         "aggregates": len(kinds("lambda_post.aggregate"))},
+                         "aggregates": len(kinds("lambda_post.aggregate")),
+                         "targets": sorted({round(e["realized"], 4) for e in settled})},
+        "margins": {"read": len(kinds("price.margin")),
+                    "identified": sum(e.get("shadow_price") is not None
+                                      for e in kinds("price.margin"))},
         "motions": {"proposed": len(kinds("charter.propose")),
                     "enacted": len(kinds("charter.activate")),
                     "rejected": len(kinds("policy.rejected")),
@@ -375,7 +381,6 @@ def charter_markets(events: list[dict[str, Any]]) -> dict[str, Any]:
         "feed_forward": {"price_updates": len(anticipated), "moved": len(moved),
                          "f_min": min((e["f"] for e in moved), default=None),
                          "f_max": max((e["f"] for e in moved), default=None)},
-        "dollar_windows": len(kinds("price.dollars")),
     }
 
 

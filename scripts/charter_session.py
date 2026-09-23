@@ -17,15 +17,19 @@ sequence:
   (c) export  an adopted charter is written as TOML with typed regions, headed by the
               roster and content digests the load path verifies.
   (d) report  λ against dollars, from rehearsal diaries (charter audit M5): per card
-              and per window, the penalty its price took and what that cost in
-              micro-USD at the window's own cost of a unit of reward.
+              and per window, the λ it closed at beside the margins the world
+              measured across its scopes, reward and micro-USD per unit of
+              violation, recomputed from the diary's price.margin points with the
+              runtime's own function.
 
 The ballots carry the λ-to-dollar report when diaries are supplied, so the
 correlation between the charter's prices and its material cost is before the
 population at charter time (essay II.IV).
 
-It makes live model calls. ``--dry-run`` swaps in a scripted provider, so the whole
-sequence runs offline and deterministically. Nothing here touches a wallet, a venue
+It makes live model calls through the rehearsal's prepaid provider, under
+``--cap-usd``. ``--dry-run`` swaps in a scripted provider, so the whole sequence runs
+offline and deterministically. The card contract the ballots refer to is the world's
+own ``world.mechanics.committee.card_contract``. Nothing here touches a wallet, a venue
 or a ledger.
 
     uv run python scripts/charter_session.py session --world W --out-dir D [--diary E]
@@ -52,13 +56,13 @@ from factorylab.charter.amendment import proposed_price  # noqa: E402
 from factorylab.charter.book import validate_observation_bindings  # noqa: E402
 from factorylab.charter.charter import Charter, MetricCard  # noqa: E402
 from factorylab.charter.committee import Seat, draw  # noqa: E402
-from factorylab.charter.market import lambda_dollars  # noqa: E402
+from factorylab.charter.market import margin  # noqa: E402
 from factorylab.charter.measurement import (  # noqa: E402
     measurement_catalogue,
     preflight_measurement,
 )
 from factorylab.charter.provenance import charter_digest, norms_raw, roster_hash  # noqa: E402
-from factorylab.charter.region import RULES, region_schema  # noqa: E402
+from factorylab.charter.region import region_schema  # noqa: E402
 from factorylab.charter.windows import window_schema  # noqa: E402
 from factorylab.cortex.assembly import SEED_SYSTEM_PROMPT, _parse_json_object  # noqa: E402
 from factorylab.world.models import ModelRequest, ModelResponse  # noqa: E402
@@ -67,22 +71,38 @@ MAX_TOKENS = 1500
 VOTE_MAX_TOKENS = 4000
 CARD_FIELDS = ("id", "norm", "description", "units", "window", "region", "observation",
                "answers_for")
-WHAT_A_CARD_IS = (
-    "A metric card turns one norm into a number compared with an acceptable region. "
-    "Fields: id; norm (exactly one supplied norm); description; units; window "
-    "{kind: returns|forecasts|windows, n: positive integer, per: role|assembly|null, and "
-    "optionally interval {level, half_width}}; region {rule, lo, hi} with rule one of "
-    f"{', '.join(RULES)}; observation (a catalogue id); answers_for "
-    "(producer|evaluator|meta|antagonist|all). An optional starting lambda lies within "
-    "world.prices.lambda_max. Windows select the latest n samples; insufficient samples "
-    "remain unmeasured. Every proposed card is preflighted through the runtime measurement "
-    "contract before voting."
-)
-
-
 # --- the provider -------------------------------------------------------------------
 
-class ScriptedCharterProvider:
+class ManifestCatalogue:
+    """A provider that answers ``catalogue()`` from the manifest's own model table.
+
+    A world whose seats size their completions natively ("provider" max_tokens,
+    edition 5 and 6) needs each model's completion limit before its runtime can
+    build a world block. The limits here are the manifest's, never a network read.
+    """
+
+    name = "manifest-catalogue"
+
+    def __init__(self, manifest) -> None:
+        self.manifest = manifest
+
+    def catalogue(self) -> list:
+        from factorylab.world.models import CatalogueEntry
+
+        rows = []
+        for model in self.manifest.models:
+            rows.append(CatalogueEntry(
+                id=model.id, name=model.id,
+                prompt_usd_per_token=str(float(model.input_usd_per_mtok) / 1_000_000),
+                completion_usd_per_token=str(float(model.output_usd_per_mtok) / 1_000_000),
+                context_length=200_000, max_completion_tokens=100_000))
+        return rows
+
+    def complete(self, req: ModelRequest) -> ModelResponse:
+        raise RuntimeError("the manifest catalogue answers no completion")
+
+
+class ScriptedCharterProvider(ManifestCatalogue):
     """A deterministic stand-in population for ``--dry-run``: plumbing, not behaviour.
 
     Each proposer offers one card on the next norm, over the next observation of a
@@ -102,7 +122,8 @@ class ScriptedCharterProvider:
          {"rule": "at most", "hi": 3}, "all", "count per return"),
     )
 
-    def __init__(self) -> None:
+    def __init__(self, manifest) -> None:
+        super().__init__(manifest)
         self.proposals = 0
 
     def complete(self, req: ModelRequest) -> ModelResponse:
@@ -209,13 +230,16 @@ def survey_world(world: dict) -> dict:
 
 
 def launch_world(manifest) -> dict:
-    """The runtime's own world block over a fake venue: launch-shaped public facts."""
+    """The runtime's own world block over a fake venue: launch-shaped public facts.
+
+    Built on the manifest's catalogue, so it makes no call and reads no network,
+    whichever provider the session's ballots then use.
+    """
     from factorylab.runtime.loop import Runtime
     from factorylab.world.exchange import FakeExchange
-    from factorylab.world.scripted import ScriptedProvider
 
     rt = Runtime(manifest, events=1, seed=None, initial_balance_micro=None, ledger_path=None,
-                 router_gamma=0.1, provider=ScriptedProvider(),
+                 router_gamma=0.1, provider=ManifestCatalogue(manifest),
                  exchange=FakeExchange(seed=manifest.exchange.seed, coins=manifest.exchange.coins,
                                        start_cash_usd=manifest.exchange.start_cash_usd))
     return rt._world_block()
@@ -255,8 +279,8 @@ def draft(manifest, provider, world: dict, rng: random.Random,
     text = _prompt(
         "Propose metric cards for the charter. The norms are fixed; the cards are the "
         "population's to write. Give one sentence of reason per card.",
-        {"norms": norms_raw(norms), "what_a_metric_card_is": WHAT_A_CARD_IS,
-         "measurable_today": measurement_catalogue(), "world": survey_world(world)},
+        {"norms": norms_raw(norms), "measurable_today": measurement_catalogue(),
+         "world": survey_world(world)},
         {"type": "object", "properties": {"cards": {"type": "array", "items": card_schema}},
          "required": ["cards"]})
     proposals: list[Proposal] = []
@@ -277,8 +301,7 @@ def draft(manifest, provider, world: dict, rng: random.Random,
             f"card passes with {len(seats) // 2 + 1} yes votes of {len(seats)}.",
             {"proposals": [{"proposal": p.key, **_card_row(p.card), **(
                 {"lambda": p.price} if p.price is not None else {})} for p in voted],
-             "norms": norms_raw(norms), "what_a_metric_card_is": WHAT_A_CARD_IS,
-             "world": survey_world(world)},
+             "norms": norms_raw(norms), "world": survey_world(world)},
             {"type": "object", "properties": {"votes": {"type": "array", "items": {
                 "type": "object", "properties": {
                     "proposal": {"enum": [p.key for p in voted]}, "vote": {"type": "boolean"},
@@ -405,77 +428,35 @@ def adopt(manifest, provider, charter_table: dict, world: dict, rng: random.Rand
 # --- (d) λ against dollars --------------------------------------------------------------
 
 def lambda_report(events: list[dict]) -> dict:
-    """Per card and per closed window: λ, the penalty its price took, and that in micro-USD.
+    """Per card and per window: λ beside the margins the world measured, from a diary.
 
-    Charter audit M5. A diary written with the runtime's own ``price.dollars``
-    statistic is read as it is. An older diary is recomputed from its primitives:
-    items up to a window's ``price.window`` belong to it, the window's spend is its
-    invocations' cost and retained-storage charges, its reward mass the raw scores
-    of its ``price.penalty`` settlements, and each penalty is apportioned to cards by
-    ``lambda * v * share`` (``charter.market.lambda_dollars`` converts). For each
-    card the report states the Pearson correlation of λ with its dollar cost over
-    the windows where both were measured.
+    Charter audit M5, one computation with the runtime: each ``price.margin`` row
+    carries a window's anonymous per-scope points, and the margins are recomputed
+    from them by ``charter.market.margin``, the same function the runtime ledgered
+    them with (and scores λ posts against): ``marginal_consequence`` (reward per unit
+    of violation) and ``micro_usd_per_violation`` (compute spent per unit of
+    violation). For each card the report states the correlation of λ with its
+    marginal dollars over the windows where the margin was identified. A diary
+    written before ``price.margin`` existed has no windows.
     """
-    windows: dict[int, dict] = {}
-    exact = [e for e in events if e.get("kind") == "price.dollars"]
-    if exact:
-        for e in exact:
-            windows[e["window"]] = {"cards": e["cards"], "reward_mass": e["reward_mass"],
-                                    "compute_spend_micro": e["compute_spend_micro"]}
-        source = "price.dollars"
-    else:
-        source = "recomputed"
-        current = {"spend": 0, "reward": 0.0, "penalties": {}}
-        closed = 0
-        lambdas: dict[int, dict[str, float]] = {}
-        for e in events:
-            kind = e.get("kind")
-            if kind == "invocation":
-                current["spend"] += int(e.get("cost") or 0)
-            elif kind == "price.contribution" and e.get("storage"):
-                current["spend"] += int(e.get("cost") or 0)
-            elif kind == "price.penalty":
-                if e.get("raw") is not None:
-                    current["reward"] += float(e["raw"])
-                terms = e.get("terms") or []
-                total = sum(t["weight"] * t["share"] for t in terms)
-                if (e.get("penalty") or 0) > 0 and total > 0:
-                    for t in terms:
-                        part = e["penalty"] * t["weight"] * t["share"] / total
-                        current["penalties"][t["card_id"]] = (
-                            current["penalties"].get(t["card_id"], 0.0) + part)
-            elif kind == "price.window":
-                closed = int(e["window"])
-                usd = lambda_dollars(current["penalties"], current["reward"],
-                                     current["spend"])
-                windows[closed] = {"penalties": current["penalties"], "usd": usd,
-                                   "reward_mass": current["reward"],
-                                   "compute_spend_micro": current["spend"]}
-                current = {"spend": 0, "reward": 0.0, "penalties": {}}
-            elif kind == "price.update" and closed:
-                lambdas.setdefault(closed, {})[e["card_id"]] = e["lambda_after"]
-        for index, row in windows.items():
-            cards = set(row["penalties"]) | set(lambdas.get(index, {}))
-            row["cards"] = {c: {"lambda": lambdas.get(index, {}).get(c),
-                                "penalty": row["penalties"].get(c, 0.0),
-                                "micro_usd": row["usd"].get(c, 0 if row["reward_mass"] > 0
-                                                            else None)}
-                            for c in cards}
     cards: dict[str, dict] = {}
-    for index in sorted(windows):
-        for card_id, row in windows[index]["cards"].items():
-            cards.setdefault(card_id, {"windows": []})["windows"].append({"window": index, **row})
+    for e in events:
+        if e.get("kind") != "price.margin":
+            continue
+        row = margin(e.get("points") or [])
+        cards.setdefault(e["card_id"], {"windows": []})["windows"].append({
+            "window": e["window"], "lambda": e.get("lambda"),
+            "marginal_consequence": row["slope"],
+            "micro_usd_per_violation": row["micro_usd_per_violation"],
+            "scopes": row["scopes"]})
     for row in cards.values():
-        pairs = [(w["lambda"], w["micro_usd"]) for w in row["windows"]
-                 if w["lambda"] is not None and w["micro_usd"] is not None]
-        row["penalty_total"] = sum(w["penalty"] for w in row["windows"])
-        row["micro_usd_total"] = sum(w["micro_usd"] or 0 for w in row["windows"])
-        row["lambda_usd_correlation"] = _pearson(pairs)
-    spend = sum(w["compute_spend_micro"] for w in windows.values())
-    reward = sum(w["reward_mass"] for w in windows.values())
-    return {"source": source, "windows": len(windows), "compute_spend_micro": spend,
-            "reward_mass": reward,
-            "micro_usd_per_reward": round(spend / reward) if reward > 0 else None,
+        identified = [w for w in row["windows"] if w["micro_usd_per_violation"] is not None]
+        row["identified_windows"] = len(identified)
+        row["lambda_usd_correlation"] = _pearson(
+            [(w["lambda"], w["micro_usd_per_violation"]) for w in identified
+             if w["lambda"] is not None])
+    return {"source": "price.margin",
+            "windows": len({w["window"] for row in cards.values() for w in row["windows"]}),
             "cards": cards}
 
 
@@ -545,6 +526,22 @@ def session(manifest, provider, out_dir: Path, *, diaries: list[Path], seed: int
     return evidence
 
 
+def prepaid_provider(manifest, cap_usd: str):
+    """The provider a rehearsal uses: prepaid rails behind an admission cap.
+
+    ``scripts/edition4_rehearsal.py``'s own construction, so the session's calls are
+    bounded and billed exactly as a rehearsal's are.
+    """
+    from decimal import Decimal
+
+    from scripts import edition4_rehearsal as rehearsal
+
+    admission = rehearsal.Admission(cap_micro=int(Decimal(cap_usd) * 1_000_000),
+                                    max_calls=10_000, recover_provider_failures=True)
+    return rehearsal.PrepaidProvider(rehearsal.build_prepaid_provider(manifest), manifest,
+                                     admission)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -555,6 +552,8 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--seed", type=int, default=None)
     run.add_argument("--dry-run", action="store_true",
                      help="a scripted provider instead of model calls")
+    run.add_argument("--cap-usd", default="2",
+                     help="the prepaid admission cap on the live path's model bill")
     rep = sub.add_parser("report", help="the λ-to-dollar report from rehearsal diaries")
     rep.add_argument("--diary", type=Path, action="append", required=True)
     args = parser.parse_args(argv)
@@ -565,16 +564,9 @@ def main(argv: list[str] | None = None) -> int:
 
     manifest = load_manifest(args.world)
     if args.dry_run:
-        provider = ScriptedCharterProvider()
+        provider = ScriptedCharterProvider(manifest)
     else:
-        from factorylab.runtime.cli import _load_dotenv
-        from factorylab.runtime.live import build_provider
-
-        _load_dotenv()
-        provider = build_provider(manifest)
-        if provider is None:
-            print("this world has no live model tiers; nothing to ask", file=sys.stderr)
-            return 1
+        provider = prepaid_provider(manifest, args.cap_usd)
     evidence = session(manifest, provider, args.out_dir, diaries=args.diary, seed=args.seed)
     print(json.dumps({k: evidence.get(k) for k in ("world", "approved", "charter_sha256",
                                                     "roster_sha256", "cost_micro")}))

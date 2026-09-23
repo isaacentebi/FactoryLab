@@ -21,7 +21,7 @@ def test_the_scripted_population_posts_lambda_proposes_motions_and_forecasts_bot
 def test_the_scorecard_reads_the_markets_from_the_diary():
     events = [
         {"kind": "lambda_post.posted"}, {"kind": "lambda_post.settled", "status": "settled",
-                                         "score": 0.5},
+                                         "score": 0.5, "realized": 0.2},
         {"kind": "policy.forecast"}, {"kind": "policy.void", "branch": "enact"},
         {"kind": "policy.outcome", "status": "settled", "forecast": True, "branch": "reject",
          "score": 0.64},
@@ -32,6 +32,7 @@ def test_the_scorecard_reads_the_markets_from_the_diary():
     ]
     card = fastloop.charter_markets(events)
     assert card["lambda_posts"]["settled"] == 1 and card["lambda_posts"]["mean_score"] == 0.5
+    assert card["lambda_posts"]["censored"] == 0 and card["margins"]["read"] == 0
     assert card["motions"]["graded"] == {"forecast:reject": {"n": 1, "score_sum": 0.64},
                                          "ballot:reject": {"n": 1, "score_sum": 1.0}}
     assert card["motions"]["void"] == {"enact": 1}
