@@ -546,6 +546,24 @@ def _measure_rows(observation: str, rows: list[dict]) -> float | None:
     return pstdev(values) if observation == "verdict_std" else fmean(values)
 
 
+def _merge_counts(into: dict, other: dict) -> None:
+    """Guarantees ``into`` holds both windows' statistics: counters summed, lists joined.
+
+    A window keeps nested score lists (``{handle: {judge: [scores]}}``) beside flat
+    counters (``calls_by_family``, ``calls_by_provider``: ``{name: count}``); both are
+    raw sufficient statistics, merged at whatever depth they sit.
+    """
+    for name, item in other.items():
+        if isinstance(item, dict):
+            _merge_counts(into.setdefault(name, {}), item)
+        elif isinstance(item, list):
+            into.setdefault(name, []).extend(item)
+        elif isinstance(item, int | float) and not isinstance(item, bool):
+            into[name] = into.get(name, 0) + item
+        else:
+            raise TypeError(f"window statistic {name!r} cannot be merged")
+
+
 def measure_card(card: MetricCard, samples: CardSamples, observations=None) -> dict[str, float]:
     """Return each fully supported scope's measurement without pooling its sample selector."""
     from factorylab.runtime.observations import seed_book
@@ -574,10 +592,7 @@ def measure_card(card: MetricCard, samples: CardSamples, observations=None) -> d
                         present = [v for v in (merged[key], value) if v is not None]
                         merged[key] = max(present) if present else None
                     elif isinstance(value, dict):
-                        for handle, judges in value.items():
-                            for judge, scores in judges.items():
-                                target = merged[key].setdefault(handle, {}).setdefault(judge, [])
-                                target.extend(scores)
+                        _merge_counts(merged[key], value)
                     elif isinstance(value, list):
                         merged[key].extend(value)
                     elif isinstance(value, set):
@@ -595,7 +610,15 @@ def measure_card(card: MetricCard, samples: CardSamples, observations=None) -> d
                 spread = _sample_values(observation.id, rows)
             else:
                 # A registered observation is measured by its own code here.
-                value = book.value(observation, SimpleNamespace(**merged))
+                if getattr(observation, "per_window", False):
+                    # A quantity of one window is measured window by window and averaged:
+                    # summed statistics would add amounts, or divide by the first
+                    # window's base alone (the #139 review).
+                    each = [book.value(observation, SimpleNamespace(**w)) for w in selected]
+                    each = [v for v in each if v is not None]
+                    value = fmean(each) if each else None
+                else:
+                    value = book.value(observation, SimpleNamespace(**merged))
                 spread = None
                 if window.interval is not None:
                     # Each selected window is one sample of the pooled measurement.

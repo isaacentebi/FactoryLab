@@ -507,11 +507,17 @@ spot_pairs = ["PURR/USDC", "HYPE/USDC"]
 # with their definitions in the charter object and one card.
 [charter]
 edition = 1
-# Edition 5's charter table, unchanged. It was ratified on 16 September 2026 by the
-# seeded committee of edition 5's roster (docs/charter/edition3-ratification.json:
-# charter c25f5617…, roster 81de4911…). This roster differs, so neither digest is
-# claimed here; see the header. (Neither pin verifies against edition 5's own file
-# either: its loaded cards hash to 7f1ae639… and its roster to eb72d8ed….)
+# Edition 6's own charter, drafted and adopted by this roster on 23 September 2026
+# (scripts/charter_session.py, live; docs/charter/edition6-ratified.toml and
+# edition6-session.json): 45 proposed cards, 7 passed their ballots and the
+# preflight, and a fresh sortition adopted the whole 3-2. It replaces edition 5's
+# table. The architect supplied the norms only (essay II.IV.a).
+# As adopted, card `independent-uptake` is described as uptake by an independent
+# lineage but binds `revision_rate` (accepted registrations or activated
+# amendments); the world publishes no uptake observation. It stands as the
+# population wrote it; an amendment or the next session may change it.
+ratified_sha256 = "b3fa16508315238f03726a600d20a4a58566c8fe80c9e290174b6c2f9478ac59"
+roster_sha256 = "2dbe4b41e657a2a1dbe6c71145a06af9ef1c74ea64c2d273c48f99b59fa3abf6"
 norms = [
   { id = "consequential usefulness", definition = "Create things or changes that others have reason to value; uptake by an independent counterparty is evidence, internal applause is a hypothesis." },
   { id = "epistemic integrity", definition = "Make commitments answerable to evidence and preserve the ability to discover that they were wrong; a changed criterion does not rewrite what was promised." },
@@ -521,15 +527,75 @@ norms = [
 ]
 
 [[charter.cards]]
-id = "censorship-bound"
+id = "independent-uptake"
+norm = "consequential usefulness"
+description = "Share of selected producer returns whose accepted registration, tool, observation, assembly, or service is subsequently taken up by an independent lineage; assess only eligible settled outcomes and treat missing evidence as unmeasured."
+units = "fraction"
+window = { kind = "windows", n = 25 }
+region = { rule = "at least", lo = 0.2 }
+observation = "revision_rate"
+answers_for = "producer"
+
+[[charter.cards]]
+id = "forecast-skill-floor"
 norm = "epistemic integrity"
-description = "Attributable, avoidably unresolved accepted commitments over the eligible commitments due in the responsible scope, with a ceiling, so a seat answers for the promises it never let the world settle. A commitment not yet due is not in the sample; documented external unobservability without owner fault, and events the seat never committed to observe, are excluded; no eligible sample is unmeasured, never zero. Accountability is the commitment owner, including responsibility delegated at acceptance. Explicitly provisional: replace, reprice or remove it."
+description = "Mean paired forecast skill against the pre-outcome prevalence baseline for settled forecasts, with unresolved commitments tracked separately by the existing censorship-bound card."
+units = "score difference"
+window = { kind = "forecasts", n = 25, per = "assembly" }
+region = { rule = "at least", lo = 0.0 }
+observation = "forecast_skill"
+answers_for = "all"
+
+[[charter.cards]]
+id = "avoidable-unresolved-ceiling"
+norm = "epistemic integrity"
+description = "Attributable, avoidably unresolved accepted commitments over eligible commitments due in the responsible scope; exclude commitments not yet due and documented external unobservability without owner fault, and treat no eligible sample as unmeasured."
 units = "fraction"
 window = { kind = "forecasts", n = 25, per = "assembly" }
-acceptable_region = "at most 0.30"
+region = { rule = "at most", hi = 0.3 }
 observation = "avoidably_unresolved_share"
 answers_for = "all"
-lambda = 0.1
+
+[[charter.cards]]
+id = "compute-burn-ceiling"
+norm = "durable agency"
+description = "Total metered invocation compute plus retained-storage rent per closed window."
+units = "micro-USD per window"
+window = { kind = "windows", n = 25 }
+region = { rule = "at most", hi = 10000000.0 }
+observation = "burn_per_window"
+answers_for = "all"
+
+[[charter.cards]]
+id = "outsider-cost-discipline"
+norm = "bounded reciprocity"
+description = "Mean cost over all selected responses, failures included, including the retained-storage charge assigned to those responses but never counting storage as a response."
+units = "micro-USD per attempt"
+window = { kind = "returns", n = 25, per = "assembly" }
+region = { rule = "at most", hi = 1000000.0 }
+observation = "cost_per_attempt"
+answers_for = "all"
+
+[[charter.cards]]
+id = "independent-consequence"
+norm = "consequential usefulness"
+description = "Share of settled selected consequences that are paid off."
+units = "fraction"
+window = { kind = "windows", n = 10 }
+region = { rule = "at least", lo = 0.5 }
+observation = "consequence_paid_off_rate"
+answers_for = "producer"
+
+[[charter.cards]]
+id = "well-formed-floor"
+norm = "fidelity"
+description = "Successful responses over selected invocation responses, including ballots, so a seat whose output mostly fails to parse cannot be credited on the fraction that happened to land."
+units = "fraction"
+window = { kind = "returns", n = 25, per = "assembly" }
+region = { rule = "at least", lo = 0.9 }
+observation = "well_formed_rate"
+answers_for = "all"
+lambda = 0.2
 
 [prompt]
 
