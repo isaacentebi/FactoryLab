@@ -7,6 +7,8 @@ card (id, accepts, emits, description); a population tool publishes the schema i
 results are held to.
 """
 
+import json
+
 import pytest
 
 from factorylab.cortex.assembly import SEED_KIND_LINES, contract_line
@@ -57,6 +59,8 @@ def test_a_registered_description_is_published_in_the_catalogue_and_search():
     _register_seat(rt, "funding-card", description=CARD)
     row = next(r for r in rt._world_block()["catalogue"] if r["id"] == "funding-card")
     assert row["description"] == CARD
+    announced = next(e for e in rt.internal if e.payload.get("id") == "funding-card")
+    assert announced.payload["description"] == CARD
     found = rt._run_tool("seed-decider", "h", {"tool": "catalogue.search",
                                                 "args": {"substring": "funding print"}})[0]
     assert [a["id"] for a in found["assemblies"]] == ["funding-card"]
@@ -143,4 +147,9 @@ def test_a_registered_returns_schema_is_published_with_the_tool():
     assert rt.tool_specs["doubler"]["returns_schema"] == promise
     found = rt._tool_schema_search("doubler", 5)
     assert found[0]["returns_schema"] == promise
+    # The durable contract and the public announcement carry the promise too.
+    output = rt.registry.get("tool:doubler").output_schema  # frozen: tuples, mappings
+    assert json.loads(json.dumps(output, default=dict)) == promise
+    announced = rt.internal[-1].payload["returns_schema"]
+    assert json.loads(json.dumps(announced, default=dict)) == promise
     assert "returns_schema" not in as_spec(_tool("", None), 0)
