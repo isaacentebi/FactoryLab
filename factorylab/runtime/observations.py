@@ -167,7 +167,10 @@ CATALOGUE: tuple[Observation, ...] = (
     ),
     Observation(
         "forecast_skill",
-        "Mean cumulative consequence skill of evaluators with settlements.",
+        "Mean cumulative consequence skill of evaluators with settlements: each "
+        "evaluator's mean score 1 - (q - y)^2 over its settled forecasts and scored "
+        "verdicts minus the same score at the pre-outcome base rate; positive when they "
+        "beat the base rate.",
         "score difference",
         lambda w: _mean(w.forecast_skills),
         (-1.0, 1.0),

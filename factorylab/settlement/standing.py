@@ -63,8 +63,13 @@ class ConsequenceStanding:
         self.__evaluators.setdefault(evaluator_id, _Standing()).requested = requested
 
     def skill(self, evaluator_id: str) -> float:
-        """Return mean Brier minus matched baseline mean over forecast and verdict scores
-        pooled together, or zero without scores."""
+        """Return mean score minus matched baseline mean over forecast and verdict scores
+        pooled together, or zero without scores.
+
+        Every score is 1 - (q - y)^2 (``scoring.brier``, ``settle.normative_brier``),
+        higher is better, so skill is positive exactly when the evaluator's scores beat
+        its base rates'.
+        """
         _require_id(evaluator_id)
         standing = self.__evaluators.get(evaluator_id)
         if standing is None:
@@ -77,7 +82,10 @@ class ConsequenceStanding:
         return scored / count - baseline / count
 
     def payoff_skill(self, evaluator_id: str) -> float:
-        """Return the settled-forecast part of skill alone, or zero without scores."""
+        """Return the settled-forecast part of skill alone, or zero without scores.
+
+        Mean 1 - (q - y)^2 minus the mean at the base rate; positive beats the base rate.
+        """
         _require_id(evaluator_id)
         standing = self.__evaluators.get(evaluator_id)
         if standing is None or not standing.n:
@@ -85,7 +93,10 @@ class ConsequenceStanding:
         return (standing.sum_brier - standing.sum_baseline_brier) / standing.n
 
     def verdict_skill(self, evaluator_id: str) -> float:
-        """Return the verdict part of skill alone, or zero without settled verdicts."""
+        """Return the verdict part of skill alone, or zero without settled verdicts.
+
+        Mean 1 - (q - outcome)^2 minus the mean at the base rate; positive beats it.
+        """
         _require_id(evaluator_id)
         standing = self.__evaluators.get(evaluator_id)
         if standing is None or not standing.verdict_n:

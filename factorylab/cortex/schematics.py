@@ -1863,8 +1863,10 @@ class SchematicsMixin:
                 "would have filled bears in the window it was drawn in"
             ),
             "consequence_standing": (
-                "mean Brier of an evaluator's settled forecasts and scored verdicts minus the "
-                "base rates', capped below minimum coverage; it enters selection among "
+                "0.5 + skill, clipped to [0, 1] and capped at 0.5 below minimum coverage; "
+                "skill = mean score 1 - (q - y)^2 of an evaluator's settled forecasts and "
+                "scored verdicts minus the same score at the base rates before each outcome, "
+                "positive when they beat the base rate; it enters selection among "
                 "contracts declaring Verdict on any accepted event kind with "
                 f"weight consequence_mix (committed {ev.consequence_share}; the weight in "
                 "force this window is world.adaptive_scoring.consequence_mix) beside the "

@@ -88,8 +88,11 @@ def measurement_catalogue(observations=None) -> list[dict]:
         "including ballots.",
         "tool_calls": "Mean attempted tool calls per selected response, failures included; "
         "global closed windows divide the window's attempted calls by its invocations.",
-        "forecast_skill": "Mean selected forecast Brier minus its paired pre-outcome "
-        "prevalence-baseline Brier.",
+        "forecast_skill": "Mean over selected settled forecasts of the forecast's score "
+        "1 - (q - y)^2 minus the same score at its pre-outcome prevalence base rate b, "
+        "1 - (b - y)^2; positive when forecasts beat the base rate. Global closed windows use "
+        "the mean of the same difference over each settled evaluator's forecasts and scored "
+        "verdicts, y a verdict's measured outcome.",
         "noop_share": "Share of selected responses declaring noop or hold; global closed "
         "windows use producer returns.",
         "revision_rate": "Share of selected responses with accepted registrations or activated "
