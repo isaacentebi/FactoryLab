@@ -9,7 +9,11 @@ from decimal import Decimal
 from typing import Any
 
 from factorylab.charter.measurement import measurement_catalogue
-from factorylab.cortex.assembly import SEED_SYSTEM_PROMPT, reserved_return_fields
+from factorylab.cortex.assembly import (
+    SEED_SYSTEM_PROMPT,
+    public_description,
+    reserved_return_fields,
+)
 from factorylab.kernel.money import money_to_usd
 from factorylab.runtime.cadence import tick_intervals
 from factorylab.runtime.custody import UNAVAILABLE
@@ -21,8 +25,12 @@ from factorylab.settlement.vocabulary import COMMISSIONED_JUDGE_REFUSAL
 
 _ADDRESSING = (
     "inputs.you is your own assembly id. catalogue lists every live assembly "
-    "as {id, version, accepts, emits}; those ids are what requests[].target, "
-    "a retire proposal's assembly_id and a learner proposal's assembly_id name. "
+    "as {id, version, accepts, emits, description}; those ids are what a retire "
+    "proposal's assembly_id and a learner proposal's assembly_id name. "
+    "requests[].target names a kind of work, never an id: a kind some live contract "
+    "emits, else one it accepts, and that kind's request router draws the executor "
+    "from those contracts (never the requester) with a logged propensity; self names "
+    "your own contract. "
     + COMMISSIONED_JUDGE_REFUSAL
 )
 
@@ -183,6 +191,8 @@ class SchematicsMixin:
             "effort": "low",
             "endowment_micro": "optional positive integer micro-USD transferred from the "
             "founder's available entitlement; omission uses the published trial amount",
+            "description": "optional, at most 500 chars: what this contract does, published "
+            "with it in the catalogue; omission publishes the contract's own line",
         },
         "router": {
             "kind": "router",
@@ -204,6 +214,8 @@ class SchematicsMixin:
             "id": "slug",
             "description": "what it computes",
             "args_schema": {"type": "object", "properties": {"x": {"type": "number"}}},
+            "returns_schema": {"type": "object", "properties": {"y": {"type": "number"}},
+                               "required": ["y"]},
             "code": "python: read a JSON object from stdin, print a JSON object",
             "timeout_s": 2,
         },
@@ -283,8 +295,17 @@ class SchematicsMixin:
 
 
     A_RETURN_MAY_INCLUDE: dict[str, str] = {
+        "kind_fields": (
+            "reserved_return_fields is the envelope every return may carry. Each seed kind "
+            "also owns fields of its own: ProducerReturn and Exposure own action, "
+            "rationale, coin, side and size (the answer order below); Verdict owns verdict "
+            "and payoff in [0, 1] and rationale; MetaVerdict owns conformity in [0, 1] and "
+            "rationale. A declared kind owns what its schema in event_schemas declares, "
+            "and a field another kind owns has no meaning in it"
+        ),
         "action": (
-            '"noop" | "hold" | "order"; an "order" return also carries "coin" (one of the '
+            'ProducerReturn and Exposure: "noop" | "hold" | "order"; an "order" return '
+            'also carries "coin" (one of the '
             'world\'s coins), "side" ("buy" | "sell") and "size" (base units as a decimal '
             'string, e.g. "0.005"), and is placed at market on return; limit, reduce-only, '
             '"market" defaults to "perp" or accepts "spot" with a configured BASE/USDC pair; '
@@ -378,13 +399,17 @@ class SchematicsMixin:
             "schema uses a new name. Built-in world and kernel events cannot be emitted."
         ),
         "requests": (
-            'objects: {"target":"an id from world.catalogue, or self","description":"task",'
-            '"inputs":{},"outcome_schema":{"type":"object"}}; children have tools and '
+            'objects: {"target":"a kind of work, or self","description":"task",'
+            '"inputs":{},"outcome_schema":{"type":"object"}}, optionally with '
+            '"propensity" {action_id: probability} over what you chose among and '
+            '"chosen", the action you took; both travel on the child\'s request and '
+            'are recorded on its handle. The target kind\'s request router draws the '
+            'executor (see addressing). Children have tools and '
             'may request children to mechanics.tools.max_depth (root depth 0), with '
             'mechanics.tools.max_children children per request. Each depth spends '
             'within its parent\'s remaining cost ceiling. '
             'Outputs arrive in tool_results as '
-            '{"tool":"assembly:<target>","args":<inputs>,"result":{"outputs":{},'
+            '{"tool":"request:<target>","args":<inputs>,"result":{"outputs":{},'
             '"status":"ok","cost_micro":0}} before your second call. '
             'Outcome schemas support object/array/scalar types, properties, required, enum, '
             'minimum, maximum, minItems, maxItems and additionalProperties.'
@@ -606,13 +631,14 @@ class SchematicsMixin:
                     for a in self.assemblies.values()
                     if a.spec.id not in self.retired_assemblies})
             ],
-            # Ids and contracts are public schematics: every assembly can be named
-            # in requests[].target, retire.assembly_id and learner.assembly_id. The
-            # model behind an id, its prompt, its learner state, the routers'
-            # weights and who judged whom stay sealed.
+            # Ids and contracts are public schematics, each an agent card (essay
+            # II.I): id, accepts, emits and a bounded description of what the
+            # contract does. The model behind an id, its prompt, its learner
+            # state, the routers' weights and who judged whom stay sealed.
             "catalogue": [
                 {"id": a.spec.id, "version": a.spec.version,
-                 "accepts": sorted(a.spec.accepts), "emits": list(a.spec.emits)}
+                 "accepts": sorted(a.spec.accepts), "emits": list(a.spec.emits),
+                 "description": public_description(a.spec)}
                 for a in sorted(self.assemblies.values(), key=lambda a: a.spec.id)
                 if a.spec.id not in self.retired_assemblies
             ],
@@ -1746,6 +1772,27 @@ class SchematicsMixin:
                 "an Exposure return settles on the exposure channel: the mean over the judges "
                 "scored on it of (1 - their consequence score), less the antagonist's card "
                 "penalty; censored when no judge's verdict on it was scored"
+            ),
+            "composed_return": (
+                "a requested child drawn by a kind's request router, whose return reached "
+                "its requester ok, settles after its requester does, on the mean of its "
+                "judges' verdict and its requester's settled score before the requester's "
+                "card penalty (each alone when only one exists), less its own card "
+                "penalty; that request router learns from it. Only a requester settled on "
+                "a producer verdict or as a composed return credits it. A child whose "
+                "lineage is any lineage of its request chain, or self, settles on its "
+                "verdict alone. No request can reach a judging or an adversarial contract"
+            ),
+            "tool_use_credit": (
+                "a producer decision that registers a population tool is held for "
+                "verdict_timeout_ticks + consequence_backstop_ticks, or to the last event "
+                "before its own deadline if sooner, and settles once on the mean of its "
+                "judges' verdict and the mean score, before card penalty, of the "
+                "decisions that called the tool without error and settled in that window "
+                "on the 0.5-centred scale (verdict, composed, evaluation, exposure or "
+                "ballot scores); a caller whose request chain includes the builder's "
+                "lineage does not count. A tool registered by any other decision "
+                "credits its builder's inbox only"
             ),
             "antagonist_routing": (
                 "router probability mass on contracts declaring Exposure is renormalised to "

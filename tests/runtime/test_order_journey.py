@@ -16,9 +16,13 @@ allows it and fees price it.
 
 import copy
 import json
+from dataclasses import replace
 from decimal import Decimal
+from types import SimpleNamespace
 
-from factorylab.kernel.events import EventKind
+from factorylab.cortex.request import Return
+from factorylab.kernel.events import Event, EventKind
+from factorylab.runtime.worlds import load_manifest
 from factorylab.world.exchange import FakeExchange
 from factorylab.world.models import ModelResponse
 from tests.runtime.test_loop import (
@@ -361,4 +365,82 @@ def test_one_order_written_twice_in_one_batch_places_nothing():
                         {"action": "hold"})
     runtime = _consequence_runtime(provider=provider, exchange=_exchange())
     handle, _ = _consequence_produce(runtime)
+    assert _writes(runtime, handle) == []
+
+
+# --- primitive audit F7: the answer order belongs to the producer kinds alone ------
+
+
+def _produce_as(runtime, seat):
+    """One decision by ``seat`` on a tick, through the real producer path."""
+    runtime.n += 1
+    handle = _consequence_decision(runtime, seat, "verdict")
+    runtime._producer_step(
+        Event(f"tick-{runtime.n}", EventKind.TICK, runtime.clock.now_ns, {"index": 0}, "test"),
+        handle, SimpleNamespace(chosen=seat), runtime.queue.get(handle).deadline_ns)
+    return handle
+
+
+def _custom_kind_runtime(provider):
+    base = load_manifest("scripted")
+    schema = {"type": "object", "properties": {"action": {"type": "string"},
+                                               "coin": {"type": "string"},
+                                               "side": {"type": "string"},
+                                               "size": {"type": "string"}}}
+    seats = tuple(replace(a, emits=("Finding",), schemas={"Finding": schema})
+                  if a.id == "seed-decider" else a for a in base.assemblies)
+    return _consequence_runtime(provider=provider, exchange=_exchange(),
+                                manifest=replace(base, assemblies=seats))
+
+
+def test_a_population_kinds_order_word_is_its_own_and_never_trades():
+    """F7: a kind that does not own the answer order gives ``action: order`` its own
+    meaning. The return stands, is published as its own kind, and places nothing."""
+    order = {"action": "order", "coin": "BTC", "side": "buy", "size": "0.01"}
+    runtime = _custom_kind_runtime(Scripted(order))
+    handle = _produce_as(runtime, "seed-decider")
+    assert _writes(runtime, handle) == []
+    kinds = _kinds(runtime, handle)
+    assert "order.refused" not in kinds and "order.intent" not in kinds
+    event = next(e for e in runtime.internal if e.payload.get("about_handle") == handle)
+    assert str(event.kind) == "Finding" and event.payload["status"] == "ok"
+    assert event.payload["outputs"]["action"] == "order"
+
+
+def test_a_population_kind_still_trades_through_venue_tools_and_acts_once():
+    """F7 moves the answer order, not the venue: a tool write is the kind's act."""
+    runtime = _custom_kind_runtime(Scripted(
+        {"action": "investigate", "tool_calls": [LIMIT]},
+        {"action": "order", "coin": "BTC", "side": "sell", "size": "0.01"}))
+    handle = _produce_as(runtime, "seed-decider")
+    assert [w["operation"] for w in _writes(runtime, handle)] == ["venue.place_limit"]
+
+
+def test_the_antagonists_answer_order_is_still_one_market_order():
+    """Exposure is a producer kind: its answer order is placed exactly once."""
+    runtime = _consequence_runtime(
+        provider=Scripted({"action": "order", "coin": "BTC", "side": "buy", "size": "0.01"}),
+        exchange=_exchange())
+    handle = _produce_as(runtime, "antagonist-a")
+    writes = _writes(runtime, handle)
+    assert [(w["operation"], w["result"]["status"]) for w in writes] == [
+        ("venue.place_market", "filled")]
+
+
+def test_an_answer_order_in_sdk_names_places_nothing_on_the_antagonists_kind_either():
+    for answer in ({"action": "order", "coin": "BTC", "is_buy": False, "size": "0.01"},
+                   {"action": "order", "coin": "BTC", "side": "sell", "size": "0.01",
+                    "price": "150"}):
+        runtime = _consequence_runtime(provider=Scripted(answer), exchange=_exchange())
+        handle = _produce_as(runtime, "antagonist-a")
+        assert _writes(runtime, handle) == [], answer
+
+
+def test_order_fields_written_into_a_verdict_place_nothing():
+    """A judge's reply is a Verdict: an order written into it is not an order."""
+    runtime = _consequence_runtime(exchange=_exchange())
+    handle = _consequence_decision(runtime, "eval-a", "verdict")
+    runtime.return_kinds[handle] = "Verdict"
+    runtime._execute_outputs(Return(handle, {"verdict": 0.5, "action": "order", "coin": "BTC",
+                                             "side": "buy", "size": "0.01"}, 0, "ok"))
     assert _writes(runtime, handle) == []

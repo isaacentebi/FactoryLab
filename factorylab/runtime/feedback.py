@@ -126,6 +126,86 @@ def evaluation_reward(grade: float | None, consequence: float | None) -> float |
     return min(1.0, max(0.0, fmean(signals)))
 
 
+def composed_reward(verdict: float | None, credit: float | None,
+                    use: float | None = None) -> float | None:
+    """A requested child's reward: the equal mean of its verdict and its requester's score.
+
+    Guarantees a value in [0, 1] when either signal exists, that signal alone when
+    only one does, and None (the child settles censored) when neither does.
+    ``verdict`` is the mean verdict of the child's own judges; ``credit`` is the
+    settled score of the decision that requested the child and consumed its
+    return, before that decision's own card penalty (``_settle_priced``'s raw
+    score). This is the collaboration credit (Chapter II rulings §2, Composition:
+    "the reward flows back to each executor it composed ... carried by the
+    ordinary reward channel").
+
+    Why this attribution. Essay II.I.b gives the reward channel three properties,
+    and the credit keeps all three:
+
+    * Thin: "the reward should always be a score". The credit is one number on
+      the unit scale, delivered as part of the child's one settlement; no rich
+      account of how the child helped travels back, so no learner forms a
+      dependency on a requester's prose.
+    * Delayed: "reward is always delayed, sometimes by many rounds". The child's
+      handle waits for its requester's settlement, which itself waits for the
+      requester's judges; credit never arrives before the requester is scored.
+    * Addressed to the exact decision: it "must find its way back to the exact
+      decision (and the exact propensity) that produced it". It settles the
+      child's own handle, whose propensity is the request router's draw, so the
+      router learns who to draw for this kind and the executor's own learner
+      learns what it did; nothing is paid to the executor's other decisions.
+
+    Why the requester's whole score, not a share of it. A score is a grade, not
+    money: dividing it among the children a requester consumed would make one
+    child's reward depend on how many siblings it had, which prices parallel
+    composition by an architect's rule (II.I.a, Carroll: "robust designs are
+    those that rely on weak claims"). The requester's outcome is the one fact
+    the world gives about whether the composition paid; without a counterfactual
+    per child there is no ground for splitting it, and a per-child judgement of
+    "whether it helped" would be a new commissioned judge and a new request
+    structure, which a thin reward channel does not carry.
+
+    Why a mean with the child's own verdict, not a replacement. Ruling R1: a
+    producer "learns from evaluator agents through the coupling of scoring and
+    propensity". The verdict reads the child's work in a clean context, as a
+    machine (II.I.b, after Yan); the requester's score says whether the work paid
+    off to the one consumer that used it. The verdict alone pays nothing for
+    collaboration; the credit alone lets a child ride on a requester that
+    ignored it and drops the clean read. Linear and equal, as
+    ``evaluation_reward`` argues: no product (a threshold by another name), no
+    architect's weight, one scale (both are producer-scale verdict means), and
+    nothing imputed ("missing facts never become performance").
+
+    Why the raw score. Each decision answers for its own cards: the child's own
+    penalty is subtracted from this reward when it settles, and subtracting the
+    requester's too would charge one price twice.
+
+    Who is never credited this way, and why. A requested judge cannot exist (a
+    judging contract is not commissioned), and in any case the signal that grades
+    an evaluator must sit outside the loop it judges (II.III.b). A forecast-shaped
+    child is scored by a proper rule, which any added term would make improper.
+    An exposure-shaped child is paid by its judges' error: paying an adversary its
+    requester's success would make it the requester's collaborator. A child of
+    the requester's own lineage, or ``self``, earns nothing extra: a lineage
+    crediting its own request is one outcome paid twice (no self-dealing). The
+    requester's own reward is untouched; the credit is a signal, not a transfer,
+    so nothing is counted twice. Credit flows only from a requester that settled
+    on a producer verdict or as a composed return: an exposure score, an
+    evaluation reward or a Brier score is not a measure of whether work paid.
+
+    A population tool is the same primitive. The decision that registered a tool
+    is held for a bounded window, and ``use`` is the mean raw score of the
+    other-lineage decisions that called the tool and settled on a verdict inside
+    it: one signal, however many callers, so heavy use cannot drown the builder's
+    own verdict, and the same equal mean applies. A decision that is both a
+    requested child and a builder settles on the equal mean of all three.
+    """
+    signals = [s for s in (verdict, credit, use) if s is not None]
+    if not signals:
+        return None
+    return min(1.0, max(0.0, fmean(signals)))
+
+
 @dataclass
 class PendingJudgement:
     handle: str  # a decision awaiting verdicts (producer) or its two signals (evaluator)
@@ -153,6 +233,14 @@ class PendingJudgement:
     # None once it is known the world will not produce one.
     consequence: float | None = None
     consequence_closed: bool = False
+    # A requested child only (W4): the handle of the decision that requested and
+    # consumed it, its judges' verdicts held until that decision settles, and the
+    # collaboration credit it then carried (``composed_reward``). A judgement
+    # checkpointed before these fields restores as an ordinary one.
+    requester: str | None = None
+    verdicts: list = field(default_factory=list)
+    credit: float | None = None
+    credit_closed: bool = False
 
     @property
     def evaluation(self) -> bool:
@@ -880,6 +968,12 @@ class FeedbackMixin:
             if (pend is None or pend.evaluation or decision.status is not SettleStatus.PENDING
                     or decision.channel != CH_VERDICT):
                 continue
+            if self._held(pend):
+                # A requested child's verdicts wait for its requester's settlement, and
+                # a tool builder's for its tool-use window: it settles on all its
+                # signals (``composed_reward``, ``_settle_composed``).
+                pend.verdicts.extend(verdicts)
+                continue
             score = fmean(v for _judge, v in verdicts)
             if len(verdicts) > 1:
                 self.ledger.append({"kind": "verdict.mean", "handle": about,
@@ -1379,16 +1473,24 @@ class FeedbackMixin:
         })
         self.consequence_mix = after
 
+    def _held(self, pend: PendingJudgement) -> bool:
+        """Whether a verdict-channel decision waits on a credit beside its verdict (W4)."""
+        return not pend.evaluation and (pend.requester is not None
+                                        or pend.handle in getattr(self, "tool_holds", {}))
+
     def _censor_stale_judgements(self) -> None:
         """A decision nobody judged within the verdict timeout settles censored.
 
         Evaluator decisions are not here: they close on their own two signals
         (``_settle_evaluations``).
         """
+        # A requested child is not stale while it waits for its requester: it
+        # settles through ``_settle_composed``, on whatever of its two signals came.
         stale = [
             p
             for p in self.pending.values()
-            if not p.evaluation and self._tick_age(p) > self.ev.verdict_timeout_ticks
+            if not p.evaluation and not self._held(p)
+            and self._tick_age(p) > self.ev.verdict_timeout_ticks
         ]
         for p in stale:
             if self.queue.get(p.handle).status is SettleStatus.PENDING:
@@ -1471,14 +1573,19 @@ class FeedbackMixin:
     def _router_sampled(decision: Any) -> bool:
         """Whether the router that holds this decision drew it (defect 3).
 
-        A child request is opened under its parent's router so its score has an
-        addressable home, but the parent chose the target: its propensity of 1.0
-        is the parent's choice, not a probability the router sampled from, and a
-        router trained on it would learn from a round it never played.
+        A request for a kind of work is drawn by that kind's request router, with
+        the propensity it sampled, so the router learns composition from the
+        child's settlement (primitive audit F5). A ``self`` request is opened under
+        its parent's router so its score has an addressable home, but the parent
+        chose itself: its propensity of 1.0 is not a probability any router
+        sampled, and a router trained on it would learn from a round it never
+        played.
         """
+        from factorylab.runtime.shared import is_request_router
+
         prop = decision.propensity
-        return (decision.parent_handle is None and prop.source == "sampled"
-                and prop.learner_state_hash != "parent-selected")
+        return ((decision.parent_handle is None or is_request_router(decision.actor))
+                and prop.source == "sampled" and prop.learner_state_hash != "parent-selected")
 
     def _learn_router_return(self, state: Any, lr: LearningReturn) -> None:
         """Train a router once per decision it drew, on the evidence that decision has.

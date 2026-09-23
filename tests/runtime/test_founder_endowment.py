@@ -197,9 +197,12 @@ def test_endowment_replays_and_child_calls_charge_the_right_seat(monkeypatch):
     child_before = rt.budget.entitlement("founder-child")
     monkeypatch.setattr(rt.provider.target, "complete", lambda request: ModelResponse(
         request.model_id, json.dumps({"action": "hold"}), 1, 1, "stop"))
+    # A request names a kind (primitive audit F5). With the observer retired, the
+    # founder's child is the one contract besides the founder that emits it.
+    rt._retire_assembly("seed-observer", "test")
     child_result, child_cost = rt._invoke_child(
         FOUNDER, rt._request(parent, "child task", {}, {"type": "object"}, 10**18, CH_VERDICT),
-        ChildRequest("founder-child", "child task", {}, {"type": "object"}), 10**18)
+        ChildRequest("ProducerReturn", "child task", {}, {"type": "object"}), 10**18)
     assert child_result["result"]["status"] == "ok" and child_cost > 0
     assert rt.budget.entitlement(FOUNDER) < parent_before
     assert rt.budget.entitlement("founder-child") == child_before

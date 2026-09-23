@@ -675,15 +675,23 @@ class Request:
 
 @dataclass(frozen=True)
 class ChildRequest:
-    """A neutral composition contract names a target capability and its complete task.
+    """A neutral composition contract names a kind of work and its complete task.
 
-    ``description`` is public task documentation shown to the child evaluator.
+    ``target`` is a kind (one some live contract emits, else one it accepts), whose
+    request router draws the executor, or ``"self"``; never a peer's id (primitive
+    audit F5). ``description`` is public task documentation shown to the child
+    evaluator. ``propensity`` and ``chosen`` are the requester's own distribution
+    over the alternatives it chose among when it made this request, carried
+    forward on the child's request and recorded on its handle (information audit
+    M1; essay II.I.b: propensity "as a public part of a request").
     """
 
     target: str
     description: str
     inputs: dict[str, Any]
     outcome_schema: dict[str, Any]
+    propensity: dict[str, float] | None = None
+    chosen: str | None = None
 
 
 @dataclass(frozen=True)

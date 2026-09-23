@@ -512,6 +512,16 @@ class BootstrapMixin:
         self.tool_specs: dict[str, dict[str, Any]] = {}  # tool id -> spec dict (world block)
         self.population_tools: dict[str, Any] = {}
         self.tool_owner: dict[str, str] = {}  # population tool id -> proposing assembly id
+        # W4: calling decision -> {population tool id: successful calls} by a seat of
+        # another lineage than the tool's builder, until that decision settles and its
+        # builder is credited (``CompositionMixin._credit_requested``).
+        self.tool_uses: dict[str, dict[str, int]] = {}
+        # W4: registering decision -> {"until": tick, "tools": [...], "scores": [...]},
+        # held for its tool-use window (``CompositionMixin._hold_for_tool_use``).
+        self.tool_holds: dict[str, dict[str, Any]] = {}
+        # A priced settlement's raw score while the kernel settles it (never between
+        # events): what the settlement hook credits composition with.
+        self.raw_scores: dict[str, float] = {}
         # C10 routing evidence: each seat's last rendered ceiling and the world size then.
         self.seat_ceilings: dict[str, dict[str, int]] = {}
         self.entitlement_bridges: dict[str, int] = {}  # handle -> pool-backed cover, one call
@@ -571,9 +581,10 @@ class BootstrapMixin:
                 "(no reserve USDC is needed) and buys real Venice credit.")
         self.tool_specs["catalogue.search"] = {
             "id": "catalogue.search",
-            "description": "Find tools, complete proposal shapes and model offers by substring. "
-            "Returns exact tool argument schemas and prices, proposal contracts, and "
-            "matching model ids with token prices and context length.",
+            "description": "Find tools, assemblies, complete proposal shapes and model offers "
+            "by substring. Returns exact tool argument and return schemas and prices, live "
+            "assembly contracts with their descriptions, proposal contracts, and matching "
+            "model ids with token prices and context length.",
             "args_schema": {
                 "type": "object",
                 "properties": {

@@ -25,12 +25,18 @@ from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from typing import Any
 
-from factorylab.cortex.registration import output_contracts, reward_contracts, seed_emits
+from factorylab.cortex.registration import (
+    MAX_CONTRACT_DESCRIPTION_CHARS,
+    output_contracts,
+    reward_contracts,
+    seed_emits,
+)
 from factorylab.cortex.request import (
     CONTINUITY_RETURN_FIELDS,
     ChildRequest,
     Request,
     Return,
+    validate_propensity,
 )
 from factorylab.cortex.sandbox import MAX_PROGRAM_TIMEOUT_S
 from factorylab.kernel.ledger import utf8_text
@@ -64,18 +70,63 @@ class AssemblySpec:
     role: str = "producer"  # descriptive label; dispatch depends only on accepts/emits
     emits: tuple[str, ...] | None = None
     schemas: dict[str, dict] = field(default_factory=dict)
+    # The public self-description carried with the contract (essay II.I: "the
+    # contract has to carry enough self-description that a primitive can be picked
+    # up against a constraint that did not exist when the contract was written").
+    # Empty means the catalogue publishes the contract's own line
+    # (``public_description``). A checkpoint written before this field restores "".
+    description: str = ""
 
     def __post_init__(self) -> None:
         if self.memory_policy not in ("none", "handle-scoped"):
             raise ValueError("unknown memory policy")
         if not isinstance(self.role, str) or not self.role.strip():
             raise ValueError("assembly role must be a nonempty label")
+        if (not isinstance(self.description, str)
+                or len(self.description) > MAX_CONTRACT_DESCRIPTION_CHARS):
+            raise ValueError(
+                f"description must be text of at most {MAX_CONTRACT_DESCRIPTION_CHARS} chars")
         emits, schemas = output_contracts(
             self.emits if self.emits is not None else seed_emits(self.role), self.schemas)
         object.__setattr__(self, "emits", emits)
         object.__setattr__(self, "schemas", schemas)
         if type(self.max_tokens) is not int or self.max_tokens <= 0:
             raise ValueError("max_tokens must be a resolved positive integer")
+
+
+#: What a return of each seed kind is and how it settles: one neutral line each,
+#: stating the contract and never how to behave under it (essay II.I.b: an agent
+#: card is "complete, semantically rich, but also neutral self-description").
+SEED_KIND_LINES: dict[str, str] = {
+    "ProducerReturn": "an answer to the accepted event, which may act on the world; it "
+                      "settles on the mean verdict of the judges that read it",
+    "Verdict": "a verdict in [0, 1] on one return; it settles on the grade of the tier "
+               "above and the world's score of the verdict against the measured outcome",
+    "MetaVerdict": "a conformity grade in [0, 1] of one judgement; it settles on the grade "
+                   "of any tier above and the world's score of the grade",
+    "Exposure": "an answer to the accepted event, which may act on the world; it settles "
+                "on how far its judges' verdicts missed its measured outcome",
+}
+
+
+def contract_line(accepts: Any, emits: Any) -> str:
+    """One line naming what a contract takes and what each emitted kind is.
+
+    Guarantees a string built from the contract alone (accepted kinds, emitted
+    kinds, and each seed kind's ``SEED_KIND_LINES`` entry), at most
+    ``MAX_CONTRACT_DESCRIPTION_CHARS`` long, so two seats with one contract carry
+    one line and nothing about either seat's lens reaches the catalogue.
+    """
+    kinds = [f"{kind}: {SEED_KIND_LINES[kind]}" if kind in SEED_KIND_LINES
+             else f"{kind}: a declared kind; its schema is in event_schemas"
+             for kind in emits or ()]
+    line = f"accepts {', '.join(sorted(accepts))}; emits " + "; ".join(kinds)
+    return line[:MAX_CONTRACT_DESCRIPTION_CHARS]
+
+
+def public_description(spec: AssemblySpec) -> str:
+    """The description an assembly publishes: its own, else its contract's line."""
+    return spec.description or contract_line(spec.accepts, spec.emits)
 
 
 @dataclass
@@ -175,7 +226,8 @@ class Assembly:
         if parsed is not None:
             try:
                 parsed, dropped = validate_return_sections(
-                    parsed, req.outcome_schema, self.validator, req, rejected=rejected)
+                    parsed, req.outcome_schema, self.validator, req, rejected=rejected,
+                    kind=answer_kind(self.spec.emits, parsed, req))
             except (ValueError, TypeError, ArithmeticError, RecursionError) as exc:
                 validation_error = str(exc)[:200] or type(exc).__name__
                 parsed = None
@@ -232,7 +284,11 @@ def _children(req: Request, parsed: dict[str, Any],
     if child_factory is not None:
         return tuple(child_factory(req, item, i) for i, item in enumerate(raw))
     return tuple(ChildRequest(item["target"], item["description"], item["inputs"],
-                              item["outcome_schema"]) for item in raw)
+                              item["outcome_schema"],
+                              validate_propensity(item["propensity"])
+                              if "propensity" in item else None,
+                              item["chosen"].strip() if "propensity" in item else None)
+                 for item in raw)
 
 
 # --- programs as seats (contract C8) -----------------------------------------
@@ -448,7 +504,8 @@ class ProgramAssembly:
             else:
                 try:
                     parsed, dropped = validate_return_sections(
-                        parsed, req.outcome_schema, self.validator, req, rejected=rejected)
+                        parsed, req.outcome_schema, self.validator, req, rejected=rejected,
+                        kind=answer_kind(self.spec.emits, parsed, req))
                 except (ValueError, TypeError, ArithmeticError, RecursionError) as exc:
                     validation_error = str(exc)[:200] or type(exc).__name__
                     parsed = None
@@ -600,15 +657,21 @@ def validate_schema(value: Any, schema: dict, *, partial: bool = False) -> None:
 
 def reserved_return_fields(*, max_children: int | None = None,
                            max_tool_calls: int | None = None) -> dict:
-    """Publish the same reserved names and types enforced on every return."""
-    properties = {k: {"type": "string"} for k in
-                  ("action", "rationale", "reason", "status", "coin", "side", "emits",
-                   "about_handle")}
-    properties.update({k: {"type": "number", "minimum": 0, "maximum": 1}
-                       for k in ("verdict", "payoff", "conformity")})
+    """Publish the universal envelope: the reserved names and types every return may carry.
+
+    Guarantees the envelope is the protocol and nothing else (primitive audit F7;
+    essay II.I: "you can easily limit the types of patterns available ... by
+    overspecifying the primitive"): continuity, propensity, registrations,
+    requests, tool calls and forecasts, plus the refusal form (``status``,
+    ``reason``), the selected kind (``emits``) and the handle a return is about.
+    No venue's order semantics and no seed role's fields: those belong to the
+    kinds that own them (``kind_return_fields``), so a population kind may give
+    ``action`` or ``verdict`` its own meaning.
+    """
+    properties = {k: {"type": "string"} for k in ("reason", "status", "emits",
+                                                  "about_handle")}
     properties.update({
         **CONTINUITY_RETURN_FIELDS,  # working_state and ack_through (C1)
-        "vote": {"type": "boolean"},
         # The deciding agent's own distribution over its own actions.
         "propensity": {"type": "object"},
         "register": {"type": "array"},
@@ -619,7 +682,10 @@ def reserved_return_fields(*, max_children: int | None = None,
         "requests": {"type": "array", "items": {
             "type": "object", "properties": {
                 "target": {"type": "string"}, "description": {"type": "string"},
-                "inputs": {"type": "object"}, "outcome_schema": {"type": "object"}},
+                "inputs": {"type": "object"}, "outcome_schema": {"type": "object"},
+                # The requester's own distribution over the alternatives it chose
+                # among, and the one it took: forwarded with the request (M1).
+                "propensity": {"type": "object"}, "chosen": {"type": "string"}},
             "required": ["target", "description", "inputs", "outcome_schema"]}},
         "forecasts": {"type": "array", "items": {"type": "object", "properties": {
             "predicate": {"type": "string"},
@@ -633,6 +699,45 @@ def reserved_return_fields(*, max_children: int | None = None,
     if max_tool_calls is not None:
         properties["tool_calls"]["maxItems"] = max_tool_calls
     return properties
+
+
+_UNIT = {"type": "number", "minimum": 0, "maximum": 1}
+#: The seed kinds whose answer may be a market order on this world's venue
+#: (``{"action": "order", "coin", "side", "size"}``). A return of any other kind
+#: never trades through its answer: it trades, if at all, through venue tools.
+ANSWER_ORDER_KINDS = frozenset({"ProducerReturn", "Exposure"})
+_ORDER_FIELDS = {"action": {"type": "string"}, "rationale": {"type": "string"},
+                 "coin": {"type": "string"}, "side": {"type": "string"}}
+#: The fields each seed kind owns, with their types (primitive audit F7): the
+#: producer kinds own the answer order, a Verdict its verdict and payoff, a
+#: MetaVerdict its conformity. A population kind owns what its schema declares.
+KIND_RETURN_FIELDS: dict[str, dict[str, dict]] = {
+    "ProducerReturn": _ORDER_FIELDS,
+    "Exposure": _ORDER_FIELDS,
+    "Verdict": {"verdict": _UNIT, "payoff": _UNIT, "rationale": {"type": "string"}},
+    "MetaVerdict": {"conformity": _UNIT, "rationale": {"type": "string"}},
+}
+
+
+def kind_return_fields(kind: str | None) -> dict:
+    """The reserved fields ``kind`` owns beside the universal envelope; {} for any other."""
+    return {name: dict(shape) for name, shape in KIND_RETURN_FIELDS.get(kind or "", {}).items()}
+
+
+def answer_kind(emits: Any, parsed: Any, req: Request | None = None) -> str | None:
+    """The kind a reply answers as: its selected ``emits``, else its contract's only kind.
+
+    Guarantees None for a policy ballot (it answers no contract) and for a
+    polymorphic contract whose reply selected none of its kinds, so no kind's
+    fields are imposed on a reply that did not choose that kind.
+    """
+    if req is not None and req.scoring_channel == "policy":
+        return None
+    kinds = tuple(emits or ())
+    chosen = parsed.get("emits") if isinstance(parsed, dict) else None
+    if isinstance(chosen, str) and chosen in kinds:
+        return chosen
+    return kinds[0] if len(kinds) == 1 else None
 
 
 class SectionError(ValueError):
@@ -656,8 +761,10 @@ class SectionError(ValueError):
 #: What a return may carry beside its answer. A section here (or one item of a
 #: list section) that does not validate is dropped with its reason and the answer
 #: stands. A continued turn may also discard malformed request-specific draft
-#: fields; final answers and core fields — the action and its order, verdict,
-#: payoff, conformity, vote, emits, about_handle and status — validate strictly.
+#: fields; final answers and core fields — the envelope's emits, about_handle and
+#: status, and the fields the answer's kind owns (a producer kind's action and
+#: order, a Verdict's verdict and payoff, a MetaVerdict's conformity) — validate
+#: strictly.
 OPTIONAL_SECTIONS = ("rationale", "working_state", "ack_through", "propensity",
                      "register", "tool_calls", "requests", "forecasts")
 _LIST_SECTIONS = frozenset({"register", "tool_calls", "requests", "forecasts"})
@@ -671,11 +778,13 @@ _FAULTS = (ValueError, TypeError, ArithmeticError, RecursionError, KeyError, Att
 
 def validate_return_sections(parsed: dict, schema: dict, validator=None, req=None,
                              *, rejected: list[dict[str, Any]] | None = None,
+                             kind: str | None = None,
                              ) -> tuple[dict, tuple[dict[str, Any], ...]]:
     """Return the reply with invalid optional sections dropped, and what was dropped.
 
     Guarantees the answer is validated exactly as strictly as a whole return was:
-    the pruned reply passes ``_validate_return`` and ``validator`` in full, or this
+    the pruned reply passes ``_validate_return`` (under ``kind``, the kind the
+    reply answers as; ``answer_kind``) and ``validator`` in full, or this
     raises and the return is malformed. Only a section named in
     ``OPTIONAL_SECTIONS``, or one item of a list section, may be dropped. On a
     continuation only, an invalid task-specific answer field may also be dropped:
@@ -706,11 +815,12 @@ def validate_return_sections(parsed: dict, schema: dict, validator=None, req=Non
         dropped.append(entry)
 
     reserved = reserved_return_fields()
+    owned = kind_return_fields(kind)
     declared = schema.get("properties", {}) if isinstance(schema, dict) else {}
     for section in OPTIONAL_SECTIONS:
         if section not in parsed:
             continue
-        shapes = [s for s in (reserved.get(section), declared.get(section))
+        shapes = [s for s in (reserved.get(section), owned.get(section), declared.get(section))
                   if isinstance(s, dict)]
         value = parsed[section]
         if section not in _LIST_SECTIONS:
@@ -788,7 +898,7 @@ def validate_return_sections(parsed: dict, schema: dict, validator=None, req=Non
         drop("status", f"unfinished continuation field: {parsed['status']!r}")
         del parsed["status"]
     if continuation and "emits" not in parsed:
-        protected = {*reserved, "size"}
+        protected = {*reserved, *owned, "size"}
         for section, shape in declared.items():
             if section not in parsed or section in protected or not isinstance(shape, dict):
                 continue
@@ -800,7 +910,7 @@ def validate_return_sections(parsed: dict, schema: dict, validator=None, req=Non
     # The answer, strictly; a validator names a fault that belongs to one section.
     for _ in range(1 + sum(len(v) for v in origin.values()) + len(OPTIONAL_SECTIONS)):
         try:
-            _validate_return(parsed, schema)
+            _validate_return(parsed, schema, kind)
             if validator is not None:
                 validator(parsed, req)
         except SectionError as exc:
@@ -842,12 +952,24 @@ def validate_return_sections(parsed: dict, schema: dict, validator=None, req=Non
 
 
 def _check_child(child: dict) -> None:
-    """A child request names a target and a task, carries no authorship, and a real schema."""
+    """A child request names a target and a task, carries no authorship, and a real schema.
+
+    Guarantees a forwarded propensity is a distribution (``validate_propensity``)
+    whose ``chosen`` action it declares with positive mass, and that ``chosen``
+    never travels without the distribution it was chosen from.
+    """
     if not child["target"] or not child["description"].strip():
         raise ValueError("child needs target and description")
     if any(k in child["inputs"] for k in ("author", "author_id", "requester", "lineage")):
         raise ValueError("child inputs contain author metadata")
     _schema_definition(child["outcome_schema"])
+    if "propensity" in child:
+        declared = validate_propensity(child["propensity"])
+        chosen = child.get("chosen")
+        if not isinstance(chosen, str) or declared.get(chosen.strip(), 0) <= 0:
+            raise ValueError("a request's propensity names its chosen action with positive mass")
+    elif "chosen" in child:
+        raise ValueError("chosen needs the propensity it was chosen from")
 
 
 #: Fields a venue tool takes that an answer's market order cannot honour, and the
@@ -856,15 +978,21 @@ _NOT_AN_ANSWER_ORDER = ("is_buy", "sz", "limit_px", "price", "tif", "reduce_only
                         "reduceOnly", "order_type", "orderType")
 
 
-def _validate_return(parsed: dict, schema: dict) -> None:
-    """Validate reply effects; each registration is admitted independently by the runtime."""
-    properties = reserved_return_fields()
-    validate_schema(parsed, {"type": "object", "properties": properties})
+def _validate_return(parsed: dict, schema: dict, kind: str | None = None) -> None:
+    """Validate reply effects; each registration is admitted independently by the runtime.
+
+    Guarantees the universal envelope on every reply, and the fields ``kind`` owns
+    (``kind_return_fields``) on a reply of that kind: the answer-order rules apply
+    to the producer kinds alone (``ANSWER_ORDER_KINDS``), so an ``action`` of
+    ``"order"`` in any other kind's reply is that kind's word, never a trade.
+    """
+    validate_schema(parsed, {"type": "object", "properties": reserved_return_fields()})
+    validate_schema(parsed, {"type": "object", "properties": kind_return_fields(kind)})
     # "order" is both an instruction and the name of a trade already made through a
     # tool. An answer carrying any order field is an instruction and validates
     # whole; one carrying none reports what the decision did (the runtime refuses
     # it to the seat if nothing was done), so a report is never a malformed return.
-    if parsed.get("action") == "order" and any(
+    if kind in ANSWER_ORDER_KINDS and parsed.get("action") == "order" and any(
             k in parsed for k in ("coin", "side", "size", *_NOT_AN_ANSWER_ORDER)):
         named = sorted(k for k in _NOT_AN_ANSWER_ORDER if k in parsed)
         if named:
@@ -906,7 +1034,8 @@ def validate_proposal(proposal: dict) -> None:
                    "endowment_micro": {"type": "integer", "minimum": 1},
                    "range": {"type": "array", "items": {"type": "number"}},
                    "actions": {"type": "array", "items": {"type": "string"}},
-                   "args_schema": {"type": "object"}})
+                   "args_schema": {"type": "object"},
+                   "returns_schema": {"type": "object"}})
     validate_schema(proposal, {"type": "object", "properties": fields, "required": ["kind"]})
     if proposal["kind"] == "router" and "add" in proposal:
         add = proposal["add"]

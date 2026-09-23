@@ -86,13 +86,14 @@ def test_prices_section_defaults_and_validation() -> None:
 def test_a_manifest_hashes_what_it_says_and_a_default_is_no_exception():
     """R8 / versioning S1: no key leaves the hash at its default, so the pinned identity
     of the scripted world moved when the shims went, again when the standing committee
-    added committee.quorum, norm_house and charter_parent_sha256, and again when a card's
-    region became typed data beside its holdouts and interval (charter audit P2, M3);
-    each time it is a new v0."""
+    added committee.quorum, norm_house and charter_parent_sha256, again when a card's
+    region became typed data beside its holdouts and interval (charter audit P2, M3),
+    and again when W4's judges came to accept Exposure (primitive audit F12); each time
+    it is a new v0."""
     scripted = load_manifest("scripted")
     assert '"forecast_horizon_events":10' in scripted.canonical_json()
     assert scripted.manifest_hash() == (
-        "639500a43380b07aa451eef545174399581db9ab366aafebd62ed726f630c2ba"
+        "335ed4d9c209477d1f8a6c9de733efb794631347bf6ad963a1b284d403166fc8"
     )
 
     implicit = manifest_from_dict(_base())

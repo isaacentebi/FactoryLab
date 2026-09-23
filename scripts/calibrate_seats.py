@@ -207,7 +207,9 @@ FILL_SCHEMA: dict[str, Any] = {
 CUSTOM_KINDS = {"tool": ("CalibrationListing", LISTING_SCHEMA),
                 "fail": ("CalibrationFill", FILL_SCHEMA),
                 "parent": ("CalibrationAnswer", ANSWER_SCHEMA),
-                "helper": ("CalibrationAnswer", ANSWER_SCHEMA)}
+                # A request names a kind of work, never a seat (primitive audit F5):
+                # the helper's own kind is what the parent's request addresses.
+                "helper": ("CalibrationHelp", ANSWER_SCHEMA)}
 #: The seats one candidate is given: one per manifest role, one per calibration kind.
 SEAT_KINDS = ("producer", "evaluator", "meta", *CUSTOM_KINDS)
 
@@ -462,7 +464,7 @@ def build_scenarios(rt: Runtime, candidate: str, seats: dict[str, str], *, sampl
 
     parent = seats["parent"]
     handle = open_handle(rt, parent, CH_VERDICT, f"{tag}:continuation")
-    helper = seats["helper"]
+    helper = CUSTOM_KINDS["helper"][0]
     parent_req = rt._request(
         handle,
         f"Delegate this task. Issue exactly one request to target {helper!r} asking it to "

@@ -33,15 +33,16 @@ from collections import deque
 from typing import Any
 
 from factorylab.cortex.registration import measured_role
-from factorylab.cortex.request import Request, Return, public_return
+from factorylab.cortex.request import Return, public_return
 from factorylab.cortex.sandbox import NoJail, jail_probe
 from factorylab.cortex.schematics import SchematicsMixin
 from factorylab.kernel.events import Event, EventKind
-from factorylab.kernel.queue import PropensityRecord, SettleStatus
+from factorylab.kernel.queue import SettleStatus
 from factorylab.kernel.termination import DORMANT
 from factorylab.learners.router import Sample
 from factorylab.runtime.bootstrap import BootstrapMixin
 from factorylab.runtime.cadence import settle_forecasts
+from factorylab.runtime.composition import CompositionMixin
 from factorylab.runtime.compute import ComputeMixin
 from factorylab.runtime.feedback import (
     FeedbackMixin,
@@ -81,6 +82,9 @@ from factorylab.world.market import X402Provider
 #: What a return carries that is not the work under judgement: its propensity, which
 #: the request's PROPENSITY block renders once (P8).
 UNJUDGED_OUTPUT_FIELDS = frozenset({"propensity"})
+#: The seed kinds a judge reads through the producer view (the machine view of
+#: essay II.I.b): the one kind a producer emits and the one an antagonist emits.
+PRODUCING_KINDS = frozenset({"ProducerReturn", "Exposure"})
 
 
 def judged_outputs(outputs: Any) -> Any:
@@ -115,6 +119,7 @@ class Runtime(
     SchematicsMixin,
     ThinkingMixin,
     RoutingMixin,
+    CompositionMixin,
     GovernanceMixin,
     VenueMixin,
     VaultMixin,
@@ -156,11 +161,21 @@ class Runtime(
         self._record_card_forecasts(pending, baseline)
 
     def _settle_priced(self, handle, *, cards, **kwargs):
-        """Custom emitted kinds answer for their own cards on every reward shape."""
+        """Custom emitted kinds answer for their own cards on every reward shape.
+
+        A decision that settles here carries its raw (pre-penalty) score to what it
+        composed: the settlement hook every path shares (``ContractQueue.settle``,
+        ``CompositionMixin._settled``) reads it from ``raw_scores``, so each decision
+        answers for its own cards and credit is never charged the requester's.
+        """
         emitted = self.return_kinds.get(handle)
         if emitted and emitted not in ("ProducerReturn", "Verdict", "MetaVerdict", "Exposure"):
             cards = measured_role(emitted)
-        return super()._settle_priced(handle, cards=cards, **kwargs)
+        self.raw_scores[handle] = kwargs["score"]
+        try:
+            return super()._settle_priced(handle, cards=cards, **kwargs)
+        finally:
+            self.raw_scores.pop(handle, None)
 
     def _settle_exchange_effects(self, events, *, observe_positions=True) -> None:
         super()._settle_exchange_effects(events, observe_positions=observe_positions)
@@ -361,6 +376,8 @@ class Runtime(
         self._settle_arrived_verdicts()
         self._settle_due_forecasts()
         self._censor_stale_judgements()
+        # A requested child settles once its requester has (the collaboration credit).
+        self._settle_composed()
         self.stats.timeouts += len(self.queue.expire(self.clock.now_ns))
         self._deliver_returns()
         self.ledger.append({"kind": "runtime.event_done", "n": self.n})
@@ -919,7 +936,8 @@ class Runtime(
                                   definition_version="unselected-return-v1", sampling_ref=None)
                 return
             if self._may_write(handle):
-                self._execute_outputs(ret)
+                # Only a producer kind's answer is an order (primitive audit F7).
+                self._execute_outputs(ret, emitted)
             self._apply_registrations(handle, ret)
             self._apply_thinking(handle, sample.chosen, ret)
             self.handle_to_assembly[handle] = sample.chosen
@@ -967,11 +985,10 @@ class Runtime(
                 # judge can price the roads this return did not take.
                 "propensity": self._public_propensity(handle),
             }
-        # Exposure retains its producer-shaped judgment route for the shipped seeds;
-        # assemblies may also subscribe to its explicit kind.
-        self._emit(EventKind.PRODUCER_RETURN if emitted == "Exposure" else emitted, payload)
-        if emitted == "Exposure" and self.routers.get("Exposure"):
-            self._emit("Exposure", payload)
+        # A return is published as the kind it is, and only as that kind (primitive
+        # audit F12): a judge of Exposure says so in its contract, accepts =
+        # ["Exposure"], rather than meeting one disguised as a ProducerReturn.
+        self._emit(emitted, payload)
 
     def _forecast_step(self, ev, handle, sample, ret, emitted) -> None:
         """Population forecast work is rewarded only by its future public facts."""
@@ -986,53 +1003,24 @@ class Runtime(
                              "cost": ret.cost, "status": ret.status,
                              "propensity": self._public_propensity(handle)})
 
-    def _invoke_child(self, action_id, parent, item, ceiling):
-        """New work shapes use the same bounded child admission and declared-shape dispatch."""
-        target = action_id if item.target == "self" else item.target
-        if (reason := self._commissioned_judge_refusal(target)) is not None:
-            return self._refuse_commissioned_judge(parent, item, target, reason)
-        spec = self.assemblies[target].spec if target in self.assemblies else None
-        if (spec is None or target in self.retired_assemblies
-                or not any(k not in ("ProducerReturn", "Verdict", "MetaVerdict", "Exposure")
-                           and shape != "judged" for k, shape in assembly_rewards(spec).items())):
-            return super()._invoke_child(action_id, parent, item, ceiling)
-        depth, cursor = 0, parent.handle
-        while self.queue.get(cursor).parent_handle is not None:
-            depth += 1
-            cursor = self.queue.get(cursor).parent_handle
-        if depth >= self.m.tools.max_depth:
-            reason = "tools.max_depth reached"
-            self.ledger.append({"kind": "requests.refused", "handle": parent.handle,
-                                "reason": reason, "depth": depth})
-            return {"tool": f"assembly:{target}", "args": item.inputs,
-                    "result": {"error": reason}}, 0
-        ceiling = min(ceiling, max(0, self._compute_available(parent.handle)))
-        actor = self.queue.get(parent.handle).actor
-        channels = self._return_channels(target)
-        channel = next(iter(channels.values()))
-        handle = self.queue.open(
-            actor=actor, event_id=f"child-{parent.handle}",
-            propensity=PropensityRecord((target,), (1.,), target, 0, actor, "parent-selected"),
-            channel=channel, deadline_ns=parent.deadline_ns, parent_handle=parent.handle,
-            cost_ceiling=ceiling, return_channels=channels)
-        self.ledger.append({"kind": "request.child", "handle": handle, "target": target,
-                            "resource_liability": parent.handle, "cost_ceiling": ceiling,
-                            "description": item.description, "inputs": item.inputs,
-                            "outcome_schema": item.outcome_schema})
-        self.stats.decisions += 1
-        self.consequences.start(handle, self.n)
+    def _run_child(self, parent, item, handle, target, sample, req):
+        """A declared work shape answers through its own reward path, like a routed return.
+
+        Guarantees a child whose executor declared a custom kind with a reward shape
+        other than ``judged`` (a forecast, a conformity or an exposure) is dispatched
+        by that shape through ``_producer_step``, exactly as a routed return of the
+        same contract would be; every other child takes the seed path.
+        """
+        spec = self.assemblies[target].spec
+        if not any(k not in ("ProducerReturn", "Verdict", "MetaVerdict", "Exposure")
+                   and shape != "judged" for k, shape in assembly_rewards(spec).items()):
+            return super()._run_child(parent, item, handle, target, sample, req)
         self.handle_to_assembly[handle] = target
-        req = Request(handle, item.description, {**item.inputs, "world": self._world_block()},
-                      {}, item.outcome_schema, parent.deadline_ns, ceiling, parent.handle,
-                      "a JSON object satisfying the outcome schema", channel, parent.handle)
         ret = self._invoke(target, req, "child", child=True)
         event = Event(f"child-input-{handle}", EventKind.REGISTERED,
                       self.clock.now_ns, item.inputs, "request")
-        sample = Sample((target,), (1.,), target, 0, actor, "parent-selected", ())
         self._producer_step(event, handle, sample, parent.deadline_ns, returned=ret)
-        return {"tool": f"assembly:{target}", "args": item.inputs,
-                "result": {"outputs": public_return(ret.outputs), "status": ret.status,
-                           "cost_micro": ret.cost}}, ret.cost
+        return ret
 
     def _evaluator_step(self, ev: Event, handle: str, sample: Sample, deadline: int,
                         *, returned: Return | None = None) -> None:
@@ -1071,12 +1059,17 @@ class Runtime(
             # scope, an evidence horizon and a budget, which may be declined.
             "commission": commission_block(
                 subject=about,
-                scope=f"the public return addressed by about_handle, judged on {ev.kind}",
+                scope=("the public return addressed by about_handle"
+                       + ("" if str(ev.kind) in PRODUCING_KINDS else f", judged on {ev.kind}")),
                 horizon=self.ev.forecast_horizon_events,
                 budget_micro=self.queue.get(handle).cost_ceiling,
             ),
         }
-        generic = ev.kind is not EventKind.PRODUCER_RETURN
+        # The two seed producing kinds are judged through one machine view: an
+        # Exposure arrives as its own kind (F12), and the kind is routing, never a
+        # clause that tells the judge its author was an antagonist (essay II.I.b:
+        # the author "should be either irrelevant, or fungible, or private").
+        generic = str(ev.kind) not in PRODUCING_KINDS
         # A judge looks at the work like a machine — request, answer, acts,
         # propensity — and never at the whole world the producer was shown
         # (essay II.I.b, after Yan 2026). It keeps its own operating access,

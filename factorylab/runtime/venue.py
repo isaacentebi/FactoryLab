@@ -513,10 +513,29 @@ class VenueMixin:
             })
         return rows
 
-    def _execute_outputs(self, ret: Return) -> None:
+    def _execute_outputs(self, ret: Return, kind: str | None = None) -> None:
+        """Place the market order an answer names, at most once, and only a producer kind's.
+
+        Guarantees nothing is placed for a return whose kind does not own the answer
+        order (``ANSWER_ORDER_KINDS``; primitive audit F7): a population kind's
+        ``action`` is its own word. The kind is ``kind`` when the caller knows it,
+        else the one the return bound (``return_kinds``), else its author's only
+        kind; an unknown kind places nothing. For a producer kind every earlier
+        rule holds: a decision acts once, and an answer never trades in place of a
+        refused or dropped write.
+        """
+        from factorylab.cortex.assembly import ANSWER_ORDER_KINDS
+
         out = ret.outputs
         attempted = self.venue_attempts.pop(ret.handle, None)
         if self.wallet.dead or ret.status != "ok":
+            return
+        kind = kind or self.return_kinds.get(ret.handle)
+        if kind is None:
+            owner = self.assemblies.get(self.handle_to_assembly.get(ret.handle, ""))
+            emits = owner.spec.emits if owner is not None else ()
+            kind = emits[0] if len(emits) == 1 else None
+        if kind not in ANSWER_ORDER_KINDS:
             return
         if out.get("action") != "order":
             if str(out.get("action", "")).lower().startswith(("buy:", "sell:")):

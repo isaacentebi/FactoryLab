@@ -150,22 +150,6 @@ class GovernanceMixin:
             return COMMISSIONED_JUDGE_REFUSAL
         return None
 
-    def _refuse_commissioned_judge(self, parent, item, target: str, reason: str) -> tuple:
-        """Refuse the request before a decision is opened or a call is made."""
-        self.ledger.append({"kind": "requests.refused", "handle": parent.handle,
-                            "target": target, "reason": reason, "ts": self.clock.now_ns})
-        self._refusal_to_owner(parent.handle, "request_refused", reason)
-        return {"tool": f"assembly:{target}", "args": item.inputs,
-                "result": {"error": reason}}, 0
-
-    def _invoke_child(self, action_id, parent, item, ceiling):
-        """A judging contract is never commissioned as a child; everything else proceeds."""
-        target = action_id if item.target == "self" else item.target
-        reason = self._commissioned_judge_refusal(target)
-        if reason is not None:
-            return self._refuse_commissioned_judge(parent, item, target, reason)
-        return super()._invoke_child(action_id, parent, item, ceiling)
-
     def _apply_registrations(self, handle: str, ret: Return) -> None:
         if ret.status != "ok":
             return
@@ -777,7 +761,7 @@ class GovernanceMixin:
                 kind="tool",
                 description=prop.description,
                 input_schema=_to_plain(prop.args_schema),
-                output_schema={"type": "object"},
+                output_schema=_to_plain(prop.returns_schema or {"type": "object"}),
                 price=PriceSpec({"call": self.m.tools.population_tool_micro_per_call}),
                 permissions=frozenset({"sandbox.run"}),
                 resource_bounds=ResourceBounds(max_duration_ns=prop.timeout_s * 1_000_000_000),
@@ -786,7 +770,8 @@ class GovernanceMixin:
             self._register_with_trial(contract, handle, amount)
             self._move_trial(handle, amount, to=None, reason="trial:tool")
             tool = PopulationTool(
-                prop.id, prop.description, prop.args_schema, prop.code, prop.timeout_s, handle
+                prop.id, prop.description, prop.args_schema, prop.code, prop.timeout_s, handle,
+                prop.returns_schema,
             )
             self.population_tools[prop.id] = tool
             owner = self.handle_to_assembly.get(handle)
@@ -794,7 +779,10 @@ class GovernanceMixin:
                 self.tool_owner[prop.id] = owner
             self.tool_specs[prop.id] = as_spec(tool, self.m.tools.population_tool_micro_per_call)
             self.stats.population_tools_registered += 1
-            self._emit(EventKind.REGISTERED, {"kind": "tool", "id": prop.id})
+            self._emit(EventKind.REGISTERED, {
+                "kind": "tool", "id": prop.id,
+                **({"returns_schema": _to_plain(prop.returns_schema)}
+                   if prop.returns_schema is not None else {})})
             return
         if isinstance(prop, ModelProposal):
             if prop.openrouter_id in self.prices.prices:
@@ -878,7 +866,7 @@ class GovernanceMixin:
                 id=prop.id, version=version, model_id=prop.model_id,
                 system_prompt=prop.system_prompt, max_tokens=max_tokens,
                 effort=prop.effort, accepts=frozenset(prop.accepts), role=prop.role,
-                emits=emits, schemas=prop.schemas, **extra)
+                emits=emits, schemas=prop.schemas, description=prop.description, **extra)
             contract = _assembly_contract(prop.id, prop.role, prop.accepts, max_tokens,
                                          emits=spec.emits, schemas=spec.schemas, version=version)
             amount = (prop.endowment_micro if prop.endowment_micro is not None
@@ -919,6 +907,7 @@ class GovernanceMixin:
                     "accepts": list(prop.accepts),
                     "emits": list(spec.emits),
                     "schemas": spec.schemas,
+                    **({"description": spec.description} if spec.description else {}),
                     "version": version,
                     **({"reward_shapes": shapes} if custom else {}),
                     **({"program": True, "state_policy": prop.state_policy} if program else {}),

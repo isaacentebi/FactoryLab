@@ -365,6 +365,12 @@ def test_offline_prompt_contract_artifact_consequence_journey(monkeypatch):
     runtime._evaluator_step(made, judge, SimpleNamespace(chosen="eval-b"),
                             runtime.queue.get(judge).deadline_ns)
     runtime._settle_arrived_verdicts()  # the end of the event's routing
+    # W4: the maker registered a tool, so its decision is held for the tool-use
+    # window; it settles once when the window closes, here on its verdict alone
+    # (the caller's decision has not settled on a score within it).
+    assert runtime.queue.get(maker).status is SettleStatus.PENDING
+    runtime.ticks_consumed = runtime.tool_holds[maker]["until"]
+    runtime._settle_composed()
     settlement = runtime.queue.history(maker)[-1]
     assert settlement.status is SettleStatus.SETTLED
     assert settlement.score == pytest.approx(0.8) and settlement.sampling_ref == judge

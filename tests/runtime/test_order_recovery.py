@@ -10,6 +10,7 @@ from tests.runtime.test_child_requests import parent_request
 def test_lost_ack_is_intented_before_submission_and_fill_keeps_original_handle(monkeypatch):
     rt = make_runtime()
     rt.consequences.start('caller', 0)
+    rt.return_kinds['caller'] = 'ProducerReturn'  # an answer order is a producer kind's (F7)
     calls = []
     place = rt.exchange.target.place
 
@@ -33,6 +34,7 @@ def test_lost_ack_is_intented_before_submission_and_fill_keeps_original_handle(m
 def test_unknown_ack_defers_fill_attribution_until_recovery(monkeypatch):
     rt = make_runtime()
     rt.consequences.start('caller', 0)
+    rt.return_kinds['caller'] = 'ProducerReturn'  # an answer order is a producer kind's (F7)
     place, lookup = rt.exchange.target.place, rt.exchange.target.lookup
 
     def lost(order):

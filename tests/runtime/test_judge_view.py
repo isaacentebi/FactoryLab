@@ -8,6 +8,8 @@ PROPENSITY block (information audit C1, C2, C7, P5, P8, U5).
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from factorylab.cortex.request import Return
 from factorylab.kernel.events import Event, EventKind
 from factorylab.runtime.shared import CH_CONFORMITY, CH_EXPOSURE, CH_FAST
@@ -42,8 +44,10 @@ def _antagonist_return(rt):
         returned=Return(handle, {"action": "hold", "propensity": PROPENSITY,
                                  "rationale": "nothing to do"}, 0, "ok"),
     )
-    return next(e for e in rt.internal
-                if e.kind == EventKind.PRODUCER_RETURN and e.payload["about_handle"] == handle)
+    # Primitive audit F12: it is published as an Exposure, and only as one.
+    (event,) = [e for e in rt.internal if e.payload.get("about_handle") == handle]
+    assert str(event.kind) == "Exposure"
+    return event
 
 
 def test_first_tier_judge_is_not_told_the_author_or_its_role(monkeypatch):
@@ -66,6 +70,33 @@ def test_first_tier_judge_is_not_told_the_author_or_its_role(monkeypatch):
     assert "your_consequence_standing" not in req.inputs
     assert "your_action_policy" not in req.inputs
     assert "antagonist-a" not in json.dumps(producer)
+    # F12: the Exposure arrives as its own kind, and the kind is routing: the judge
+    # reads the same machine view a ProducerReturn gets, with no kind clause in it.
+    assert "event" not in req.inputs
+    assert "Exposure" not in json.dumps(req.inputs["commission"])
+
+
+def test_an_exposure_reaches_only_the_judges_whose_contract_accepts_it():
+    """F12: no ProducerReturn is emitted for an Exposure; a judge declares the kind."""
+    from dataclasses import replace
+
+    from factorylab.runtime.worlds import load_manifest
+
+    rt = _consequence_runtime()
+    event = _antagonist_return(rt)
+    assert not [e for e in rt.internal if e.kind == EventKind.PRODUCER_RETURN]
+    base = load_manifest("scripted")
+    seats = tuple(replace(a, accepts=("ProducerReturn",))
+                  if a.id in ("eval-b", "eval-c", "eval-d") else a for a in base.assemblies)
+    judged = _consequence_runtime(manifest=replace(base, assemblies=seats))
+    assert judged._universe_for("Exposure", event)[:-1] == ["eval-a"]
+    # A roster that seeds judging must seed a reader for every kind that settles on
+    # readers; the load path refuses one whose antagonist nobody judges.
+    unread = replace(base, assemblies=tuple(
+        replace(a, accepts=("ProducerReturn",)) if a.role == "evaluator" else a
+        for a in base.assemblies))
+    with pytest.raises(ValueError, match="emits Exposure"):
+        unread.validate()
 
 
 def test_meta_judge_reads_the_machine_view_not_the_world(monkeypatch):

@@ -45,7 +45,7 @@ max_tokens = 512
 id = "eval-a"
 role = "evaluator"
 model_id = "fake-haiku"
-accepts = ["ProducerReturn"]
+accepts = ["ProducerReturn", "Exposure"]
 emits = ["Verdict"]
 max_tokens = 256
 
@@ -53,7 +53,7 @@ max_tokens = 256
 id = "eval-b"
 role = "evaluator"
 model_id = "fake-haiku"
-accepts = ["ProducerReturn"]
+accepts = ["ProducerReturn", "Exposure"]
 emits = ["Verdict"]
 max_tokens = 256
 
@@ -61,7 +61,7 @@ max_tokens = 256
 id = "eval-c"
 role = "evaluator"
 model_id = "fake-opus"
-accepts = ["ProducerReturn"]
+accepts = ["ProducerReturn", "Exposure"]
 emits = ["Verdict"]
 max_tokens = 256
 
@@ -69,7 +69,7 @@ max_tokens = 256
 id = "eval-d"
 role = "evaluator"
 model_id = "fake-opus"
-accepts = ["ProducerReturn"]
+accepts = ["ProducerReturn", "Exposure"]
 emits = ["Verdict"]
 max_tokens = 256
 

@@ -20,6 +20,8 @@ from factorylab.cortex.sandbox import jail_available
 
 SLUG = re.compile(r"^[a-z][a-z0-9-]{1,47}$")
 MAX_PROMPT_CHARS = 4000
+#: A contract's public self-description: an assembly's, and a tool's.
+MAX_CONTRACT_DESCRIPTION_CHARS = 500
 MAX_PROPOSALS_PER_RETURN = 3
 LEARNERS = ("exp3", "blum_mansour")
 ROLES = ("producer", "evaluator", "meta", "antagonist")
@@ -152,6 +154,9 @@ class AssemblyProposal:
     # An optional founder-selected endowment, in exact integer micro-USD. ``None``
     # keeps the historical trial amount selected by the runtime.
     endowment_micro: int | None = None
+    # The public self-description published with the contract in the catalogue
+    # (primitive audit F6). Empty publishes the contract's own line.
+    description: str = ""
 
     def __post_init__(self) -> None:
         """``reward_shapes`` holds the resolved contract for the kinds this proposal emits.
@@ -189,6 +194,9 @@ class ToolProposal:
     args_schema: dict
     code: str
     timeout_s: int
+    # What the tool promises to return (primitive audit F9): a top-level object
+    # schema every result is validated against before a caller reads it.
+    returns_schema: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -558,10 +566,15 @@ def _assembly(
             raise ValueError("endowment_micro must be a positive integer")
     else:
         endowment_micro = None
+    description = item.get("description", "")
+    if not isinstance(description, str):
+        raise ValueError("description must be text")
+    if len(description.strip()) > MAX_CONTRACT_DESCRIPTION_CHARS:
+        raise ValueError(f"description exceeds {MAX_CONTRACT_DESCRIPTION_CHARS} chars")
     return AssemblyProposal(
         aid, role, model_id, prompt, accepts, max_tokens, effort, emits, schemas,
         reward_contracts(emits, item.get("reward_shapes", {}), registered=known_reward_shapes),
-        code, timeout_s, state_policy, trigger, endowment_micro,
+        code, timeout_s, state_policy, trigger, endowment_micro, description.strip(),
     )
 
 
@@ -594,8 +607,8 @@ def _tool(
     description = item.get("description")
     if not isinstance(description, str) or not description.strip():
         raise ValueError("description is required")
-    if len(description) > 500:
-        raise ValueError("description exceeds 500 chars")
+    if len(description) > MAX_CONTRACT_DESCRIPTION_CHARS:
+        raise ValueError(f"description exceeds {MAX_CONTRACT_DESCRIPTION_CHARS} chars")
     schema = item.get("args_schema")
     if (
         not isinstance(schema, dict)
@@ -611,9 +624,16 @@ def _tool(
     timeout_s = item.get("timeout_s")
     if type(timeout_s) is not int or not 1 <= timeout_s <= 5:
         raise ValueError("timeout_s must be an int in [1, 5]")
+    returns = item.get("returns_schema")
+    if returns is not None:
+        from factorylab.cortex.tools import object_schema_error
+
+        error = object_schema_error(returns)
+        if error is not None:
+            raise ValueError(f"returns_schema: {error}")
     if not (jail_available() if jail is None else jail):
         raise ValueError("no jail on this host")
-    return ToolProposal(tid, description, schema, code, timeout_s)
+    return ToolProposal(tid, description, schema, code, timeout_s, returns)
 
 
 # --- propensity and measurement ----------------------------------------------
