@@ -209,7 +209,7 @@ class PricingMixin:
         for name, value in evidence.items():
             sample[name] += value
         self.window.compute_spend_micro += ret.cost
-        if observed_role in ("evaluator", "meta"):
+        if observed_role in ("evaluator", "meta", "adversary"):
             self.window.evaluator_spend_micro += ret.cost
         return ret
 

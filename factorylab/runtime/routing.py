@@ -758,10 +758,15 @@ class RoutingMixin:
         for event in released:
             states = list(self.routers.get(kind, []))
             drawn: list[str] = []
+            # A judged return's routers draw one after another, each excluding the judges
+            # already drawn for it and their families (the #132 Codex review): two
+            # routers of one kind never put two judges of a family on one return.
+            judged = self._judged_return(event)
             for state in states:
                 if self.wallet.dead:
                     break
-                chosen = self._route_with(state, event,
+                exclude = frozenset(a for a in drawn if a != NOOP) if judged else frozenset()
+                chosen = self._route_with(state, event, exclude=exclude,
                                           phase="release" if first_tier else None)
                 if chosen is not None:
                     drawn.append(chosen)

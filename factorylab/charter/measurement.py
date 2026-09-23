@@ -365,14 +365,15 @@ def preflight_measurement(card: MetricCard, observations=None, *,
     preflight_card(card, observations)
     unit = replace(card, window=replace(card.window, n=1))
     samples = CardSamples()
-    kinds = ("ProducerReturn", "Verdict", "MetaVerdict", "Exposure")
+    kinds = ("ProducerReturn", "Verdict", "MetaVerdict", "Exposure", "CounterVerdict")
     if card.answers_for not in ("producer", "evaluator", "meta", "antagonist", "adversary",
                                 "all"):
         kinds += (card.answers_for,)
     for kind in kinds:
         role = measured_role(kind)
         samples.returned(handle=kind, assembly=kind, role=role, window=1,
-                         ret=Return(kind, {"verdict": 0.0} if kind == "Verdict" else {}, 1, "ok"))
+                         ret=Return(kind, {"verdict": 0.0} if kind in ("Verdict", "CounterVerdict")
+                                    else {}, 1, "ok"))
     # Use the real row constructor, with judge and subject separated. The card
     # cannot manufacture either identity by assigning its answers_for to a row.
     for source in samples.returns:

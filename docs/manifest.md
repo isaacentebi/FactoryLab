@@ -501,7 +501,8 @@ final measurement its judges are rewarded on), it settles on
 verdict. A return the world will not measure is never on an adversary's menu
 (`no world outcome`), and a counter the world leaves unmeasured past the backstop
 settles censored. A counter never touches the judge's or the producer's reward. It is
-evaluator work (measured with the `evaluator` role), capped with the antagonists at
+measured in its own `adversary` scope (a card may answer for `adversary`, and counter
+settlements bear that scope's prices), capped with the antagonists at
 `adversarial_share`, and cannot be commissioned.
 
 **The tiers above.** A MetaVerdict is routed like any judgement: a meta that accepts

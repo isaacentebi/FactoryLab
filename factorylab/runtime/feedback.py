@@ -73,7 +73,7 @@ EVALUATION_UNSCORED = "evaluation-unscored-v1"
 VERDICT_BASE = "verdict:"
 EVALUATION_BASE = "evaluation_consequence"
 _CARDS_FOR_CHANNEL = {CH_VERDICT: "producer", CH_CONFORMITY: "evaluator",
-                      CH_EXPOSURE: "antagonist", CH_COUNTER: "evaluator"}
+                      CH_EXPOSURE: "antagonist", CH_COUNTER: "adversary"}
 
 
 def exposure_score(consequences: list[float], ordinary: list[float]) -> float:
@@ -1604,7 +1604,7 @@ class FeedbackMixin:
                                           "phase": phase, "counter_score": round(score, 4)})
             self._settle_priced(handle, channel=CH_COUNTER, score=score,
                                 definition_version=DEF_COUNTER, sampling_ref=None,
-                                cards="evaluator")
+                                cards="adversary")
             self.stats.counters_settled += 1
 
     def _censor_judgement(self, handle: str, reason: str) -> None:

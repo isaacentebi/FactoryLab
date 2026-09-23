@@ -62,7 +62,7 @@ MAX_ROWS = 200
 #: The page carries the latest returns; every older row lives in its window's page file.
 RETURNS_ROWS = 500
 RETURNS_PAGE = "returns-{window}.json"
-ROLES = ("producer", "evaluator", "meta", "antagonist")
+ROLES = ("producer", "evaluator", "meta", "antagonist", "adversary")
 RAILS = ("openrouter", "venice", "x402")
 INCOME_CLASSES = ("earned_micro", "subsidy_micro", "converted_from_principal_micro")
 #: Money that entered this factory, by class, and money that left, by the reason.

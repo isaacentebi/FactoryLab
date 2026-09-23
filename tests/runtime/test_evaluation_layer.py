@@ -754,3 +754,60 @@ def test_a_draw_with_every_reader_barred_is_ledgered_and_counted():
     assert barred and rt.stats.route_barred == len(barred)
     assert all(row["event_kind"] == "Verdict" for row in barred)
 
+
+# --- the #132 Codex review: two routers of a judged kind; the adversary scope ----------
+
+
+@pytest.mark.gate
+def test_two_routers_of_a_judged_kind_never_draw_two_judges_of_one_family():
+    from factorylab.runtime.loop import Runtime
+
+    base = load_manifest("scripted")
+    manifest = replace(base, evaluation=replace(base.evaluation, multi_judge_share=0.0))
+    rt = Runtime(manifest, events=80, seed=1, initial_balance_micro=None, ledger_path=None,
+                 router_gamma=0.5)
+    rt._build_router("ProducerReturn", "exp3", 0.5, replace=False)
+    assert len(rt.routers["ProducerReturn"]) == 2
+    rt.run()
+    means = _rows(rt, "verdict.mean")
+    assert means
+    for row in means:
+        judges = [rt.handle_to_assembly[h] for h in row["judges"]]
+        families = [rt._family(j) for j in judges]
+        assert len(set(judges)) == len(judges)
+        assert len(set(families)) == len(families)
+        assert rt._family(rt.handle_to_assembly[row["handle"]]) not in families
+
+
+def test_counter_verdicts_are_measured_and_priced_in_the_adversary_scope(monkeypatch):
+    from factorylab.charter.amendment import proposed_answers_for
+    from factorylab.charter.charter import MetricCard, MetricWindow
+    from factorylab.charter.measurement import preflight_measurement
+    from factorylab.cortex.registration import measured_role
+
+    assert measured_role("CounterVerdict") == "adversary"
+    assert proposed_answers_for("adversary", "c") == "adversary"
+    card = MetricCard(id="counter-form", norm="n", description="d", units="fraction",
+                      window=MetricWindow("returns", 5, "role"),
+                      acceptable_region="at least 0.9", observation="well_formed_rate",
+                      answers_for="adversary")
+    preflight_measurement(card)  # the scope has samples to measure: it is real
+    rt = _adversarial_runtime(counterfactual={"coin": "BTC", "side": "buy"}, verdicts=(0.9,))
+    priced = []
+    original = rt._penalty_for
+
+    def record(cards, handle=None, **kwargs):
+        priced.append((cards, handle))
+        return original(cards, handle, **kwargs)
+
+    monkeypatch.setattr(rt, "_penalty_for", record)
+    _mids(rt, BTC="100")
+    _producer, event = _produce_hold(rt)
+    judge = _judge(rt, event, "eval-c")
+    rt._settle_arrived_verdicts()
+    counter = _counter(rt, judge, 0.1)
+    _advance(rt, rt.ev.consequence_horizon_ticks - 1)
+    _mids(rt, BTC="101")
+    _advance(rt, 2)
+    assert ("adversary", counter) in priced
+

@@ -37,11 +37,13 @@ def seed_emits(role: str) -> tuple[str, ...]:
             "adversary": ("CounterVerdict",)}.get(role, ("ProducerReturn",))
 
 
-# A counter-verdict is evaluator work (essay II.III.b: "the adversarial layer consists
-# not only of evaluators but also of productive workers"), measured with the judges.
+# A counter-verdict is measured in its own scope: the adversarial judges are a
+# population the charter may price apart from the judges they read (essay II.III.b:
+# "the adversarial layer consists not only of evaluators but also of productive
+# workers"; the #132 Codex review).
 CONTRACT_ROLES = MappingProxyType({
     "ProducerReturn": "producer", "Verdict": "evaluator",
-    "MetaVerdict": "meta", "Exposure": "antagonist", "CounterVerdict": "evaluator",
+    "MetaVerdict": "meta", "Exposure": "antagonist", "CounterVerdict": "adversary",
 })
 REWARD_SHAPES = ("judged", "forecast", "conformity", "exposure", "counter")
 SEED_REWARD_SHAPES = MappingProxyType({
