@@ -12,7 +12,7 @@ from typing import Any
 
 from factorylab.charter.book import CharterBook
 from factorylab.charter.charter import Charter
-from factorylab.charter.controller import CardRegion
+from factorylab.charter.controller import CardRegion, PriceController
 from factorylab.charter.measurement import CardSamples
 from factorylab.cortex.assembly import Assembly, AssemblySpec
 from factorylab.cortex.tools import ObservationRunner, ToolRunner
@@ -30,7 +30,7 @@ from factorylab.runtime.cadence import GovernanceCadence
 from factorylab.runtime.cascade import CascadeGate
 from factorylab.runtime.compute import ContractConsequences
 from factorylab.runtime.feedback import PendingJudgement
-from factorylab.runtime.immune import ImmunePriceController
+from factorylab.runtime.immune import thrash_controller
 from factorylab.runtime.live import LiveClock, LiveVenue, Reconciler, WallClock, build_provider
 from factorylab.runtime.observations import seed_book
 from factorylab.runtime.pricing import MeasureWindow
@@ -475,8 +475,14 @@ class BootstrapMixin:
         self.reference_mids: dict[str, dict[str, Any]] = {}
         self.consequence_mix: float = self.ev.consequence_share  # live sampling actuator
         self.sampling_history: list[dict[str, Any]] = []
-        # learning-death grant: the window it is live for and the assemblies that spent it
-        self.novelty_grant: dict[str, Any] = {"window": None, "consumed": []}
+        # The niche for unhistoried actions (ruling R5): per open invocation, the
+        # unhistoried tool action whose result its next model round reads. Emptied
+        # when the invocation returns, so a checkpoint never holds an entry.
+        self.niche_rounds: dict[str, str] = {}
+        # Time audit T14: when each loop's configuration last changed, and the
+        # lifespans recorded since the immune organ last closed a window.
+        self.config_ticks: dict[str, int] = {}
+        self.lifespan_log: list[dict[str, Any]] = []
         self.delivered_seen: dict[str, int] = {
             st.learner.id: 0 for st in self._all_router_states()
         }
@@ -772,7 +778,9 @@ class BootstrapMixin:
 
         # prices: regions are parsed here, the controller only prices
         pr = manifest.prices
-        self.controller = ImmunePriceController(
+        # The thrash price (versioning C2): the charter's PID over the gap's volatility.
+        self.thrash_controller = thrash_controller(self.ledger, manifest)
+        self.controller = PriceController(
             self.ledger,
             eta=pr.eta,
             decay=pr.decay,

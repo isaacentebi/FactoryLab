@@ -11,12 +11,13 @@ from typing import Any
 from factorylab.cortex.assembly import PROGRAM_MODEL_ID
 from factorylab.cortex.registration import measured_role, reward_contracts
 from factorylab.kernel.events import Event, EventKind
-from factorylab.kernel.queue import PropensityRecord, SettleStatus
+from factorylab.kernel.queue import PropensityRecord, SettleStatus, action_key
 from factorylab.kernel.registry import Contract
 from factorylab.learners.base import NEUTRAL_REWARD, ObservedRewards
 from factorylab.learners.exp3 import EXP3
 from factorylab.learners.router import Router, Sample
 from factorylab.runtime.families import model_family
+from factorylab.runtime.immune import configuration_changed
 from factorylab.runtime.shared import (
     CH_CONFORMITY,
     CH_CONSEQUENCE,
@@ -330,8 +331,10 @@ class RouterState:
     # definition -> learned seat rounds settled under it: the scales this router's
     # rewards are on, and so what an abstention is worth to it (``neutral``).
     definitions: dict[str, int] = field(default_factory=dict)
-    # This window's NOOP watch, {"window", "draws", "min_p"}; empty before a draw.
-    # The immune organ reads it as its frontier-invocation evidence; no draw reads it.
+    # This window's NOOP watch, {"window", "draws", "min_p"} and, per draw that offered
+    # an unhistoried seat, "unhistoried_offered" and the "unhistoried_mass" it put on
+    # such seats; empty before a draw. The immune organ reads it as its frontier-
+    # invocation evidence; no draw reads it.
     watch: dict = field(default_factory=dict)
 
     def neutral(self) -> float:
@@ -648,9 +651,10 @@ class RoutingMixin:
         silence is not an unbounded entitlement. Its patience is ``min_ratio``
         measured consequence periods in ticks (``_patience``; time audit T5), so the
         consequence that pays it can arrive inside it (essay II.IV.b: the
-        compensation period must be shorter than the lifetime). A live learning-death
-        grant adds one more trial. A seed assembly has no registration tick; it is
-        protected until its first settled record.
+        compensation period must be shorter than the lifetime). A seed assembly has
+        no registration tick; it is protected until its first settled record. A seat
+        past its trial still reaches the niche through each unhistoried action it
+        takes (``_niche_action``; ruling R5).
         """
         try:
             population = self.registry.get(action_id).provenance != "seed"
@@ -665,21 +669,45 @@ class RoutingMixin:
         if not self.queue.has_history(action_id):
             return True
         delivered = self.stats.consequences_by_assembly.get(action_id, 0)
-        return delivered < self.m.novelty.trials or self._novelty_grant_open(action_id)
+        return delivered < self.m.novelty.trials
 
-    def _novelty_grant_open(self, assembly_id: str) -> bool:
-        """A learning-death grant is one extra trial per assembly, live for its patience.
+    def _tool_action(self, tool_id: str) -> str:
+        """The action key of a call to ``tool_id``: the tool and the kind it is published as."""
+        spec = self.tool_specs.get(tool_id) or {}
+        return action_key(tool=str(tool_id), kind=str(spec.get("kind") or "tool"))
 
-        Live from its issue until ``until_tick`` (time audit T5) and spent by that
-        assembly's first delivered trial beyond the base allowance. A grant issued
-        before the tick clock is live only in the window it was issued for.
+    def _niche_action(self, handle: str, reason: str) -> str | None:
+        """The unhistoried action a metered call serves, or None when it serves none.
+
+        Essay II.II.b; ruling R5: "Some share of compute and write access is usable
+        only in the context of unhistoried actions (decisions that arrive carrying
+        no propensity record and no reward trail)". Two calls qualify, for any seat
+        the router drew, historied or not:
+
+        * a **tool call** of a (tool, kind) that no settled decision of the seat has
+          taken (``DecisionQueue.has_action_history``);
+        * a **model call** that reads such a call's result in the same decision
+          (``niche_rounds``): the compute that action consumes.
+
+        The kernel names what is eligible and makes the reserve available to it; it
+        never chooses a seat's action, and nothing tells the seat the niche exists
+        beyond the schematic in ``world.mechanics.novelty``.
         """
-        grant = self.novelty_grant
-        if assembly_id in grant["consumed"]:
-            return False
-        if "until_tick" in grant:
-            return self.ticks_consumed < grant["until_tick"]
-        return grant["window"] is not None and grant["window"] == self.stats.reserve_windows
+        try:
+            seat = self.queue.get(handle).propensity.chosen
+        except KeyError:
+            return None
+        if seat not in self.assemblies:
+            return None
+        if reason.startswith("tool:"):
+            tool = reason.removeprefix("tool:")
+            if tool not in self.tool_specs:
+                return None
+            key = self._tool_action(tool)
+            return None if self.queue.has_action_history(seat, key) else key
+        if reason == f"model:{self.assemblies[seat].spec.model_id}":
+            return self.niche_rounds.get(handle)
+        return None
 
     def _register_with_trial(self, contract: Contract, handle: str, amount: int,
                              *, refuse: str = ""):
@@ -706,7 +734,10 @@ class RoutingMixin:
                 and self.queue.has_history(contract_id))
 
     def _novelty_compute(self, handle: str, reason: str) -> bool:
-        """Only an assembly's own model calls can use its novelty entitlement."""
+        """An unhistoried seat's own model calls, and every call an unhistoried action
+        makes (``_niche_action``), may use the novelty entitlement; nothing else."""
+        if self._niche_action(handle, reason) is not None:
+            return True
         if not reason.startswith("model:"):
             return False
         try:
@@ -1000,7 +1031,7 @@ class RoutingMixin:
         if addressed is not None and action_id != addressed:
             return "asleep: this event is addressed to another seat"
         return book.absent(action_id, str(ev.kind), now=self.tick_index,
-                           coins=book.fold_coins(action_id))
+                           coins=book.fold_coins(action_id), jitter=self._wake_jitter)
 
     def _quiet_tick(self, ev: Event, candidates: list[str],
                     excluded: dict[str, str]) -> bool:
@@ -1208,12 +1239,19 @@ class RoutingMixin:
         if NOOP not in sample.action_ids:
             return
         p = sample.probs[list(sample.action_ids).index(NOOP)]
+        # The draw mass on seats with no settled record: a frontier offered unhistoried
+        # seats and never drawing them is quarantined (versioning audit P1).
+        fresh = [q for a, q in zip(sample.action_ids, sample.probs, strict=True)
+                 if a != NOOP and a in self.assemblies and self._unhistoried(a)]
         self._close_abstention_watch(state)
         if not state.watch:
-            state.watch = {"window": self.window.index, "draws": 1, "min_p": p}
-            return
+            state.watch = {"window": self.window.index, "draws": 0, "min_p": p}
         state.watch["draws"] += 1
         state.watch["min_p"] = min(state.watch["min_p"], p)
+        if fresh:
+            state.watch["unhistoried_offered"] = state.watch.get("unhistoried_offered", 0) + 1
+            state.watch["unhistoried_mass"] = (state.watch.get("unhistoried_mass", 0.0)
+                                               + math.fsum(fresh))
 
     def _close_abstention_watch(self, state: RouterState) -> None:
         """Drop a watch whose window has ended; the immune organ read it at the close."""
@@ -1237,8 +1275,12 @@ class RoutingMixin:
                 continue
             floor = learning_death_floor(state.seed_gamma)
             rows.append({"router": state.learner.id, "event_kind": state.kind,
+                         # The retentive core (essay II.I.a) is not the frontier.
+                         "core": state.kind in self.m.evaluation.no_swap_regret_kinds,
                          "draws": watch["draws"], "min_p_noop": watch["min_p"],
-                         "floor": floor, "uninvoked": watch["min_p"] >= floor})
+                         "floor": floor, "uninvoked": watch["min_p"] >= floor,
+                         "unhistoried_offered": watch.get("unhistoried_offered", 0),
+                         "unhistoried_mass": watch.get("unhistoried_mass", 0.0)})
         return sorted(rows, key=lambda row: row["router"])
 
     @staticmethod
@@ -1310,6 +1352,8 @@ class RoutingMixin:
             self._build_router(kind, self._seed_learner_kind(kind), self.router_gamma)
             self.ledger.append({**entry, "carried": False})
             self.stats.epochs += 1
+            configuration_changed(self, f"router:{kind}", self.clockwork.measured(
+                f"router:{kind}"))
             self.clockwork.loops[f"epoch:{kind}"] = {"opened": now, "due": now, "period": 1.0,
                                                     "inner": 1, "fires": 1}
             return
@@ -1328,6 +1372,10 @@ class RoutingMixin:
             return
         self.pending_epochs.pop(kind, None)
         if any(universe != st.universe for st in states):
+            # Time audit T14: an epoch replaces the router's configuration; how long
+            # the last one lived, against the loop that corrects it.
+            configuration_changed(self, f"router:{kind}", self.clockwork.measured(
+                f"router:{kind}"))
             previous = self.clockwork.loops.get(f"epoch:{kind}", {})
             self.clockwork.loops[f"epoch:{kind}"] = {
                 "opened": now, "due": now, "period": 1.0,

@@ -40,12 +40,14 @@ class GovernanceCadence:
         self._last_activation_ns = 0
         self._waiting: dict[str, None] = {}
         self._deferred: dict[str, int] = {}
-        # Essay II.IV.c, time audit T7: the settling times measured after activations
-        # (system identification), the per-card score series they are read from, and
-        # the probe of the latest activation while its series has not settled.
+        # Essay II.IV.c, time audit T7: the settling times the live versioning measured
+        # (``versioning.live``: a charter activation, a change of terms or of behaviour
+        # opens a version, and it settles when its distribution stops moving), and the
+        # version still open and unsettled, {"version", "opened"}, whose age counts.
         self._settling: deque[int] = deque(maxlen=sample)
-        self._series: dict[str, list[float]] = {}
-        self._probe: dict | None = None
+        self._unsettled: dict | None = None
+        # The version whose age was already recorded as a lower bound (censored).
+        self._censored: int | None = None
         # Time audit T13: the capital loop's closures, open to finalized, in ticks.
         self._capital: deque[int] = deque(maxlen=sample)
 
@@ -122,16 +124,16 @@ class GovernanceCadence:
         """The slowest loop governance commands, in ticks (essay II.IV.c).
 
         The largest of: the consequence loop; the oldest outstanding forecast; the
-        settling time measured after activations, and the age of the latest
-        activation's unsettled score series (time audit T7); and the capital
-        loop's p90 closure (T13). An unfinished loop is never read as a fast one.
+        versions' measured settling times, and the age of the version still
+        unsettled (time audit T7; versioning audit M1); and the capital loop's p90
+        closure (T13). An unfinished loop is never read as a fast one.
         """
         oldest = max((self._current_event - opened for opened in self._outstanding.values()),
                      default=0)
         settling = max(self._settling, default=0)
-        probe = (self._current_event - self._probe["opened"]) if self._probe else 0
+        unsettled = (self._current_event - self._unsettled["opened"]) if self._unsettled else 0
         capital = self.capital_period_events() or 0
-        return max(self.consequence_period_events(), oldest, settling, probe, capital)
+        return max(self.consequence_period_events(), oldest, settling, unsettled, capital)
 
     def record_capital(self, *, transfer_id: str, latency_ticks: int, latency_ns: int) -> None:
         """One conversion reached finality: the capital loop closed once (time audit T13)."""
@@ -154,63 +156,43 @@ class GovernanceCadence:
         ordered = sorted(self._capital)
         return ordered[(9 * len(ordered) + 9) // 10 - 1]
 
-    def open_probe(self, *, amendment_id: str) -> None:
-        """An activation is the deliberate intent revision whose settling is measured.
+    def record_settling(self, *, version: int, cause: str, ticks: int, settled: bool) -> None:
+        """One version's settling time joins the slowest period (essay II.IV.c; T7).
 
         Essay II.IV.c: "inject a small, deliberate intent revision and measure how
-        long the output distribution takes to return to a settled distribution".
-        The band each card's series settled in before the activation is the one
-        its series must return to; a card with no settled band before is not read.
+        long the output distribution takes to return to a settled distribution ...
+        that settling time corresponds to the period of the slowest feedback loop".
+        The live versioning measures it for every version, whatever opened it (a
+        charter activation, a change of the world's terms, a change of behaviour);
+        ``settled`` False is a lower bound, the age at which the version was
+        superseded or censored. A version already censored is not recorded again.
         """
-        bands = {card: max(values) - min(values)
-                 for card, values in self._series.items()
-                 if len(values) >= self._min_ratio}
-        self._ledger.append({"kind": "governance.probe", "amendment_id": amendment_id,
-                             "event": self._current_event, "cards": sorted(bands)})
-        # With no settled band before the revision there is nothing to read its
-        # settling against: the probe is not held open on a measurement it lacks.
-        self._probe = ({"amendment_id": amendment_id, "opened": self._current_event,
-                        "bands": bands, "after": {}} if bands else None)
-
-    def observe_scores(self, values: dict[str, float]) -> None:
-        """Retain each card's latest window values and close the probe once they settle.
-
-        Guarantees the probe settles at the first close where every read card has
-        at least ``min_ratio`` values since the activation and their spread is
-        within the band it held before, at whatever new level. Its settling time,
-        in ticks, joins the slowest period (time audit T7).
-        """
-        for card, value in values.items():
-            rows = self._series.setdefault(card, [])
-            rows.append(float(value))
-            del rows[:-self._min_ratio]
-        probe = self._probe
-        if probe is None:
+        if type(ticks) is not int or ticks < 0:
+            raise ValueError("a settling time is a nonnegative number of ticks")
+        if version == self._censored:
             return
-        for card, value in values.items():
-            if card in probe["bands"]:
-                rows = probe["after"].setdefault(card, [])
-                rows.append(float(value))
-                del rows[:-self._min_ratio]
-        bands = probe["bands"]
-        settled = all(
-            len(probe["after"].get(card, ())) >= self._min_ratio
-            and max(probe["after"][card]) - min(probe["after"][card]) <= band
-            for card, band in bands.items())
-        ticks = self._current_event - probe["opened"]
-        # A series still unsettled after min_ratio consequence periods is closed with its
-        # age as a lower bound, so one revision the world never settles cannot stop the
-        # governance loop for the life of the world; the bound still slows it.
-        censored = not settled and ticks >= self._min_ratio * self.consequence_period_events()
-        if settled or censored:
-            self._ledger.append({"kind": "governance.settling",
-                                 "amendment_id": probe["amendment_id"],
-                                 "opened_event": probe["opened"],
-                                 "settled_event": self._current_event,
-                                 "settling_ticks": ticks, "settled": settled,
-                                 "cards": sorted(bands)})
-            self._settling.append(ticks)
-            self._probe = None
+        self._ledger.append({"kind": "governance.settling", "version": version,
+                             "cause": cause, "settled_event": self._current_event,
+                             "settling_ticks": ticks, "settled": settled})
+        self._settling.append(ticks)
+
+    def track_version(self, *, version: int, opened: int | None, settled: bool) -> None:
+        """Hold the open version's age in the slowest period while it is unsettled.
+
+        A version still unsettled after ``min_ratio`` consequence periods is recorded
+        with its age as a lower bound and no longer held, so one revision the world
+        never settles cannot stop the governance loop for the life of the world; the
+        bound still slows it.
+        """
+        if settled or opened is None or version == self._censored:
+            self._unsettled = None
+            return
+        self._unsettled = {"version": version, "opened": opened}
+        age = self._current_event - opened
+        if age >= self._min_ratio * self.consequence_period_events():
+            self.record_settling(version=version, cause="censored", ticks=age, settled=False)
+            self._censored = version
+            self._unsettled = None
 
     def viability(self, *, run_ticks: int | None, world_ticks: int | None) -> dict:
         """Whether a governance tier fits between sampling noise and lagging the world.
@@ -319,7 +301,8 @@ class GovernanceCadence:
         self._last_activation_event = self._current_event
         self._waiting.pop(amendment_id, None)
         self._deferred.pop(amendment_id, None)
-        self.open_probe(amendment_id=amendment_id)
+        # The activation's settling is read by the live versioning: the new edition
+        # opens a version at the next window close (``versioning.live``).
 
     def world_block(self, tick_interval_ns: int | TickClock) -> dict:
         """Expose measured duration, UTC activation timestamp and approved waiting ids only."""

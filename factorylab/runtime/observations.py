@@ -1,6 +1,6 @@
 """Supported observations; absent evidence never becomes a score.
 
-The twenty-five seed observations below are the factory's starting measurement
+The seed observations below are the factory's starting measurement
 vocabulary. They are not the whole of it: the population may also register
 its own observation — a pure ``observe(facts) -> float`` over the public
 per-window facts, run in the tool jail — and a card may then name it. Seed and
@@ -26,7 +26,11 @@ if TYPE_CHECKING:
 # The early-warning summaries are the evaluators' (``runtime.ews``), not a public fact.
 PRIVATE_WINDOW_FIELDS = ("decisions", "closed_values", "closed_regions", "closed_shares",
                          "closed_cards", "closed_prices", "closed_holdouts",
-                         "series_discarded", "ews_variance", "ews_autocorrelation")
+                         "series_discarded", "ews_variance", "ews_autocorrelation",
+                         # The thrash price in force is the runtime's charge, and the
+                         # provider and family names are text; the observations below
+                         # publish their concentration, not the names.
+                         "thrash_penalty", "calls_by_provider", "calls_by_family")
 MAX_WORLD_SAMPLES = 1024
 # Fields holding a public quantity filed under a private identity: a decision
 # handle, an evaluator's assembly id. The quantity is disclosed, the identity is
@@ -77,6 +81,12 @@ def _ratio(numerator: int, denominator: int | None) -> float | None:
 
 def _mean(values: list[float] | list[int]) -> float | None:
     return sum(values) / len(values) if values else None
+
+
+def _concentration(counts: Mapping[str, int] | None) -> float | None:
+    """The largest share of the window's model calls one name took, or None without calls."""
+    total = sum((counts or {}).values())
+    return max(counts.values()) / total if total else None
 
 
 def _cost_per_return(w: MeasureWindow) -> float | None:
@@ -340,6 +350,27 @@ CATALOGUE: tuple[Observation, ...] = (
         "fraction",
         lambda w: _ratio(getattr(w, "evaluator_spend_micro", 0),
                          getattr(w, "compute_spend_micro", 0)),
+        (0.0, 1.0),
+    ),
+    # Essay II.IV.c: loops that "share a common medium (e.g., a common foundation model
+    # whose checkpoint releases act as a global forcing function) or a common
+    # infrastructure ... risk entrainment"; governance must "force or incentivize the
+    # randomization of a factory's dependency class" (time audit T15). These say how
+    # concentrated the window's dependencies were, so a card can price it.
+    Observation(
+        "provider_concentration",
+        "The largest share of the window's model calls that one provider served "
+        "(openrouter, venice, x402 sellers, the program jail).",
+        "fraction",
+        lambda w: _concentration(getattr(w, "calls_by_provider", None)),
+        (0.0, 1.0),
+    ),
+    Observation(
+        "family_concentration",
+        "The largest share of the window's model calls made on one foundation model "
+        "family, whichever route served them.",
+        "fraction",
+        lambda w: _concentration(getattr(w, "calls_by_family", None)),
         (0.0, 1.0),
     ),
     Observation(

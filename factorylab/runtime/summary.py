@@ -92,7 +92,11 @@ class RunStats:
     registered_window: dict[str, int] = field(default_factory=dict)  # assembly -> window index
     # assembly -> the world tick it registered at: where its patience counts from (T5)
     registered_tick: dict[str, int] = field(default_factory=dict)
+    # The immune organ's retained window records (``timing.min_ratio × immune.k``),
+    # the live versioning (``versioning.live``) and the thrash price the last close set.
     immune_windows: list[dict] = field(default_factory=list)
+    versions: dict[str, Any] = field(default_factory=dict)
+    thrash: dict[str, Any] = field(default_factory=dict)
     pathologies: dict[str, bool] = field(default_factory=lambda: {
         "stable_failure": False, "thrash": False, "learning_death": False,
     })

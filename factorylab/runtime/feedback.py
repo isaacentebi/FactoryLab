@@ -749,8 +749,7 @@ class FeedbackMixin:
                      "status": str(s.status)})
 
     def _count_consequence(self, assembly_id: str | None) -> None:
-        """One observed consequence delivered to an assembly ends one of its novelty trials;
-        a trial beyond the base allowance spends the window's learning-death grant.
+        """One observed consequence delivered to an assembly ends one of its novelty trials.
 
         Callers count resolved evidence only: a censored payoff or an unmeasured
         commission told nobody anything about the seat, so it spends no trial.
@@ -758,10 +757,6 @@ class FeedbackMixin:
         if assembly_id is None:
             return
         delivered = self.stats.consequences_by_assembly.get(assembly_id, 0)
-        if delivered >= self.m.novelty.trials and self._novelty_grant_open(assembly_id):
-            self.novelty_grant["consumed"].append(assembly_id)
-            self.ledger.append({"kind": "novelty.grant_consumed", "assembly": assembly_id,
-                                "window": self.stats.reserve_windows, "ts": self.clock.now_ns})
         self.stats.consequences_by_assembly[assembly_id] = delivered + 1
 
     def _credit_consequence(self, payoff: Any) -> None:
@@ -1881,6 +1876,7 @@ class FeedbackMixin:
             return
         if keyed and key is None:
             return  # its frozen round is already spent: nothing trains, nothing is booked
+        reward = self._thrash_charged(state, lr.handle, reward)
         fb = BanditFeedback(prop.chosen, reward, prop.probs[prop.action_ids.index(prop.chosen)])
         if target is not state:
             p, executed = state.learner.inner.take_for(key) if keyed else (None, None)
@@ -1977,6 +1973,9 @@ class FeedbackMixin:
             self.ledger.append({"kind": "router.abstention_priced", "handle": handle,
                                 "router": credit["router"], "neutral": neutral,
                                 "penalty": penalty, "reward": reward, "ts": now})
+            # Ruling R9: waking nobody bears the thrash price a woken round of the core
+            # would, so abstaining is never the way out of paying for thrash.
+            reward = self._thrash_charged(drawer, handle, reward)
             fb = BanditFeedback(NOOP, reward, prop.probs[prop.action_ids.index(NOOP)])
             self._apply_router_round(drawer, handle, credit["p"], credit["executed"], fb)
 
@@ -2008,6 +2007,31 @@ class FeedbackMixin:
         penalty = sum(weight * self._penalty_for(role, handle, as_role=role)
                       for role, weight in sorted(roles.items()))
         return min(1.0, max(0.0, neutral - penalty)), penalty
+
+    def _thrash_charged(self, state: Any, handle: str, reward: float) -> float:
+        """A no-swap-regret router's reward less the thrash price in force when it drew.
+
+        Essay II.II.b: "in the case of thrash, one should penalize the duration of
+        spectral-gap volatility, incentivizing the surplus-retaining core of
+        no-swap-regret learners to stabilize" (versioning audit C2). The charge is the
+        thrash penalty of the window the round was drawn in (``MeasureWindow.
+        thrash_penalty``; the live window's for a round with no recorded origin), on
+        the routers of the kinds in ``evaluation.no_swap_regret_kinds`` only, woken
+        rounds and abstentions alike. The result stays in [0, 1]; a charge is ledgered.
+        """
+        if state.kind not in self.m.evaluation.no_swap_regret_kinds:
+            return reward
+        origin = self.price_origins.get(handle, {}).get("origin")
+        window = self.price_windows.get(origin, self.window)
+        charge = window.thrash_penalty
+        if charge <= 0:
+            return reward
+        charged = min(1.0, max(0.0, reward - charge))
+        self.ledger.append({"kind": "thrash.charged", "handle": handle,
+                            "router": state.learner.id, "window": window.index,
+                            "charge": charge, "reward_before": reward, "reward": charged,
+                            "ts": self.clock.now_ns})
+        return charged
 
     def _router_owed_abstention(self, learner_id: str) -> bool:
         """Keep a router addressable until every abstention it drew has been credited."""

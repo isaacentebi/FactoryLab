@@ -384,11 +384,15 @@ class SubscriptionBook:
         self.last_wake[seat] = now
         self.deferred_until.pop(seat, None)
 
-    def absent(self, seat: str, kind: str, *, now: int, coins: frozenset[str]) -> str:
+    def absent(self, seat: str, kind: str, *, now: int, coins: frozenset[str],
+               jitter=None) -> str:
         """Why this seat is not in the draw for this event, or "" when it is awake.
 
         Only routine kinds can leave a seat absent. A fill, an order rejection
         or a fired watcher reaches a seat that deferred every tick it had.
+        ``jitter(seat, last_wake, floor)`` lengthens the seat's floor by a few
+        ticks of its own after each routine wake, so seats are not phase-locked
+        to one tick (essay II.IV.c; time audit T15).
         """
         if not is_routine(kind):
             return ""
@@ -401,8 +405,11 @@ class SubscriptionBook:
         if until is not None and now <= until:
             return f"asleep: deferred through tick {until}"
         last = self.last_wake.get(seat)
-        if sub.cadence_floor > 1 and last is not None and now - last < sub.cadence_floor:
-            return f"asleep: cadence floor {sub.cadence_floor} ticks"
+        floor = sub.cadence_floor
+        extra = jitter(seat, last, floor) if jitter is not None and last is not None else 0
+        if floor + extra > 1 and last is not None and now - last < floor + extra:
+            return (f"asleep: cadence floor {floor} ticks"
+                    + (f", jittered by {extra}" if extra else ""))
         return ""
 
     # -- the coalesced update ---------------------------------------------
@@ -549,6 +556,26 @@ class ThinkingMixin:
 
     def _live_seats(self) -> list[str]:
         return [aid for aid in self.assemblies if aid not in self.retired_assemblies]
+
+    def _wake_jitter(self, seat: str, last: int, floor: int) -> int:
+        """Whole ticks this seat's next routine wake waits beyond its floor.
+
+        Essay II.IV.c: the deferral between loops "should also be diversified
+        (jittered) to intentionally obfuscate entrainment"; every seat woke on one
+        shared tick (time audit T15). Guarantees a draw of its own per seat and per
+        wake (the world seed, the seat, the tick it last woke: a resumed world draws
+        the same), of ``floor × timing.jitter_fraction × u`` ticks, rounded up with
+        the probability of its fraction, so a seat at a floor of one sits out the
+        next tick about ``jitter_fraction / 2`` of the time. A seat's own floor and
+        defer are unchanged; a safety event still reaches it at once.
+        """
+        from factorylab.runtime.clockwork import jitter_draw
+
+        span = floor * self.clockwork.jitter_fraction * jitter_draw(
+            self.clockwork.seed, f"wake:{seat}", last)
+        whole = int(span)
+        return whole + int(jitter_draw(self.clockwork.seed, f"wake-round:{seat}", last)
+                           < span - whole)
 
     @property
     def inbox_delivery(self) -> dict[str, Any]:

@@ -443,7 +443,6 @@ class ImmuneSpec:
     gap_threshold: float = 0.8
     gain_step: float = 0.05
     gamma_max: float = 0.5
-    decay_step: float = 0.1
     registration_bins: tuple[float, ...] = (0.0, 2.0)
     revision_bins: tuple[float, ...] = (0.0,)
 
@@ -1013,7 +1012,7 @@ class WorldManifest:
         ):
             if type(value) is not int or value < minimum:
                 raise ValueError(f"{name} must be an integer >= {minimum}")
-        for name in ("tv_threshold", "gap_threshold", "gain_step", "gamma_max", "decay_step"):
+        for name in ("tv_threshold", "gap_threshold", "gain_step", "gamma_max"):
             value = getattr(self.immune, name)
             if type(value) not in (int, float) or not isfinite(value) or not 0 < value <= 1:
                 raise ValueError(f"immune.{name} must be finite and in (0, 1]")
@@ -1229,6 +1228,9 @@ def _manifest_immune(raw: Any) -> ImmuneSpec:
         raise ValueError("immune must be a table")
     if "bins" in raw:
         raise ValueError("immune.bins was removed: the three region-relative bins are fixed")
+    if "decay_step" in raw:
+        raise ValueError("immune.decay_step was removed: thrash is priced by its duration "
+                         "(the thrash PID), never answered by lowering card prices")
     if "price_step" not in raw:
         raise ValueError("immune.price_step is required: the stable-failure ratchet's "
                          "lambda step per window")

@@ -1,29 +1,104 @@
-"""Live, bounded pathology correction uses public window observations, never the diary."""
+"""The immune organ: live versions, the convergence pathologies, and their priced answers.
 
+Essay II.II.a-b: "Our goal is to seed the superdark factory with a kind of
+incentive-based immune system that corrects each of these pathologies live, in
+runtime." At every closed price window the organ reads the window into the live
+versioning (``versioning.live``: the rolling operator, the version, its gap and
+settling time) and diagnoses the pathologies with the one predicate the forensic
+report also replays (``versioning.versions.diagnose``). The answers:
+
+* **stable failure**: "price the duration of failure, ratcheting up penalties the
+  longer the factory spends in a wide-spectral-gap attractor": each card of the
+  failing attractor is ratcheted by its duration (``PriceController.ratchet``), and
+  the ratcheted price reaches abstention too, through the same card penalty a
+  router's NOOP bears (ruling R9, ``FeedbackMixin._priced_abstention``). The raise is
+  bounded by ``prices.penalty_cap`` like every card penalty; see ``thrash_penalty``
+  for why that bound is kept.
+* **thrash**: "penalize the duration of spectral-gap volatility, incentivizing the
+  surplus-retaining core of no-swap-regret learners to stabilize": the version gap's
+  volatility is priced by the charter's one price law, a PID whose integral
+  accumulates how long the volatility lasts (``THRASH_CARD``), and the price is
+  subtracted from the rewards of the no-swap-regret routers and of their
+  abstentions (``FeedbackMixin._thrash_charge``).
+* **learning death**: "delivered as a fact about the world", never as a response:
+  the novelty reserve is usable by unhistoried actions of every seat (ruling R5,
+  ``RoutingMixin._niche_action``). The organ only holds the exploration gain it
+  raised while the frontier is gone.
+
+The organ diagnoses every window and acts (gain, ratchet) on its own loop, at least
+``min_ratio`` price periods apart (versioning P5). The thrash price is a price and
+moves on the price loop, like every card's.
+"""
+
+import hashlib
+import json
 from dataclasses import asdict
-from math import isfinite
 
-from factorylab.charter.controller import PriceController
+from factorylab.charter.controller import CardRegion, PriceController
+from factorylab.versioning import live
 from factorylab.versioning.series import CHANNELS
 from factorylab.versioning.versions import diagnose
 
+#: The version causes whose settling times governance: a revision of the input, by
+#: the charter or by the world's terms. Essay II.IV.c: "inject a small, deliberate
+#: intent revision and measure how long the output distribution takes to return to a
+#: settled distribution ... that settling time corresponds to the period of the
+#: slowest feedback loop". The factory's own drift (launch, behaviour) is versioned and
+#: ledgered the same way; it is not a revision whose response governance measures.
+REVISIONS = frozenset({"charter", "terms"})
 
-class ImmunePriceController(PriceController):
-    """The existing checkpointed controller can borrow extra decay for one window."""
+#: The thrash price's own entry in its PID (essay II.II.b): "penalize the duration of
+#: spectral-gap volatility". It is not a charter card and prices no role's decisions.
+THRASH_CARD = "pathology:thrash"
 
-    def set_decay(self, value: float, *, ledger, window: int) -> None:
-        """A decay change takes effect only after its evidence is durable.
 
-        This narrow adapter owns the existing controller's checkpointed decay slot;
-        no alternate price state or recovery path is introduced.
-        """
-        if not isfinite(value) or value <= 0:
-            raise ValueError("decay must be finite and positive")
-        before = self.decay
-        if before != value:
-            ledger.append({"kind": "immune.decay", "window": window,
-                           "decay_before": before, "decay_after": value})
-            self.decay = value
+def thrash_controller(ledger, manifest) -> PriceController:
+    """The thrash price: the charter's PID law and gains over the version gap's volatility.
+
+    One price law (Chapter II rulings §2: "One price law: PID"): the same ``eta``,
+    ``kp``, ``kd``, ``decay`` and ``lambda_max`` the charter committed for its cards,
+    over the volatility of the version gap series, in the region ``[0,
+    immune.tv_threshold]``. Its integral accumulates ``eta * v`` for every window
+    the volatility stays above that bound, so the price rises with the duration of
+    the thrash, and leaks ``decay`` a window once it settles.
+    """
+    pr, bound = manifest.prices, manifest.immune.tv_threshold
+    controller = PriceController(ledger, eta=pr.eta, decay=pr.decay, lambda_max=pr.lambda_max,
+                                 min_window_events=pr.min_window_events, kp=pr.kp, kd=pr.kd)
+    # The violation is in the gap's own units (it lives in [0, 1]), as a card at a zero
+    # bound keeps its observation's declared units.
+    controller.register(CardRegion(THRASH_CARD, "max", None, bound, 1.0))
+    return controller
+
+
+def thrash_penalty(rt) -> dict:
+    """Update the thrash price from the volatility just read, and the penalty it sets.
+
+    Guarantees the penalty is ``min(lambda * v, prices.penalty_cap)``, where ``v``
+    is the volatility's distance above ``immune.tv_threshold`` in the gap's own
+    units, and zero while the volatility is unsupported or inside that bound.
+
+    ``prices.penalty_cap`` binds this and the stable-failure ratchet alike (versioning
+    audit P4 asked whether it should). It is kept: a reward is a unit-interval score,
+    and a penalty that took all of it from every arm would leave the learner no
+    difference to learn from, so the duration price would stop moving it at all;
+    and the essay's own warning is that "gain ramped high enough to kick a system out
+    of an overdamped attractor will, if unchecked, overshoot into an oscillation
+    condition (thrash)". What keeps staying costly beyond the cap is that abstention
+    bears the same price (ruling R9), so the cap no longer makes waiting the escape,
+    and the ratchet keeps winding the card's integral, which keeps the price after
+    the attractor is left.
+    """
+    state = rt.stats.versions
+    volatility = state.get("volatility")
+    controller = rt.thrash_controller
+    if volatility is not None:
+        controller.observe(THRASH_CARD, volatility, window_end_event=rt.n)
+    price = controller.price(THRASH_CARD)
+    violation = controller.violation(THRASH_CARD, volatility) if volatility is not None else 0.0
+    penalty = min(price * violation, rt.m.prices.penalty_cap)
+    return {"volatility": volatility, "violation": violation, "lambda": price,
+            "penalty": penalty}
 
 
 def _bases(saved: dict) -> list[dict]:
@@ -90,11 +165,12 @@ def access_evidence(rt) -> dict[str, tuple[bool, str | None]]:
     rather than inferring it from quiet behaviour:
 
     * **affordable seat** — some live seat's cheapest probe is inside what its
-      own entitlement (or the unallocated commons) can pay for. Without one no
-      investigation can be bought at any price.
+      own entitlement (or the unallocated commons) can pay for.
     * **route to registration** — an affordable seat and a novelty reserve with
       something left in it, which is what admits a new tool, program, model or
-      observation.
+      observation. The reserve is read inside the window it belongs to: the organ
+      runs at the window's close, before the next reserve window opens (versioning
+      audit C1), so what is read is what the closing window still held.
     * **route to revision** — the registration route plus enough live seats to
       draw the committee that votes an amendment or a challenge through.
 
@@ -131,14 +207,14 @@ def access_evidence(rt) -> dict[str, tuple[bool, str | None]]:
     except Exception:  # noqa: BLE001
         facts["registration_route"] = (None, None)
     try:
-        live = len(rt.assemblies) - len(rt.retired_assemblies)
+        live_seats = len(rt.assemblies) - len(rt.retired_assemblies)
         seats = rt.m.committee.seats
         registration = facts["registration_route"][0]
         if registration is False:
             facts["revision_route"] = (False, "revision needs the registration route it lost")
-        elif live < seats:
+        elif live_seats < seats:
             facts["revision_route"] = (
-                False, f"a committee needs {seats} seats and {live} are live")
+                False, f"a committee needs {seats} seats and {live_seats} are live")
         else:
             facts["revision_route"] = (registration, None)
     except Exception:  # noqa: BLE001
@@ -146,10 +222,43 @@ def access_evidence(rt) -> dict[str, tuple[bool, str | None]]:
     return facts
 
 
+def terms_digest(rt) -> str:
+    """A digest of the terms the world offers: its own published surfaces and prices.
+
+    Essay II.II: "If an external force changes the terms through which an input can
+    be satisfied by a present distribution of the factory's output, the version has
+    changed" (versioning audit M3). The terms are the world's tools and their prices
+    (never the population's own tools or connectors, which it wrote itself) and the
+    current price of every model the manifest named.
+    """
+    rt._ensure_connector_tool()  # the fixed primitives, published lazily, are terms
+    own = set(rt.population_tools)
+    tools = {tid: [spec.get("kind"), spec.get("price_micro_per_call")]
+             for tid, spec in rt.tool_specs.items()
+             if tid not in own and spec.get("kind") not in ("population", "connector")}
+    prices = {}
+    for tier in rt.m.models:
+        price = rt.prices.prices.get(tier.id)
+        prices[tier.id] = None if price is None else repr(price)
+    payload = json.dumps({"tools": tools, "models": prices}, sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+
 def close_window(rt, values: dict[str, float]) -> None:
-    """Fixed cells retain history across editions and publish causal diagnostic evidence."""
+    """Read the closed window into the live versions, diagnose, price thrash, then act.
+
+    Guarantees, in this order: the window record joins the retained horizon
+    (``timing.min_ratio × immune.k`` windows); every version boundary and settling
+    reading is ledgered, and the settling of a version a revision opened reaches the
+    governance cadence (``REVISIONS``, ``GovernanceCadence.record_settling``), with its
+    age while it is unsettled; the flags and their evidence are
+    ledgered (``pathology.*``, ``immune.window``); the thrash price moves; and only
+    then, on the organ's own loop, the gain and the ratchet.
+    """
     spec = rt.m.immune
-    previous = rt.stats.immune_windows
+    k = spec.k
+    horizon = rt.m.timing.min_ratio * k
+    bins = {"registration_bins": spec.registration_bins, "revision_bins": spec.revision_bins}
     profile = {channel: None for channel in CHANNELS}
     profile.update({
         "verdict": values.get("verdict_mean"),
@@ -166,54 +275,74 @@ def close_window(rt, values: dict[str, float]) -> None:
     # Consequence outcomes: a rising paid-off rate or realized P&L is a live frontier.
     profile["paid_off"] = values.get("consequence_paid_off_rate")
     profile["realized_pnl"] = values.get("realized_pnl_usd")
-    # The access facts learning death is actually about ride in the organ's own
-    # window profile, so a diagnosis can say which access is lost and why.
     access = access_evidence(rt)
     profile.update({f"access:{name}": None if present is None else float(present)
                     for name, (present, _why) in access.items()})
+    now = rt.ticks_consumed
+    previous = rt.stats.immune_windows[-1] if rt.stats.immune_windows else None
+    if previous is None:
+        rt.config_ticks.setdefault("charter", 0)  # the launch edition's first tick
+    elif previous["charter_edition"] != rt.charter.edition:
+        # Time audit T14: an edition replaces the charter; governance corrects it on
+        # its slowest loop.
+        configuration_changed(rt, "charter", rt.cadence.slowest_period_events())
     current = {
-        "index": rt.window.index, "charter_edition": rt.charter.edition,
-        "profile": profile,
-        # The frontier signal (ruling R9; versioning U1, time T16): which routers woke
-        # their seats only by exploration this window. It is evidence inside the one
-        # learning-death diagnosis below, never a flag of its own.
+        "index": rt.window.index, "tick": now, "charter_edition": rt.charter.edition,
+        "terms": terms_digest(rt), "profile": profile,
+        # The frontier signal (ruling R9; versioning P1, U1): each router's draws this
+        # window, its NOOP floor and its draw mass on unhistoried seats.
         "frontier_invocation": rt.frontier_invocation(),
+        # Configurations refactored since the last close, against their loops (T14).
+        "lifespans": list(rt.lifespan_log),
         "access": {name: why for name, (_present, why) in access.items() if why},
-        "regions": {f"card:{cid}": asdict(region) for cid, region in regions.items()
-                    },
+        "regions": {f"card:{cid}": asdict(region) for cid, region in regions.items()},
     }
-    windows = [*previous, current][-(spec.k + 1):]
-    diagnosed = diagnose(windows, k=spec.k, registration_bins=spec.registration_bins,
-                         revision_bins=spec.revision_bins)
+    rt.lifespan_log = []
+    windows = [*rt.stats.immune_windows, current][-horizon:]
+    state, events = live.advance(rt.stats.versions or live.fresh(), windows, k=k,
+                                 horizon=horizon, tv_threshold=spec.tv_threshold, **bins)
+    for event in events:
+        kind = event["kind"]
+        rt.ledger.append({"kind": f"version.{kind}", **{n: v for n, v in event.items()
+                                                        if n != "kind"}})
+        if kind == "settled" and event["cause"] in REVISIONS:
+            rt.cadence.record_settling(version=event["version"], cause=event["cause"],
+                                       ticks=event["ticks"], settled=event["settled"])
+    rt.cadence.track_version(version=state["version"], opened=state["start_tick"],
+                             settled=(state["settled_tick"] is not None
+                                      or state["cause"] not in REVISIONS))
+    diagnosed = diagnose(windows, state, k=k, tv_threshold=spec.tv_threshold,
+                         gap_threshold=spec.gap_threshold, **bins)
     flags = diagnosed.pop("flags")
     evidence = {"window": current["index"], **diagnosed}
+    rt.stats.immune_windows = windows
+    rt.stats.versions = state
+    rt.stats.pathologies = flags
     for kind, detected in flags.items():
         if detected:
             rt.ledger.append({"kind": f"pathology.{kind}", **evidence})
+    rt.stats.thrash = thrash_penalty(rt)
     # Versioning P5, time audit T2: the organ diagnoses every closed window but acts
-    # (gain, decay, ratchet) only on its own loop, at least ``min_ratio`` price-loop
+    # (gain, ratchet) only on its own loop, at least ``min_ratio`` price-loop
     # periods apart with its own jitter, so it never revises the controller at the
     # controller's own frequency (iatrogenic thrash, essay II.IV.c).
-    now = rt.ticks_consumed
     inner = rt.clockwork.period("price", default=rt.m.timing.min_ratio)
     acts = rt.clockwork.due("immune", now, inner)
     rt.ledger.append({"kind": "immune.window", **evidence, "profile": profile, "flags": flags,
                       "regions": current["regions"], "charter_edition": rt.charter.edition,
+                      "tick": now, "terms": current["terms"],
+                      "frontier_invocation": current["frontier_invocation"],
+                      "lifespans": current["lifespans"], "thrash": rt.stats.thrash,
                       "acts": acts})
-    rt.stats.immune_windows = windows
-    # Learning death's response is this flag alone: the reserve reads it at the next
-    # window boundary and issues the one extra novelty trial per assembly.
-    rt.stats.pathologies = flags
     if not acts:
         return
     schedule = rt.clockwork.fire("immune", now, inner)
     rt._ledger_loop("immune", schedule, inner_loop="price")
-    # Oscillation has priority if coarse cells make the two signals overlap.
+    # Oscillation has priority: gain ramped into an attractor overshoots into thrash
+    # (essay II.IV.b), so a thrashing factory's raised exploration unwinds first.
     ratcheted: set[str] = set()
     if flags["thrash"]:
         _gain(rt, "thrash", current["index"])
-        rt.controller.set_decay(rt.m.prices.decay + spec.decay_step,
-                                ledger=rt.ledger, window=current["index"] + 1)
     elif flags["stable_failure"]:
         _gain(rt, "stable_failure", current["index"])
         # Essay II.II.b: stable failure is priced by its duration. Every violated card
@@ -232,3 +361,26 @@ def close_window(rt, values: dict[str, float]) -> None:
     for card_id in rt.controller.card_ids():
         if card_id not in ratcheted:
             rt.controller.end_failure(card_id, window=current["index"])
+
+
+def configuration_changed(rt, loop: str, latency: int) -> None:
+    """One configuration of ``loop`` was replaced: record how long it lived.
+
+    Essay II.IV.b (time audit T14): "Thrash occurs in loops whose periods exceed
+    the lifespan of the configurations they are trying to error-correct." A
+    lifespan is the ticks between two changes of one loop's configuration (a seat's
+    contract version, a router's epoch, a charter edition); ``latency`` is the
+    measured period of the loop that corrects it. A ratio below one is a correction
+    that lands on the configuration's successor, and the organ reads it as thrash.
+    The first configuration of a loop has no lifespan yet.
+    """
+    now = rt.ticks_consumed
+    last = rt.config_ticks.get(loop)
+    rt.config_ticks[loop] = now
+    if last is None:
+        return
+    latency = max(1, int(latency))
+    row = {"loop": loop, "lifespan_ticks": now - last, "latency_ticks": latency,
+           "ratio": (now - last) / latency, "tick": now}
+    rt.lifespan_log = [*rt.lifespan_log, row]
+    rt.ledger.append({"kind": "config.lifespan", **row, "ts": rt.clock.now_ns})

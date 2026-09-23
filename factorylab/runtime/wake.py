@@ -650,10 +650,6 @@ class _Observatory:
         self._respond(item.get("window"), {"response": "router_gain",
                                            "pathology": item.get("pathology")})
 
-    def _on_immune_decay(self, item: dict) -> None:
-        self._respond(item.get("window"), {"response": "price_decay",
-                                           "decay_after": item.get("decay_after")})
-
     def _on_immune_price_relief(self, item: dict) -> None:
         self._respond(item.get("window"), {"response": "price_relief",
                                            "card_id": item.get("card_id")})
@@ -663,8 +659,6 @@ class _Observatory:
                                            "card_id": item.get("card_id"),
                                            "duration": item.get("duration")})
 
-    def _on_novelty_grant(self, item: dict) -> None:
-        self._respond(item.get("window"), {"response": "novelty_grant"})
 
     def _cells(self, manifest) -> dict:
         """Cells from the immune organ's own per-window profiles, by the versioning module."""

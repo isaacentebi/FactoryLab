@@ -94,6 +94,14 @@ class MeasureWindow:
     # (``runtime.ews``): evaluator-facing, never a public window fact.
     ews_variance: float | None = None
     ews_autocorrelation: float | None = None
+    # The thrash price in force while this window is open (``immune.thrash_penalty``):
+    # what a no-swap-regret router's round drawn in it is charged (versioning C2).
+    thrash_penalty: float = 0.0
+    # The window's model calls by the provider that served them and by the foundation
+    # family of the model (essay II.IV.c, entrainment; time audit T15). The dependency
+    # observations read these; the names are not a public window fact.
+    calls_by_provider: dict[str, int] = field(default_factory=dict)
+    calls_by_family: dict[str, int] = field(default_factory=dict)
 
 
 #: The definition of a censored settlement that carries a price: its decision left
@@ -216,7 +224,29 @@ class PricingMixin:
         self.window.compute_spend_micro += ret.cost
         if observed_role in ("evaluator", "meta", "adversary"):
             self.window.evaluator_spend_micro += ret.cost
+        self._count_dependency(action_id)
         return ret
+
+    def _count_dependency(self, action_id: str) -> None:
+        """One model call counted by the provider that served it and its model's family.
+
+        Essay II.IV.c: loops that "share a common medium (e.g., a common foundation
+        model ...) or a common infrastructure ... risk entrainment", and governance must
+        "force or incentivize the randomization of a factory's dependency class"
+        (time audit T15). The counts feed the dependency observations a card can price.
+        """
+        from factorylab.runtime.families import model_family
+
+        assembly = self.assemblies.get(action_id)
+        if assembly is None:
+            return
+        model = assembly.spec.model_id
+        provider = next((tier.provider for tier in self.m.models if tier.id == model),
+                        "x402" if model.startswith("x402:") else
+                        "program" if model == "program" else "openrouter")
+        for counts, name in ((self.window.calls_by_provider, provider),
+                             (self.window.calls_by_family, model_family(model))):
+            counts[name] = counts.get(name, 0) + 1
 
     def _record_pricing_fills(self, events) -> None:
         """Filled notional belongs to the order's original decision in the fill's window."""
@@ -249,8 +279,8 @@ class PricingMixin:
         ``min_ratio`` times the fastest priced card's sample loop
         (``_price_inner``), and due only when that period has elapsed and the
         ratio still holds against the loop measured now. No other loop shares its
-        boundary: the immune organ, the sampling actuator, governance, the novelty
-        grant and the money caps each keep their own schedule.
+        boundary: the immune organ, the sampling actuator, governance and the money
+        caps each keep their own schedule.
         """
         if self.reserve_window_start is None:
             self.cadence.launch(self.clock.now_ns if self.live else 0)
@@ -283,9 +313,9 @@ class PricingMixin:
         self.reserve_window_start = self.clock.now_ns
         self.market_index = None
         self.stats.reserve_windows += 1
-        self._issue_novelty_grant()
         self.window = MeasureWindow(self.stats.reserve_windows, self._equity_micro(),
-                                    opened_tick=now, due_tick=schedule["due"])
+                                    opened_tick=now, due_tick=schedule["due"],
+                                    thrash_penalty=self.stats.thrash.get("penalty", 0.0))
         from factorylab.runtime.continuity import charge_window as charge_state_window
 
         charge_state_window(self)  # a seat's working state pays byte-time rent
@@ -355,27 +385,6 @@ class PricingMixin:
         """The fastest priced card's sample loop in ticks: what the window must separate from."""
         cards = [c for c in self.charter.cards if c.id in self.regions]
         return min((self._card_inner(c) for c in cards), default=1)
-
-    def _issue_novelty_grant(self) -> None:
-        """Learning death grants one extra novelty trial per assembly, for one patience.
-
-        Time audit T5, T6: the grant lives ``_patience`` ticks from its issue, not
-        one window, and is not re-issued while it lives; a flag raised after it
-        lapsed issues the next one.
-        """
-        now = self.ticks_consumed
-        grant = self.novelty_grant
-        live = grant.get("until_tick") is not None and now < grant["until_tick"]
-        if live:
-            return
-        if not self.stats.pathologies.get("learning_death"):
-            self.novelty_grant = {"window": None, "consumed": []}
-            return
-        until = now + self._patience()
-        self.novelty_grant = {"window": self.stats.reserve_windows, "consumed": [],
-                              "issued_tick": now, "until_tick": until}
-        self.ledger.append({"kind": "novelty.grant", "window": self.stats.reserve_windows,
-                            "tick": now, "until_tick": until, "ts": self.clock.now_ns})
 
     def _prune_price_evidence(self) -> None:
         """Completed decisions release old attribution windows after their totals are frozen."""
@@ -545,9 +554,8 @@ class PricingMixin:
         card_values = measure_cards(self.charter.cards, self.card_samples, w, observations=book)
         card_values = {cid: value for cid, value in card_values.items() if cid in self.regions}
         self._early_warning_close(w, history, series, card_values)
-        # The per-card score series governance's settling time is read from (time
-        # audit T7), and the viability of a governance tier against it.
-        self.cadence.observe_scores(card_values)
+        # The viability of a governance tier against the slowest loop, whose settling
+        # time the live versioning measures at this close (time audit T7).
         self._check_viability()
         # A decision settling late is priced on the window it worked in.
         self.window.closed_values = dict(card_values)
@@ -602,7 +610,6 @@ class PricingMixin:
                              for cid, value in self.card_samples.medians.items()})
         self._close_policy_window(w.index)  # delayed committee liability
         self.stats.last_window_values = values
-        self.controller.set_decay(self.m.prices.decay, ledger=self.ledger, window=w.index)
         # The window's own blame is settled here, before any amendment can activate at this
         # boundary: the cards it measured and the prices its close left them holding. A verdict
         # or a late settlement from this window is attributed by this edition, never by the one
