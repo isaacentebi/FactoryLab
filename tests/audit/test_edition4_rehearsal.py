@@ -238,6 +238,31 @@ def test_the_prepaid_provider_probes_feasibility_without_ending_the_rehearsal():
     assert provider.admission.stop_reason is None
 
 
+def test_a_cap_below_every_seat_ends_the_rehearsal():
+    # Codex review of #136: when every seated model's probe exceeds the whole cap, no
+    # call can be admitted, so the run ends instead of recording NOOPs.
+    manifest = rehearsal.effective_manifest(load_manifest(WORLD))
+    provider = rehearsal.PrepaidProvider(StubProvider(None), manifest,
+                                         rehearsal.Admission(cap_micro=10, max_calls=3))
+    seated = sorted({a.model_id for a in manifest.assemblies})
+    for model in seated[:-1]:
+        provider.affordable(model, 11)
+        assert provider.admission.stop_reason is None
+    provider.affordable(seated[-1], 11)
+    assert provider.admission.stop_reason == "cap_below_every_seat"
+
+
+def test_one_seat_above_the_cap_does_not_end_the_rehearsal():
+    manifest = rehearsal.effective_manifest(load_manifest(WORLD))
+    provider = rehearsal.PrepaidProvider(StubProvider(None), manifest,
+                                         rehearsal.Admission(cap_micro=10, max_calls=3))
+    seated = sorted({a.model_id for a in manifest.assemblies})
+    provider.affordable(seated[0], 5)
+    for model in seated:
+        provider.affordable(model, 11)
+    assert provider.admission.stop_reason is None
+
+
 def test_admission_uses_canonical_provider_failure_billing_classification():
     manifest = rehearsal.effective_manifest(load_manifest(WORLD))
 
