@@ -610,11 +610,15 @@ def measure_card(card: MetricCard, samples: CardSamples, observations=None) -> d
                 spread = _sample_values(observation.id, rows)
             else:
                 # A registered observation is measured by its own code here.
-                value = book.value(observation, SimpleNamespace(**merged))
-                if value is not None and getattr(observation, "per_window_total", False):
-                    # The merged statistics hold the selected windows' sum; the card
-                    # measures one window's amount (the #139 review).
-                    value /= len(selected)
+                if getattr(observation, "per_window", False):
+                    # A quantity of one window is measured window by window and averaged:
+                    # summed statistics would add amounts, or divide by the first
+                    # window's base alone (the #139 review).
+                    each = [book.value(observation, SimpleNamespace(**w)) for w in selected]
+                    each = [v for v in each if v is not None]
+                    value = fmean(each) if each else None
+                else:
+                    value = book.value(observation, SimpleNamespace(**merged))
                 spread = None
                 if window.interval is not None:
                     # Each selected window is one sample of the pooled measurement.

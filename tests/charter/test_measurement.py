@@ -72,3 +72,13 @@ def test_a_per_window_total_over_several_windows_is_their_mean():
     rate = MetricCard("card", NORM, "d", "u", MetricWindow("windows", 2, None), "at least 0",
                       "well_formed_rate", "all")
     assert measure_card(rate, samples) == {"all": pytest.approx(6 / 8)}
+
+
+def test_turnover_over_several_windows_is_the_mean_of_each_windows_own_ratio():
+    # The #139 review: each window's turnover is over its own starting equity.
+    samples = CardSamples()
+    samples.closed(MeasureWindow(1, 100, notional_micro=100))
+    samples.closed(MeasureWindow(2, 1_000, notional_micro=1_000))
+    card = MetricCard("card", NORM, "d", "u", MetricWindow("windows", 2, None), "at most 2",
+                      "turnover", "all")
+    assert measure_card(card, samples) == {"all": pytest.approx(1.0)}

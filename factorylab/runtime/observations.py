@@ -57,10 +57,12 @@ class Observation:
     code: str | None = None
     version: int = 1
     provenance: str = "seed"
-    # True for an amount one window accumulates (a count, a spend, a PnL): measured over
-    # several windows it is their mean, never their sum. Rates carry their own
-    # denominators and are measured from the summed statistics.
-    per_window_total: bool = False
+    # True for a quantity of one window: an amount it accumulates (a count, a spend, a
+    # PnL) or a ratio to that window's own base (turnover over its starting equity).
+    # Over several windows it is the mean of each window's own value, never a value of
+    # their summed statistics. Rates over summable denominators are measured from the
+    # summed statistics.
+    per_window: bool = False
 
     @property
     def scale(self) -> float:
@@ -176,7 +178,7 @@ CATALOGUE: tuple[Observation, ...] = (
         "ratio",
         lambda w: 0.0 if not w.notional_micro else _ratio(w.notional_micro, w.equity_start_micro),
         (0.0, 1.0),
-        per_window_total=True,
+        per_window=True,
     ),
     Observation(
         "noop_share",
@@ -200,7 +202,7 @@ CATALOGUE: tuple[Observation, ...] = (
         "count",
         lambda w: float(w.registrations),
         (0.0, 1.0),
-        per_window_total=True,
+        per_window=True,
     ),
     Observation(
         "registration_rejections",
@@ -208,7 +210,7 @@ CATALOGUE: tuple[Observation, ...] = (
         "count",
         lambda w: float(w.registration_rejections),
         (0.0, 1.0),
-        per_window_total=True,
+        per_window=True,
     ),
     Observation(
         "amendments_proposed",
@@ -216,7 +218,7 @@ CATALOGUE: tuple[Observation, ...] = (
         "count",
         lambda w: float(w.amendments_proposed),
         (0.0, 1.0),
-        per_window_total=True,
+        per_window=True,
     ),
     Observation(
         "amendments_activated",
@@ -224,7 +226,7 @@ CATALOGUE: tuple[Observation, ...] = (
         "count",
         lambda w: float(w.amendments_activated),
         (0.0, 1.0),
-        per_window_total=True,
+        per_window=True,
     ),
     Observation(
         "verdict_mean",
@@ -256,14 +258,14 @@ CATALOGUE: tuple[Observation, ...] = (
         (0.0, 1.0),
     ),
     Observation("fills", "Venue fills processed in the window.", "count",
-                lambda w: float(w.fills), (0.0, 1.0), per_window_total=True),
+                lambda w: float(w.fills), (0.0, 1.0), per_window=True),
     Observation(
         "realized_pnl_usd",
         "Realized fill P&L before fees and funding.",
         "USD",
         lambda w: w.realized_pnl_micro / 1_000_000,
         (-1.0, 1.0),
-        per_window_total=True,
+        per_window=True,
     ),
     Observation(
         "position_concentration",
@@ -324,7 +326,7 @@ CATALOGUE: tuple[Observation, ...] = (
         "count",
         lambda w: float(w.market_purchases),
         (0.0, 1.0),
-        per_window_total=True,
+        per_window=True,
     ),
     # Essay II.IV: "speed is categorically indistinguishable from a specific approach
     # to cash burn" (charter audit M6). A clock motion predicts its effect on this, or
@@ -390,7 +392,7 @@ CATALOGUE: tuple[Observation, ...] = (
         "micro-USD per window",
         lambda w: float(getattr(w, "compute_spend_micro", 0)),
         (0.0, 1_000_000.0),
-        per_window_total=True,
+        per_window=True,
     ),
 )
 
