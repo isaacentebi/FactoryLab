@@ -7,8 +7,9 @@ real Venice credit while the population trades on testnet money:
 
     testnet profit -> real Venice credit -> spending authority -> Venice seats think with it
 
-World: `worlds/edition6-capital-loop.toml` (edition 6's fourteen-seat roster, seven seats
-on Venice routes). It replaced `worlds/edition5-capital-loop.toml`, which the kernel no
+World: `worlds/edition6-capital-loop.toml` (edition 6's fourteen-seat roster, every seat on
+OpenRouter at genesis; the seated families' Venice routes are on the menu, for seats to
+move onto credit the factory buys). It replaced `worlds/edition5-capital-loop.toml`, which the kernel no
 longer loads: since Wave 5a a world that seeds judging must hold at least as many
 evaluator seats as producer seats, on at least three model families (docs/manifest.md,
 "The evaluator population"). Code: `HybridRail` in

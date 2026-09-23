@@ -255,6 +255,24 @@ input_usd_per_mtok = "0.14"
 output_usd_per_mtok = "0.49"
 reasoning = { enabled = false }
 
+# The capital loop's routes for the seats' own models, served by Venice at Venice's list
+# prices (23 September 2026), so a seat can think on the credit its own profit bought
+# without changing what it thinks with.
+[[models]]
+id = "venice:openai-gpt-6-luna"
+provider = "venice"
+input_usd_per_mtok = "0.125"
+output_usd_per_mtok = "0.625"
+reasoning = { effort = "low" }
+
+[[models]]
+id = "venice:deepseek-v4-1-flash"
+provider = "venice"
+input_usd_per_mtok = "0.375"
+output_usd_per_mtok = "1.50"
+reasoning = { enabled = false }
+
+
 [[assemblies]]
 id = "mechanism"
 role = "producer"

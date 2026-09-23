@@ -12,19 +12,18 @@
 # at least three families (Wave 5a; docs/manifest.md, "The evaluator population").
 #
 # What differs from edition6-testnet-rehearsal: the [treasury] block below (reserve,
-# hybrid mode, sink, window cap, absolute bound, reserve floor, pinned payee), two Venice
-# menu entries (GPT-6 Luna and DeepSeek v4.1 flash), and the seats' routes. Seven of the
-# fourteen seats think on Venice (the four Luna seats, the `mechanism` producer and the
-# countercase meta on Venice's DeepSeek, and the Qwen antagonist), so the credit a
-# conversion buys is credit this population actually spends. A provider change is not a
-# model change: every seat keeps the exact model it holds in the testnet world, so the
-# two rehearsals differ only in the capital loop. MiniMax stays on OpenRouter because
-# Venice sells only a preview checkpoint of M3. The consequence, fidelity, mechanics and
-# adversarial judges and the calibration and tier-three metas stay on OpenRouter, so a
-# Venice outage cannot silence evaluation.
+# hybrid mode, sink, window cap, absolute bound, reserve floor, pinned payee) and nothing
+# else. Both worlds seat the same models on the same routes, all on OpenRouter at
+# genesis: the operator funds once, on the rail it can pay by card, and seats no seat on
+# a rail the factory has not bought into. The menu offers every seated family's Venice
+# route, so a seat may move onto credit the factory's own profit bought (a model
+# proposal re-routes it). The first live rehearsal (23 September 2026) seeded seven seats
+# on Venice with $0.098 of credit: none could afford a call, three of them producers, so
+# no producer that might have converted could think. Venice credit is now something the
+# population chooses to buy, not a place it starts.
 #
-# THE ROSTER IS UNRATIFIED, as edition 6's is: its charter table is edition 6's, and no
-# ratification digest is claimed for this roster (see the [charter] note).
+# The roster is edition 6's, so the charter ratified for edition6-testnet-rehearsal binds
+# this world too (see the [charter] note).
 #
 # The header of the world this was copied from follows.
 #
@@ -305,7 +304,7 @@ reasoning = { enabled = false }
 [[assemblies]]
 id = "mechanism"
 role = "producer"
-model_id = "venice:deepseek-v4-1-flash"
+model_id = "deepseek/deepseek-v4.1-flash"
 accepts = ["WorldUpdate", "Fill"]
 max_tokens = "provider"
 effort = "low"
@@ -315,7 +314,7 @@ initial_state = { lens = "Your starting prior is that mechanisms explain more th
 [[assemblies]]
 id = "empirical"
 role = "producer"
-model_id = "venice:openai-gpt-6-luna"
+model_id = "openai/gpt-6-luna"
 accepts = ["WorldUpdate", "Fill"]
 max_tokens = "provider"
 effort = "low"
@@ -337,7 +336,7 @@ initial_state = { lens = "Your starting prior is that reusable capability may be
 [[assemblies]]
 id = "opportunity"
 role = "producer"
-model_id = "venice:openai-gpt-6-luna"
+model_id = "openai/gpt-6-luna"
 accepts = ["WorldUpdate", "Fill"]
 max_tokens = "provider"
 effort = "low"
@@ -377,7 +376,7 @@ initial_state = { lens = "Your starting prior is that what a return did is stron
 [[assemblies]]
 id = "judge-base-rate"
 role = "evaluator"
-model_id = "venice:openai-gpt-6-luna"
+model_id = "openai/gpt-6-luna"
 accepts = ["ProducerReturn", "Exposure"]
 max_tokens = "provider"
 effort = "low"
@@ -398,7 +397,7 @@ initial_state = { lens = "Your starting prior is that apparent evaluator skill i
 [[assemblies]]
 id = "meta-countercase"
 role = "meta"
-model_id = "venice:deepseek-v4-1-flash"
+model_id = "deepseek/deepseek-v4.1-flash"
 accepts = ["Verdict", "MetaVerdict"]
 max_tokens = "provider"
 effort = "low"
@@ -432,7 +431,7 @@ initial_state = { lens = "Your starting prior is that a confident verdict is wro
 [[assemblies]]
 id = "antagonist"
 role = "antagonist"
-model_id = "venice:openai-gpt-6-luna"
+model_id = "openai/gpt-6-luna"
 accepts = ["WorldUpdate"]  # architect review #7: once a tick, not every price print
 max_tokens = "provider"
 effort = "low"
@@ -444,7 +443,7 @@ initial_state = { lens = "Your starting prior is that a judge can approve work w
 [[assemblies]]
 id = "antagonist-core"
 role = "antagonist"
-model_id = "venice:qwen-3-8-flash"
+model_id = "qwen/qwen3.8-flash"
 accepts = ["Tick"]
 max_tokens = "provider"
 effort = "low"
