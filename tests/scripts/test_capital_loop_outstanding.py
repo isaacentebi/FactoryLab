@@ -206,3 +206,15 @@ def test_the_kill_witness_beside_a_run_is_not_a_sibling_run(tmp_path):
     witness.mkdir()
     (witness / "ledger.jsonl").write_text("{}\n")
     assert rehearsal._sibling_runs(tmp_path / "now") == (tmp_path / "earlier",)
+
+
+def test_a_run_named_like_the_witness_is_still_read_and_the_name_is_refused(tmp_path):
+    # The #142 review: a run directory named .witness that holds a diary and its key must
+    # not be hidden from the launch check, and no run may take that name.
+    from factorylab.runtime.witness import WITNESS_DIR
+    from scripts import edition4_rehearsal as rehearsal
+
+    write_run(tmp_path / WITNESS_DIR)
+    assert rehearsal._sibling_runs(tmp_path / "now") == (tmp_path / WITNESS_DIR,)
+    with pytest.raises(rehearsal.RehearsalRefused, match="output_dir_reserved_for_witness"):
+        rehearsal._refuse_reserved_out(tmp_path / WITNESS_DIR)

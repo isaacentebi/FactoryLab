@@ -695,16 +695,26 @@ def _sibling_runs(output_dir: Path | None) -> tuple[Path, ...]:
 
     Guarantees the kill witness a run writes beside its own directory
     (``factorylab.runtime.witness.WITNESS_DIR``) is never taken for a run: it holds
-    witness lines, not a diary, and has no ledger key, so reading it as a run refused
-    every capital-loop launch after the first.
+    witness lines and no ledger key, so reading it as a run refused every capital-loop
+    launch after the first. A directory of that name holding a ledger key is a run and
+    is read like any other (a run may not be named so; see ``_refuse_reserved_out``).
     """
     from factorylab.runtime.witness import WITNESS_DIR
 
     if output_dir is None:
         return ()
-    return tuple(sorted(p for p in output_dir.parent.iterdir()
-                        if p != output_dir and p.name != WITNESS_DIR
-                        and (p / "ledger.jsonl").exists()))
+    return tuple(sorted(
+        p for p in output_dir.parent.iterdir()
+        if p != output_dir and (p / "ledger.jsonl").exists()
+        and not (p.name == WITNESS_DIR and not (p / "ledger.jsonl.key").exists())))
+
+
+def _refuse_reserved_out(output_dir: Path | None) -> None:
+    """Guarantees no run is written where the kill witness lives beside runs."""
+    from factorylab.runtime.witness import WITNESS_DIR
+
+    if output_dir is not None and output_dir.name == WITNESS_DIR:
+        raise RehearsalRefused("output_dir_reserved_for_witness")
 
 
 def _denied_rails(capital_loop: bool) -> list[str]:
@@ -787,6 +797,7 @@ def run_rehearsal(
             # still settle (a crashed world's last one stays valid for its timeout).
             from factorylab.runtime.capital_loop import launch_check
 
+            _refuse_reserved_out(output_dir)
             runs = tuple(previous_runs) + _sibling_runs(output_dir)
             launch = launch_check(manifest, previous_runs=runs,
                                   transport=capital_loop_transport or _http_request())
