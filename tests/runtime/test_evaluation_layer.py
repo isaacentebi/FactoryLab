@@ -723,8 +723,8 @@ def test_a_roster_whose_metas_cannot_read_a_chain_is_refused():
         if seat["role"] == "meta":
             seat["model_id"] = "openai/gpt-6-luna"
     raw["assemblies"].append({**next(a for a in raw["assemblies"] if a["id"] == "meta-audit"),
-                              "id": "meta-extra", "model_id": "minimax/minimax-m3"})
-    with pytest.raises(ValueError, match="no meta reads a Verdict by a minimax judge on a "
+                              "id": "meta-extra", "model_id": "xiaomi/mimo-v2.6-flash"})
+    with pytest.raises(ValueError, match="no meta reads a Verdict by a xiaomi judge on a "
                                          "gpt return off both families"):
         manifest_from_dict(raw)
 
