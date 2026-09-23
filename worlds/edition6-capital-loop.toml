@@ -12,19 +12,18 @@
 # at least three families (Wave 5a; docs/manifest.md, "The evaluator population").
 #
 # What differs from edition6-testnet-rehearsal: the [treasury] block below (reserve,
-# hybrid mode, sink, window cap, absolute bound, reserve floor, pinned payee), two Venice
-# menu entries (GPT-6 Luna and DeepSeek v4.1 flash), and the seats' routes. Seven of the
-# fourteen seats think on Venice (the four Luna seats, the `mechanism` producer and the
-# countercase meta on Venice's DeepSeek, and the Qwen antagonist), so the credit a
-# conversion buys is credit this population actually spends. A provider change is not a
-# model change: every seat keeps the exact model it holds in the testnet world, so the
-# two rehearsals differ only in the capital loop. MiniMax stays on OpenRouter because
-# Venice sells only a preview checkpoint of M3. The consequence, fidelity, mechanics and
-# adversarial judges and the calibration and tier-three metas stay on OpenRouter, so a
-# Venice outage cannot silence evaluation.
+# hybrid mode, sink, window cap, absolute bound, reserve floor, pinned payee) and nothing
+# else. Both worlds seat the same models on the same routes, all on OpenRouter at
+# genesis: the operator funds once, on the rail it can pay by card, and seats no seat on
+# a rail the factory has not bought into. The menu offers every seated family's Venice
+# route, so a seat may move onto credit the factory's own profit bought (a model
+# proposal re-routes it). The first live rehearsal (23 September 2026) seeded seven seats
+# on Venice with $0.098 of credit: none could afford a call, three of them producers, so
+# no producer that might have converted could think. Venice credit is now something the
+# population chooses to buy, not a place it starts.
 #
-# THE ROSTER IS UNRATIFIED, as edition 6's is: its charter table is edition 6's, and no
-# ratification digest is claimed for this roster (see the [charter] note).
+# The roster is edition 6's, so the charter ratified for edition6-testnet-rehearsal binds
+# this world too (see the [charter] note).
 #
 # The header of the world this was copied from follows.
 #
@@ -149,8 +148,10 @@ reasoning = { enabled = false }
 # Never silently authorize a more expensive fallback than the route that was validated
 # (GPT-6 §10.2): OpenRouter routes only to providers that honour these parameters.
 extra_body = { provider = { require_parameters = true } }
-# json_schema: 10/10 kernel-valid vs 10/10 json_object (DeepInfra, Wafer, DekaLLM), 23 Sept 2026 probe.
-contract = "json_schema"
+# json_object. Under json_schema a 23 September 2026 probe of toy prompts was 10/10
+# kernel-valid, but in the first live capital-loop rehearsal that day its hosts returned 9
+# of 11 real contracts malformed (`"emits":","`, required fields absent), against about 1%
+# on json_object in the A/B batches before.
 
 [[models]]
 id = "openai/gpt-5.6-sol"
@@ -303,7 +304,7 @@ reasoning = { enabled = false }
 [[assemblies]]
 id = "mechanism"
 role = "producer"
-model_id = "venice:deepseek-v4-1-flash"
+model_id = "deepseek/deepseek-v4.1-flash"
 accepts = ["WorldUpdate", "Fill"]
 max_tokens = "provider"
 effort = "low"
@@ -313,7 +314,7 @@ initial_state = { lens = "Your starting prior is that mechanisms explain more th
 [[assemblies]]
 id = "empirical"
 role = "producer"
-model_id = "venice:openai-gpt-6-luna"
+model_id = "openai/gpt-6-luna"
 accepts = ["WorldUpdate", "Fill"]
 max_tokens = "provider"
 effort = "low"
@@ -335,7 +336,7 @@ initial_state = { lens = "Your starting prior is that reusable capability may be
 [[assemblies]]
 id = "opportunity"
 role = "producer"
-model_id = "venice:openai-gpt-6-luna"
+model_id = "openai/gpt-6-luna"
 accepts = ["WorldUpdate", "Fill"]
 max_tokens = "provider"
 effort = "low"
@@ -375,7 +376,7 @@ initial_state = { lens = "Your starting prior is that what a return did is stron
 [[assemblies]]
 id = "judge-base-rate"
 role = "evaluator"
-model_id = "venice:openai-gpt-6-luna"
+model_id = "openai/gpt-6-luna"
 accepts = ["ProducerReturn", "Exposure"]
 max_tokens = "provider"
 effort = "low"
@@ -396,7 +397,7 @@ initial_state = { lens = "Your starting prior is that apparent evaluator skill i
 [[assemblies]]
 id = "meta-countercase"
 role = "meta"
-model_id = "venice:deepseek-v4-1-flash"
+model_id = "deepseek/deepseek-v4.1-flash"
 accepts = ["Verdict", "MetaVerdict"]
 max_tokens = "provider"
 effort = "low"
@@ -430,7 +431,7 @@ initial_state = { lens = "Your starting prior is that a confident verdict is wro
 [[assemblies]]
 id = "antagonist"
 role = "antagonist"
-model_id = "venice:openai-gpt-6-luna"
+model_id = "openai/gpt-6-luna"
 accepts = ["WorldUpdate"]  # architect review #7: once a tick, not every price print
 max_tokens = "provider"
 effort = "low"
@@ -442,7 +443,7 @@ initial_state = { lens = "Your starting prior is that a judge can approve work w
 [[assemblies]]
 id = "antagonist-core"
 role = "antagonist"
-model_id = "venice:qwen-3-8-flash"
+model_id = "qwen/qwen3.8-flash"
 accepts = ["Tick"]
 max_tokens = "provider"
 effort = "low"
@@ -560,12 +561,12 @@ max_venice_per_window = "10"
 # The absolute bound: at most $10 of real mainnet USDC is ever AUTHORIZED for Venice by
 # this world, re-authorizations after an expired top-up included.
 max_venice_total_usd = "10"
-# PLACEHOLDER -- THE OPERATOR MUST SET THIS BEFORE A LIVE RUN. No top-up is prepared if
-# it would leave the Base mainnet reserve below this balance, which no fresh run can
-# reset. The rehearsal runner reads the reserve keylessly at launch and refuses unless
-# reserve - floor <= max_venice_total_usd: set it to the reserve's current USDC minus
-# what this rehearsal may spend in total.
-venice_reserve_floor_usd = "0"
+# No top-up is prepared if it would leave the Base mainnet reserve below this balance,
+# which no fresh run can reset. The rehearsal runner reads the reserve keylessly at
+# launch and refuses unless reserve - floor <= max_venice_total_usd. Set on 23 September
+# 2026 for the first live capital-loop rehearsal: the reserve read $18.266 USDC (0 ETH;
+# Venice credit $0.098), so the floor is that less the $10 this world may ever spend.
+venice_reserve_floor_usd = "8.266"
 # The only payee a Venice top-up quote may name. Recorded from Venice's live unpaid 402
 # quote on 11 September 2026 (docs/research/venice.md, "x402 flow"); the operator should
 # re-read it with the unpaid quote in docs/architecture/capital-loop-rehearsal.md. A
@@ -585,18 +586,19 @@ spot_pairs = ["PURR/USDC", "HYPE/USDC"]
 # with their definitions in the charter object and one card.
 [charter]
 edition = 1
-# Edition 6's own charter, drafted and adopted by this roster on 23 September 2026
+# Edition 6's own charter, drafted and adopted 3-2 by this population on 23 September 2026
 # (scripts/charter_session.py, live; docs/charter/edition6-ratified.toml and
-# edition6-session.json): 45 proposed cards, 7 passed their ballots and the
-# preflight, and a fresh sortition adopted the whole 3-2. It replaces edition 5's
-# table. The architect supplied the norms only (essay II.IV.a).
-# As adopted, card `independent-uptake` is described as uptake by an independent
-# lineage but binds `revision_rate` (accepted registrations or activated
-# amendments); the world publishes no uptake observation. It stands as the
-# population wrote it; an amendment or the next session may change it.
-# The cards are edition6-testnet-rehearsal's, ratified there. No digest is claimed:
-# this world routes seven seats through Venice, so its roster hashes differently,
-# and a funded launch of this roster would need its own session.
+# edition6-session.json): 45 proposed cards, 7 passed their ballots and the preflight.
+# The architect supplied the norms only (essay II.IV.a). As adopted, card
+# `independent-uptake` is described as uptake by an independent lineage but binds
+# `revision_rate` (accepted registrations or activated amendments); the world publishes
+# no uptake observation. It stands as the population wrote it.
+# UNPINNED. The roster changed after that session (DeepSeek's contract, every seat on
+# OpenRouter, the Venice menu), so its roster digest no longer holds and none is
+# claimed. Two sessions on the changed roster drafted new tables and rejected them, 4-1
+# and 3-2 (docs/charter/edition6-session-2.json, -3.json); several ballots read the draft
+# against this table as if both were to stand. A funded launch needs a session that
+# adopts on the launch roster, and its digests pinned here.
 norms = [
   { id = "consequential usefulness", definition = "Create things or changes that others have reason to value; uptake by an independent counterparty is evidence, internal applause is a hypothesis." },
   { id = "epistemic integrity", definition = "Make commitments answerable to evidence and preserve the ability to discover that they were wrong; a changed criterion does not rewrite what was promised." },

@@ -279,11 +279,15 @@ def test_only_the_capital_loop_world_names_the_hybrid_keys():
     assert all(getattr(TreasurySpec(), key) is None for key in HYBRID_VENICE_KEYS)
 
 
-def test_the_capital_loop_world_puts_most_seats_on_venice_and_caps_two_conversions():
+def test_the_capital_loop_world_starts_on_openrouter_and_caps_two_conversions():
+    # The first live rehearsal (23 September 2026) seeded seven seats on Venice with $0.098
+    # of credit and none could think. Seats start where the operator funded them; Venice
+    # routes of the seated families stay on the menu for credit the factory buys.
     world = capital_loop()
     menu = {m.id: m for m in world.models}
-    venice = [a for a in world.assemblies if menu[a.model_id].provider == "venice"]
-    assert 2 * len(venice) >= len(world.assemblies)
+    assert all(menu[a.model_id].provider == "openrouter" for a in world.assemblies)
+    assert {"venice:openai-gpt-6-luna", "venice:deepseek-v4-1-flash",
+            "venice:qwen-3-8-flash"} <= set(menu)
     assert world.treasury.venice_network == "base-mainnet"
     assert world.treasury.max_venice_per_window == 2 * FIVE
     assert world.treasury.max_venice_total_micro == 2 * FIVE

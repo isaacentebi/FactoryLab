@@ -139,8 +139,9 @@ def work_disclosure(kinds: dict[str, str], predicates: list[dict]) -> dict:
     return {
         "reward_shapes": {
             "judged": "The mean of the verdicts the judges that read the return gave.",
-            "forecast": "Return forecasts: [{predicate, params, q}]. Reward is mean Brier "
-            "when every prediction resolves; missing outcomes are unscored.",
+            "forecast": "Return forecasts: [{predicate, params, q}]. Reward is the mean "
+            "Brier score 1 - (q - y)^2 when every prediction resolves; missing outcomes are "
+            "unscored.",
             "conformity": "Return conformity (0 to 1) on the judged work. Graded by the tier "
             "above, where one exists, and scored against the judged work's consequence "
             "score.",
@@ -148,7 +149,8 @@ def work_disclosure(kinds: dict[str, str], predicates: list[dict]) -> dict:
             "scored against its measured outcome than those judges score on other returns.",
             "counter": "Return verdict (0 to 1) on the return a verdict judged. Settles when "
             "the world measures that return, on 0.5 + 0.5 * (your Brier - that verdict's "
-            "Brier); unscored when the world never measures it.",
+            "Brier), Brier = 1 - (verdict - outcome)^2; unscored when the world never "
+            "measures it.",
         },
         "default_reward_shape": "judged",
         "kind_rewards": shapes,

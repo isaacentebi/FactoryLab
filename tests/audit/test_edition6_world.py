@@ -68,12 +68,13 @@ def test_every_seat_runs_on_the_seed_system_prompt_with_a_one_sentence_prior():
         assert "not" not in lens.lower().split(), seat.id
 
 
-def test_the_charter_is_the_populations_own_and_pins_this_roster(monkeypatch):
+def test_the_charter_is_the_populations_own_and_claims_no_pin_for_a_changed_roster(
+        monkeypatch):
     five, six = _history(EDITION5, monkeypatch), load_manifest(EDITION6)
     # Essay II.IV.a: the architect supplies norms only. The norms are edition 5's (the
     # norm house keeps fidelity's value and drops its procedure, charter audit S2); the
-    # cards are the ones edition 6's own population drafted and adopted on 23 September
-    # 2026 (docs/charter/edition6-ratified.toml).
+    # cards are the ones edition 6's population adopted on 23 September 2026
+    # (docs/charter/edition6-ratified.toml).
     assert [str(n) for n in six.charter.norms] == [str(n) for n in five.charter.norms]
     for old, new in zip(five.charter.norms, six.charter.norms, strict=True):
         if str(new) != "fidelity":
@@ -83,20 +84,19 @@ def test_the_charter_is_the_populations_own_and_pins_this_roster(monkeypatch):
     assert "A judge identifying such a conflict must" not in fidelity.definition
     ratified = tomllib.loads(Path("docs/charter/edition6-ratified.toml").read_text())
     assert [c.id for c in six.charter.cards] == [c["id"] for c in ratified["charter"]["cards"]]
-    assert six.charter.cards != five.charter.cards
-    # The pins verify: the loaded cards hash to the ratified digest and the roster to the
-    # roster that voted, so a funded copy passes charter provenance ...
-    assert six.charter_content_sha256 == six.charter_ratified_sha256
-    assert roster_hash(six) == six.charter_roster_sha256 != roster_hash(five)
+    # The roster changed after that session, so no digest is claimed, and a funded copy
+    # is refused until a session adopts on the launch roster.
+    assert six.charter_ratified_sha256 is None and six.charter_roster_sha256 is None
     assert six.exchange.client_namespace is None and six.exchange.principal_usd is None
     funded = replace(six, name="funded", exchange=replace(
         six.exchange, mainnet=True, client_namespace="0" * 32))
-    funded._validate_funded_admission()
-    # ... and refuses a roster the charter was not ratified on, or an edited charter.
-    moved = replace(funded, assemblies=funded.assemblies[1:])
+    with pytest.raises(ValueError, match="ratified_sha256"):
+        funded._validate_funded_admission()
+    # A pin, once claimed, binds the roster that voted: a stale one is refused.
+    stale = replace(funded, charter_ratified_sha256=six.charter_content_sha256,
+                    charter_roster_sha256="0" * 64)
     with pytest.raises(ValueError, match="roster differs"):
-        moved._validate_funded_admission()
-    edited = replace(funded, charter_content_sha256="0" * 64)
-    with pytest.raises(ValueError, match="differs from the ratified charter digest"):
-        edited._validate_funded_admission()
+        stale._validate_funded_admission()
+    assert roster_hash(six) == roster_hash(load_manifest(
+        "worlds/edition6-capital-loop.toml"))
 

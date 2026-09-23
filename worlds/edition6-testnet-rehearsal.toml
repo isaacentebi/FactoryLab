@@ -119,8 +119,10 @@ reasoning = { enabled = false }
 # Never silently authorize a more expensive fallback than the route that was validated
 # (GPT-6 §10.2): OpenRouter routes only to providers that honour these parameters.
 extra_body = { provider = { require_parameters = true } }
-# json_schema: 10/10 kernel-valid vs 10/10 json_object (DeepInfra, Wafer, DekaLLM), 23 Sept 2026 probe.
-contract = "json_schema"
+# json_object. Under json_schema a 23 September 2026 probe of toy prompts was 10/10
+# kernel-valid, but in the first live capital-loop rehearsal that day its hosts returned 9
+# of 11 real contracts malformed (`"emits":","`, required fields absent), against about 1%
+# on json_object in the A/B batches before.
 
 [[models]]
 id = "openai/gpt-5.6-sol"
@@ -252,6 +254,24 @@ provider = "venice"
 input_usd_per_mtok = "0.14"
 output_usd_per_mtok = "0.49"
 reasoning = { enabled = false }
+
+# The capital loop's routes for the seats' own models, served by Venice at Venice's list
+# prices (23 September 2026), so a seat can think on the credit its own profit bought
+# without changing what it thinks with.
+[[models]]
+id = "venice:openai-gpt-6-luna"
+provider = "venice"
+input_usd_per_mtok = "0.125"
+output_usd_per_mtok = "0.625"
+reasoning = { effort = "low" }
+
+[[models]]
+id = "venice:deepseek-v4-1-flash"
+provider = "venice"
+input_usd_per_mtok = "0.375"
+output_usd_per_mtok = "1.50"
+reasoning = { enabled = false }
+
 
 [[assemblies]]
 id = "mechanism"
@@ -507,17 +527,19 @@ spot_pairs = ["PURR/USDC", "HYPE/USDC"]
 # with their definitions in the charter object and one card.
 [charter]
 edition = 1
-# Edition 6's own charter, drafted and adopted by this roster on 23 September 2026
+# Edition 6's own charter, drafted and adopted 3-2 by this population on 23 September 2026
 # (scripts/charter_session.py, live; docs/charter/edition6-ratified.toml and
-# edition6-session.json): 45 proposed cards, 7 passed their ballots and the
-# preflight, and a fresh sortition adopted the whole 3-2. It replaces edition 5's
-# table. The architect supplied the norms only (essay II.IV.a).
-# As adopted, card `independent-uptake` is described as uptake by an independent
-# lineage but binds `revision_rate` (accepted registrations or activated
-# amendments); the world publishes no uptake observation. It stands as the
-# population wrote it; an amendment or the next session may change it.
-ratified_sha256 = "b3fa16508315238f03726a600d20a4a58566c8fe80c9e290174b6c2f9478ac59"
-roster_sha256 = "2dbe4b41e657a2a1dbe6c71145a06af9ef1c74ea64c2d273c48f99b59fa3abf6"
+# edition6-session.json): 45 proposed cards, 7 passed their ballots and the preflight.
+# The architect supplied the norms only (essay II.IV.a). As adopted, card
+# `independent-uptake` is described as uptake by an independent lineage but binds
+# `revision_rate` (accepted registrations or activated amendments); the world publishes
+# no uptake observation. It stands as the population wrote it.
+# UNPINNED. The roster changed after that session (DeepSeek's contract, every seat on
+# OpenRouter, the Venice menu), so its roster digest no longer holds and none is
+# claimed. Two sessions on the changed roster drafted new tables and rejected them, 4-1
+# and 3-2 (docs/charter/edition6-session-2.json, -3.json); several ballots read the draft
+# against this table as if both were to stand. A funded launch needs a session that
+# adopts on the launch roster, and its digests pinned here.
 norms = [
   { id = "consequential usefulness", definition = "Create things or changes that others have reason to value; uptake by an independent counterparty is evidence, internal applause is a hypothesis." },
   { id = "epistemic integrity", definition = "Make commitments answerable to evidence and preserve the ability to discover that they were wrong; a changed criterion does not rewrite what was promised." },
