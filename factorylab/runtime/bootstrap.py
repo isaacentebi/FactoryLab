@@ -516,6 +516,12 @@ class BootstrapMixin:
         # another lineage than the tool's builder, until that decision settles and its
         # builder is credited (``CompositionMixin._credit_requested``).
         self.tool_uses: dict[str, dict[str, int]] = {}
+        # W4: registering decision -> {"until": tick, "tools": [...], "scores": [...]},
+        # held for its tool-use window (``CompositionMixin._hold_for_tool_use``).
+        self.tool_holds: dict[str, dict[str, Any]] = {}
+        # A priced settlement's raw score while the kernel settles it (never between
+        # events): what the settlement hook credits composition with.
+        self.raw_scores: dict[str, float] = {}
         # C10 routing evidence: each seat's last rendered ceiling and the world size then.
         self.seat_ceilings: dict[str, dict[str, int]] = {}
         self.entitlement_bridges: dict[str, int] = {}  # handle -> pool-backed cover, one call

@@ -117,10 +117,20 @@ class ContractQueue:
         return [self.get(d.handle) for d in self.queue.outstanding(actor)]
 
     def settle(self, handle, *, channel, **kwargs):
-        """Only the selected variant may settle; the original kernel routing channel is retained."""
+        """Only the selected variant may settle; the original kernel routing channel is retained.
+
+        Guarantees every settlement the runtime makes, whatever path made it (a
+        verdict, a ballot, a censoring), is seen once by the runtime's settlement
+        hook after the kernel retained it: what a decision composed is credited
+        from its one settlement (W4, ``CompositionMixin._settled``).
+        """
         if channel != self.get(handle).channel:
             raise ValueError("settlement must address the selected return channel")
-        return self.queue.settle(handle, channel=self.queue.get(handle).channel, **kwargs)
+        result = self.queue.settle(handle, channel=self.queue.get(handle).channel, **kwargs)
+        hook = getattr(self.runtime, "_settled", None)
+        if hook is not None:
+            hook(handle, kwargs)
+        return result
 
     def _mapped(self, handle, ret):
         """Return the same feedback under its selected channel, retaining every other field.
@@ -393,11 +403,15 @@ class RoutingMixin:
         Verdict"), or, when none emits it, those that accept it (work on an input
         of that kind). A retired contract is never in it, so retirement changes
         the menu and never fails a request. A judging contract is never in it
-        either: it cannot be commissioned (``_commissioned_judge_refusal``).
+        either: it cannot be commissioned (``_commissioned_judge_refusal``). Nor is
+        an adversary (any contract with an exposure-shaped kind): the adversarial
+        minority is a share of routing the kernel caps (``_cap_adversarial``), not
+        a hand any requester may hire, and an Exposure answer can trade.
         """
         live = [a.spec for a in self.assemblies.values()
                 if a.spec.id not in self.retired_assemblies
-                and self._commissioned_judge_refusal(a.spec.id) is None]
+                and self._commissioned_judge_refusal(a.spec.id) is None
+                and "exposure" not in assembly_rewards(a.spec).values()]
         emitters = sorted(s.id for s in live if kind in s.emits)
         return emitters or sorted(s.id for s in live if kind in s.accepts)
 

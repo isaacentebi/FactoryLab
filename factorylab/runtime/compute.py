@@ -2194,7 +2194,9 @@ class ComputeMixin:
             step = self._evaluator_step if emitted == "Verdict" else self._meta_step
             step(event, handle, sample, parent.deadline_ns, returned=ret)
         else:
-            if self._may_write(handle):
+            # A requested child never trades through an Exposure answer: an adversary
+            # cannot be commissioned (``_request_universe``), and this holds even so.
+            if self._may_write(handle) and emitted != "Exposure":
                 self._execute_outputs(ret, emitted)
             self._apply_registrations(handle, ret)
             self.consequences.finish(handle, ret.cost)

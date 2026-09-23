@@ -159,16 +159,19 @@ class Runtime(
     def _settle_priced(self, handle, *, cards, **kwargs):
         """Custom emitted kinds answer for their own cards on every reward shape.
 
-        A decision that settles here also carries its raw score to what it composed:
-        the children it consumed and the population tools it used across lineages
-        (the collaboration credit, ``CompositionMixin._credit_requested``).
+        A decision that settles here carries its raw (pre-penalty) score to what it
+        composed: the settlement hook every path shares (``ContractQueue.settle``,
+        ``CompositionMixin._settled``) reads it from ``raw_scores``, so each decision
+        answers for its own cards and credit is never charged the requester's.
         """
         emitted = self.return_kinds.get(handle)
         if emitted and emitted not in ("ProducerReturn", "Verdict", "MetaVerdict", "Exposure"):
             cards = measured_role(emitted)
-        result = super()._settle_priced(handle, cards=cards, **kwargs)
-        self._credit_requested(handle, None if kwargs.get("unresolved") else kwargs["score"])
-        return result
+        self.raw_scores[handle] = kwargs["score"]
+        try:
+            return super()._settle_priced(handle, cards=cards, **kwargs)
+        finally:
+            self.raw_scores.pop(handle, None)
 
     def _settle_exchange_effects(self, events, *, observe_positions=True) -> None:
         super()._settle_exchange_effects(events, observe_positions=observe_positions)

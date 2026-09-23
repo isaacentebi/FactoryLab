@@ -1778,15 +1778,21 @@ class SchematicsMixin:
                 "its requester ok, settles after its requester does, on the mean of its "
                 "judges' verdict and its requester's settled score before the requester's "
                 "card penalty (each alone when only one exists), less its own card "
-                "penalty; that request router learns from it. A child of the requester's "
-                "own lineage, or self, settles on its verdict alone"
+                "penalty; that request router learns from it. Only a requester settled on "
+                "a producer verdict or as a composed return credits it. A child whose "
+                "lineage is any lineage of its request chain, or self, settles on its "
+                "verdict alone. No request can reach a judging or an adversarial contract"
             ),
             "tool_use_credit": (
-                "when a decision that called a population tool registered by another "
-                "lineage settles on a score, that score before its card penalty reaches "
-                "the tool's builder once, as an outcome addressed to the handle that "
-                "registered the tool; a call that errored, or a decision that settled "
-                "without a score, credits nothing"
+                "a producer decision that registers a population tool is held for "
+                "verdict_timeout_ticks + consequence_backstop_ticks, or to the last event "
+                "before its own deadline if sooner, and settles once on the mean of its "
+                "judges' verdict and the mean score, before card penalty, of the "
+                "decisions that called the tool without error and settled in that window "
+                "on the 0.5-centred scale (verdict, composed, evaluation, exposure or "
+                "ballot scores); a caller whose request chain includes the builder's "
+                "lineage does not count. A tool registered by any other decision "
+                "credits its builder's inbox only"
             ),
             "antagonist_routing": (
                 "router probability mass on contracts declaring Exposure is renormalised to "

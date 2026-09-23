@@ -34,10 +34,11 @@ def test_the_composition_card_counts_requests_credits_and_cross_lineage_tool_cal
         {"kind": "credit.composed"}, {"kind": "credit.composed"},
         {"kind": "credit.withheld"},
         {"kind": "composed.settled", "credit": 0.4},
-        {"kind": "composed.settled", "credit": None},
+        {"kind": "composed.settled", "credit": None, "tool_use_credit": 0.7},
         {"kind": "tool.population_call", "across_lineage": True},
         {"kind": "tool.population_call", "across_lineage": False},
-        {"kind": "credit.tool", "credit": 0.7},
+        {"kind": "credit.tool", "credit": 0.7, "applied": "hold"},
+        {"kind": "credit.tool", "credit": 0.9, "applied": "late"},
     ]
     card = fastloop.composition(events)
     assert card == {
@@ -52,6 +53,7 @@ def test_the_composition_card_counts_requests_credits_and_cross_lineage_tool_cal
         "population_tool_calls_by_non_builder": 1,
         "tool_builder_credits": 1,
         "tool_builder_credit_sum": 0.7,
+        "tool_builder_settlements_credited": 1,
     }
     assert fastloop.scorecard(events)["composition"] == card
     combined = fastloop.combine([{"composition": card}, {"composition": card}])

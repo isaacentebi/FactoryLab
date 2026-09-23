@@ -137,10 +137,6 @@ class PolicyProvider(ScriptedProvider):
         # and both credits are reached on the free tier.
         if not tool_listed and n % 5 == 2:
             return {"action": "build", "register": [HALF_SPREAD]}
-        if tool_listed and n % 6 == 1:
-            return {"action": "investigate", "tool_calls": [{
-                "tool": HALF_SPREAD["id"],
-                "args": {"mid": float(mid) if mid else 100.0, "bps": 10}}]}
         if n % 9 == 4:
             return {"action": "investigate", "requests": [{
                 "target": "ProducerReturn", "description": CHILD_TASK,
@@ -148,6 +144,10 @@ class PolicyProvider(ScriptedProvider):
                     "type": "object", "properties": {"summary": {"type": "string"}},
                     "required": ["summary"]},
                 "propensity": {"request": 0.5, "hold": 0.5}, "chosen": "request"}]}
+        if tool_listed and n % 3 == 1:
+            return {"action": "investigate", "tool_calls": [{
+                "tool": HALF_SPREAD["id"],
+                "args": {"mid": float(mid) if mid else 100.0, "bps": 10}}]}
         if n % 7 == 3 and mid:
             # The same resting sell twice (decisions 264 and 273), above the market;
             # the venue takes both (Chapter II rulings, R6).
@@ -345,8 +345,12 @@ def composition(events: list[dict[str, Any]]) -> dict[str, Any]:
     children = [e for e in events if e.get("kind") == "request.child"]
     settled = [e for e in events if e.get("kind") == "composed.settled"]
     paid = [e for e in settled if e.get("credit") is not None]
+    builders = [e for e in settled if e.get("tool_use_credit") is not None]
     calls = [e for e in events if e.get("kind") == "tool.population_call"]
-    tool_credits = [e for e in events if e.get("kind") == "credit.tool"]
+    # A use that reached a builder's held decision (or, unheld, its inbox); a use that
+    # settled after the builder's window closed is ledgered "late" and credits nothing.
+    tool_credits = [e for e in events if e.get("kind") == "credit.tool"
+                    and e.get("applied", "hold") != "late"]
     return {
         "child_requests_by_kind": dict(collections.Counter(
             str(e.get("requested", e.get("target"))) for e in children)),
@@ -362,6 +366,8 @@ def composition(events: list[dict[str, Any]]) -> dict[str, Any]:
         "population_tool_calls_by_non_builder": sum(1 for e in calls if e.get("across_lineage")),
         "tool_builder_credits": len(tool_credits),
         "tool_builder_credit_sum": round(sum(e.get("credit") or 0 for e in tool_credits), 6),
+        # Registering decisions that settled on their verdict and their tool's use.
+        "tool_builder_settlements_credited": len(builders),
     }
 
 

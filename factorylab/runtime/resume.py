@@ -569,7 +569,7 @@ _RUNTIME_FIELDS = (
     "tool_owner",
     # W4: population-tool calls awaiting their calling decision's settlement, to
     # credit the tool's builder. Defaults empty when an older checkpoint lacks it.
-    "tool_uses",
+    "tool_uses", "tool_holds",
     "pending_votes", "regions", "priced", "rolling", "unparsed_logged", "window",
     "pending", "balance_at", "events_log", "reserve_window_start", "internal",
     "n", "emitted", "insolvency_count", "_compute_routed", "_compute_unaffordable",

@@ -126,7 +126,8 @@ def evaluation_reward(grade: float | None, consequence: float | None) -> float |
     return min(1.0, max(0.0, fmean(signals)))
 
 
-def composed_reward(verdict: float | None, credit: float | None) -> float | None:
+def composed_reward(verdict: float | None, credit: float | None,
+                    use: float | None = None) -> float | None:
     """A requested child's reward: the equal mean of its verdict and its requester's score.
 
     Guarantees a value in [0, 1] when either signal exists, that signal alone when
@@ -188,9 +189,21 @@ def composed_reward(verdict: float | None, credit: float | None) -> float | None
     the requester's own lineage, or ``self``, earns nothing extra: a lineage
     crediting its own request is one outcome paid twice (no self-dealing). The
     requester's own reward is untouched; the credit is a signal, not a transfer,
-    so nothing is counted twice.
+    so nothing is counted twice. Credit flows only from a requester that settled
+    on a producer verdict or as a composed return: an exposure score, an
+    evaluation reward or a Brier score is not a measure of whether work paid.
+
+    A population tool is the same primitive. The decision that registered a tool
+    is held for a bounded window, and ``use`` is the mean raw score of the
+    other-lineage decisions that called the tool and settled on a verdict inside
+    it: one signal, however many callers, so heavy use cannot drown the builder's
+    own verdict, and the same equal mean applies. A decision that is both a
+    requested child and a builder settles on the equal mean of all three.
     """
-    return evaluation_reward(verdict, credit)
+    signals = [s for s in (verdict, credit, use) if s is not None]
+    if not signals:
+        return None
+    return min(1.0, max(0.0, fmean(signals)))
 
 
 @dataclass
@@ -955,9 +968,10 @@ class FeedbackMixin:
             if (pend is None or pend.evaluation or decision.status is not SettleStatus.PENDING
                     or decision.channel != CH_VERDICT):
                 continue
-            if pend.requester is not None:
-                # A requested child's verdicts wait for its requester's settlement:
-                # it settles on both (``composed_reward``, ``_settle_composed``).
+            if self._held(pend):
+                # A requested child's verdicts wait for its requester's settlement, and
+                # a tool builder's for its tool-use window: it settles on all its
+                # signals (``composed_reward``, ``_settle_composed``).
                 pend.verdicts.extend(verdicts)
                 continue
             score = fmean(v for _judge, v in verdicts)
@@ -1459,6 +1473,11 @@ class FeedbackMixin:
         })
         self.consequence_mix = after
 
+    def _held(self, pend: PendingJudgement) -> bool:
+        """Whether a verdict-channel decision waits on a credit beside its verdict (W4)."""
+        return not pend.evaluation and (pend.requester is not None
+                                        or pend.handle in getattr(self, "tool_holds", {}))
+
     def _censor_stale_judgements(self) -> None:
         """A decision nobody judged within the verdict timeout settles censored.
 
@@ -1470,7 +1489,7 @@ class FeedbackMixin:
         stale = [
             p
             for p in self.pending.values()
-            if not p.evaluation and p.requester is None
+            if not p.evaluation and not self._held(p)
             and self._tick_age(p) > self.ev.verdict_timeout_ticks
         ]
         for p in stale:
