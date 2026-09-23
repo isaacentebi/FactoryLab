@@ -190,4 +190,5 @@ def test_the_rehearsal_runner_runs_the_launch_check_before_anything_is_built(
     assert report["refusal"]["reason"] == "source_root_mismatch"
     printed = capsys.readouterr().out
     assert '"reserve_usdc_micro": 10000000' in printed
-    assert '"venice_reserve_floor_micro": 0' in printed
+    floor = load_manifest("worlds/edition6-capital-loop.toml").treasury.venice_reserve_floor_micro
+    assert f'"venice_reserve_floor_micro": {floor}' in printed
