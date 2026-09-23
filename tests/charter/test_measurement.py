@@ -82,3 +82,17 @@ def test_turnover_over_several_windows_is_the_mean_of_each_windows_own_ratio():
     card = MetricCard("card", NORM, "d", "u", MetricWindow("windows", 2, None), "at most 2",
                       "turnover", "all")
     assert measure_card(card, samples) == {"all": pytest.approx(1.0)}
+
+
+def test_published_forecast_skill_states_its_score_and_which_sign_beats_the_base_rate():
+    """Schematics are public (essay II.I.b): a seat reading the catalogue can tell which
+    sign of ``forecast_skill`` beats the base rate. "Brier" alone reads both ways; the
+    score here is 1 - (q - y)^2, higher is better."""
+    from factorylab.charter.measurement import measurement_catalogue
+    from factorylab.runtime.observations import CATALOGUE
+
+    published = next(r for r in measurement_catalogue() if r["id"] == "forecast_skill")
+    seed = next(o for o in CATALOGUE if o.id == "forecast_skill")
+    for description in (published["description"], seed.description):
+        assert "1 - (q - y)^2" in description
+        assert "positive when" in description and "beat the base rate" in description
