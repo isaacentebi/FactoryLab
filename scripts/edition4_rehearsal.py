@@ -198,10 +198,6 @@ class PrepaidProvider:
         self.manifest = manifest
         self.admission = admission
         self._prices = manifest.price_table()
-        # Each model's latest feasibility probe: True when it exceeded the whole cap.
-        # When every seated model's latest probe did, no call can be admitted (Codex
-        # review of #136); a probe grows with the world, so only the latest counts.
-        self._over_cap: dict[str, bool] = {}
 
     def _namespace_allowed(self, model_id: str) -> bool:
         if model_id.startswith("venice:"):
@@ -219,12 +215,14 @@ class PrepaidProvider:
         if not self._namespace_allowed(model_id):
             return False, "provider: rail denied"
         allowed, reason = self.admission.can_admit(ceiling_micro, probe=True)
-        self._over_cap[model_id] = reason == "quote_above_cap"
-        seated = {a.model_id for a in self.manifest.assemblies}
-        if all(self._over_cap.get(m, False) for m in seated):
-            # A cap below every seat's current worst case admits nothing; the run ends
-            # rather than recording NOOP decisions for its remaining events.
-            self.admission.stop_reason = self.admission.stop_reason or "cap_below_every_seat"
+        if reason == "quote_above_cap":
+            # The rehearsal's cap is its compute budget, so a seat whose worst case
+            # exceeds all of it is excluded for compute, exactly as a seat whose ceiling
+            # exceeds the wallet is. The runtime then applies its own rule over its live
+            # seats: a draw whose every candidate is excluded for compute joins the
+            # insolvency streak, which ends or pauses the world (treasury.insolvency_events).
+            return False, (f"compute: ceiling {ceiling_micro} exceeds rehearsal cap "
+                           f"{self.admission.cap_micro}")
         if not allowed:
             return False, f"admission: {reason}"
         affordable = getattr(self.inner, "affordable", None)
