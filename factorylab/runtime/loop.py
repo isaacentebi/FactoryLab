@@ -295,6 +295,8 @@ class Runtime(
         previous_window = self.reserve_window_start
         self.n += 1
         self.clock.now_ns = max(self.clock.now_ns, ev.ts_ns)
+        # The safety path's own clock restarts with every event (time audit T8).
+        self._safety_ns = self.clock.now_ns
         self.bus.publish(ev)
         self.stats.events += 1
         self.events_log.append({"kind": str(ev.kind), "payload": _to_plain(ev.payload)})

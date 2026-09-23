@@ -22,6 +22,22 @@ PREDISPATCH = (socket.gaierror, socket.herror, ConnectionRefusedError,
                ssl.SSLCertVerificationError)
 
 
+#: The reason a provider gives when a completion outlived the deadline its caller
+#: stated (``ModelRequest.timeout_s``): the call may have been billed, and no answer
+#: arrived within the time it was allowed.
+CALL_EXPIRED = "Call deadline expired"
+
+
+def expired(exc: BaseException) -> bool:
+    """True when a transport fault is the socket timing out, not the peer failing."""
+    return any(isinstance(cause, TimeoutError) for cause in (exc, getattr(exc, "reason", None)))
+
+
+def call_timeout(req_timeout: float | None, ceiling: float) -> float:
+    """The deadline one completion is given: its caller's, never above the adapter's."""
+    return ceiling if req_timeout is None else max(1.0, min(float(req_timeout), ceiling))
+
+
 def dispatched(exc: BaseException) -> bool:
     """True unless the failure is definitive evidence the request was never sent."""
     # ``URLError`` carries the underlying socket failure as its ``reason``.

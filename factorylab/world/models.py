@@ -108,6 +108,10 @@ class ModelRequest:
     max_tokens: int = 4096
     effort: str = "medium"
     json_object: bool = False
+    #: The call's own deadline in seconds, stated by whoever runs it (the runtime
+    #: states a ratio of its delivered tick, Chapter II §IV.c; time audit T8). None
+    #: leaves the adapter's own ceiling in force.
+    timeout_s: float | None = None
 
 
 @dataclass(frozen=True)

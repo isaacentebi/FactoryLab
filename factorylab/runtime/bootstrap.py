@@ -31,7 +31,7 @@ from factorylab.runtime.cascade import CascadeGate
 from factorylab.runtime.compute import ContractConsequences
 from factorylab.runtime.feedback import PendingJudgement
 from factorylab.runtime.immune import ImmunePriceController
-from factorylab.runtime.live import LiveClock, LiveVenue, Reconciler, build_provider
+from factorylab.runtime.live import LiveClock, LiveVenue, Reconciler, WallClock, build_provider
 from factorylab.runtime.observations import seed_book
 from factorylab.runtime.pricing import MeasureWindow
 from factorylab.runtime.resume import JournalProxy, RecoveryJournal
@@ -364,6 +364,10 @@ class BootstrapMixin:
             deterministic=isinstance(self.provider, (ScriptedProvider, FakeModel)),
         )
         self.market = JournalProxy(self.market, self.ledger, "market")
+        # Time audit T8: the safety path reads wall time between model calls, journaled.
+        self.wall = JournalProxy(WallClock(lambda: self.tick_clock, self.clock), self.ledger,
+                                 "wall", deterministic=not self.live)
+        self._safety_ns = self.clock.now_ns
         # Uncertain bills settle from the provider's own balance, read through the
         # journal like every other provider read so replay reproduces it.
         self.bill_settlement = BillSettlement(self._provider_balance, record=self._record_market)

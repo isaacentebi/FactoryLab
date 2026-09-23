@@ -28,11 +28,12 @@ from factorylab.kernel.money import nonnegative_usd_micro
 #: a transport timeout is billed as uncertain at the ceiling, so it must be rarer than
 #: a slow reply. The ten-minute tick absorbs it.
 MODEL_HTTP_TIMEOUT_S = 180
-#: A completion's own ceiling. Native completion allowances (#121) let a reply think
-#: for minutes, so it is far longer than a read's -- but it is finite: with no deadline
-#: one stalled connection held an edition 5 world for over half an hour, and a factory
-#: nobody watches cannot wait on a socket forever. It is an idle-socket deadline,
-#: longer than a ten-minute tick; a reply that exceeds it is billed uncertain at the
+#: The adapter's ceiling on a completion, used when its caller states no deadline of
+#: its own. Native completion allowances (#121) let a reply think for minutes, so it
+#: is far longer than a read's -- but it is finite: with no deadline one stalled
+#: connection held an edition 5 world for over half an hour. The runtime states each
+#: call's deadline as a ratio of its delivered tick (``ModelRequest.timeout_s``; time
+#: audit T8), never above this. A reply that exceeds it is billed uncertain at the
 #: request's ceiling, never dropped.
 MODEL_COMPLETION_TIMEOUT_S = 900
 
@@ -69,8 +70,12 @@ class _NoRedirect(request.HTTPRedirectHandler):
         return None
 
 
-def http_request(method: str, url: str, payload: dict | None, headers: dict) -> HTTPResponse:
-    """One HTTP attempt preserves 402 headers and parses decimal numbers without floats."""
+def http_request(method: str, url: str, payload: dict | None, headers: dict, *,
+                 timeout: float | None = None) -> HTTPResponse:
+    """One HTTP attempt preserves 402 headers and parses decimal numbers without floats.
+
+    ``timeout`` is a completion's own deadline in seconds, never above the ceiling.
+    """
     req = request.Request(
         url,
         data=json.dumps(payload).encode() if payload is not None else None,
@@ -80,8 +85,9 @@ def http_request(method: str, url: str, payload: dict | None, headers: dict) -> 
     try:
         completion = method == "POST" and parse.urlsplit(url).path.rstrip("/").endswith(
             "/chat/completions")
+        ceiling = MODEL_COMPLETION_TIMEOUT_S if completion else MODEL_HTTP_TIMEOUT_S
         response = request.build_opener(_NoRedirect()).open(
-            req, timeout=MODEL_COMPLETION_TIMEOUT_S if completion else MODEL_HTTP_TIMEOUT_S)
+            req, timeout=(min(float(timeout), ceiling) if completion and timeout else ceiling))
     except error.HTTPError as exc:
         response = exc
     with response:

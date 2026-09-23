@@ -262,10 +262,29 @@ def _discard_sorted(keys: list[tuple], key: tuple) -> None:
 @dataclass
 class _ObservedMeteredModel(MeteredModel):
     record: Any = None
+    # The runtime's clock around one call (Chapter II §IV.c; time audit T8): the
+    # safety pass it runs before the call, the deadline it states for it, and what
+    # it does when the call outlives that deadline.
+    before_call: Any = None
+    deadline_s: Any = None
+    expired: Any = None
 
     def complete(self, req: ModelRequest, *, handle: str) -> Metered[ModelResponse]:
-        """Expose already-debited vendor overruns to runtime evidence before returning."""
-        metered = super().complete(req, handle=handle)
+        """Expose already-debited vendor overruns to runtime evidence before returning.
+
+        Guarantees the safety pass runs before the call, the call carries the
+        runtime's deadline, and a call that outlived it is reported as expired.
+        """
+        if self.before_call is not None:
+            self.before_call()
+        if self.deadline_s is not None:
+            req = replace(req, timeout_s=self.deadline_s())
+        try:
+            metered = super().complete(req, handle=handle)
+        except BillingUncertain as exc:
+            if self.expired is not None and call_expired(exc):
+                self.expired(handle, req.timeout_s)
+            raise
         if metered.overrun:
             self.record({"kind": "compute.overrun", "handle": handle,
                          "model_id": metered.result.model_id, "cost": metered.cost,
@@ -282,6 +301,13 @@ class _ObservedX402Model(X402MeteredModel):
         if result.cost > 0:
             self.record({"kind": "observation.market_purchase", "handle": handle})
         return result
+
+
+def call_expired(exc: BaseException) -> bool:
+    """Whether a failed completion outlived the deadline its caller stated (T8)."""
+    from factorylab.world.openai_wire import CALL_EXPIRED
+
+    return str(getattr(exc, "cause", exc)).endswith(CALL_EXPIRED)
 
 
 def _provider_fault(ret: Return) -> str | None:
@@ -443,10 +469,12 @@ class ComputeMixin:
             self.event_schemas.update(spec.schemas)
             if not self.ledger.bootstrap:
                 self.stats.registered_window.setdefault(spec.id, self.stats.reserve_windows)
+                self.stats.registered_tick.setdefault(spec.id, self.ticks_consumed)
             return asm
         model = _ObservedMeteredModel(
             self.provider, self.prices, meter, record=self._record_market,
-            settlement=self.bill_settlement,
+            settlement=self.bill_settlement, before_call=self._safety_pass,
+            deadline_s=self._call_deadline_s, expired=self._call_expired,
         )
         if spec.model_id.startswith("x402:"):
             model = _ObservedX402Model(

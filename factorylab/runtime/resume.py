@@ -399,7 +399,8 @@ class RecoveryJournal:
                     raise _recorded_error(item["error"], item.get("reason"),
                                           status=item.get("status"),
                                           unbilled=item.get("unbilled", False),
-                                          carry=item.get("carry"))
+                                          carry=item.get("carry"),
+                                          expired=item.get("expired", False))
                 return result
             if name in ("exchange.place", "exchange.close", "exchange.cancel",
                         "exchange.vault_create", "exchange.vault_transfer"):
@@ -463,6 +464,10 @@ class RecoveryJournal:
                 billing = {"status": status,
                            "unbilled": isinstance(classify_provider_failure(failure),
                                                   UnbilledFailure)}
+                from factorylab.world.openai_wire import CALL_EXPIRED
+
+                if str(failure).endswith(CALL_EXPIRED):
+                    billing["expired"] = True
             self.append({"kind": "io.result", "call": seq, "error": error,
                          **({"reason": reason} if reason is not None else {}),
                          **({"carry": carry} if carry is not None else {}), **billing})
@@ -484,6 +489,8 @@ def _read_only(name: str) -> bool:
             "search_markets", "market", "market_of_token", "midpoint"):
         return True  # the public Polymarket reads (world/polymarket.py)
     return name.rsplit(".", 1)[-1] in (
+        # The safety path's wall-clock read (time audit T8).
+        "now_ns",
         "mids", "account", "funding", "fills", "candles", "order_book", "funding_history",
         "open_orders", "balance_micro", "balance_of", "affordable", "catalogue", "discover",
         "quote", "fetch",
@@ -497,7 +504,7 @@ def _read_only(name: str) -> bool:
 
 def _recorded_error(name: str, reason: str | None = None, *,
                     status: int | None = None, unbilled: bool = False,
-                    carry: dict | None = None) -> Exception:
+                    carry: dict | None = None, expired: bool = False) -> Exception:
     from factorylab.world.evm import Pending, RailError
     from factorylab.world.exchange import VenueUnavailable
     from factorylab.world.market import PaymentOutcomeUnknown
@@ -515,6 +522,12 @@ def _recorded_error(name: str, reason: str | None = None, *,
             from factorylab.world import metering
 
             cls = metering.OpenRouterError if cls is OpenRouterError else metering.VeniceError
+        if expired:
+            # The call outlived the deadline its caller stated (time audit T8): the
+            # runtime reads that from the recorded outcome, so a replay reads it too.
+            from factorylab.world.openai_wire import CALL_EXPIRED
+
+            return cls(status, CALL_EXPIRED)
         return cls(status, "Provider request failed")
     if name == "Pending":
         return Pending(reason or "treasury rail unavailable", carry=carry)
@@ -691,6 +704,10 @@ _DERIVED_STATE = {
     "ReceiptBook._ReceiptBook__execution_ids": "derived global execution-receipt cursor",
     "ReceiptBook._ReceiptBook__execution_by_handle": "derived per-handle execution index",
     "FakeTreasury._balances_memo": "the scripted rail's balances, keyed on what they read",
+    "Runtime._safety_ns": "the safety path's last wall read, reset at every event's start",
+    "FakeTreasury.tick_index": "the world tick the runtime states before every treasury tick",
+    "FakeTreasury.forward_wait_ticks": "the runtime restates it before every treasury tick "
+                                       "from the manifest floor and the measured capital loop",
 }
 # Transient: belongs to this process or this file, not to the world.
 _TRANSIENT_STATE = {

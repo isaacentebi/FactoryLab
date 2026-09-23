@@ -72,6 +72,9 @@ class BillingUncertain(RuntimeError):
 
     def __init__(self, cost: int, cause: Exception):
         self.cost = cost
+        # The provider failure behind it, for a caller that tells an expired call from
+        # a failed one (time audit T8). Never rendered: it may name the provider.
+        self.cause = cause
         super().__init__(f"billing uncertain ({type(cause).__name__})")
 
 
