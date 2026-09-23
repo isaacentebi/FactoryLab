@@ -321,6 +321,52 @@ carry case of `scripts/calibrate_seats.py` exactly.
 | `adversarial_share` | float in [0, 1] | 0.15 | hard | Cap on the router's probability mass over antagonist assemblies (A5). The essay's "minority" is a constraint, not a prize. |
 | `sampling_step` | float in [0, 1] | 0.1 | hard | Step by which the consequence mix rises per divergent window and steps back otherwise (A14, the live sampling-rate actuator). |
 | `sampling_cap` | float in [consequence_share, 1) | 0.7 | hard | Ceiling of the raised consequence mix (A14). |
+| `multi_judge_share` | float in [0, 1] | 0.3 | hard | Share of judged returns drawn again until `multi_judge_count` judges read them (Wave 5a; evaluations P6, M2). Drawn once per judged return from the runtime's seeded stream; 0 draws nothing. |
+| `multi_judge_count` | int in [2, 5] | 2 | hard | Draws a multi-judged return receives. Each further draw is an ordinary routed decision from the kind's first router, over its menu less every seat drawn for the return and every seat on a drawn seat's family (`route.multi_judge`). |
+| `meta_read_share` | float in (0, 1] | 0.5 | hard | Of a cascade window's completed judgements, the share released to the tier above at its close, the representative first and then by the same rank (`cascade.release` with `companion_of`; evaluations C7). Edition 6 sets 1.0. |
+
+### The evaluator population (Wave 5a; evaluations C1, M3, P6)
+
+A world whose seeds emit a `Verdict` is refused at load unless all of these hold
+(`WorldManifest.evaluator_population_problems` names each failure):
+
+- **Evaluators are not the minority.** Evaluator seats (every seed with a verdict,
+  conformity or counter reward shape: judges, metas, adversarial judges) are at
+  least as many as producer seats (every seed with a judged or exposure shape,
+  antagonists included). Essay II.III: "more evaluators consuming more compute and
+  performing more invocations than agents engaged in production".
+- **At least three model families serve the evaluator tier.** A family is the
+  foundation model, not the route (`runtime/families.py: model_family`):
+  `venice:z-ai-glm-5-3-flash` and `z-ai/glm-5.3-flash` are one family, and so are
+  `openai/gpt-5.6-sol` and `openai/gpt-5.6-luna`. A `fake-` test double is its own.
+- **Two judges a return are possible** (while `multi_judge_share > 0`): every judged
+  kind a seed emits is accepted by judges on at least `multi_judge_count` families
+  other than its author's.
+
+Routing never draws a judging seat (a verdict, conformity or counter shape) for a
+subject authored on its own family, at any tier (`route.excluded`, reason
+`same-family`); a draw every seat of which is barred for this subject opens no
+decision (`tick.quiet`). Edition 5, edition 3 and their capital-loop copy fail all
+three checks and no longer load (R8); `worlds/edition6-capital-loop.toml` replaces
+the capital loop's world.
+
+### `[chaos]`: the chaos actuator (Wave 5a; essay II.III.b; evaluations M1)
+
+| Key | Type | Default | Cast | Meaning |
+|---|---|---|---|---|
+| `venue_unavailable` | float in [0, 0.5] | 0 | hard | Per tick: every venue read a seat makes that tick answers `{"status": "unavailable"}`, and a Tick payload's account and mids read unavailable. |
+| `stale_mids` | float in [0, 0.5] | 0 | hard | Per tick: the mids a seat is shown (the Tick payload, `recent_mids`, source freshness, its fold) stay the tick before's. |
+| `tool_withheld` | float in [0, 0.5] | 0 | hard | Per population-tool call: its result is withheld and the call is neither run nor charged. |
+| `connector_timeout` | float in [0, 0.5] | 0 | hard | Per connector fetch: it times out before anything is fetched or charged (`connector.refused`, reason `timeout`). |
+
+Each fault is drawn from the runtime's seeded stream (a zero rate draws nothing),
+counted in `stats.chaos_faults`, ledgered as `chaos.fault`, and marked on the event it
+happened in, where the seed predicate `failure_within` reads it. No fault moves money:
+a faulted call returns before the meter reserves, venue writes and treasury transfers
+are never faulted, and the venue reads behind the pre-submission collateral check, the
+fills, the reconciler, settlement, custody and the kill path never consult it. The
+world's own record (`recent_mids`, which prices a declined trade, and the window's
+public facts) keeps every print.
 
 ### `[novelty]`
 
@@ -413,13 +459,52 @@ the same reward, so a judge decision's deadline covers the return's backstop.
 the consequence score `s` of the decision it graded, scored the same way against
 the base rate of those scores (`meta.consequence`); a meta of a verdict the world
 never resolved has none. A top-tier meta settles on that alone, a lower tier on it
-and the grade from the tier above. A meta reads the cascade window's
-representative; the window's other verdicts are not graded by it (the sibling
-share is deleted, evaluations U2).
+and the grade from the tier above. A meta reads what the cascade window released
+to it: the representative and, up to `meta_read_share` of the window's completed
+evidence, its companions, each with the window as context; a verdict nobody read
+borrows no grade (the sibling share is deleted, evaluations U2).
 
-**The antagonist** earns `1 - consequence score`, averaged over the judges scored
-on its return (`exposure.settled`), and is censored when no judge's verdict on it
-was scored. There is no endorsement threshold (evaluations S4).
+**The antagonist** earns `0.5 + 0.5 * (mean(ordinary) - mean(c))` (`exposure-v2`,
+`exposure.settled`), where `c` are the consequence scores of the judges scored on its
+return and `ordinary` each of those judges' mean consequence score on ordinary
+returns (0.5 before its first): it earns above 0.5 only when it made its judges miss
+more than they usually miss, never for a judge's plain miscalibration (the Wave 2
+review, item 6). It is censored when no judge's verdict on it was scored. There is no
+endorsement threshold (evaluations S4). Edition 6 seeds two antagonists: one on
+WorldUpdate through the kind's mean-based EXP3 router, one on Tick, which it alone
+reads, through a Blum-Mansour router (`no_swap_regret_kinds = ["Tick"]`), both capped
+at `adversarial_share` (II.III.b: "healthy mixes of mean-based and swap-based
+learners").
+
+**The adversarial judge** (role `adversary`, kind `CounterVerdict`, reward shape
+`counter`) reads a first-tier Verdict and the return it judged, and answers its own
+verdict `q` on that return. When the world measures the return (the same mark or
+final measurement its judges are rewarded on), it settles on
+`0.5 + 0.5 * ((1 - (q - y)^2) - (1 - (v - y)^2))` (`counter-v1`, `counter.settled`),
+`v` the verdict it read: a proper rule in `q`, 0.5 for a counter that repeats the
+verdict. A return the world will not measure is never on an adversary's menu
+(`no world outcome`), and a counter the world leaves unmeasured past the backstop
+settles censored. A counter never touches the judge's or the producer's reward. It is
+evaluator work (measured with the `evaluator` role), capped with the antagonists at
+`adversarial_share`, and cannot be commissioned.
+
+**The tiers above.** A MetaVerdict is routed like any judgement: a meta that accepts
+`MetaVerdict` reads it one tier up (`evaluator.meta_grade` with its tier), off its
+author's family and out of its ancestry, so recursion deepens as far as distinct
+seats allow. Edition 6's metas read Verdicts and MetaVerdicts and a standing
+tier-three meta reads MetaVerdicts only.
+
+**Early warning** (ruling R3; evaluations M2). At every measurement window's close
+the runtime appends the window's score profile (mean verdict, mean meta grade,
+consequence skill, evaluator disagreement, the wallet balance, each card's value) to
+a history of the last 4k windows (`immune.k`) and computes population variance and
+lag-one autocorrelation at k, 2k and 4k windows
+(`versioning.versions.early_warnings`; `ews.window`). The table goes into every
+judge's, meta's and adversarial judge's request as `early_warning`, never into a
+producer's, and two seed observations summarise it for cards (`ews_variance`,
+`ews_autocorrelation`); both are withheld from `last_closed_window_values`.
+Evaluators may forecast `drawdown_exceeds` or `failure_within` to say a regression
+is coming; each settles on the realized drawdown or failure.
 
 **Form is not a grade.** A judgement with no verdict or conformity in [0, 1], a
 model refusal, or one whose target is refused settles censored
@@ -2326,8 +2411,8 @@ decision of the role it would have filled bears in the window it was drawn in
 (`router.abstention_priced`; ruling R9): the abstention is recorded as a decision of
 that window and priced exactly as a woken decision is, so waking nobody never beats
 a woken seat merely because penalties touched only the decisions that acted.
-`verdict-v1`, `evaluation-v1`, `exposure-v1` and `policy-promise-brier-v2` are worth
-0.5; Brier scores (`brier-v1`, `forecast-mean-v1`) 0.75, the coin-flip forecaster's;
+`verdict-v1`, `evaluation-v1`, `exposure-v2`, `counter-v1` and `policy-promise-brier-v2`
+are worth 0.5; Brier scores (`brier-v1`, `forecast-mean-v1`) 0.75, the coin-flip forecaster's;
 any other definition, and a router that has learned no seat round yet, 0.5. An
 unscored seat round with no record of its own is credited the same value. A replaced
 router's settled rounds train the router that replaced it, stepped at the size of the

@@ -110,7 +110,13 @@ class PolicyProvider(ScriptedProvider):
         inputs = _inputs_from_prompt(text)
         desc = _description_from_prompt(text)
         if desc.startswith(("Give verdict", "Evaluate")):
-            reply = self._judge(inputs)
+            reply = self._judge(inputs, req.model_id)
+        elif desc.startswith("Give your own verdict"):
+            # Plumbing (Wave 5a): an adversarial judge's counter-verdict, one step off
+            # the verdict it read, so both the counter and its settlement are reached.
+            read = (inputs.get("verdict") or {}).get("verdict")
+            q = 0.3 if not isinstance(read, int | float) or read >= 0.5 else 0.7
+            reply = {"verdict": q, "rationale": "scripted counter"}
         elif desc.startswith("Assess"):
             reply = {"conformity": 0.8, "rationale": "scripted meta"}
         elif desc.startswith("Vote"):
@@ -204,12 +210,14 @@ class PolicyProvider(ScriptedProvider):
         return hold
 
     @staticmethod
-    def _judge(inputs: dict[str, Any]) -> dict[str, Any]:
+    def _judge(inputs: dict[str, Any], model_id: str = "") -> dict[str, Any]:
         # One seed-vocabulary claim per verdict, as the paid judges seal (PR121: 141 in
         # 240 ticks), so a forecast-windowed card (edition 5's censorship-bound) is
         # measured and priced on the free tier. The verdict itself is the prediction
-        # the world scores (ruling R1).
-        return {"verdict": 0.6, "rationale": "scripted verdict",
+        # the world scores (ruling R1). It differs by model, so two judges of one
+        # return disagree and ensemble disagreement is reached (Wave 5a).
+        verdict = (0.6, 0.45, 0.75)[sum(map(ord, model_id)) % 3]
+        return {"verdict": verdict, "rationale": "scripted verdict",
                 "forecasts": [{"predicate": "wallet_up", "q": 0.4,
                                "params": {"horizon_events": 10}}]}
 
@@ -289,6 +297,7 @@ def scorecard(events: list[dict[str, Any]]) -> dict[str, Any]:
                              "mean_y": (round(statistics.fmean(e["score"] for e in opportunity),
                                               3) if opportunity else None)},
         "reward_chain": reward_chain(events),
+        "evaluation_layer": evaluation_layer(events),
         "composition": composition(events),
         "charter_markets": charter_markets(events),
         "orders": {"intents": dict(intents),
@@ -372,6 +381,61 @@ def reward_chain(events: list[dict[str, Any]]) -> dict[str, Any]:
         "exposures_nonzero": sum(1 for e in exposures if (e.get("score") or 0) > 0),
         "noop_share_by_router": {actor: round(c["noop"] / c["draws"], 3)
                                  for actor, c in sorted(draws.items()) if c["draws"]},
+    }
+
+
+def evaluation_layer(events: list[dict[str, Any]]) -> dict[str, Any]:
+    """How far the evaluation layer reached (Wave 5a), from the diary alone.
+
+    Plumbing counts and shares, never targets (rulings R12): the share of judged
+    returns that two or more judges read (``verdict.mean``), the grades each tier
+    above the judges gave, the adversarial layer's settled rewards, the chaos faults
+    injected, the windows whose early-warning table had a supported series, and the
+    evaluators' share of the run's metered compute (evaluator, meta and adversary
+    invocations over all of them).
+    """
+    judged = sum(1 for e in events if e.get("kind") == "decision.settle"
+                 and (e.get("return") or {}).get("status") == "settled"
+                 and (e.get("return") or {}).get("definition_version") == "verdict-v1")
+    multi = sum(1 for e in events if e.get("kind") == "verdict.mean")
+    grades = collections.Counter(e.get("tier") for e in events
+                                 if e.get("kind") == "evaluator.meta_grade")
+    exposures = [e for e in events if e.get("kind") == "exposure.settled"]
+    counters = [e for e in events if e.get("kind") == "counter.settled"]
+    cost, calls = collections.Counter(), collections.Counter()
+    for e in events:
+        if e.get("kind") == "invocation":
+            cost[e.get("role", "?")] += int(e.get("cost") or 0)
+            calls[e.get("role", "?")] += 1
+    evaluator_calls = sum(calls[r] for r in ("evaluator", "meta", "adversary"))
+    evaluator_cost = sum(cost[r] for r in ("evaluator", "meta", "adversary"))
+    total_cost = sum(cost.values())
+    ews = [e for e in events if e.get("kind") == "ews.window"]
+    return {
+        "judged_returns": judged,
+        "multi_judged_returns": multi,
+        "multi_judged_share": round(multi / judged, 3) if judged else None,
+        "tier_grades": {str(tier): n for tier, n in sorted(grades.items())},
+        "tier3_grades": sum(n for tier, n in grades.items() if (tier or 0) >= 3),
+        "adversarial": {
+            "exposures_settled": len(exposures),
+            "exposures_rewarded": sum(1 for e in exposures if (e.get("score") or 0) > 0),
+            "exposures_won": sum(1 for e in exposures if (e.get("score") or 0) > 0.5),
+            "counters_opened": sum(1 for e in events if e.get("kind") == "counter.opened"),
+            "counters_settled": len(counters),
+            "counters_rewarded": sum(1 for e in counters if (e.get("score") or 0) > 0),
+            "counters_won": sum(1 for e in counters if (e.get("score") or 0) > 0.5),
+        },
+        "chaos_faults": dict(collections.Counter(e.get("fault") for e in events
+                                                 if e.get("kind") == "chaos.fault")),
+        "ews_windows": len(ews),
+        "ews_published": sum(1 for e in ews if e.get("supported_series")),
+        "compute_micro_by_role": dict(cost),
+        "evaluator_compute_share": (round(evaluator_cost / total_cost, 3)
+                                    if total_cost else None),
+        "invocations_by_role": dict(calls),
+        "evaluator_invocation_share": (round(evaluator_calls / sum(calls.values()), 3)
+                                       if calls else None),
     }
 
 
@@ -586,6 +650,24 @@ def combine(cards: list[dict[str, Any]]) -> dict[str, Any]:
            for count in ("meta_consequence_events", "exposures_settled", "exposures_nonzero")},
         "noop_share_by_router_by_seed": [r["noop_share_by_router"] for r in chains],
     }
+    layers = [c["evaluation_layer"] for c in cards if c.get("evaluation_layer")]
+    if layers:
+        layer: dict[str, Any] = {}
+        for row in layers:
+            add(layer, {k: v for k, v in row.items()
+                        if k not in ("multi_judged_share", "evaluator_compute_share",
+                                     "evaluator_invocation_share")})
+        judged, multi = layer.get("judged_returns", 0), layer.get("multi_judged_returns", 0)
+        layer["multi_judged_share"] = round(multi / judged, 3) if judged else None
+        cost = layer.get("compute_micro_by_role", {})
+        spent = sum(cost.values())
+        layer["evaluator_compute_share"] = (round(sum(cost.get(r, 0) for r in (
+            "evaluator", "meta", "adversary")) / spent, 3) if spent else None)
+        calls = layer.get("invocations_by_role", {})
+        made = sum(calls.values())
+        layer["evaluator_invocation_share"] = (round(sum(calls.get(r, 0) for r in (
+            "evaluator", "meta", "adversary")) / made, 3) if made else None)
+        total["evaluation_layer"] = layer
     total["billed_usd"] = str(sum(Decimal(c.get("billed_usd", "0")) for c in cards))
     total["wall_seconds"] = max((c.get("wall_seconds", 0) for c in cards), default=0)
     total["prompt_bytes_median"] = {
