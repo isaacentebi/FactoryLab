@@ -1,85 +1,111 @@
+"""The forensic report replays the live versioning and the live predicate (wave 5b).
+
+Essay II.II: versions are behavioural; stable failure is "a robust version with a
+wide spectral gap" failing its input; thrash never settles; learning death is the
+frontier "no longer being invoked". The report reaches exactly what the organ read.
+"""
+
 import pytest
 
 from factorylab.charter.controller import CardRegion, PriceController, violation
 from factorylab.kernel.ledger import Ledger
 from factorylab.versioning.report import summary
-from factorylab.versioning.versions import slope
+from factorylab.versioning.versions import frontier_evidence, slope
+
+REGION = {"kind": "max", "lo": None, "hi": 1.0, "scale": 2.0}
 
 
-def test_stable_failure_only(diary):
-    region = {"kind": "max", "lo": None, "hi": 1.0, "scale": 2.0}
-    rows = [{"verdict": 0.2, "cards": {"cost": 5}, "regions": {"cost": region}} for _ in range(8)]
-    flags = summary(diary(rows))["pathologies"]
+def _failing(n, **extra):
+    return [{"verdict": 0.5, "registrations": 0, "cards": {"cost": 5}, "regions": {"cost": REGION},
+             **extra} for _ in range(n)]
+
+
+def test_stable_failure_is_a_persistent_violation_in_a_wide_attractor(diary):
+    flags = summary(diary(_failing(8)))["pathologies"]
     assert [flag["kind"] for flag in flags] == ["stable_failure"]
     assert (flags[0]["start_window"], flags[0]["end_window"]) == (2, 7)
-    assert flags[0]["evidence"]["windows"][0]["gap_bound"] == 1
-    assert all(e["violated_cards"] == ["cost"] for e in flags[0]["evidence"]["windows"])
-    rows[0]["regions"] = {"cost": dict(region, hi=5)}
+    evidence = flags[0]["evidence"]["windows"]
+    assert evidence[0]["card_gap"] == 1
+    assert all(e["violated_cards"] == ["cost"] for e in evidence)
+    rows = _failing(8)
+    rows[0]["regions"] = {"cost": dict(REGION, hi=5)}  # compliant: nothing fails
     for row in rows[1:]:
         row.pop("regions")
     assert summary(diary(rows))["pathologies"] == []
 
 
-def test_learning_death_only_and_registrations_split_runs(diary):
-    rows = [{"verdict": 0.5, "registrations": 0} for _ in range(9)]
-    flags = summary(diary(rows))["pathologies"]
-    assert [flag["kind"] for flag in flags] == ["learning_death"]
-    assert (flags[0]["start_window"], flags[0]["end_window"]) == (2, 8)
+def test_a_registration_does_not_reset_the_failing_attractor(diary):
+    """Versioning P3: the attractor is the persistent violated-card set and the gap over
+    the cards; activity, which the organ's raised gain invites, never enters it."""
+    rows = _failing(10)
+    rows[4]["registrations"] = 3
+    rows[6]["registrations"] = 3
+    flags = [f for f in summary(diary(rows))["pathologies"] if f["kind"] == "stable_failure"]
+    assert [(f["start_window"], f["end_window"]) for f in flags] == [(2, 9)]
+
+
+def test_an_unmeasured_reading_is_missing_evidence_not_compliance(diary):
+    rows = _failing(8)
+    rows[4]["cards"] = {}
+    flags = [f for f in summary(diary(rows))["pathologies"] if f["kind"] == "stable_failure"]
+    assert [(f["start_window"], f["end_window"]) for f in flags] == [(2, 7)]
+
+
+def _immune(rows, frontier):
+    """Diary rows that carry the organ's own window records, with the routers' draws."""
+    for i, row in enumerate(rows):
+        row["extra"] = [{"kind": "immune.window", "window": i + 1, "charter_edition": 1,
+                         "profile": {"verdict": row.get("verdict"), "card:cost": 5,
+                                     "registrations": row.get("registrations", 0),
+                                     "revision": 0.0},
+                         "regions": {"card:cost": REGION}, "tick": 10 * (i + 1),
+                         "frontier_invocation": frontier(i)}]
+    return rows
+
+
+def test_learning_death_is_read_from_frontier_invocation_never_from_cards(diary):
+    """Versioning P1: the routers' draws, quiet and a single cell; compliance never enters."""
+    parked = [{"router": "router:Tick", "uninvoked": True, "core": False}]
+    invoked = [{"router": "router:Tick", "uninvoked": False, "core": False}]
+    rows = _immune(_failing(8), lambda i: parked)
+    kinds = {f["kind"] for f in summary(diary(rows))["pathologies"]}
+    assert "learning_death" in kinds
+    rows = _immune(_failing(8), lambda i: invoked)
+    assert "learning_death" not in {f["kind"] for f in summary(diary(rows))["pathologies"]}
+    # A core (no-swap-regret) router parked at NOOP is not the frontier.
+    rows = _immune(_failing(8), lambda i: [dict(parked[0], core=True)])
+    assert "learning_death" not in {f["kind"] for f in summary(diary(rows))["pathologies"]}
+    # Registrations break the quiet, so they split the diagnosis.
+    rows = _immune(_failing(9), lambda i: parked)
     rows[4]["registrations"] = 1
-    flags = summary(diary(rows))["pathologies"]
-    assert [(flag["start_window"], flag["end_window"]) for flag in flags] == [(2, 3), (7, 8)]
+    rows = _immune(rows, lambda i: parked)
+    spans = [(f["start_window"], f["end_window"]) for f in summary(diary(rows))["pathologies"]
+             if f["kind"] == "learning_death"]
+    assert spans == [(2, 3), (7, 8)]
 
 
-def _stable_rows(n=6, *, value=0.2, hi=1.0, observations=None):
-    region = {"kind": "max", "lo": None, "hi": hi, "scale": 2.0}
-    return [{"verdict": 0.5, "registrations": 0, "cards": {"cost": value},
-             "regions": {"cost": region},
-             **({"observations": observations(i)} if observations else {})}
-            for i in range(n)]
+def test_a_quarantined_frontier_is_offered_unhistoried_seats_and_never_draws_them():
+    window = {"profile": {"registrations": 0, "revision": 0}, "regions": {},
+              "frontier_invocation": [{"router": "r", "uninvoked": False,
+                                       "unhistoried_offered": 4, "unhistoried_mass": 0.0}]}
+    evidence = frontier_evidence([window, window, window])
+    assert evidence["gone"] and evidence["unhistoried"] == {"offered": 12, "mass": 0.0}
+    window["frontier_invocation"][0]["unhistoried_mass"] = 0.2
+    assert not frontier_evidence([window, window, window])["gone"]
+    # Without the routers' record (an older diary) nothing is diagnosed gone.
+    assert not frontier_evidence([{"profile": {}, "regions": {}}])["gone"]
 
 
-def test_profitable_compliant_stability_is_not_learning_death(diary):
-    """P2-08: the frontier is alive while the cards hold or the outcomes improve."""
-    # The reviewer's case: same cell, no edits, every card inside, realized P&L rising.
-    rows = _stable_rows(observations=lambda i: {"realized_pnl_usd": 1.0 + i})
-    assert summary(diary(rows))["pathologies"] == []
-    # Compliance alone keeps the flag down, whatever the outcomes do.
-    assert summary(diary(_stable_rows()))["pathologies"] == []
-    # A rising paid-off rate alone keeps it down with a violated card.
-    rows = _stable_rows(value=5, observations=lambda i: {"consequence_paid_off_rate": i / 10})
-    assert [f["kind"] for f in summary(diary(rows))["pathologies"]] == ["stable_failure"]
-    # Falling outcomes with a violated card: the frontier is gone.
-    rows = _stable_rows(value=5, observations=lambda i: {"realized_pnl_usd": -float(i),
-                                                          "consequence_paid_off_rate": 0.5})
-    kinds = [f["kind"] for f in summary(diary(rows))["pathologies"]]
-    assert kinds == ["learning_death", "stable_failure"]
-    # An unmeasured card cannot vouch for compliance, so flat outcomes flag it.
-    rows = _stable_rows()
-    for row in rows:
-        row["cards"] = {}
-    flags = summary(diary(rows))["pathologies"]
-    assert [f["kind"] for f in flags] == ["learning_death"]
-    frontier = flags[0]["evidence"]["windows"][-1]["frontier"]
-    # Edition 3 adds the causal half: which access is lost. These windows carry no
-    # access facts at all, so nothing is reported lost — unknown is never a loss.
-    assert frontier.pop("lost_access") == []
-    assert frontier == {"quiet": True, "improving": False, "holding": False,
-                        "paid_off_slope": None, "realized_pnl_slope": None}
-
-
-def test_thrash_only_and_stops_when_cells_stop_changing(diary):
-    # A card supplies cells without adding a score slope that could flag divergence.
-    rows = [{"cards": {"activity": i % 2},
-             "regions": {"activity": {"kind": "max", "lo": None, "hi": -1, "scale": 1}}}
-            for i in range(14)]
-    flags = summary(diary(rows), k=3, tv_threshold=0.2)["pathologies"]
-    assert [flag["kind"] for flag in flags] == ["thrash"]
-    assert (flags[0]["start_window"], flags[0]["end_window"]) == (3, 13)
-    assert all(all(e["changes"]) for e in flags[0]["evidence"]["windows"])
-    report = summary(diary(rows + [{"cards": {"activity": 1}}] * 4), k=3, tv_threshold=0.2)
-    assert [flag["end_window"] for flag in report["pathologies"] if flag["kind"] == "thrash"] == [
-        13
-    ]
+def test_oscillation_is_thrash_and_a_steady_series_is_not(diary):
+    """Essay II.IV.b: "We can think of thrash as oscillation"; its versions are cut
+    before they ever settle."""
+    region = {"kind": "max", "lo": None, "hi": 0, "scale": 1}
+    rows = [{"cards": {"activity": i % 2}, "regions": {"activity": region}} for i in range(14)]
+    report = summary(diary(rows), k=3, tv_threshold=0.2)
+    thrash = [f for f in report["pathologies"] if f["kind"] == "thrash"]
+    assert thrash and all(not e["settled"] for f in thrash for e in f["evidence"]["windows"])
+    steady = [{"cards": {"activity": 1}, "regions": {"activity": region}} for _ in range(14)]
+    assert not [f for f in summary(diary(steady), k=3)["pathologies"] if f["kind"] == "thrash"]
 
 
 @pytest.mark.parametrize("outcome", ["forecast_skill", "consequence"])
@@ -121,16 +147,25 @@ def test_violation_matches_controller(kind, lo, hi, values):
         assert region_value == controller.violation("x", value)
 
 
-def test_version_boundaries_are_detection_windows(diary):
+def test_versions_are_debounced_detections_each_with_its_own_gap(diary):
+    """Versioning M2, P6: a boundary needs two complete k-blocks inside the version, and
+    each version's operator is counted over its own span."""
     region = {"kind": "max", "hi": 0, "lo": None, "scale": 1}
     rows = [{"verdict": v, "cards": {"quality": v}, "regions": {"quality": region}}
             for v in [0] * 6 + [1] * 6]
-    report = summary(diary(rows), k=3, tv_threshold=.5)
-    spans = report["versions"]
-    assert [span["start_window"] for span in spans] == [0, 7, 8, 9]
+    spans = summary(diary(rows), k=3, tv_threshold=.5)["versions"]
+    assert [(s["start_window"], s["cause"]) for s in spans] == [(0, "launch"), (7, "behaviour")]
     assert sum(span["duration"] for span in spans) == 12
     assert spans[0]["dominant_cells"][0]["share"] == pytest.approx(6 / 7)
-    assert [entry["end_window"] for entry in report["ews"]] == [6, 7, 8, 11]
+    assert spans[1]["gap"] == 1 and spans[1]["durable"]
+
+
+def test_a_card_becoming_measurable_opens_no_version(diary):
+    """Versioning P6: the unsupported reading is missing, not a cell of its own."""
+    region = {"kind": "max", "hi": 0, "lo": None, "scale": 1}
+    rows = [{"cards": {} if i < 4 else {"quality": 1}, "regions": {"quality": region}}
+            for i in range(12)]
+    assert [s["cause"] for s in summary(diary(rows), k=3)["versions"]] == ["launch"]
 
 
 def test_ews_known_values_and_missing_time_positions(diary):
@@ -152,32 +187,17 @@ def test_ews_known_values_and_missing_time_positions(diary):
     assert slope([None, 1]) is None
 
 
-def test_settling_after_activation_and_unsettled_tail(diary):
+def test_an_activation_opens_a_version_and_its_settling_is_read(diary):
+    """Essay II.II: "If a revision to the input at the level of the charter happens, the
+    version has changed"; II.IV.c: its settling time is what governance waits on."""
     activation = {"kind": "charter.activate", "amendment_id": "a", "edition": 2}
-    rows = [{"verdict": 0} for _ in range(3)]
-    rows += [{"verdict": 1, "before": [activation]}, {"verdict": 1}]
-    rows += [{"verdict": 0} for _ in range(4)]
-    for row in rows:
-        row["cards"] = {"quality": row["verdict"]}
-        row["regions"] = {"quality": {"kind": "max", "hi": 0, "lo": None, "scale": 1}}
-    items = diary(rows)
-    report = summary(items, k=2)
-    evidence = report["settling"][0]
-    assert evidence["activation_window"] == 3
-    assert evidence["settled_window"] == 6
-    assert evidence["windows_after_activation"] == 4 and evidence["tv"] == 0
-    assert summary(diary(rows[:5]), k=2)["settling"][0]["windows_after_activation"] is None
-    tail = dict(activation, amendment_id="tail", edition=3, seq=len(items))
-    assert summary(items + [tail], k=2)["settling"][-1]["activation_window"] is None
-
-
-def test_activation_inside_window_excludes_mixed_window(diary):
-    rows = [{"verdict": 0} for _ in range(6)]
-    rows[2]["extra"] = [{"kind": "charter.activate", "amendment_id": "a", "edition": 2}]
+    region = {"kind": "max", "hi": 0, "lo": None, "scale": 1}
+    rows = [{"cards": {"quality": 0}, "regions": {"quality": region}} for _ in range(4)]
+    rows += [{"cards": {"quality": 1}, "regions": {"quality": region}, "before": [activation]}]
+    rows += [{"cards": {"quality": 1}, "regions": {"quality": region}} for _ in range(6)]
     report = summary(diary(rows), k=2)
-    assert report["settling"][0]["settled_window"] == 4
-    assert report["settling"][0]["windows_after_activation"] == 3
-    assert report["windows"][2]["charter_edition"] == 1
-    assert report["windows"][3]["charter_edition"] == 2
-    early = [{"before": [{"kind": "charter.activate", "amendment_id": "b", "edition": 2}]}]
-    assert summary(diary(early), k=2)["settling"][0]["windows_after_activation"] is None
+    assert [(s["start_window"], s["cause"]) for s in report["versions"]] == [
+        (0, "launch"), (4, "charter")]
+    charter = [r for r in report["settling"] if r["cause"] == "charter"]
+    assert charter and charter[0]["settled"] and charter[0]["ticks"] > 0
+    assert report["versions"][1]["settling_ticks"] == charter[0]["ticks"]

@@ -76,6 +76,47 @@ def transition_operator(cells: list[tuple]) -> dict:
     }
 
 
+def _delta(matrix: list[list[float]]) -> float:
+    """Dobrushin's coefficient: the largest total-variation distance between two rows."""
+    return min(1.0, max((0.5 * fsum(abs(a - b) for a, b in zip(left, right, strict=True))
+                         for i, left in enumerate(matrix) for right in matrix[i + 1:]),
+                        default=0.0))
+
+
+def observed_gap(cells: list[tuple]) -> float | None:
+    """A lower bound on the operator's spectral gap from the sample, or None.
+
+    Every eigenvalue of a stochastic matrix other than 1 has modulus at most
+    ``delta(P^t) ** (1/t)`` for each t (Dobrushin's coefficient of the t-step
+    operator), so ``1 - min_t delta(P^t) ** (1/t)`` over t up to the number of
+    occupied cells bounds the gap from below, and more tightly than one step: a
+    chain whose transient cells all drain into one attractor has a wide gap even
+    though their one-step rows differ. A cell the sample never saw leave (the
+    newest reading) is given the sample's own occupancy as its row: there is no
+    evidence it is a second attractor, and a self-loop would assert one. None
+    without a single transition.
+    """
+    if len(cells) < 2:
+        return None
+    occupied = sorted(set(cells))
+    indices = {cell: i for i, cell in enumerate(occupied)}
+    counts = [[0] * len(occupied) for _ in occupied]
+    for left, right in zip(cells, cells[1:], strict=False):
+        counts[indices[left]][indices[right]] += 1
+    occupancy = Counter(cells)
+    fallback = [occupancy[cell] / len(cells) for cell in occupied]
+    step = [[value / sum(row) for value in row] if sum(row) else list(fallback)
+            for row in counts]
+    power, best = step, 1.0
+    for t in range(1, len(occupied) + 1):
+        best = min(best, _delta(power) ** (1.0 / t))
+        if best == 0.0:
+            break
+        power = [[fsum(row[j] * step[j][c] for j in range(len(step)))
+                  for c in range(len(step))] for row in power]
+    return 1.0 - best
+
+
 def cell_series(
     windows: list[dict], cards: list[str], *,
     registration_bins: tuple[float, ...], revision_bins: tuple[float, ...],

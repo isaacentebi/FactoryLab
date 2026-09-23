@@ -1,22 +1,17 @@
-"""Behavioural versions and diagnostic evidence never prescribe factory objectives."""
+"""Behavioural versions and pathology evidence never prescribe factory objectives.
+
+The live immune organ and the forensic report read the same predicate
+(``diagnose``) over the same live versioning (``versioning.live``): what the
+organ acted on can be reconstructed from the diary, and nothing offline uses a
+rule the world did not run under.
+"""
 
 from collections import Counter
 from math import fsum
 from statistics import fmean, pvariance
 
-from factorylab.charter.controller import CardRegion, violation
-from factorylab.versioning.operator import cell_series, total_variation, transition_operator
+from factorylab.versioning import live
 from factorylab.versioning.series import mean
-
-
-def block_distances(cells: list[tuple], k: int) -> list[float | None]:
-    """Distances compare two complete adjacent trailing blocks at each window end."""
-    return [
-        total_variation(cells[end - 2 * k : end - k], cells[end - k : end])
-        if end >= 2 * k
-        else None
-        for end in range(1, len(cells) + 1)
-    ]
 
 
 def dominant_cells(cells: list[tuple]) -> list[dict]:
@@ -26,43 +21,6 @@ def dominant_cells(cells: list[tuple]) -> list[dict]:
         {"cell": list(cell), "share": count / len(cells)}
         for cell, count in sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))[:3]
     ]
-
-
-def versions(windows: list[dict], cells: list[tuple], *, k: int, tv_threshold: float) -> list[dict]:
-    """Every above-threshold detection window starts a version, without debounce.
-
-    Boundaries are detection indices, not retroactively inferred change points.
-    Inclusive spans cover every retained window once. Means omit missing values.
-    """
-    if not windows:
-        return []
-    distances = block_distances(cells, k)
-    starts = [0] + [
-        i for i, tv in enumerate(distances) if i > 0 and (
-            windows[i]["charter_edition"] != windows[i - 1]["charter_edition"]
-            or tv is not None and tv > tv_threshold
-        )
-    ]
-    result = []
-    for start, stop in zip(starts, starts[1:] + [len(windows)], strict=True):
-        group = windows[start:stop]
-        result.append(
-            {
-                "start_window": start,
-                "end_window": stop - 1,
-                "duration": stop - start,
-                "dominant_cells": dominant_cells(cells[start:stop]),
-                "mean_profile": {
-                    name: mean(
-                        [w["profile"].get(name) for w in group
-                         if w["profile"].get(name) is not None]
-                    )
-                    for name in group[0]["profile"]
-                },
-                "charter_edition": group[0]["charter_edition"],
-            }
-        )
-    return result
 
 
 def slope(values: list[float | None]) -> float | None:
@@ -90,65 +48,60 @@ def _runs(flags: list[bool]) -> list[tuple[int, int]]:
     return result
 
 
-def diagnose(
-    windows: list[dict], *, k: int,
-    registration_bins: tuple[float, ...], revision_bins: tuple[float, ...],
-) -> dict:
-    """One causal predicate serves live correction and offline reconstruction.
+def diagnose(windows: list[dict], state: dict, *, k: int, tv_threshold: float,
+             gap_threshold: float, registration_bins: tuple[float, ...],
+             revision_bins: tuple[float, ...]) -> dict:
+    """The three convergence pathologies at the newest window, and their evidence.
 
-    New cards need k observations to establish failure; removing a dimension
-    preserves the remaining history. A region change is measured against the
-    region applicable in that window. Thrash needs k actual changes and no
-    compliant window, rather than volatility in a moving histogram partition.
+    ``windows`` are the retained windows ending with the newest; ``state`` is the
+    live versioning after it (``live.advance``). Essay II.II.a:
+
+    * **stable failure** is "a robust version with a wide spectral gap whose
+      input–output distribution is failing against its input": a nonempty set of
+      cards violated in every tail window that measured them (``live.
+      persistent_violations``; never activity, versioning audit P3) while the
+      rolling operator over those cards has a gap of at least
+      ``immune.gap_threshold`` (``card_gap``: registrations and revisions, which the
+      organ's raised gain invites, cannot narrow it and reset the duration);
+    * **thrash** is a factory that "never settles": the version gap series is
+      volatile (mean change above ``immune.tv_threshold``); or at least two
+      versions in a row were abandoned before they settled and the current one has
+      not settled either (an oscillation keeps its gap flat and low, and shows as
+      versions cut before they hold); or a configuration was refactored faster
+      than the loop that corrects it closes (a recorded lifespan shorter than its
+      feedback latency; essay II.IV.b, "Thrash occurs in loops whose periods exceed
+      the lifespan of the configurations they are trying to error-correct"; time
+      audit T14);
+    * **learning death** is the frontier "no longer being invoked" or
+      "quarantined", which leaves "a single state with no variety": one cell over
+      the tail, no registration or revision in it, and the frontier gone
+      (``frontier_evidence``; versioning audit P1). Card compliance never enters.
     """
     tail = windows[-k:]
     supported = len(tail) == k
-    common = set.intersection(*(set(w["regions"]) for w in tail)) if tail else set()
-    fixed = cell_series(tail, sorted(common), registration_bins=registration_bins,
-                        revision_bins=revision_bins)
-    cells = fixed["cells"]
-    same = supported and len(set(cells)) == 1
-    violated = [
-        {cid for cid, region in w["regions"].items()
-         if w["profile"].get(cid) is not None
-         and violation(CardRegion(**dict(region, card_id=cid)), w["profile"][cid]) > 0}
-        for w in windows[-(k + 1):]
-    ]
-    failures = set.intersection(*violated[-k:]) if supported else set()
-    changes = []
-    recent = windows[-(k + 1):]
-    for previous, current in zip(recent, recent[1:], strict=False):
-        names = sorted(set(previous["regions"]) & set(current["regions"]))
-        pair = cell_series([previous, current], names, registration_bins=registration_bins,
-                           revision_bins=revision_bins)["cells"]
-        changes.append(pair[0] != pair[1])
+    bins = {"registration_bins": registration_bins, "revision_bins": revision_bins}
+    dims, tail_cells = live.cells(tail, **bins)
+    failing = live.persistent_violations(tail) if supported else []
+    wide = state.get("card_gap") is not None and state["card_gap"] >= gap_threshold
+    volatile = state.get("volatility") is not None and state["volatility"] > tv_threshold
+    short_lived = [row for w in tail for row in w.get("lifespans", ())
+                   if row.get("ratio") is not None and row["ratio"] < 1]
+    abandoned = state.get("unsettled_run", 0) >= 2 and state.get("settled_tick") is None
     frontier = frontier_evidence(tail)
+    single = supported and len(set(tail_cells)) == 1
     flags = {
-        "stable_failure": bool(same and failures),
-        # Learning death is the frontier gone (essay: extinguished or quarantined), not a
-        # count of edits: stable cells, no registrations or revisions, no improvement in
-        # consequence outcomes and a compliance the cards cannot vouch for.
-        "learning_death": bool(same and frontier["quiet"] and not frontier["improving"]
-                               and not frontier["holding"]),
-        "thrash": bool(len(changes) == k and all(changes) and all(violated)),
+        "stable_failure": bool(failing and wide),
+        "learning_death": bool(single and frontier["quiet"] and frontier["gone"]),
+        "thrash": bool(supported and (volatile or abandoned or short_lived)),
     }
     return {
-        "flags": flags, "cells": [list(c) for c in cells],
-        "dimensions": fixed["dimensions"],
-        "gap_bound": transition_operator(cells)["gap_bound"],
-        "violated_cards": sorted(failures), "changes": changes, "frontier": frontier,
+        "flags": flags, "cells": [list(c) for c in tail_cells], "dimensions": dims,
+        "gap": state.get("gap"), "rolling_gap": state.get("rolling_gap"),
+        "card_gap": state.get("card_gap"),
+        "volatility": state.get("volatility"), "version": state.get("version"),
+        "settled": state.get("settled_tick") is not None, "abandoned": abandoned,
+        "violated_cards": failing, "short_lived": short_lived, "frontier": frontier,
     }
-
-
-def _holds(window: dict) -> bool:
-    """Every card of the window is measured against a region it satisfies."""
-    profile, regions = window["profile"], window["regions"]
-    cards = set(regions) | {name for name in profile if name.startswith("card:")}
-    return bool(cards) and all(
-        name in regions and profile.get(name) is not None
-        and violation(CardRegion(**dict(regions[name], card_id=name)), profile[name]) == 0
-        for name in cards
-    )
 
 
 #: The three accesses whose loss is what "learning death" names (edition 3, C3):
@@ -167,9 +120,7 @@ def lost_access(tail: list[dict]) -> list[dict]:
     """Which access the tail shows lost, and the reason the organ recorded for it.
 
     An access is lost when every window of the tail measured it absent; an
-    access no window measured is unknown and is not reported as lost. Protected
-    exploration buys an option: a population that can still afford to look and
-    to revise, and does not, has not lost anything, so nothing is listed.
+    access no window measured is unknown and is not reported as lost.
     """
     result = []
     for name in ACCESS:
@@ -184,62 +135,118 @@ def lost_access(tail: list[dict]) -> list[dict]:
 
 
 def frontier_evidence(tail: list[dict]) -> dict:
-    """The surplus-generating frontier is gone only when the tail is quiet and flat.
+    """Whether the surplus-generating frontier is still invoked, from the routers' draws.
 
-    ``quiet``: no registrations and no revisions in any tail window. ``improving``:
-    the consequence outcomes rise over the tail (a positive least-squares slope of
-    the paid-off rate or of realized P&L; an unmeasured series never improves).
-    ``holding``: every card in every tail window is measured and inside its
-    region, which a charter with no measured card cannot show.
-    ``uninvoked_routers`` (present when every tail window recorded the routers'
-    frontier invocation): the routers that woke their seats only by exploration in
-    every tail window, the frontier "no longer being invoked" (essay II.II.a).
-
-    ``lost_access`` is the causal half the diagnosis is actually about: which of
-    the affordable seat, the route to registration and the route to revision the
-    tail shows gone, and the reason the organ recorded. A quiet tail with every
-    access intact is a population that could look and chose not to; the flag
-    still fires on the gone-frontier rule, and the record says what was lost, so
-    "unchanged behaviour" is never the finding on its own.
+    ``quiet``: no registration and no revision in any tail window.
+    ``uninvoked_routers`` (when every tail window recorded the routers' draws): the
+    frontier (mean-based) routers whose every draw in every tail window gave NOOP at
+    least ``1 - gamma``, so their seats were woken by exploration alone, the
+    frontier "no longer being invoked" (essay II.II.a; ruling R9, versioning U1).
+    ``unhistoried``: the draws that offered an unhistoried seat and the probability
+    mass they put on such seats; offered and never drawn at all is the frontier
+    "quarantined". ``gone`` is either. ``improving``, the slopes and
+    ``lost_access`` are the causal annotation, never the flag.
     """
     paid_off = slope([w["profile"].get("paid_off") for w in tail])
     realized = slope([w["profile"].get("realized_pnl") for w in tail])
-    invocation = {}
-    if tail and all("frontier_invocation" in w for w in tail):
-        # The routers' own frontier signal (ruling R9): a router whose every draw in
-        # every tail window left its seats to exploration alone. Recorded as evidence
-        # for the flag; wave 5 rebuilds the immune organ's predicate around it
-        # (versioning P1) and this is the hook it reads.
-        invocation["uninvoked_routers"] = sorted(
-            set.intersection(*({row["router"] for row in w["frontier_invocation"]
-                                if row["uninvoked"]} for w in tail)))
+    recorded = bool(tail) and all("frontier_invocation" in w for w in tail)
+    evidence: dict = {}
+    gone = False
+    if recorded:
+        frontier = [[row for row in w["frontier_invocation"] if not row.get("core")]
+                    for w in tail]
+        uninvoked = sorted(set.intersection(*({row["router"] for row in rows
+                                               if row.get("uninvoked")} for rows in frontier)))
+        offered = sum(row.get("unhistoried_offered", 0) for rows in frontier for row in rows)
+        mass = fsum(row.get("unhistoried_mass", 0.0) for rows in frontier for row in rows)
+        evidence = {"uninvoked_routers": uninvoked,
+                    "unhistoried": {"offered": offered, "mass": mass}}
+        gone = bool(uninvoked) or (offered > 0 and mass == 0)
     return {
         "quiet": bool(tail) and all(
             w["profile"].get("registrations") == 0 and w["profile"].get("revision") == 0
             for w in tail
         ),
+        "gone": gone,
         "improving": bool(paid_off is not None and paid_off > 0
                           or realized is not None and realized > 0),
-        "holding": bool(tail) and all(_holds(w) for w in tail),
         "paid_off_slope": paid_off, "realized_pnl_slope": realized,
         "lost_access": lost_access(tail),
-        **invocation,
+        **evidence,
     }
 
 
-def pathologies(
-    windows: list[dict], cells: list[tuple], spans: list[dict], *, k: int,
-    registration_bins: tuple[float, ...], revision_bins: tuple[float, ...],
-) -> list[dict]:
-    """Consecutive detection windows retain the same causal evidence used by the live organ."""
-    evidence = [diagnose(windows[:end + 1], k=k, registration_bins=registration_bins,
-                         revision_bins=revision_bins) for end in range(len(windows))]
+def replay(windows: list[dict], *, k: int, horizon: int, tv_threshold: float,
+           gap_threshold: float, registration_bins: tuple[float, ...],
+           revision_bins: tuple[float, ...]) -> list[dict]:
+    """Every window read through the live versioning and diagnosis, in order.
+
+    Returns, per window, the versioning state after it, the events it produced
+    and the diagnosis: the forensic reconstruction of what the live organ saw.
+    """
+    bins = {"registration_bins": registration_bins, "revision_bins": revision_bins}
+    state = live.fresh()
+    retained: list[dict] = []
+    result = []
+    for window in windows:
+        retained = [*retained, window][-horizon:]
+        state, events = live.advance(state, retained, k=k, horizon=horizon,
+                                     tv_threshold=tv_threshold, **bins)
+        result.append({"state": state, "events": events,
+                       "diagnosis": diagnose(retained, state, k=k, tv_threshold=tv_threshold,
+                                             gap_threshold=gap_threshold, **bins)})
+    return result
+
+
+def versions(windows: list[dict], readings: list[dict], *, gap_threshold: float,
+             registration_bins: tuple[float, ...],
+             revision_bins: tuple[float, ...]) -> list[dict]:
+    """The version spans the live versioning opened, each with its own operator gap.
+
+    Boundaries are the windows a version opened at (detection indices, never
+    inferred change points). Each span's gap is the operator counted over the
+    whole span (versioning audit M2) and it is ``durable`` when that gap is at
+    least ``gap_threshold``. Means omit missing values.
+    """
+    if not windows:
+        return []
+    bins = {"registration_bins": registration_bins, "revision_bins": revision_bins}
+    starts = [i for i, reading in enumerate(readings)
+              if any(e["kind"] == "boundary" for e in reading["events"])]
+    starts = [0, *[s for s in starts if s > 0]]
+    causes = {i: next((e["cause"] for e in readings[i]["events"] if e["kind"] == "boundary"),
+                      "launch") for i in starts}
+    result = []
+    for start, stop in zip(starts, [*starts[1:], len(windows)], strict=True):
+        group = windows[start:stop]
+        span_gap = live.gap(group, **bins)
+        settled = next((e["ticks"] for r in readings[start:stop] for e in r["events"]
+                        if e["kind"] == "settled" and e["settled"]), None)
+        result.append({
+            "start_window": start, "end_window": stop - 1, "duration": stop - start,
+            "cause": causes[start],
+            "dominant_cells": dominant_cells(live.cells(group, **bins)[1]),
+            "gap": span_gap, "durable": span_gap is not None and span_gap >= gap_threshold,
+            "settling_ticks": settled,
+            "mean_profile": {
+                name: mean([w["profile"].get(name) for w in group
+                            if w["profile"].get(name) is not None])
+                for name in group[0]["profile"]
+            },
+            "charter_edition": group[0]["charter_edition"],
+        })
+    return result
+
+
+def pathologies(windows: list[dict], readings: list[dict], spans: list[dict]) -> list[dict]:
+    """Consecutive flagged windows, with the evidence the live organ read at each."""
     result = []
     for kind in ("stable_failure", "learning_death", "thrash"):
-        for start, end in _runs([e["flags"][kind] for e in evidence]):
+        flags = [r["diagnosis"]["flags"][kind] for r in readings]
+        for start, end in _runs(flags):
             result.append({
                 "kind": kind, "start_window": start, "end_window": end,
-                "evidence": {"windows": evidence[start:end + 1]},
+                "evidence": {"windows": [r["diagnosis"] for r in readings[start:end + 1]]},
             })
     # This retrospective signal remains a separate diagnosis; it does not change
     # the three convergence predicates or infer consequence from a raw verdict.
@@ -259,6 +266,18 @@ def pathologies(
                              "outcome_slope": outcome_slope},
             })
     return sorted(result, key=lambda item: (item["start_window"], item["end_window"], item["kind"]))
+
+
+def settling(readings: list[dict]) -> list[dict]:
+    """Every version's settling reading: ticks to settle, or a superseded version's age.
+
+    Essay II.IV.c: "measure how long the output distribution takes to return to a
+    settled distribution". ``settled`` False is a lower bound: the version was
+    superseded first. A version still open and unsettled has no reading.
+    """
+    return [{"version": e["version"], "cause": e["cause"], "window": e["window"],
+             "settled": e["settled"], "ticks": e["ticks"]}
+            for r in readings for e in r["events"] if e["kind"] == "settled"]
 
 
 def early_warnings(
@@ -309,48 +328,3 @@ def early_warnings(
         result.append({"end_window": end, "series": signals})
     return result
 
-
-def settling(
-    items: list[dict],
-    windows: list[dict],
-    cells: list[tuple],
-    *,
-    k: int,
-    tv_threshold: float,
-) -> list[dict]:
-    """Each activation compares fully post-activation blocks to k preceding closed windows.
-
-    A window containing activation is excluded from both blocks unless activation
-    is its first item. Elapsed windows count closures after activation. Missing
-    baseline support or failure to cross strictly below threshold yields None.
-    Activations in a dropped tail remain present with no observed settling time.
-    """
-    result = []
-    for item in items:
-        if item.get("kind") != "charter.activate":
-            continue
-        seq = item["seq"]
-        before = [w["index"] for w in windows if w["end_seq"] < seq]
-        after = [w["index"] for w in windows if w["start_seq"] >= seq]
-        activation_window = next((w["index"] for w in windows if w["end_seq"] >= seq), None)
-        duration = settled_at = tv = None
-        if len(before) >= k and after:
-            baseline = [cells[i] for i in before[-k:]]
-            for end in range(after[0] + k - 1, len(windows)):
-                distance = total_variation(baseline, cells[end - k + 1 : end + 1])
-                if distance < tv_threshold:
-                    settled_at, tv = end, distance
-                    duration = end - len(before) + 1
-                    break
-        result.append(
-            {
-                "amendment_id": item["amendment_id"],
-                "edition": item["edition"],
-                "activation_seq": seq,
-                "activation_window": activation_window,
-                "windows_after_activation": duration,
-                "settled_window": settled_at,
-                "tv": tv,
-            }
-        )
-    return result
