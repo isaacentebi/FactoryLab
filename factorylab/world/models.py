@@ -8,6 +8,7 @@ integer micro-USD. Providers never touch the wallet; ``metering`` does.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from decimal import Decimal
 from fractions import Fraction
@@ -116,6 +117,20 @@ class ModelRequest:
     #: states a ratio of its delivered tick, Chapter II §IV.c; time audit T8). None
     #: leaves the adapter's own ceiling in force.
     timeout_s: float | None = None
+
+
+def prompt_chars(req: ModelRequest) -> int:
+    """Characters a request sends as input, including its wire schema when it carries one.
+
+    Guarantees a reservation priced from this count covers the schema a host may bill
+    as prompt tokens. A route whose manifest contract is json_object never sends the
+    schema; it is counted there too, a small over-reservation, so the ceiling needs no
+    knowledge of the route.
+    """
+    chars = len(req.system) + sum(len(str(m.get("content", ""))) for m in req.messages)
+    if req.response_schema is not None:
+        chars += len(json.dumps(req.response_schema, separators=(",", ":")))
+    return chars
 
 
 @dataclass(frozen=True)

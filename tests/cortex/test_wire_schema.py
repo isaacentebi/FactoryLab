@@ -134,6 +134,21 @@ def test_a_contract_that_forbids_continuing_or_declining_is_carried_as_it_is():
     validate_schema({"requests": [CHILD]}, wire_schema(contract))
 
 
+def test_a_contract_silent_on_the_envelope_still_carries_its_shape():
+    """A continuation list the contract does not name keeps the envelope's item shape."""
+    contract = {"type": "object", "properties": {"action": {"type": "string"}},
+                "required": ["action"]}
+    wire = wire_schema(contract)
+    for reply in ({"tool_calls": [0]}, {"tool_calls": [{"tool": "world.read"}]},
+                  {"requests": ["judge"]}, {"action": "hold", "tool_calls": [0]}):
+        with pytest.raises(ValueError):
+            validate_schema(reply, wire)
+    for reply in ({"tool_calls": [CALL]}, {"requests": [CHILD]}, {"action": "hold"},
+                  {"action": "hold", "tool_calls": [CALL]}):
+        _validate_return(reply, contract, None)
+        validate_schema(reply, wire)
+
+
 def test_a_value_that_is_not_a_schema_carries_no_wire_schema():
     assert wire_schema(None) is None and wire_schema([]) is None
 

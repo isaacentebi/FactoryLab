@@ -195,9 +195,11 @@ class PrepaidProvider:
         }
 
     def _ceiling(self, req: ModelRequest) -> int:
+        from factorylab.world.models import prompt_chars
+
         price = self._prices.price(req.model_id)
-        chars = len(req.system) + sum(len(str(m.get("content", ""))) for m in req.messages)
-        return price.cost(int(chars * 1.5) + 64, req.max_tokens)
+        # The wire schema is input too (models.contract, §II.b), so it is reserved for.
+        return price.cost(int(prompt_chars(req) * 1.5) + 64, req.max_tokens)
 
     def affordable(self, model_id: str, ceiling_micro: int) -> tuple[bool, str]:
         if not self._namespace_allowed(model_id):

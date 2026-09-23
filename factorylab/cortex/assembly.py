@@ -1040,13 +1040,21 @@ def wire_schema(schema: Any) -> dict | None:
         return None
     schema = deepcopy(schema)
     forms: list[dict] = []
+    # The universal envelope's shape of each continuation list, which the kernel
+    # enforces whatever the contract says (``_validate_return``), under whatever the
+    # contract states of it. Its limits travel in the contract when the runtime
+    # states them; the kernel enforces them either way.
+    envelope = reserved_return_fields()
     for shape in _answer_shapes(schema):
-        forms.append(shape)
         properties = shape.get("properties")
-        properties = properties if isinstance(properties, dict) else {}
+        properties = dict(properties) if isinstance(properties, dict) else {}
         for key in ("tool_calls", "requests"):
             listed = properties.get(key)
-            listed = listed if isinstance(listed, dict) else {"type": "array"}
+            properties[key] = {**envelope[key], **(listed if isinstance(listed, dict) else {})}
+        shape = {**shape, "properties": properties}
+        forms.append(shape)
+        for key in ("tool_calls", "requests"):
+            listed = properties[key]
             if listed.get("maxItems", 1) == 0:
                 continue  # this contract admits no continuation through ``key``
             partial = _partial(shape)
