@@ -33,7 +33,7 @@ from factorylab.runtime.capital_loop import (  # noqa: E402
 from factorylab.runtime.worlds import load_manifest  # noqa: E402
 from factorylab.world.x402 import http_request  # noqa: E402
 
-DEFAULT_WORLD = ROOT / "worlds/edition5-capital-loop.toml"
+DEFAULT_WORLD = ROOT / "worlds/edition6-capital-loop.toml"
 
 
 def verdict(row: dict) -> str:

@@ -88,12 +88,14 @@ def test_a_manifest_hashes_what_it_says_and_a_default_is_no_exception():
     of the scripted world moved when the shims went, again when the standing committee
     added committee.quorum, norm_house and charter_parent_sha256, again when a card's
     region became typed data beside its holdouts and interval (charter audit P2, M3),
-    and again when W4's judges came to accept Exposure (primitive audit F12); each time
-    it is a new v0."""
+    and again when W4's judges came to accept Exposure (primitive audit F12), and again
+    when Wave 5a added the evaluation keys and [chaos] and gave the roster a third
+    model family (evaluations C1, M1, P6); each time it is a new v0."""
     scripted = load_manifest("scripted")
     assert '"forecast_horizon_events":10' in scripted.canonical_json()
+    assert '"chaos":{"connector_timeout":0.0' in scripted.canonical_json()
     assert scripted.manifest_hash() == (
-        "335ed4d9c209477d1f8a6c9de733efb794631347bf6ad963a1b284d403166fc8"
+        "97d9c18e7783601f75c9bb4612695c12573bcb7e7f3691674901fca3a0b3c4f9"
     )
 
     implicit = manifest_from_dict(_base())

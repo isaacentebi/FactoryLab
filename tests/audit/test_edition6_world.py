@@ -3,6 +3,10 @@
 Chapter II rulings R12 and smuggling audit B and C: the seats run on the kernel's
 seed system prompt, each lens is a one-sentence prior, and the roster is honestly
 unratified until the population ratifies it. The edition 5 file is not touched.
+
+Wave 5a grew the roster to the evaluator population the kernel now requires
+(evaluations C1, M3, P6), and edition 5's own roster no longer loads (R8): it is read
+here as history, past the one check it fails.
 """
 
 from dataclasses import replace
@@ -16,9 +20,43 @@ EDITION5 = "worlds/edition5-testnet-rehearsal.toml"
 EDITION6 = "worlds/edition6-testnet-rehearsal.toml"
 
 
+def _history(path, monkeypatch):
+    """A world file the kernel refuses for its evaluator population, read as history."""
+    from factorylab.runtime.worlds import WorldManifest
+
+    monkeypatch.setattr(WorldManifest, "_validate_evaluator_population", lambda self: None)
+    return load_manifest(path)
+
+
+def test_edition5_is_refused_for_its_evaluator_population():
+    with pytest.raises(ValueError, match="evaluator population") as refused:
+        load_manifest(EDITION5)
+    reason = str(refused.value)
+    assert "evaluator seats (4) are fewer than producer seats (5)" in reason
+    assert "2 model families serve the evaluator tier" in reason
+
+
+def test_edition6_seeds_the_evaluator_population():
+    from factorylab.runtime.families import model_family
+
+    world = load_manifest(EDITION6)
+    assert world.evaluator_population_problems() == []
+    roles = [seat.role for seat in world.assemblies]
+    evaluators = [s for s in world.assemblies if s.role in ("evaluator", "meta", "adversary")]
+    assert len(evaluators) == 8 and roles.count("producer") + roles.count("antagonist") == 6
+    assert len({model_family(s.model_id) for s in evaluators}) >= 3
+    # The standing tier above the metas, the adversarial judge, and the swap-based
+    # antagonist reading the one kind its Blum-Mansour router routes.
+    assert any(s.accepts == ("MetaVerdict",) for s in world.assemblies)
+    assert any(s.role == "adversary" for s in world.assemblies)
+    core = [s for s in world.assemblies if "Tick" in s.accepts]
+    assert [s.role for s in core] == ["antagonist"]
+    assert world.evaluation.no_swap_regret_kinds == ("Tick",)
+
+
 def test_every_seat_runs_on_the_seed_system_prompt_with_a_one_sentence_prior():
     world = load_manifest(EDITION6)
-    assert len(world.assemblies) == 9
+    assert len(world.assemblies) == 14
     for seat in world.assemblies:
         assert seat.system_prompt is None, seat.id
         lens = seat.initial_state["lens"]
@@ -26,8 +64,8 @@ def test_every_seat_runs_on_the_seed_system_prompt_with_a_one_sentence_prior():
         assert "not" not in lens.lower().split(), seat.id
 
 
-def test_the_charter_is_edition_5s_and_the_roster_claims_no_ratification():
-    five, six = load_manifest(EDITION5), load_manifest(EDITION6)
+def test_the_charter_is_edition_5s_and_the_roster_claims_no_ratification(monkeypatch):
+    five, six = _history(EDITION5, monkeypatch), load_manifest(EDITION6)
     # Charter audit S2: the norm house keeps fidelity's value and drops its procedure;
     # every card and every other norm is edition 5's.
     assert six.charter.cards == five.charter.cards

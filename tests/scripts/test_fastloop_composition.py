@@ -13,7 +13,11 @@ WORLD = Path(__file__).parents[2] / "worlds" / "edition6-testnet-rehearsal.toml"
 @pytest.mark.gate
 def test_the_scripted_population_reaches_requests_tools_and_both_credits(tmp_path):
     """The free tier's plumbing covers the composition path end to end."""
-    card = fastloop.run("scripted", 80, WORLD, tmp_path, cap_usd="2", seed=1)
+    # A builder is credited only by uses judged inside its registering decision's hold
+    # window; seed 2's draws put a judged cross-lineage use there on edition 6's
+    # fourteen-seat roster (seed 1's first two uses were an unjudged return and an
+    # antagonist's unmeasured Exposure).
+    card = fastloop.run("scripted", 80, WORLD, tmp_path, cap_usd="2", seed=2)
     assert card["status"] == "completed", card.get("error")
     composed = card["composition"]
     assert composed["child_requests_by_kind"].get("ProducerReturn", 0) >= 1

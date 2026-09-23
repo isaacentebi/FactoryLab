@@ -782,6 +782,71 @@ class WorldManifest:
                     raise ValueError(f"assembly {a.id} emits {kind}, which settles on the "
                                      "verdicts of its readers, and no seed accepts it")
 
+    def evaluator_population_problems(self) -> list[str]:
+        """Every way the seeded roster falls short of Chapter II §III's evaluators.
+
+        Guarantees one sentence per failed check, and none for a roster that seeds no
+        judging at all (no seed emits a Verdict: an evaluation-free fixture, whose
+        returns are visibly unjudged). The checks are facts about the world fixed at
+        the Stackelberg move (evaluations C1, M3, P6):
+
+        * evaluator seats (every seed whose kinds read a subject as a judgement: a
+          verdict, a grade of the tier below, a counter-verdict) are at least as many
+          as producer seats (every seed whose returns settle on their readers'
+          verdicts, antagonists included): "more evaluators consuming more compute
+          and performing more invocations than agents engaged in production" (II.III);
+        * at least three foundation-model families serve the evaluator tier (II.IV:
+          a common foundation model is "a global forcing function"; a provider change
+          is not a model change, ``runtime.families``);
+        * while ``evaluation.multi_judge_share`` is positive, every judged kind a seed
+          emits is accepted by judges on at least ``multi_judge_count`` families
+          other than its author's, so a multi-judged return can be read by that many
+          judges and never by one on its author's family (rulings §2, Evaluations).
+        """
+        from factorylab.cortex.registration import reward_contracts, seed_emits
+        from factorylab.runtime.families import model_family
+
+        seeded = {a.id: tuple(a.emits) if a.emits else seed_emits(a.role)
+                  for a in self.assemblies}
+        if not any("Verdict" in emits for emits in seeded.values()):
+            return []
+        shapes = {a.id: reward_contracts(seeded[a.id]) for a in self.assemblies}
+        evaluators = [a for a in self.assemblies
+                      if set(shapes[a.id].values()) & {"forecast", "conformity", "counter"}]
+        producers = [a for a in self.assemblies if a not in evaluators
+                     and set(shapes[a.id].values()) & {"judged", "exposure"}]
+        problems = []
+        if len(evaluators) < len(producers):
+            problems.append(f"evaluator seats ({len(evaluators)}) are fewer than producer "
+                            f"seats ({len(producers)})")
+        families = sorted({model_family(a.model_id) for a in evaluators})
+        if len(families) < 3:
+            problems.append(f"{len(families)} model families serve the evaluator tier "
+                            f"({', '.join(families) or 'none'}); at least 3 must")
+        if self.evaluation.multi_judge_share > 0:
+            need = self.evaluation.multi_judge_count
+            for author in producers:
+                family = model_family(author.model_id)
+                for kind, shape in shapes[author.id].items():
+                    if shape not in ("judged", "exposure"):
+                        continue
+                    readers = {model_family(j.model_id) for j in self.assemblies
+                               if kind in j.accepts and shapes[j.id].get("Verdict") == "forecast"}
+                    readers.discard(family)
+                    if len(readers) < need:
+                        problems.append(
+                            f"{author.id}'s {kind} is accepted by judges on {len(readers)} "
+                            f"families other than its own ({family}); "
+                            f"evaluation.multi_judge_count needs {need}")
+        return problems
+
+    def _validate_evaluator_population(self) -> None:
+        """Refuse a world that seeds judging without the evaluators Chapter II requires."""
+        problems = self.evaluator_population_problems()
+        if problems:
+            raise ValueError("the evaluator population Chapter II §III requires is not seeded: "
+                             + "; ".join(problems))
+
     def validate(self) -> None:
         namespace = self.exchange.client_namespace
         if self.prompt.mode not in ("reference", "compact"):
@@ -987,6 +1052,7 @@ class WorldManifest:
             value = getattr(p, name)
             if type(value) not in (int, float) or not isfinite(value) or value < 0:
                 raise ValueError(f"prices.{name} must be finite and nonnegative")
+        self._validate_evaluator_population()
 
 
 def duration_ns(value: Any) -> int:

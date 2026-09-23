@@ -1,3 +1,31 @@
+# Edition 6 capital-loop rehearsal: edition6-testnet-rehearsal.toml with the hybrid
+# Venice mode on (docs/architecture/capital-loop-rehearsal.md). Trading stays on
+# Hyperliquid TESTNET; `treasury.transfer to_venice` spends REAL USDC from the Base
+# MAINNET reserve for real Venice credit, and pays for it in the observed pots with a
+# testnet shadow send of the same $5 to `venice_shadow_sink`. It rehearses the essay's
+# reciprocal flow of capital (II.IV) end to end: profit -> Venice credit -> spending
+# authority -> Venice seats think with it. At most two conversions ($10) per window.
+#
+# It replaces edition5-capital-loop.toml, which the kernel no longer loads: edition 5's
+# nine seats hold fewer evaluator seats than producer seats and two evaluator families,
+# and a world that seeds judging must hold at least as many evaluators as producers on
+# at least three families (Wave 5a; docs/manifest.md, "The evaluator population").
+#
+# What differs from edition6-testnet-rehearsal: the [treasury] block below (reserve,
+# hybrid mode, sink, window cap, absolute bound, reserve floor, pinned payee), the Venice
+# Luna menu entry, and the seats' routes. Seven of the fourteen seats think on Venice
+# (the four GLM seats, the `opportunity` producer on Venice's Luna, and the qwen judge and
+# antagonist on Venice's qwen), so the credit a conversion buys is credit this population
+# actually spends. A provider change is not a model change, so every seat keeps its
+# family and the evaluator tier its four (glm, gpt, deepseek, qwen). The Luna and
+# deepseek judges, the calibration meta, the tier-three meta, the adversarial judge and
+# the first antagonist stay on OpenRouter, so a Venice outage cannot silence evaluation.
+#
+# THE ROSTER IS UNRATIFIED, as edition 6's is: its charter table is edition 6's, and no
+# ratification digest is claimed for this roster (see the [charter] note).
+#
+# The header of the world this was copied from follows.
+#
 # Edition 6 testnet rehearsal (Chapter II rulings R12; smuggling audit B, C and D-7).
 # A copy of worlds/edition5-testnet-rehearsal.toml, which stays byte-identical so the
 # wake pages of the runs already made from it keep their genesis. Three changes and
@@ -45,13 +73,7 @@
 # any funded launch, the population must re-ratify on this roster with
 # scripts/charter_session.py (it makes live model calls), and the export's digests go
 # back into [charter]; a mainnet load refuses this file until then.
-# TEST FIXTURE, not a world: tests/runtime/test_polymarket_fastloop.py runs it through
-# scripts/fastloop.py on the simulated venues. It is worlds/edition6-testnet-rehearsal.toml
-# unchanged except for this name and the [polymarket] block at the end, which enables
-# Polymarket event markets on the seeded simulated venue (runtime/polymarket.py). No world
-# under worlds/ enables the block. (It copied edition 5 until Wave 5a, when edition 5's
-# roster stopped meeting the evaluator population a world that seeds judging must hold.)
-name = "polymarket-fastloop"
+name = "edition6-capital-loop"
 seed = 3
 # $300 of inference backing, precommitted whole (GPT-6 §12.1). $120 is released at genesis
 # and the remaining $180 in three weekly tranches below.
@@ -203,10 +225,20 @@ input_usd_per_mtok = "0.14"
 output_usd_per_mtok = "0.49"
 reasoning = { enabled = false }
 
+# The capital loop's Luna route: the same model the judges use on OpenRouter, served by
+# Venice at Venice's list price ($0.25 in / $1.50 out per million tokens), so a producer
+# can think on the credit its own profit bought without changing what it thinks with.
+[[models]]
+id = "venice:openai-gpt-56-luna"
+provider = "venice"
+input_usd_per_mtok = "0.25"
+output_usd_per_mtok = "1.50"
+reasoning = { effort = "low" }
+
 [[assemblies]]
 id = "mechanism"
 role = "producer"
-model_id = "z-ai/glm-5.3-flash"
+model_id = "venice:z-ai-glm-5-3-flash"
 accepts = ["WorldUpdate", "Fill"]
 max_tokens = "provider"
 effort = "low"
@@ -216,7 +248,7 @@ initial_state = { lens = "Your starting prior is that mechanisms explain more th
 [[assemblies]]
 id = "empirical"
 role = "producer"
-model_id = "z-ai/glm-5.3-flash"
+model_id = "venice:z-ai-glm-5-3-flash"
 accepts = ["WorldUpdate", "Fill"]
 max_tokens = "provider"
 effort = "low"
@@ -227,7 +259,7 @@ initial_state = { lens = "Your starting prior is that an observed pattern is wea
 [[assemblies]]
 id = "constructor"
 role = "producer"
-model_id = "z-ai/glm-5.3-flash"
+model_id = "venice:z-ai-glm-5-3-flash"
 accepts = ["WorldUpdate", "Fill"]
 max_tokens = "provider"
 effort = "low"
@@ -238,7 +270,7 @@ initial_state = { lens = "Your starting prior is that reusable capability may be
 [[assemblies]]
 id = "opportunity"
 role = "producer"
-model_id = "openai/gpt-5.6-luna"
+model_id = "venice:openai-gpt-56-luna"
 accepts = ["WorldUpdate", "Fill"]
 max_tokens = "provider"
 effort = "low"
@@ -258,7 +290,7 @@ initial_state = { lens = "Your starting prior is that an outcome is noisy eviden
 [[assemblies]]
 id = "judge-fidelity"
 role = "evaluator"
-model_id = "z-ai/glm-5.3-flash"
+model_id = "venice:z-ai-glm-5-3-flash"
 accepts = ["ProducerReturn", "Exposure"]
 max_tokens = "provider"
 effort = "low"
@@ -278,7 +310,7 @@ initial_state = { lens = "Your starting prior is that what a return did is stron
 [[assemblies]]
 id = "judge-base-rate"
 role = "evaluator"
-model_id = "qwen/qwen3.8-flash"
+model_id = "venice:qwen-3-8-flash"
 accepts = ["ProducerReturn", "Exposure"]
 max_tokens = "provider"
 effort = "low"
@@ -299,7 +331,7 @@ initial_state = { lens = "Your starting prior is that apparent evaluator skill i
 [[assemblies]]
 id = "meta-countercase"
 role = "meta"
-model_id = "z-ai/glm-5.3-flash"
+model_id = "venice:z-ai-glm-5-3-flash"
 accepts = ["Verdict", "MetaVerdict"]
 max_tokens = "provider"
 effort = "low"
@@ -343,7 +375,7 @@ initial_state = { lens = "Your starting prior is that a judge can approve work w
 [[assemblies]]
 id = "antagonist-core"
 role = "antagonist"
-model_id = "qwen/qwen3.8-flash"
+model_id = "venice:qwen-3-8-flash"
 accepts = ["Tick"]
 max_tokens = "provider"
 effort = "low"
@@ -435,13 +467,43 @@ gain_step = 0.05
 gamma_max = 0.5
 decay_step = 0.1
 
-# The reserve this repository's reserve.key derives; LiveRail refuses any other.
 [treasury]
+# The reserve this repository's reserve.key derives; LiveRail refuses any other. The same
+# address holds the testnet reserve (Base Sepolia) and the REAL one (Base mainnet) whose
+# USDC the Venice conversions spend.
+reserve_address = "0x1228e5620944a79D268Afc7522E00891526EdEBb"
 hyperevm_gas_budget_wei = 0
 base_gas_budget_wei = 0
 max_transfer_fee_usd = "2"
-
 cctp_forwarding = "never"
+# Hybrid capital-loop mode: to_venice buys real Venice credit on Base mainnet (a fixed $5
+# x402 top-up) and pays for it in the observed testnet pots with a $5 usdSend from the
+# venue to the sink below. Refused on a mainnet venue and refused without a sink.
+venice_network = "base-mainnet"
+# PLACEHOLDER -- THE OPERATOR MUST CONFIRM OR REPLACE THIS SINK BEFORE A LIVE RUN.
+# The shadow leg's testnet USDC is sent here and never comes back. It must be an address
+# no pot of this world observes, and it must already exist on Hyperliquid testnet (the
+# rail refuses a sink the venue reports as `missing`, because a first send to a new
+# account pays an activation fee the $5 tranche does not cover). 0x...dEaD is the
+# conventional burn address; send it a dollar of testnet USDC once by hand, or name an
+# operator-owned testnet account instead.
+venice_shadow_sink = "0x000000000000000000000000000000000000dEaD"
+# At most two conversions ($10 of real mainnet USDC) per reserve window.
+max_venice_per_window = "10"
+# The absolute bound: at most $10 of real mainnet USDC is ever AUTHORIZED for Venice by
+# this world, re-authorizations after an expired top-up included.
+max_venice_total_usd = "10"
+# PLACEHOLDER -- THE OPERATOR MUST SET THIS BEFORE A LIVE RUN. No top-up is prepared if
+# it would leave the Base mainnet reserve below this balance, which no fresh run can
+# reset. The rehearsal runner reads the reserve keylessly at launch and refuses unless
+# reserve - floor <= max_venice_total_usd: set it to the reserve's current USDC minus
+# what this rehearsal may spend in total.
+venice_reserve_floor_usd = "0"
+# The only payee a Venice top-up quote may name. Recorded from Venice's live unpaid 402
+# quote on 11 September 2026 (docs/research/venice.md, "x402 flow"); the operator should
+# re-read it with the unpaid quote in docs/architecture/capital-loop-rehearsal.md. A
+# quote naming anyone else is refused before anything is signed.
+venice_pay_to = "0x2670b922ef37c7df47158725c0cc407b5382293f"
 [venue]
 # Testnet spot, unchanged from edition 2: PURR/USDC is the only testnet pair with a
 # canonical name and a rehearsable lot, and HYPE/USDC is the spot HYPE that pays the
@@ -456,11 +518,11 @@ spot_pairs = ["PURR/USDC", "HYPE/USDC"]
 # with their definitions in the charter object and one card.
 [charter]
 edition = 1
-# Edition 5's charter table, unchanged. It was ratified on 16 September 2026 by the
-# seeded committee of edition 5's roster (docs/charter/edition3-ratification.json:
-# charter c25f5617…, roster 81de4911…). This roster differs, so neither digest is
-# claimed here; see the header. (Neither pin verifies against edition 5's own file
-# either: its loaded cards hash to 7f1ae639… and its roster to eb72d8ed….)
+# Edition 6's charter table, unchanged. Neither `ratified_sha256` nor `roster_sha256` is
+# claimed: edition 5's pins bind edition 5's charter to edition 5's roster, and this
+# roster (edition 6's, with seven seats on Venice routes) has not been voted on.
+# Testnet admission does not check them; a funded launch of this roster would need the
+# population to ratify on it (scripts/charter_session.py) and the digests pinned here.
 norms = [
   { id = "consequential usefulness", definition = "Create things or changes that others have reason to value; uptake by an independent counterparty is evidence, internal applause is a hypothesis." },
   { id = "epistemic integrity", definition = "Make commitments answerable to evidence and preserve the ability to discover that they were wrong; a changed criterion does not rewrite what was promised." },
@@ -483,14 +545,3 @@ lambda = 0.1
 [prompt]
 
 mode = "compact"
-
-[polymarket]
-enabled = true
-venue = "fake"
-# The simulated pot's opening USDC. It is its own custody: it never borrows the venue
-# principal above or the reserve.
-collateral_usd = "40"
-read_price_usd = "0.001"
-max_order_usd = "10"
-max_open_usd = "30"
-max_orders_per_window = 20
