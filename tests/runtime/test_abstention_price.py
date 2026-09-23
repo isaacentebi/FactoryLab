@@ -101,6 +101,12 @@ def test_every_abstention_a_world_draws_is_priced_on_the_roles_of_its_menu():
         prop = opened[handle]["propensity"]
         seats = [(a, p) for a, p in zip(prop["action_ids"], prop["probs"], strict=True)
                  if a != NOOP and a in rt.assemblies]
+        if not seats:
+            # A draw that could wake nobody stood in for the seats it excluded, equally.
+            router = next(st for st in [*rt._all_router_states(),
+                                        *rt.retired_routers.values()]
+                          if st.learner.id == opened[handle]["actor"])
+            seats = [(a, 1.0) for a in router.universe if a != NOOP and a in rt.assemblies]
         total = sum(p for _a, p in seats)
         expected: dict[str, float] = {}
         for seat, p in seats:

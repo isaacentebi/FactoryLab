@@ -17,7 +17,14 @@ MAX_FORECAST_HORIZON = 200
 CH_FAST, CH_VERDICT, CH_CONFORMITY, CH_CONSEQUENCE = "fast", "verdict", "conformity", "consequence"
 
 
-CH_EXPOSURE, DEF_EXPOSURE = "exposure", "exposure-v1"
+# Exposure centred on the judges' own consequence scores on ordinary returns (the
+# Wave 2 review, item 6): v2, where v1 paid a merely miscalibrated judge's miss.
+CH_EXPOSURE, DEF_EXPOSURE = "exposure", "exposure-v2"
+
+
+# An adversarial judge's counter-verdict, settled on how far its own prediction beat
+# the verdict it read when the world measured the return (evaluations M1).
+CH_COUNTER, DEF_COUNTER = "counter", "counter-v1"
 
 
 DEF_FAST, DEF_VERDICT, DEF_CONFORMITY = "fast-v1", "verdict-v1", "conformity-v1"
@@ -107,7 +114,10 @@ def assembly_rewards(spec: Any) -> dict[str, str]:
 def return_channel(kind: str, shape: str, *, higher: bool = False) -> str:
     """A declared shape selects an existing reward channel; seed Verdict retains conformity."""
     if shape not in REWARD_SHAPES:
-        raise ValueError("reward shape must be judged, forecast, conformity or exposure")
+        raise ValueError("reward shape must be judged, forecast, conformity, exposure or "
+                         "counter")
+    if shape == "counter":
+        return CH_COUNTER
     if shape == "forecast":
         # The seed Verdict also carries a verdict judged for conformity; its
         # predictions already have their own consequence decisions.
@@ -134,8 +144,11 @@ def work_disclosure(kinds: dict[str, str], predicates: list[dict]) -> dict:
             "conformity": "Return conformity (0 to 1) on the judged work. Graded by the tier "
             "above, where one exists, and scored against the judged work's consequence "
             "score.",
-            "exposure": "Settles on how wrong the judges' verdicts on the return were "
-            "against its measured outcome.",
+            "exposure": "Settles on how much worse the judges' verdicts on the return "
+            "scored against its measured outcome than those judges score on other returns.",
+            "counter": "Return verdict (0 to 1) on the return a verdict judged. Settles when "
+            "the world measures that return, on 0.5 + 0.5 * (your Brier - that verdict's "
+            "Brier); unscored when the world never measures it.",
         },
         "default_reward_shape": "judged",
         "kind_rewards": shapes,

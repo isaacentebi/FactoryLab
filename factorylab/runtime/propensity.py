@@ -164,8 +164,8 @@ def action_label(role: str, outputs: dict[str, Any], status: str,
         return DECLINED
     if status != "ok":
         return MALFORMED
-    if role in ("evaluator", "meta"):
-        key = "verdict" if role == "evaluator" else "conformity"
+    if role in ("evaluator", "meta", "adversary"):
+        key = "conformity" if role == "meta" else "verdict"
         value = outputs.get(key)
         if type(value) not in (int, float) or isinstance(value, bool):
             return MALFORMED

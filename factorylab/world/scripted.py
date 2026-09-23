@@ -60,6 +60,11 @@ class ScriptedProvider:
                                 "args": {"substring": "fake", "limit": 1}}]})
         elif desc.startswith(("Give verdict", "Evaluate")):
             reply = self._evaluate(req, inputs)
+        elif desc.startswith("Give your own verdict"):
+            # An adversarial judge's counter-verdict: the other side of what it read.
+            read = (inputs.get("verdict") or {}).get("verdict")
+            q = 1 - read if isinstance(read, int | float) else 0.5
+            reply = {"verdict": q, "rationale": "scripted counter"}
         elif desc.startswith("Assess"):
             reply = self._meta(inputs)
         elif desc.startswith("Vote"):

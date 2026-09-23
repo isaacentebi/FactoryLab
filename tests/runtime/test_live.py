@@ -147,13 +147,16 @@ def test_runtime_runs_a_live_shaped_world_with_stub_venue_and_scripted_models() 
         "initial_balance_usd": "20",
         "tick_interval": "1s",
         "exchange": {"kind": "hyperliquid", "mainnet": False, "coins": ["BTC", "ETH"]},
+        # Three fake families: a world that seeds judging holds the evaluator population
+        # Chapter II requires, and no judge reads its author's family (Wave 5a).
         "models": [
             {
-                "id": "fake-haiku",
+                "id": model_id,
                 "provider": "fake",
                 "input_usd_per_mtok": "1",
                 "output_usd_per_mtok": "5",
-            },
+            }
+            for model_id in ("fake-haiku", "fake-opus", "fake-sonnet", "fake-gemini")
         ],
         "assemblies": [
             {
@@ -165,10 +168,17 @@ def test_runtime_runs_a_live_shaped_world_with_stub_venue_and_scripted_models() 
             {
                 "id": "eval-a",
                 "role": "evaluator",
-                "model_id": "fake-haiku",
+                "model_id": "fake-opus",
                 "accepts": ["ProducerReturn"],
             },
-            {"id": "meta-a", "role": "meta", "model_id": "fake-haiku", "accepts": ["Verdict"]},
+            {
+                "id": "eval-b",
+                "role": "evaluator",
+                "model_id": "fake-sonnet",
+                "accepts": ["ProducerReturn"],
+            },
+            # Off every (judge, producer) chain's families (the #132 review, item 3).
+            {"id": "meta-a", "role": "meta", "model_id": "fake-gemini", "accepts": ["Verdict"]},
         ],
         "novelty": {"share": 0.1},
         "charter": seed_charter_table(),

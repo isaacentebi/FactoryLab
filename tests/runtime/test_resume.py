@@ -71,7 +71,7 @@ original = rt._process_event
 def interrupt(event):
     result = original(event)
     stop = (rt.n == 250 if sys.argv[2] == 'event250' else
-            rt.ticks_consumed == 125 and str(event.kind) == 'Tick')
+            rt.ticks_consumed == 126 and str(event.kind) == 'Tick')
     if stop:
         os.kill(os.getpid(), signal.SIGKILL)
     return result

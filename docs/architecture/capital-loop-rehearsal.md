@@ -7,7 +7,11 @@ real Venice credit while the population trades on testnet money:
 
     testnet profit -> real Venice credit -> spending authority -> Venice seats think with it
 
-World: `worlds/edition5-capital-loop.toml`. Code: `HybridRail` in
+World: `worlds/edition6-capital-loop.toml` (edition 6's fourteen-seat roster, seven seats
+on Venice routes). It replaced `worlds/edition5-capital-loop.toml`, which the kernel no
+longer loads: since Wave 5a a world that seeds judging must hold at least as many
+evaluator seats as producer seats, on at least three model families (docs/manifest.md,
+"The evaluator population"). Code: `HybridRail` in
 `factorylab/world/treasury_rails.py`, `FakeHybridRail` and the two-leg bookkeeping in
 `factorylab/world/treasury.py`.
 
@@ -120,7 +124,7 @@ covered every block up to it. The runtime clock is never consulted.
 1. **Rehearse for free first.** The fast harness runs both legs on scripted custodians:
 
        uv run python scripts/fastloop.py run --provider scripted --ticks 20 --seeds 1 \
-         --world worlds/edition5-capital-loop.toml
+         --world worlds/edition6-capital-loop.toml
 
 2. **Confirm the sink.** Replace the `0x...dEaD` placeholder or accept it. It must be
    outside every pot this world observes and must already exist on Hyperliquid testnet
@@ -160,7 +164,7 @@ covered every block up to it. The runtime clock is never consulted.
    purchase stays denied, and the reserve key is cleared from the environment once the
    rail has captured its signer):
 
-       uv run python scripts/edition4_rehearsal.py --world worlds/edition5-capital-loop.toml \
+       uv run python scripts/edition4_rehearsal.py --world worlds/edition6-capital-loop.toml \
          --capital-loop --source-root "$PWD" --out work/capital-loop/<run> \
          --duration 30m --cap-usd 5
 

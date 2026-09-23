@@ -115,7 +115,7 @@ def test_default_run_freezes_the_preflight_and_buys_nothing(tmp_path, monkeypatc
     assert frozen["preflight"]["world"]["prompt_mode"] == "compact"
     assert frozen["preflight"]["expected_value"] == probe.EXPECTED_VALUE
     assert set(frozen["preflight"]["models"].values()) == {
-        "venice:z-ai-glm-5-3-flash", "openai/gpt-5.6-luna"}
+        "z-ai/glm-5.3-flash", "openai/gpt-5.6-luna"}
     assert [row["executed"] for row in records(where["out"])] == [False]
 
 
@@ -313,7 +313,7 @@ def test_investigation_paid_mode_requires_an_existing_freeze(tmp_path, monkeypat
         "--source-root", str(Path.cwd()),
         # Any world the kernel loads: the refusal precedes every model call. An untracked
         # run copy under work/ is history, and history need not load (R8).
-        "--world", "worlds/edition3-rehearsal-5.toml",
+        "--world", "worlds/edition6-testnet-rehearsal.toml",
         "--out", str(tmp_path / "arm"),
         "--paid",
     ])

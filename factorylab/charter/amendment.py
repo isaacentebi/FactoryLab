@@ -10,10 +10,11 @@ from factorylab.charter.charter import MetricCard
 def proposed_answers_for(value: object, card_id: str) -> str:
     """Population cards explicitly name a supported scoring role, independent of card id."""
     if not isinstance(value, str) or value.strip().lower() not in (
-        "producer", "evaluator", "meta", "antagonist", "all",
+        "producer", "evaluator", "meta", "antagonist", "adversary", "all",
     ):
         raise ValueError(
-            f"card {card_id} answers_for: expected producer, evaluator, meta, antagonist or all"
+            f"card {card_id} answers_for: expected producer, evaluator, meta, antagonist, "
+            "adversary or all"
         )
     return value.strip().lower()
 

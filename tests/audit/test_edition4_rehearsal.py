@@ -15,7 +15,7 @@ from factorylab.world.models import CatalogueEntry, ModelRequest, ModelResponse
 from factorylab.world.openrouter import OpenRouterError
 from scripts import edition4_rehearsal as rehearsal
 
-WORLD = "worlds/edition3-rehearsal-5.toml"
+WORLD = "worlds/edition6-testnet-rehearsal.toml"
 
 
 @dataclass
@@ -29,6 +29,9 @@ class StubProvider:
             ("openai/gpt-5.6-sol", "0.00000200", "0.00001000", 128_000),
             ("venice:z-ai-glm-5-3-flash", "0.00000015", "0.00000050", 131_072),
             ("venice:qwen-3-8-flash", "0.00000014", "0.00000049", 131_072),
+            # Edition 6's OpenRouter routes of the same two models.
+            ("z-ai/glm-5.3-flash", "0.00000009", "0.00000030", 131_072),
+            ("qwen/qwen3.8-flash", "0.00000015", "0.00000047", 131_072),
             ("openai/gpt-5.6-luna", "0.00000020", "0.00000120", 128_000),
             ("openai/gpt-5.6-luna:online", "0.00000020", "0.00000120", 128_000),
         )
@@ -355,10 +358,16 @@ def test_runner_report_records_effective_manifest_and_uses_denied_market(monkeyp
     assert isinstance(market_seen["value"], rehearsal.DeniedMarket)
     assert report["cost"]["attempted"] == 0
     assert "x402" in report["denied_rails"]
-    assert (
-        report["preserved"]["roster_sha256"]["from"]
-        != report["preserved"]["roster_sha256"]["to"]
-    )
+    # The report names the roster the world file ratified and the one that ran. Edition 6's
+    # rehearsal changes nothing a roster digest covers, so the two agree; the report says
+    # so rather than asserting a change that did not happen.
+    from factorylab.charter.provenance import roster_hash
+    from factorylab.runtime.worlds import load_manifest
+
+    assert report["preserved"]["roster_sha256"] == {
+        "from": roster_hash(load_manifest(WORLD)),
+        "to": roster_hash(manifest_seen["value"]),
+    }
     assert report["behavioral_screen"]["status"] == "inconclusive"
     assert report["behavioral_screen"]["criteria_met"]["delivered_ticks"] is False
     critical = report["behavioral_screen"]["critical_path_io"]
@@ -368,7 +377,8 @@ def test_runner_report_records_effective_manifest_and_uses_denied_market(monkeyp
     assert critical["selected_total_calls"] == 9
     assert critical["selected_total_elapsed_ns"] == 105
     assert critical["selected_mean_elapsed_ns"] == "35/3"
-    assert report["factors"]["roster_preserved"] is False
+    # Edition 6: the rehearsal keeps the roster.
+    assert report["factors"]["roster_preserved"] is True
     assert report["factors"]["completion_allowance"] == "provider"
     assert report["factors"]["reasoning"]["actual_reasoning_provenance"] == {
         "status": "unknown",

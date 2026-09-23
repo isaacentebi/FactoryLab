@@ -143,6 +143,17 @@ accepts = ["Verdict"]
 max_tokens = "provider"
 effort = "low"
 
+# A third meta family (the #132 review, item 3): a meta never shares a family with
+# the judge it grades nor that judge's producer, so every (judge, producer) pair of
+# families this roster makes needs a meta on neither.
+[[assemblies]]
+id = "meta-c"
+role = "meta"
+model_id = "openai/gpt-5.6-luna"
+accepts = ["Verdict"]
+max_tokens = "provider"
+effort = "low"
+
 # The novelty share is a flow per measured consequence period, and a trial's patience is
 # timing.min_ratio of those periods (time audit T5, T6). Neither the pricing window nor any
 # other loop period is cast here: each is derived from the loop it commands (time audit

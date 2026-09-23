@@ -8,7 +8,7 @@ later work may continue; repeated failures and unauthoritative successful bills 
 admission. A failed completion is never retried by this wrapper.
 
 The one exception is ``--capital-loop`` on a hybrid Venice world
-(worlds/edition5-capital-loop.toml): ``treasury.transfer to_venice`` stays open and
+(worlds/edition6-capital-loop.toml): ``treasury.transfer to_venice`` stays open and
 spends REAL Base mainnet USDC for Venice credit, paid for in the testnet pots by a
 shadow send. Every other treasury route and every x402 purchase stays denied. The
 operator runbook is docs/architecture/capital-loop-rehearsal.md.
@@ -37,7 +37,7 @@ from factorylab.runtime.worlds import PromptSpec, WorldManifest, load_manifest
 from factorylab.world.metering import UnbilledFailure, classify_provider_failure
 from factorylab.world.models import ModelRequest, ModelResponse
 
-DEFAULT_WORLD = Path("worlds/edition3-rehearsal-5.toml")
+DEFAULT_WORLD = Path("worlds/edition6-testnet-rehearsal.toml")
 DEFAULT_SOURCE = Path("/tmp/factorylab-edition4-baseline-source")
 DEFAULT_CAP_MICRO = 5_000_000
 DEFAULT_DURATION_NS = 30 * 60 * 1_000_000_000

@@ -11,6 +11,8 @@ from dataclasses import replace
 from decimal import Decimal
 from unittest.mock import Mock
 
+import pytest
+
 from factorylab.runtime.worlds import load_manifest
 from factorylab.world.exchange import FakeExchange, HyperliquidExchange
 from factorylab.world.venue_tools import VenueTools
@@ -69,7 +71,20 @@ class TestD1NoLeverageOrPrincipalCap:
         assert not ledger_items(rt, "order.infeasible")
 
     def test_old_manifests_with_the_deprecated_keys_still_load_and_keep_their_hash(self):
-        m = load_manifest("edition3-testnet")
+        import tomllib
+
+        from factorylab.runtime.worlds import manifest_from_dict
+
+        # Edition 3's own file names both keys, and its nine-seat roster no longer meets
+        # the evaluator population the kernel requires, so it is refused whole (R8).
+        with pytest.raises(ValueError, match="evaluator population"):
+            load_manifest("edition3-testnet")
+        # The keys themselves still load, read and hashed, on a roster that loads.
+        with open("worlds/edition6-testnet-rehearsal.toml", "rb") as fh:
+            raw = tomllib.load(fh)
+        raw["venue"]["principal_usd"] = "120"
+        raw.setdefault("tools", {})["max_leverage"] = 3
+        m = manifest_from_dict(raw)
         assert m.exchange.principal_usd == "120"  # read, and inert
         payload = json.loads(m.canonical_json())
         assert payload["exchange"]["principal_usd"] == "120"

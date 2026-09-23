@@ -14,6 +14,24 @@
 #     max_leverage`. So is edition 5's drawn `client_namespace`: a copy must never
 #     share another world's client order ids, and a rehearsal draws a fresh one.
 #
+# Wave 5a (evaluations C1, C7, M1-M3, P5, P6) then built out the evaluation layer, and
+# the roster grew to meet it. The kernel now refuses a world that seeds judging with
+# fewer evaluator seats than producer seats, with fewer than three model families in
+# the evaluator tier, or with too few judge families for two judges a return
+# (docs/manifest.md, "The evaluator population"). Edition 5's nine seats fail all
+# three. Added, each on a family already on the menu, each with a one-sentence prior:
+#  - two judges, on deepseek and qwen, so four families judge and a multi-judged return
+#    finds two judges off its author's family;
+#  - a third meta, on deepseek; all three metas read Verdicts and MetaVerdicts, so
+#    recursion deepens past two tiers and every chain has a reader off its families;
+#  - an adversarial judge on deepseek (role `adversary`), paid by how far its own
+#    verdict beat the verdict it read when the world measured the return;
+#  - a second antagonist, on qwen, reading Tick through a Blum-Mansour router, beside
+#    the first's mean-based EXP3 draw on WorldUpdate (II.III.b: the adversarial layer
+#    holds "healthy mixes of mean-based and swap-based learners").
+# Fourteen seats: eight evaluators, six producers (antagonists included). The kernel
+# requires a strict evaluator majority, and no seat reads a chain on its own family.
+#
 # THE ROSTER IS UNRATIFIED. The roster digest hashes every seat's system_prompt and
 # initial_state, so this roster is not the one edition 5's charter was ratified on.
 # The charter table below is edition 5's with one change in its norm layer, which is
@@ -51,7 +69,8 @@ releases = [
   { at = "21d", amount_micro = 60000000 },
 ]
 # C10: 0.8 of each unlocked pool is split equally across the live seats, the rest is the
-# commons. Genesis: 0.8 * 120,000,000 / 9 = 10,666,666 a seat, GPT-6 §12.2's ~$10.67.
+# commons. Genesis: 0.8 * 120,000,000 / 14 = 6,857,142 a seat (GPT-6 §12.2 split nine
+# seats at ~$10.67; Wave 5a's roster is fourteen).
 base_share = 0.8
 
 # C5 kill contract: a dead factory carries no exposure. Every kill - the operator's
@@ -240,12 +259,33 @@ max_tokens = "provider"
 effort = "low"
 initial_state = { lens = "Your starting prior is that a favourable measurement can diverge from the value it is meant to represent.", open_questions = [], active_commitments = [] }
 
-# Batched meta review, roughly every eight completed judgments.
+# Two more judges on families already on the menu (evaluations C1, P6): four
+# families judge, so no return is read only by its author's family.
+[[assemblies]]
+id = "judge-mechanics"
+role = "evaluator"
+model_id = "deepseek/deepseek-v4.1-flash"
+accepts = ["ProducerReturn", "Exposure"]
+max_tokens = "provider"
+effort = "low"
+initial_state = { lens = "Your starting prior is that what a return did is stronger evidence than what it says it did.", open_questions = [], active_commitments = [] }
+
+[[assemblies]]
+id = "judge-base-rate"
+role = "evaluator"
+model_id = "qwen/qwen3.8-flash"
+accepts = ["ProducerReturn", "Exposure"]
+max_tokens = "provider"
+effort = "low"
+initial_state = { lens = "Your starting prior is that most outcomes in a quiet market land close to their base rate.", open_questions = [], active_commitments = [] }
+
+# Metas read verdicts and each other's grades: a MetaVerdict is routed one tier up
+# to any meta off its author's family (evaluations C7).
 [[assemblies]]
 id = "meta-calibration"
 role = "meta"
 model_id = "openai/gpt-5.6-luna"
-accepts = ["Verdict"]
+accepts = ["Verdict", "MetaVerdict"]
 max_tokens = "provider"
 effort = "low"
 initial_state = { lens = "Your starting prior is that apparent evaluator skill is often smaller than it looks.", open_questions = [], active_commitments = [] }
@@ -255,10 +295,34 @@ initial_state = { lens = "Your starting prior is that apparent evaluator skill i
 id = "meta-countercase"
 role = "meta"
 model_id = "z-ai/glm-5.3-flash"
-accepts = ["Verdict"]
+accepts = ["Verdict", "MetaVerdict"]
 max_tokens = "provider"
 effort = "low"
 initial_state = { lens = "Your starting prior is that apparent evaluator competence or failure usually admits a plausible alternative explanation.", open_questions = [], active_commitments = [] }
+
+# The third meta family (evaluations C7; the #132 review, item 3): a meta never shares
+# a family with the judge it grades nor that judge's producer, so the metas span three
+# families and every (judge, producer) pair has a reader; it reads MetaVerdicts too.
+[[assemblies]]
+id = "meta-audit"
+role = "meta"
+model_id = "deepseek/deepseek-v4.1-flash"
+accepts = ["Verdict", "MetaVerdict"]
+max_tokens = "provider"
+effort = "low"
+initial_state = { lens = "Your starting prior is that a grade of a grade inherits the blind spots of the first grade.", open_questions = [], active_commitments = [] }
+
+# An adversarial judge (evaluations M1): it reads a verdict and the return it judged,
+# and is paid only when the world measures that return, by how far its own verdict
+# beat the one it read.
+[[assemblies]]
+id = "judge-adversary"
+role = "adversary"
+model_id = "deepseek/deepseek-v4.1-flash"
+accepts = ["Verdict"]
+max_tokens = "provider"
+effort = "low"
+initial_state = { lens = "Your starting prior is that a confident verdict is wrong more often than its confidence suggests.", open_questions = [], active_commitments = [] }
 
 # Bounded trouble, counted against the actual evaluation budget (GPT-6 §10.3).
 [[assemblies]]
@@ -269,6 +333,18 @@ accepts = ["WorldUpdate"]  # architect review #7: once a tick, not every price p
 max_tokens = "provider"
 effort = "low"
 initial_state = { lens = "Your starting prior is that a judge can approve work whose apparent success is unsupported.", open_questions = [], active_commitments = [] }
+
+# The swap-based antagonist (II.III.b; evaluations M1): the only seat that reads Tick,
+# so the Tick router, seeded Blum-Mansour below, is its learner alone, beside the
+# mean-based EXP3 draw that wakes the first antagonist on WorldUpdate.
+[[assemblies]]
+id = "antagonist-core"
+role = "antagonist"
+model_id = "qwen/qwen3.8-flash"
+accepts = ["Tick"]
+max_tokens = "provider"
+effort = "low"
+initial_state = { lens = "Your starting prior is that a judge's approval tracks presentation more closely than outcome.", open_questions = [], active_commitments = [] }
 
 # The novelty share is a flow per measured consequence period, and a trial's patience is
 # timing.min_ratio of those periods (time audit T5, T6). Neither the pricing window nor any
@@ -303,9 +379,26 @@ sampling_step = 0.1
 sampling_cap = 0.7
 
 # Ruling R10: the judge tier is mostly mean-based ("a significantly higher population of
-# mean-based no-regret judges than ... swap-based judges", II.III), so no router here is
-# seeded as a no-swap-regret core. The core beside a producer frontier is wave 5's.
-no_swap_regret_kinds = []
+# mean-based no-regret judges than ... swap-based judges", II.III), so no judging router
+# is seeded as a no-swap-regret core. Tick is read by the second antagonist alone: the
+# adversarial layer's swap-based learner (II.III.b: "healthy mixes of mean-based and
+# swap-based learners"), capped like every adversary at adversarial_share.
+no_swap_regret_kinds = ["Tick"]
+# Evaluations P6, M2: three returns in ten are drawn again until two judges on
+# different families, never the author's, have read them; ensemble disagreement.
+multi_judge_share = 0.3
+multi_judge_count = 2
+# Evaluations C7: each cascade window releases all its completed judgements upward,
+# still only at its jittered close and each with its window as context (II.IV.c).
+meta_read_share = 1.0
+
+# The chaos actuator (II.III.b: a chaos monkey; evaluations M1): real, bounded faults
+# in what the seats are shown, drawn from the world's seeded stream. None moves money.
+[chaos]
+venue_unavailable = 0.05
+stale_mids = 0.05
+tool_withheld = 0.05
+connector_timeout = 0.05
 [tools]
 population_tool_micro_per_call = 50
 
