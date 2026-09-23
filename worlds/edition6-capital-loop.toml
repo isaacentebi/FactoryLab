@@ -561,12 +561,12 @@ max_venice_per_window = "10"
 # The absolute bound: at most $10 of real mainnet USDC is ever AUTHORIZED for Venice by
 # this world, re-authorizations after an expired top-up included.
 max_venice_total_usd = "10"
-# PLACEHOLDER -- THE OPERATOR MUST SET THIS BEFORE A LIVE RUN. No top-up is prepared if
-# it would leave the Base mainnet reserve below this balance, which no fresh run can
-# reset. The rehearsal runner reads the reserve keylessly at launch and refuses unless
-# reserve - floor <= max_venice_total_usd: set it to the reserve's current USDC minus
-# what this rehearsal may spend in total.
-venice_reserve_floor_usd = "0"
+# No top-up is prepared if it would leave the Base mainnet reserve below this balance,
+# which no fresh run can reset. The rehearsal runner reads the reserve keylessly at
+# launch and refuses unless reserve - floor <= max_venice_total_usd. Set on 23 September
+# 2026 for the first live capital-loop rehearsal: the reserve read $18.266 USDC (0 ETH;
+# Venice credit $0.098), so the floor is that less the $10 this world may ever spend.
+venice_reserve_floor_usd = "8.266"
 # The only payee a Venice top-up quote may name. Recorded from Venice's live unpaid 402
 # quote on 11 September 2026 (docs/research/venice.md, "x402 flow"); the operator should
 # re-read it with the unpaid quote in docs/architecture/capital-loop-rehearsal.md. A
