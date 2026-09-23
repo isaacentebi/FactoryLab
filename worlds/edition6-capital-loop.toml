@@ -149,8 +149,10 @@ reasoning = { enabled = false }
 # Never silently authorize a more expensive fallback than the route that was validated
 # (GPT-6 §10.2): OpenRouter routes only to providers that honour these parameters.
 extra_body = { provider = { require_parameters = true } }
-# json_schema: 10/10 kernel-valid vs 10/10 json_object (DeepInfra, Wafer, DekaLLM), 23 Sept 2026 probe.
-contract = "json_schema"
+# json_object. Under json_schema a 23 September 2026 probe of toy prompts was 10/10
+# kernel-valid, but in the first live capital-loop rehearsal that day its hosts returned 9
+# of 11 real contracts malformed (`"emits":","`, required fields absent), against about 1%
+# on json_object in the A/B batches before.
 
 [[models]]
 id = "openai/gpt-5.6-sol"
