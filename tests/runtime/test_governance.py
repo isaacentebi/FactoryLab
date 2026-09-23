@@ -28,8 +28,10 @@ def test_votes_have_one_queue_decision_per_seat_per_amendment(monkeypatch):
     calls = [i for i in items if i['kind'] == 'invocation']
     assert len(decisions) == len(calls) == 2
     assert {i['handle'] for i in decisions} == {i['handle'] for i in calls}
-    for call in calls:
-        assert rt.queue.history(call['handle'])
+    # Charter audit P1: a failed motion's ballots are not censored; each waits to be
+    # graded on the reject branch, against the unchanged charter.
+    waiting = {v['handle']: v['branch'] for v in rt.pending_votes}
+    assert waiting == {call['handle']: 'reject' for call in calls}
     assert rt.window.invocations == 2
 
 

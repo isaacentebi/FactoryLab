@@ -68,7 +68,8 @@ def _record_types() -> dict[str, type]:
     from factorylab.charter.committee import Ballot, Committee, Seat, StandingCommittee
     from factorylab.charter.controller import CardRegion, _CardState
     from factorylab.charter.measurement import CardSamples
-    from factorylab.charter.windows import MetricWindow
+    from factorylab.charter.region import CardRule
+    from factorylab.charter.windows import Interval, MetricWindow
     from factorylab.cortex.assembly import AssemblySpec, ProgramAssemblySpec
     from factorylab.cortex.tools import PopulationTool
     from factorylab.kernel.events import Event, EventKind
@@ -104,6 +105,7 @@ def _record_types() -> dict[str, type]:
 
     classes = (
         Amendment, PredictedEffect, Charter, MetricCard, MetricWindow, CardSamples,
+        CardRule, Interval,
         Ballot, Committee, Seat, StandingCommittee, CardRegion, _CardState,
         AssemblySpec, WorkAssemblySpec, ProgramAssemblySpec, Predicate, PredicateForecast,
         PopulationTool, Event, PopulationEvent, EventKind, Decision,
@@ -588,6 +590,15 @@ _RUNTIME_FIELDS = (
     "event_schemas",
     # Metric challenges: frozen incumbent and replacement cards, their trial series and status.
     "challenges",
+    # The charter's markets (charter audit M1): unsettled lambda posts and each seat's
+    # settled-post record. An older checkpoint has neither; both start empty.
+    "lambda_posts", "lambda_standing",
+    # Charter audit M5 and the posts' target: each closed window's decisions and scope
+    # violations until their consequences are in, the consequences measured so far, and
+    # the last margin published. Each starts empty when an older checkpoint lacks it.
+    "margin_windows", "measured_consequences", "lambda_dollars",
+    # Charter motions decided by branch (the realized enactment rate).
+    "motion_tally",
     "return_bindings",
     "return_events",
     # The population's registered measurements and its open assembly-learner rounds.

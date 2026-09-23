@@ -11,6 +11,7 @@ from factorylab.charter.amendment import Amendment, PredictedEffect
 from factorylab.charter.book import Refusal
 from factorylab.charter.charter import Charter, MetricCard
 from factorylab.charter.controller import promise_kept
+from factorylab.charter.market import MOTION_FORECAST_DEFINITION, brier
 from factorylab.charter.measurement import measure_card, preflight_measurement
 from factorylab.cortex.assembly import AssemblySpec
 from factorylab.cortex.registration import (
@@ -91,6 +92,9 @@ class GovernanceMixin:
         self.forecast_returns = {}
         # challenge id -> frozen incumbent and replacement cards, trial series, status
         self.challenges: dict[str, dict] = {}
+        # Charter motions decided so far by branch: the factory's realized enactment
+        # rate, which weighs a seat's pair of conditional forecasts (charter.market).
+        self.motion_tally: dict[str, int] = {"passed": 0, "failed": 0}
         self.predicate_runner = JournalProxy(PredicateRunner(), self.ledger, "predicate")
         # The norm house's files beside the ledger, read only at a governance
         # boundary and through the journal, so a resumed world reads what the
@@ -101,9 +105,22 @@ class GovernanceMixin:
                                        self.ledger, "norms")
         self.observer.predicates = self.predicates
         self.PROPOSAL_SHAPES = deepcopy(self.PROPOSAL_SHAPES)
-        for kind in ("connector", "retire"):
+        for kind in ("connector", "retire", "challenge"):
             self.PROPOSAL_SHAPES[kind]["predicted_effect"] = {
                 "card_id": "a current card id", "direction": "decrease", "window": 1}
+        # Charter audit P2: a card's region is typed data; the sentence is derived.
+        # Charter audit M3: a holdout motion appends one registered predicate to a card.
+        shape = self.PROPOSAL_SHAPES["amendment"]
+        for card in shape.get("add", ()):
+            card.pop("acceptable_region", None)
+            card["region"] = {"rule": "at most | at least | above | below | between | "
+                              "below the median of the previous window",
+                              "lo": "number, for at least, above and between",
+                              "hi": "number, for at most, below and between"}
+        shape["holdout"] = {"card_id": "a current card id",
+                            "predicate": "a registered predicate id",
+                            "evidence": "why the card needs it, at most 4000 chars",
+                            "trial_windows": 3}
 
     def _commissioned_judge_refusal(self, target: str) -> str | None:
         """Name why a judging contract cannot be commissioned as a child, or None.
@@ -169,6 +186,10 @@ class GovernanceMixin:
                 prediction = None
                 if item.get("kind") in ("connector", "retire"):
                     prediction = self._policy_prediction(item.get("predicted_effect"))
+                elif isinstance(item, dict) and item.get("kind") == "challenge":
+                    # Charter audit P2: a challenge declares its own promise; the
+                    # runtime never infers it from the replacement's wording.
+                    prediction = PredictedEffect.parse(item.get("predicted_effect"))
                 if isinstance(item, dict) and item.get("kind") == "amendment":
                     self._propose_amendment(handle, item)
                 else:
@@ -176,7 +197,7 @@ class GovernanceMixin:
                     namespaced = (isinstance(mid, str) and item.get("kind") == "model"
                                   and mid.startswith(("x402:", "venice:")))
                     adapted = {**item, "openrouter_id": "namespace/model"} if namespaced else item
-                    if item.get("kind") == "connector":
+                    if item.get("kind") in ("connector", "challenge"):
                         adapted = {k: v for k, v in adapted.items() if k != "predicted_effect"}
                     accepted, rejected = parse_proposals(
                         {"register": [adapted]},
@@ -430,7 +451,8 @@ class GovernanceMixin:
         """The replacement cards under trial or ballot, keyed by challenge id."""
         return {cid: ch["replacement"] for cid, ch in self._live_challenges().items()}
 
-    def _register_challenge(self, handle: str, prop: ChallengeProposal) -> None:
+    def _register_challenge(self, handle: str, prop: ChallengeProposal, *,
+                            predicted_effect: PredictedEffect | None = None) -> None:
         """Admit a metric challenge: one novelty trial buys a frozen side-by-side trial.
 
         The replacement keeps the challenged card's id and norm, so adopting it
@@ -438,6 +460,10 @@ class GovernanceMixin:
         definitions behind them are frozen here; the incumbent keeps pricing
         the live charter throughout, so commitments incurred under it settle
         under it. The challenge is ledgered before it exists in state.
+
+        Charter audit P2: the replacement's region is built as typed data from
+        the challenge's rule and value, and the promise its ballot is graded on
+        is the one the challenger declared, which names the challenged card.
         """
         from factorylab.charter.amendment import proposed_answers_for
         from factorylab.charter.book import validate_observation_bindings
@@ -448,16 +474,22 @@ class GovernanceMixin:
             raise ValueError("challenge card_id must name a current card")
         if any(ch["card_id"] == prop.card_id for ch in self._live_challenges().values()):
             raise ValueError("card is already under challenge")
+        if predicted_effect is None:
+            raise ValueError("a challenge declares its predicted_effect")
+        if predicted_effect.card_id != incumbent.id:
+            raise ValueError("a challenge's predicted_effect names the challenged card")
         spec = prop.replacement
         answers_for = spec.get("answers_for", incumbent.answers_for)
         if answers_for not in self._kind_rewards():
             answers_for = proposed_answers_for(answers_for, incumbent.id)
+        rule = str(spec["rule"])
+        bound = "lo" if rule in ("at least", "above") else "hi"
         replacement = MetricCard(
             incumbent.id, incumbent.norm,
             str(spec.get("description", incumbent.description)),
             str(spec.get("units", incumbent.units)),
-            spec["window"], f"{spec['rule']} {spec['value']}", str(spec["observation"]),
-            answers_for,
+            spec["window"], {"rule": rule, bound: spec["value"]}, str(spec["observation"]),
+            answers_for, holdout=incumbent.holdout,
         )
         if replacement == incumbent:
             raise ValueError("challenge leaves the card unchanged")
@@ -494,7 +526,7 @@ class GovernanceMixin:
             "evidence": prop.evidence, "incumbent": incumbent, "replacement": replacement,
             "trial_windows": prop.trial_windows, "start_window": self.window.index,
             "observations": definitions, "series": [], "status": "trial",
-            "amendment_id": None,
+            "amendment_id": None, "predicted_effect": predicted_effect,
         }
         self.ledger.append({"kind": "challenge.proposed",
                             **{k: v for k, v in record.items() if k != "series"},
@@ -520,6 +552,12 @@ class GovernanceMixin:
                              "observation": challenge[side].observation,
                              "value": fmean(scopes.values()) if scopes else None,
                              "scopes": scopes}
+            if challenge.get("holdout") and self.card_samples.windows:
+                # A holdout trial also resolves the appended predicate on the window.
+                row["holdout"] = {"predicate": challenge["holdout"],
+                                  "held": self._resolve_holdout(
+                                      challenge["holdout"],
+                                      window_facts(self.card_samples.windows[-1]))}
             self.ledger.append({"kind": "challenge.window", "challenge_id": challenge["id"],
                                 **row, "ts": self.clock.now_ns})
             challenge["series"].append(row)
@@ -547,14 +585,24 @@ class GovernanceMixin:
             if challenge["status"] != "due":
                 continue
             replacement = challenge["replacement"]
-            direction = ("increase" if replacement.acceptable_region.startswith(
-                ("at least", "above")) else "decrease")
+            effect = challenge.get("predicted_effect")
+            if effect is None:
+                # A challenge admitted before challenges declared their own promise
+                # (charter audit P2) keeps the one it was always going to be balloted on.
+                effect = PredictedEffect(replacement.id, "increase" if replacement.rule
+                                         is not None and replacement.rule.kind == "min"
+                                         else "decrease", 1)
+            holdout = challenge.get("holdout")
             try:
+                # A holdout motion appends to the card as it stands when it activates
+                # (charter audit M3): a replace frozen at admission would revert any
+                # cards motion that activated during the trial.
                 am = Amendment(
                     id=challenge["id"], proposer_handle=challenge["handle"],
-                    edition_base=self.charter.edition, add=(), replace=(replacement,),
-                    remove=(),
-                    predicted_effect=PredictedEffect(replacement.id, direction, 1),
+                    edition_base=self.charter.edition, add=(),
+                    replace=() if holdout else (replacement,), remove=(),
+                    predicted_effect=effect,
+                    holdout=(challenge["card_id"], holdout) if holdout else None,
                 )
                 self.charter_book.propose(am, self._policy_observations(challenge))
             except ValueError as exc:
@@ -677,6 +725,7 @@ class GovernanceMixin:
         evidence = str(challenge.get("evidence") or "")
         return {
             "id": challenge["id"],
+            **({"holdout": challenge["holdout"]} if challenge.get("holdout") else {}),
             "card_id": challenge["card_id"],
             "evidence": evidence[:BALLOT_EVIDENCE_CHARS],
             "evidence_truncated": len(evidence) > BALLOT_EVIDENCE_CHARS,
@@ -687,14 +736,16 @@ class GovernanceMixin:
             "windows_shown": len(rows),
             "series": [{"window": row.get("window"),
                         "incumbent": side(row, "incumbent"),
-                        "replacement": side(row, "replacement")} for row in rows],
+                        "replacement": side(row, "replacement"),
+                        **({"holdout": row["holdout"]} if "holdout" in row else {})}
+                       for row in rows],
         }
 
     def _register(self, handle: str, prop: Any, *,
                   predicted_effect: PredictedEffect | None = None) -> None:
         amount = self.ev.trial_amount_micro
         if isinstance(prop, ChallengeProposal):
-            self._register_challenge(handle, prop)
+            self._register_challenge(handle, prop, predicted_effect=predicted_effect)
             return
         if isinstance(prop, MarketProposal):
             self._register_market(handle, prop)
@@ -1078,8 +1129,11 @@ class GovernanceMixin:
             proposed_price,
             proposed_tick_interval,
         )
-        from factorylab.charter.charter import MetricCard
+        from factorylab.charter.charter import MetricCard, stated_region
 
+        if "holdout" in item:
+            self._propose_holdout(handle, item)
+            return
         present = {"cards": any(item.get(key) for key in ("add", "replace", "remove")),
                    "lambda": "lambda" in item, "clock": "tick_interval" in item}
         classes = [name for name in CHANGE_CLASSES if present[name]]
@@ -1108,6 +1162,16 @@ class GovernanceMixin:
             if not isinstance(raw, dict) or not raw:
                 self._refuse_amendment(item, "lambda must map current card ids to prices")
             for card_id, value in raw.items():
+                if value == "posted":
+                    # Charter audit M1: the committee adopts the factory's posted price,
+                    # read and frozen now, so the motion states the number it sets.
+                    posted = self._posted_lambda(str(card_id))
+                    if posted is None:
+                        self._refuse_amendment(item, f"no posted lambda for card {card_id}")
+                    self.ledger.append({"kind": "lambda_post.adopted", "motion": item.get("id"),
+                                        "card_id": str(card_id), **posted,
+                                        "ts": self.clock.now_ns})
+                    value = posted["lambda"]
                 try:
                     prices.append((str(card_id), proposed_price(value, self.m.prices.lambda_max)))
                 except ValueError as exc:
@@ -1125,6 +1189,15 @@ class GovernanceMixin:
                     self._refuse_amendment(
                         item, "a card carries no lambda: a motion carries one change class "
                         "(cards, lambda or clock)")
+                holdout = tuple(c.get("holdout") or ())
+                incumbent = next((x for x in self.charter.cards if x.id == c.get("id")), None)
+                kept = incumbent.holdout if incumbent is not None and key == "replace" else ()
+                if not set(holdout) <= set(kept):
+                    # Charter audit M3: a holdout is appended by its own motion, with a
+                    # trial; a cards motion may keep or drop a card's holdouts only.
+                    self._refuse_amendment(
+                        item, "a cards motion keeps or drops a card's holdouts; a holdout "
+                        "is appended by a holdout motion")
                 out.append(
                     MetricCard(
                         str(c.get("id", "")),
@@ -1132,11 +1205,12 @@ class GovernanceMixin:
                         str(c.get("description", "")),
                         str(c.get("units", "")),
                         c.get("window"),
-                        str(c.get("acceptable_region", "")),
+                        stated_region(c),
                         str(c.get("observation", "")),
                         (c.get("answers_for") if isinstance(c.get("answers_for"), str)
                          and c.get("answers_for") in self._kind_rewards()
                          else proposed_answers_for(c.get("answers_for"), str(c.get("id", "")))),
+                        holdout=holdout,
                     )
                 )
             from factorylab.runtime.cards import parses
@@ -1144,7 +1218,7 @@ class GovernanceMixin:
             for card in out:
                 card.validate_answers_for(frozenset(self._kind_rewards()))
                 if not parses(card):
-                    raise ValueError("card acceptable_region has no finite usable bounds")
+                    raise ValueError("card region has no finite usable bounds")
                 # A card may name a registered observation; an unregistered one
                 # is refused here, before a vote, with the reason.
                 region_for(card, rolling={}, observations=self.observations)
@@ -1190,6 +1264,113 @@ class GovernanceMixin:
         self.charter_book.propose(am, self.observations)
         self.stats.amendments_proposed += 1
         self.window.amendments_proposed += 1
+
+    def _propose_holdout(self, handle: str, item: dict[str, Any]) -> None:
+        """Admit a holdout motion to a trial; its ballot waits for the trial to end.
+
+        Essay II.IV.a: the factory's evaluatory layer may "continuously add
+        holdout test criteria to a given charter (based on adversarially induced
+        conditions or just real production traffic)". A holdout motion is the
+        ordinary amendment path's replace of one card with one registered
+        predicate, frozen at its current version, appended to the card's
+        holdouts. Only an evaluator or antagonist seat proposes one (charter audit
+        M3). Like a metric challenge it buys a side-by-side trial with one novelty
+        trial: for ``trial_windows`` closed windows the card is measured and the
+        predicate resolved on each, and the motion then joins the next
+        committee's agenda under its own id and its own predicted effect.
+        """
+        from factorylab.charter.charter import HOLDOUT_RE
+        from factorylab.charter.holdout import behavioural_reads
+        from factorylab.cortex.registration import (
+            MAX_CHALLENGE_TRIAL_WINDOWS,
+            MAX_EVIDENCE_CHARS,
+            measured_role,
+        )
+
+        motion_id = str(item.get("id", ""))
+        spec = item.get("holdout")
+        others = sorted({"add", "replace", "remove", "lambda", "tick_interval"} & set(item))
+        if others:
+            self._refuse_amendment(item, "a holdout motion carries its holdout alone; this "
+                                   f"one also carries {', '.join(others)}")
+        if not isinstance(spec, dict) or set(spec) != {"card_id", "predicate", "evidence",
+                                                       "trial_windows"}:
+            self._refuse_amendment(item, "holdout needs exactly card_id, predicate, evidence "
+                                   "and trial_windows")
+        proposer = self._proposer_assembly(handle)
+        emits = self.assemblies[proposer].spec.emits if proposer in self.assemblies else ()
+        if measured_role(emits) not in ("evaluator", "antagonist"):
+            self._refuse_amendment(item, "a holdout motion is proposed by an evaluator or "
+                                   "antagonist seat")
+        card = next((c for c in self.charter.cards if c.id == spec["card_id"]), None)
+        if card is None:
+            self._refuse_amendment(item, "holdout.card_id must name a current card")
+        predicate = (self.predicates.get(spec["predicate"])
+                     if isinstance(spec["predicate"], str) and spec["predicate"] else None)
+        if predicate is None or predicate.code is None:
+            self._refuse_amendment(item, "holdout.predicate must name a registered predicate; "
+                                   "a seed predicate resolves over a forecast's horizon, not "
+                                   "a closed window")
+        try:
+            # A holdout tests behaviour: a predicate on the window's index, the clock,
+            # balances or market series would fail forever whatever the factory did.
+            behavioural_reads(predicate.code)
+        except ValueError as exc:
+            self._refuse_amendment(item, str(exc))
+        entry = f"{predicate.id}@{predicate.version}"
+        if HOLDOUT_RE.fullmatch(entry) is None:
+            self._refuse_amendment(item, "holdout.predicate is not a predicate id")
+        if predicate.id in {h.split("@")[0] for h in card.holdout}:
+            self._refuse_amendment(item, "the card already holds this predicate")
+        windows = spec["trial_windows"]
+        if type(windows) is not int or not 1 <= windows <= MAX_CHALLENGE_TRIAL_WINDOWS:
+            self._refuse_amendment(item, "holdout.trial_windows must be an integer in "
+                                   f"[1, {MAX_CHALLENGE_TRIAL_WINDOWS}]")
+        evidence = spec["evidence"]
+        if not isinstance(evidence, str) or not evidence.strip() or (
+                len(evidence) > MAX_EVIDENCE_CHARS):
+            self._refuse_amendment(item, "holdout.evidence must be a nonempty string of at "
+                                   f"most {MAX_EVIDENCE_CHARS} chars")
+        try:
+            effect = PredictedEffect.parse(item.get("predicted_effect"))
+        except ValueError as exc:
+            self._refuse_amendment(item, str(exc))
+        if effect.card_id != card.id:
+            self._refuse_amendment(item, "a holdout motion's predicted_effect names its card")
+        if any(ch["card_id"] == card.id for ch in self._live_challenges().values()):
+            self._refuse_amendment(item, "card is already under challenge or holdout trial")
+        closed = self.card_samples.windows[-1] if self.card_samples.windows else None
+        if closed is None or self._resolve_holdout(entry, window_facts(closed)) is None:
+            self._refuse_amendment(item, "holdout preflight: the predicate does not resolve on "
+                                   "the last closed window")
+        # The motion's id is checked like any amendment's before the trial is paid.
+        Amendment(id=motion_id, proposer_handle=handle, edition_base=self.charter.edition,
+                  add=(), replace=(card,), remove=(), predicted_effect=effect)
+        if motion_id in self.challenges or any(
+                am.id == motion_id for am in self.charter_book.pending()):
+            self._refuse_amendment(item, "amendment id already proposed")
+        replacement = MetricCard(card.id, card.norm, card.description, card.units, card.window,
+                                 card.region, card.observation, card.answers_for,
+                                 holdout=(*card.holdout, entry))
+        contract = Contract(
+            id=f"holdout:{motion_id}", version=1, kind="tool", description="holdout motion",
+            input_schema={"type": "object"}, output_schema={"type": "object"},
+            price=PriceSpec({}), permissions=frozenset(), resource_bounds=ResourceBounds())
+        self._register_proposal(contract, handle, reason="trial:holdout")
+        observation = self.observations.get(card.observation)
+        definitions = ({observation.id: deepcopy(self.registered_observations[observation.id])}
+                       if observation is not None and observation.registered else {})
+        record = {
+            "id": motion_id, "handle": handle, "card_id": card.id,
+            "evidence": evidence, "incumbent": card, "replacement": replacement,
+            "holdout": entry, "trial_windows": windows, "start_window": self.window.index,
+            "observations": definitions, "series": [], "status": "trial",
+            "amendment_id": None, "predicted_effect": effect,
+        }
+        self.ledger.append({"kind": "holdout.proposed",
+                            **{k: v for k, v in record.items() if k != "series"},
+                            "edition": self.charter.edition, "ts": self.clock.now_ns})
+        self.challenges[motion_id] = record
 
     def _proposer_assembly(self, handle: str) -> str | None:
         """The assembly a proposing decision belongs to, when the queue knows it."""
@@ -1449,6 +1630,8 @@ class GovernanceMixin:
                         "add": [asdict(c) for c in am.add],
                         "replace": [asdict(c) for c in am.replace],
                         "remove": list(am.remove),
+                        **({"holdout": {"card_id": am.holdout[0], "predicate": am.holdout[1]}}
+                           if getattr(am, "holdout", None) else {}),
                         **({"lambda": prices} if prices else {}),
                         "predicted_effect": am.predicted_effect.as_dict(),
                         **({"tick_interval": am.tick_interval}
@@ -1473,6 +1656,10 @@ class GovernanceMixin:
                 handle,
                 ("Vote on a connector registration." if connector is not None else
                  "Vote on retiring the named assembly version." if retiring else
+                 "Vote on appending a holdout to a charter card: inputs.challenge carries "
+                 "the proposer's evidence, the card's measured series and the holdout's "
+                 "result per trial window."
+                 if challenge_inputs and challenge_inputs.get("holdout") else
                  "Vote on an amendment to the charter's metric cards proposed by a metric "
                  "challenge: inputs.challenge carries the challenger's evidence and both "
                  "measured series, incumbent and replacement per trial window."
@@ -1547,8 +1734,16 @@ class GovernanceMixin:
             if not retiring:
                 self.cadence.approve(am.id)
                 self.stats.amendments_passed += 1
-        elif outcome == "failed":
+                self.motion_tally["passed"] += 1
+        elif outcome == "failed" and retiring:
             self._censor_ballots(am.id)
+        elif outcome == "failed":
+            # Charter audit P1: the rejected branch is observable. Its ballots and
+            # its reject-branch forecasts are graded against the unchanged charter.
+            self.motion_tally["failed"] += 1
+            self.ledger.append({"kind": "policy.rejected", "amendment_id": am.id,
+                                "window": self.window.index})
+            self._activate_policy_ballots(am.id, branch="reject")
 
     @staticmethod
     def _motion_description(am: Any) -> str:
@@ -1561,15 +1756,35 @@ class GovernanceMixin:
         return "Vote on an amendment to the charter's metric cards."
 
     def _card_statistics(self) -> list[dict]:
-        """Each priced card's lambda, windows priced at lambda_max and violation duration (M7)."""
+        """Each priced card's lambda, windows priced at lambda_max and violation duration (M7).
+
+        Beside the controller's lambda stands the price the factory posted
+        (charter audit M1), when any seat posted one.
+        """
         return [{"card_id": card_id, "lambda": self.controller.price(card_id),
+                 **({"posted": posted} if (posted := self._posted_lambda(card_id)) else {}),
                  **self.controller.saturation(card_id)}
                 for card_id in sorted(self.priced)]
 
+    def _posted_lambda(self, card_id: str) -> dict | None:
+        """The factory's posted price for a card; the charter's markets supply it."""
+        return None
+
+    def _motion_market(self, motion_id: str) -> dict | None:
+        """The conditional forecasts on one motion; the charter's markets supply them."""
+        return None
+
     def _agenda_block(self, committee) -> dict:
-        """The seated committee's agenda: its motions, the deferred ones and the card record."""
+        """The seated committee's agenda: its motions, the deferred ones and the card record.
+
+        ``markets`` carries each agenda motion's conditional forecasts on both
+        branches (charter audit M2), when there are any.
+        """
+        markets = {motion: market for motion in committee.agenda
+                   if (market := self._motion_market(motion))}
         return {"boundary": committee.boundary, "round": committee.round,
                 "motions": list(committee.agenda), "deferred": list(committee.deferred),
+                **({"markets": markets} if markets else {}),
                 "lambda_max": self.m.prices.lambda_max, "cards": self._card_statistics()}
 
     def _activate_passed(self) -> None:
@@ -1812,6 +2027,22 @@ class GovernanceMixin:
         if vote is None:
             self._settle_policy(handle, 0.0, SettleStatus.CENSORED)
             return
+        ballot = {
+            "handle": handle, "assembly": assembly, "amendment_id": proposal.id,
+            "vote": vote, **self._promise_frame(proposal),
+            "activation_window": None, "baseline": None,
+        }
+        self.ledger.append({"kind": "policy.promised", **ballot})
+        self.pending_votes.append(ballot)
+
+    def _promise_frame(self, proposal) -> dict:
+        """The frozen measurement a motion's promise is graded on, shared by every bet on it.
+
+        The card (or, for a clock motion, the burn observation's frame), the
+        observation's version and definition, and the region, frozen before the
+        branch is decided, so a later registration cannot rewrite what a ballot or
+        a conditional forecast was a bet on.
+        """
         effect = proposal.predicted_effect
         if effect.observation is not None:
             card = self._observation_card(effect.observation)
@@ -1823,16 +2054,10 @@ class GovernanceMixin:
         observation = self.observations.get(card.observation)
         definitions = ({observation.id: deepcopy(self.registered_observations[observation.id])}
                        if observation.registered else {})
-        ballot = {
-            "handle": handle, "assembly": assembly, "amendment_id": proposal.id,
-            "vote": vote, "prediction": proposal.predicted_effect, "card": card,
-            "observation_id": observation.id, "observation_version": observation.version,
-            "observations": definitions,
-            "region": region_for(card, rolling=self.rolling, observations=self.observations),
-            "activation_window": None, "baseline": None,
-        }
-        self.ledger.append({"kind": "policy.promised", **ballot})
-        self.pending_votes.append(ballot)
+        return {"prediction": proposal.predicted_effect, "card": card,
+                "observation_id": observation.id, "observation_version": observation.version,
+                "observations": definitions,
+                "region": region_for(card, rolling=self.rolling, observations=self.observations)}
 
     def _observation_card(self, observation_id: str) -> MetricCard:
         """The measurement a clock motion's promise is graded on: one whole window, unpriced.
@@ -1855,11 +2080,29 @@ class GovernanceMixin:
         return ObservationBook(vote["observations"], run=self.observation_runner.run,
                                reject=self._observation_out_of_range)
 
-    def _activate_policy_ballots(self, proposal_id: str) -> None:
-        """All proposal kinds start their promised horizon only when their change takes effect."""
+    def _activate_policy_ballots(self, proposal_id: str, branch: str = "enact") -> None:
+        """Every bet on a motion starts its horizon when the motion's branch is decided.
+
+        ``enact``: the change took effect, as it always was. ``reject``: a charter
+        motion failed its vote, and the unchanged charter is the realized branch
+        (charter audit P1; essay II.IV.a, "bet on beliefs"). Ballots follow the
+        branch taken. A conditional forecast on the branch not taken is void: its
+        decision closes censored and nothing grades it, as a conditional market
+        refunds the branch that did not happen. Either way the baseline is the
+        measurement at the decision and the horizon the motion's own window.
+        """
+        void = [v for v in self.pending_votes if v["amendment_id"] == proposal_id
+                and v.get("forecast") and v["branch"] != branch]
+        for vote in void:
+            self.ledger.append({"kind": "policy.void", "handle": vote["handle"],
+                                "amendment_id": proposal_id, "branch": vote["branch"],
+                                "decided": branch})
+            self._settle_policy(vote["handle"], 0.0, SettleStatus.CENSORED)
+        self.pending_votes[:] = [v for v in self.pending_votes if v not in void]
         for vote in self.pending_votes:
             if vote["amendment_id"] != proposal_id:
                 continue
+            vote["branch"] = branch
             observations = self._policy_observations(vote)
             values = measure_card(vote["card"], self.card_samples, observations)
             activated = {**vote, "baseline": fmean(values.values()) if values else None,
@@ -1869,10 +2112,26 @@ class GovernanceMixin:
             self.ledger.append({"kind": "policy.activated", **activated})
             vote.update(activated)
 
-    def _settle_policy(self, handle, score, status) -> None:
+    def _settle_policy(self, handle, score, status, *, definition: str | None = None) -> None:
         """Policy feedback reaches the original assembly's durable, private return channel."""
         self.queue.settle(handle, channel="policy", score=score, status=status,
-                          definition_version="policy-promise-brier-v2", sampling_ref=None)
+                          definition_version=definition or "policy-promise-brier-v2",
+                          sampling_ref=None)
+
+    @staticmethod
+    def _branch_probability(vote: dict, branch: str) -> float:
+        """The probability a bet gave that the motion's promise holds on the branch taken.
+
+        A conditional forecast states it. A yes vote says the motion makes the
+        promised difference: the promise holds if enacted (q = 1) and does not hold
+        on the unchanged charter (q = 0); a no vote says the opposite. So a ballot
+        is graded on whichever branch the committee took, and a no vote is liable
+        exactly as a yes vote is (charter audit P1).
+        """
+        if vote.get("forecast"):
+            return float(vote["q"])
+        yes = float(bool(vote["vote"]))
+        return yes if branch == "enact" else 1.0 - yes
 
     def _close_policy_window(self, index: int) -> None:
         """Each vote is graded once at its declared post-activation boundary, or censored."""
@@ -1897,16 +2156,22 @@ class GovernanceMixin:
             outcome = (promise_kept(effect.direction, baseline, value, region,
                                     resolution=resolution)
                        if status is SettleStatus.SETTLED else None)
-            score = float(vote["vote"] == outcome) if outcome is not None else 0.0
+            branch = vote.get("branch", "enact")
+            q = self._branch_probability(vote, branch)
+            score = brier(q, outcome) if outcome is not None else 0.0
             self.ledger.append({"kind": "policy.outcome", "handle": vote["handle"],
-                                "amendment_id": vote["amendment_id"], "baseline": baseline,
+                                "amendment_id": vote["amendment_id"], "branch": branch,
+                                "q": q, "forecast": bool(vote.get("forecast")),
+                                "baseline": baseline,
                                 "direction": effect.direction, "resolution": resolution,
                                 "region": asdict(region) if region is not None else None,
                                 "observation_id": vote["observation_id"],
                                 "observation_version": vote["observation_version"],
                                 "value": value, "window": index, "y": outcome,
                                 "score": score, "status": str(status)})
-            self._settle_policy(vote["handle"], score, status)
+            self._settle_policy(vote["handle"], score, status,
+                                definition=MOTION_FORECAST_DEFINITION if vote.get("forecast")
+                                else None)
         self.pending_votes[:] = remaining
         pending_handles = {self.queue.get(f.handle).parent_handle for f in self.book.pending()}
         self.card_samples.prune((*self.charter.cards, *(v["card"] for v in remaining),

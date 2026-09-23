@@ -64,6 +64,8 @@ class MeasureWindow:
     # Each measured card's per-scope values at the close (scope -> value), for a card
     # whose window is per assembly or per role: who a violation is attributable to.
     closed_scopes: dict[str, dict[str, float]] = field(default_factory=dict)
+    # Each measured card's holdout violation at the close (charter audit M3).
+    closed_holdouts: dict[str, float] = field(default_factory=dict)
     mids: list[dict] = field(default_factory=list)
     funding: list[dict] = field(default_factory=list)
     wallet_balance_micro: list[list[int]] = field(default_factory=list)
@@ -434,6 +436,11 @@ class PricingMixin:
             for card in self.charter.cards
             if card.id in card_values and normalise(card.observation) == "cost_per_return"
         ]
+        # Charter audit M3: each measured card's holdouts, resolved on this window.
+        held = self._holdout_results(card_values)
+        holdouts = {cid: row["violation"] for cid, row in held.items()}
+        self.window.closed_holdouts = dict(holdouts)
+        self.card_samples.holdouts = dict(holdouts)
         self.ledger.append(
             {
                 "kind": "price.window",
@@ -443,13 +450,17 @@ class PricingMixin:
                 "observations": values,
                 "regions": {cid: asdict(region) for cid, region in self.regions.items()},
                 "charter_edition": self.charter.edition,
+                **({"holdouts": held} if held else {}),
                 "ts": self.clock.now_ns,
             }
         )
         before = self.controller.snapshot()["cards"]
         observed = sorted(card_values)
         for card_id in observed:
-            self.controller.observe(card_id, card_values[card_id], window_end_event=self.n)
+            self.controller.observe(card_id, card_values[card_id], window_end_event=self.n,
+                                    holdout=holdouts.get(card_id, 0.0),
+                                    anticipated=self._anticipated_violation(
+                                        card_id, card_values[card_id]))
         after = self.controller.snapshot()["cards"]
         for card_id in observed:
             if after[card_id]["updates"] > before[card_id]["updates"]:
@@ -473,6 +484,63 @@ class PricingMixin:
         self._ledger_unattributed()
         close_window(self, values)
         self._prune_price_evidence()
+
+    def _anticipated_violation(self, card_id: str, value: float) -> float | None:
+        """The market's expected change in a card's violation, or None without a market.
+
+        The charter's markets (``runtime.markets``) answer this from the
+        conditional forecasts on open motions; a runtime without them prices
+        backward only.
+        """
+        return None
+
+    def _holdout_results(self, card_values: dict[str, float]) -> dict[str, dict]:
+        """Each measured card's holdouts resolved on the window that just closed.
+
+        Essay II.IV.a: the evaluatory layer adds "holdout test criteria to a given
+        charter". A holdout is a registered predicate frozen at a version; it is
+        resolved on the closed window's public facts. Returns, per card with any,
+        ``{"results": {id@version: bool | None}, "violation": v}``, ``v`` from
+        ``charter.holdout_violation``: each failed holdout adds one resolution step
+        of the card's region to its violation, and an unresolved one adds nothing.
+        """
+        from factorylab.charter.charter import holdout_violation
+        from factorylab.runtime.observations import window_facts
+
+        cards = [c for c in self.charter.cards if c.holdout and c.id in card_values]
+        if not cards or not self.card_samples.windows:
+            return {}
+        facts = window_facts(self.card_samples.windows[-1])
+        out = {}
+        for card in cards:
+            results = {entry: self._resolve_holdout(entry, facts) for entry in card.holdout}
+            out[card.id] = {"results": results, "violation": holdout_violation(
+                list(results.values()), self._resolution_step(card.id))}
+        return out
+
+    def _resolution_step(self, card_id: str) -> float:
+        """One promise resolution of a card's region, in the region's own relative units.
+
+        ``committee.promise_resolution * observation.scale / region.scale``: the move a
+        promise must clear, as a distance the controller prices. Zero for a card with
+        no region or no observation.
+        """
+        region = self.regions.get(card_id)
+        card = next((c for c in self.charter.cards if c.id == card_id), None)
+        observation = self.observations.get(card.observation) if card is not None else None
+        if region is None or observation is None or region.scale <= 0:
+            return 0.0
+        return self.m.committee.promise_resolution * observation.scale / region.scale
+
+    def _resolve_holdout(self, entry: str, facts: dict) -> bool | None:
+        """One ``predicate@version`` on public facts; unknown or unresolved is None."""
+        name, _, version = entry.partition("@")
+        try:
+            value, _error = self.predicates.resolve(name, {"horizon_events": 1}, facts,
+                                                     version=int(version))
+        except (ValueError, TypeError):
+            return None
+        return value
 
     def _ledger_unattributed(self) -> None:
         """Guarantees a priced violation that no decision will carry is ledgered, never silent.
@@ -563,7 +631,9 @@ class PricingMixin:
             region = regions.get(card.id)
             if region is None or card.id not in values:
                 continue
-            amount = violation(region, values[card.id])
+            holdouts = (self.card_samples.holdouts if window.closed_values is None
+                        else window.closed_holdouts)
+            amount = violation(region, values[card.id]) + holdouts.get(card.id, 0.0)
             weight = price * amount
             owner = None
             share = 1.0 if handle is None else self._decision_share(
