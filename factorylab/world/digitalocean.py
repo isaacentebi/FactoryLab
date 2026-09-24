@@ -364,13 +364,17 @@ def _is_mine(raw: Any, droplet_id: int, uuid: str | None) -> bool:
     return _by_id(raw, droplet_id) and raw.get("product") in DROPLET_PRODUCTS
 
 
-def _line(raw: dict, period: str, source: str) -> dict[str, Any]:
+def _line(raw: dict, period: str, source: str, ordinal: int = 0) -> dict[str, Any]:
     """One of this droplet's lines, strictly: exact amount, its own span, an identity.
 
-    The identity within the month is a digest of the month, the source (the preview
-    or an invoice's uuid), the product and the start time; the amount and the end
-    time grow while a month accrues, and the description (DigitalOcean's text, a
-    rename changes it) is not part of it.
+    The identity within the month is a digest of every field that tells two lines
+    apart: the month, the source (the preview or an invoice's uuid), the product, the
+    description, the start and end, the amount and the resource ids; and, for lines
+    identical in all of those, ``ordinal``, their occurrence in response order.
+    Identical lines are interchangeable, so the ordinal is stable across re-reads,
+    and two different lines never share an identity. A preview line's identity moves
+    as it accrues; a month's level is the sum of its lines, so that books nothing
+    twice. The description (DigitalOcean's text) is used only inside the digest.
     """
     start = _time(raw.get("start_time"), "start_time")
     end = _time(raw.get("end_time"), "end_time")
@@ -384,11 +388,19 @@ def _line(raw: dict, period: str, source: str) -> dict[str, Any]:
         raise DigitalOceanError(None, "this droplet's line names no product")
     # The product enters only the identity digest and the droplet check below: it is
     # DigitalOcean's text, and nothing publishes it.
-    key = hashlib.sha256(json.dumps([period, source, product, start],
-                                    separators=(",", ":")).encode()).hexdigest()[:24]
-    return {"key": key, "source": source, "start_time": start, "end_time": end,
-            "droplet": product == DROPLET_PRODUCT,
-            "amount_micro": _money(raw.get("amount"), "invoice item amount")}
+    amount = _money(raw.get("amount"), "invoice item amount")
+    return {"key": f"{_identity(raw, period, source)}:{ordinal}", "source": source,
+            "start_time": start, "end_time": end, "droplet": product == DROPLET_PRODUCT,
+            "amount_micro": amount}
+
+
+def _identity(raw: dict, period: str, source: str) -> str:
+    """A digest of every field of a line that tells it apart from another."""
+    fields = [period, source] + [str(raw.get(name) if raw.get(name) is not None else "")
+                                 for name in ("product", "description", "start_time",
+                                              "end_time", "amount", "resource_id",
+                                              "resource_uuid")]
+    return hashlib.sha256(json.dumps(fields, separators=(",", ":")).encode()).hexdigest()[:24]
 
 
 def _entry(raw: Any) -> dict[str, Any] | None:
@@ -564,8 +576,13 @@ class DigitalOceanClient:
     @staticmethod
     def _classify(rows: list, invoice: str, period: str, droplet_id: int,
                   uuid: str | None) -> dict[str, Any]:
-        mine = [_line(row, period, invoice) for row in rows
-                if _is_mine(row, droplet_id, uuid)]
+        mine, seen = [], {}
+        for row in rows:
+            if not _is_mine(row, droplet_id, uuid):
+                continue
+            identity = _identity(row, period, invoice)
+            seen[identity] = seen.get(identity, -1) + 1
+            mine.append(_line(row, period, invoice, seen[identity]))
         return {"mine": mine, "others": len(rows) - len(mine)}
 
     def billing(self, droplet_id: int, *, since: str, done: list[str],
@@ -592,7 +609,12 @@ class DigitalOceanClient:
         preview = listing.get("invoice_preview")
         period = _period(preview.get("invoice_period") if isinstance(preview, dict) else None,
                          "invoice_period")
-        invoices = [inv for inv in (_invoice(row) for row in rows) if inv is not None]
+        invoices = [_invoice(row) for row in rows]
+        if any(inv is None for inv in invoices):
+            # An invoice nobody can place or read could be this droplet's: a read that
+            # skipped it could call a month final with it unread. The whole read is
+            # unavailable instead, and nothing is booked from it.
+            raise DigitalOceanError(None, "an invoice in the list names no uuid or period")
         waiting = sorted((inv for inv in invoices
                           if inv["period"] >= since and inv["uuid"] not in done),
                          key=lambda inv: (inv["period"], inv["uuid"]))
@@ -619,4 +641,4 @@ class DigitalOceanClient:
                 "period": period, "lines": current["mine"], "others": current["others"],
                 "closed": closed, "waiting": len(pending),
                 "waiting_periods": sorted({inv["period"] for inv in pending}),
-                "unreadable_invoices": len(rows) - len(invoices), "history": entries}
+                "history": entries}

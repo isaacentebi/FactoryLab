@@ -372,6 +372,9 @@ class HostingAccount:
         return result
 
     def _keep_spans(self, lines: list[dict], prefix: str) -> None:
+        # A preview line's identity moves as it accrues: keep the spans of the launch
+        # month's current lines only.
+        current = set(self.lines.get(self.since, {}))
         from datetime import datetime
 
         def ns(stamp: str) -> int:
@@ -381,6 +384,7 @@ class HostingAccount:
         self.spans.update({f"{prefix}:{x['key']}": [ns(x["start_time"]), ns(x["end_time"]),
                                                     x.get("droplet", True)]
                            for x in lines})
+        self.spans = {k: v for k, v in self.spans.items() if k in current}
 
 
 def _month_of_ns(ns: int | None) -> str:

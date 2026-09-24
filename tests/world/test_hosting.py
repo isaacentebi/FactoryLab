@@ -651,3 +651,52 @@ def test_a_credit_spanning_the_launch_widens_the_bound_and_never_narrows_it():
                 for r in (credited.droplet, "cr-1"))
     booked = credited.hosting.burn_by_month()["2026-09"]
     assert booked <= launch_bound(credited) + post + CENT_MICRO
+
+
+# --- Codex on 47789b3 --------------------------------------------------------------------------
+
+def test_two_lines_sharing_a_product_and_a_start_are_both_booked():
+    """Two different lines for the droplet, same product, same start: one used to overwrite
+    the other under a shared identity."""
+    w = world()
+    windows(w, 1)
+    w.fake.add("extra-1", "Droplets", "0.00500", "second line", billed_as=w.droplet,
+               since=w.fake.resources[w.droplet]["since"])
+    w.fake.advance(24 * 8)
+    w.fake.post_invoice("2026-09")
+    windows(w, 1)
+    extra = micro(w.fake.billed("extra-1", "2026-09")) - micro(
+        w.fake.accrued_before("extra-1", w.launch))
+    assert extra > 0
+    assert_months(w, ["2026-09"], extra={"2026-09": extra})
+
+
+def test_two_identical_lines_are_booked_twice_and_a_reread_books_nothing():
+    w = world()
+    windows(w, 12)                           # October, measured whole
+    w.fake.duplicated.add(w.droplet)
+    w.fake.advance(24 * 28)                  # October ends
+    w.fake.post_invoice("2026-09")
+    w.fake.post_invoice("2026-10")
+    windows(w, 2, hours=1)
+    october = w.hosting.burn_by_month()["2026-10"]
+    assert october == 2 * micro(w.fake.billed(w.droplet, "2026-10"))
+    before = len(w.records)
+    windows(w, 2, hours=0)
+    assert w.records[before:] == []          # the same figures again: nothing new
+
+
+def test_an_unreadable_invoice_row_makes_the_read_unavailable_and_nothing_final():
+    w = world()
+    windows(w, 9)                            # into October
+    w.fake.post_invoice("2026-09")
+    w.fake.bad_index_row = True              # an invoice nobody can place or read
+    booked = w.hosting.burn_by_month()
+    windows(w, 2, hours=1)
+    assert w.hosting.unread == "billing read failed or passed its deadline"
+    assert w.hosting.burn_by_month() == booked
+    assert w.hosting.estimate_final is False
+    assert w.hosting.view()["burn_by_month"][0]["estimate_final"] is False
+    w.fake.bad_index_row = False
+    windows(w, 1, hours=1)
+    assert w.hosting.estimate_final is True

@@ -110,6 +110,8 @@ class FakeDigitalOcean:
         self.untagged = False                      # lines that name no resource
         self.uuid_of: dict[str, str] = {}          # resource -> the uuid its lines carry
         self.span_of: dict[str, tuple] = {}        # resource -> the span its lines state
+        self.duplicated: set[str] = set()          # resources whose line is billed twice
+        self.bad_index_row = False                 # an invoice row with no usable identity
 
     # ---- the account's own model -------------------------------------------------------
 
@@ -298,6 +300,9 @@ class FakeDigitalOcean:
         rows = [{"invoice_uuid": inv["uuid"], "invoice_id": str(i + 1),
                  "amount": f"{inv['amount']:.2f}", "invoice_period": inv["period"]}
                 for i, inv in enumerate(reversed(self.invoices))]
+        if self.bad_index_row:
+            rows.append({"invoice_uuid": "", "invoice_id": "99", "amount": "1.00",
+                         "invoice_period": "2026-9"})
         preview = {"invoice_uuid": "00000000-0000-4000-8000-000000000000", "invoice_id": "0",
                    "amount": f"{sum(lines.values(), Decimal(0)):.2f}",
                    "invoice_period": month, "updated_at": stamp(self.generated())}
@@ -328,4 +333,6 @@ class FakeDigitalOcean:
                           "duration": str(max(0, int((end - start) // HOUR))),
                           "duration_unit": "Hours", "start_time": stamp(start),
                           "end_time": stamp(end), "project_name": "factory"})
+            if rid in self.duplicated:
+                items.append(dict(items[-1]))     # the same line, billed twice
         return 200, self._page("invoice_items", items, page, per_page)

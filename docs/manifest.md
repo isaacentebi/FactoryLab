@@ -1735,7 +1735,9 @@ docs.digitalocean.com/reference/api/reference/billing/):
 
 - `GET /v2/customers/my/invoices`, every page (paged until an empty page, or `meta.total`
   rows when it is stated): the `invoice_preview`'s `invoice_period` and every finalized
-  invoice's `invoice_uuid` and `invoice_period`;
+  invoice's `invoice_uuid` and `invoice_period`. A row with no readable uuid or period makes
+  the whole read unavailable: an invoice nobody can place might be this droplet's, so
+  nothing is booked from that read and the launch estimate does not become final;
 - `GET /v2/customers/my/invoices/{invoice_uuid}` for up to two finalized invoices of the
   launch month or later that have not been reconciled, oldest first, each read once by
   its uuid (a month can have several invoices);
@@ -1763,9 +1765,15 @@ other line, whatever it holds, is only counted, so no other resource's line can 
 fail. No answer from DigitalOcean can crash a tick: an answer that cannot be booked leaves
 the books where they were and is recorded as unread (`billing answer could not be booked`),
 and a replay of the same recorded answer takes the same path.
-A line's identity within its month is a digest of the month, its source (the preview, or an
-invoice's uuid), its product and its `start_time`; its description is never read, and its
-product is never published.
+A line's identity within its month is a digest of every field that tells two lines apart:
+the month, its source (the preview, or an invoice's uuid), its product, description, start
+and end, amount and resource ids; lines identical in all of those are told apart by their
+occurrence in response order, and, being interchangeable, keep that identity across
+re-reads. So two different lines never share an identity (two lines with one product and one
+start are both booked), and identical lines are booked as many times as they are billed. A
+preview line's identity moves as it accrues; the month's level is the sum of its lines, so
+that books nothing twice. The description and product are used only inside the digest and
+never published.
 
 A month's level is the sum of this droplet's lines on its invoices once one of them carries
 any (the first such invoice replaces the preview's figures, and later invoices for the month
