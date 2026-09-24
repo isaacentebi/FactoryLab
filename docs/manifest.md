@@ -2491,8 +2491,15 @@ money: the archive is the world's own disk.
 `entries()` returns one row per reference, with that reference's owner.
 `artifact.list {cursor?}` is free and returns only the caller's own rows (sha,
 kind, bytes, when), newest first, 50 a page with `next_cursor` and the caller's
-`count`. `next_cursor` is a position in that order (`<ns>:<sha>`), so a row
-released or collected between two pages never ends the paging; a cursor naming
+`count`. Rows sharing a timestamp are ordered by when their hash entered the
+archive, never by hash: an outcome item's bytes name its evidence's ledger
+sequence, which a resume shifts, and the archive index keeps its insertion order
+through a checkpoint and a replay. `next_cursor` is a position in that order
+(`<ns>:<sha>`), so a row released or collected between two pages never ends the
+paging. It names the row by hash, not by its place: places are derived and a
+rebuild renumbers them, while the hash names the same row after a resume. A
+cursor naming a hash the listing never held resumes at the first row with its
+timestamp, so a page may repeat a row but never skips one; a cursor naming
 neither a position nor a row the caller holds returns no rows and
 `cursor_unknown: true`; the seat's `YOU` `directory` previews the same rows. No list names
 another seat's artifacts (information audit C4).
