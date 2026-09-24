@@ -62,6 +62,35 @@ def drive(rt, monkeypatch, replies):
     return handed, sent
 
 
+def test_a_ballot_no_assembly_answered_is_no_invocation_in_its_scope_facts(monkeypatch):
+    # PR #143 review: the window never counts an assembly-unavailable ballot among its
+    # invocations; the scope facts published to population code must not either, or
+    # the scope's prompt bytes per invocation are diluted by a prompt nobody rendered.
+    from types import SimpleNamespace
+
+    from factorylab.charter.amendment import PredictedEffect
+    from factorylab.charter.measurement import scope_facts
+
+    rt = runtime()
+    monkeypatch.setattr(rt.charter_book, "vote", lambda *_: None)
+    monkeypatch.setattr(rt.charter_book, "abstain", lambda *_: None)
+    monkeypatch.setattr(rt.charter_book, "tally", lambda *_: "failed")
+    amendment = SimpleNamespace(id="gone-seat", proposed_prices=(), add=(), replace=(),
+                                remove=(), tick_interval=None,
+                                predicted_effect=PredictedEffect("cost_per_return",
+                                                                 "decrease", 1))
+    committee = SimpleNamespace(seats=[("seat1", SEAT), ("seat2", "retired-assembly")])
+    rt._hold_vote(amendment, committee)
+    assert rt.window.invocations == 1
+    rows = rt.card_samples.returns
+    rendered = [row for row in rows if row["prompt_bytes"] is not None]
+    assert len(rows) == 2 and len(rendered) == 1
+    facts = scope_facts([{"index": rt.window.index}], rows, [])
+    assert facts["invocations"] == rt.window.invocations == 1
+    assert facts["prompt_bytes"] / facts["invocations"] == rendered[0]["prompt_bytes"]
+    assert [row.get("invoked") for row in rows if row["prompt_bytes"] is None] == [False]
+
+
 @pytest.mark.parametrize(("ceiling", "replies"), [
     # A working state written in a tool round: the continuation renders the new head.
     (1_000_000, [{"working_state": {"note": "x" * 3_000},

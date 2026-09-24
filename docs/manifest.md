@@ -684,7 +684,11 @@ its scope in the selected closed windows. One metered after its author's latest
 response is kept for the next horizon but moves no price until then. A registered
 observation measured per scope reads the scope's summed `prompt_bytes`,
 `you_bytes`, `inputs_bytes` and `downstream_read_bytes` among its facts, and a
-scope whose only row in the selected windows is a reading is measured too. Its violations are attributed by the generic `1/n` share described below.
+scope whose only row in the selected windows is a reading is measured too. The
+scope's `invocations` fact counts its invocations as `window.invocations` counts the
+window's: an assembly-unavailable ballot is a response but no invocation, so it is
+in neither, and summed prompt bytes over `invocations` is a mean per rendered prompt
+in a scope exactly as it is globally. Its violations are attributed by the generic `1/n` share described below.
 
 `forecasts` selects the latest `n` resolved forecast records in each scope.
 `forecast_skill` uses paired Brier skill against the baseline as it stood before

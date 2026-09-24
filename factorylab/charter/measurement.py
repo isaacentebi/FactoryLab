@@ -209,8 +209,13 @@ def scope_facts(windows: list[dict], returns: list[dict], forecasts: list[dict],
     this builds the facts ``window_facts`` would publish for a window holding
     only those rows. The world's own series (mids, funding, books, wallet
     balances, tick times) are facts about the world, not the scope, and pass
-    through whole. The counters are the scope's own: its responses
-    (``invocations``, ``ok``, ``costs`` of its well-formed responses, ``tool_calls``,
+    through whole. The counters are the scope's own, with the window's meaning.
+    ``invocations`` counts the scope's invocations exactly as ``window.invocations``
+    counts the window's: a response that was no invocation (a ballot whose assembly
+    was unavailable, rendered no prompt) is not one, so the scope's summed prompt
+    bytes over its invocations are a mean per rendered prompt, as they are
+    globally. Its responses give (``ok``, ``costs`` of its well-formed responses,
+    ``tool_calls``,
     ``noop_returns``, ``revision_returns``, ``producer_returns`` as its response
     count, ``storage_cost_micro``, ``compute_spend_micro``, the summed
     ``prompt_bytes``, ``you_bytes`` and ``inputs_bytes`` of its prompts, and the
@@ -234,7 +239,10 @@ def scope_facts(windows: list[dict], returns: list[dict], forecasts: list[dict],
     settled = [row for row in forecasts if row.get("predicate") == "return_paid_off"
                and row.get("status") == "settled"]
     merged.update({
-        "invocations": len(responses),
+        # The window's meaning: every invocation the runtime made, and not a response
+        # that was none (a ballot no assembly was there to answer). A row sampled
+        # before the marker existed was a real invocation.
+        "invocations": sum(bool(row.get("invoked", True)) for row in responses),
         "ok": sum(bool(row["ok"]) for row in responses),
         "costs": [row["cost"] for row in responses if row["ok"]],
         "tool_calls": sum(row["tool_calls"] for row in responses),
@@ -306,11 +314,15 @@ class CardSamples:
     # The violation each card's failed holdouts added at the last close (M3).
     holdouts: dict[str, float] = field(default_factory=dict)
 
-    def returned(self, *, handle: str, assembly: str, role: str, window: int, ret) -> None:
+    def returned(self, *, handle: str, assembly: str, role: str, window: int, ret,
+                 invoked: bool = True) -> None:
         """One completed invocation, including its continuation costs, is one return sample.
 
         Its prompt byte counts are the ones its ledger row records, or None when the
         runtime rendered it no prompt: an unmeasured prompt is never a zero-byte one.
+        ``invoked`` is False for a response that was no invocation (a ballot whose
+        assembly was unavailable): it is still a response, but it is not among the
+        invocations its scope publishes, exactly as the window does not count it.
         """
         sections = getattr(ret, "prompt_sections", None) or {}
         self.returns.append({
@@ -320,7 +332,7 @@ class CardSamples:
             "revision": False, "tool_calls": len(ret.tool_calls),
             "verdict": ret.outputs.get("verdict"),
             "prompt_bytes": sections.get("total"), "you_bytes": sections.get("you"),
-            "inputs_bytes": sections.get("inputs"),
+            "inputs_bytes": sections.get("inputs"), "invoked": bool(invoked),
         })
 
     def read(self, *, handle: str, assembly: str, role: str, window: int,

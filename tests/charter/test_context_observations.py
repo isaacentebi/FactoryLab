@@ -59,7 +59,8 @@ def _samples():
     s.returned(handle="b1", assembly="b", role="producer", window=2,
                ret=_ret("b1", total=2_000, you=200, inputs=1_000))
     s.returned(handle="b2", assembly="b", role="producer", window=2,
-               ret=Return("b2", {"reason": "assembly unavailable"}, 0, "failed"))
+               ret=Return("b2", {"reason": "assembly unavailable"}, 0, "failed"),
+               invoked=False)
     s.returned(handle="j1", assembly="j", role="evaluator", window=2,
                ret=_ret("j1", total=5_000, you=500, inputs=4_000))
     # j1 read a1: the reading lands in window 2 under a1's author, never under j.
@@ -330,7 +331,8 @@ def test_a_row_no_prompt_was_rendered_for_neither_reprices_nor_evicts(observatio
     before = measure_card(card, samples)
     assert before
     samples.returned(handle="ballot", assembly="gone", role="other", window=2,
-                     ret=Return("ballot", {"reason": "assembly unavailable"}, 0, "failed"))
+                     ret=Return("ballot", {"reason": "assembly unavailable"}, 0, "failed"),
+                     invoked=False)
     assert not fresh_sample(card, samples, MeasureWindow(2, 1))
     assert measure_card(card, samples) == before
     # Over whole windows: a window whose only activity is not an invocation (rent, a
@@ -407,6 +409,37 @@ def test_freshness_admits_exactly_the_rows_measurement_measures(observation):
     samples.closed(MeasureWindow(2, 1))
     assert measure_card(whole, samples) == {}
     assert not fresh_sample(whole, samples, MeasureWindow(2, 1))
+
+
+def test_scoped_invocations_count_what_the_window_counts_so_prompt_means_agree():
+    # PR #143 review: scope facts counted an assembly-unavailable ballot among the
+    # scope's invocations, so population code dividing its prompt bytes by them got
+    # a diluted mean, unlike the global observation and the seeded scoped one.
+    from factorylab.runtime.observations import ObservationBook
+
+    samples = CardSamples()
+    samples.returned(handle="v1", assembly="v", role="other", window=1,
+                     ret=_ret("v1", total=1_000, you=100, inputs=400))
+    samples.returned(handle="v2", assembly="v", role="other", window=1,
+                     ret=Return("v2", {"reason": "assembly unavailable"}, 0, "failed"),
+                     invoked=False)
+    # The window the runtime closed: one invocation, the ballot never counted.
+    samples.closed(MeasureWindow(1, 1, invocations=1, ok=1, prompt_bytes=1_000,
+                                 you_bytes=100, inputs_bytes=400))
+    facts = scope_facts(samples.windows, samples.returns, [])
+    assert (facts["invocations"], facts["prompt_bytes"]) == (1, 1_000)
+    book = ObservationBook(
+        {"prompt_mean": {"description": "prompt bytes per invocation", "units": "bytes",
+                         "unit_range": [0, 100_000], "code": "def observe(facts): ...",
+                         "version": 1, "provenance": "population"}},
+        run=lambda _code, f: (f["prompt_bytes"] / f["invocations"], None))
+    scoped = measure_card(_card("prompt_mean", kind="windows", n=1, per="assembly",
+                                answers_for="all"), samples, observations=book)
+    seeded = measure_card(_card("prompt_bytes", kind="windows", n=1, per="assembly",
+                                answers_for="all"), samples)
+    whole = measure_card(_card("prompt_bytes", kind="windows", n=1, per=None,
+                               answers_for="all"), samples)
+    assert scoped == seeded == {"v": 1_000.0} and whole == {"all": 1_000.0}
 
 
 def test_a_registered_observation_measures_a_scope_whose_only_row_is_a_reading():
