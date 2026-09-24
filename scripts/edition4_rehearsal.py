@@ -1221,14 +1221,19 @@ def _report_outstanding(report: dict, runtime: Any, output_dir: Path | None) -> 
     if not top_ups and not shadows and unreadable is None:
         section["outstanding_at_end"] = {"top_ups_submitted": [], "shadow_sends_pending": []}
         return
-    command = f"uv run python {OUTSTANDING_SCRIPT} {output_dir}"
+    import shlex
+
+    # Quoted for a shell, and given as an argument list too: a run directory with a
+    # space or a ";" must neither split nor run as syntax while a top-up may be live.
+    argv = ["uv", "run", "python", OUTSTANDING_SCRIPT, str(output_dir)]
+    command = shlex.join(argv)
     outstanding = {
         "warning": ("the run ended with a Venice conversion unbooked: a top-up "
                     "authorization may still settle on Base mainnet after the world died"
                     if top_ups or unreadable else
                     "the run ended with a shadow send unconfirmed (testnet money)"),
         "top_ups_submitted": top_ups, "shadow_sends_pending": shadows,
-        "diary_unreadable": unreadable, "next_step": command,
+        "diary_unreadable": unreadable, "next_step": command, "next_step_argv": argv,
         "runbook": "docs/architecture/capital-loop-rehearsal.md, After the run",
     }
     section["outstanding_at_end"] = report["capital_loop_outstanding"] = outstanding

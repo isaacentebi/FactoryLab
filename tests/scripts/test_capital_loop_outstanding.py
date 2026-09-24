@@ -652,6 +652,8 @@ def test_a_run_that_ends_with_a_top_up_submitted_says_so_loudly(tmp_path, capsys
                                           "valid_before": 3_000,
                                           "last_reason": "submission outcome unknown"}]
     assert loud["next_step"] == f"uv run python scripts/capital_loop_outstanding.py {run}"
+    assert loud["next_step_argv"] == ["uv", "run", "python",
+                                      "scripts/capital_loop_outstanding.py", str(run)]
     assert report["capital_loop"]["outstanding_at_end"] is loud
     assert capsys.readouterr().err == ""  # computed only: printed once report.json is on disk
     rehearsal._announce_outstanding(report)
@@ -675,6 +677,39 @@ def test_a_run_that_ends_with_a_top_up_submitted_says_so_loudly(tmp_path, capsys
     rehearsal._announce_outstanding(unread)
     assert unread["capital_loop_outstanding"]["diary_unreadable"] == "LedgerIntegrityError"
     assert "CAPITAL LOOP OUTSTANDING" in capsys.readouterr().err
+
+
+def test_the_recovery_command_survives_a_run_directory_a_shell_would_split(tmp_path,
+                                                                          capsys):
+    # Codex on PR #144: an unquoted --out with a space or a ";" split the advertised
+    # recovery command, or ran the rest as shell syntax, while a top-up might be live.
+    import shlex
+    import subprocess
+    from types import SimpleNamespace
+
+    from scripts import edition4_rehearsal as rehearsal
+
+    ledger = Ledger(clock_ns=lambda: 0)
+    ledger.append({"kind": "treasury.step_submitted", "state": {
+        "id": "treasury-1", "steps": ["shadow_send", "venice_top_up"], "index": 1,
+        "status": "submitted", "reference": reference(LIVE_NONCE, 3_000), "route_data": {}}})
+    marker = tmp_path / "ran"
+    run = tmp_path / f"my runs/first run; touch {marker} #"
+    report = {"capital_loop": {}}
+    rehearsal._report_outstanding(report, SimpleNamespace(ledger=ledger), run)
+    loud = report["capital_loop_outstanding"]
+    assert loud["next_step_argv"][-1] == str(run)
+    assert shlex.split(loud["next_step"]) == loud["next_step_argv"]
+    # A real shell reads the printed command as exactly those words and runs nothing
+    # else: each word is echoed, not executed.
+    words = subprocess.run(["sh", "-c", f'set -- {loud["next_step"]}; printf "%s\\n" "$@"'],
+                           capture_output=True, text=True, check=True).stdout.splitlines()
+    assert words == loud["next_step_argv"] and not marker.exists()
+    rehearsal._announce_outstanding(report)
+    printed = capsys.readouterr()
+    assert loud["next_step"] in printed.err
+    assert json.loads(printed.out)["capital_loop_outstanding"]["next_step_argv"][-1] == (
+        str(run))
 
 
 def test_the_cli_summary_carries_the_outstanding_warning(tmp_path, monkeypatch, capsys):

@@ -11,6 +11,7 @@ faked but the bytes leaving the process: the SDK's HTTP post (the venue) and url
 import base64
 import json
 import os
+import shlex
 import signal
 import time
 from pathlib import Path
@@ -205,7 +206,7 @@ def test_a_signal_mid_run_still_writes_the_report_warns_and_exits_3(
     monkeypatch.setattr(rehearsal, "run_rehearsal",
                         lambda *a, **k: run(*a, **k, **launch_kwargs(w)))
     before = {n: signal.getsignal(n) for n in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
-    out = tmp_path / "runs" / "stopped"
+    out = tmp_path / "runs" / "stopped run; echo not a command"  # a shell would split it
     code = rehearsal.main(["--world", str(w["world"]), "--out", str(out), "--capital-loop",
                            "--duration", "60m", "--source-root", str(repo_root())])
     assert code == 3  # what the operator's shell sees
@@ -214,8 +215,10 @@ def test_a_signal_mid_run_still_writes_the_report_warns_and_exits_3(
     assert report["capital_loop_outstanding"]["top_ups_submitted"]
     printed = capsys.readouterr()
     assert "CAPITAL LOOP OUTSTANDING" in printed.err
-    assert json.loads(printed.out[printed.out.rindex('{\n  "status"'):])[
-        "capital_loop_outstanding"]["next_step"].endswith(str(out))
+    summary = json.loads(printed.out[printed.out.rindex('{\n  "status"'):])
+    loud = summary["capital_loop_outstanding"]
+    assert loud["next_step_argv"][-1] == str(out)
+    assert shlex.split(loud["next_step"]) == loud["next_step_argv"]
     # The run's handlers are gone again, and the reserve is free.
     assert {n: signal.getsignal(n) for n in before} == before
     from factorylab.runtime.capital_loop import ReserveLock
