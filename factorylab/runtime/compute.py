@@ -1118,8 +1118,6 @@ class ComputeMixin:
         "venue.vault_create", "venue.vault_deposit", "venue.vault_withdraw",
         # Polymarket event markets (runtime/polymarket.py), on the simulated venue.
         "polymarket.place_limit", "polymarket.cancel",
-        # The host's droplet size ([hosting]; runtime/hosting.py).
-        "hosting.resize",
     })
 
     #: Reads whose answers carry text third parties wrote, jailed like a fetched

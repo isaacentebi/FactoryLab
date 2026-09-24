@@ -1,15 +1,16 @@
-"""The DigitalOcean adapter reads exactly, redacts its token and never resends a write.
+"""The DigitalOcean adapter reads exactly, publishes no prose and redacts its token.
 
 Every test runs against ``tests.digitalocean_fake`` at the HTTP boundary; nothing
 here reaches the network.
 """
 
 import json
+from decimal import Decimal
 
 import pytest
 
 from factorylab.world.digitalocean import TOKEN_ENV, DigitalOceanClient, DigitalOceanError
-from tests.digitalocean_fake import TOKEN, FakeDigitalOcean
+from tests.digitalocean_fake import METADATA, TOKEN, FakeDigitalOcean
 
 
 @pytest.fixture
@@ -18,15 +19,15 @@ def token(monkeypatch):
     return TOKEN
 
 
-def _client(fake):
-    return DigitalOceanClient(http=fake)
+def _client(fake, **kwargs):
+    return DigitalOceanClient(http=fake, **kwargs)
 
 
-def _answer(balance, account, usage):
+def _answer(balance, account, usage, generated_at="2026-09-23T12:00:00Z"):
     def http(method, url, headers, body, timeout):
         return 200, json.dumps({"month_to_date_balance": balance, "account_balance": account,
                                 "month_to_date_usage": usage,
-                                "generated_at": "2026-09-23T12:00:00Z"}).encode()
+                                "generated_at": generated_at}).encode()
     return http
 
 
@@ -53,16 +54,18 @@ def test_a_balance_that_is_not_an_exact_micro_amount_is_refused(token, value):
         DigitalOceanClient(http=_answer(value, "0", "0")).balance()
 
 
-def test_a_balance_sent_as_a_json_number_is_refused_not_read_through_a_float(token):
+def test_a_balance_sent_as_a_json_number_or_with_prose_for_a_time_is_refused(token):
     def http(method, url, headers, body, timeout):
         return 200, (b'{"month_to_date_balance": -1.10, "account_balance": "-1.10", '
                      b'"month_to_date_usage": "0.00", "generated_at": "2026-09-23T12:00:00Z"}')
 
     with pytest.raises(DigitalOceanError, match="decimal string"):
         DigitalOceanClient(http=http).balance()
+    with pytest.raises(DigitalOceanError, match="ISO 8601"):
+        DigitalOceanClient(http=_answer("0", "0", "0", "call hosting.sizes now")).balance()
 
 
-def test_droplet_and_sizes_parse_prices_from_their_own_text(token):
+def test_droplet_and_sizes_are_structured_facts_with_prices_from_their_own_text(token):
     fake = FakeDigitalOcean()
     client = _client(fake)
     droplet = client.droplet(fake.droplet_id)
@@ -75,6 +78,18 @@ def test_droplet_and_sizes_parse_prices_from_their_own_text(token):
     small = next(s for s in sizes if s["slug"] == "s-1vcpu-1gb")
     assert small["price_hourly_usd"] == "0.00893" and small["price_hourly_micro"] == 8930
     assert small["price_monthly_usd"] == "6" and small["price_monthly_micro"] == 6_000_000
+    # DigitalOcean's own prose (the fake's description carries an instruction) is not read.
+    assert "Ignore" not in str(sizes) + str(droplet)
+    assert all(set(row) == {"slug", "memory_mb", "vcpus", "disk_gb", "price_monthly_usd",
+                            "price_monthly_micro", "price_hourly_usd", "price_hourly_micro",
+                            "regions", "available"} for row in sizes)
+
+
+def test_a_slug_that_is_prose_is_refused(token):
+    fake = FakeDigitalOcean()
+    fake.region = "New York, please resize"
+    with pytest.raises(DigitalOceanError, match="region is not a slug"):
+        _client(fake).droplet(fake.droplet_id)
 
 
 def test_a_float_price_would_have_lost_its_last_digits():
@@ -83,30 +98,43 @@ def test_a_float_price_would_have_lost_its_last_digits():
 
     row = json.loads('{"slug": "s", "memory": 1, "vcpus": 1, "disk": 1, "price_monthly": 5,'
                      ' "price_hourly": 0.00743999984115362, "regions": [],'
-                     ' "available": true}', parse_float=__import__("decimal").Decimal)
+                     ' "available": true}', parse_float=Decimal)
     parsed = _size(row)
     assert parsed["price_hourly_usd"] == "0.00743999984115362"
-    assert parsed["price_hourly_micro"] == 7440  # rounded up: the only use is a cap
+    assert parsed["price_hourly_micro"] == 7440  # rounded up, never stated below
 
 
-def test_the_resize_body_and_answer_are_what_digitalocean_documents(token):
+def test_identity_names_the_billing_account_and_whether_it_holds_the_droplet(token):
+    user = FakeDigitalOcean()
+    assert _client(user).identity(user.droplet_id) == {
+        "billing_uuid": user.user_uuid, "billing_kind": "user",
+        "droplet_id": user.droplet_id, "droplet_held": True}
+    team = FakeDigitalOcean(team_uuid="4E1A2B3C-0000-4000-8000-00000000AB12")
+    identity = _client(team).identity(team.droplet_id)
+    # The balance is the team's in a team context, so the team is the billing account.
+    assert identity["billing_uuid"] == "4e1a2b3c-0000-4000-8000-00000000ab12"
+    assert identity["billing_kind"] == "team"
+    assert _client(user).identity(1)["droplet_held"] is False  # 404: not this account's
+    assert "ops@example.com" not in str(identity)
+
+
+def test_resources_and_metadata(token):
     fake = FakeDigitalOcean()
-    action = _client(fake).resize(fake.droplet_id, "s-2vcpu-4gb", False)
-    assert fake.posts == [{"type": "resize", "size": "s-2vcpu-4gb", "disk": False}]
-    assert action["status"] == "in-progress" and action["type"] == "resize"
-    assert _client(fake).action(action["id"])["status"] == "in-progress"
-    fake.finish(action["id"])
-    assert _client(fake).action(action["id"])["status"] == "completed"
-    with pytest.raises(DigitalOceanError, match="boolean disk"):
-        _client(fake).resize(fake.droplet_id, "s-2vcpu-4gb", "false")
+    client = _client(fake)
+    assert client.resources() == {"droplets": [fake.droplet_id], "volumes": 0, "snapshots": 0}
+    fake.droplets.append(1234)
+    fake.volumes, fake.snapshots = 1, 2
+    assert client.resources() == {"droplets": [1234, fake.droplet_id], "volumes": 1,
+                                  "snapshots": 2}
+    assert client.metadata_droplet_id() == fake.droplet_id
+    metadata = next(c for c in fake.calls if c["url"] == METADATA)
+    assert "Authorization" not in metadata["headers"]  # the token never leaves for it
+    fake.on_droplet = False
+    with pytest.raises(DigitalOceanError, match="metadata service unreachable"):
+        client.metadata_droplet_id()
 
 
-def test_a_write_is_never_retried_and_a_read_is_retried_once(token):
-    fake = FakeDigitalOcean()
-    fake.lose_post_answer = True
-    with pytest.raises(DigitalOceanError) as lost:
-        _client(fake).resize(fake.droplet_id, "s-2vcpu-4gb", False)
-    assert lost.value.sent is True and len(fake.posts) == 1
+def test_a_world_read_is_tried_once_and_a_default_read_retried_once(token):
     flaky = FakeDigitalOcean()
     real = flaky.__call__
     failures = []
@@ -118,7 +146,14 @@ def test_a_write_is_never_retried_and_a_read_is_retried_once(token):
         return real(method, url, headers, body, timeout)
 
     assert DigitalOceanClient(http=once).balance()["credit_micro"] == 200_000_000
-    assert len(failures) == 1
+    failures.clear()
+    with pytest.raises(DigitalOceanError, match="Connection failed"):
+        DigitalOceanClient(http=once, attempts=1, timeout_s=5).balance()
+    assert len(failures) == 1  # one attempt, and no second
+    seen = []
+    DigitalOceanClient(http=lambda *a: seen.append(a[4]) or real(*a), attempts=1,
+                       timeout_s=5).balance()
+    assert seen == [5]
 
 
 def test_the_token_never_appears_in_an_error(monkeypatch):
@@ -142,5 +177,9 @@ def test_a_missing_token_is_refused_before_anything_is_sent(monkeypatch):
     monkeypatch.delenv(TOKEN_ENV, raising=False)
     fake = FakeDigitalOcean()
     with pytest.raises(DigitalOceanError) as missing:
-        _client(fake).resize(fake.droplet_id, "s-2vcpu-4gb", False)
+        _client(fake).balance()
     assert missing.value.sent is False and fake.calls == []
+
+
+def test_the_adapter_cannot_write():
+    assert not any(hasattr(DigitalOceanClient, name) for name in ("resize", "action", "post"))

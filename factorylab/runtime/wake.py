@@ -73,7 +73,8 @@ OUT_CLASSES = ("model", "tool", "connector", "treasury", "registration", "exchan
 #: Which custodian each class moves money at. Venue P&L and funding are reported
 #: here as they always were, but under the venue's custody: they are not, and
 #: never were, movements of the compute wallet, which is authority (edition 3, C5).
-CUSTODY_OF_CLASS = {"exchange_pnl": "venue", "funding": "venue"}
+#: The host's burn ([hosting]) leaves the hosting pot and never the compute wallet.
+CUSTODY_OF_CLASS = {"exchange_pnl": "venue", "funding": "venue", "hosting": "hosting"}
 
 
 def _custody_headings(classes: tuple[str, ...]) -> dict[str, str]:
@@ -389,16 +390,17 @@ class _Observatory:
         # money in by its ``income.earned`` item. Venue effects no longer arrive
         # here at all: they are ``venue.settled`` items, below.
         reason, amount = str(item.get("reason", "")), item.get("amount")
-        if reason == "hosting" and type(amount) is int:
-            # The host's observed charge ([hosting]): money out, to DigitalOcean.
-            self.money_out["hosting"] += -amount
-            return
         if reason not in ("exchange_pnl", "funding") or type(amount) is not int:
             return
         if amount >= 0:
             self.money_in[reason] += amount
         else:
             self.money_out[reason] += -amount
+
+    def _on_treasury_hosting_burn(self, item: dict) -> None:
+        # What DigitalOcean took from the hosting pot ([hosting]; world/hosting.py).
+        if type(item.get("micro")) is int and item["micro"] > 0:
+            self.money_out["hosting"] += item["micro"]
 
     def _on_venue_settled(self, item: dict) -> None:
         """Venue P&L, fees and funding, reported under the venue's own custody.

@@ -242,23 +242,22 @@ class PolymarketSpec:
 
 @dataclass(frozen=True)
 class HostingSpec:
-    """``[hosting]``: the host's prepaid credit as a pot, and its droplet as a surface.
+    """``[hosting]``: the host's prepaid credit as its own pot, and its droplet as a read.
 
-    Off unless enabled. ``enabled = false`` builds no client, reads nothing,
-    opens no pot and publishes no tool, whatever else the block names. Enabled,
-    the world reads its DigitalOcean balance each tick and books what
-    DigitalOcean reports as used (world/hosting.py), and publishes
-    ``hosting.droplet``, ``hosting.sizes`` and ``hosting.resize``. Fixed for the
-    world's life: the droplet, the most a month the droplet may be resized to
-    cost (``max_monthly_micro``), and whether a resize may grow the disk, which
-    DigitalOcean cannot undo (``allow_disk_resize``, default false).
+    Off unless enabled, and off wherever the world does not run on a DigitalOcean
+    droplet (a test, a laptop): ``enabled = false`` builds no client, reads
+    nothing, opens no pot and publishes no tool. Enabled, the world refuses to
+    start unless the droplet's own metadata service names ``droplet_id``, the
+    token's account holds that droplet and nothing else billable, and (on a
+    resume) the account is the one the world was bound to at launch. It then
+    reads the account once a reserve window and books what DigitalOcean reports it
+    took (world/hosting.py), on the hosting pot alone, and publishes
+    ``hosting.droplet`` and ``hosting.sizes``. Fixed for the world's life.
     """
 
     enabled: bool = False
     provider: str = "digitalocean"
     droplet_id: int | None = None
-    max_monthly_micro: int = 0
-    allow_disk_resize: bool = False
 
     def __post_init__(self):
         if type(self.enabled) is not bool:
@@ -266,14 +265,11 @@ class HostingSpec:
         if self.provider != "digitalocean":
             raise ValueError("hosting.provider must be digitalocean")
         if self.droplet_id is not None and (
-                type(self.droplet_id) is not int or self.droplet_id <= 0):
+                type(self.droplet_id) is not int or isinstance(self.droplet_id, bool)
+                or self.droplet_id <= 0):
             raise ValueError("hosting.droplet_id must be a positive integer")
         if self.enabled and self.droplet_id is None:
             raise ValueError("hosting.enabled needs hosting.droplet_id")
-        if type(self.max_monthly_micro) is not int or self.max_monthly_micro < 0:
-            raise ValueError("hosting.max_monthly_usd must be nonnegative")
-        if type(self.allow_disk_resize) is not bool:
-            raise ValueError("hosting.allow_disk_resize must be true or false")
 
 
 @dataclass(frozen=True)
@@ -1715,24 +1711,14 @@ def _manifest_polymarket(raw: Any) -> PolymarketSpec:
 
 
 def _manifest_hosting(raw: Any) -> HostingSpec:
-    """``[hosting]``: an absent block is the disabled default; an unknown key is refused.
-
-    ``max_monthly_usd`` is exact USD text or an integer, like every price.
-    """
+    """``[hosting]``: an absent block is the disabled default; an unknown key is refused."""
     if raw is None:
         return HostingSpec()
-    keys = {"enabled", "provider", "droplet_id", "max_monthly_usd", "allow_disk_resize"}
-    if not isinstance(raw, dict) or set(raw) - keys:
+    if not isinstance(raw, dict) or set(raw) - {"enabled", "provider", "droplet_id"}:
         raise ValueError("unknown hosting manifest key")
-    cap = raw.get("max_monthly_usd", 0)
-    if isinstance(cap, bool) or type(cap) not in (str, int):
-        raise ValueError("hosting.max_monthly_usd must be exact USD text or integer")
-    return HostingSpec(
-        enabled=raw.get("enabled", False), provider=raw.get("provider", "digitalocean"),
-        droplet_id=raw.get("droplet_id"),
-        max_monthly_micro=usd_to_micro(cap, rounding="exact"),
-        allow_disk_resize=raw.get("allow_disk_resize", False),
-    )
+    return HostingSpec(enabled=raw.get("enabled", False),
+                       provider=raw.get("provider", "digitalocean"),
+                       droplet_id=raw.get("droplet_id"))
 
 
 def _manifest_chaos(raw: Any) -> ChaosSpec:

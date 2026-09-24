@@ -766,8 +766,9 @@ class BootstrapMixin:
         install_polymarket(self)
         from factorylab.runtime.hosting import install as install_hosting
 
-        # [hosting] enabled: the host's prepaid credit as a pot, and the droplet's
-        # size as a surface (world/hosting.py). Absent otherwise.
+        # [hosting] enabled: the host's prepaid credit as its own pot, and two
+        # structured reads of the droplet and the size list (world/hosting.py). A
+        # world that cannot verify a dedicated droplet does not start. Absent otherwise.
         self.hosting = None
         install_hosting(self, hosting_client)
         self.tool_runner = JournalProxy(ToolRunner(), self.ledger, "sandbox")

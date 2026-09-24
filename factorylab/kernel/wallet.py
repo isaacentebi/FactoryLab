@@ -503,10 +503,6 @@ class Wallet:
         A retry belongs to authenticated recovery, never to a second live submission.
         ``income`` is a paid service call settled to the reserve (edition 2, C11):
         new money arriving from outside, booked like venue P&L, never negative.
-        ``hosting`` is a charge the host's own billing reported (the wallet moves
-        only when money moves, and this names DigitalOcean as the counterparty):
-        always negative, never refused for want of balance, because the money has
-        already left; no seat authored it, so the budget book's pool absorbs it.
         """
         self._live()
         balance = self.balance
@@ -514,13 +510,11 @@ class Wallet:
         exhausted = self.__exhausted
         for delta, handle, reason in settlements:
             require_money(delta)
-            if reason not in ("exchange_pnl", "funding", "income", "financing", "hosting"):
-                raise ValueError("settlement source must be exchange_pnl, funding, income, "
-                                 "financing or hosting")
+            if reason not in ("exchange_pnl", "funding", "income", "financing"):
+                raise ValueError(
+                    "settlement source must be exchange_pnl, funding, income or financing")
             if reason in ("income", "financing") and delta <= 0:
                 raise ValueError(f"{reason} must be positive")
-            if reason == "hosting" and delta >= 0:
-                raise ValueError("hosting must be negative: an observed charge")
             if not isinstance(handle, str) or not handle:
                 raise ValueError("settlement handle is required")
             balance += delta

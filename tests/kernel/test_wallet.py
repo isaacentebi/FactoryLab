@@ -334,25 +334,3 @@ def test_settle_uncertain_never_revives_a_dead_wallet(ledger, clock):
     with pytest.raises(Infeasible):
         wallet.settle_uncertain(reservation.id, 1)
     assert wallet.balance == -45 and wallet.check_conservation()
-
-
-def test_a_hosting_settlement_is_an_observed_charge_only(ledger, clock):
-    """The wallet moves only when money moves: a hosting settlement is DigitalOcean's
-    reported charge, so it is negative, never refused for want of balance (the money
-    has already left), and a credit or a zero under that name is refused whole."""
-    wallet = Wallet(100, ledger, clock_ns=clock, balance_floor_micro=10)
-    held = wallet.reserve(80, "seat", "model:x")
-    for delta in (0, 5):
-        with pytest.raises(ValueError, match="hosting must be negative"):
-            wallet.settle(delta, "hosting:digitalocean", "hosting")
-    with pytest.raises(ValueError, match="hosting must be negative"):
-        wallet.settle_batch([(-3, "hosting:digitalocean", "hosting"),
-                             (4, "hosting:digitalocean", "hosting")])
-    assert wallet.balance == 100 and wallet.check_conservation()
-    wallet.settle(-30, "hosting:digitalocean", "hosting")  # beyond what is available
-    assert wallet.balance == 70 and wallet.available == -10 and wallet.check_conservation()
-    wallet.release(held)
-    wallet.settle(-60, "hosting:digitalocean", "hosting")
-    assert wallet.dead  # a charge that reaches the floor is death, and final
-    with pytest.raises(Infeasible):
-        wallet.settle(-1, "hosting:digitalocean", "hosting")

@@ -335,6 +335,11 @@ class Runtime(
         starved = (previous_window != self.reserve_window_start) and self._commons_check()
         if previous_window is not None and previous_window != self.reserve_window_start:
             self._sampling_actuator()
+        if previous_window != self.reserve_window_start and getattr(self, "hosting", None):
+            # The host's billing is read once a reserve window, never on the tick
+            # path (AGENTS.md rule 12): DigitalOcean updates it hourly at best, and a
+            # slow answer costs one short, unretried wait a window.
+            self.treasury.observe_hosting()
         self._observe_delivered_event(ev)
         if ev.kind is EventKind.TICK:
             self._open_pending_epochs()
@@ -344,10 +349,6 @@ class Runtime(
                 from factorylab.runtime import polymarket
 
                 polymarket.tick(self)  # its own intents, fills and resolutions
-            if getattr(self, "hosting", None) is not None:
-                from factorylab.runtime import hosting
-
-                hosting.tick(self)  # the host's billing, read; an open resize, followed
             self._collect_income()  # C10: each receipt credits its owning seat before the tick
             self._tick_treasury()
             self._classify_financing()  # a conversion confirmed this tick is spendable now

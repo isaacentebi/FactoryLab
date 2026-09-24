@@ -1,4 +1,4 @@
-"""DigitalOcean: the host's billing and droplet endpoints, read exactly, written once.
+"""DigitalOcean: the host's billing and droplet endpoints, read exactly, never written.
 
 The factory runs on a DigitalOcean droplet paid from prepaid account credit. That
 credit is a pot like OpenRouter's (essay II.II, the one first move): the treasury
@@ -20,18 +20,23 @@ What the parsing relies on (docs.digitalocean.com/reference/api/reference/):
   ``memory``, ``vcpus``, ``disk``, ``locked``, ``region.slug`` and the embedded
   ``size`` with ``price_monthly`` / ``price_hourly``.
 * ``GET /v2/sizes`` (sizes/): ``sizes[]`` with ``slug``, ``memory``, ``vcpus``,
-  ``disk``, ``price_monthly``, ``price_hourly`` (JSON numbers), ``regions``,
-  ``available``, ``description``; paginated by ``per_page`` (at most 200) and
-  ``meta.total``.
-* ``POST /v2/droplets/{id}/actions`` with ``{"type": "resize", "size", "disk"}``
-  (droplet-actions/): ``disk: true`` "is a permanent change and cannot be reversed
-  as a Droplet's disk size cannot be decreased"; ``disk: false`` changes CPU and
-  RAM only. Resizing through the API powers the droplet down first
-  (products/droplets/how-to/resize/). The answer is ``{"action": {...}}``.
-* ``GET /v2/actions/{id}`` (actions/): ``action.status`` is ``in-progress``,
-  ``completed`` or ``errored``; also ``type``, ``started_at``, ``completed_at``,
-  ``resource_id``.
+  ``disk``, ``price_monthly``, ``price_hourly`` (JSON numbers), ``regions`` and
+  ``available``; paginated by ``per_page`` (at most 200) and ``meta.total``. The
+  free-text ``description`` is DigitalOcean-authored prose and is not read.
+* ``GET /v2/account`` (account/): ``account.uuid`` is "the unique universal
+  identifier for the current user"; ``account.team.uuid``, present "when authorized
+  in a team context", identifies the team. Billing belongs to the team when there is
+  one, so the team's uuid is the billing account's identity, else the user's. The
+  email and names are not read.
+* ``GET /v2/droplets``, ``GET /v2/volumes``, ``GET /v2/snapshots`` (droplets/,
+  block-storage/, snapshots/): the account's billable resources, counted by
+  ``meta.total``, so a world can refuse an account that pays for anything else.
+* ``GET http://169.254.169.254/metadata/v1/id`` (metadata/droplet-properties/): the
+  droplet's own id as plain text, reachable only from inside that droplet and sent
+  no token.
 
+Only structured facts leave this module: slugs and statuses must look like slugs
+and times must parse as ISO 8601, so no provider-authored prose can reach a seat.
 JSON numbers are decoded as ``Decimal`` from their own text, so a price is never
 read through a binary float.
 """
@@ -40,6 +45,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections.abc import Callable
 from decimal import Decimal
 from typing import Any
@@ -54,9 +60,8 @@ HTTP_TIMEOUT_S = 30
 PER_PAGE = 200
 MAX_PAGES = 5
 BASE_URL = "https://api.digitalocean.com"
+METADATA_URL = "http://169.254.169.254/metadata/v1/id"
 TOKEN_ENV = "DIGITALOCEAN_TOKEN"
-#: The three states DigitalOcean gives an action (actions/).
-ACTION_STATUSES = ("in-progress", "completed", "errored")
 
 #: ``http(method, url, headers, body, timeout) -> (status, body)``: the one boundary.
 Http = Callable[[str, str, dict[str, str], bytes | None, float], tuple[int, bytes]]
@@ -96,6 +101,28 @@ def _urllib_http(method: str, url: str, headers: dict[str, str], body: bytes | N
             exc.close()
 
 
+_SLUG = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
+_UUID = re.compile(r"[0-9a-fA-F-]{8,64}")
+
+
+def _slug(value: Any, field: str) -> str:
+    """A DigitalOcean identifier (a size, a region, a status), never free text."""
+    if not isinstance(value, str) or _SLUG.fullmatch(value) is None:
+        raise DigitalOceanError(None, f"{field} is not a slug")
+    return value
+
+
+def _time(value: Any, field: str) -> str:
+    """An ISO 8601 time as DigitalOcean wrote it; anything else is refused."""
+    from datetime import datetime
+
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (AttributeError, ValueError):
+        raise DigitalOceanError(None, f"{field} is not an ISO 8601 time") from None
+    return value
+
+
 def _money(value: Any, field: str) -> int:
     """Exact micro-USD from a documented decimal string; anything else is refused."""
     if not isinstance(value, str):
@@ -109,8 +136,7 @@ def _money(value: Any, field: str) -> int:
 def _price(value: Any, field: str) -> tuple[str, int]:
     """A published price as its own decimal text and as micro-USD rounded up.
 
-    Rounded up because the one use of the micro figure is a cap the kernel
-    enforces: a price that is a fraction of a micro-USD above the cap is above it.
+    Rounded up so a price is never stated below what DigitalOcean published.
     """
     if isinstance(value, bool) or not isinstance(value, (Decimal, int, str)):
         raise DigitalOceanError(None, f"{field} is not a decimal number")
@@ -131,51 +157,44 @@ def _int(value: Any, field: str) -> int:
 
 def _size(raw: Any) -> dict[str, Any]:
     """One size as published: its slug, resources and prices, never interpreted."""
-    if not isinstance(raw, dict) or not isinstance(raw.get("slug"), str):
-        raise DigitalOceanError(None, "size without a slug")
+    if not isinstance(raw, dict):
+        raise DigitalOceanError(None, "size is not an object")
     monthly, monthly_micro = _price(raw.get("price_monthly"), "price_monthly")
     hourly, hourly_micro = _price(raw.get("price_hourly"), "price_hourly")
     regions = raw.get("regions", [])
-    if not isinstance(regions, list) or not all(isinstance(r, str) for r in regions):
+    if not isinstance(regions, list):
         raise DigitalOceanError(None, "size regions are not a list of slugs")
     return {
-        "slug": raw["slug"],
+        "slug": _slug(raw.get("slug"), "size slug"),
         "memory_mb": _int(raw.get("memory"), "memory"),
         "vcpus": _int(raw.get("vcpus"), "vcpus"),
         "disk_gb": _int(raw.get("disk"), "disk"),
         "price_monthly_usd": monthly, "price_monthly_micro": monthly_micro,
         "price_hourly_usd": hourly, "price_hourly_micro": hourly_micro,
-        "regions": sorted(regions),
+        "regions": sorted(_slug(r, "region") for r in regions),
         "available": raw.get("available") is True,
-        "description": str(raw.get("description") or "")[:80],
     }
 
 
-def _action(raw: Any) -> dict[str, Any]:
-    if not isinstance(raw, dict) or type(raw.get("id")) is not int:
-        raise DigitalOceanError(None, "action without an id")
-    status = raw.get("status")
-    if status not in ACTION_STATUSES:
-        raise DigitalOceanError(None, "action status is not one DigitalOcean documents")
-    return {"id": raw["id"], "status": status, "type": str(raw.get("type") or ""),
-            "started_at": raw.get("started_at"), "completed_at": raw.get("completed_at"),
-            "resource_id": raw.get("resource_id")}
-
-
 class DigitalOceanClient:
-    """Reads parse exactly or raise; the one write is sent at most once per call.
+    """Reads parse exactly or raise; nothing here writes to DigitalOcean.
 
-    GETs retry once after a connection failure. The POST never retries here: a
-    lost answer is the caller's to reconcile by reading, never by resending.
-    The bearer token is read from the environment at each call (``TOKEN_ENV``,
-    loaded from ``digitalocean.key`` by the CLI) and is redacted from every
-    error this class raises.
+    A GET is tried at most ``attempts`` times on a connection failure; a world's
+    own reads use one attempt and a short timeout, so a slow DigitalOcean costs one
+    bounded wait and never a retry loop. The bearer token is read from the
+    environment at each call (``TOKEN_ENV``, loaded from ``digitalocean.key`` by
+    the CLI), is redacted from every error this class raises, and is never sent to
+    the metadata service.
     """
 
     name = "digitalocean"
 
     def __init__(self, *, token_env: str = TOKEN_ENV, base_url: str = BASE_URL,
-                 http: Http | None = None, timeout_s: float = HTTP_TIMEOUT_S) -> None:
+                 http: Http | None = None, timeout_s: float = HTTP_TIMEOUT_S,
+                 attempts: int = 2) -> None:
+        if type(attempts) is not int or attempts < 1:
+            raise ValueError("attempts must be a positive integer")
+        self._attempts = attempts
         self._token_env = token_env
         self._base_url = base_url.rstrip("/")
         self._http = http if http is not None else _urllib_http
@@ -193,7 +212,7 @@ class DigitalOceanClient:
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json",
                    "Accept": "application/json"}
         body = json.dumps(payload).encode() if payload is not None else None
-        attempts = 2 if method == "GET" else 1
+        attempts = self._attempts if method == "GET" else 1
         for attempt in range(attempts):
             try:
                 status, raw = self._http(method, self._base_url + path, headers, body,
@@ -231,8 +250,40 @@ class DigitalOceanClient:
             "month_to_date_usage_micro": _money(raw.get("month_to_date_usage"),
                                                 "month_to_date_usage"),
             "credit_micro": -balance,
-            "generated_at": raw["generated_at"],
+            "generated_at": _time(raw["generated_at"], "generated_at"),
         }
+
+    def identity(self, droplet_id: int) -> dict[str, Any]:
+        """Which billing account this token reads, and whether it holds the droplet.
+
+        ``billing_uuid`` is the team's uuid when the token acts for a team, else the
+        user's (the balance is the team's when there is one). ``droplet_held`` is
+        False when this account answers 404 for the droplet: the second anchor.
+        """
+        raw = self._request("GET", "/v2/account")
+        account = raw.get("account") if isinstance(raw, dict) else None
+        if not isinstance(account, dict):
+            raise DigitalOceanError(None, "account missing")
+        team = account.get("team") if isinstance(account.get("team"), dict) else None
+        owner = team.get("uuid") if team is not None else account.get("uuid")
+        if not isinstance(owner, str) or _UUID.fullmatch(owner) is None:
+            raise DigitalOceanError(None, "account without a uuid")
+        try:
+            held = self.droplet(droplet_id)["id"] == int(droplet_id)
+        except DigitalOceanError as exc:
+            if exc.status != 404:
+                raise
+            held = False
+        return {"billing_uuid": owner.lower(), "billing_kind": "team" if team else "user",
+                "droplet_id": int(droplet_id), "droplet_held": held}
+
+    def billing(self, droplet_id: int) -> dict[str, Any]:
+        """The account's identity and its balance, read together as one observation.
+
+        One call, so a journal records and replays the pair as one read: whether
+        a reading may be booked depends on both.
+        """
+        return {"identity": self.identity(droplet_id), "balance": self.balance()}
 
     def droplet(self, droplet_id: int) -> dict[str, Any]:
         """One droplet's size, state and price as DigitalOcean reports them."""
@@ -243,12 +294,14 @@ class DigitalOceanClient:
         size = _size(droplet.get("size"))
         region = droplet.get("region") if isinstance(droplet.get("region"), dict) else {}
         return {
-            "id": _int(droplet.get("id"), "id"), "status": str(droplet.get("status") or ""),
-            "locked": droplet.get("locked") is True, "size_slug": droplet["size_slug"],
+            "id": _int(droplet.get("id"), "id"),
+            "status": _slug(droplet.get("status"), "droplet status"),
+            "locked": droplet.get("locked") is True,
+            "size_slug": _slug(droplet["size_slug"], "size_slug"),
             "memory_mb": _int(droplet.get("memory"), "memory"),
             "vcpus": _int(droplet.get("vcpus"), "vcpus"),
             "disk_gb": _int(droplet.get("disk"), "disk"),
-            "region": str(region.get("slug") or ""),
+            "region": _slug(region.get("slug"), "region"),
             "price_monthly_usd": size["price_monthly_usd"],
             "price_monthly_micro": size["price_monthly_micro"],
             "price_hourly_usd": size["price_hourly_usd"],
@@ -268,16 +321,32 @@ class DigitalOceanClient:
                 break
         return sorted(found, key=lambda s: s["slug"])
 
-    def resize(self, droplet_id: int, size: str, disk: bool) -> dict[str, Any]:
-        """Submit one resize action, once; return DigitalOcean's action."""
-        if type(disk) is not bool or not isinstance(size, str) or not size:
-            raise DigitalOceanError(None, "resize needs a size slug and a boolean disk",
-                                    sent=False)
-        raw = self._request("POST", f"/v2/droplets/{int(droplet_id)}/actions",
-                            {"type": "resize", "size": size, "disk": disk})
-        return _action(raw.get("action") if isinstance(raw, dict) else None)
+    def _total(self, path: str, key: str) -> tuple[int, list]:
+        raw = self._request("GET", f"{path}?per_page={PER_PAGE}&page=1")
+        rows = raw.get(key) if isinstance(raw, dict) else None
+        total = (raw.get("meta") or {}).get("total") if isinstance(raw, dict) else None
+        if not isinstance(rows, list) or type(total) is not int:
+            raise DigitalOceanError(None, f"{key} list missing")
+        return total, rows
 
-    def action(self, action_id: int) -> dict[str, Any]:
-        """One action's status."""
-        raw = self._request("GET", f"/v2/actions/{int(action_id)}")
-        return _action(raw.get("action") if isinstance(raw, dict) else None)
+    def resources(self) -> dict[str, Any]:
+        """The account's billable resources: every droplet id, and volume and snapshot counts."""
+        total, rows = self._total("/v2/droplets", "droplets")
+        ids = sorted(_int(row.get("id"), "id") for row in rows if isinstance(row, dict))
+        if total != len(ids):
+            # More droplets than one page holds is already not a dedicated account.
+            ids.extend([0] * (total - len(ids)))
+        return {"droplets": ids, "volumes": self._total("/v2/volumes", "volumes")[0],
+                "snapshots": self._total("/v2/snapshots", "snapshots")[0]}
+
+    def metadata_droplet_id(self) -> int:
+        """The id the droplet's own metadata service states; it is sent no token."""
+        try:
+            status, raw = self._http("GET", METADATA_URL, {}, None, min(self._timeout_s, 5))
+        except Exception as exc:  # noqa: BLE001 - off a droplet it is unreachable
+            raise DigitalOceanError(None, "metadata service unreachable",
+                                    sent=dispatched(exc)) from None
+        text = raw.decode("utf-8", errors="replace").strip() if isinstance(raw, bytes) else ""
+        if status != 200 or not text.isdigit():
+            raise DigitalOceanError(status, "metadata service gave no droplet id")
+        return int(text)

@@ -1657,96 +1657,116 @@ every surface carries ids and a normalised `YES`, `NO` or `outcome <n>`.
 
 The factory runs on a DigitalOcean droplet paid from prepaid account credit. That credit
 is part of the one first move (essay II.II, the Stackelberg move; II.IV, "a continuous,
-reciprocal flow of capital is an objective requirement"), exactly as OpenRouter credit
-is, so it is a pot on the books. DigitalOcean takes no crypto, so the factory cannot
-refill it: it is a finite prepaid endowment.
+reciprocal flow of capital is an objective requirement"), so it is on the books. It pays
+for hosting and nothing else, and DigitalOcean takes no crypto, so the factory cannot refill
+it: it is a finite prepaid endowment, and it is **its own pot**. A hosting charge lowers the
+`hosting` pot and no other. The compute wallet never moves for hosting: it is the authority
+the model credits back, and money that left DigitalOcean never passed through it.
 
-`[hosting]` is off by default. A disabled block builds no client, reads nothing, opens no
-pot and publishes no tool, but its keys are part of the manifest and are hashed like any
-other. No world under `worlds/` enables it. The keys, all fixed for the world's life:
+`[hosting]` is off by default, and must stay off wherever the world does not run on a
+DigitalOcean droplet (a test, a laptop): an enabled world there refuses to start. A disabled
+block builds no client, reads nothing, opens no pot and publishes no tool, but its keys are
+part of the manifest and are hashed like any other. No world under `worlds/` enables it.
+The keys, all fixed for the world's life:
 
 | key | default | meaning |
 |---|---|---|
-| `enabled` | `false` | read the host's balance each tick, open the `hosting` pot, publish the hosting tools |
+| `enabled` | `false` | verify the host at start, read its account once a reserve window, open the `hosting` pot, publish `hosting.droplet` and `hosting.sizes` |
 | `provider` | `"digitalocean"` | the only provider built (`world/digitalocean.py`) |
-| `droplet_id` | none | the droplet this world runs on and may resize; a positive integer, required when enabled |
-| `max_monthly_usd` | `"0"` | the highest `price_monthly` a resize may target, exact USD text or an integer |
-| `allow_disk_resize` | `false` | whether `hosting.resize` may send `disk: true`. A disk resize is permanent: DigitalOcean cannot shrink a disk |
+| `droplet_id` | none | the droplet this world runs on; a positive integer, required when enabled |
 
 The token is `DIGITALOCEAN_TOKEN`, loaded by the CLI from `digitalocean.key` in the working
-directory (owned, mode 0400 or 0600, gitignored by `*.key`) and never printed; an enabled
-world without it does not start (`CredentialMissing`). It is redacted from every error, and
-nothing the adapter returns carries it.
+directory (owned, mode 0400 or 0600, gitignored by `*.key`) and never printed. An enabled
+world without it does not start (`CredentialMissing`). The token is redacted from every
+error, never sent to the metadata service, and appears in nothing the adapter returns.
 
-**What DigitalOcean reports, and what is read from it.** `GET /v2/customers/my/balance`
-returns `month_to_date_balance`, `account_balance` and `month_to_date_usage` as decimal
-strings and `generated_at` as an ISO 8601 time; `month_to_date_balance` "includes the
-`account_balance` and `month_to_date_usage`" (docs.digitalocean.com/reference/api/reference/billing/).
-A negative balance is credit and a positive one is owed (DigitalOcean's own statement,
-digitalocean.com/community/questions/where-can-i-see-my-account-balance; the API
-reference itself states no sign). Each string is parsed exactly to micro-USD; one that is
-not an exact micro-USD amount, or not a string, is refused. The pot is
+**A dedicated, verified pot.** Every start of an enabled world, at launch and at every
+resume, runs `world.hosting.verify` before anything else touches the world, and refuses with
+`HostingRefused` and a named reason:
+
+- `not running on a DigitalOcean droplet`: the metadata service
+  (`GET http://169.254.169.254/metadata/v1/id`, plain text, reachable only from inside a
+  droplet; docs.digitalocean.com/reference/api/metadata/droplet-properties/) did not answer;
+- `metadata droplet id differs from [hosting] droplet_id`;
+- `the billing account does not hold [hosting] droplet_id` (`GET /v2/droplets/{id}` is 404);
+- `the billing account holds resources besides this droplet`: `GET /v2/droplets`,
+  `/v2/volumes` and `/v2/snapshots` list anything but this one droplet, so the account's
+  whole bill is not this world's host;
+- `the billing account could not be read`.
+
+The account the token reads is then the world's **bound identity**: `GET /v2/account`'s
+`team.uuid` when the token acts for a team (the balance is the team's), else its `uuid`,
+with the droplet id as the second anchor (docs.digitalocean.com/reference/api/reference/account/).
+It is checkpointed with the pot. A resume whose token reads another account refuses
+(`the billing account differs from the one this world is bound to`) when it restores the
+checkpoint. Every billing reading carries the identity too; a reading from another account,
+or one whose account no longer holds the droplet, is refused, ledgered as
+`treasury.hosting_refused` with its reason, and never booked, and the pot is unknown until a
+reading from the bound account arrives.
+
+**What DigitalOcean reports.** `GET /v2/customers/my/balance` returns
+`month_to_date_balance`, `account_balance` and `month_to_date_usage` as decimal strings and
+`generated_at` as an ISO 8601 time; `month_to_date_balance` "includes the `account_balance`
+and `month_to_date_usage`" (docs.digitalocean.com/reference/api/reference/billing/). A
+negative balance is credit and a positive one is owed (DigitalOcean's own statement,
+digitalocean.com/community/questions/where-can-i-see-my-account-balance; the API reference
+states no sign). Each string is parsed exactly to micro-USD; one that is not exact, or not a
+string, is refused, as is a `generated_at` that is not a time. The pot's balance is
 `-month_to_date_balance`: credit remaining, negative when the account owes.
 
-**Burn is observed, never computed.** `Treasury.observe_hosting` reads the balance once a
-tick (journaled as `hosting.balance`). The first reading is the endowment,
-`treasury.hosting_endowment`, and moves nothing: like the seed credit, it is backing the
-operator puts behind `initial_balance_usd`. After that, a rise in `month_to_date_balance`
-is money DigitalOcean took. It is ledgered first as `treasury.hosting_burn` (counterparty
-`digitalocean`, the two readings' `generated_at`, and the balance, usage and account
-figures before and after), then settled on the wallet as a `hosting` debit
-(`wallet.settle`, handle `hosting:digitalocean`). The monthly invoice moves usage into the
-account balance without changing `month_to_date_balance`, so a rollover is not a burn. A
-fall is credit that arrived from outside (a prepayment, a promotion, a refund):
-`treasury.hosting_credited`, and the wallet does not move, because the operator's side
-payment is not authority the population was given. A reading older than the last is
-`treasury.hosting_stale` and changes nothing; a failed one is `treasury.hosting_unread`
-(once per reason) and leaves the pot unknown, never zero. A charge and a payment that land
-between the same two readings net: the reading cannot tell them apart. Nothing is debited
-on a timer, by the hourly price, or when a resize is submitted.
+**Burn is observed, never computed.** `Treasury.observe_hosting` reads the account once a
+reserve window (journaled as `hosting.billing`), off the tick path, with one attempt and a
+five-second timeout: a slow DigitalOcean costs one bounded wait a window and never a retry,
+and a failed read leaves the pot unknown (`treasury.hosting_unread`) until the next window.
+The first reading is the endowment, `treasury.hosting_endowment`. After it, each reading is
+booked by `HostingAccount.observe` so that every dollar DigitalOcean took is booked once:
 
-**Where a hosting charge lands.** It is overhead: no seat decided it, so it is booked to
-no seat. The `hosting` settlement lowers the wallet's unlocked balance, and the budget
-book's unallocated pool absorbs it, as it absorbs every shared cost
-(`BudgetBook.unallocated`); no entitlement moves. It is not in any seat's cost, so it is
-not in `cost_per_return`, `cost_per_attempt` or `burn_per_window`, which measure what
-decisions spent. The wake counts it in `money.out_by_class.hosting`. The pot is in
-`Treasury.pots()` (`hosting`, and `hosting_detail` with DigitalOcean's figures and the
-endowment, burned and credited totals), in its total and completeness, in the
-reconciliation's sum, and in `custody_view` as `hosting_credit`. A charge that reaches the
-balance floor kills the world like any other settled loss.
+- usage above the highest `month_to_date_usage` seen in the current billing cycle (the
+  high-water mark) is burn. A fall within a cycle (a revision) books nothing, and a rise
+  back to the mark books nothing again;
+- a new cycle begins at a reading in a later month whose usage fell below the mark: the
+  reset has been seen. A later month whose usage has not reset is still the old cycle, so a
+  rollover is read the same way whichever of its two steps lands first;
+- a rise in `account_balance` is an invoice. It settles the oldest closed cycle's booked
+  usage: what it covers was burn already; what it charges beyond that (usage after the last
+  reading, tax) is burn; what it falls short by is credit applied at invoice, ledgered as
+  credit, and the cycle is closed. With no closed cycle waiting, it settles the current
+  cycle's booked usage (an invoice that landed before the reset);
+- a fall in `account_balance` is credit from outside (a prepayment, a refund): the pot rises
+  and the books ledger it as `treasury.hosting_credited` with cause `outside`. It never
+  reduces a later burn.
 
-**The droplet surface.** Three tools, all free:
+Burn is ledgered as `treasury.hosting_burn` and credit as `treasury.hosting_credited`
+(cause `invoice` or `outside`), each with DigitalOcean as the counterparty and both
+readings' `generated_at`, usage and account balance as the evidence. One invoice per cycle
+is assumed, and a charge and a payment that land between the same two readings net. Nothing
+is booked on a timer or from a price.
 
-- `hosting.droplet {}`: the droplet (size slug, vCPUs, memory, disk, status, region,
-  monthly and hourly price), the pot, the limits and every resize this world submitted.
-- `hosting.sizes {}`: DigitalOcean's published sizes (`GET /v2/sizes`, every page) that are
-  available in the droplet's region, with their prices as DigitalOcean wrote them (JSON
-  numbers decoded from their own text), and the limits: `max_monthly_usd` and whether disk
-  growth is allowed.
-- `hosting.resize {size, disk?}`: `POST /v2/droplets/{id}/actions`
-  `{"type": "resize", "size": size, "disk": disk}`. `disk` defaults to `false`.
+**The pot is published, and reconciled against its own counterparty.** `Treasury.pots()`
+carries `hosting` (the balance DigitalOcean reports) and `hosting_detail`: the balance, the
+books (`endowment + credited - burned`), their `discrepancy_micro`, month-to-date usage,
+`generated_at`, the endowment, the burned and credited totals, and `last_burn_micro`, the
+burn booked at the last reading (one reading a reserve window, so the burn of that window).
+It is never in `total_micro` or `complete`, which reconcile the pots that back the compute
+wallet. `custody_view` lists it as `hosting_credit`, and the wake counts its burn in
+`money.out_by_class.hosting` under the `hosting` custody. Hosting burn is overhead: no seat
+decided it, it is in no seat's cost, and so it is not in `cost_per_return`,
+`cost_per_attempt` or `burn_per_window`.
 
-`hosting.resize` is a consequence write: only a producing decision with an open consequence
-account may make it. `HostingAccount.resize` (`world/hosting.py`) refuses before any intent,
-with `hosting.refused`, a size not on the published list, a size not available in the
-droplet's region, a size whose monthly price (rounded up to the micro-USD) exceeds
-`max_monthly_usd`, `disk: true` without `allow_disk_resize`, the droplet's current size, and
-any resize while another is open. Otherwise it ledgers `hosting.intent` (client id
-`<handle>:<slot>`, from and to size and price) before the call, submits once, and records
-`hosting.acknowledged` with DigitalOcean's action id. Each tick follows the action
-(`GET /v2/actions/{id}`) to `hosting.resized` or `hosting.errored`. A repeat of the same
-client id reconciles and never resubmits. An answer that did not arrive
-(`hosting.uncertain`) is resolved by reading the droplet: at the target size it is
-`hosting.resized`; locked or not active, the action is still running; idle at another size
-for `UNCERTAIN_POLLS` (5) readings, it is released as `hosting.unresolved`. DigitalOcean
-powers the droplet off to resize it, so the process may die between the call and its
-answer: the journal then completes the interrupted `hosting.resize` as uncertain on
-resume (`RecoveryJournal.call`) and never sends it again. A resize's price reaches the
-books only through the billing that follows it.
+**When the pot reaches zero,** DigitalOcean does not stop the droplet: it bills the payment
+method on file for what the account then owes. That money is outside the factory's books.
+The pot shows it as a negative balance, and nothing in the factory pays it. This is a
+documented boundary, not a modelled one.
 
-The pot's readings, its totals and every intent survive a checkpoint inside the treasury
-snapshot (`hosting`); a world without the block writes no such key.
+**Two reads.** `hosting.droplet {}` publishes the droplet (size slug, vCPUs, memory, disk,
+status, region, monthly and hourly price) and the pot; `hosting.sizes {}` publishes
+DigitalOcean's size list (`GET /v2/sizes`, every page) as available in the droplet's region,
+with prices read from their own JSON text. Both are free and structured: slugs, counts,
+prices and times only, never DigitalOcean-authored prose (a size's `description` is not
+read, and a slug or status that is not a slug is refused), so no outside text reaches a wake
+that can write. There is no write. A resize powers the droplet off and nothing here could
+power it back on while the factory runs on it; it returns only with an external power-on
+design.
 
 ## New kinds of work: reward shapes and predicates
 
@@ -2535,8 +2555,7 @@ tick's hundred prompts ask an unreachable venue once.
 ### What moves the compute wallet
 
 Model, tool and program charges; rent, as authority; releases; transfers between
-seats; verified income; confirmed conversions into provider credit; and, in a world
-with `[hosting]`, the host's charges as DigitalOcean's billing reports them. That is
+seats; verified income; and confirmed conversions into provider credit. That is
 the whole list.
 
 Venue P&L, fees and funding are not on it. They settle on the venue accounts,

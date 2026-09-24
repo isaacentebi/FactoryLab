@@ -137,7 +137,7 @@ def test_a_manifest_hashes_what_it_says_and_a_default_is_no_exception():
     assert '"chaos":{"connector_timeout":0.0' in scripted.canonical_json()
     assert '"contract":"json_object"' in scripted.canonical_json()
     assert scripted.manifest_hash() == (
-        "674a917abe3da22489095140eed98a3ffc4f19d68ee633082e334338cb369837"
+        "b148752ba72a38833bd8d6766e0f8ce9e06ba186a6782aa3ad9965752c404659"
     )
 
     implicit = manifest_from_dict(_base())
