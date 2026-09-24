@@ -278,17 +278,25 @@ def test_a_foreign_line_or_a_new_history_type_never_blocks_later_months():
     assert "account" not in str(detail).replace("account-wide", "")   # nothing of the account
 
 
-def test_the_droplets_other_products_and_other_resources_are_never_booked():
+def test_the_droplets_backups_are_its_burn_and_a_snapshot_sharing_its_id_is_not():
     w = world()
     windows(w, 1)
-    w.fake.add(w.droplet + "-bk", "Droplets", "0.07", "not this droplet")
+    # A backup is billed against the droplet's id; a snapshot has its own id, which here
+    # happens to be the same number; and another droplet is another droplet.
+    w.fake.add("bk-1", "Droplet Backups", "0.00357", "weekly", billed_as=w.droplet)
+    w.fake.add("snap-1", "Snapshots", "0.00083", "snapshot", billed_as=w.droplet)
     w.fake.add("888", "Droplets", "0.07143", "a-bigger-host")
     windows(w, 3)
     w.fake.remove("888")
     w.fake.advance(24 * 7)
     w.fake.post_invoice("2026-09")
     windows(w, 1)
-    assert_months(w, ["2026-09"])
+    backups = micro(w.fake.billed("bk-1", "2026-09"))
+    assert backups > 0 and micro(w.fake.billed("snap-1", "2026-09")) > 0
+    booked = w.hosting.burn_by_month()["2026-09"]
+    assert abs(booked - (truth(w, "2026-09") + backups)) <= CENT_MICRO   # backups in
+    reconciled = items(w, "treasury.hosting_invoice")[0]
+    assert (reconciled["lines"], reconciled["other_lines"]) == (2, 2)     # snapshot out
 
 
 def test_untagged_lines_are_flagged_never_labelled_invoiced_and_cleared_when_matched():
@@ -396,3 +404,35 @@ def test_the_token_never_reaches_the_ledger_even_when_an_error_echoes_it(monkeyp
     assert items(w, "treasury.hosting_unread")
     assert "b" * 64 not in str(w.records) and TOKEN not in str(w.records)
     assert "b" * 64 not in str(w.treasury.snapshot())
+
+
+@pytest.mark.parametrize("late", [False, True])
+def test_the_launch_months_burn_is_labelled_an_estimate_with_its_bound(late):
+    """The pre-launch share is an allocation, not a measurement: every item and the pot
+    say so, with the most the booked burn can exceed the true post-launch charge by."""
+    w = world()
+    if late:
+        w.fake.down = True                   # first read after the month, from its invoice
+    windows(w, 9)
+    w.fake.down = False
+    w.fake.post_invoice("2026-09")
+    windows(w, 2)
+    share = items(w, "treasury.hosting_launch_share")[0]
+    assert share["estimated"] is True and share["source"] == ("invoice" if late else "preview")
+    bound = share["overshoot_bound_micro"]
+    assert bound >= 0 and "at most overshoot_bound_micro" in share["bound"]
+    launch = [r for r in items(w, "treasury.hosting_burn") + items(
+        w, "treasury.hosting_burn_reversed") if r["month"] == "2026-09"]
+    assert launch and all(r["estimated"] is True and r["overshoot_bound_micro"] == bound
+                          for r in launch)
+    later = [r for r in items(w, "treasury.hosting_burn") if r["month"] != "2026-09"]
+    assert later and all(r["estimated"] is False for r in later)
+    view = {m["month"]: m for m in w.hosting.view()["burn_by_month"]}
+    assert view["2026-09"]["estimated"] is True
+    assert view["2026-09"]["overshoot_bound_micro"] == bound
+    assert view["2026-10"]["estimated"] is False
+    # The bound holds against what the fake charged after the launch.
+    overshoot = w.hosting.burn_by_month()["2026-09"] - truth(w, "2026-09")
+    assert overshoot <= bound + CENT_MICRO
+    if late:
+        assert overshoot > CENT_MICRO        # the capped invoice made it a real estimate

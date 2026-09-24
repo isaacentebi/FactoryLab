@@ -56,15 +56,24 @@ def test_a_billing_read_parses_this_droplets_lines_and_counts_the_rest(token):
                for c in fake.calls)
 
 
-def test_only_this_droplets_product_is_its_line():
-    from factorylab.world.digitalocean import _is_mine
+def test_a_line_is_the_droplets_by_its_uuid_or_by_its_id_and_a_droplet_product():
+    from factorylab.world.digitalocean import _is_mine, droplet_uuid
 
-    assert _is_mine({"resource_id": "7", "product": "Droplets"}, 7)
-    assert _is_mine({"resource_id": 7, "product": "Droplets"}, 7)
-    assert not _is_mine({"resource_id": "7", "product": "Droplet Backups"}, 7)
-    assert not _is_mine({"resource_id": "8", "product": "Droplets"}, 7)
-    assert not _is_mine({"resource_id": True, "product": "Droplets"}, 1)
-    assert not _is_mine("a line", 7)
+    uuid = "0b7e3c2a-1111-4000-8000-000000000001"
+    own = {"resource_id": "7", "resource_uuid": uuid.upper(), "product": "Droplets"}
+    assert droplet_uuid([{"resource_id": "8", "product": "Droplets"}, own], 7) == uuid
+    assert _is_mine(own, 7, uuid)
+    assert _is_mine({"resource_id": 7, "product": "Droplets"}, 7, None)
+    # Charges billed against the droplet: by its uuid whatever the product, or by its id.
+    assert _is_mine({"resource_uuid": uuid, "product": "Anything New"}, 7, uuid)
+    assert _is_mine({"resource_id": "7", "resource_uuid": "0b7e3c2a-2222-4000-8000-0000000"
+                     "00002", "product": "Droplet Backups"}, 7, uuid)
+    # Another kind of resource whose numeric id equals the droplet's is not the droplet.
+    assert not _is_mine({"resource_id": "7", "resource_uuid": "0b7e3c2a-3333-4000-8000-00"
+                         "0000000003", "product": "Snapshots"}, 7, uuid)
+    assert not _is_mine({"resource_id": "8", "product": "Droplets"}, 7, uuid)
+    assert not _is_mine({"resource_id": True, "product": "Droplets"}, 1, None)
+    assert not _is_mine("a line", 7, uuid)
 
 
 def test_a_malformed_foreign_line_never_fails_a_read_and_a_malformed_own_line_does(token):

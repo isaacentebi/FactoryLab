@@ -118,7 +118,7 @@ class HostingAccount:
 
     FIELDS = ("bound", "launch_ns", "lines", "baseline", "reconciled", "invoiced",
               "unmatched", "booked", "negative", "unread", "history", "snapshot",
-              "pending_baseline", "pending_noted")
+              "pending_baseline", "pending_noted", "droplet_uuid")
 
     def __init__(self, client: Any, *, droplet_id: int, bound: dict[str, Any] | None,
                  launch_ns: int | None, budget_s: float) -> None:
@@ -141,6 +141,7 @@ class HostingAccount:
         self.snapshot: dict[str, Any] = {}             # the droplet and sizes last read
         self.pending_baseline = True                   # launch month's share not yet known
         self.pending_noted = False                     # and the diary has said so
+        self.droplet_uuid: str | None = None           # learned from its own line
 
     @property
     def since(self) -> str | None:
@@ -175,13 +176,27 @@ class HostingAccount:
             "balance_micro": None, "balance": "unknown", "balance_reason": BALANCE_UNKNOWN,
             "burned_micro": sum(months.values()),
             "burn_by_month": [{"month": m, "micro": v,
-                               "source": "invoice" if m in self.invoiced else "preview"}
+                               "source": "invoice" if m in self.invoiced else "preview",
+                               **self._estimate(m)}
                               for m, v in list(months.items())[-12:]],
             "launch_month": self.since,
             "launch_share": ("pending" if self.pending_baseline
                              else self.baseline.get(self.since, {}).get("method")),
             "unmatched_months": list(self.unmatched), "unread": self.unread,
         }
+
+    def _estimate(self, month: str) -> dict[str, Any]:
+        """How a month's booked burn was reached: measured, or the launch month's estimate.
+
+        The launch month's pre-launch share is an allocation, not a measurement, so its
+        booked burn says ``estimated`` and carries the most it can exceed the true
+        post-launch charge by (``overshoot_bound_micro``).
+        """
+        share = self.baseline.get(month) if month == self.since else None
+        if share is None:
+            return {"estimated": False}
+        return {"estimated": True, "overshoot_bound_micro": share["overshoot_bound_micro"],
+                "bound": share["bound"]}
 
     def _prelaunch(self, month: str, lines: list[dict]) -> dict | None:
         """The launch month's pre-launch share, from lines whose span covers the launch.
@@ -190,6 +205,15 @@ class HostingAccount:
         what falls before the launch is not this world's. Only a reading in which one of
         this droplet's lines reaches past the launch can say it; until then it is
         pending, and the month books nothing.
+
+        The share is an allocation, and it carries a bound on how far the booked
+        post-launch burn can exceed the true one. For the droplet's own line: the
+        pre-launch part of what DigitalOcean discounted the line by, against the
+        droplet's published hourly price for the hours in its span (the monthly cap
+        discounts the end of a month, which sharing by span spreads over the whole of
+        it, so the share falls short of the pre-launch charge by at most that part).
+        For any other line billed against the droplet (a backup, say), whose accrual
+        over its span nothing here knows: its whole post-launch part.
         """
         from datetime import datetime
 
@@ -197,16 +221,32 @@ class HostingAccount:
             return int(datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
                        * 1_000_000_000)
 
-        spans = [(ns(x["start_time"]), ns(x["end_time"]), x["amount_micro"]) for x in lines]
-        if month != self.since or not any(end > self.launch_ns for _, end, _ in spans):
+        spans = [(ns(x["start_time"]), ns(x["end_time"]), x["amount_micro"],
+                  x.get("droplet", True)) for x in lines]
+        if month != self.since or not any(end > self.launch_ns for _, end, _, _ in spans):
             return None
-        share = 0
-        for start, end, amount in spans:
+        hourly = (self.snapshot.get("droplet") or {}).get("price_hourly_micro")
+        share = bound = 0
+        for start, end, amount, own in spans:
             if end <= self.launch_ns:
                 share += amount
-            elif start < self.launch_ns:
-                share += amount * (self.launch_ns - start) // (end - start)
-        return {"micro": share, "method": "within each line's own span"}
+                continue
+            pre = amount * (max(start, self.launch_ns) - start) // (end - start)
+            share += pre
+            post = amount - pre
+            if own and type(hourly) is int:
+                listed = hourly * (end - start) // 3_600_000_000_000
+                discount = max(0, listed - amount)
+                # The true pre-launch charge is at most the listed price for its hours,
+                # so the share falls short of it, and the burn over-reaches, by at most
+                # the discount's pre-launch part.
+                bound += -(-discount * (max(start, self.launch_ns) - start) // (end - start))
+            else:
+                bound += post
+        return {"micro": share, "method": "within each line's own span", "estimated": True,
+                "overshoot_bound_micro": bound,
+                "bound": ("the booked launch-month burn exceeds the true post-launch charge "
+                          "by at most overshoot_bound_micro")}
 
     def _book(self, month: str, source: str, result: dict) -> None:
         """Book the change in one month's figure; never below zero."""
@@ -226,7 +266,8 @@ class HostingAccount:
         if delta:
             result["changes"].append({"month": month, "delta_micro": delta,
                                       "booked_micro": level, "source": source,
-                                      "lines": len(self.lines.get(month, {}))})
+                                      "lines": len(self.lines.get(month, {})),
+                                      **self._estimate(month)})
 
     def _match(self, month: str, result: dict) -> None:
         if month in self.unmatched:
@@ -248,6 +289,7 @@ class HostingAccount:
         """
         self.unread = None
         self.snapshot = {"droplet": reading["droplet"], "sizes": reading["sizes"]}
+        self.droplet_uuid = self.droplet_uuid or reading.get("droplet_uuid")
         result: dict[str, Any] = {"changes": [], "baseline": None, "unmatched": [],
                                   "cleared": [], "negative": [], "reconciled": [],
                                   "entries": []}

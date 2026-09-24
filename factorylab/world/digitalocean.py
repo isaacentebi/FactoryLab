@@ -19,10 +19,15 @@ What the parsing relies on (docs.digitalocean.com/reference/api/reference/):
   ``group_description``, ``description``, ``amount`` (decimal string, USD),
   ``duration``, ``duration_unit``, ``start_time``, ``end_time`` and
   ``project_name``; paginated the same way. A line is this droplet's when its
-  ``resource_id`` is the droplet's id and its ``product`` is ``Droplets``; only such
-  lines are parsed, strictly, and every other line is only counted, so a line of
-  another resource can never make a read fail. Tax is on the invoice, not on the
-  lines, so this droplet's lines exclude it.
+  ``resource_uuid`` is the droplet's billing uuid, or its ``resource_id`` is the
+  droplet's id and its ``product`` is one DigitalOcean bills against a droplet
+  (``DROPLET_PRODUCTS``). The droplet object carries no uuid (droplets/), so the
+  billing uuid is learned from the droplet's own ``Droplets`` line, matched by id;
+  a snapshot or volume whose numeric id happens to equal the droplet's has neither
+  that uuid nor a droplet product, and is never matched. Only this droplet's lines
+  are parsed, strictly; every other line is only counted, so a line of another
+  resource can never make a read fail. Tax is on the invoice, not on the lines, so
+  this droplet's lines exclude it.
 * ``GET /v2/customers/my/billing_history`` (billing/): ``billing_history[]`` with
   ``description``, ``amount`` (signed decimal string: an invoice positive, a payment
   negative), ``invoice_id``, ``invoice_uuid``, ``date`` and ``type``, one of
@@ -77,8 +82,14 @@ TOKEN_ENV = "DIGITALOCEAN_TOKEN"
 PER_PAGE = 200
 #: A safety bound only: a list is paged until an empty page, within the deadline.
 MAX_PAGES = 100
-#: The product DigitalOcean bills a droplet under.
+#: The product DigitalOcean bills a droplet under; its line names the droplet's uuid.
 DROPLET_PRODUCT = "Droplets"
+#: Products DigitalOcean bills against a droplet, matched by the droplet's id when a line
+#: carries no uuid: the droplet itself and its backups (products/backups/: backups are
+#: billed as a share of the droplet's cost, or per GiB). The API reference names no
+#: product strings; these are the invoice's product names, and a line whose uuid is the
+#: droplet's is matched whatever its product is called.
+DROPLET_PRODUCTS = frozenset({"Droplets", "Droplet Backups", "Backups"})
 #: Closed invoices reconciled a read, oldest first; the rest wait for the next window.
 INVOICES_PER_READ = 2
 #: A response larger than this is not a billing answer.
@@ -308,18 +319,37 @@ def _invoice(raw: Any) -> dict[str, Any] | None:
     return {"uuid": uuid, "period": period}
 
 
-def _is_mine(raw: Any, droplet_id: int) -> bool:
-    """Whether a raw invoice line is this droplet's: its id and the droplet product.
+def _by_id(raw: Any, droplet_id: int) -> bool:
+    resource = raw.get("resource_id") if isinstance(raw, dict) else None
+    return (isinstance(resource, (str, int)) and not isinstance(resource, bool)
+            and str(resource) == str(int(droplet_id)))
 
-    Reads two fields and parses nothing else, so no other resource's line, whatever
-    it holds, can make a read fail.
+
+def droplet_uuid(rows: list, droplet_id: int) -> str | None:
+    """The droplet's billing uuid, from its own ``Droplets`` line, matched by id."""
+    for raw in rows:
+        uuid = raw.get("resource_uuid") if isinstance(raw, dict) else None
+        if (_by_id(raw, droplet_id) and raw.get("product") == DROPLET_PRODUCT
+                and isinstance(uuid, str) and _UUID.fullmatch(uuid)):
+            return uuid.lower()
+    return None
+
+
+def _is_mine(raw: Any, droplet_id: int, uuid: str | None) -> bool:
+    """Whether a raw invoice line is this droplet's: its uuid is the droplet's, or its
+    id is and its product is one billed against a droplet.
+
+    Reads three fields and parses nothing else, so no other resource's line,
+    whatever it holds, can make a read fail. A resource of another kind that shares
+    the droplet's numeric id (a snapshot, say) has neither the droplet's uuid nor a
+    droplet product, so it is not matched.
     """
     if not isinstance(raw, dict):
         return False
-    resource = raw.get("resource_id")
-    return (isinstance(resource, (str, int)) and not isinstance(resource, bool)
-            and str(resource) == str(int(droplet_id))
-            and raw.get("product") == DROPLET_PRODUCT)
+    named = raw.get("resource_uuid")
+    if uuid is not None and isinstance(named, str) and named.lower() == uuid:
+        return True
+    return _by_id(raw, droplet_id) and raw.get("product") in DROPLET_PRODUCTS
 
 
 def _line(raw: dict, period: str, source: str) -> dict[str, Any]:
@@ -332,9 +362,15 @@ def _line(raw: dict, period: str, source: str) -> dict[str, Any]:
     """
     start = _time(raw.get("start_time"), "start_time")
     end = _time(raw.get("end_time"), "end_time")
-    key = hashlib.sha256(json.dumps([period, source, DROPLET_PRODUCT, start],
+    product = raw.get("product")
+    if not isinstance(product, str) or not 0 < len(product) <= 100:
+        raise DigitalOceanError(None, "this droplet's line names no product")
+    # The product enters only the identity digest and the droplet check below: it is
+    # DigitalOcean's text, and nothing publishes it.
+    key = hashlib.sha256(json.dumps([period, source, product, start],
                                     separators=(",", ":")).encode()).hexdigest()[:24]
     return {"key": key, "source": source, "start_time": start, "end_time": end,
+            "droplet": product == DROPLET_PRODUCT,
             "amount_micro": _money(raw.get("amount"), "invoice item amount")}
 
 
@@ -464,6 +500,7 @@ class DigitalOceanClient:
             "price_monthly_usd": size["price_monthly_usd"],
             "price_monthly_micro": size["price_monthly_micro"],
             "price_hourly_usd": size["price_hourly_usd"],
+            "price_hourly_micro": size["price_hourly_micro"],
         }
 
     def sizes(self, deadline: Deadline | float) -> list[dict[str, Any]]:
@@ -500,20 +537,23 @@ class DigitalOceanClient:
                 "metadata_id": self.metadata_droplet_id(deadline), "droplet": droplet}
 
     def lines(self, invoice: str, period: str, droplet_id: int,
-              deadline: Deadline | float) -> dict[str, Any]:
+              deadline: Deadline | float, uuid: str | None = None) -> dict[str, Any]:
         """One invoice's lines (``preview`` for the month so far): this droplet's, parsed
-        strictly, and how many other lines it had, unparsed."""
+        strictly, how many other lines it had, unparsed, and the droplet's billing uuid
+        (``uuid`` as known, else learned from this invoice's own droplet line)."""
         deadline = _deadline(deadline)
         target = "preview" if invoice == "preview" else invoice
         if target != "preview" and _UUID.fullmatch(target) is None:
             raise DigitalOceanError(None, "invoice uuid is malformed")
         rows, _ = self._pages(f"/v2/customers/my/invoices/{target}", "invoice_items",
                               deadline)
-        mine = [_line(row, period, target) for row in rows if _is_mine(row, droplet_id)]
-        return {"mine": mine, "others": len(rows) - len(mine)}
+        uuid = uuid or droplet_uuid(rows, droplet_id)
+        mine = [_line(row, period, target) for row in rows
+                if _is_mine(row, droplet_id, uuid)]
+        return {"mine": mine, "others": len(rows) - len(mine), "uuid": uuid}
 
     def billing(self, droplet_id: int, *, since: str, done: list[str],
-                budget_s: float) -> dict[str, Any]:
+                budget_s: float, uuid: str | None = None) -> dict[str, Any]:
         """One window's billing observation, whole or not at all, within ``budget_s``.
 
         Returns the identity (account, droplet, metadata), the droplet itself, the
@@ -537,15 +577,19 @@ class DigitalOceanClient:
                          key=lambda inv: (inv["period"], inv["uuid"]))
         closed = []
         for invoice in waiting[:INVOICES_PER_READ]:
-            found = self.lines(invoice["uuid"], invoice["period"], droplet_id, deadline)
+            found = self.lines(invoice["uuid"], invoice["period"], droplet_id, deadline,
+                               uuid)
+            uuid = uuid or found.pop("uuid")
+            found.pop("uuid", None)
             closed.append({**invoice, **found})
-        current = self.lines("preview", period, droplet_id, deadline)
+        current = self.lines("preview", period, droplet_id, deadline, uuid)
         sizes = self.sizes(deadline)
         raw = self._get(f"/v2/customers/my/billing_history?per_page={PER_PAGE}&page=1",
                         deadline)
         history = raw.get("billing_history") if isinstance(raw, dict) else None
         entries = [e for e in (_entry(row) for row in history or []) if e is not None]
         return {"identity": identity, "droplet": droplet, "sizes": sizes,
+                "droplet_uuid": current["uuid"],
                 "period": period, "lines": current["mine"], "others": current["others"],
                 "closed": closed, "waiting": len(waiting) - len(closed),
                 "unreadable_invoices": len(rows) - len(invoices), "history": entries}

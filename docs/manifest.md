@@ -1717,12 +1717,21 @@ docs.digitalocean.com/reference/api/reference/billing/):
 - the account, the droplet, the metadata id, the published sizes, and the billing
   history's first page.
 
-An invoice line is this droplet's when its `resource_id` is the droplet's id **and** its
-`product` is `Droplets`. Only those lines are parsed, strictly (exact decimal amounts, ISO
-8601 `start_time` and `end_time`); every other line, whatever it holds, is only counted, so
-no other resource's line can make a read fail. A line's identity within its month is a
-digest of the month, its source (the preview, or an invoice's uuid), the product and its
-`start_time`; its description is never read.
+Every charge DigitalOcean bills against this droplet is this world's burn: the droplet
+itself, its backups, anything attributed to it. A line is this droplet's when its
+`resource_uuid` is the droplet's billing uuid, or its `resource_id` is the droplet's id and
+its `product` is one billed against a droplet (`DROPLET_PRODUCTS`: `Droplets`,
+`Droplet Backups`, `Backups`; the API reference names no product strings, so these are the
+invoice's names, and a line carrying the droplet's uuid is matched whatever its product is
+called). The droplet object carries no uuid (docs.digitalocean.com/reference/api/reference/droplets/),
+so the billing uuid is learned from the droplet's own `Droplets` line, matched by id, and
+checkpointed. A snapshot or volume whose numeric id happens to equal the droplet's has
+neither that uuid nor a droplet product, and is not matched. Only this droplet's lines are
+parsed, strictly (exact decimal amounts, ISO 8601 `start_time` and `end_time`); every other
+line, whatever it holds, is only counted, so no other resource's line can make a read fail.
+A line's identity within its month is a digest of the month, its source (the preview, or an
+invoice's uuid), its product and its `start_time`; its description is never read, and its
+product is never published.
 
 A month's level is the sum of this droplet's lines on its invoices once one of them carries
 any (the first such invoice replaces the preview's figures, and later invoices for the month
@@ -1746,10 +1755,19 @@ the pot says `launch_share: "pending"`, and the diary says so once
 (`treasury.hosting_launch_share_pending`). Nothing accrued before the launch is ever booked,
 and nothing after it is dropped: if the first reading that can say it is the month's own
 invoice, read in a later month, the share comes from the invoice's lines
-(`treasury.hosting_launch_share` names its source). On an invoice that DigitalOcean capped at
-the droplet's monthly price, sharing by span attributes the cap's discount to the whole
-month, so the booked launch-month burn can exceed the true post-launch charge by at most that
-discount's post-launch share.
+(`treasury.hosting_launch_share` names its source).
+
+**The launch month's burn is an estimate, and says so.** Sharing a line by its span is an
+allocation, not a measurement: DigitalOcean caps a droplet at its monthly price, and the cap
+discounts the end of a month, which sharing spreads over the whole of it. So the launch
+share, every `hosting_burn` and `hosting_burn_reversed` item for the launch month, and the
+launch month's entry in the pot's `burn_by_month` carry `estimated: true` and
+`overshoot_bound_micro`: the most the booked launch-month burn can exceed the true
+post-launch charge by. For the droplet's own line it is the pre-launch part of the line's
+discount against the droplet's published hourly price for the hours in its span (the true
+pre-launch charge is at most that price for those hours); for any other line billed against
+the droplet, whose accrual over its span is not reported, it is that line's whole post-launch
+part. Every other month is DigitalOcean's figure, `estimated: false`.
 
 A month whose lines include none of this droplet's while other lines exist is flagged
 `treasury.hosting_unmatched`, keeps what is booked, and is never labelled as invoiced; it is

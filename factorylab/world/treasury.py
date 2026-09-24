@@ -501,7 +501,7 @@ class Treasury:
         try:
             reading = hosting.client.billing(
                 hosting.droplet_id, since=hosting.since, done=list(hosting.reconciled),
-                budget_s=hosting.budget_s)
+                budget_s=hosting.budget_s, uuid=hosting.droplet_uuid)
         except Exception:  # noqa: BLE001 - an unread custodian is unknown, not empty
             # A fixed reason, never the exception's class: a replay raises the recorded
             # failure under another class, and the diary must read the same.

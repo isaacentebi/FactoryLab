@@ -111,11 +111,16 @@ class FakeDigitalOcean:
 
     # ---- the account's own model -------------------------------------------------------
 
-    def add(self, resource_id, product, hourly, description, *, since=None, monthly=None):
+    def add(self, resource_id, product, hourly, description, *, since=None, monthly=None,
+            billed_as=None):
+        """A resource on the account. ``billed_as`` is the ``resource_id`` its lines carry
+        (a backup is billed against its droplet's id; a snapshot has its own id, which
+        can equal a droplet's); its ``resource_uuid`` is its own."""
         self.resources[resource_id] = {
             "product": product, "hourly": Decimal(hourly),
             "monthly": None if monthly is None else Decimal(monthly),
-            "description": description, "since": since or self.now, "until": None}
+            "description": description, "since": since or self.now, "until": None,
+            "billed_as": billed_as or resource_id}
 
     def remove(self, resource_id):
         self.resources[resource_id]["until"] = self.now
@@ -302,8 +307,9 @@ class FakeDigitalOcean:
             start = max(res["since"], month_start(month))
             end = min(until, res["until"] or until)
             items.append({"product": res["product"],
-                          "resource_id": "" if self.untagged else rid,
-                          "resource_uuid": str(uuidlib.uuid5(uuidlib.NAMESPACE_URL, rid)),
+                          "resource_id": "" if self.untagged else res["billed_as"],
+                          "resource_uuid": "" if self.untagged
+                          else str(uuidlib.uuid5(uuidlib.NAMESPACE_URL, rid)),
                           "group_description": "", "description": res["description"],
                           "amount": f"{amount:.2f}",
                           "duration": str(max(0, int((end - start) // HOUR))),
