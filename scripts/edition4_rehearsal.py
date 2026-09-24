@@ -754,15 +754,26 @@ def run_rehearsal(
     capital_loop: bool = False,
     previous_runs: tuple = (),
     capital_loop_transport: Callable | None = None,
+    capital_loop_lock_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """Run a fresh bounded testnet rehearsal and persist a sanitized evidence report.
 
     ``capital_loop`` runs a hybrid Venice world (docs/architecture/
     capital-loop-rehearsal.md): ``to_venice`` stays open and spends real Base mainnet
-    USDC, every other treasury route and x402 purchase stays denied.
+    USDC, every other treasury route and x402 purchase stays denied. It then also
+    guarantees: the reserve is held by this run alone on this host from before its
+    launch check until the run returns (``ReserveLock``, in ``capital_loop_lock_dir``,
+    by default the operator's ``~/.factorylab/capital-loop``); the run is at least
+    ``SETTLEMENT_RATIO`` conversion settlement horizons long; and a run that ends with a
+    top-up still submitted says so in ``report["capital_loop_outstanding"]``, on stdout
+    and on stderr, naming ``scripts/capital_loop_outstanding.py``.
     """
     if type(duration_ns) is not int or duration_ns <= 0:
         raise ValueError("duration_ns must be positive integer")
+    if capital_loop and out is None:
+        # Real money needs a diary on disk: the next launch reads it to refuse while
+        # anything this run authorized could still settle.
+        raise ValueError("a capital-loop rehearsal requires an output directory")
     if target_ticks is not None and (type(target_ticks) is not int or target_ticks <= 0):
         raise ValueError("target_ticks must be a positive integer")
     if type(cap_micro) is not int or cap_micro <= 0:
@@ -783,6 +794,7 @@ def run_rehearsal(
         output_dir.mkdir(parents=True, exist_ok=False)
         report_path = output_dir / "report.json"
     admission = Admission(cap_micro, max_calls, recover_provider_failures=True)
+    lock = None
     try:
         base = load_manifest(str(world))
         manifest = effective_manifest(
@@ -798,15 +810,36 @@ def run_rehearsal(
             # reserve, read keylessly now, may lose at most max_venice_total_usd before
             # reaching it, and no earlier run may have left an authorization that can
             # still settle (a crashed world's last one stays valid for its timeout).
-            from factorylab.runtime.capital_loop import launch_check
+            from factorylab.runtime.capital_loop import (
+                ReserveLock,
+                launch_check,
+                settlement_bound,
+            )
 
-            runs = tuple(previous_runs) + _sibling_runs(output_dir)
-            launch = launch_check(manifest, previous_runs=runs,
-                                  transport=capital_loop_transport or _http_request())
+            # Taken before the check and held until the run returns: the floor check
+            # reads the chain, which cannot see another run's signed-but-unsettled
+            # authorization, so two runs on one reserve must never overlap.
+            lock = ReserveLock(manifest.treasury.reserve_address,
+                               lock_dir=capital_loop_lock_dir)
+            transport = capital_loop_transport or _http_request()
+            run_ns = (duration_ns if target_ticks is None
+                      else min(duration_ns, target_ticks * manifest.tick_interval_ns))
+            settlement = settlement_bound(run_ns, manifest.tick_interval_ns,
+                                          transport=transport)
+            # The reserve's last holder is read wherever it ran, not only beside --out:
+            # it is the one earlier run whose authorization can still be live.
+            last = lock.last_run()
+            runs = tuple(previous_runs) + _sibling_runs(output_dir) + (
+                (last,) if last is not None else ())
+            launch = launch_check(manifest, previous_runs=runs, transport=transport)
+            launch = {**launch, "settlement": settlement, "reserve_lock": str(lock.path),
+                      "last_run": None if last is None else str(last)}
             print(json.dumps({"capital_loop_launch_check": {
                 k: v for k, v in launch.items() if k != "previous_runs"}}), flush=True)
         source_path, frozen_hash = source_hash(Path(source_root) if source_root else None)
     except Exception as exc:
+        if lock is not None:
+            lock.close()
         report = {"status": "failed", "error": _safe_exception(exc),
                   "cost": admission.report(), "denied_rails": _denied_rails(capital_loop)}
         refusal = getattr(exc, "reason", None)
@@ -822,6 +855,8 @@ def run_rehearsal(
     planned_ticks = target_ticks or max(1, duration_ns // manifest.tick_interval_ns)
     minimum_ticks = minimum_ticks or manifest.evaluation.consequence_backstop_ticks
     if minimum_ticks > planned_ticks:
+        if lock is not None:
+            lock.close()
         raise ValueError("minimum_ticks exceeds the rehearsal's planned tick ceiling")
     before_reasoning = {model.id: dict(model.reasoning) for model in base.models}
     after_reasoning = {model.id: dict(model.reasoning) for model in manifest.models}
@@ -941,6 +976,9 @@ def run_rehearsal(
             # Only the conversion is admitted; the CCTP exits and class moves are
             # refused before signing, exactly as the denied rail refuses them.
             runtime.treasury.rail.target = CapitalLoopRail(runtime.treasury.rail.target)
+            # This run's diary exists now and nothing has signed yet: from here on the
+            # next launch on this reserve reads it, wherever its --out is.
+            lock.record_run(output_dir)
         else:
             # Bootstrap gives an unconfigured rail for a manifest without a reserve, but
             # that rail still supports the venue's spot/perps class move. Replace its
@@ -998,10 +1036,57 @@ def run_rehearsal(
     finally:
         if observer is not None:
             observer.detach()
+        if capital_loop and runtime is not None:
+            _report_outstanding(report, runtime, output_dir)
         report["cost"] = admission.report()
         if report_path is not None:
             report_path.write_text(json.dumps(report, indent=2, default=str) + "\n")
+        if lock is not None:
+            lock.close()
     return report
+
+
+def _report_outstanding(report: dict, runtime: Any, output_dir: Path | None) -> None:
+    """Guarantees a run that ends with an unbooked conversion says so, and never raises.
+
+    A top-up still submitted at the end (its authorization may settle after the world
+    is dead, or settled with its credit unbooked), a shadow send still pending, or a
+    diary that cannot be read is written to ``report["capital_loop_outstanding"]`` and
+    printed on stdout and stderr with the next step, ``scripts/
+    capital_loop_outstanding.py`` on this run's directory. Nothing is signed or retried.
+    """
+    import sys
+
+    from factorylab.runtime.capital_loop import (
+        OUTSTANDING_SCRIPT,
+        journaled_references,
+        submitted_top_ups,
+    )
+
+    try:
+        items = runtime.ledger._recovery_items()
+        top_ups, shadows, unreadable = submitted_top_ups(items), journaled_references(
+            items)[1], None
+    except Exception as exc:  # noqa: BLE001 - an unread diary is reported, never guessed
+        top_ups, shadows, unreadable = None, None, type(exc).__name__
+    section = report.setdefault("capital_loop", {})
+    if not top_ups and not shadows and unreadable is None:
+        section["outstanding_at_end"] = {"top_ups_submitted": [], "shadow_sends_pending": []}
+        return
+    command = f"uv run python {OUTSTANDING_SCRIPT} {output_dir}"
+    outstanding = {
+        "warning": ("the run ended with a Venice conversion unbooked: a top-up "
+                    "authorization may still settle on Base mainnet after the world died"
+                    if top_ups or unreadable else
+                    "the run ended with a shadow send unconfirmed (testnet money)"),
+        "top_ups_submitted": top_ups, "shadow_sends_pending": shadows,
+        "diary_unreadable": unreadable, "next_step": command,
+        "runbook": "docs/architecture/capital-loop-rehearsal.md, After the run",
+    }
+    section["outstanding_at_end"] = report["capital_loop_outstanding"] = outstanding
+    print(json.dumps({"capital_loop_outstanding": outstanding}, default=str), flush=True)
+    print(f"CAPITAL LOOP OUTSTANDING: {outstanding['warning']}. Before touching the reserve "
+          f"or relaunching, run: {command}", file=sys.stderr, flush=True)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1039,9 +1124,11 @@ def main(argv: list[str] | None = None) -> int:
                            minimum_ticks=args.minimum_ticks,
                            capital_loop=args.capital_loop,
                            previous_runs=tuple(args.previous_run))
-    print(json.dumps({"status": report["status"], "out": str(args.out),
-                      "cost": report["cost"],
-                      "behavioral_screen": report.get("behavioral_screen")}, indent=2))
+    summary = {"status": report["status"], "out": str(args.out), "cost": report["cost"],
+               "behavioral_screen": report.get("behavioral_screen")}
+    if "capital_loop_outstanding" in report:
+        summary["capital_loop_outstanding"] = report["capital_loop_outstanding"]
+    print(json.dumps(summary, indent=2, default=str))
     return 0 if report["status"] == "completed" else 1
 
 

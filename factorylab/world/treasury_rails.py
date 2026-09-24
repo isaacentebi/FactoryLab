@@ -833,6 +833,10 @@ class LiveRail(ClassTransferRail):
         ref = state["reference"]
         auth = ref["authorization"]
         base = self._venice_base()
+        # Rescanned from ``start_block`` every poll on purpose, with no cursor: a clean
+        # poll persists nothing (only a Pending carries a cursor, and a pending step is
+        # never tested for expiry), and a cursor would trust one RPC's empty answer for
+        # a range forever, where the rescan asks again and heals a lagging node.
         topics = [event_topic("AuthorizationUsed(address,bytes32)"),
                   "0x" + word_address(self.reserve_address).hex(), auth["nonce"]]
         for log in base.logs(base.chain.usdc, topics, ref["start_block"]):

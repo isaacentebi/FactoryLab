@@ -8,6 +8,7 @@ confirms only when both have. These tests hold the order, the failure matrix and
 accounting on scripted custodians and on the live rail's own code against fakes.
 """
 
+import base64
 import hashlib
 import json
 from copy import deepcopy
@@ -24,7 +25,15 @@ from factorylab.kernel.wallet import Wallet
 from factorylab.runtime.live import Reconciler
 from factorylab.runtime.resume import RecoveryJournal, encode
 from factorylab.runtime.worlds import TreasurySpec, load_manifest
-from factorylab.world.evm import BASE, BASE_SEPOLIA, Pending, RailError, event_topic, word_address
+from factorylab.world.evm import (
+    BASE,
+    BASE_SEPOLIA,
+    EVM,
+    Pending,
+    RailError,
+    event_topic,
+    word_address,
+)
 from factorylab.world.exchange import FakeExchange
 from factorylab.world.treasury import (
     CREDIT_SHORT,
@@ -37,7 +46,7 @@ from factorylab.world.treasury import (
     FakeTreasury,
 )
 from factorylab.world.treasury_rails import HybridRail
-from factorylab.world.x402 import HTTPResponse, X402Error
+from factorylab.world.x402 import VENICE_URL, HTTPResponse, X402Error
 from tests.world.test_treasury_rails import Chain, Info
 from tests.world.test_x402 import quote as quote_fixture
 
@@ -384,13 +393,38 @@ PAYEE = "0x2670b922ef37c7df47158725c0cc407b5382293f"
 
 
 class Final(Chain):
-    """A Base whose finalized head and scan coverage the test sets."""
+    """A Base whose finalized head and scan coverage the test sets, and which answers
+    honestly: a scan returns only the asked contract's logs whose topics match, inside
+    ``[start, min(finalized, scanned_to)]``; a receipt is returned only for its own
+    transaction; and whether the tranche moved is read from the receipt's own
+    ``Transfer`` logs by ``EVM.transferred``, never assumed."""
+
+    transferred = EVM.transferred
 
     def __init__(self, config):
         super().__init__(config)
         self.final = {"number": hex(500), "timestamp": hex(10_000)}
+        self.scanned_to = 500  # the scan reached the finalized head unless a test says not
         self.authorization_used = False  # USDC's authorizationState(reserve, nonce)
         self.state_reads = []
+        self.receipts = {}
+
+    def scan(self, contract, topics, start, *, max_pages=None):
+        self.scans.append((start, max_pages))
+        end = min(int(self.final["number"], 16), self.scanned_to)
+        return [log for log in self.log_rows
+                if log["address"].lower() == contract.lower()
+                and start <= int(log["blockNumber"], 16) <= end
+                and len(log["topics"]) >= len(topics)
+                and all(want is None or want.lower() == got.lower()
+                        for want, got in zip(topics, log["topics"], strict=False))
+                ], self.scanned_to
+
+    def logs(self, contract, topics, start):
+        return self.scan(contract, topics, start)[0]
+
+    def proof(self, txhash):
+        return self.receipts.get(txhash)
 
     def call(self, method, args):
         if method == "eth_getBlockByNumber" and args[0] == "finalized":
@@ -536,7 +570,7 @@ def test_the_top_up_is_proven_on_base_mainnet_not_on_the_testnet_reserve_chain(m
     rail.base.log_rows, rail.base.proved = [log], receipt  # on Sepolia: must not count
     assert rail.poll("venice_top_up", state) is None
     rail.base.log_rows, rail.base.proved = [], None
-    rail.venice_base.log_rows, rail.venice_base.proved = [log], receipt
+    debit(rail, reference)
     rail._x402.credit = 6_000_000
     confirmed = rail.poll("venice_top_up", state)
     assert confirmed["confirmed"] and confirmed["evidence"]["venice_credit_micro"] == FIVE
@@ -614,15 +648,22 @@ def top_up_state(rail):
     return state
 
 
-def debit(rail, reference):
-    """A finalized AuthorizationUsed debit of ``reference`` on Base mainnet."""
-    topics = [event_topic("AuthorizationUsed(address,bytes32)"),
-              "0x" + word_address(rail.reserve_address).hex(),
-              reference["authorization"]["nonce"]]
-    rail.venice_base.log_rows = [{"address": BASE.usdc, "topics": topics,
-                                  "transactionHash": "0x" + "12" * 32}]
-    rail.venice_base.proved = {"status": "0x1", "blockHash": "0x" + "34" * 32,
-                               "logs": [{"address": BASE.usdc, "topics": topics}]}
+def debit(rail, reference, *, authorizer=None, sender=None, payee=PAYEE, amount=FIVE,
+          block=200, tx="0x" + "12" * 32):
+    """A finalized debit as USDC's transferWithAuthorization emits it: AuthorizationUsed
+    for (authorizer, nonce), then the Transfer of ``amount`` from ``sender`` to ``payee``.
+    Each defaults to the right one; a test names the one it gets wrong."""
+    authorizer = authorizer or rail.reserve_address
+    used = [event_topic("AuthorizationUsed(address,bytes32)"),
+            "0x" + word_address(authorizer).hex(), reference["authorization"]["nonce"]]
+    moved = {"address": BASE.usdc, "data": "0x" + amount.to_bytes(32).hex(), "topics": [
+        event_topic("Transfer(address,address,uint256)"),
+        "0x" + word_address(sender or authorizer).hex(), "0x" + word_address(payee).hex()]}
+    rail.venice_base.log_rows = [{"address": BASE.usdc, "topics": used,
+                                  "transactionHash": tx, "blockNumber": hex(block)}]
+    rail.venice_base.receipts = {tx: {"status": "0x1", "blockHash": "0x" + "34" * 32,
+                                      "logs": [{"address": BASE.usdc, "topics": used,
+                                                "data": "0x"}, moved]}}
 
 
 def ordinary_rail(monkeypatch):
@@ -877,3 +918,335 @@ def test_6_a_shadow_send_executing_late_is_matched_inside_its_nonce_window(monke
     assert rail.poll("shadow_send", state)["confirmed"]
     rail.exchange._info.updates = [{**late, "time": 1_700_000_000_000 + 4 * 86_400_000}]
     assert rail.poll("shadow_send", state) is None  # past the window it never executed
+
+
+# ---- Wave 10: only our own debit is booked, and it is booked once
+
+
+@pytest.mark.parametrize("wrong", ["payee", "amount", "authorizer", "sender", "unfinalized",
+                                   "before_the_authorization"])
+def test_a_debit_that_is_not_the_tranche_to_the_payee_is_never_booked(monkeypatch, wrong):
+    rail = live(monkeypatch)
+    state = top_up_state(rail)  # start_block 99, finalized head 500
+    stranger = Account.create().address
+    debit(rail, state["reference"], **{
+        "payee": {"payee": stranger}, "amount": {"amount": FIVE - 1},
+        "authorizer": {"authorizer": stranger}, "sender": {"sender": stranger},
+        "unfinalized": {"block": 501}, "before_the_authorization": {"block": 98}}[wrong])
+    rail._x402.credit = 6_000_000
+    assert rail.poll("venice_top_up", state) is None
+    debit(rail, state["reference"], tx="0x" + "56" * 32)  # the one that is ours
+    confirmed = rail.poll("venice_top_up", state)
+    assert confirmed["confirmed"] and confirmed["evidence"]["tx_hash"] == "0x" + "56" * 32
+
+
+class BaseWire:
+    """Base mainnet as its public JSON-RPC answers, and honest about it.
+
+    Logs are returned only for the asked contract, topics and block range; a receipt
+    only for a mined transaction; ``authorizationState`` as of the asked block;
+    ``finalized`` trails the head by ``lag`` blocks. ``settle`` is what USDC's
+    ``transferWithAuthorization`` does, and nothing more: it refuses a used nonce, an
+    expired authorization and an unfunded payer, then emits ``AuthorizationUsed`` and
+    the ``Transfer``. ``debit`` emits any pair a test wants, right or wrong.
+    """
+
+    USED = "AuthorizationUsed(address,bytes32)"
+    MOVED = "Transfer(address,address,uint256)"
+
+    def __init__(self, reserve, micro):
+        import time
+
+        self.head, self.lag, self.t0 = 1_000, 8, int(time.time())
+        self.balances = {reserve.lower(): micro}
+        self.receipts, self.used, self.methods = {}, {}, []
+
+    def block(self, number):
+        return {"number": hex(number), "hash": "0x" + number.to_bytes(32).hex(),
+                "timestamp": hex(self.t0 + 2 * (number - 1_000))} if number <= self.head else None
+
+    def advance(self, blocks):
+        self.head += blocks
+
+    def debit(self, authorizer, nonce, payee, micro, *, sender=None):
+        sender = (sender or authorizer).lower()
+        self.head += 1
+        tx = "0x" + hashlib.sha256(f"{self.head}:{nonce}".encode()).hexdigest()
+        where = {"blockNumber": hex(self.head), "blockHash": self.block(self.head)["hash"],
+                 "transactionHash": tx, "removed": False}
+        logs = [{"address": BASE.usdc.lower(), "data": "0x", **where, "topics": [
+                    event_topic(self.USED), "0x" + word_address(authorizer).hex(), nonce]},
+                {"address": BASE.usdc.lower(), "data": "0x" + micro.to_bytes(32).hex(),
+                 **where, "topics": [event_topic(self.MOVED), "0x" + word_address(sender).hex(),
+                                     "0x" + word_address(payee).hex()]}]
+        self.used[(authorizer.lower(), nonce.lower())] = self.head
+        self.balances[sender] = self.balances.get(sender, 0) - micro
+        self.balances[payee.lower()] = self.balances.get(payee.lower(), 0) + micro
+        self.receipts[tx] = {"transactionHash": tx, "status": "0x1", "logs": logs, **where}
+        return tx
+
+    def settle(self, authorization):
+        payer, nonce = authorization["from"].lower(), authorization["nonce"].lower()
+        assert (payer, nonce) not in self.used, "EIP-3009: authorization is used"
+        assert int(self.block(self.head)["timestamp"], 16) + 2 < int(
+            authorization["validBefore"]), "EIP-3009: authorization is expired"
+        assert self.balances.get(payer, 0) >= int(authorization["value"])
+        return self.debit(authorization["from"], authorization["nonce"], authorization["to"],
+                          int(authorization["value"]))
+
+    def __call__(self, payload):
+        method, params = payload["method"], payload["params"]
+        self.methods.append(method)
+        tags = {"latest": self.head, "finalized": self.head - self.lag}
+        if method == "eth_chainId":
+            return hex(BASE.id)
+        if method == "eth_blockNumber":
+            return hex(self.head)
+        if method == "eth_getBlockByNumber":
+            return self.block(tags.get(params[0]) or int(params[0], 16))
+        if method == "eth_call":
+            call, tag = params
+            assert call["to"].lower() == BASE.usdc.lower()
+            data, at = call["data"], tags.get(tag) or int(tag, 16)
+            if data.startswith("0x70a08231"):  # balanceOf(address)
+                return hex(self.balances.get("0x" + data[-40:].lower(), 0))
+            used = self.used.get(("0x" + data[34:74].lower(), "0x" + data[74:138].lower()))
+            return "0x" + ("1" if used is not None and used <= at else "0").rjust(64, "0")
+        if method == "eth_getLogs":
+            query = params[0]
+            low, high = int(query["fromBlock"], 16), int(query["toBlock"], 16)
+            return [deepcopy(log) for receipt in self.receipts.values()
+                    for log in receipt["logs"]
+                    if log["address"] == query["address"].lower()
+                    and low <= int(log["blockNumber"], 16) <= high
+                    and all(want is None or want.lower() == got.lower()
+                            for want, got in zip(query["topics"], log["topics"], strict=False))]
+        if method == "eth_getTransactionReceipt":
+            return deepcopy(self.receipts.get(params[0]))
+        raise AssertionError(f"unexpected Base RPC {method}")
+
+
+class VeniceWire:
+    """Venice's x402 routes as they answer over HTTP, checking every signature they get.
+
+    A balance read or a paid top-up must carry a SIWE sign-in that recovers to the
+    address it names; a payment must be the quote's own requirements and an EIP-712
+    authorization signed by its ``from``. The facilitator then settles it on Base
+    (``settle``, which a test may replace with a wrong settlement) and credits the payer.
+    """
+
+    def __init__(self, chain, credit):
+        self.chain, self.settle = chain, chain.settle
+        self.quote = quote_fixture.__wrapped__()
+        self.credit, self.paid = dict(credit), []
+
+    def signed_in(self, headers, url):
+        from eth_account.messages import encode_defunct
+
+        sign_in = json.loads(base64.b64decode(headers["X-Sign-In-With-X"]))
+        signer = Account.recover_message(encode_defunct(text=sign_in["message"]),
+                                         signature=sign_in["signature"])
+        assert signer == sign_in["address"] and f"URI: {url}\n" in sign_in["message"]
+        return signer
+
+    def __call__(self, method, url, payload, headers):
+        from eth_account.messages import encode_typed_data
+
+        from factorylab.world.x402 import MAX_AUTHORIZATION_S, authorization_typed_data
+
+        path = url.removeprefix(VENICE_URL)
+        if method == "GET" and path.startswith("/x402/balance/"):
+            who = self.signed_in(headers, url)
+            assert path == f"/x402/balance/{who}"
+            return HTTPResponse(200, {"data": {"balanceUsd": str(
+                Decimal(self.credit.get(who.lower(), 0)) / 1_000_000)}})
+        assert (method, path) == ("POST", "/x402/top-up")
+        if "X-402-Payment" not in headers:
+            return HTTPResponse(402, deepcopy(self.quote))  # the unpaid quote
+        payer = self.signed_in(headers, url)
+        envelope = json.loads(base64.b64decode(headers["X-402-Payment"]))
+        accepted, auth = envelope["accepted"], envelope["payload"]["authorization"]
+        assert accepted == self.quote["accepts"][0] and auth["from"] == payer
+        window = min(accepted["maxTimeoutSeconds"], MAX_AUTHORIZATION_S)
+        typed = authorization_typed_data(accepted, payer, now=int(auth["validBefore"]) - window,
+                                         nonce=bytes.fromhex(auth["nonce"][2:]))
+        assert {k: str(v) if k in ("value", "validAfter", "validBefore") else v
+                for k, v in typed["message"].items()} == auth
+        assert Account.recover_message(encode_typed_data(full_message=typed),
+                                       signature=envelope["payload"]["signature"]) == payer
+        tx = self.settle(auth)
+        self.paid.append(tx)
+        self.credit[payer.lower()] = self.credit.get(payer.lower(), 0) + int(auth["value"])
+        receipt = {"success": True, "transaction": tx, "network": "eip155:8453", "payer": payer}
+        return HTTPResponse(200, {}, {"payment-response": base64.b64encode(
+            json.dumps(receipt).encode()).decode()})
+
+
+class VenueWire:
+    """Hyperliquid testnet's /info and /exchange as the SDK posts them over HTTP.
+
+    A ``usdSend`` executes only when its EIP-712 signature recovers to the main
+    account, and once per nonce; its ledger row is the ``send`` shape with the nonce.
+    """
+
+    def __init__(self, main, sink):
+        self.main, self.sink = main, sink
+        self.rows, self.executed, self.withdrawable = [], set(), Decimal("50")
+
+    def post(self, api, path, payload):
+        from hyperliquid.utils.constants import TESTNET_API_URL
+
+        assert api.base_url == TESTNET_API_URL
+        if path == "/exchange":
+            action, nonce = payload["action"], payload["nonce"]
+            assert action["type"] == "usdSend" and payload["vaultAddress"] is None
+            assert recover_user_from_user_signed_action(
+                dict(action), payload["signature"], USD_SEND_SIGN_TYPES,
+                "HyperliquidTransaction:UsdSend", False) == self.main
+            if nonce not in self.executed:  # a venue nonce executes once
+                self.executed.add(nonce)
+                self.withdrawable -= Decimal(action["amount"])
+                self.rows.append({"time": nonce + 700, "hash": "0x" + hashlib.sha256(
+                    str(nonce).encode()).hexdigest(), "delta": {
+                        "type": "send", "user": self.main.lower(),
+                        "destination": action["destination"].lower(), "sourceDex": "",
+                        "destinationDex": "", "token": "USDC", "amount": action["amount"],
+                        "usdcValue": action["amount"], "fee": "0.0", "nonce": nonce}})
+            return {"status": "ok", "response": {"type": "default"}}
+        assert path == "/info"
+        kind = payload["type"]
+        if kind == "meta":
+            return {"universe": [{"name": "BTC", "szDecimals": 5},
+                                 {"name": "ETH", "szDecimals": 4}]}
+        if kind == "spotMeta":
+            return {"tokens": [{"name": "USDC", "index": 0, "szDecimals": 8}], "universe": []}
+        if kind == "userRole":
+            known = (self.main.lower(), self.sink.lower())
+            return {"role": "user" if payload["user"].lower() in known else "missing"}
+        if kind == "clearinghouseState":
+            return {"marginSummary": {"accountValue": str(self.withdrawable)},
+                    "withdrawable": str(self.withdrawable)}
+        if kind == "userNonFundingLedgerUpdates":
+            return [deepcopy(r) for r in self.rows if r["time"] >= payload["startTime"]]
+        raise AssertionError(f"unexpected venue info {kind}")
+
+
+def wired(monkeypatch):
+    """The real HybridRail, Treasury, x402 client and Hyperliquid SDK, faked only where
+    bytes leave the process: the HTTP/JSON-RPC transport and the SDK's HTTP post."""
+    from hyperliquid.api import API
+
+    from factorylab.world.exchange import HyperliquidExchange
+    from factorylab.world.treasury import Treasury
+
+    main, reserve = Account.create(), Account.create()  # throwaway keys, never funded
+    monkeypatch.delenv("VENICE_API_KEY", raising=False)
+    monkeypatch.setenv("HL_PRIVATE_KEY", main.key.hex())
+    monkeypatch.setenv("RESERVE_PRIVATE_KEY", reserve.key.hex())
+    chain = BaseWire(reserve.address, 50_000_000)
+    venice = VeniceWire(chain, {reserve.address.lower(): 1_000_000})
+    venue = VenueWire(main.address, SINK)
+    monkeypatch.setattr(API, "post", lambda api, path, payload=None: venue.post(
+        api, path, payload))
+
+    def transport(method, url, payload, headers):
+        if url.startswith(VENICE_URL):
+            return venice(method, url, payload, headers)
+        assert (method, url) == ("POST", BASE.rpc), url  # no other network exists
+        return HTTPResponse(200, {"jsonrpc": "2.0", "id": payload["id"],
+                                  "result": chain(payload)})
+
+    spec = TreasurySpec(reserve_address=reserve.address, venice_network="base-mainnet",
+                        venice_shadow_sink=SINK, venice_pay_to=PAYEE,
+                        max_venice_total_micro=2 * FIVE, venice_reserve_floor_micro=0)
+    rail = HybridRail(HyperliquidExchange(mainnet=False), spec, transport=transport)
+    monkeypatch.delenv("RESERVE_PRIVATE_KEY")  # the runner clears it once the rail has it
+    rail.metered_usage_since = lambda since_ns: 0
+    ledger = Ledger(clock_ns=lambda: 0)
+    wallet = Wallet(100_000_000, ledger, clock_ns=lambda: 0)
+    treasury = Treasury(ledger, wallet, rail, fee_ceiling_micro=0,
+                        max_venice_total_micro=2 * FIVE)
+    wallet.bind_pots(treasury.pots)
+    treasury.open_window(1)
+    return SimpleNamespace(treasury=treasury, wallet=wallet, ledger=ledger, rail=rail,
+                           chain=chain, venice=venice, venue=venue, reserve=reserve.address)
+
+
+def test_both_legs_confirm_end_to_end_through_the_real_rail_and_book_once(monkeypatch):
+    import time
+
+    w = wired(monkeypatch)
+    submitted = w.treasury.transfer("to_venice", "5", handle="seat", now_ns=time.time_ns())
+    assert submitted["status"] == "submitted"
+    assert len(w.venue.rows) == 1 and w.venice.paid == []  # the shadow leg alone, first
+    assert w.treasury.tick(time.time_ns()) == []  # shadow ledgered, then the top-up submitted
+    assert len(w.venice.paid) == 1 and len(w.chain.used) == 1
+    state = w.treasury.state
+    assert state["steps"][state["index"]] == "venice_top_up"
+    assert state["reference"]["authorization"]["to"].lower() == PAYEE  # the pinned payee
+    assert state["route_data"]["submission"]["transaction"] == w.venice.paid[0]
+    for _ in range(3):  # the debit is mined but not finalized: nothing is booked yet
+        assert w.treasury.tick(time.time_ns()) == []
+    w.chain.advance(w.chain.lag)
+    confirmed = w.treasury.tick(time.time_ns())
+    assert [c["status"] for c in confirmed] == ["confirmed"]
+    assert confirmed[0]["tx_refs"][-1]["tx_hash"] == w.venice.paid[0]
+    for _ in range(3):
+        assert w.treasury.tick(time.time_ns()) == []
+    assert len(kinds(w.ledger, "treasury.confirmed")) == 1
+    financing = kinds(w.ledger, "treasury.financing")
+    assert [(f["credit_micro"], f["source"], f["paid_from"]) for f in financing] == [
+        (FIVE, "venue_perps", "base_mainnet_reserve")]
+    assert len(kinds(w.ledger, "treasury.venice_authorized")) == 1
+    assert w.chain.balances[w.reserve.lower()] == 45_000_000  # $5 of real USDC, once
+    assert w.chain.balances[PAYEE] == FIVE
+    assert w.venue.withdrawable == Decimal("45") and len(w.venue.rows) == 1
+    assert w.wallet.balance == 100_000_000 + FIVE and w.wallet.check_conservation()
+    evidence = confirmed[0]["tx_refs"][-1]
+    assert evidence["credit_shortfall_micro"] == 0 and evidence["observed_micro"] == 6_000_000
+    assert set(w.chain.methods) <= {"eth_chainId", "eth_blockNumber", "eth_getBlockByNumber",
+                                    "eth_call", "eth_getLogs", "eth_getTransactionReceipt"}
+
+
+@pytest.mark.parametrize("wrong", ["payee", "amount", "authorizer", "sender"])
+def test_a_facilitator_settling_anything_but_our_tranche_books_nothing(monkeypatch, wrong):
+    import time
+
+    w = wired(monkeypatch)
+    stranger = Account.create().address
+    w.chain.balances[stranger.lower()] = 50_000_000
+
+    def settle(auth):  # Venice acknowledges, and the chain shows something else
+        payee, micro = auth["to"], int(auth["value"])
+        authorizer, sender = auth["from"], None
+        if wrong == "payee":
+            payee = stranger
+        elif wrong == "amount":
+            micro -= 1
+        elif wrong == "authorizer":
+            authorizer = stranger
+        else:
+            sender = stranger
+        return w.chain.debit(authorizer, auth["nonce"], payee, micro, sender=sender)
+
+    w.venice.settle = settle
+    w.treasury.transfer("to_venice", "5", handle="seat", now_ns=time.time_ns())
+    w.treasury.tick(time.time_ns())
+    assert len(w.venice.paid) == 1
+    w.chain.advance(w.chain.lag + 1)  # the wrong debit is finalized
+    for _ in range(3):
+        assert w.treasury.tick(time.time_ns()) == []
+    assert w.treasury.state["status"] == "submitted"  # principal held, nothing booked
+    assert not kinds(w.ledger, "treasury.confirmed")
+    assert not kinds(w.ledger, "treasury.financing")
+    assert w.wallet.balance == 100_000_000
+    # Past validBefore on finalized Base: an authorization the chain shows used is
+    # never abandoned (real money left; an operator reads it), and one it shows unused
+    # strands recoverably, its shadow leg paid and its hold kept.
+    w.chain.advance(400)
+    w.treasury.tick(time.time_ns())
+    assert not kinds(w.ledger, "treasury.financing")
+    if wrong == "authorizer":
+        assert w.treasury.state["status"] == "stranded" and w.treasury.state["recoverable"]
+    else:
+        assert w.treasury.state["status"] == "submitted"

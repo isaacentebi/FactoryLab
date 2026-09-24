@@ -167,20 +167,103 @@ covered every block up to it. The runtime clock is never consulted.
 
        uv run python scripts/edition4_rehearsal.py --world worlds/edition6-capital-loop.toml \
          --capital-loop --source-root "$PWD" --out work/capital-loop/<run> \
-         --duration 30m --cap-usd 5
+         --duration 90m --cap-usd 5
 
    (`--source-root` must name the checkout whose `factorylab` is imported; `--cap-usd`
-   bounds model spend only, not conversions.)
+   bounds model spend only, not conversions. A longer run spends more model money
+   under the same cap.)
 
    `report.json` carries a `capital_loop` section naming the network, sink, window cap,
    total cap, floor, payee and reserve, and the launch check's numbers. Before building
-   anything the runner also reads every sibling run directory of `--out` that kept a
-   diary (and each `--previous-run DIR`) and refuses while any of their top-up
-   authorizations could still settle; a directory whose ledger key file is missing is
-   refused too, since it cannot be read.
+   anything the runner, in this order:
+
+   1. takes the reserve's lock (see "One run per reserve") and refuses
+      `capital_loop_reserve_locked` while another capital-loop run holds it;
+   2. refuses a run too short for a conversion to settle inside it (see "How long a run
+      must be"), `capital_loop_duration_below_settlement_bound`;
+   3. reads the reserve and refuses unless reserve − floor ≤ `max_venice_total_usd`;
+   4. reads every sibling run directory of `--out` that kept a diary, each
+      `--previous-run DIR`, and the reserve's last recorded run wherever it is, and
+      refuses while any of their top-up authorizations could still settle. A run whose
+      ledger key file is missing, or whose diary does not read whole under its own key
+      (`run_ledger_unreadable`: another run's key in a copied or restored folder, a
+      corrupted, removed or reordered line), is refused too, since what cannot be read
+      may be a live authorization. Only a torn last line, a crash mid-append, is
+      skipped.
+
+### How long a run must be
+
+A conversion settles, or provably dies, only once a *finalized* Base block is past its
+debit or past its `validBefore`, and the rail sees that on its next tick. So one
+conversion's settlement horizon is the authorization's validity window (the quote's
+`maxTimeoutSeconds`, capped at 600 s exactly as the signer caps it) plus Base's
+finality lag plus one tick. The run commands the conversion, and AGENTS.md rule 12
+(essay II, IV.c) asks an inner loop to settle at least 3× faster than the outer loop
+that commands it, so the runner refuses a run shorter than **three** horizons. Its
+length is `--duration`, or `--ticks` × the tick when that is shorter.
+
+Both inputs are read at launch, keylessly: the window from Venice's unpaid quote (a
+POST with no payment and no credential; when it cannot be read the 600 s cap is used,
+which only lengthens the bound), and the lag as the latest Base block's timestamp less
+the finalized block's (unreadable, the launch is refused, `finality_lag_unreadable`).
+With the numbers of 23 September 2026 (a 300 s window, a lag of about 16 minutes, the
+rehearsal's 10 s tick) the bound is 3 × 1,270 s, about 64 minutes; `--duration 90m`
+leaves room for the lag to grow. The numbers are printed in
+`capital_loop_launch_check.settlement` and kept in the report.
+
+No length makes a late conversion impossible: a top-up submitted in roughly the last
+horizon of a run still ends `submitted`. The bound makes that the tail, not the rule,
+and the end of the run says so (see "After the run").
+
+### One run per reserve
+
+The floor check reads the chain, and the chain cannot see an authorization that was
+signed but has not settled; each run also counts only its own authorizations. Two runs
+on one reserve started close together could therefore each authorize past the floor.
+So a capital-loop run holds a lock on its reserve from before its launch check until
+it returns:
+
+- The lock is `~/.factorylab/capital-loop/<reserve address, lowercase>.lock`, an
+  exclusive `flock` on a close-on-exec descriptor (the kernel ledger's own writer-lock
+  pattern). The OS releases it when the run returns or its process dies, however it
+  dies, so a crash never wedges it and there is no pid file to clear by hand. It is
+  keyed by the reserve and the operator account, not by `--out` or the checkout, so
+  every worktree resolves the same lock.
+- Beside it, `<reserve>.last-run.json` names the one run that last held the reserve. A
+  run records itself once its checks passed and its diary exists, before anything can
+  sign; the next launch reads that run wherever its directory is.
+
+Reading only the sibling directories of `--out` is **not enough** on its own, even
+with the lock: the lock ends with its run, and a run can end (or die) with an
+authorization still live for up to its validity window plus finality. A later run
+launched with `--out` in another directory would not see it, and the $5 it could still
+settle is invisible to the floor. The last-run record closes that: every earlier run
+was proven settled or dead by the launch after it (a dead EIP-3009 authorization never
+revives), so the last holder is the only earlier run that can still be live, and it is
+always read. Siblings and `--previous-run` are still read too.
+
+What the lock does not cover: another machine, or another operator account (another
+home directory), on the same reserve; `factorylab reserve` top-ups made by hand; and
+runs launched before this lock existed. The on-chain floor is the only bound across
+those. Do not delete `~/.factorylab/capital-loop`: the record is what finds the last
+run. If the recorded run's directory is gone, every launch refuses with
+`run_ledger_missing` naming it. Only after its validity window plus the finality lag
+have passed since that run died (its authorizations are then settled or dead) and the
+reserve's balance has been read, remove `<reserve>.last-run.json` by hand.
 
 ## After the run
 
+- **If the run printed `CAPITAL LOOP OUTSTANDING`** (on stderr, and as
+  `capital_loop_outstanding` on stdout, in the final summary and in `report.json`), it
+  ended with a conversion unbooked: a top-up still `submitted` (its authorization may
+  settle after the world died, or settled with its credit short), or a shadow send
+  still pending. Its `top_ups_submitted` names each transfer, nonce and `validBefore`.
+  Do not touch the reserve or relaunch; run its `next_step`,
+
+      uv run python scripts/capital_loop_outstanding.py work/capital-loop/<run>
+
+  and follow "After a crash" from step 2. A settlement after the world died is never
+  booked by it; the next launch refuses until that authorization settled or died.
 - `events.json`: every `treasury.confirmed` with `direction: to_venice` has a matching
   `treasury.financing` (`source: venue_perps`, `paid_from: base_mainnet_reserve`) and a
   `financing.classified` naming the seat and what went to its entitlement.
@@ -210,9 +293,12 @@ covered every block up to it. The runtime clock is never consulted.
 
 A killed or crashed capital-loop world is not resumed. Instead:
 
-1. **Wait 10 minutes.** A crashed world's last top-up authorization stays valid on
-   chain until its `validBefore` (at most the quote's `maxTimeoutSeconds`, capped at
-   600 seconds after it was prepared), and Base needs its finality lag on top.
+1. **Wait the validity window plus Base's finality lag** (about 26 minutes at most
+   with the numbers of 23 September 2026). A crashed world's last top-up authorization
+   stays valid on chain until its `validBefore` (at most the quote's
+   `maxTimeoutSeconds`, capped at 600 seconds after it was prepared), and a finalized
+   block past it comes about 16 minutes later. The reserve lock was released when the
+   process died; nothing needs clearing.
 2. **Read what is outstanding**, read-only and keyless (the run's diary is opened with
    its own `ledger.jsonl.key`, as `factorylab postmortem` opens it; the reserve key is
    never loaded, nothing is signed):
@@ -229,9 +315,18 @@ A killed or crashed capital-loop world is not resumed. Instead:
    booked; the next run counts it in its first credit observation. A pending shadow
    send is testnet money only.
 4. **Relaunch** as in "Before a live run". The launch check re-reads every sibling run
-   directory and refuses while any authorization could still settle.
+   directory and the reserve's last recorded run, and refuses while any authorization
+   could still settle.
 
 ## What is not proven live
+
+Both legs' success path runs end to end in `tests/world/test_venice_hybrid.py` through
+the real `HybridRail`, `Treasury`, x402 client, `EVM` scans and Hyperliquid SDK, faked
+only where bytes leave the process (the HTTP/JSON-RPC transport and the SDK's HTTP
+post). The fake Base is honest (logs only for the asked contract, topics and blocks;
+finality trailing the head) and the fake Venice and venue check every signature they
+receive; a debit to another payee, of another amount or from another account is never
+booked, and ours is booked once. Those fakes are ours, not Venice's or Hyperliquid's.
 
 The testnet `usdSend` signing and its ledger-row shape were exercised only against
 fakes: the signature recovers the venue address through the SDK's own

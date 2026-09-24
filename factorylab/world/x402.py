@@ -42,6 +42,9 @@ VENICE_URL = "https://api.venice.ai/api/v1"
 BASE_USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
 BASE_NETWORK = "eip155:8453"
 TOP_UP_MICRO = 5_000_000
+#: The longest validity window this adapter ever signs, whatever a quote allows: an
+#: authorization's ``validBefore`` is at most this many seconds after it was built.
+MAX_AUTHORIZATION_S = 600
 
 
 class X402Error(Exception):
@@ -284,7 +287,7 @@ def authorization_typed_data(
     _address(address)
     now = time.time_ns() // 1_000_000_000 if now is None else now
     nonce = os.urandom(32) if nonce is None else nonce
-    timeout = min(accepted["maxTimeoutSeconds"], 600)
+    timeout = min(accepted["maxTimeoutSeconds"], MAX_AUTHORIZATION_S)
     if type(now) is not int or now < 0 or now + timeout >= 2**256:
         raise X402Error("Invalid authorization time")
     if not isinstance(nonce, bytes) or len(nonce) != 32:
