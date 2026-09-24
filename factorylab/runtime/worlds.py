@@ -31,6 +31,10 @@ from factorylab.runtime.observations import observation_for
 from factorylab.world.connector import DEFAULT_DENYLIST, validate_denylist
 from factorylab.world.market import DISCOVERY_URL
 from factorylab.world.models import PriceTable, TokenPrice
+from factorylab.world.venue_tools import (
+    DEFAULT_PUBLIC_READ_WEIGHT_PER_MINUTE,
+    VENUE_WEIGHT_PER_MINUTE,
+)
 
 NS_PER_SECOND = 1_000_000_000
 NS_PER_HOUR = 3_600 * NS_PER_SECOND
@@ -65,6 +69,11 @@ class ExchangeSpec:
     # the vault reads and writes are published, and a vault's equity is a custody pot.
     # Off by default.
     vault_tools: bool = False
+    # ``[venue] public_read_weight_per_minute``: the venue request weight the public
+    # reads may spend per minute of world time, world-wide. The venue's IP limit is a
+    # real constraint shared with the kernel's own calls, so it is a limit, not a price
+    # (essay II.II.b); the default leaves the kernel most of it (world/venue_tools.py).
+    public_read_weight_per_minute: int = DEFAULT_PUBLIC_READ_WEIGHT_PER_MINUTE
 
 
 @dataclass(frozen=True)
@@ -192,7 +201,7 @@ class WebSpec:
         if self.search_model is not None and not isinstance(self.search_model, str):
             raise ValueError("web.search_model must be a model id on the menu")
         if type(self.max_call_micro) is not int or self.max_call_micro < 0:
-            raise ValueError("web.max_call_micro must be a non-negative integer")
+            raise ValueError("web.max_call_usd must be a non-negative amount")
         if self.search_model is not None and self.max_call_micro <= 0:
             raise ValueError("web.max_call_usd must be positive")
 
@@ -1375,6 +1384,12 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
     vault_tools = venue.get("vault_tools", False)
     if type(vault_tools) is not bool:
         raise ValueError("venue.vault_tools must be true or false")
+    read_weight = venue.get("public_read_weight_per_minute",
+                            DEFAULT_PUBLIC_READ_WEIGHT_PER_MINUTE)
+    if type(read_weight) is not int or not 1 <= read_weight < VENUE_WEIGHT_PER_MINUTE:
+        raise ValueError("venue.public_read_weight_per_minute must be an integer below "
+                         f"{VENUE_WEIGHT_PER_MINUTE}, the venue's own per-minute weight "
+                         "limit, which the kernel's own calls share")
     if (not isinstance(spot_pairs, list) or any(
             not isinstance(p, str) or p.count("/") != 1 or not p.endswith("/USDC")
             or not p.split("/")[0] for p in spot_pairs)
@@ -1390,6 +1405,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         start_cash_usd=str(ex.get("start_cash_usd", "100")),
         principal_usd=principal,
         vault_tools=vault_tools,
+        public_read_weight_per_minute=read_weight,
         shocks=tuple(
             Shock(int(sh["step"]), str(sh["coin"]), str(sh["multiplier"]))
             for sh in ex.get("shocks", [])

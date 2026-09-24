@@ -152,4 +152,4 @@ def test_a_registered_returns_schema_is_published_with_the_tool():
     assert json.loads(json.dumps(output, default=dict)) == promise
     announced = rt.internal[-1].payload["returns_schema"]
     assert json.loads(json.dumps(announced, default=dict)) == promise
-    assert "returns_schema" not in as_spec(_tool("", None), 0)
+    assert "returns_schema" not in as_spec(_tool("", None))

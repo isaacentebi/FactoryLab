@@ -595,6 +595,10 @@ edition = 1
 # and 3-2 (docs/charter/edition6-session-2.json, -3.json); several ballots read the draft
 # against this table as if both were to stand. A funded launch needs a session that
 # adopts on the launch roster, and its digests pinned here.
+# Since Wave 11 the observations of `compute-burn-ceiling` (burn_per_window) and
+# `outsider-cost-discipline` (cost_per_attempt) no longer include storage rent or
+# tool, program-seat or public-read prices: the kernel debits only real outflows.
+# The cards' wording predates that and is the population's to revise.
 norms = [
   { id = "consequential usefulness", definition = "Create things or changes that others have reason to value; uptake by an independent counterparty is evidence, internal applause is a hypothesis." },
   { id = "epistemic integrity", definition = "Make commitments answerable to evidence and preserve the ability to discover that they were wrong; a changed criterion does not rewrite what was promised." },

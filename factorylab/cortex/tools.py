@@ -270,30 +270,30 @@ def web_search_spec(max_call_usd: str) -> dict:
     }
 
 
-def calc_spec(price_micro_per_call: int) -> dict:
-    """The deterministic arithmetic primitive, at the price a world commits to it.
+def calc_spec() -> dict:
+    """The deterministic arithmetic primitive; free, since it pays no one.
 
     GPT-6's third reading, §7. The published contract lives beside the
-    arithmetic in ``factorylab.cortex.calc`` so the two cannot drift; this only
-    stamps the price, which every world in this repository commits at zero.
+    arithmetic in ``factorylab.cortex.calc`` so the two cannot drift. Its price
+    is zero and cannot be otherwise: the wallet moves only when money moves.
     """
     from factorylab.cortex.calc import CALC_SPEC
 
-    if type(price_micro_per_call) is not int or price_micro_per_call < 0:
-        raise ValueError("price_micro_per_call must be a non-negative int")
-    return {**deepcopy(CALC_SPEC), "price_micro_per_call": price_micro_per_call}
+    return {**deepcopy(CALC_SPEC), "price_micro_per_call": 0}
 
 
-def as_spec(tool: PopulationTool, price_micro_per_call: int) -> dict:
-    """Return public ToolSpec fields without source, provenance or schema aliases."""
-    if type(price_micro_per_call) is not int or price_micro_per_call < 0:
-        raise ValueError("price_micro_per_call must be a non-negative int")
+def as_spec(tool: PopulationTool) -> dict:
+    """Return public ToolSpec fields without source, provenance or schema aliases.
+
+    Guarantees a price of zero: a population tool runs in the world's own jail,
+    which pays no one, so no price other than zero can be published for it.
+    """
     return {
         "id": tool.id,
         "description": tool.description,
         "args_schema": deepcopy(tool.args_schema),
         **({"returns_schema": deepcopy(tool.returns_schema)}
            if tool.returns_schema is not None else {}),
-        "price_micro_per_call": price_micro_per_call,
+        "price_micro_per_call": 0,
         "kind": "population",
     }

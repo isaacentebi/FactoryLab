@@ -538,7 +538,7 @@ class ComputeMixin:
             # moves), and the call still runs through the meter so it is ledgered
             # beside a model call.
             asm = ProgramAssembly(
-                spec, self.program_runner, meter, 0,
+                spec, self.program_runner, meter,
                 artifacts=self.artifacts, validator=self._validate_output_contract,
                 record=lambda entry: self.ledger.append(entry),
             )
@@ -891,7 +891,7 @@ class ComputeMixin:
         """
         from factorylab.cortex.tools import calc_spec
 
-        self.tool_specs.setdefault("calc", calc_spec(0))
+        self.tool_specs.setdefault("calc", calc_spec())
 
     def _ensure_web_tool(self) -> None:
         """Register ``web.search`` exactly when the manifest names a search route.
@@ -1097,6 +1097,30 @@ class ComputeMixin:
         meter = self._seat_meter(self.handle_to_assembly.get(handle))
         return metered_data(meter, handle, cap, execute, self._record_market)
 
+    PUBLIC_READ_REFUSAL = "venue public read budget for this minute is spent"
+
+    def _spend_public_read(self, tool_id: str, args: Any) -> str | None:
+        """Spend a public venue read's weight from this minute's budget, or refuse it.
+
+        Guarantees: a read the budget cannot cover is refused before it is sent, so
+        the population's reads never spend the venue IP limit the kernel's own order
+        and reconcile calls need (world/venue_tools.py); the minute is world-clock
+        time, journaled, so a replay refuses exactly what the recording refused.
+        Any other tool passes untouched.
+        """
+        from factorylab.world.venue_tools import public_read_weight
+
+        weight = public_read_weight(tool_id, args)
+        if weight is None:
+            return None
+        minute = self.clock.now_ns // 60_000_000_000
+        spent = getattr(self, "public_read_weight", None) or {"minute": None, "used": 0}
+        used = spent["used"] if spent["minute"] == minute else 0
+        if used + weight > self.m.exchange.public_read_weight_per_minute:
+            return self.PUBLIC_READ_REFUSAL
+        self.public_read_weight = {"minute": minute, "used": used + weight}
+        return None
+
     def _tool_price_bound(self, call: dict) -> int:
         """Variable tool prices fit the remaining request ceiling before dispatch."""
         tool = call["tool"]
@@ -1174,7 +1198,7 @@ class ComputeMixin:
         round rather than treated as free.
         """
         if isinstance(assembly, ProgramAssembly):
-            return assembly.price
+            return 0  # the jail pays no one: a program call costs nothing
         model = getattr(assembly, "model", None)
         build = getattr(assembly, "build_model_request", None)
         if model is None or build is None:
@@ -1361,6 +1385,12 @@ class ComputeMixin:
         if fault is not None:
             # Decided before the meter reserves: a fault moves no money (runtime.chaos).
             return fault, 0
+        refusal = self._spend_public_read(tool_id, args)
+        if refusal is not None:
+            self.ledger.append({"kind": "tool.refused", "handle": handle,
+                                "assembly_id": action_id, "tool": tool_id,
+                                "reason": refusal, "ts": self.clock.now_ns})
+            return {"error": refusal}, 0
         price = int(spec["price_micro_per_call"])
 
         def execute() -> dict:

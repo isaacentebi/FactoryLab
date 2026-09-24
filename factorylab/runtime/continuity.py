@@ -50,9 +50,13 @@ Retained bytes are a constraint, not a cash flow. Holding them pays no one: the
 disk is the world's fixed-price machine, so no money leaves the factory at the
 margin and the wallet does not move for them (the wallet moves only when money
 moves; essay II.II.b casts a scarce resource as a hard limit or prices it through
-the charter's λ on reward, II.IV.a). The hard limit above is the cast. The size of
-every head is ledgered on its ``state.put`` item, which is where a measurement of
-it reads, so the charter can price retained state if the population proposes to.
+the charter's λ on reward, II.IV.a). The hard limit above is the cast, and it bounds
+the whole of what a seat retains, not each version: a new head releases the
+superseded one's reference, whose bytes are collected once no durable checkpoint
+names them (``ArtifactStore.release``). The size of every head is ledgered on its
+``state.put`` item, and the archive's size at every boundary on
+``artifact.retained``, so the charter can price retained state if the population
+proposes to.
 Rendering a seat its own state costs the tokens it costs and nothing else.
 """
 
@@ -177,11 +181,17 @@ class WorkingState:
             raise ValueError(STATE_TOO_LARGE)
         sha = self.artifacts.put(data, owner=seat, kind=kind)
         now = self.clock()
+        previous = self.heads.get(seat)
         successor = {"sha": sha, "bytes": len(data), "ns": now, "handle": handle}
         self.ledger.append({"kind": "state.put", "assembly_id": seat, "sha": sha,
                             "bytes": len(data), "handle": handle,
                             "over_soft": len(data) > SOFT_STATE_BYTES, "ts": now})
         self.heads[seat] = successor
+        if previous is not None and previous["sha"] != sha:
+            # One head per seat is what is retained (the hard limit bounds the whole
+            # of it, not each version): the superseded head's reference goes, and its
+            # bytes are collected once no durable checkpoint names them.
+            self.artifacts.release(previous["sha"], owner=seat, kind=kind)
         return successor
 
     def render(self, seat: str) -> dict[str, Any] | None:
@@ -613,3 +623,9 @@ def collect_window(rt) -> None:
     collect = getattr(rt.artifacts, "collect", None)
     if collect is not None:
         collect()
+    retained = getattr(rt.artifacts, "retained", None)
+    if retained is not None:
+        # The archive's size after collection, so the disk the world keeps is a
+        # fact in the diary (what a card may someday price through λ; II.IV.a).
+        rt.ledger.append({"kind": "artifact.retained", **retained(),
+                          "window": rt.window.index, "ts": rt.clock.now_ns})

@@ -26,8 +26,15 @@ from tests.conftest import make_runtime
 from tests.runtime.test_connectors import decision, ledger_items
 
 DAY_NS = 86_400 * 1_000_000_000
-#: The reasons a nonzero debit may carry: each one names who was paid.
-REAL_OUTFLOWS = ("model:", "tool:web.search", "tool:connector.x402", "treasury:fees")
+#: The reasons a nonzero debit may carry: each one names who was paid. A program
+#: seat's ``model:program`` is not one of them: the jail pays no one.
+REAL_OUTFLOWS = ("tool:web.search", "tool:connector.x402", "treasury:fees")
+
+
+def _real_outflow(reason: str) -> bool:
+    if reason == "model:program":
+        return False
+    return reason.startswith(("model:", *REAL_OUTFLOWS))
 
 
 def _next_window(rt, *, advance_ns):
@@ -96,6 +103,65 @@ def test_every_seeded_tool_is_free_and_a_free_call_moves_no_money():
         result, cost = rt._run_tool("seed-decider", handle, call)
         assert cost == 0, (call, result)
     assert rt.wallet.balance == before
+
+
+def test_free_public_venue_reads_are_capped_by_a_per_minute_weight_budget():
+    """A free read still spends the venue's shared IP rate limit, a real constraint the
+    kernel's own order and reconcile calls need, so it is a limit (II.II.b): the
+    reads share a per-minute weight budget, a read past it is refused before it is
+    sent, the budget survives a checkpoint, and it renews with the next minute."""
+    from factorylab.runtime.resume import restore_runtime, runtime_state
+    from factorylab.world.venue_tools import public_read_weight
+
+    rt = make_runtime()
+    rt._manage_reserve_window()
+    rt.m = replace(rt.m, exchange=replace(rt.m.exchange, public_read_weight_per_minute=50))
+    rt.clock.now_ns = 60_000_000_000 * 1_000  # the start of a minute
+    sent = []
+    call = rt.venue_tools.call
+    rt.venue_tools.call = lambda tool, args: sent.append(tool) or call(tool, args)
+    handle = decision(rt)
+    assert public_read_weight("venue.funding", {}) == 20
+    assert public_read_weight("venue.candles", {"n": 61}) == 22
+    assert public_read_weight("venue.funding_history", {"n": 999}) == 25  # out of range
+    for _ in range(2):  # 20 + 20 of 50
+        result, cost = rt._run_tool("seed-decider", handle, {"tool": "venue.funding", "args": {}})
+        assert "error" not in result and cost == 0
+    result, _ = rt._run_tool("seed-decider", handle, {"tool": "venue.funding", "args": {}})
+    assert result == {"error": rt.PUBLIC_READ_REFUSAL} and sent == ["venue.funding"] * 2
+    assert ledger_items(rt, "tool.refused")[-1]["reason"] == rt.PUBLIC_READ_REFUSAL
+    for _ in range(5):  # the 10 left still buys the cheap reads
+        assert "error" not in rt._run_tool("seed-decider", handle,
+                                           {"tool": "venue.mids", "args": {}})[0]
+    assert "error" in rt._run_tool("seed-decider", handle, {"tool": "venue.mids", "args": {}})[0]
+    rt2 = make_runtime()
+    rt2.m = rt.m
+    restore_runtime(rt2, runtime_state(rt))
+    rt2.clock.now_ns = rt.clock.now_ns
+    assert "error" in rt2._run_tool("seed-decider", handle, {"tool": "venue.mids", "args": {}})[0]
+    rt.clock.now_ns += 60_000_000_000
+    assert "error" not in rt._run_tool("seed-decider", handle,
+                                       {"tool": "venue.funding", "args": {}})[0]
+    # A write is not a public read and never spends the budget.
+    assert public_read_weight("venue.place_market", {}) is None
+    # The budget is published as a fact where the tool is (the launch manifest's value).
+    text = make_runtime().tool_specs["venue.candles"]["description"]
+    assert "budget of 480 venue request weight per minute" in text
+    assert "spends 20 plus 1 per 60 candles" in text
+
+
+def test_the_default_read_budget_leaves_the_kernel_most_of_the_venue_limit():
+    from factorylab.world.venue_tools import (
+        DEFAULT_PUBLIC_READ_WEIGHT_PER_MINUTE,
+        VENUE_WEIGHT_PER_MINUTE,
+    )
+
+    assert load_manifest("scripted").exchange.public_read_weight_per_minute == (
+        DEFAULT_PUBLIC_READ_WEIGHT_PER_MINUTE)
+    assert DEFAULT_PUBLIC_READ_WEIGHT_PER_MINUTE * 2 < VENUE_WEIGHT_PER_MINUTE
+    for bad in (0, 1200, "480", True):
+        with pytest.raises(ValueError, match="public_read_weight_per_minute"):
+            manifest_from_dict(_world(venue={"public_read_weight_per_minute": bad}))
 
 
 def _world(**tables):
@@ -253,7 +319,7 @@ def test_a_world_s_total_debits_equal_its_real_outflows():
     rt.run()
     commits = [i for i in items if i["kind"] == "wallet.commit"]
     assert commits and provider.bills
-    fictitious = [c for c in commits if c["amount"] and not c["reason"].startswith(REAL_OUTFLOWS)]
+    fictitious = [c for c in commits if c["amount"] and not _real_outflow(c["reason"])]
     assert fictitious == []
     billed = sum(c["amount"] for c in commits
                  if c["reason"].startswith(("model:", "tool:web.search")))
@@ -267,3 +333,29 @@ def test_a_world_s_total_debits_equal_its_real_outflows():
     arrived = sum(i["amount"] for i in items if i["kind"] in ("wallet.settle", "wallet.drip"))
     assert start + arrived - rt.wallet.balance == sum(c["amount"] for c in commits)
     assert rt.wallet.check_conservation() and rt.budget.check_invariant()
+
+
+@pytest.mark.gate
+def test_a_program_seat_s_decisions_commit_zero():
+    """A registered program seat is routed and returns like a model seat, and every
+    one of its calls commits 0: the jail pays no one."""
+    from tests.audit.test_e2_programs import Proposer
+    from tests.cortex.test_jail import require_jail
+
+    require_jail()
+    rt = Runtime(load_manifest("scripted"), events=40, seed=1, initial_balance_micro=None,
+                 ledger_path=None, router_gamma=.1, provider=Proposer())
+    items = []
+    append = rt.ledger.append
+
+    def capture(item):
+        items.append(dict(item))
+        return append(item)
+
+    rt.ledger.append = capture
+    rt.run()
+    calls = [i for i in items if i["kind"] == "program.call"]
+    commits = [i for i in items if i["kind"] == "wallet.commit"
+               and i["reason"] == "model:program"]
+    assert calls and commits and len(commits) >= len(calls)
+    assert {i["cost"] for i in calls} == {0} and {i["amount"] for i in commits} == {0}

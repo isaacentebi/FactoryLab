@@ -26,9 +26,22 @@ R11 deleted the publication path nothing ever used.
 
 **Nothing is deleted except an unreferenced blob.** ``collect()`` removes exactly
 those — durable bytes no reference names, which is what a crash between
-``_write`` and the ledger item leaves behind — and ledgers each removal as
-``artifact.collected``. It is called by the runtime at a reserve-window boundary.
-A blob any reference names is never a candidate whatever its age.
+``_write`` and the ledger item leaves behind, and records whose every reference
+was released — and ledgers each removal as ``artifact.collected``. It is called
+by the runtime at a reserve-window boundary. A blob any reference names is never
+a candidate whatever its age.
+
+**A reference can be released (Wave 11).** The disk is the world's own and pays
+no one, so retained bytes are a constraint with a hard limit, not a price
+(essay II.II.b): a seat keeps one working-state head and a program one private
+state, and ``release`` drops the (sha, owner, kind) reference a superseded one
+held. A reference remembers every kind its owner wrote the bytes under, so
+releasing one kind never drops bytes the same owner still holds as another (an
+inbox body, an archived rationale). A record whose last reference is released is
+kept until a checkpoint no longer needs it: it is ``pending`` until the next
+durable checkpoint, then ``sealed`` (``seal_released``), and only a sealed record
+is collected, so a resume from the latest checkpoint never names bytes that are
+gone.
 """
 
 from __future__ import annotations
@@ -135,14 +148,78 @@ class ArtifactStore:
         self.index.setdefault(sha, {"owner": owner, "kind": kind, "bytes": len(data), "ts": ts})
         record = self.index[sha]
         refs = record.setdefault("refs", {})
-        for existing in record.get("readers", [record["owner"]]):
-            # An index restored from a checkpoint written before references carries
-            # its readers; each becomes that reader's own reference, as it always was.
-            refs.setdefault(existing, {"kind": record["kind"], "ts": record["ts"]})
-        refs.setdefault(owner, {"kind": kind, "ts": ts})
+        if not record.pop("released", None):
+            for existing in record.get("readers", [record["owner"]]):
+                # An index restored from a checkpoint written before references carries
+                # its readers; each becomes that reader's own reference, as it always was.
+                refs.setdefault(existing, {"kind": record["kind"], "ts": record["ts"]})
+        reference = refs.setdefault(owner, {"kind": kind, "ts": ts})
+        kinds = set(reference.get("kinds", [reference["kind"]]))
+        if kind not in kinds:
+            # The same owner holds these bytes under a second kind: both are named,
+            # so releasing one never drops the other.
+            reference["kinds"] = sorted(kinds | {kind})
         record["readers"] = sorted(refs)
         self._changed_sha(sha)
         return sha
+
+    def release(self, sha: str, *, owner: str, kind: str) -> bool:
+        """Drop ``owner``'s hold on ``sha`` under ``kind``; return whether the record is now free.
+
+        Guarantees: only the named kind of the named owner's reference is dropped, so
+        bytes the owner still holds under another kind, and bytes another owner
+        holds, stay owned; a record whose last reference goes is marked ``pending``
+        and is collected only once sealed by a later checkpoint; an unknown hash or a
+        reference that does not hold the kind changes nothing. The release is
+        ledgered as ``artifact.released``.
+        """
+        record = self.index.get(_valid_sha(sha))
+        if record is None:
+            return False
+        refs = dict(self.references(sha, record))
+        reference = refs.get(owner)
+        if reference is None:
+            return False
+        kinds = set(reference.get("kinds", [reference["kind"]]))
+        if kind not in kinds:
+            return False
+        kinds.discard(kind)
+        if len(kinds) > 1:
+            refs[owner] = {**reference, "kinds": sorted(kinds)}
+        elif kinds:
+            refs[owner] = {"kind": kinds.pop(), "ts": reference["ts"]}
+        else:
+            refs.pop(owner)
+        record["refs"] = refs
+        record["readers"] = sorted(refs)
+        if not refs:
+            record["released"] = "pending"
+        self._changed_sha(sha)
+        self.ledger.append({"kind": "artifact.released", "sha": sha, "owner": owner,
+                            "artifact_kind": kind, "free": not refs, "ts": self.clock()})
+        return not refs
+
+    def seal_released(self) -> int:
+        """Make every pending release collectable; return how many were sealed.
+
+        Called once a checkpoint is durable (and again after a resume restores one):
+        the checkpoint just written names no reference to a record released before
+        it, so collecting that record can never leave a resume short of bytes.
+        """
+        sealed = 0
+        for record in self.index.values():
+            if record.get("released") == "pending":
+                record["released"] = "sealed"
+                sealed += 1
+        return sealed
+
+    def retained(self) -> dict[str, int]:
+        """What the archive holds now: indexed records, their bytes, and the released part."""
+        records = len(self.index)
+        total = sum(record["bytes"] for record in self.index.values())
+        released = sum(record["bytes"] for record in self.index.values()
+                       if record.get("released"))
+        return {"records": records, "bytes": total, "released_bytes": released}
 
     def get(self, sha: str) -> bytes:
         """Return the bytes of an archived artifact, verified against the hash asked for."""
@@ -208,12 +285,21 @@ class ArtifactStore:
         live again, by which time the replay has re-put everything still owned and
         only the true leftovers remain.
         """
-        live = {sha for sha, record in self.index.items() if self.references(sha, record)}
+        # A release not yet sealed by a durable checkpoint is still live: the latest
+        # checkpoint may name it, and a resume from it must find the bytes.
+        live = {sha for sha, record in self.index.items()
+                if self.references(sha, record) or record.get("released") == "pending"}
+        # A sealed record is a candidate whether or not its bytes are still on disk:
+        # a replay reaches it after the recorded run removed them, and must collect
+        # (and ledger) it exactly as the recording did.
+        sealed = {sha for sha, record in self.index.items()
+                  if record.get("released") == "sealed"}
         if self.root is None:
-            orphans = sorted(sha for sha in self._memory if sha not in live)
+            orphans = sorted({sha for sha in self._memory if sha not in live} | sealed)
         else:
-            orphans = sorted(path.name for path in self.root.glob("*")
-                             if len(path.name) == SHA_HEX_CHARS and path.name not in live)
+            orphans = sorted({path.name for path in self.root.glob("*")
+                              if len(path.name) == SHA_HEX_CHARS
+                              and path.name not in live} | sealed)
         if getattr(self.ledger, "recovering", False):
             orphans = [sha for sha in orphans if sha in self.index]
         for sha in orphans:
@@ -222,6 +308,10 @@ class ArtifactStore:
             else:
                 try:
                     (self.root / sha).unlink()
+                except FileNotFoundError:
+                    # A replay collects a sealed record whose bytes the recorded run
+                    # already removed: it is ledgered again, exactly as recorded.
+                    pass
                 except OSError:
                     continue
             self.index.pop(sha, None)

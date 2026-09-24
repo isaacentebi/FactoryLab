@@ -598,6 +598,21 @@ class BootstrapMixin:
             specs, vault_examples = vault_specs()
             self.tool_specs.update(specs)
             self.treasury.vault_custody = True
+        from factorylab.world.venue_tools import _BASE_WEIGHT
+
+        budget = manifest.exchange.public_read_weight_per_minute
+        for tool_id in _BASE_WEIGHT:
+            if tool_id in self.tool_specs:
+                # A limit is a published fact (essay II.I.b), never advice.
+                self.tool_specs[tool_id]["description"] += (
+                    f" Public venue reads share a budget of {budget} venue request weight "
+                    "per minute of world time, world-wide; this read spends "
+                    f"{_BASE_WEIGHT[tool_id]}"
+                    + (" plus 1 per 60 candles" if tool_id == "venue.candles" else
+                       " plus 1 per 20 rates" if tool_id == "venue.funding_history" else "")
+                    + ". A read past the budget is refused and not sent.")
+        # Public venue read weight spent in the current minute of world time.
+        self.public_read_weight = {"minute": None, "used": 0}
         self.tool_specs["treasury.transfer"] = {
             "id": "treasury.transfer",
             "description": "Move USDC spot_to_perps or perps_to_spot, between venue and reserve, "

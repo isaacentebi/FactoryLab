@@ -22,7 +22,7 @@ import json
 import math
 from collections.abc import Callable
 from copy import deepcopy
-from dataclasses import dataclass, field, replace
+from dataclasses import KW_ONLY, dataclass, field, replace
 from decimal import Decimal
 from typing import Any
 
@@ -347,13 +347,15 @@ class ProgramAssemblySpec(AssemblySpec):
 
 
 @dataclass(frozen=True)
-class _ProgramPrice:
-    """What routing asks a seat's model: the ceiling of one call. A program's is flat."""
+class _ProgramCeiling:
+    """What routing asks a seat's model: the ceiling of one call. A program's is zero.
 
-    micro_per_call: int
+    The jail is the world's own and pays no one, so a program call has no price
+    (the wallet moves only when money moves; essay II.II.b).
+    """
 
     def ceiling(self, req: Any) -> int:
-        return self.micro_per_call
+        return 0
 
 
 @dataclass
@@ -361,10 +363,10 @@ class ProgramAssembly:
     """Executes requests by running the seat's program in the jail.
 
     Guarantees, matching ``Assembly``: the program runs at most once per
-    request; ``cost`` is exactly what the wallet was charged, which is the flat
-    ``price`` reserved and committed through the meter under the reason
-    ``model:program``, so every call is a wallet transaction and the novelty
-    reserve treats it as this seat's own compute; every failure — no jail, a
+    request; ``cost`` is exactly what the wallet was charged, which is zero: the
+    call runs through the meter under the reason ``model:program`` with a ceiling
+    and a cost of zero, so it is ledgered beside a model call and no money moves,
+    because the jail pays no one; every failure — no jail, a
     non-zero exit, a wall timeout, a reply that is not the Return JSON the
     validator accepts — is a ``Return`` with status ``malformed`` (or ``failed``
     when nothing ran), never an exception. Private state is loaded from and
@@ -376,19 +378,19 @@ class ProgramAssembly:
     spec: ProgramAssemblySpec
     runner: Any  # ProgramRunner or its journal proxy: run(code, stdin=, timeout_s=) -> dict
     meter: Any  # Meter over the world wallet
-    price: int
+    # Everything after the meter is named: a fourth positional argument (the flat
+    # price the executor once took) is refused rather than read as something else.
+    _: KW_ONLY
     artifacts: Any | None = None  # ArtifactStore; required for state_policy "private"
     memory: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     child_factory: Callable[[Request, dict[str, Any], int], Request] | None = None
     validator: Callable[[dict[str, Any], Request], None] | None = None
     record: Callable[[dict[str, Any]], Any] | None = None
     state_sha: str | None = None
-    model: _ProgramPrice = field(init=False)
+    model: _ProgramCeiling = field(init=False)
 
     def __post_init__(self) -> None:
-        if type(self.price) is not int or self.price < 0:
-            raise ValueError("program price must be a non-negative integer micro-USD")
-        self.model = _ProgramPrice(self.price)
+        self.model = _ProgramCeiling()
 
     def build_stdin(self, req: Request, state: Any) -> str:
         """Render what the program reads: the request as a model would see it, plus state.
@@ -425,9 +427,6 @@ class ProgramAssembly:
             return None, type(exc).__name__
 
     def invoke(self, req: Request) -> Return:
-        if self.price > req.cost_ceiling:
-            return Return(req.handle, {"reason": "ceiling exceeds request cost_ceiling"}, 0,
-                          "failed")
         state, state_error = self._load_state()
         if state_error is not None:
             # The seat has state and it cannot be read: the call does not run with
@@ -453,8 +452,8 @@ class ProgramAssembly:
 
         try:
             metered = self.meter.run(
-                handle=req.handle, reason=f"model:{PROGRAM_MODEL_ID}", ceiling=self.price,
-                execute=execute, cost_of=lambda _r: self.price,
+                handle=req.handle, reason=f"model:{PROGRAM_MODEL_ID}", ceiling=0,
+                execute=execute, cost_of=lambda _r: 0,
             )
         except Infeasible as exc:
             return Return(req.handle, {"reason": f"infeasible: {exc}"}, 0, "failed")
@@ -528,8 +527,14 @@ class ProgramAssembly:
                                  "stop")
             if self.artifacts is None:
                 return malformed({"reason": "no artifact archive"}, "stop")
+            previous = self.state_sha
             self.state_sha = self.artifacts.put(encoded, owner=self.spec.id,
                                                 kind="program.state")
+            if previous is not None and previous != self.state_sha:
+                # One private state per program is retained: the superseded one's
+                # reference goes, and its bytes are collected once no durable
+                # checkpoint names them (the disk is a limit, not a price).
+                self.artifacts.release(previous, owner=self.spec.id, kind="program.state")
             provider["state_sha"] = self.state_sha
         children = _children(req, parsed, self.child_factory)
         raw_calls = parsed.get("tool_calls")

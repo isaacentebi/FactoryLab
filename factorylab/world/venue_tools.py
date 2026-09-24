@@ -131,6 +131,42 @@ def _json_value(value: Any) -> Any:
     return value
 
 
+#: Hyperliquid's documented REST limits ("Rate limits and user limits",
+#: hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/rate-limits-and-user-limits):
+#: "REST requests share an aggregated weight limit of 1200 per minute" per IP;
+#: l2Book and allMids weigh 2; every other documented info request weighs 20;
+#: candleSnapshot adds weight per 60 items returned and fundingHistory per 20. The
+#: added weight per interval is not stated, so it is counted as 1.
+VENUE_WEIGHT_PER_MINUTE = 1200
+#: The share of that budget the population's public reads may use by default: 40%,
+#: leaving 720 a minute for the kernel's own calls (account and spot state, mids,
+#: asset contexts, open orders, funding and fill pages each tick, and orders).
+DEFAULT_PUBLIC_READ_WEIGHT_PER_MINUTE = 480
+_BASE_WEIGHT = {"venue.mids": 2, "venue.order_book": 2, "venue.instruments": 20,
+                "venue.funding": 20, "venue.candles": 20, "venue.funding_history": 20,
+                "venue.vault_details": 20}
+_ITEMS_PER_WEIGHT = {"venue.candles": ("n", 60, 200), "venue.funding_history": ("n", 20, 100)}
+
+
+def public_read_weight(tool_id: str, args: Any) -> int | None:
+    """The venue's documented request weight of one public read, or None for any other tool.
+
+    Guarantees the weight never undercounts a well-formed call: an item count that is
+    missing or out of its schema's range is counted at the schema's maximum.
+    """
+    base = _BASE_WEIGHT.get(tool_id)
+    if base is None:
+        return None
+    extra = _ITEMS_PER_WEIGHT.get(tool_id)
+    if extra is None:
+        return base
+    key, per, most = extra
+    n = args.get(key) if isinstance(args, dict) else None
+    if type(n) is not int or not 1 <= n <= most:
+        n = most
+    return base + -(-n // per)
+
+
 class VenueTools:
     """Only schema-valid requests reach the exchange; every attempt has an audit entry."""
 

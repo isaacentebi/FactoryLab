@@ -782,7 +782,7 @@ class GovernanceMixin:
             owner = self.handle_to_assembly.get(handle)
             if owner is not None:
                 self.tool_owner[prop.id] = owner
-            self.tool_specs[prop.id] = as_spec(tool, 0)
+            self.tool_specs[prop.id] = as_spec(tool)
             self.stats.population_tools_registered += 1
             self._emit(EventKind.REGISTERED, {
                 "kind": "tool", "id": prop.id,

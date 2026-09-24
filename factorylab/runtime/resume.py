@@ -658,6 +658,9 @@ _RUNTIME_FIELDS = (
     "facilitator_url",
     "registered_predicates", "kind_reward_shapes", "forecast_returns",
     "connector_calls", "connector_calls_day",
+    # The public venue reads' weight spent this minute. An older checkpoint starts it
+    # at zero.
+    "public_read_weight",
     # The pause between releases: None while awake, else the entry record (C2).
     "dormancy",
     # C10: each seat's last rendered call ceiling and the world size it was priced at.
@@ -1052,6 +1055,10 @@ def restore_runtime(rt, state: dict) -> None:
                 # Older checkpoints predate the thrash price; it starts at zero.
                 continue
             setattr(getattr(rt, name), prefix + field, components[name][field])
+    # The recorded run sealed every release this checkpoint shows the moment it was
+    # durable; the resumed one does the same, so the tail collects exactly what the
+    # recording collected.
+    rt.artifacts.seal_released()
     rt.prices.prices = decode(state["prices"])
     rt.assemblies.clear()
     for assembly in decode(state["assemblies"]):
@@ -1167,6 +1174,10 @@ def _check_artifacts(store, *, index: dict, assemblies, heads: dict, outcomes: d
                 raise ResumeError("an outcome item's body is not in the archive index",
                                   code="artifact_missing", sha=item["sha"], owner=seat)
     for sha, record in index.items():
+        if record.get("released"):
+            # Released before this checkpoint and possibly collected since: nothing
+            # the saved state names depends on it (kernel/artifacts.py, ``release``).
+            continue
         try:
             store.get(sha)
         except ArtifactError:

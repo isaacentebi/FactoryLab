@@ -134,13 +134,14 @@ def test_a_manifest_hashes_what_it_says_and_a_default_is_no_exception():
     micro_per_byte_day, connectors.call_price_usd, web.call_price_micro,
     polymarket.read_price_usd, tools.population_tool_micro_per_call and
     prices.program_micro_per_call; the wallet moves only when money moves, §II.b,
-    §IV.a); each time it is a new v0."""
+    §IV.a), and again when the public venue reads gained their per-minute weight
+    budget ([venue] public_read_weight_per_minute); each time it is a new v0."""
     scripted = load_manifest("scripted")
     assert '"forecast_horizon_events":10' in scripted.canonical_json()
     assert '"chaos":{"connector_timeout":0.0' in scripted.canonical_json()
     assert '"contract":"json_object"' in scripted.canonical_json()
     assert scripted.manifest_hash() == (
-        "78f0b9f59b0226eeea2d2c7e089e566b6688259a127e63925b963134a267f23d"
+        "6f9a16d527a85ea3b928660a2b211ebff83cc212d03fe4290786db988624ecd0"
     )
 
     implicit = manifest_from_dict(_base())

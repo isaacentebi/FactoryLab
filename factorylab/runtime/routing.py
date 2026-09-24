@@ -787,8 +787,10 @@ class RoutingMixin:
         """The ceiling one call of this seat needs now: its last rendered ceiling plus the
         input price of every character the world block has grown by since (at the
         meter's own slack). Before its first call, the ceiling of its last hold.
-        A flat-fee seat (a program) needs its fee: the world block's growth costs
-        it nothing, so there is no growth term and no token price to look up."""
+        A program seat needs nothing: its jail pays no one, so its recorded ceiling
+        is zero, the world block's growth costs it nothing and there is no token
+        price to look up. Its entitlement therefore does not bound it; the limits
+        that do are the kernel's (docs/manifest.md, "Program seats")."""
         record = self.seat_ceilings.get(action_id)
         if record is None:
             return self.budget.last_hold(action_id)

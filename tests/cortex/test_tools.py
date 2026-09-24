@@ -266,21 +266,27 @@ def test_population_tool_is_frozen_and_spec_only_exposes_public_fields():
     tool = _tool()
     with pytest.raises(FrozenInstanceError):
         tool.code = "changed"
-    spec = as_spec(tool, 50)
+    spec = as_spec(tool)
     assert spec == {
         "id": "test-tool", "description": "A test tool",
         "args_schema": {"type": "object", "properties": {}},
-        "price_micro_per_call": 50, "kind": "population",
+        "price_micro_per_call": 0, "kind": "population",
     }
     spec["args_schema"]["properties"]["new"] = {"type": "string"}
     assert tool.args_schema["properties"] == {}
     assert replace(tool, provenance="another-decision").provenance == "another-decision"
 
 
-@pytest.mark.parametrize("price", [True, 1.5, -1])
-def test_spec_rejects_non_integer_or_negative_money(price):
-    with pytest.raises(ValueError, match="non-negative int"):
+@pytest.mark.parametrize("price", [50, 0])
+def test_a_population_tool_or_calc_cannot_be_given_a_price(price):
+    """Wave 11: a jailed tool pays no one, so no price can be stamped on it."""
+    from factorylab.cortex.tools import calc_spec
+
+    with pytest.raises(TypeError):
         as_spec(_tool(), price)
+    with pytest.raises(TypeError):
+        calc_spec(price)
+    assert calc_spec()["price_micro_per_call"] == 0
 
 
 @pytest.mark.parametrize("cap", [True, 0, -1, 1.5])

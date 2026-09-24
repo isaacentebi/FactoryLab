@@ -1746,7 +1746,21 @@ dispatch still checks the coin against the venue and refuses an unlisted one.
 or pair the venue lists, and `venue.funding_history` refuses a spot pair.
 `venue.place_market`, `venue.place_limit`, `venue.close`, `venue.cancel` and
 `venue.set_leverage` still refuse a market that is not registered for trading.
-These six public reads are free: the venue charges nothing for them. The
+These six public reads are free: the venue charges nothing for them. They
+still spend the venue's per-IP rate limit, which the kernel's own order,
+reconcile and account calls share, so they are capped: `[venue]
+public_read_weight_per_minute` (default `480`, an integer below `1200`, fixed for
+the world's life) is the venue request weight all public reads together may
+spend per minute of world time. Each read spends its documented weight
+(Hyperliquid, "Rate limits and user limits": 1200 per minute per IP; `l2Book` and
+`allMids` weigh 2, other info requests 20, `candleSnapshot` one more per 60 items
+and `fundingHistory` one more per 20): `venue.mids` and `venue.order_book` 2,
+`venue.instruments`, `venue.funding` and `venue.vault_details` 20, `venue.candles`
+20 plus 1 per 60 candles and `venue.funding_history` 20 plus 1 per 20 rates, an
+out-of-range count taken at its maximum. The default leaves 720 a minute to the
+kernel. A read the budget cannot cover is refused before it is sent
+(`tool.refused`); the minute's spend is checkpointed. Each tool's description
+states the budget and its weight. The
 launch seed only ever adds to the adapter's own listing; on the deterministic
 venue a seeded market the adapter does not list is dropped, and on a live one an
 unlisted spot pair fails launch. An adapter that publishes no listing keeps the
@@ -1780,11 +1794,19 @@ R11: Chapter II §I.b prescribes two channels, rich requests and thin rewards, a
 a population-wide blackboard is neither. Its storage rent survived it until Wave
 11, which removed it: the bytes sit on the world's own fixed-price disk, so the
 rent paid no one, and a debit with no counterparty makes the books lie (the
-wallet moves only when money moves). Retained working state is a constraint: the
-64 KiB hard limit is the cast (§II.b), and the size of every head is ledgered on
-its `state.put` item, where a registered measurement can read it so the charter
-can price it through λ on reward (§II.b soft casts, §IV.a) if the population
-proposes to. A world file naming `[storage]` or `[notes]` is refused by name.
+wallet moves only when money moves). Retained working state is a constraint, and
+the hard cast (§II.b) bounds the whole of it, not each version: a seat retains one
+working-state head of at most 64 KiB and a program seat one private state of at
+most 64 KiB. Writing a new one releases the superseded one's reference
+(`artifact.released`); `artifact.get` no longer returns it, and its bytes are
+removed at a reserve-window boundary once a durable checkpoint no longer names it
+(`artifact.collected`). Inbox bodies and archived rationales are never released.
+The world block's `storage` section states the limits and this retention as
+facts. The size of every head is ledgered on its `state.put` item, and the
+archive's size after each boundary's collection on `artifact.retained {records,
+bytes, released_bytes, window}`, where a measurement could read them so the
+charter can price retained state through λ on reward (§II.b soft casts, §IV.a) if
+the population proposes to. A world file naming `[storage]` or `[notes]` is refused by name.
 Nothing about retained state reaches a decision's cost, a cost card or a
 consequence outcome: `ReturnAccount.carried_micro`, `consequence.carried`, the
 `storage` rows of a card's samples and the window's `storage_cost_micro` were
@@ -1909,7 +1931,22 @@ checkpointed. The wake shows `liveness.status` as `alive`, `dormant` or
 
 A program seat's call costs no money: its code runs in the world's own jail,
 which pays no one, so the wallet does not move for it. `prices.program_micro_per_call`,
-the flat price it used to be debited, was removed in Wave 11 and is refused.
+the flat price it used to be debited, was removed in Wave 11 and is refused, and the
+executor takes no price at all (`ProgramAssembly` has no price field; its routing
+ceiling is zero).
+
+**A program seat's entitlement no longer bounds it.** Its calls commit zero, so
+its entitlement neither pays for them nor runs out because of them; routing reads
+its need as zero. What bounds a program seat is the kernel's hard casts: the
+event count (it runs only when routing draws it for an event, once per draw, and a
+watcher once per tick plus the safety sweeps); `tools.max_tool_calls` per request
+and the five tool rounds a decision may buy; `tools.max_children`; the jail's wall
+timeout (`timeout_s`, 1–10 s) with its CPU rlimit and output cap; the 64 KiB
+private-state limit, with one state retained; `connectors.max_calls_per_window`
+and the public venue read budget (`[venue] public_read_weight_per_minute`) for
+whatever it fetches; and governance, which retires it through a retirement
+proposal. Anything it buys from outside (a model call it subcontracts, a paid
+read, a search) is metered at its real price against its entitlement as before.
 
 An assembly proposal whose `model_id` is `program` registers a seat whose
 executor is population Python in the tool jail rather than a model
@@ -2020,7 +2057,14 @@ another seat's artifacts (information audit C4).
 
 **Collection.** `ArtifactStore.collect()` is the one thing that deletes, and it
 can only reach blobs **no reference names** — what a crash
-between the durable write and its ledger item leaves behind. Each removal is
+between the durable write and its ledger item leaves behind, and records whose
+last reference was released (a superseded working-state head or program state;
+`ArtifactStore.release`). A reference names every kind its owner wrote the bytes
+under, so releasing one kind never drops bytes the owner still holds as another.
+A released record is `pending` until the next durable checkpoint, then `sealed`
+(`seal_released`, also applied to the checkpoint a resume restores), and only a
+sealed record is collected, so a resume never needs bytes that are gone; the
+resume's archive check skips released records. Each removal is
 ledgered `artifact.collected {sha, ts}`. The runtime calls it at each
 reserve-window boundary (`continuity.collect_window`). An owned blob is never a
 candidate, so collection can never take a seat's working state, an inbox body or
@@ -2052,7 +2096,9 @@ next request carries `your_state: {sha, bytes, state}` verbatim. The soft
 allowance is 8,192 bytes (accepted, and marked `over_soft`); above 65,536 the
 field is refused, the head is unchanged and `state.refused {assembly_id, handle,
 reason}` is ledgered. A manifest may seed a head with an assembly's
-`initial_state`; without one the head is None. Retained state costs no money
+`initial_state`; without one the head is None. A new head releases the
+superseded one (see "Collection"), so a seat retains one head. Retained state
+costs no money
 (Wave 11: the storage rent paid no one and was removed; see "Seeing the world");
 the hard limit is the constraint, and there is no transfer toll.
 
@@ -2380,6 +2426,10 @@ conflated: the **learning score** (evidence for a rule), the **seat entitlement*
 (permission to spend inside the compute budget) and the **assets and credits**
 held by a custodian, which change only by a verified transaction, a provider
 charge, a refund or a purchase — never by an internal reclassification.
+Since Wave 11 an entitlement bounds only what costs money: a program seat's own
+calls, a jailed tool, a public read and retained state cost nothing, so an
+entitlement does not limit them; their limits are the kernel's (see "Program
+seats" and "Seeing the world").
 
 ### The custody accounts
 
@@ -2561,7 +2611,8 @@ declared propensity stands, floored as before.
 A decision may buy up to five tool rounds, bounded by its existing money and model
 call ceilings. Known reads can extend retrieval; a write or child call ends it.
 Continuation pricing reserves another call before extending reads, and unknown
-prices do not extend them. Actual metering remains authoritative. Older tool results
+prices do not extend them; a program seat's next call reserves zero, since it
+costs nothing, so only the round limit bounds its reads. Actual metering remains authoritative. Older tool results
 have exact invocation-local `artifact.get` references that expire when the decision
 returns; they create no permanent archive entries. The current round's results are
 included once. External text retains its restricted continuation. Public `world.read` is available in both prompt

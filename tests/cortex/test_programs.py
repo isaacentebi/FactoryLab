@@ -16,7 +16,6 @@ from factorylab.world.metering import Meter
 from tests.cortex.test_cortex import TinyWallet
 from tests.cortex.test_jail import require_jail
 
-PRICE = 50
 ECHO = (
     "import json, sys\n"
     "d = json.load(sys.stdin)\n"
@@ -48,25 +47,35 @@ def program(wallet=None, *, ledger=None, **kw):
     ledger = ledger or Ledger(None, manifest={"name": "programs"})
     archive = ArtifactStore(ledger, root=None, clock_ns=lambda: 1)
     recorded = []
-    asm = ProgramAssembly(spec(**kw), ProgramRunner(), Meter(wallet), PRICE, artifacts=archive,
+    asm = ProgramAssembly(spec(**kw), ProgramRunner(), Meter(wallet), artifacts=archive,
                           record=recorded.append)
     return asm, wallet, recorded
 
 
 # --- invocation through the meter -------------------------------------------
 
-def test_program_answers_like_a_model_and_is_charged_its_flat_price():
+def test_program_answers_like_a_model_and_moves_no_money():
+    """Wave 11: the jail pays no one, so a program call is metered at zero."""
     require_jail()
     asm, wallet, recorded = program()
     ret = asm.invoke(req())
     assert ret.status == "ok" and ret.served_by == "program"
     assert ret.outputs == {"action": "hold", "seen": 0, "you": "prog-a"}
-    assert ret.cost == PRICE and wallet.balance == 10_000 - PRICE
-    assert wallet.log == [("reserve", PRICE), ("commit", PRICE)]
+    assert ret.cost == 0 and wallet.balance == 10_000
+    assert wallet.log == [("reserve", 0), ("commit", 0)]
     assert ret.provider["state_sha"] == asm.state_sha and asm.state_sha is not None
     assert recorded == [{"kind": "program.call", "assembly_id": "prog-a", "handle": "h1",
-                         "status": "ok", "cost": PRICE, "state_in": None,
+                         "status": "ok", "cost": 0, "state_in": None,
                          "state_out": asm.state_sha}]
+
+
+def test_a_program_has_no_price_to_set():
+    """No door back to a fictitious debit: the executor takes no price, and the
+    ceiling routing reads from it is zero."""
+    with pytest.raises(TypeError):
+        ProgramAssembly(spec(), ProgramRunner(), Meter(TinyWallet(1_000)), 50)
+    asm, _, _ = program()
+    assert asm.model.ceiling(req()) == 0
 
 
 def test_state_restored_by_hash_is_what_the_next_call_sees():
@@ -74,7 +83,7 @@ def test_state_restored_by_hash_is_what_the_next_call_sees():
     asm, _, _ = program()
     asm.invoke(req("h1"))
     sha = asm.state_sha
-    fresh = ProgramAssembly(spec(), ProgramRunner(), Meter(TinyWallet(1_000)), PRICE,
+    fresh = ProgramAssembly(spec(), ProgramRunner(), Meter(TinyWallet(1_000)),
                             artifacts=asm.artifacts)
     fresh.state_sha = sha
     assert fresh.invoke(req("h2")).outputs["seen"] == 1
@@ -97,12 +106,12 @@ OVERRAN = ("timeout", "exit -24")
     ("import json\nprint(json.dumps({'status': 7}))", None),
 ])
 @pytest.mark.gate  # measured over 0.9 s: a subprocess, a jail timeout or a long loop
-def test_failure_is_a_billed_malformed_return_never_an_exception(code, reason):
+def test_failure_is_a_malformed_return_never_an_exception(code, reason):
     require_jail()
     asm, wallet, recorded = program(code=code, timeout_s=1)
     ret = asm.invoke(req())
-    assert ret.status == "malformed" and ret.cost == PRICE
-    assert wallet.log == [("reserve", PRICE), ("commit", PRICE)]
+    assert ret.status == "malformed" and ret.cost == 0
+    assert wallet.log == [("reserve", 0), ("commit", 0)]
     if reason:
         assert ret.outputs["reason"] in reason
     else:
@@ -110,22 +119,19 @@ def test_failure_is_a_billed_malformed_return_never_an_exception(code, reason):
     assert asm.state_sha is None and recorded[0]["status"] == "malformed"
 
 
-def test_infeasible_reservation_and_ceiling_yield_failed_with_no_charge():
-    asm, wallet, recorded = program(TinyWallet(balance=PRICE - 1))
+def test_an_infeasible_reservation_yields_failed_with_no_charge():
+    asm, wallet, recorded = program(TinyWallet(balance=-1))
     ret = asm.invoke(req())
-    assert ret.status == "failed" and ret.cost == 0 and wallet.log == []
-    asm, wallet, _ = program()
-    ret = asm.invoke(req(ceiling=PRICE - 1))
     assert ret.status == "failed" and ret.cost == 0 and wallet.log == []
     assert recorded == []
 
 
-def test_no_jail_is_a_billed_malformed_return(monkeypatch):
+def test_no_jail_is_a_malformed_return(monkeypatch):
     asm, wallet, _ = program()
     asm.runner = ProgramRunner(available=False)
     ret = asm.invoke(req())
     assert ret.status == "malformed" and ret.outputs == {"reason": "no jail on this host"}
-    assert ret.cost == PRICE and wallet.balance == 10_000 - PRICE
+    assert ret.cost == 0 and wallet.balance == 10_000
 
 
 def test_program_runner_never_raises(monkeypatch):

@@ -545,6 +545,9 @@ class Runtime(
         self.ledger.append(
             {"kind": "snapshot", "boundary": boundary, "n": self.n, "state": state}
         )
+        # The checkpoint just made durable names no reference to anything released
+        # before it, so those records may now be collected (kernel/artifacts.py).
+        self.artifacts.seal_released()
         # The held venue reads are not in the checkpoint — the listing, the mids and
         # the account state are the venue's own facts, and a checkpoint is a
         # continuation, not a cache. Dropping them here is what makes it safe to leave

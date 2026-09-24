@@ -10,6 +10,7 @@ from typing import Any
 
 from factorylab.charter.measurement import measurement_catalogue
 from factorylab.cortex.assembly import (
+    MAX_PROGRAM_STATE_BYTES,
     SEED_SYSTEM_PROMPT,
     public_description,
     reserved_return_fields,
@@ -493,10 +494,17 @@ class SchematicsMixin:
             # so it carries no price (the wallet moves only when money moves): what is
             # stated is the hard cast (II.II.b), as a fact.
             "storage": {"working_state_max_bytes": HARD_STATE_BYTES,
+                        "program_state_max_bytes": MAX_PROGRAM_STATE_BYTES,
                         "units": "bytes of canonical JSON",
                         "pricing": "Retained working_state costs no money. A working_state "
                         "over working_state_max_bytes is refused and the head is left as "
-                        "it was."},
+                        "it was.",
+                        "retention": "One working_state head per seat and one private "
+                        "state per program seat are retained. A superseded one is released "
+                        "when its successor is written: artifact.get no longer returns it, "
+                        "and its bytes are removed at a reserve-window boundary after the "
+                        "next checkpoint. Inbox bodies and archived rationales are "
+                        "retained."},
             "tools": self._published_tool_specs(),
             "reserve": {"protected": self.reserve.remaining(), "units": "micro-USD",
                         "trials": self.m.novelty.trials,
