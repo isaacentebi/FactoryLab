@@ -1145,7 +1145,7 @@ class ComputeMixin:
     #: for it, and a round that ran only these has not acted.
     READ_ONLY_KINDS = frozenset({
         "institution", "catalogue", "outcome", "artifact", "market", "venue",
-        "connector", "web", "polymarket",
+        "connector", "web", "polymarket", "hosting",
     })
 
     def _read_only_call(self, tool_id: str) -> bool:
@@ -1439,6 +1439,10 @@ class ComputeMixin:
                 from factorylab.runtime import polymarket
 
                 return polymarket.execute(self, action_id, handle, tool_id, args, slot)
+            if spec["kind"] == "hosting":
+                from factorylab.runtime import hosting
+
+                return hosting.execute(self, action_id, handle, tool_id, args, slot)
             if spec["kind"] == "calc":
                 # Deterministic arithmetic (R3-E): a pure function of its arguments,
                 # no jail, no rail, no clock. It is metered and ledgered like any

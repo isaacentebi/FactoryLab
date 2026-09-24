@@ -424,6 +424,12 @@ class RecoveryJournal:
             if name == "provider.complete":
                 self.append({"kind": "io.result", "call": seq, "error": "RuntimeError"})
                 raise _recorded_error("RuntimeError")
+            if name.startswith("hosting."):
+                # A DigitalOcean read whose answer died with the process is completed as
+                # unavailable, never sent again: the pot waits for the next window's
+                # read, and a resume never depends on DigitalOcean (world/hosting.py).
+                self.append({"kind": "io.result", "call": seq, "error": "OSError"})
+                raise _recorded_error("OSError")
             if not _read_only(name) and name != "treasury.rail.send":
                 self.fail(f"unacknowledged external write {name} at seq {seq}; "
                           "refusing to submit it twice")
@@ -494,6 +500,9 @@ def _read_only(name: str) -> bool:
     if name.startswith("polymarket.") and name.rsplit(".", 1)[-1] in (
             "search_markets", "market", "market_of_token", "midpoint"):
         return True  # the public Polymarket reads (world/polymarket.py)
+    if name.startswith("hosting.") and name.rsplit(".", 1)[-1] in (
+            "billing",):
+        return True  # DigitalOcean's billing and droplet reads (world/digitalocean.py)
     return name.rsplit(".", 1)[-1] in (
         # The safety path's wall-clock and delivered-tick reads (time audit T8).
         "now_ns", "tick_ns",
@@ -1178,20 +1187,20 @@ def _check_artifacts(store, *, index: dict, assemblies, heads: dict, outcomes: d
 
 
 def resume_runtime(manifest, ledger_path: str, *, provider=None, market=None, exchange=None,
-                   clock_source=None, now_ns=None, _lock=None):
+                   clock_source=None, now_ns=None, hosting_client=None, _lock=None):
     """Hold exclusive ownership before reading recovery evidence or contacting a provider."""
     lock = _lock or LedgerLock(ledger_path)
     try:
         return _resume_runtime(manifest, ledger_path, provider=provider, market=market,
                                exchange=exchange, clock_source=clock_source, now_ns=now_ns,
-                               lock=lock)
+                               lock=lock, hosting_client=hosting_client)
     except BaseException:
         lock.close()
         raise
 
 
 def _resume_runtime(manifest, ledger_path, *, provider, market, exchange, clock_source,
-                    now_ns, lock):
+                    now_ns, lock, hosting_client=None):
     """Authenticate, restore, replay and reconcile before admitting another world event."""
     from factorylab.runtime.loop import Runtime
     from factorylab.runtime.shared import SimClock
@@ -1254,7 +1263,8 @@ def _resume_runtime(manifest, ledger_path, *, provider, market, exchange, clock_
     # An older checkpoint's ``drip`` launch flag is read past: [drip] is gone (D-6).
     config = {k: v for k, v in state["config"].items() if k != "drip"}
     rt = Runtime(manifest, **config, ledger_path=None, provider=provider, market=market,
-                 exchange=exchange, clock_source=clock_source, _journal=journal, _lock=lock)
+                 exchange=exchange, clock_source=clock_source, _journal=journal, _lock=lock,
+                 hosting_client=hosting_client)
     # The journal carries no path; the archive's bytes live beside the ledger (C9).
     from factorylab.kernel.artifacts import artifact_root
 

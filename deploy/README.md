@@ -150,6 +150,14 @@ chmod 0600 /srv/factorylab/rclone.conf
 install -o root -g root -m 0600 /dev/null /srv/factorylab/ops.env
 ```
 
+A world with `[hosting]` enabled (docs/manifest.md, "The host") also needs
+`/srv/factorylab/digitalocean.key`, placed the same way (`scp`, then `chown factory:factory`
+and `chmod 0600`). It must be a **custom-scoped, read-only** DigitalOcean token with exactly
+`billing:read`, `droplet:read`, `account:read` and `sizes:read`: the world reads its own
+invoice lines and droplet and never writes, and a token that could write could resize or
+destroy the droplet it runs on. The static wake service cannot read it (`InaccessiblePaths`),
+and the backup archives it when it is present.
+
 Use a secure editor to populate `/srv/factorylab/ops.env` (systemd env syntax, not
 shell code). Replace these sample values; do not put real values into this README:
 

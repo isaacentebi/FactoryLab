@@ -1681,6 +1681,227 @@ The reads are the kernel's measurement and cost no seat anything. `scripts/fastl
 answers a live-read world's reads from the simulated venue (`simulate_reads`), which then
 moves and resolves on the world's clock.
 
+## The host: `[hosting]`
+
+The factory runs on a DigitalOcean droplet paid from prepaid account credit. That credit
+is part of the one first move (essay II.II, the Stackelberg move; II.IV, "a continuous,
+reciprocal flow of capital is an objective requirement"), so what the droplet costs is on
+the books. DigitalOcean credit pays for hosting and nothing else, so hosting is **its own
+pot**: a hosting charge never moves the compute wallet, which is the authority the model
+credits back.
+
+`[hosting]` is off by default and must stay off wherever the world does not run on a
+DigitalOcean droplet (a test, a laptop): an enabled launch there refuses to start. A
+disabled block builds no client, reads nothing, opens no pot and publishes no tool, but its
+keys are hashed like any other. No world under `worlds/` enables it. The keys, all fixed for
+the world's life:
+
+| key | default | meaning |
+|---|---|---|
+| `enabled` | `false` | verify the droplet at launch, book its invoice lines once a reserve window, publish `hosting.droplet` and `hosting.sizes` |
+| `provider` | `"digitalocean"` | the only provider built (`world/digitalocean.py`) |
+| `droplet_id` | none | the droplet this world runs on; a positive integer, required when enabled |
+
+**The token must be read-only.** `DIGITALOCEAN_TOKEN` is loaded by the CLI from
+`digitalocean.key` in the working directory (owned, mode 0400 or 0600, gitignored by
+`*.key`), never printed, redacted from every error and never sent to the metadata service.
+It must be a custom-scoped token with exactly `billing:read`, `droplet:read`, `account:read`
+and `sizes:read` (docs.digitalocean.com/reference/api/scopes/): the world reads and never
+writes, and a token that could write could resize or destroy the droplet it runs on. An
+enabled world without a token does not start (`CredentialMissing`). `deploy/README.md` says
+where the file goes; the static wake service cannot read it and the backup archives it.
+
+**Launch binds the droplet, its account and the launch month.** A launch runs
+`world.hosting.verify` and refuses with `HostingRefused` and a named reason unless the
+droplet's metadata service (`GET http://169.254.169.254/metadata/v1/id`, plain text,
+reachable only from inside a droplet; docs.digitalocean.com/reference/api/metadata/droplet-properties/)
+names `droplet_id` (`not running on a DigitalOcean droplet`, `metadata droplet id differs
+from [hosting] droplet_id`) and the token's account holds it (`the billing account does not
+hold [hosting] droplet_id`). The account may hold anything else: only this droplet's lines
+are booked. The bound identity is `GET /v2/account`'s `team.uuid` when the token acts for a
+team (billing is the team's), else its `uuid`, with the droplet id
+(docs.digitalocean.com/reference/api/reference/account/). The launch month comes from the
+world's launch clock. Both are checkpointed with the pot. **A resume asks DigitalOcean
+nothing to start**: the binding and the launch time come from the checkpoint, and every
+billing reading carries the identity and the metadata id again. A reading from another
+account, from an account that no longer holds the droplet, or taken on another droplet is
+refused, ledgered once as `treasury.hosting_refused` with its reason, and books nothing. The
+transport needs a bounded name lookup (`getent`, below); a host without one refuses to
+launch or resume (`no bounded name lookup on this host (getent)`).
+
+**Burn is DigitalOcean's own per-resource billing, never inferred.** Once a reserve window
+`Treasury.observe_hosting` makes one billing read (journaled as `hosting.billing`;
+docs.digitalocean.com/reference/api/reference/billing/):
+
+- `GET /v2/customers/my/invoices`, every page (paged until an empty page, or `meta.total`
+  rows when it is stated): the `invoice_preview`'s `invoice_period` and every finalized
+  invoice's `invoice_uuid` and `invoice_period`. A row with no readable uuid or period makes
+  the whole read unavailable: an invoice nobody can place might be this droplet's, so
+  nothing is booked from that read and the launch estimate does not become final;
+- `GET /v2/customers/my/invoices/{invoice_uuid}` for up to two finalized invoices of the
+  launch month or later that have not been reconciled, each reconciled once by its uuid (a
+  month can have several invoices). They are read from a checkpointed cursor that rotates
+  through the waiting invoices in (period, uuid) order, so each of n waiting invoices is
+  read within ceil(n / 2) reads: within that bound every one is reconciled or held for a
+  stated reason. A failure reading one closed invoice (a 404, a timeout on its own share of
+  the deadline, a malformed line of this droplet's) is that invoice's alone: it is held as
+  `unreadable` (`treasury.hosting_invoice_pending`, once per change of reason), the cursor
+  moves past it, the rest of the read is booked, and it is read again when the rotation
+  comes back round. Only a failure of what the whole read stands on (the invoice index, the
+  preview, the account, the droplet, or authentication) makes the whole read unavailable;
+- `GET /v2/customers/my/invoices/preview`: the month's accruing lines ("an invoice preview
+  is generated daily, which can be accessed with the `preview` keyword in place of
+  `$INVOICE_UUID`");
+- the account, the droplet, the metadata id, the published sizes, and the billing
+  history's first page. The last two are auxiliary, each scoped to what it feeds and
+  each on at most a quarter of the read's budget. The size catalogue feeds only the
+  population's `hosting.sizes` list (the launch price behind the overshoot bound is the
+  droplet's own, verified at launch); the billing history feeds only the private diary's
+  account entries, and no line is attributed or booked from it. A history that is not a
+  list of objects (missing, a string, a number) is this read failing, never an empty
+  history. A failure of
+  either is logged once per change as `treasury.hosting_auxiliary_unread` and changes
+  nothing else; a catalogue that could not be read is not replaced by an older one, and
+  `hosting.sizes` then says so.
+
+Every charge DigitalOcean bills against this droplet is this world's burn: the droplet
+itself, its backups, anything attributed to it. A line is this droplet's when its
+`resource_uuid` is the droplet's billing uuid, or its `resource_id` is the droplet's id and
+its `product` is one billed against a droplet (`DROPLET_PRODUCTS`: `Droplets`,
+`Droplet Backups`, `Backups`; the API reference names no product strings, so these are the
+invoice's names, and a line carrying the droplet's uuid is matched whatever its product is
+called). The droplet object carries no uuid (docs.digitalocean.com/reference/api/reference/droplets/),
+so the billing uuid is learned from the droplet's own `Droplets` line, matched by id, and
+checkpointed once a valid one is actually seen (canonical 8-4-4-4-12 hex, parsed as a
+uuid and compared lowercased; anything else, such as `deadbeef`, is no uuid); until then it
+is unknown, nothing else is
+ever recorded in its place, and every read looks for it again (on the preview, and on every
+invoice read with it) before any line of that read is classified. While it is unknown, the
+id-and-product match still books what it matches with certainty, and any other line that
+names a canonical uuid, whatever id it names, might be billed against the droplet by its uuid
+and cannot be classified: an invoice holding one is held (`treasury.hosting_invoice_pending`, reason
+`uuid unknown`), never called reconciled, and read again in its turn. An invoice is reconciled
+only when every line in it is classified with certainty. A snapshot or volume whose numeric id happens to equal the droplet's has
+neither that uuid nor a droplet product, and is not matched. Only this droplet's lines are
+parsed, strictly (exact decimal amounts, ISO 8601 `start_time` and `end_time`, and an
+ordered span: a line that ends before it starts makes the whole read unavailable); every
+other line, whatever it holds, is only counted, so no other resource's line can make a read
+fail. No answer from DigitalOcean can crash a tick: an answer that cannot be booked leaves
+the books where they were and is recorded as unread (`billing answer could not be booked`),
+and a replay of the same recorded answer takes the same path.
+A line's identity within its month is a digest of every field that tells two lines apart:
+the month, its source (the preview, or an invoice's uuid), its product, description, start
+and end, amount and resource ids; lines identical in all of those are told apart by their
+occurrence in response order, and, being interchangeable, keep that identity across
+re-reads. So two different lines never share an identity (two lines with one product and one
+start are both booked), and identical lines are booked as many times as they are billed. A
+preview line's identity moves as it accrues; the month's level is the sum of its lines, so
+that books nothing twice. The description and product are used only inside the digest and
+never published.
+
+A month's level is the sum of this droplet's lines on its invoices once one of them carries
+any (the first such invoice replaces the preview's figures, and later invoices for the month
+add theirs), else on the preview. Its booked burn is that level, less the launch month's
+pre-launch share, and never below zero: a month DigitalOcean shows below zero is booked at
+zero and ledgered once as `treasury.hosting_negative_month` with its level and lines. Each
+reading books, per month, the change in that figure: `treasury.hosting_burn` when it rose,
+`treasury.hosting_burn_reversed` when it fell (a revision, an adjustment, a final invoice
+lower than its preview), each naming DigitalOcean, the month and its source. Booking is a
+level, not a flow: reading the same figures again, or replaying them after a resume, books
+nothing, and a month's booked burn is DigitalOcean's latest figure for this droplet. Each
+reconciled invoice is ledgered as `treasury.hosting_invoice` with its uuid, month, and how
+many of its lines were this droplet's and how many were not.
+
+**The launch month.** What the droplet accrued before the launch is not this world's burn.
+It is each of this droplet's launch-month lines' amount shared by DigitalOcean's own span for
+the line, `start_time` to `end_time`: the share before the launch. It is recomputed, with its
+bound, from the current version of every launch-month line on each read while the month is
+open, supplemental invoices for it included, so a line that appears late (a backup billed
+from before the launch) or a revision moves it, and the month's burn is booked from that
+recomputation. Only a reading in which
+one of those lines reaches past the launch can say it (the preview is generated daily, so the
+first reading after a launch often cannot); until one does, the launch month books nothing,
+the pot says `launch_share: "pending"`, and the diary says so once
+(`treasury.hosting_launch_share_pending`). Nothing accrued before the launch is ever booked,
+and nothing after it is dropped: if the first reading that can say it is the month's own
+invoice, read in a later month, the share comes from the invoice's lines
+(`treasury.hosting_launch_share` names its source).
+
+**The launch month's burn is an estimate, and says so.** Sharing a line by its span is an
+allocation, not a measurement: DigitalOcean caps a droplet at its monthly price, and the cap
+discounts the end of a month, which sharing spreads over the whole of it. So the launch
+share, every `hosting_burn` and `hosting_burn_reversed` item for the launch month, and the
+launch month's entry in the pot's `burn_by_month` carry `estimated: true` and
+`overshoot_bound_micro`: the most the booked launch-month burn can exceed the true
+post-launch charge by, and `estimate_final`, which becomes true only once the launch month has
+closed, an invoice for it carrying this droplet's lines is reconciled, and no invoice known
+for it is still waiting or held, for any reason. At every read the booked launch-month burn is at most the published
+bound plus the true post-launch charge. The bound is a sum of each line's uncertainty and
+is never below zero; no line reduces it. A line wholly before or wholly after the launch is
+certain and adds nothing (a line with no span is a charge at its instant, dated there). For
+a positive line of the droplet's own, it is the pre-launch part of the line's discount
+against the droplet's hourly price for the hours in its span (the true pre-launch charge is
+at most that price for those hours), priced at the rate launch verification read from the
+droplet (`treasury.hosting_launch_price`, with its monthly cap, written with the first
+booked read), never at a rate a later read sees after a resize or a repricing. For any other
+line, a credit included (its size, not its sign), or when launch verification read no price,
+it is that line's whole post-launch part.
+Every other month is DigitalOcean's figure, `estimated: false`.
+
+A month whose lines include none of this droplet's while other lines exist is flagged
+`treasury.hosting_unmatched`, keeps what is booked, and is never labelled as invoiced; it is
+cleared (`treasury.hosting_matched`) when a later reading matches it. DigitalOcean did not
+tell the droplet's lines apart, and that is said rather than guessed.
+
+**Tax, credits and payments.** Tax is on DigitalOcean's invoices, not on their lines, so this
+droplet's burn excludes it: on a taxed account the credit drains faster than the burn shows.
+The billing history records payments, credits, refunds and other entries with an amount, a
+date and an invoice reference, and names no resource (its documented `type` enum is in
+github.com/digitalocean/openapi, `specification/resources/billing/models/billing_history.yml`;
+a type outside it is recorded as `unknown`, and an entry that cannot be read is skipped,
+never an error). None is attributable to the droplet, so none is booked: each new one is
+kept in the private diary as `treasury.hosting_account_entry` with `attributed: false`, and
+none is published. For the same reason **the pot's balance is unknown**: DigitalOcean credit
+is account-wide, and the part available to this droplet is not reported. The pot publishes
+burn and says so, rather than invent a balance. When the account's credit runs out,
+DigitalOcean bills the payment method on file; that money is outside the factory's books, a
+documented boundary.
+
+**Rule 12.** The billing read runs inside event processing, at a reserve window's boundary,
+under one monotonic deadline of a tick (the `tick_interval` the clock declares when it
+starts) divided by `[timing] min_ratio`: an inner loop settles at least that many times
+faster than the loop that commands it. The deadline covers the whole read, however many
+requests it makes: the name is looked up with the system resolver through
+`getent ahostsv4` in a child process killed at the deadline (the system call has no timeout
+of its own, and no thread is started), and the connection (to that address, TLS still
+validating the host name), the handshake, the send and every receive are bounded by what the
+deadline leaves. Nothing is retried. A read whose answer died with the process (an `io.call` for
+`hosting.*` with no `io.result`) is completed on resume as unavailable and never sent again,
+as an interrupted model completion is. So the read can delay the event it runs in, and with it
+the world's next event, by at most a tick over `min_ratio`. A read that fails or passes its
+deadline books nothing (`treasury.hosting_unread`, ledgered once per reason) and the next
+window reads again.
+
+**Published.** `Treasury.pots()` carries `hosting: null` and `hosting_detail`: `balance:
+"unknown"` with its reason, `burned_micro`, `burn_by_month` (the last twelve months, each
+with its source), the launch month and its share's status, the unmatched months and the last
+unread reason, and nothing about the rest of the account. It is never in `total_micro` or
+`complete`, which reconcile the pots that back the compute wallet. `custody_view` lists it
+as `hosting_credit`, unavailable for its balance, with the burn. The wake counts the burn in
+`money.out_by_class.hosting` under the `hosting` custody and publishes
+`money.hosting.burn_by_month`. Hosting burn is overhead: no seat decided it, it is in no
+seat's cost, and so it is not in `cost_per_return`, `cost_per_attempt` or `burn_per_window`.
+
+**Two reads, from the window's read.** `hosting.droplet {}` publishes the droplet (size slug,
+vCPUs, memory, disk, status, region, monthly and hourly price) and the pot; `hosting.sizes
+{}` publishes DigitalOcean's size list as available in the droplet's region, with prices read
+from their own JSON text. Both answer from the last billing read, which fetched the droplet
+and the sizes, and never reach the network, so a seat cannot spend the account's API rate
+limit or delay the world; before the first read they answer `hosting not read yet`. Both are
+free and structured: slugs, counts, prices and times, never DigitalOcean-authored prose. There
+is no write. A resize powers the droplet off and nothing here could power it back on while
+the factory runs on it; it returns only with an external power-on design.
+
 ## New kinds of work: reward shapes and predicates
 
 A registration declares which one of the four reward shapes — `judged`,

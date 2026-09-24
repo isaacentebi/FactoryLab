@@ -69,11 +69,12 @@ INCOME_CLASSES = ("earned_micro", "subsidy_micro", "converted_from_principal_mic
 IN_CLASSES = ("initial", "drip", "release", "subsidy", "earned", "converted_from_principal",
               "exchange_pnl", "funding")
 OUT_CLASSES = ("model", "tool", "connector", "treasury", "registration", "exchange_pnl",
-               "funding", "transfer_fees", "other")
+               "funding", "transfer_fees", "hosting", "other")
 #: Which custodian each class moves money at. Venue P&L and funding are reported
 #: here as they always were, but under the venue's custody: they are not, and
 #: never were, movements of the compute wallet, which is authority (edition 3, C5).
-CUSTODY_OF_CLASS = {"exchange_pnl": "venue", "funding": "venue"}
+#: The host's burn ([hosting]) leaves the hosting pot and never the compute wallet.
+CUSTODY_OF_CLASS = {"exchange_pnl": "venue", "funding": "venue", "hosting": "hosting"}
 
 
 def _custody_headings(classes: tuple[str, ...]) -> dict[str, str]:
@@ -238,6 +239,8 @@ class _Observatory:
         # dormancy and termination.
         self.money_in: Counter = Counter()
         self.money_out: Counter = Counter()
+        # The host's pot ([hosting]): this droplet's burn by month.
+        self.hosting: dict = {"burn_by_month": {}}
         # Venue effects by the venue account they landed in, kept apart from the
         # compute wallet's own movements.
         self.venue_by_custody: dict[str, Counter] = {}
@@ -395,6 +398,22 @@ class _Observatory:
             self.money_in[reason] += amount
         else:
             self.money_out[reason] += -amount
+
+    def _on_treasury_hosting_burn(self, item: dict) -> None:
+        # What DigitalOcean billed this droplet ([hosting]; world/hosting.py), by month.
+        if type(item.get("micro")) is int and item["micro"] > 0:
+            self.money_out["hosting"] += item["micro"]
+            month = str(item.get("month"))
+            self.hosting["burn_by_month"][month] = (
+                self.hosting["burn_by_month"].get(month, 0) + item["micro"])
+
+    def _on_treasury_hosting_burn_reversed(self, item: dict) -> None:
+        # DigitalOcean's figure for a line went down: the booked burn follows it.
+        if type(item.get("micro")) is int and item["micro"] > 0:
+            self.money_out["hosting"] -= item["micro"]
+            month = str(item.get("month"))
+            self.hosting["burn_by_month"][month] = (
+                self.hosting["burn_by_month"].get(month, 0) - item["micro"])
 
     def _on_venue_settled(self, item: dict) -> None:
         """Venue P&L, fees and funding, reported under the venue's own custody.
@@ -798,6 +817,10 @@ class _Observatory:
                 "venue_by_custody": {custody: dict(sorted(counts.items()))
                                      for custody, counts in sorted(
                                          self.venue_by_custody.items())},
+                # Only a world with [hosting] has anything here: this droplet's burn by
+                # month. Nothing about the rest of the host's account is published.
+                "hosting": {"burn_by_month": dict(sorted(
+                                self.hosting["burn_by_month"].items()))},
             },
             "deliveries": {
                 # Rows, not keys: a channel name such as "verdict" is a sealed key

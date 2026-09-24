@@ -206,6 +206,10 @@ class Treasury:
         # perps account's, so a rail that does not report it has it read here, or
         # the venue pot would lose every deposit. Off: no read, no pot, no change.
         self.vault_custody = False
+        # The host's prepaid credit ([hosting]; world/hosting.py): its own pot, whose
+        # balance and outflow are what DigitalOcean reports and which backs nothing
+        # else. None: no read, no pot, no change.
+        self.hosting = None
 
     def _write(self, kind: str, **fields) -> None:
         self.ledger.append({"kind": "treasury." + kind, **fields})
@@ -252,6 +256,12 @@ class Treasury:
         result.update({k: self.income[k] for k in INCOME_CLASSES})
         result["claimed_micro"] = self.income.get("claimed_micro", 0)
         result["observed_at_ns"] = self.pots_observed_ns
+        if self.hosting is not None:
+            # Its own pot, beside the others and never in their total: DigitalOcean
+            # credit pays only DigitalOcean and backs no model spending. Its balance
+            # is unknown (world/hosting.py); its burn is published by month.
+            result["hosting"] = None
+            result["hosting_detail"] = self.hosting.view()
         # The compute wallet is not a pot. It is the constitutional ceiling on
         # what may be spent -- authority, not cash -- and the assets above are
         # what back it. Labelling it here keeps a reader from adding it to them.
@@ -464,6 +474,96 @@ class Treasury:
             )
         self.income = {**self.income, "spool_offset": observed["offset"]}
         return booked
+
+    def observe_hosting(self) -> dict | None:
+        """Read this droplet's billing once and book exactly its invoice lines, by month.
+
+        Guarantees no wallet moves: a hosting charge lowers the hosting pot and no
+        other (the wallet moves only when money moves, and this money never passes
+        through it). A reading is booked only when it comes from the account this
+        world is bound to, which still holds the droplet this process runs on;
+        otherwise it is refused, ledgered as ``treasury.hosting_refused`` with its
+        named reason, and books nothing. A failed or late read books nothing and is
+        ledgered once as ``treasury.hosting_unread``. Every booked change is one
+        ``treasury.hosting_burn`` (or ``hosting_burn_reversed`` when DigitalOcean's
+        figure for the month went down), naming DigitalOcean and the month.
+        """
+        hosting = self.hosting
+        if hosting is None:
+            return None
+        from factorylab.world.hosting import refusal
+
+        def unread(kind: str, reason: str) -> None:
+            if hosting.unread != reason:
+                self._write(kind, reason=reason)
+            hosting.unread = reason
+
+        try:
+            reading = hosting.client.billing(
+                hosting.droplet_id, since=hosting.since, done=list(hosting.reconciled),
+                budget_s=hosting.budget_s, uuid=hosting.droplet_uuid or None,
+                cursor=hosting.cursor)
+        except Exception:  # noqa: BLE001 - an unread custodian is unknown, not empty
+            # A fixed reason, never the exception's class: a replay raises the recorded
+            # failure under another class, and the diary must read the same.
+            unread("hosting_unread", "billing read failed or passed its deadline")
+            return None
+        reason = refusal(hosting.bound, reading["identity"])
+        if reason is not None:
+            unread("hosting_refused", reason)
+            return None
+        before = hosting.state()
+        try:
+            result = hosting.observe(reading)
+        except Exception:  # noqa: BLE001 - no answer from the venue may crash a tick
+            # Whatever the answer held that could not be booked, it is not booked: the
+            # books go back to where they were, the reading is recorded as unread, and
+            # a replay of the same recorded answer takes the same path.
+            hosting.restore(before)
+            unread("hosting_unread", "billing answer could not be booked")
+            return None
+        common = {"counterparty": "digitalocean", "droplet_id": hosting.droplet_id}
+        if result["launch_price"] is not None:
+            self._write("hosting_launch_price", **common, month=hosting.since,
+                        **result["launch_price"])
+        for invoice in result["reconciled"]:
+            self._write("hosting_invoice", **invoice)
+        if result["auxiliary_unread"]:
+            # A read that feeds nothing booked failed; logged once per change.
+            self._write("hosting_auxiliary_unread", **common,
+                        reads=result["auxiliary_unread"])
+        for invoice in result["held"]:
+            # Read, and not yet classifiable with certainty: never called done, and
+            # read again in its turn (the reason says why).
+            self._write("hosting_invoice_pending", **invoice)
+        if result["baseline"] is not None:
+            self._write("hosting_launch_share", **common, **result["baseline"])
+        if result["pending"]:
+            # No line of this droplet reaching past the launch has been read yet: the
+            # launch month's pre-launch share is unknown, so the month books nothing
+            # until one is, and no accrual is booked as burn or dropped meanwhile.
+            self._write("hosting_launch_share_pending", **common, month=hosting.since,
+                        launch_ns=hosting.launch_ns)
+        for change in result["changes"]:
+            kind = "hosting_burn" if change["delta_micro"] > 0 else "hosting_burn_reversed"
+            self._write(kind, **common, micro=abs(change["delta_micro"]),
+                        **{k: v for k, v in change.items() if k != "delta_micro"})
+        for negative in result["negative"]:
+            self._write("hosting_negative_month", **common, **negative)
+        for month in result["unmatched"]:
+            # The droplet's own lines could not be told apart that month: nothing is
+            # booked for it, and the diary says so rather than book the account's.
+            self._write("hosting_unmatched", **common, month=month)
+        for month in result["cleared"]:
+            self._write("hosting_matched", **common, month=month)
+        for entry in result["entries"]:
+            # The account's own entries name no resource: kept in the private diary,
+            # never booked and never published.
+            self._write("hosting_account_entry", counterparty="digitalocean",
+                        attributed=False, entry_type=entry["type"],
+                        micro=entry["amount_micro"], date=entry["date"],
+                        invoice_uuid=entry["invoice_uuid"])
+        return result
 
     def _gas_view(self) -> dict:
         """The exit route's gas position: never money, so it cannot change completeness."""
@@ -1191,6 +1291,10 @@ class Treasury:
                 "income": self.income,
             }
         )
+        if self.hosting is not None:
+            # Only a world with a hosting pot carries this key; every other
+            # checkpoint keeps its shape.
+            saved["hosting"] = self.hosting.state()
         if self.rail.name == FakeHybridRail.name:
             # The scripted mainnet reserve and sink sit outside every observed pot, so
             # only the checkpoint carries them; a world without the mode never has them.
@@ -1236,6 +1340,8 @@ class Treasury:
             self.rail.venice = saved["fake_venice"]
         if saved.get("fake_hybrid") is not None:
             self.rail.hybrid_books = saved["fake_hybrid"]
+        if saved.get("hosting") is not None and self.hosting is not None:
+            self.hosting.restore(saved["hosting"])
 
 
 class FakeRail:

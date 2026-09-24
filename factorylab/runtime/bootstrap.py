@@ -87,6 +87,7 @@ class BootstrapMixin:
         reconcile_every: int = 10,
         kill_at_end: bool = False,
         capital_loop: bool = False,
+        hosting_client: Any | None = None,
         _journal: RecoveryJournal | None = None,
         _lock: LedgerLock | None = None,
     ) -> None:
@@ -763,6 +764,14 @@ class BootstrapMixin:
         # [polymarket] enabled: event-market tools with their own examples, and the
         # simulated venue or the public read client behind them. Absent otherwise.
         install_polymarket(self)
+        from factorylab.runtime.hosting import install as install_hosting
+
+        # [hosting] enabled: the host's own pot, booked from DigitalOcean's invoice
+        # lines for its droplet, and two structured reads (world/hosting.py). A launch
+        # that cannot verify its droplet does not start; a resume asks DigitalOcean
+        # nothing to start. Absent otherwise.
+        self.hosting = None
+        install_hosting(self, hosting_client, resuming=_journal is not None)
         self.tool_runner = JournalProxy(ToolRunner(), self.ledger, "sandbox")
         available = self.tool_runner.available
         self.ledger.append({"kind": "sandbox.availability", "available": available})

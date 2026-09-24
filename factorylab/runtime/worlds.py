@@ -241,6 +241,38 @@ class PolymarketSpec:
 
 
 @dataclass(frozen=True)
+class HostingSpec:
+    """``[hosting]``: the host's prepaid credit as its own pot, and its droplet as a read.
+
+    Off unless enabled, and off wherever the world does not run on a DigitalOcean
+    droplet (a test, a laptop): ``enabled = false`` builds no client, reads
+    nothing, opens no pot and publishes no tool. Enabled, a launch refuses to start
+    unless the droplet's own metadata service names ``droplet_id`` and the token's
+    account holds that droplet; the account may hold anything else. Once a reserve
+    window the world books DigitalOcean's invoice lines for this droplet alone
+    (world/hosting.py), on the hosting pot, refusing any reading from another
+    account, and publishes ``hosting.droplet`` and ``hosting.sizes``. Fixed for the
+    world's life.
+    """
+
+    enabled: bool = False
+    provider: str = "digitalocean"
+    droplet_id: int | None = None
+
+    def __post_init__(self):
+        if type(self.enabled) is not bool:
+            raise ValueError("hosting.enabled must be true or false")
+        if self.provider != "digitalocean":
+            raise ValueError("hosting.provider must be digitalocean")
+        if self.droplet_id is not None and (
+                type(self.droplet_id) is not int or isinstance(self.droplet_id, bool)
+                or self.droplet_id <= 0):
+            raise ValueError("hosting.droplet_id must be a positive integer")
+        if self.enabled and self.droplet_id is None:
+            raise ValueError("hosting.enabled needs hosting.droplet_id")
+
+
+@dataclass(frozen=True)
 class TreasurySpec:
     """Compute insolvency and the public discovery index are fixed at launch."""
 
@@ -559,6 +591,7 @@ class WorldManifest:
     connectors: ConnectorsSpec = ConnectorsSpec()
     web: WebSpec = WebSpec()
     polymarket: PolymarketSpec = PolymarketSpec()
+    hosting: HostingSpec = HostingSpec()
     storage: StorageSpec = StorageSpec()
     prices: PricesSpec = PricesSpec()
     treasury: TreasurySpec = TreasurySpec()
@@ -1501,6 +1534,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         connectors=connectors,
         web=web,
         polymarket=_manifest_polymarket(d.get("polymarket")),
+        hosting=_manifest_hosting(d.get("hosting")),
         storage=storage,
         tools=ToolsSpec(
             int((d.get("tools") or {}).get("population_tool_micro_per_call", 50)),
@@ -1674,6 +1708,17 @@ def _manifest_polymarket(raw: Any) -> PolymarketSpec:
                                       default.max_orders_per_window),
         seed=raw.get("seed", default.seed),
     )
+
+
+def _manifest_hosting(raw: Any) -> HostingSpec:
+    """``[hosting]``: an absent block is the disabled default; an unknown key is refused."""
+    if raw is None:
+        return HostingSpec()
+    if not isinstance(raw, dict) or set(raw) - {"enabled", "provider", "droplet_id"}:
+        raise ValueError("unknown hosting manifest key")
+    return HostingSpec(enabled=raw.get("enabled", False),
+                       provider=raw.get("provider", "digitalocean"),
+                       droplet_id=raw.get("droplet_id"))
 
 
 def _manifest_chaos(raw: Any) -> ChaosSpec:

@@ -144,6 +144,8 @@ def _load_dotenv() -> None:
         ("openrouter.key", "OPENROUTER_API_KEY"),
         ("hyperliquid.key", "HL_PRIVATE_KEY"),
         ("reserve.key", "RESERVE_PRIVATE_KEY"),
+        # The host's API token ([hosting]): it reads the account the world's host bills.
+        ("digitalocean.key", "DIGITALOCEAN_TOKEN"),
     ):
         keyfile = Path.cwd() / filename
         if not (keyfile.exists() or keyfile.is_symlink()):
