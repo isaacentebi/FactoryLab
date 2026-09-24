@@ -40,6 +40,7 @@ from factorylab.cortex.request import (
     validate_propensity,
 )
 from factorylab.cortex.sandbox import MAX_PROGRAM_TIMEOUT_S
+from factorylab.kernel.artifacts import ArtifactError
 from factorylab.kernel.ledger import utf8_text
 from factorylab.world.metering import BillingUncertain, Infeasible, MeteredModel
 from factorylab.world.models import ModelRequest
@@ -527,14 +528,16 @@ class ProgramAssembly:
                                  "stop")
             if self.artifacts is None:
                 return malformed({"reason": "no artifact archive"}, "stop")
-            previous = self.state_sha
-            self.state_sha = self.artifacts.put(encoded, owner=self.spec.id,
-                                                kind="program.state")
-            if previous is not None and previous != self.state_sha:
-                # One private state per program is retained: the superseded one's
-                # reference goes, and its bytes are collected once no durable
-                # checkpoint names them (the disk is a limit, not a price).
-                self.artifacts.release(previous, owner=self.spec.id, kind="program.state")
+            # One private state per program is retained: the put releases the
+            # superseded one's reference, whose bytes are collected once no durable
+            # checkpoint names them (the disk is a limit, not a price), and refuses a
+            # state the retained private state cap cannot hold, as a full disk would.
+            try:
+                self.state_sha = self.artifacts.put(encoded, owner=self.spec.id,
+                                                    kind="program.state",
+                                                    supersedes=self.state_sha)
+            except ArtifactError as exc:
+                return malformed({"reason": str(exc)}, "stop")
             provider["state_sha"] = self.state_sha
         children = _children(req, parsed, self.child_factory)
         raw_calls = parsed.get("tool_calls")

@@ -1903,7 +1903,7 @@ paid read is the journal call `connector.paid_fetch`, and the ledger retains
 HTTP 402 with no data cost. `world.connectors` publishes `optional_fields`,
 the `payment` note, and each registered connector's `pay` and `max_call_micro`.
 
-Retained storage costs no money, and there is no `[storage]` table. The public
+Retained storage costs no money; `[storage]` holds one limit and no price. The public
 notebook (`note.put`, `note.get`, `note.list` and `[notes]`) was deleted by ruling
 R11: Chapter II §I.b prescribes two channels, rich requests and thin rewards, and
 a population-wide blackboard is neither. Its storage rent survived it until Wave
@@ -1918,14 +1918,31 @@ when no checkpoint names it, otherwise at the first boundary after a later
 checkpoint, so at most one more per seat is held a window longer); and every
 outcome body and archived rationale, retained for the world's life and growing
 with decisions, on the order of 0.5 KiB per outcome addressed to a seat (an inbox
-body with its evidence pointer and what the seat said). A retirement releases the
-retired seat's head and a retired program's private state the same way, since
-retirement is final and nothing revives a retired seat, so **retained private state
-is bounded by the live seats times the per-seat cap** (a head and a private state,
-64 KiB each), and the live seats are bounded by the money, since every seat exists
-on an endowment; a retired seat's outcome bodies and archived rationales are the
-world's record and stay. A retired id registered again as its next version starts
-with no head. Writing a new head
+body with its evidence pointer and what the seat said). Retirement is final for a
+version, not for an id: a retired id's head and a retired program's private state
+are kept, and the id registered again as its next version inherits them (a program
+version inherits the private state the id still holds). The disk is finite, so the
+whole of retained private state has its own hard limit:
+
+| key | default | meaning |
+|---|---|---|
+| `[storage] retained_private_bytes` | `67108864` (64 MiB) | the most the archive holds as private state (every working-state head and program private state, retired ids' included); fixed for the world's life |
+
+**Retained private state is at most `retained_private_bytes`, always.** A retired
+id's state is kept until capacity is needed: a head or program-state write that
+would take retained private state over the limit first releases the kept state of
+retired ids, oldest retirement first, each through the journaled release
+(`artifact.released` with `cause: "capacity"`, ledgered before the index changes);
+a write that still does not fit, with no retired state left, is refused with a
+no-space error, as on a full disk (a head is ledgered `state.refused` and left as it
+was; a program's call is malformed and its state unchanged). A live seat's state is
+never released to make room. A write replacing a seat's own head or state is
+measured with the one it replaces gone. The key is validated at load: at least the
+seeded seats times the per-seat cap (128 KiB: a head and a private state), and at
+most half the free disk of the filesystem the world is loaded from (the working
+directory, where `runs/` sits), read with `shutil.disk_usage`. The world block's
+`storage` section publishes it with the rule above. A retired seat's outcome
+bodies and archived rationales are the world's record and stay. Writing a new head
 releases the superseded one's reference (`artifact.released`), and `artifact.get`
 answers `artifact_released` for it to the seat that released it (for its last
 eight releases) and `artifact_private` to every other reader. The world block's
@@ -1934,7 +1951,8 @@ head is ledgered on its `state.put` item, and the
 archive's size after each boundary's collection on `artifact.retained {records,
 bytes, released_bytes, window}`, where a measurement could read them so the
 charter can price retained state through λ on reward (§II.b soft casts, §IV.a) if
-the population proposes to. A world file naming `[storage]` or `[notes]` is refused by name.
+the population proposes to. A world file naming `[notes]`, or a `[storage]` price
+(`micro_per_byte_day`), is refused by name; any other `[storage]` key is unknown.
 Nothing about retained state reaches a decision's cost, a cost card or a
 consequence outcome: `ReturnAccount.carried_micro`, `consequence.carried`, the
 `storage` rows of a card's samples and the window's `storage_cost_micro` were

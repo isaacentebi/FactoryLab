@@ -496,6 +496,7 @@ class SchematicsMixin:
             # stated is the hard cast (II.II.b), as a fact.
             "storage": {"working_state_max_bytes": HARD_STATE_BYTES,
                         "program_state_max_bytes": MAX_PROGRAM_STATE_BYTES,
+                        "retained_private_bytes": self.m.storage.retained_private_bytes,
                         "units": "bytes of canonical JSON",
                         "pricing": "Retained working_state costs no money. A working_state "
                         "over working_state_max_bytes is refused and the head is left as "
@@ -504,8 +505,7 @@ class SchematicsMixin:
                         "most working_state_max_bytes. A program seat retains its current "
                         "private state, at most program_state_max_bytes, written when a "
                         "call prints one; seats of its lineage read it while it is current. "
-                        "Writing a successor releases the superseded head or state, and a "
-                        "seat's retirement releases its head and private state: "
+                        "Writing a successor releases the superseded head or state: "
                         "artifact.get answers artifact_released to the seat that released "
                         f"it, for its last {RELEASED_MEMORY} releases, and answers every other "
                         "reader as it "
@@ -514,8 +514,16 @@ class SchematicsMixin:
                         "names them, otherwise at the first boundary after a later "
                         "checkpoint. Outcome bodies and archived rationales are retained for "
                         "the world's life and grow with decisions, on the order of 0.5 KiB "
-                        "per outcome addressed to a seat. Retained private state is "
-                        "therefore at most the live seats times these two caps."},
+                        "per outcome addressed to a seat. Retained private state, every "
+                        "head and program private state held, a retired id's included, is "
+                        "at most retained_private_bytes, always. A retired id's head and "
+                        "private state are kept until capacity is needed, and the id "
+                        "registered again as its next version inherits whatever of them is "
+                        "still kept. A write that would take retained private state over "
+                        "retained_private_bytes first releases retired ids' state, oldest "
+                        "retirement first; a write that still does not fit is refused with "
+                        "a no-space error, as on a full disk. A live seat's state is never "
+                        "released to make room."},
             "tools": self._published_tool_specs(),
             "reserve": {"protected": self.reserve.remaining(), "units": "micro-USD",
                         "trials": self.m.novelty.trials,

@@ -404,6 +404,9 @@ class BootstrapMixin:
             self._register_seed_contracts()
         self.assemblies: dict[str, Assembly] = {}
         self.retired_assemblies: set[str] = set()
+        # The retired ids, oldest retirement first: whose kept state is released first
+        # when a private-state write needs room under the cap (``[storage]``).
+        self.retirement_order: list[str] = []
         self.retirement_proposals: dict[str, dict] = {}
         self.return_kinds: dict[str, str] = {}
         self.return_bindings: dict[str, dict] = {}
@@ -546,6 +549,10 @@ class BootstrapMixin:
             self.ledger, root=artifact_root(ledger_path) if ledger_path else None,
             clock_ns=self.clock,
         )
+        # The disk is finite: retained private state has a hard cap for the world's
+        # life, and a write that needs room releases retired ids' kept state first.
+        self.artifacts.private_cap = manifest.storage.retained_private_bytes
+        self.artifacts.make_room = self._release_oldest_retired_state
         # Continuity (C1): a head pointer per seat over the archive, and an inbox of
         # settled consequences addressed to the seat that decided them. These replace
         # the three-entry memory deque, which lost a decision before its outcome landed.

@@ -902,6 +902,8 @@ class GovernanceMixin:
             if custom:
                 self.kind_reward_shapes.update(shapes)
             self.retired_assemblies.discard(prop.id)
+            if prop.id in self.retirement_order:
+                self.retirement_order.remove(prop.id)
             if not self._assign_reader_slot(prop.id):
                 # Every venue read slot is held: the seat is admitted all the same,
                 # without the venue reads, and its proposer's receipt says so.

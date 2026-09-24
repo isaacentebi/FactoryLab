@@ -564,10 +564,15 @@ class ComputeMixin:
             # pays no one: its price is zero (the wallet moves only when money
             # moves), and the call still runs through the meter so it is ledgered
             # beside a model call.
+            # A retired id's next version inherits the private state the id still
+            # holds: retirement is final for a version, not for an id.
+            kept = [sha for sha, kind in self.artifacts.private_holdings(spec.id)
+                    if kind == "program.state"]
             asm = ProgramAssembly(
                 spec, self.program_runner, meter,
                 artifacts=self.artifacts, validator=self._validate_output_contract,
                 record=lambda entry: self.ledger.append(entry),
+                state_sha=kept[-1] if kept else None,
             )
             self.assemblies[spec.id] = asm
             self.event_schemas.update(spec.schemas)

@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
 import tomllib
 from dataclasses import asdict, dataclass, field, fields, replace
 from decimal import Decimal
@@ -210,6 +211,25 @@ class WebSpec:
             raise ValueError("web.max_call_usd must be a non-negative amount")
         if self.search_model is not None and self.max_call_micro <= 0:
             raise ValueError("web.max_call_usd must be positive")
+
+
+#: The default cap on retained private state: 64 MiB.
+DEFAULT_RETAINED_PRIVATE_BYTES = 64 * 1024 * 1024
+#: The cap may take at most this share of the host's free disk at load, as a
+#: (numerator, denominator) pair: half, so the diary and the world's record keep room.
+MAX_FREE_DISK_SHARE = (1, 2)
+
+
+@dataclass(frozen=True)
+class StorageSpec:
+    """``[storage]``: the hard cap on retained private state, fixed for the world's life.
+
+    Retained private state is every working-state head and program private state
+    the archive holds, retired ids' included. The disk is finite and pays no one,
+    so this is a limit, never a price (essay II.II.b, the hard cast).
+    """
+
+    retained_private_bytes: int = DEFAULT_RETAINED_PRIVATE_BYTES
 
 
 #: The hybrid capital-loop keys: unset (``None``) in every world but the capital loop.
@@ -586,6 +606,7 @@ class WorldManifest:
     connectors: ConnectorsSpec = ConnectorsSpec()
     web: WebSpec = WebSpec()
     polymarket: PolymarketSpec = PolymarketSpec()
+    storage: StorageSpec = StorageSpec()
     prices: PricesSpec = PricesSpec()
     treasury: TreasurySpec = TreasurySpec()
     clock: ClockSpec = ClockSpec()
@@ -993,8 +1014,39 @@ class WorldManifest:
                         f"cannot cover one read of {SEAT_READ_REQUESTS} request")
         return None
 
+    def storage_problem(self, *, free_bytes: int | None = None) -> str | None:
+        """Why this world's retained private state cap cannot hold, or None.
+
+        Guarantees a world is refused whose ``[storage] retained_private_bytes`` is
+        not a positive integer, cannot hold every seeded seat at its per-seat cap (a
+        working-state head and a program private state), or exceeds
+        ``MAX_FREE_DISK_SHARE`` of the free disk of the filesystem it is loaded from
+        (the working directory, where ``runs/`` sits), read with ``shutil.disk_usage``
+        unless ``free_bytes`` is given.
+        """
+        from factorylab.cortex.assembly import MAX_PROGRAM_STATE_BYTES
+        from factorylab.runtime.continuity import HARD_STATE_BYTES
+
+        cap = self.storage.retained_private_bytes
+        if type(cap) is not int or cap <= 0:
+            return "storage.retained_private_bytes must be a positive integer"
+        per_seat = HARD_STATE_BYTES + MAX_PROGRAM_STATE_BYTES
+        floor = len(self.assemblies) * per_seat
+        if cap < floor:
+            return (f"storage.retained_private_bytes = {cap} cannot hold the "
+                    f"{len(self.assemblies)} seeded seats at {per_seat} bytes each "
+                    f"(a working-state head and a program private state): at least {floor}")
+        if free_bytes is None:
+            free_bytes = shutil.disk_usage(Path.cwd()).free
+        num, den = MAX_FREE_DISK_SHARE
+        ceiling = free_bytes * num // den
+        if cap > ceiling:
+            return (f"storage.retained_private_bytes = {cap} exceeds {num}/{den} of the "
+                    f"host's free disk ({free_bytes} bytes free): at most {ceiling}")
+        return None
+
     def validate(self) -> None:
-        problem = self.read_share_problem()
+        problem = self.read_share_problem() or self.storage_problem()
         if problem is not None:
             raise ValueError(problem)
         namespace = self.exchange.client_namespace
@@ -1368,12 +1420,14 @@ def _refuse_removed_prices(d: dict[str, Any]) -> None:
     compute is refused by name rather than loaded as if the price applied: such a
     debit had no counterparty, so the books would lie.
     """
+    storage = d.get("storage")
     for table in ("storage", "notes"):
-        if table in d:
+        if table in d and (table == "notes" or not isinstance(storage, dict)
+                           or "micro_per_byte_day" in storage):
             raise ValueError(
                 f"[{table}] was removed: retained working state pays no one, so it is a "
-                "constraint (the 64 KiB hard limit), never a money debit; the wallet moves "
-                "only when money moves")
+                "constraint (the 64 KiB hard limit and storage.retained_private_bytes), "
+                "never a money debit; the wallet moves only when money moves")
     for (table, key), why in REMOVED_PRICE_KEYS.items():
         if isinstance(d.get(table), dict) and key in d[table]:
             raise ValueError(f"{table}.{key} was removed: {why}; the wallet moves only "
@@ -1603,6 +1657,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         evaluation=evaluation,
         connectors=connectors,
         web=web,
+        storage=_manifest_storage(d.get("storage")),
         polymarket=_manifest_polymarket(d.get("polymarket")),
         tools=ToolsSpec(
             int((d.get("tools") or {}).get("max_leverage", 3)),
@@ -1758,6 +1813,15 @@ def _manifest_polymarket(raw: Any) -> PolymarketSpec:
         kernel_reserve_per_minute=raw.get("kernel_reserve_per_minute",
                                           default.kernel_reserve_per_minute),
     )
+
+
+def _manifest_storage(raw: Any) -> StorageSpec:
+    """``[storage]``: only the retained private state cap (a price there is refused first)."""
+    if raw is None:
+        return StorageSpec()
+    if not isinstance(raw, dict) or set(raw) - {"retained_private_bytes"}:
+        raise ValueError("unknown storage manifest key")
+    return StorageSpec(raw.get("retained_private_bytes", DEFAULT_RETAINED_PRIVATE_BYTES))
 
 
 def _manifest_chaos(raw: Any) -> ChaosSpec:

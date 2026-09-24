@@ -139,13 +139,15 @@ def test_a_manifest_hashes_what_it_says_and_a_default_is_no_exception():
     be divided over venue read slots ([venue] max_readers; the population itself has no
     size cap), and again when Polymarket reads gained their published-rate-limit budget
     and kernel reserve ([polymarket] read_requests_per_minute,
-    kernel_reserve_per_minute); each time it is a new v0."""
+    kernel_reserve_per_minute), and again when retained private state gained its
+    hard cap on the finite disk ([storage] retained_private_bytes; a retired id keeps
+    its state until capacity is needed); each time it is a new v0."""
     scripted = load_manifest("scripted")
     assert '"forecast_horizon_events":10' in scripted.canonical_json()
     assert '"chaos":{"connector_timeout":0.0' in scripted.canonical_json()
     assert '"contract":"json_object"' in scripted.canonical_json()
     assert scripted.manifest_hash() == (
-        "b10be6232e84925bf00892b89ee932748bdc2ed48a7653fbd81a47d0fb8b53f5"
+        "2c06f000beb71e86e7d4d278c3bd6e5000fefb0933e5686ebad5bc5273427aff"
     )
 
     implicit = manifest_from_dict(_base())

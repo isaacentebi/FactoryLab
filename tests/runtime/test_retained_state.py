@@ -6,16 +6,29 @@ program seat), releases the reference a superseded one held, and collects its
 bytes once no checkpoint a resume could start from names them. Nothing a seat or
 the settlement machinery still references is ever collected, and nothing about a
 released record's former writer survives into what a later writer is shown.
+
+Retirement is final for a version, not for an id, so a retired id keeps its state
+for its next version; the disk is finite, so the whole of retained private state
+has a hard cap (``[storage] retained_private_bytes``) that releases retired ids'
+state, oldest retirement first, before it refuses a write.
 """
+
+import hashlib
+import json
+from types import SimpleNamespace
 
 import pytest
 
-from factorylab.kernel.artifacts import ArtifactStore, artifact_root
+from factorylab.cortex.assembly import MAX_PROGRAM_STATE_BYTES
+from factorylab.kernel.artifacts import ArtifactCapacityError, ArtifactStore, artifact_root
 from factorylab.kernel.ledger import Ledger
+from factorylab.runtime import worlds
 from factorylab.runtime.continuity import HARD_STATE_BYTES, canonical
 from factorylab.runtime.resume import _check_artifacts
+from factorylab.runtime.worlds import DEFAULT_RETAINED_PRIVATE_BYTES, manifest_from_dict
 from tests.conftest import make_runtime
 from tests.runtime.test_connectors import decision, ledger_items
+from tests.runtime.test_real_flows import _world
 
 DAY_NS = 86_400 * 1_000_000_000
 
@@ -353,6 +366,11 @@ def test_a_resume_seals_what_the_recorded_run_sealed_and_skips_collected_bytes(t
     assert new in store.index and store.get(new)
 
 
+
+
+# --- retirement keeps an id's state; a finite disk bounds the whole of it ---------------
+
+
 def _register_program(rt, seat_id):
     from factorylab.cortex.request import Return
 
@@ -361,53 +379,205 @@ def _register_program(rt, seat_id):
         "kind": "assembly", "id": seat_id, "model_id": "program", "accepts": ["Tick"],
         "code": "print('{}')", "state_policy": "private"}]}, 0, "ok"))
     assert seat_id in rt.assemblies, ledger_items(rt, "registration.rejected")
+    assert seat_id not in rt.retired_assemblies
     return handle
 
 
+def _write_both(rt, seat, obj):
+    """A head through the kernel's own path, and a program state as a call prints one."""
+    rt.working_state.put(seat, obj, handle=decision(rt, seat))
+    asm = rt.assemblies[seat]
+    asm.state_sha = rt.artifacts.put(canonical({"program": obj}), owner=seat,
+                                     kind="program.state", supersedes=asm.state_sha)
+
+
 def _private_bytes(rt):
-    """What the archive holds as somebody's private state: heads and program states."""
+    """Retained private state, recounted from the index: every record a reference holds
+    as a working-state head or a program private state."""
     return sum(record["bytes"] for sha, record in rt.artifacts.index.items()
-               if rt.artifacts.references(sha, record)
-               and {ref.get("kind") for ref in rt.artifacts.references(sha, record).values()}
-               & {"working.state", "program.state"})
+               if any(k in ("working.state", "program.state")
+                      for ref in rt.artifacts.references(sha, record).values()
+                      for k in ref.get("kinds", [ref["kind"]])))
 
 
-def test_retiring_seats_releases_their_private_state_so_it_stays_bounded():
-    """Retirement is final, so a retired seat's head and program state reach no one and
-    are released: register, write both, retire, N times, and the private bytes the
-    archive holds stay within the live seats times the per-seat cap."""
+def test_a_retired_id_registered_again_inherits_its_head_and_program_state():
+    """Retirement is final for a version, not for an id: the next version of a retired
+    id starts from the head and the program state the id kept, and nothing of them
+    was released."""
+    rt = make_runtime()
+    rt._manage_reserve_window()
+    _register_program(rt, "prog-a")
+    _write_both(rt, "prog-a", {"lesson": "keep"})
+    head = rt.working_state.head("prog-a")
+    state = rt.assemblies["prog-a"].state_sha
+    first = rt.assemblies["prog-a"]
+    rt._retire_assembly("prog-a", "vote-1")
+    for _ in range(2):
+        _boundary(rt)
+    _register_program(rt, "prog-a")
+    second = rt.assemblies["prog-a"]
+    assert second is not first and second.spec.version == first.spec.version + 1
+    assert rt.working_state.head("prog-a") == head
+    assert second.state_sha == state
+    assert json.loads(rt.artifacts.get(second.state_sha)) == {"program": {"lesson": "keep"}}
+    assert not [i for i in ledger_items(rt, "artifact.released") if i["owner"] == "prog-a"]
+    assert "prog-a" not in rt.retirement_order
+
+
+def test_retired_state_is_released_oldest_first_and_retained_stays_under_the_cap():
+    """Register, write, retire with fresh ids past the cap: retained private state never
+    exceeds it, the state of the oldest retirement is released first (journaled, cause
+    ``capacity``), the latest retired ids keep theirs, and live seats are untouched."""
     rt = make_runtime()
     rt._manage_reserve_window()
     rt._snapshot("reserve_window")
-    blob = "x" * (HARD_STATE_BYTES - 64)
+    live_head = rt.working_state.put("seed-decider", {"live": True}, handle=decision(rt))
+    live = {seat: rt.working_state.head(seat) for seat in rt.working_state.heads}
+    pad = "x" * 20_000
+    pair = len(canonical({"n": 0, "pad": pad})) + len(canonical({"program": {"n": 0,
+                                                                            "pad": pad}}))
+    cap = rt.artifacts.private_bytes() + 3 * pair
+    rt.artifacts.private_cap = cap
     for n in range(8):
         seat = f"prog-{n}"
         _register_program(rt, seat)
-        rt.working_state.put(seat, {"n": n, "pad": blob}, handle=decision(rt, seat))
-        rt.assemblies[seat].state_sha = rt.artifacts.put(
-            canonical({"n": n, "pad": blob}), owner=seat, kind="program.state")
+        _write_both(rt, seat, {"n": n, "pad": pad})
         rt._retire_assembly(seat, f"vote-{n}")
-        assert rt.working_state.head(seat) is None and rt.assemblies[seat].state_sha is None
-        _boundary(rt)
-    live = len(rt._live_seats())
-    assert _private_bytes(rt) <= live * 2 * HARD_STATE_BYTES
-    assert _private_bytes(rt) < 2 * HARD_STATE_BYTES  # nothing of the retired seats
-    released = [i for i in ledger_items(rt, "artifact.released") if i["owner"] == "prog-0"]
+        assert rt.artifacts.private_bytes() == _private_bytes(rt) <= cap
+        if n % 2:
+            _boundary(rt)
+    released = [i for i in ledger_items(rt, "artifact.released") if i.get("cause")]
+    assert {i["cause"] for i in released} == {"capacity"}
+    assert list(dict.fromkeys(i["owner"] for i in released)) == [f"prog-{n}" for n in range(5)]
     assert {i["artifact_kind"] for i in released} == {"working.state", "program.state"}
+    for n in range(5):
+        assert rt.working_state.head(f"prog-{n}") is None
+        assert rt.assemblies[f"prog-{n}"].state_sha is None
+        assert not rt.artifacts.private_holdings(f"prog-{n}")
+    for n in range(5, 8):
+        assert rt.working_state.head(f"prog-{n}") is not None
+        assert rt.assemblies[f"prog-{n}"].state_sha is not None
+    for seat, head in live.items():
+        assert rt.working_state.head(seat) == head
+        assert (head["sha"], "working.state") in rt.artifacts.private_holdings(seat)
+    assert rt.working_state.head("seed-decider") == live_head
+    # What is still kept is inherited; what was released for room is not.
+    _register_program(rt, "prog-7")
+    assert rt.working_state.head("prog-7") is not None
+    assert rt.assemblies["prog-7"].state_sha is not None
+    _register_program(rt, "prog-0")
+    assert rt.working_state.head("prog-0") is None
+    assert rt.assemblies["prog-0"].state_sha is None
 
 
-def test_a_retired_seat_s_record_to_the_world_is_still_readable():
-    """What a retired seat was told (its inbox bodies) and what it said (archived
-    rationales) are the world's record and are not released."""
+def test_a_live_write_that_cannot_fit_is_refused_as_on_a_full_disk():
+    """No retired state left to release: a live seat's write that would pass the cap
+    is refused with the capacity error, ledgered, and changes nothing; a write that
+    replaces the seat's own head at the cap is measured with that head gone."""
     rt = make_runtime()
     rt._manage_reserve_window()
-    handle = decision(rt, "seed-observer")
-    rt.working_state.put("seed-observer", {"v": 1}, handle=handle)
-    item = rt.outcomes.append("seed-observer", handle=handle, outcome={"kind": "fill"},
-                              evidence="e-retired")
-    rt._retire_assembly("seed-observer", "vote-1")
-    for _ in range(3):
-        _boundary(rt)
-    assert rt.artifacts.get(item["sha"])
-    assert rt.outcomes.body(item["sha"])["outcome"] == {"kind": "fill"}
-    assert rt.working_state.head("seed-observer") is None
+    handle = decision(rt)
+    rt.working_state.put("seed-decider", {"n": 1}, handle=handle)
+    rt.artifacts.private_cap = rt.artifacts.private_bytes()
+    before = rt.working_state.head("seed-decider")
+    puts = len(ledger_items(rt, "artifact.put"))
+    assert rt._write_working_state("seed-decider", handle, {"working_state": {"n": 12345}}) \
+        is False
+    refused = ledger_items(rt, "state.refused")[-1]
+    assert refused["assembly_id"] == "seed-decider"
+    assert refused["reason"].startswith("no space: retained private state holds")
+    assert rt.working_state.head("seed-decider") == before
+    assert len(ledger_items(rt, "artifact.put")) == puts
+    assert rt.artifacts.private_bytes() <= rt.artifacts.private_cap
+    # The same size again replaces the seat's own head: nothing is refused.
+    assert rt._write_working_state("seed-decider", handle, {"working_state": {"n": 2}})
+    assert rt.working_state.head("seed-decider")["sha"] != before["sha"]
+    assert rt.artifacts.private_bytes() <= rt.artifacts.private_cap
+    with pytest.raises(ArtifactCapacityError):
+        rt.working_state.put("seed-observer", {"observer": 1},
+                             handle=decision(rt, "seed-observer"))
+    # Bytes already held as private state add nothing: a second holder is admitted.
+    rt.working_state.put("seed-observer", {"n": 2}, handle=decision(rt, "seed-observer"))
+    assert rt.artifacts.private_bytes() <= rt.artifacts.private_cap
+
+
+def test_the_archive_never_holds_more_private_state_than_its_cap(tmp_path):
+    """The kernel invariant, attempted on a bare archive: a private write past the cap
+    asks for room, and without it is refused having written nothing (no bytes, no
+    ledger item); bytes of any other kind are not private state and pass."""
+    store, ledger = _store(tmp_path)
+    store.private_cap = 100
+    asked = []
+    store.make_room = lambda: asked.append(1) and False
+    kept = store.put(b"a" * 80, owner="s", kind="working.state")
+    with pytest.raises(ArtifactCapacityError, match="no space"):
+        store.put(b"b" * 30, owner="t", kind="program.state")
+    assert asked == [1] and store.private_bytes() == 80
+    assert not (store.root / hashlib.sha256(b"b" * 30).hexdigest()).exists()
+    assert [i["sha"] for i in _kinds(ledger, "artifact.put")] == [kept]
+    store.put(b"c" * 500, owner="t", kind="outcome")
+    assert store.private_bytes() == 80
+    # Room made by the owner is used: the write fits once a holder lets go.
+    store.make_room = lambda: store.release(kept, owner="s", kind="working.state")
+    store.put(b"b" * 30, owner="t", kind="program.state")
+    assert store.private_bytes() == 30 <= store.private_cap
+
+
+def test_a_live_seat_s_state_is_never_released_for_room():
+    """Only retired ids are released for room: with none retired, a full cap refuses
+    the write and every live head stays held."""
+    rt = make_runtime()
+    rt._manage_reserve_window()
+    rt.working_state.put("seed-decider", {"n": 1}, handle=decision(rt))
+    heads = dict(rt.working_state.heads)
+    rt.artifacts.private_cap = rt.artifacts.private_bytes()
+    assert rt._release_oldest_retired_state() is False
+    assert not rt._write_working_state("seed-observer", decision(rt, "seed-observer"),
+                                       {"working_state": {"big": "x" * 1000}})
+    assert rt.working_state.heads == heads
+    assert not [i for i in ledger_items(rt, "artifact.released") if i.get("cause")]
+
+
+# --- [storage] retained_private_bytes: a limit, validated at load ------------------------
+
+
+def test_the_cap_defaults_to_64_mib_and_is_published_as_a_limit():
+    rt = make_runtime()
+    assert rt.m.storage.retained_private_bytes == DEFAULT_RETAINED_PRIVATE_BYTES == 64 << 20
+    assert rt.artifacts.private_cap == DEFAULT_RETAINED_PRIVATE_BYTES
+    storage = rt._world_block()["storage"]
+    assert storage["retained_private_bytes"] == DEFAULT_RETAINED_PRIVATE_BYTES
+    assert "at most retained_private_bytes, always" in storage["retention"]
+    assert "kept until capacity is needed" in storage["retention"]
+    assert "oldest retirement first" in storage["retention"]
+    assert '"retained_private_bytes":67108864' in rt.m.canonical_json()
+
+
+def test_a_cap_below_the_seeded_seats_is_refused():
+    per_seat = HARD_STATE_BYTES + MAX_PROGRAM_STATE_BYTES
+    with pytest.raises(ValueError, match="cannot hold the 1 seeded seats"):
+        manifest_from_dict(_world(storage={"retained_private_bytes": per_seat - 1}))
+    assert manifest_from_dict(_world(storage={"retained_private_bytes": per_seat}))
+
+
+@pytest.mark.parametrize("bad", [0, -1, "67108864", True, 1.5])
+def test_a_cap_that_is_not_a_positive_integer_is_refused(bad):
+    with pytest.raises(ValueError, match="retained_private_bytes must be a positive integer"):
+        manifest_from_dict(_world(storage={"retained_private_bytes": bad}))
+
+
+def test_a_cap_over_half_the_free_disk_is_refused(monkeypatch):
+    free = 100 << 20
+    monkeypatch.setattr(worlds.shutil, "disk_usage",
+                        lambda path: SimpleNamespace(total=free, used=0, free=free))
+    with pytest.raises(ValueError, match=r"exceeds 1/2 of the host's free disk"):
+        manifest_from_dict(_world(storage={"retained_private_bytes": (50 << 20) + 1}))
+    assert manifest_from_dict(_world(storage={"retained_private_bytes": 50 << 20}))
+
+
+def test_a_storage_price_or_an_unknown_storage_key_is_refused():
+    with pytest.raises(ValueError, match=r"\[storage\] was removed"):
+        manifest_from_dict(_world(storage={"retained_private_bytes": 1 << 20,
+                                           "micro_per_byte_day": "0"}))
+    with pytest.raises(ValueError, match="unknown storage manifest key"):
+        manifest_from_dict(_world(storage={"max_bytes": 1 << 20}))

@@ -51,6 +51,17 @@ bytes that are gone.
 A record whose every reference was released and that another seat then writes is
 that seat's alone: its owner of record and kind are reset to the new writer, so
 nothing shows it who wrote the bytes before (essay II.I.b, the author is private).
+
+**Retained private state has a hard cap (Wave 11).** The disk is finite, so the
+whole of what is held as some seat's private state (``PRIVATE_KINDS``: working-state
+heads and program private states) is a hard limit, ``private_cap``, never a price
+(essay II.II.b, the hard cast). A put that would take it over the cap first asks
+the owner of the store to ``make_room``, which releases retired seats' state through
+``release`` (ledgered before the index changes); a put that still does not fit is
+refused with ``ArtifactCapacityError`` and writes nothing, as on a full disk. A put
+naming the reference it ``supersedes`` is measured with that reference gone, and
+releases it, so a seat replacing its state at the cap is never refused for the
+state it replaces.
 """
 
 from __future__ import annotations
@@ -78,10 +89,16 @@ RELEASED_REFUSAL = "artifact_released"
 #: ones answer like any hash the reader holds no reference to. Bounded, so the
 #: checkpoint does not grow with every head a seat ever wrote.
 RELEASED_MEMORY = 8
+#: The kinds that are a seat's private state; ``private_cap`` bounds their total.
+PRIVATE_KINDS = frozenset({"working.state", "program.state"})
 
 
 class ArtifactError(ValueError):
     """The archive refuses a malformed hash, unknown artifact or corrupted file."""
+
+
+class ArtifactCapacityError(ArtifactError):
+    """A private-state write that does not fit the retained private state cap."""
 
 
 def artifact_root(ledger_path: str | os.PathLike[str]) -> Path:
@@ -116,6 +133,16 @@ class ArtifactStore:
         # reader's own history, kept apart from the records so that what it is told
         # never depends on whether another seat holds the bytes or they were collected.
         self.released_recent: dict[str, list[str]] = {}
+        # The hard cap on retained private state, in bytes (``[storage]
+        # retained_private_bytes``), and the owner's way to free some: it releases one
+        # retired seat's private state and says whether there was any. Unset, a store
+        # has no cap (a bare store in a test).
+        self.private_cap: int | None = None
+        self.make_room: Callable[[], bool] | None = None
+        # The hashes some reference holds under a private kind: derived from the
+        # index, rebuilt whenever the index is replaced or edited from outside.
+        self._private: set[str] = set()
+        self._private_epoch: int | None = None
 
     # Change tracking, for views derived from the index (the runtime's directory
     # listing) that would otherwise re-read the whole archive on every request:
@@ -153,14 +180,27 @@ class ArtifactStore:
         self.generation += 1
         self._changed.add(sha)
 
-    def put(self, data: bytes, *, owner: str, kind: str) -> str:
-        """Archive ``data`` for ``owner`` and return its hash; the bytes precede the record."""
+    def put(self, data: bytes, *, owner: str, kind: str,
+            supersedes: str | None = None) -> str:
+        """Archive ``data`` for ``owner`` and return its hash; the bytes precede the record.
+
+        Guarantees, for a private kind under a cap: after the put, retained private
+        state is at most ``private_cap``; the put first releases retired seats' state
+        through ``make_room`` if it must, and a put that cannot fit raises
+        ``ArtifactCapacityError`` having written nothing of its own. ``supersedes``,
+        a hash ``owner`` holds under ``kind``, is released once the new reference
+        is indexed, and is measured as gone.
+        """
         if not isinstance(data, (bytes, bytearray)):
             raise TypeError("artifact data must be bytes")
         if not isinstance(owner, str) or not owner or not isinstance(kind, str) or not kind:
             raise ArtifactError("artifact owner and kind are required")
         data = bytes(data)
         sha = hashlib.sha256(data).hexdigest()
+        if supersedes == sha:
+            supersedes = None
+        if kind in PRIVATE_KINDS and self.private_cap is not None:
+            self._admit_private(sha, len(data), owner, kind, supersedes)
         ts = self.clock()
         self._write(sha, data)  # Durable bytes before any authenticated reference.
         self.ledger.append({"kind": "artifact.put", "sha": sha, "owner": owner,
@@ -192,10 +232,60 @@ class ArtifactStore:
             # so releasing one never drops the other.
             reference["kinds"] = sorted(kinds | {kind})
         record["readers"] = sorted(refs)
+        if kind in PRIVATE_KINDS:
+            self._private_shas().add(sha)
         self._changed_sha(sha)
+        if supersedes is not None:
+            self.release(supersedes, owner=owner, kind=kind)
         return sha
 
-    def release(self, sha: str, *, owner: str, kind: str) -> bool:
+    def _private_shas(self) -> set[str]:
+        """The hashes some reference holds under a private kind, rebuilt on an index change."""
+        if self._private_epoch != self.epoch:
+            self._private = {sha for sha, record in self.index.items()
+                             if self._held_private(sha, record)}
+            self._private_epoch = self.epoch
+        return self._private
+
+    def _held_private(self, sha: str, record: dict[str, Any], *,
+                      but: tuple[str, str] | None = None) -> bool:
+        """Whether any reference holds ``sha`` under a private kind, ``but`` one (owner, kind)."""
+        return any(k in PRIVATE_KINDS and (holder, k) != but
+                   for holder, reference in self.references(sha, record).items()
+                   for k in reference.get("kinds", [reference["kind"]]))
+
+    def private_bytes(self) -> int:
+        """Retained private state: the bytes of every record held under a private kind."""
+        return sum(self.index[sha]["bytes"] for sha in self._private_shas())
+
+    def private_holdings(self, owner: str) -> list[tuple[str, str]]:
+        """Every ``(sha, kind)`` ``owner`` holds under a private kind, in put order."""
+        return [(sha, k) for sha, record in self.index.items()
+                for holder, reference in self.references(sha, record).items()
+                if holder == owner
+                for k in reference.get("kinds", [reference["kind"]]) if k in PRIVATE_KINDS]
+
+    def _admit_private(self, sha: str, size: int, owner: str, kind: str,
+                       supersedes: str | None) -> None:
+        """Make room for a private put or refuse it: see ``put``."""
+        while True:
+            held = self._private_shas()
+            total = self.private_bytes()
+            adds = 0 if sha in held else size
+            freed = 0
+            record = self.index.get(supersedes) if supersedes is not None else None
+            if (record is not None and supersedes in held
+                    and not self._held_private(supersedes, record, but=(owner, kind))):
+                freed = record["bytes"]
+            if total - freed + adds <= self.private_cap:
+                return
+            if self.make_room is None or not self.make_room():
+                raise ArtifactCapacityError(
+                    f"no space: retained private state holds {total} of its "
+                    f"{self.private_cap} bytes (storage.retained_private_bytes) and this "
+                    f"write adds {adds - freed}; no retired seat's state is left to release")
+
+    def release(self, sha: str, *, owner: str, kind: str, cause: str | None = None) -> bool:
         """Drop ``owner``'s hold on ``sha`` under ``kind``; return whether the record is now free.
 
         Guarantees: only the named kind of the named owner's reference is dropped, so
@@ -205,7 +295,9 @@ class ArtifactStore:
         reference that does not hold the kind changes nothing. The release is
         ledgered as ``artifact.released`` before the index changes, as a put is. The
         reference's ``kind`` names only what the owner still holds, and a record
-        whose owner of record lets go names a remaining holder instead.
+        whose owner of record lets go names a remaining holder instead. ``cause``,
+        when given, is ledgered with the release (``capacity``: room made under the
+        retained private state cap).
         """
         record = self.index.get(_valid_sha(sha))
         if record is None:
@@ -226,9 +318,13 @@ class ArtifactStore:
         else:
             refs.pop(owner)
         self.ledger.append({"kind": "artifact.released", "sha": sha, "owner": owner,
-                            "artifact_kind": kind, "free": not refs, "ts": self.clock()})
+                            "artifact_kind": kind, "free": not refs,
+                            **({"cause": cause} if cause is not None else {}),
+                            "ts": self.clock()})
         record["refs"] = refs
         record["readers"] = sorted(refs)
+        if kind in PRIVATE_KINDS and not self._held_private(sha, record):
+            self._private_shas().discard(sha)
         if owner not in refs:
             recent = self.released_recent.setdefault(owner, [])
             recent.append(sha)

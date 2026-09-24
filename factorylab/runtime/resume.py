@@ -680,6 +680,9 @@ _RUNTIME_FIELDS = (
     "venue_read_use",
     # The seats holding a venue read slot. An older checkpoint gives the seeds theirs.
     "venue_readers",
+    # The retired ids, oldest retirement first (the order the retained private state
+    # cap releases their kept state in).
+    "retirement_order",
     # Each seat's Polymarket read requests in the sliding minute. An older checkpoint
     # (or a world without the block) starts every share unspent.
     "polymarket_read_use",
@@ -1004,6 +1007,9 @@ def restore_runtime(rt, state: dict) -> None:
         if name in _RETIRED_RUNTIME:
             continue
         setattr(rt, _RUNTIME_BACKING.get(name, name), value)
+    if "retirement_order" not in saved_runtime:
+        # An older checkpoint kept no retirement order: its retired ids, by id.
+        rt.retirement_order = sorted(rt.retired_assemblies)
     rt.diary_id = diary
     rt.pending = {handle: p for handle, p in rt.pending.items()
                   if p.channel not in _RETIRED_PENDING}

@@ -89,6 +89,22 @@ def test_state_restored_by_hash_is_what_the_next_call_sees():
     assert fresh.invoke(req("h2")).outputs["seen"] == 1
 
 
+def test_a_state_the_retained_private_state_cap_cannot_hold_is_refused_as_a_full_disk():
+    """A state replacing the program's own at the cap fits; one that cannot fit is a
+    malformed return, and the program keeps the state it had."""
+    require_jail()
+    asm, _, _ = program()
+    asm.invoke(req("h1"))
+    archive = asm.artifacts
+    archive.private_cap = archive.private_bytes()
+    assert asm.invoke(req("h2")).status == "ok"  # {"n": 2} replaces {"n": 1}
+    kept = asm.state_sha
+    archive.private_cap = archive.private_bytes() - 1
+    ret = asm.invoke(req("h3"))
+    assert ret.status == "malformed" and ret.outputs["reason"].startswith("no space")
+    assert asm.state_sha == kept and archive.private_bytes() == archive.private_cap + 1
+
+
 #: A program that never stops is stopped by whichever bound trips first. The jail
 #: sets the CPU rlimit to the same number of seconds as the wall timeout
 #: (``sandbox.run_python``, ``cpu_s=timeout_s``), so a busy loop races them: the

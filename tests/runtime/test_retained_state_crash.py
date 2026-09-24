@@ -5,7 +5,9 @@ heads at every boundary. It is interrupted mid-window, right after an
 ``artifact.collected`` item, and between a blob's unlink and its ledger item, then
 resumed through the real recovery journal. The diary's artifact trail and the final
 summary must equal an uninterrupted run's: nothing still referenced is gone, and a
-replay collects exactly what the recording collected.
+replay collects exactly what the recording collected. A world whose retained private
+state cap is small releases a retired seat's kept state for room, and is interrupted
+between that release's ledger line and its index change.
 """
 
 import hashlib
@@ -19,7 +21,7 @@ import pytest
 from factorylab.kernel.ledger import Ledger
 from factorylab.runtime.loop import Runtime
 from factorylab.runtime.resume import resume_world
-from factorylab.runtime.worlds import load_manifest
+from factorylab.runtime.worlds import StorageSpec, load_manifest
 from factorylab.world.exchange import FakeExchange
 from factorylab.world.scripted import ScriptedProvider
 
@@ -53,14 +55,14 @@ class Crash(BaseException):
     """The process dies here: nothing after it runs, nothing catches it."""
 
 
-def _runtime(path):
-    return Runtime(load_manifest("scripted"), events=EVENTS, seed=1,
+def _runtime(path, manifest=None):
+    return Runtime(manifest or load_manifest("scripted"), events=EVENTS, seed=1,
                    initial_balance_micro=None, ledger_path=str(path), router_gamma=.1,
                    provider=Writer())
 
 
-def _items(path):
-    manifest = json.loads(load_manifest("scripted").canonical_json())
+def _items(path, manifest=None):
+    manifest = json.loads((manifest or load_manifest("scripted")).canonical_json())
     return Ledger.reopen(str(path), manifest=manifest)._recovery_items()
 
 
@@ -278,34 +280,61 @@ def _retiring(monkeypatch):
     monkeypatch.setattr(Runtime, "_process_event", process_then_retire)
 
 
-def test_a_crash_between_retirement_and_release_resumes_to_the_uninterrupted_run(
+#: Small enough that the live seats' heads fill it after the retirement: the retired
+#: seat's kept head is released for room, and later live writes are refused.
+TIGHT_CAP = 30_000
+
+
+def _capacity(items):
+    return [(i["owner"], i["artifact_kind"], i["sha"]) for i in items
+            if i["kind"] == "artifact.released" and i.get("cause") == "capacity"]
+
+
+def test_retirement_keeps_the_seat_s_state_in_a_world_run(tmp_path, monkeypatch):
+    """Retirement releases nothing: under the default cap the retired seat's head is
+    still held at the end of the run."""
+    _retiring(monkeypatch)
+    rt = _runtime(tmp_path / "world.jsonl")
+    rt.run()
+    assert "seed-observer" in rt.retired_assemblies
+    assert rt.working_state.head("seed-observer") is not None
+    assert not [i for i in _items(tmp_path / "world.jsonl")
+                if i["kind"] == "artifact.released" and i.get("owner") == "seed-observer"]
+
+
+def test_a_crash_between_an_eviction_s_ledger_line_and_its_index_change_resumes(
         tmp_path, monkeypatch):
     _retiring(monkeypatch)
+    manifest = replace(load_manifest("scripted"), storage=StorageSpec(TIGHT_CAP))
     base = tmp_path / "base" / "world.jsonl"
     base.parent.mkdir()
-    expected_summary = _summary(_runtime(base).run())
-    expected = _items(base)
-    released = [i for i in expected if i["kind"] == "artifact.released"
-                and i.get("owner") == "seed-observer"]
-    assert released, "the retired seat held private state to release"
+    expected_summary = _summary(_runtime(base, manifest).run())
+    expected = _items(base, manifest)
+    evicted = _capacity(expected)
+    assert [(owner, kind) for owner, kind, _ in evicted] == [
+        ("seed-observer", "working.state")], "the retired seat's head was released for room"
+    assert any(i["kind"] == "state.refused" and i["reason"].startswith("no space")
+               for i in expected)
     path = tmp_path / "crash" / "world.jsonl"
     path.parent.mkdir()
-    rt = _runtime(path)
+    rt = _runtime(path, manifest)
     append = rt.ledger.append
 
-    def die_after_retirement(item):
+    def die_after_eviction(item):
         seq = append(item)
-        if item.get("kind") == "assembly.retired":
-            raise Crash  # the retirement is ledgered, its release is not
+        if item.get("kind") == "artifact.released" and item.get("cause") == "capacity":
+            raise Crash  # the release is ledgered; the index has not changed
         return seq
 
-    rt.ledger.append = die_after_retirement
+    rt.ledger.append = die_after_eviction
     with pytest.raises(Crash):
         rt.run()
-    before = _items(path)
-    assert before[-1]["kind"] == "assembly.retired"
-    summary = resume_world(load_manifest("scripted"), str(path), provider=Writer())
-    after = _items(path)
+    before = _items(path, manifest)
+    assert before[-1]["kind"] == "artifact.released" and before[-1]["cause"] == "capacity"
+    assert rt.working_state.head("seed-observer") is not None  # the index never moved
+    summary = resume_world(manifest, str(path), provider=Writer())
+    after = _items(path, manifest)
     assert after[:len(before)] == before
     assert _trail(after) == _trail(expected)
+    assert _capacity(after) == evicted
     assert _summary(summary) == expected_summary
