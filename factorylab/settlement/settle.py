@@ -109,6 +109,15 @@ def _question(forecast: Forecast, key: str) -> str:
                       "cursor": dict(cursor) if cursor is not None else None}).decode()
 
 
+class FactsDeferred(Exception):
+    """The world cannot read a due forecast's facts now, only later: nothing is settled.
+
+    Raised by a ``facts_for`` whose read the world's own limits defer (a request
+    budget spent for this minute). Deferral is not an absence: the forecast stays due
+    and is settled on a later pass, never censored for it.
+    """
+
+
 def normative_brier(q: float, outcome: float) -> float:
     """Return 1 - (q - outcome)^2 in [0, 1] for a probability and a unit-interval outcome."""
     _require_probability(q, "q")
@@ -153,7 +162,7 @@ class Settler:
 
     def settle_due(
         self, n: int, facts_for: Callable[[Forecast], WindowFacts | None], *,
-        tick: int | None = None,
+        tick: int | None = None, on_deferred: Callable[[int], None] | None = None,
     ) -> list[Settled]:
         """Return due outcomes in seal order; only accepted observed settlements train history.
 
@@ -164,15 +173,26 @@ class Settler:
         one parameter set and one sealed interval (and, for a population predicate,
         one sealed window position); its forecasts are all due together, so the
         snapshot lives for this pass only.
+
+        A ``facts_for`` that raises ``FactsDeferred`` stops the pass: that forecast and
+        every later one stay due, untouched, for a later pass, and ``on_deferred`` is
+        told how many were left.
         """
         results = []
         # question -> (baseline q, uninformative) as it stood before its answer
         before: dict[str, tuple[float, bool]] = {}
         answered: set[str] = set()  # questions whose one observation is recorded
-        for forecast in self.__book.due(n, tick):
+        due = self.__book.due(n, tick)
+        for index, forecast in enumerate(due):
             if forecast.predicate_id == RETURN_PAID_OFF.id:
                 continue
-            facts = facts_for(forecast)
+            try:
+                facts = facts_for(forecast)
+            except FactsDeferred:
+                if on_deferred is not None:
+                    on_deferred(sum(1 for f in due[index:]
+                                    if f.predicate_id != RETURN_PAID_OFF.id))
+                break
             excluded = None
             if facts is UNOBSERVABLE:
                 # The owner documented that the world never offered the fact and

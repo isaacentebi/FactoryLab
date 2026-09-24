@@ -194,6 +194,11 @@ class Resolving:
                 "outcomes": [{"token_id": YES, "price": "1" if closed else "0.6"},
                              {"token_id": NO, "price": "0" if closed else "0.4"}]}
 
+    def market(self, market_id):
+        # Once a token's market is known, the world reads that market by its id.
+        assert market_id == "1"
+        return self.market_of_token(YES)
+
     def order_book(self, token_id, depth):
         return {"token_id": token_id, "bids": [{"price": "0.59", "size": "5"}],
                 "asks": [{"price": "0.61", "size": "5"}], "midpoint": "0.6"}
@@ -225,3 +230,67 @@ def test_the_judges_of_one_question_are_graded_against_one_read_of_the_world():
     seal(rt, ("event_pays", 0.5, {"horizon_events": 4, "token_id": YES}), judge="judge-b")
     advance(rt, 5)
     assert [r.y for r in results] == [0, 1] and reader.calls == 2
+
+
+class Counting:
+    """A live reader that sends what Gamma and the CLOB would, and keeps each request's
+    world time: every token is on an open market, found on the second listing."""
+
+    deterministic = False
+
+    def __init__(self, clock):
+        self.clock, self.sent, self.at, self.lookups = clock, 0, [], {}
+
+    def _send(self, requests):
+        self.sent += requests
+        self.at.extend([self.clock()] * requests)
+
+    def requests_sent(self):
+        return self.sent
+
+    def market_of_token(self, token_id):
+        self._send(2)  # the closed listing, then the open one
+        self.lookups[token_id] = self.lookups.get(token_id, 0) + 1
+        return self._market(token_id)
+
+    def market(self, market_id):
+        self._send(1)
+        return self._market(market_id.removeprefix("m-"))
+
+    @staticmethod
+    def _market(token_id):
+        return {"market_id": f"m-{token_id}", "closed": False, "uma_resolution_status": None,
+                "outcomes": [{"token_id": token_id, "price": "0.5"}]}
+
+
+def test_a_pass_the_request_budget_cannot_cover_defers_and_every_token_is_looked_up_once():
+    """Codex P1: the kernel's settlement reads are metered with the seats' against the
+    world's one budget. Thirty tokens due in one pass need more than a minute's budget:
+    the pass stops before the budget is passed, records the deferral, and settles the
+    rest on later passes; nothing is censored for waiting, no 60 s window ever holds
+    more than the budget, and each token's market is looked up once, ever."""
+    budget = 40
+    rt = world(venue="live", read_requests_per_minute=budget, kernel_reserve_per_minute=24)
+    reader = rt.polymarket.venue.target = Counting(lambda: rt.clock.now_ns)
+    results = results_of(rt)
+    tokens = [str(10**20 + 100 + i) for i in range(30)]
+    for batch in range(0, 30, 2):
+        about = collateral_decision(rt, owner="author")
+        assert len(seal(rt, *[("event_pays", 0.5, {"horizon_events": 2, "token_id": t})
+                              for t in tokens[batch:batch + 2]], about=about)) == 2
+    advance(rt, 3)
+    first = len(results)
+    assert 0 < first < 30
+    for _ in range(4):
+        advance(rt, 61)
+    assert len(results) == 30
+    assert {r.y for r in results} == {0}  # every claim observed; none censored
+    assert not any(r.status is SettleStatus.CENSORED for r in results)
+    assert reader.lookups == {t: 1 for t in tokens}
+    minute = 60 * 10**9
+    assert max(sum(1 for t in reader.at if start <= t < start + minute)
+               for start in reader.at) <= budget
+    diary = _consequence_diary(rt)
+    deferred = [i for i in diary if i["kind"] == "polymarket.settlement_deferred"]
+    assert deferred and deferred[0]["count"] == 30 - first
+    assert not any(i["kind"] == "polymarket.event_unavailable" for i in diary)

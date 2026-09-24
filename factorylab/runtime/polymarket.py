@@ -65,6 +65,7 @@ from fractions import Fraction
 from typing import Any
 
 from factorylab.kernel.money import usd_to_micro
+from factorylab.settlement.settle import FactsDeferred
 
 CUSTODY = "polymarket"
 READS = ("polymarket.search", "polymarket.market", "polymarket.book")
@@ -184,9 +185,13 @@ class PolymarketSurface:
         self.booked = 0
         self.settled = Decimal(0)
         self.opening: Decimal | None = None
+        # token id -> the id of the market that lists it. Which market lists a token is
+        # fixed when the market is made, so it is looked up once for the world's life,
+        # and every later read of that token's market is one GET by market id.
+        self.token_markets: dict[str, str] = {}
 
     FIELDS = ("intents", "order_ids", "realized", "claimed", "claims", "booked", "settled",
-              "opening")
+              "opening", "token_markets")
 
     def state(self) -> dict[str, Any]:
         """Intents, order ownership, the claim book, the window count and the venue's state."""
@@ -238,8 +243,11 @@ def install(rt: Any) -> None:
     venue.observer = lambda method, args, kwargs, result: observe_answer(
         rt, method, args, kwargs, result)
     rt.polymarket = PolymarketSurface(spec, venue, writes=writes)
-    # seat -> [[world ns, requests sent]] of its reads in the sliding minute.
+    # reader slot -> [[world ns, requests]] of the reads its seats asked in the
+    # sliding minute; and [[world ns, requests sent]] of every request the world sent,
+    # the kernel's and the seats' together.
     rt.polymarket_read_use = {}
+    rt.polymarket_sent = []
     rt._polymarket_tick_reads = None
     specs = tool_specs(spec, writes=writes)
     share = read_share(spec, rt.m.exchange.max_readers)
@@ -251,11 +259,13 @@ def install(rt: Any) -> None:
             f"{spec.read_requests_per_minute} requests a minute, of which "
             f"{spec.kernel_reserve_per_minute} are held back for the kernel's own "
             f"settlement and marking reads, and each slot has a fixed share of {share} "
-            "requests in any sliding 60 s of world time. This read sends one request; "
-            "a read your remaining share cannot cover is refused and not sent. Within "
-            "one world tick, a read identical to one already answered in that tick is "
-            "answered from that answer: no request is sent and none of your share is "
-            "spent.")
+            "requests in any sliding 60 s of world time, kept by the slot whichever seat "
+            "holds it. Every read is charged one request to your slot's share. A read is "
+            "refused, and not sent, when your slot's remaining share cannot cover it, or "
+            f"when the world's requests in the last 60 s leave less than the kernel's "
+            f"{spec.kernel_reserve_per_minute} plus this read. Within one world tick, a "
+            "read identical to one already answered in that tick is answered from that "
+            "answer, and sends no request.")
     rt.tool_specs.update(specs)
 
 
@@ -330,8 +340,19 @@ def event_facts(rt: Any, predicate_id: str, token_id: str,
 
     snapshot = snapshots.get(token_id)
     if snapshot is None:
+        # A read the world's request budget cannot cover now raises ``ReadDeferred``
+        # before anything is sent: the pass stops and the claim waits, never censored.
+        market_id = surface.token_markets.get(token_id)
         try:
-            snapshot = {"market": surface.venue.market_of_token(token_id), "answered": True}
+            if market_id is None:
+                market = kernel_read(rt, "market_of_token", token_id)
+                if market is not None:
+                    surface.token_markets[token_id] = str(market["market_id"])
+            else:
+                market = kernel_read(rt, "market", market_id)
+            snapshot = {"market": market, "answered": True}
+        except ReadDeferred:
+            raise
         except Exception:  # noqa: BLE001 - an unanswered read is an absent fact
             snapshot = {"market": None, "answered": False}
         snapshots[token_id] = snapshot
@@ -350,7 +371,9 @@ def event_facts(rt: Any, predicate_id: str, token_id: str,
                 # resolved market).
                 try:
                     mid = None if market["closed"] else _decimal(
-                        surface.venue.order_book(token_id, 1)["midpoint"])
+                        kernel_read(rt, "order_book", token_id, 1)["midpoint"])
+                except ReadDeferred:
+                    raise
                 except Exception:  # noqa: BLE001
                     mid = None
                 snapshot["midpoint"] = mid if mid is not None and 0 < mid < 1 else None
@@ -408,7 +431,16 @@ def execute(rt: Any, action_id: str, handle: str, tool_id: str, args: dict,
         return _write(rt, surface, action_id, handle, tool_id, args, slot)
     if tool_id == ACCOUNT:
         return {**account_view(sanitized(surface.account())), "as_of_ns": rt.clock.now_ns}
+    from factorylab.world.polymarket import SEAT_READ_REQUESTS
+
     method, call = _read_call(tool_id, args)
+    # Admission, and the charge to the slot's share, are the same whether the tick
+    # already holds the answer or not: a seat cannot tell the two apart, so another
+    # seat's reads never reach it through its refusals or its share (AGENTS.md rule 4).
+    refusal = _read_refusal(rt, action_id)
+    if refusal is not None:
+        return _refused(rt, action_id, handle, tool_id, refusal)
+    _charge_slot(rt, action_id, SEAT_READ_REQUESTS)
     cached = _tick_answer(rt, method, call)
     if cached is not None:
         # No request: the tick already holds the answer to this very request.
@@ -416,9 +448,6 @@ def execute(rt: Any, action_id: str, handle: str, tool_id: str, args: dict,
         rt.ledger.append({"kind": "polymarket.read_answered", "handle": handle,
                           "assembly_id": action_id, "tool": tool_id, "ts": rt.clock.now_ns})
     else:
-        refusal = _read_refusal(rt, action_id)
-        if refusal is not None:
-            return _refused(rt, action_id, handle, tool_id, refusal)
         before = _requests_sent(surface)
         dispatched = surface.venue.dispatched
         try:
@@ -426,7 +455,7 @@ def execute(rt: Any, action_id: str, handle: str, tool_id: str, args: dict,
         except Exception:  # noqa: BLE001 - a read failure is a fact, not a crash
             return _refused(rt, action_id, handle, tool_id, "polymarket read unavailable")
         finally:
-            _charge_read(rt, surface, action_id, before, dispatched)
+            _charge_sent(rt, _sent_since(surface, before, dispatched, SEAT_READ_REQUESTS))
     protect(rt, result)
     result["as_of_ns"] = rt.clock.now_ns
     rt.ledger.append({"kind": "polymarket.read", "handle": handle, "assembly_id": action_id,
@@ -437,8 +466,14 @@ def execute(rt: Any, action_id: str, handle: str, tool_id: str, args: dict,
 # --- the read limit: Polymarket's published rate limits, shared by slot -------------------
 
 READ_REFUSAL = "polymarket read share spent"
+#: A seat read the world's own request budget, less the kernel's reserve, cannot cover.
+BUDGET_REFUSAL = "polymarket requests held for the kernel"
 #: The span a seat's Polymarket read share is counted over: any sliding minute.
 READ_WINDOW_NS = 60_000_000_000
+
+
+class ReadDeferred(FactsDeferred):
+    """A kernel read the world's Polymarket request budget cannot cover now; nothing sent."""
 
 
 def read_share(spec: Any, readers: int) -> int:
@@ -463,31 +498,87 @@ def _read_result(tool_id: str, value: Any) -> dict[str, Any]:
 
 
 def _read_used(rt: Any, seat: str) -> int:
-    """The Polymarket requests this seat's reads sent in the sliding minute ending now."""
+    """The Polymarket requests charged to this seat's reader slot in the sliding minute.
+
+    Keyed by the slot, not the seat: a seat registered into a slot a retired seat
+    held inherits what that seat spent in the window, so a slot never has more than
+    its share whoever holds it."""
+    key = rt._reader_key(seat)
     since = rt.clock.now_ns - READ_WINDOW_NS
     uses = rt.polymarket_read_use
-    kept = [row for row in uses.get(seat, ()) if row[0] > since]
+    kept = [row for row in uses.get(key, ()) if row[0] > since]
     if kept:
-        uses[seat] = kept
+        uses[key] = kept
     else:
-        uses.pop(seat, None)
+        uses.pop(key, None)
     return sum(requests for _ts, requests in kept)
 
 
-def _read_refusal(rt: Any, seat: str) -> str | None:
-    """Refuse a read the seat's own share cannot cover, before anything is sent.
+def _charge_slot(rt: Any, seat: str, requests: int) -> None:
+    _read_used(rt, seat)
+    rt.polymarket_read_use.setdefault(rt._reader_key(seat), []).append(
+        [rt.clock.now_ns, requests])
 
-    Guarantees: the share is a manifest constant, the seat's own reads alone count
-    against it (AGENTS.md rule 4), and the kernel's reserve is never a seat's.
+
+def sent_in_window(rt: Any) -> int:
+    """Every Polymarket request the world sent in the sliding minute ending now, the
+    kernel's and the seats' together: what the published per-IP limit weighs."""
+    since = rt.clock.now_ns - READ_WINDOW_NS
+    kept = [row for row in getattr(rt, "polymarket_sent", ()) if row[0] > since]
+    rt.polymarket_sent = kept
+    return sum(requests for _ts, requests in kept)
+
+
+def _charge_sent(rt: Any, requests: int) -> None:
+    if requests:
+        sent_in_window(rt)
+        rt.polymarket_sent.append([rt.clock.now_ns, requests])
+
+
+def _read_refusal(rt: Any, seat: str) -> str | None:
+    """Refuse a seat read before anything is sent, on its slot's share or the world's.
+
+    Guarantees: a read is admitted only when its slot's share (a manifest constant,
+    charged by that slot's reads alone) covers one request, and when the world's
+    requests in the sliding minute leave the kernel's whole reserve plus this read
+    under ``read_requests_per_minute``. So seat reads can never spend the kernel's
+    reserve, and every request sent, kernel and seat, stays under the budget.
     """
     from factorylab.world.polymarket import SEAT_READ_REQUESTS
 
-    share = read_share(rt.m.polymarket, rt.m.exchange.max_readers)
+    spec = rt.m.polymarket
+    share = read_share(spec, rt.m.exchange.max_readers)
     used = _read_used(rt, seat)
     if used + SEAT_READ_REQUESTS > share:
         return (f"{READ_REFUSAL}: {used} of {share} requests in the last 60 s; "
                 f"this read sends {SEAT_READ_REQUESTS}")
+    if (sent_in_window(rt) + spec.kernel_reserve_per_minute + SEAT_READ_REQUESTS
+            > spec.read_requests_per_minute):
+        return (f"{BUDGET_REFUSAL}: the world's requests in the last 60 s leave less than "
+                f"the kernel's reserve of {spec.kernel_reserve_per_minute} plus this read")
     return None
+
+
+def kernel_read(rt: Any, method: str, *args: Any) -> Any:
+    """One of the kernel's own Polymarket reads, metered against the world's budget.
+
+    Guarantees: sent only when the most requests it can send fit what the world's
+    requests in the sliding minute leave of ``read_requests_per_minute`` (the
+    kernel may spend its reserve and whatever the seats left); otherwise
+    ``ReadDeferred`` is raised and nothing is sent. Every request it sent is counted.
+    """
+    from factorylab.world.polymarket import read_requests
+
+    surface = rt.polymarket
+    most = read_requests(method)
+    if sent_in_window(rt) + most > rt.m.polymarket.read_requests_per_minute:
+        raise ReadDeferred(method)
+    before = _requests_sent(surface)
+    dispatched = surface.venue.dispatched
+    try:
+        return getattr(surface.venue, method)(*args)
+    finally:
+        _charge_sent(rt, _sent_since(surface, before, dispatched, most))
 
 
 def _requests_sent(surface: Any) -> int | None:
@@ -501,21 +592,13 @@ def _requests_sent(surface: Any) -> int | None:
     return sent if type(sent) is int else None
 
 
-def _charge_read(rt: Any, surface: Any, seat: str, before: int | None,
-                 dispatched: int) -> None:
-    """Charge every request the read sent; the simulation, one when it was dispatched."""
-    from factorylab.world.polymarket import SEAT_READ_REQUESTS
-
+def _sent_since(surface: Any, before: int | None, dispatched: int, most: int) -> int:
+    """What one read sent: the reader's own count when it has one, else, when the read
+    reached the reader, the most it could send (a reader that keeps no count)."""
     after = _requests_sent(surface)
     if before is not None and after is not None and after >= before:
-        sent = after - before
-    elif surface.venue.dispatched == dispatched:
-        sent = 0
-    else:
-        sent = SEAT_READ_REQUESTS
-    if sent:
-        _read_used(rt, seat)
-        rt.polymarket_read_use.setdefault(seat, []).append([rt.clock.now_ns, sent])
+        return after - before
+    return 0 if surface.venue.dispatched == dispatched else most
 
 
 def _tick_key(rt: Any) -> tuple | None:
@@ -882,11 +965,17 @@ def mark(rt: Any) -> None:
     keeping a stale one or taking an invented one, so its lot is not marked and its
     decision falls back as any unobserved consequence does.
     """
-    surface = rt.polymarket
-    for coin in sorted({lot.coin for lot in rt.consequences.table.lots
-                        if lot.market == "event"}):
+    coins = sorted({lot.coin for lot in rt.consequences.table.lots if lot.market == "event"})
+    for index, coin in enumerate(coins):
         try:
-            mid = _decimal(surface.venue.order_book(coin.removeprefix("PM:"), 1)["midpoint"])
+            mid = _decimal(kernel_read(rt, "order_book", coin.removeprefix("PM:"), 1)[
+                "midpoint"])
+        except ReadDeferred:
+            # The world's request budget is spent for this minute: the rest keep the
+            # mark they have and are read on a later tick; nothing is dropped for it.
+            rt.ledger.append({"kind": "polymarket.mark_deferred",
+                              "count": len(coins) - index, "ts": rt.clock.now_ns})
+            return
         except Exception:  # noqa: BLE001 - an unread price is an absent price
             mid = None
         if mid is not None and 0 < mid < 1:

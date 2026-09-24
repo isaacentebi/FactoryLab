@@ -1514,11 +1514,12 @@ class RoutingMixin:
         self.retired_assemblies.add(assembly_id)
         # Retirement is final for a version, not for an id: the id's head and program
         # state are kept for its next version, until the retained private state cap
-        # needs the room (``_release_oldest_retired_state``).
+        # needs the room (``_reclaimable_state``).
         self.retirement_order.append(assembly_id)
         if assembly_id in getattr(self, "venue_readers", ()):
-            # A retirement frees its venue read slot for the next registration.
-            self.venue_readers.remove(assembly_id)
+            # A retirement frees its venue read slot for the next registration. The
+            # slot keeps its place, and its read history stays with it.
+            self.venue_readers[self.venue_readers.index(assembly_id)] = None
         book = getattr(self, "subscription_book", None)
         if book is not None:
             # A retired watcher stops being evaluated, and stops being charged for it.
@@ -1528,31 +1529,27 @@ class RoutingMixin:
             self._open_epoch(kind)
         self._watch_evaluator_majority(f"retire:{assembly_id}")
 
-    def _release_oldest_retired_state(self) -> bool:
-        """Release the kept private state of the id retired longest ago; False if none is.
+    def _reclaimable_state(self) -> list[str]:
+        """The ids whose kept private state the archive may release for room, oldest
+        retirement first: retired ids only, so a live seat's state is never released
+        (essay II.II.b: the disk is a hard limit, not a price)."""
+        return [seat for seat in self.retirement_order if seat in self.retired_assemblies]
 
-        Guarantees: only a retired id's state is released, never a live seat's; each
-        reference goes through the archive's journaled release (ledgered with cause
-        ``capacity`` before the index changes); the id then names no head and no
-        program state, and leaves the retirement order. Called by the archive when a
-        private-state write needs room under ``[storage] retained_private_bytes``
-        (essay II.II.b: the disk is a hard limit, not a price).
+    def _state_reclaimed(self, seat: str, sha: str, kind: str) -> None:
+        """Forget a retired id's pointer to state the archive released for room.
+
+        Guarantees: the id names no head or program state that is no longer held, and
+        it leaves the retirement order once it holds no private state at all. The
+        release itself was ledgered before the index changed (``ArtifactStore``).
         """
-        while self.retirement_order:
-            seat = self.retirement_order.pop(0)
-            if seat not in self.retired_assemblies:
-                continue
-            held = self.artifacts.private_holdings(seat)
-            if not held:
-                continue
-            for sha, kind in held:
-                self.artifacts.release(sha, owner=seat, kind=kind, cause="capacity")
-            self.working_state.heads.pop(seat, None)
-            retired = self.assemblies.get(seat)
-            if getattr(retired, "state_sha", None) is not None:
-                retired.state_sha = None
-            return True
-        return False
+        head = self.working_state.heads.get(seat)
+        if kind == "working.state" and head is not None and head["sha"] == sha:
+            del self.working_state.heads[seat]
+        retired = self.assemblies.get(seat)
+        if kind == "program.state" and getattr(retired, "state_sha", None) == sha:
+            retired.state_sha = None
+        if not self.artifacts.private_holdings(seat) and seat in self.retirement_order:
+            self.retirement_order.remove(seat)
 
     def _watch_evaluator_majority(self, cause: str) -> None:
         """Ledger the moment the live roster's evaluator seats stop, or resume, outnumbering

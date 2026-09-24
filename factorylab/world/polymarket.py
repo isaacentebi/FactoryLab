@@ -327,6 +327,15 @@ DEFAULT_READ_REQUESTS_PER_MINUTE = 180
 DEFAULT_KERNEL_RESERVE_PER_MINUTE = 60
 #: Requests one seat read sends: every Polymarket read tool is one GET, sent once.
 SEAT_READ_REQUESTS = 1
+#: The most requests one kernel read can send, by reader method: ``market_of_token``
+#: asks the closed listing, the open one, then the closed one again (up to 3); every
+#: other read is one GET.
+READ_REQUESTS = {"market_of_token": 3}
+
+
+def read_requests(method: str) -> int:
+    """The most requests one read by ``method`` can send."""
+    return READ_REQUESTS.get(method, 1)
 
 
 @dataclass
@@ -538,26 +547,44 @@ class FakePolymarket:
 
     def search_markets(self, query: str, limit: int) -> list[dict[str, Any]]:
         """Seeded markets whose question contains ``query``, case-insensitively."""
+        self._count(1)
         needle = query.lower()
         rows = [self._public(m) for m in self._markets.values()
                 if needle in m["question"].lower() or needle in m["market_id"]]
         return rows[:limit]
 
     def market(self, market_id: str) -> dict[str, Any]:
+        self._count(1)
         market = self._markets.get(market_id)
         if market is None:
             raise PolymarketUnavailable("HTTP 404")
         return self._public(market, detail=True)
 
+    def _count(self, requests: int) -> None:
+        # The requests the live reader would send for the same read: the simulated
+        # venue is metered as the live one is (``requests_sent``).
+        self.sent = getattr(self, "sent", 0) + requests
+
+    def requests_sent(self) -> int:
+        """Guarantees the count of requests the live reader would have sent for every
+        read this venue answered, monotone."""
+        return getattr(self, "sent", 0)
+
     def market_of_token(self, token_id: str) -> dict[str, Any] | None:
         listed = self._tokens.get(token_id)
-        return None if listed is None else self._public(self._markets[listed[0]], detail=True)
+        if listed is None:
+            self._count(3)  # closed, open, closed: absent from all three
+            return None
+        market = self._markets[listed[0]]
+        self._count(1 if market["closed"] else 2)  # found closed, or closed then open
+        return self._public(market, detail=True)
 
     def _best(self, token_id: str) -> tuple[Decimal, Decimal]:
         mid = self._token_mid(token_id)
         return mid - self.tick, mid + self.tick
 
     def order_book(self, token_id: str, depth: int) -> dict[str, Any]:
+        self._count(1)
         listed = self._tokens.get(token_id)
         if listed is None:
             raise PolymarketUnavailable("HTTP 404")
@@ -578,6 +605,7 @@ class FakePolymarket:
                 "timestamp_ms": str(self._now_ns // 1_000_000)}
 
     def midpoint(self, token_id: str) -> str | None:
+        self._count(1)
         if token_id not in self._tokens:
             raise PolymarketUnavailable("HTTP 404")
         return str(self._token_mid(token_id))

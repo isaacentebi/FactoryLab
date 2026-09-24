@@ -388,6 +388,9 @@ class ProgramAssembly:
     validator: Callable[[dict[str, Any], Request], None] | None = None
     record: Callable[[dict[str, Any]], Any] | None = None
     state_sha: str | None = None
+    # Why this version may not write private state now (``retired``), or None: a
+    # retired version's pending return may settle, but it writes no state.
+    state_gate: Callable[[], str | None] | None = None
     model: _ProgramCeiling = field(init=False)
 
     def __post_init__(self) -> None:
@@ -530,14 +533,22 @@ class ProgramAssembly:
                 return malformed({"reason": "no artifact archive"}, "stop")
             # One private state per program is retained: the put releases the
             # superseded one's reference, whose bytes are collected once no durable
-            # checkpoint names them (the disk is a limit, not a price), and refuses a
-            # state the retained private state cap cannot hold, as a full disk would.
-            try:
-                self.state_sha = self.artifacts.put(encoded, owner=self.spec.id,
-                                                    kind="program.state",
-                                                    supersedes=self.state_sha)
-            except ArtifactError as exc:
-                return malformed({"reason": str(exc)}, "stop")
+            # checkpoint names them (the disk is a limit, not a price). A state the
+            # world refuses (a retired version, or the retained private state cap, as
+            # a full disk would) is refused as a seat's working state is: ledgered
+            # ``state.refused``, the previous state kept, and the return stands.
+            refused = self.state_gate() if self.state_gate is not None else None
+            if refused is None:
+                try:
+                    self.state_sha = self.artifacts.put(encoded, owner=self.spec.id,
+                                                        kind="program.state",
+                                                        supersedes=self.state_sha)
+                except ArtifactError as exc:
+                    refused = str(exc)[:200]
+            if refused is not None and self.record is not None:
+                self.record({"kind": "state.refused", "assembly_id": self.spec.id,
+                             "handle": req.handle, "state_kind": "program.state",
+                             "reason": refused})
             provider["state_sha"] = self.state_sha
         children = _children(req, parsed, self.child_factory)
         raw_calls = parsed.get("tool_calls")

@@ -55,13 +55,18 @@ nothing shows it who wrote the bytes before (essay II.I.b, the author is private
 **Retained private state has a hard cap (Wave 11).** The disk is finite, so the
 whole of what is held as some seat's private state (``PRIVATE_KINDS``: working-state
 heads and program private states) is a hard limit, ``private_cap``, never a price
-(essay II.II.b, the hard cast). A put that would take it over the cap first asks
-the owner of the store to ``make_room``, which releases retired seats' state through
-``release`` (ledgered before the index changes); a put that still does not fit is
-refused with ``ArtifactCapacityError`` and writes nothing, as on a full disk. A put
-naming the reference it ``supersedes`` is measured with that reference gone, and
-releases it, so a seat replacing its state at the cap is never refused for the
-state it replaces.
+(essay II.II.b, the hard cast). It is counted per reference: every holder's
+reference counts its full size, whether or not another seat holds identical bytes,
+so what one seat is told about capacity never depends on what another seat wrote
+(essay II.I.b; the disk may still keep one copy). A put that would take it over the
+cap may release the references of retired seats that the store's owner names as
+``reclaimable``, oldest retirement first, through ``release`` (ledgered before the
+index changes), and only until the put fits; when even all of them would not make
+room, nothing is released and the put is refused with ``ArtifactCapacityError``,
+writing nothing, as on a full disk. A put naming the reference it ``supersedes`` is
+measured with that reference gone, and releases it, so a seat replacing its state at
+the cap is never refused for the state it replaces. The cap bounds the index: bytes
+on disk can exceed it by the releases since the last checkpoint, until collection.
 """
 
 from __future__ import annotations
@@ -101,6 +106,11 @@ class ArtifactCapacityError(ArtifactError):
     """A private-state write that does not fit the retained private state cap."""
 
 
+#: The one thing a private-state write the cap cannot hold is told: no totals, no
+#: sizes, nothing about what any other seat holds (essay II.I.b).
+CAPACITY_REFUSAL = "private state is at the world's capacity"
+
+
 def artifact_root(ledger_path: str | os.PathLike[str]) -> Path:
     """The archive beside a ledger: ``runs/<world>.jsonl`` keeps ``runs/<world>.artifacts``."""
     return Path(ledger_path).with_suffix(".artifacts")
@@ -134,14 +144,17 @@ class ArtifactStore:
         # never depends on whether another seat holds the bytes or they were collected.
         self.released_recent: dict[str, list[str]] = {}
         # The hard cap on retained private state, in bytes (``[storage]
-        # retained_private_bytes``), and the owner's way to free some: it releases one
-        # retired seat's private state and says whether there was any. Unset, a store
-        # has no cap (a bare store in a test).
+        # retained_private_bytes``). ``reclaimable`` names the owners whose private
+        # references may be released for room, in the order to release them (retired
+        # seats, oldest retirement first), and ``on_reclaimed(owner, sha, kind)`` is
+        # told of each such release. Unset, a store has no cap (a bare store in a test).
         self.private_cap: int | None = None
-        self.make_room: Callable[[], bool] | None = None
-        # The hashes some reference holds under a private kind: derived from the
-        # index, rebuilt whenever the index is replaced or edited from outside.
-        self._private: set[str] = set()
+        self.reclaimable: Callable[[], list[str]] | None = None
+        self.on_reclaimed: Callable[[str, str, str], None] | None = None
+        # (sha, holder, kind) -> bytes for every reference held under a private kind:
+        # derived from the index, rebuilt whenever the index is replaced or edited
+        # from outside.
+        self._private: dict[tuple[str, str, str], int] = {}
         self._private_epoch: int | None = None
 
     # Change tracking, for views derived from the index (the runtime's directory
@@ -185,11 +198,11 @@ class ArtifactStore:
         """Archive ``data`` for ``owner`` and return its hash; the bytes precede the record.
 
         Guarantees, for a private kind under a cap: after the put, retained private
-        state is at most ``private_cap``; the put first releases retired seats' state
-        through ``make_room`` if it must, and a put that cannot fit raises
-        ``ArtifactCapacityError`` having written nothing of its own. ``supersedes``,
-        a hash ``owner`` holds under ``kind``, is released once the new reference
-        is indexed, and is measured as gone.
+        state (counted per reference) is at most ``private_cap``; the put releases
+        ``reclaimable`` references only when that makes it fit, and only until it
+        does; a put that cannot fit raises ``ArtifactCapacityError`` having released
+        and written nothing. ``supersedes``, a hash ``owner`` holds under ``kind``, is
+        released once the new reference is indexed, and is measured as gone.
         """
         if not isinstance(data, (bytes, bytearray)):
             raise TypeError("artifact data must be bytes")
@@ -233,30 +246,28 @@ class ArtifactStore:
             reference["kinds"] = sorted(kinds | {kind})
         record["readers"] = sorted(refs)
         if kind in PRIVATE_KINDS:
-            self._private_shas().add(sha)
+            self._private_refs()[(sha, owner, kind)] = len(data)
         self._changed_sha(sha)
         if supersedes is not None:
             self.release(supersedes, owner=owner, kind=kind)
         return sha
 
-    def _private_shas(self) -> set[str]:
-        """The hashes some reference holds under a private kind, rebuilt on an index change."""
+    def _private_refs(self) -> dict[tuple[str, str, str], int]:
+        """(sha, holder, kind) -> bytes of every private reference, rebuilt on an index
+        change."""
         if self._private_epoch != self.epoch:
-            self._private = {sha for sha, record in self.index.items()
-                             if self._held_private(sha, record)}
+            self._private = {
+                (sha, holder, k): record["bytes"]
+                for sha, record in self.index.items()
+                for holder, reference in self.references(sha, record).items()
+                for k in reference.get("kinds", [reference["kind"]]) if k in PRIVATE_KINDS}
             self._private_epoch = self.epoch
         return self._private
 
-    def _held_private(self, sha: str, record: dict[str, Any], *,
-                      but: tuple[str, str] | None = None) -> bool:
-        """Whether any reference holds ``sha`` under a private kind, ``but`` one (owner, kind)."""
-        return any(k in PRIVATE_KINDS and (holder, k) != but
-                   for holder, reference in self.references(sha, record).items()
-                   for k in reference.get("kinds", [reference["kind"]]))
-
     def private_bytes(self) -> int:
-        """Retained private state: the bytes of every record held under a private kind."""
-        return sum(self.index[sha]["bytes"] for sha in self._private_shas())
+        """Retained private state: every private reference at its full size, each holder's
+        counted whether or not another holds identical bytes."""
+        return sum(self._private_refs().values())
 
     def private_holdings(self, owner: str) -> list[tuple[str, str]]:
         """Every ``(sha, kind)`` ``owner`` holds under a private kind, in put order."""
@@ -268,22 +279,27 @@ class ArtifactStore:
     def _admit_private(self, sha: str, size: int, owner: str, kind: str,
                        supersedes: str | None) -> None:
         """Make room for a private put or refuse it: see ``put``."""
-        while True:
-            held = self._private_shas()
-            total = self.private_bytes()
-            adds = 0 if sha in held else size
-            freed = 0
-            record = self.index.get(supersedes) if supersedes is not None else None
-            if (record is not None and supersedes in held
-                    and not self._held_private(supersedes, record, but=(owner, kind))):
-                freed = record["bytes"]
-            if total - freed + adds <= self.private_cap:
-                return
-            if self.make_room is None or not self.make_room():
-                raise ArtifactCapacityError(
-                    f"no space: retained private state holds {total} of its "
-                    f"{self.private_cap} bytes (storage.retained_private_bytes) and this "
-                    f"write adds {adds - freed}; no retired seat's state is left to release")
+        refs = self._private_refs()
+        adds = 0 if (sha, owner, kind) in refs else size
+        freed = refs.get((supersedes, owner, kind), 0) if supersedes is not None else 0
+        over = self.private_bytes() - freed + adds - self.private_cap
+        if over <= 0:
+            return
+        owners = self.reclaimable() if self.reclaimable is not None else []
+        candidates = [(holder, held, k, refs[(held, holder, k)])
+                      for holder in owners if holder != owner
+                      for held, k in self.private_holdings(holder)]
+        if sum(size for *_rest, size in candidates) < over:
+            # Even releasing every reclaimable reference would not make room: release
+            # nothing, so a refused write takes nothing from anyone.
+            raise ArtifactCapacityError(CAPACITY_REFUSAL)
+        for holder, held, k, size in candidates:
+            if over <= 0:
+                break
+            self.release(held, owner=holder, kind=k, cause="capacity")
+            if self.on_reclaimed is not None:
+                self.on_reclaimed(holder, held, k)
+            over -= size
 
     def release(self, sha: str, *, owner: str, kind: str, cause: str | None = None) -> bool:
         """Drop ``owner``'s hold on ``sha`` under ``kind``; return whether the record is now free.
@@ -323,8 +339,8 @@ class ArtifactStore:
                             "ts": self.clock()})
         record["refs"] = refs
         record["readers"] = sorted(refs)
-        if kind in PRIVATE_KINDS and not self._held_private(sha, record):
-            self._private_shas().discard(sha)
+        if kind in PRIVATE_KINDS:
+            self._private_refs().pop((sha, owner, kind), None)
         if owner not in refs:
             recent = self.released_recent.setdefault(owner, [])
             recent.append(sha)

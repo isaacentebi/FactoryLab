@@ -189,7 +189,7 @@ TICK_ANSWERED = {
 TICK_ANSWER_FACT = (
     "Within one world tick, until a venue write, a read identical to a venue request "
     "already answered in that tick (the kernel's own included) is answered from that "
-    "answer: no request is sent and none of your share is spent.")
+    "answer, and sends no request.")
 
 
 def public_read_weight(tool_id: str, args: Any) -> int | None:

@@ -412,6 +412,9 @@ class BootstrapMixin:
         # The retired ids, oldest retirement first: whose kept state is released first
         # when a private-state write needs room under the cap (``[storage]``).
         self.retirement_order: list[str] = []
+        # id -> the seat that registered its current version (None: no known seat).
+        # A seed is in none: only the seed itself owns it.
+        self.registrants: dict[str, str | None] = {}
         self.retirement_proposals: dict[str, dict] = {}
         self.return_kinds: dict[str, str] = {}
         self.return_bindings: dict[str, dict] = {}
@@ -557,7 +560,8 @@ class BootstrapMixin:
         # The disk is finite: retained private state has a hard cap for the world's
         # life, and a write that needs room releases retired ids' kept state first.
         self.artifacts.private_cap = manifest.storage.retained_private_bytes
-        self.artifacts.make_room = self._release_oldest_retired_state
+        self.artifacts.reclaimable = self._reclaimable_state
+        self.artifacts.on_reclaimed = self._state_reclaimed
         # Continuity (C1): a head pointer per seat over the archive, and an inbox of
         # settled consequences addressed to the seat that decided them. These replace
         # the three-entry memory deque, which lost a decision before its outcome landed.
@@ -619,7 +623,11 @@ class BootstrapMixin:
             specs, vault_examples = vault_specs()
             self.tool_specs.update(specs)
             self.treasury.vault_custody = True
-        from factorylab.world.venue_tools import _BASE_WEIGHT, TICK_ANSWER_FACT
+        from factorylab.world.venue_tools import (
+            _BASE_WEIGHT,
+            TICK_ANSWER_FACT,
+            VENUE_WEIGHT_PER_MINUTE,
+        )
 
         budget = manifest.exchange.public_read_weight_per_minute
         seats = manifest.exchange.max_readers
@@ -636,21 +644,33 @@ class BootstrapMixin:
             self.tool_specs[tool_id]["description"] += (
                 f" Held by seats with a venue read slot (at most {seats}). Each slot has "
                 f"a fixed share of {budget // seats} venue request weight ({budget} over "
-                f"{seats} slots) in any sliding 60 s of world time. This read is sent once "
-                f"and sends {weight}"
-                + (" plus 1 per 60 candles" if tool_id == "venue.candles" else
-                   " plus 1 per 20 rates" if tool_id == "venue.funding_history" else "")
-                + ", charged to your share as the venue weighs it. A read your remaining "
-                "share cannot cover is refused and not sent. " + TICK_ANSWER_FACT)
-        # seat -> [[world ns, venue weight sent]] of its reads in the sliding minute.
+                f"{seats} slots) in any sliding 60 s of world time, kept by the slot "
+                f"whichever seat holds it. This read is sent at most once and weighs "
+                f"{weight}"
+                + (" plus 1 per 60 candles asked" if tool_id == "venue.candles" else
+                   " plus 1 per 20 rates asked" if tool_id == "venue.funding_history"
+                   else "")
+                + ", charged to your slot's share for every read. A read is refused, and "
+                "not sent, when your slot's remaining share cannot cover it, or when the "
+                "venue weight the world sent in the last 60 s leaves less than the "
+                f"kernel's {VENUE_WEIGHT_PER_MINUTE - budget} plus this read (the venue "
+                f"weighs {VENUE_WEIGHT_PER_MINUTE} a minute per IP). " + TICK_ANSWER_FACT)
+        # reader slot -> [[world ns, venue weight]] of the reads charged to it in the
+        # sliding minute; the slot keeps it whichever seat holds the slot.
         self.venue_read_use: dict[str, list[list[int]]] = {}
-        # The same for Polymarket reads (``runtime/polymarket.py``); empty, and never
+        # [[world ns, weight]] the seats' reads sent to a simulated venue (the live
+        # adapter weighs everything it sends itself: ``request_weight_window``).
+        self.venue_sent: list[list[int]] = []
+        # The same for Polymarket reads (``runtime/polymarket.py``), and every
+        # Polymarket request the world sent, kernel and seats; empty, and never
         # spent, in a world without the block.
         self.polymarket_read_use: dict[str, list[list[int]]] = {}
+        self.polymarket_sent: list[list[int]] = []
         self._polymarket_tick_reads = None
-        # The seats holding a venue read slot: the seeds, in manifest order, up to
-        # ``[venue] max_readers``; then registrations while one is free.
-        self.venue_readers: list[str] = [
+        # The venue read slots, by position: the seeds, in manifest order, up to
+        # ``[venue] max_readers``; then registrations into the lowest free slot. A
+        # retired seat's slot is None until it is given again.
+        self.venue_readers: list[str | None] = [
             a.id for a in manifest.assemblies][:manifest.exchange.max_readers]
 
         self.tool_specs["treasury.transfer"] = {

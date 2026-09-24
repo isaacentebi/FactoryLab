@@ -647,11 +647,21 @@ def test_a_seat_s_polymarket_reads_are_refused_once_its_share_is_spent():
     assert "76 requests a minute, of which 60 are held back for the kernel" in text
 
 
-def test_an_identical_read_in_the_tick_is_answered_and_charges_nothing():
+def test_an_identical_read_in_the_tick_is_answered_and_charged_like_any_read():
+    """Rule 4: a seat cannot tell a tick's answer from a sent read. Two seats reading
+    the same thing in one tick are each charged to their slot's share and get answers
+    of the same shape; only the one request actually sent counts against the world's
+    budget."""
     rt = world(read_requests_per_minute=76, kernel_reserve_per_minute=60)
-    assert "markets" in _search(rt, "seed-decider", "event A")
-    again = _search(rt, "seed-decider", "event A")  # share spent, answered anyway
-    assert "markets" in again
+    first = _search(rt, "seed-decider", "event A")
+    second = _search(rt, "seed-observer", "event A")  # answered from the tick
+    assert "markets" in first and first == second
+    assert polymarket._read_used(rt, "seed-decider") == 1
+    assert polymarket._read_used(rt, "seed-observer") == 1
+    assert polymarket.sent_in_window(rt) == 1
+    # With the share spent, a read the tick could answer is refused like any other.
+    again = _search(rt, "seed-decider", "event A")
+    assert again["error"].startswith(polymarket.READ_REFUSAL)
     assert [i["kind"] for i in _consequence_diary(rt)
             if i["kind"] == "polymarket.read_answered"] == ["polymarket.read_answered"]
 
@@ -682,3 +692,42 @@ def test_the_polymarket_budget_is_validated_at_load_against_the_published_limit(
             manifest_from_dict({**raw, "polymarket": {"enabled": True, **block}})
     assert manifest_from_dict({**raw, "polymarket": {
         "enabled": True, "read_requests_per_minute": 1800}}).polymarket.enabled
+
+
+def test_a_seat_is_refused_when_the_world_s_requests_leave_the_kernel_too_little():
+    """One meter counts every request the world sent, kernel and seats. A seat with
+    share left is refused, unsent, when the minute's requests leave less than the
+    kernel's reserve plus its read; the kernel's own reads still go out."""
+    rt = world(read_requests_per_minute=76, kernel_reserve_per_minute=60)
+    for _ in range(16):
+        polymarket.kernel_read(rt, "order_book", token(rt), 1)
+    assert polymarket.sent_in_window(rt) == 16  # 16 + 60 reserve + 1 > 76
+    refused = _search(rt, "seed-decider", "event A")
+    assert refused["error"].startswith(polymarket.BUDGET_REFUSAL)
+    assert polymarket._read_used(rt, "seed-decider") == 0
+    assert polymarket.kernel_read(rt, "order_book", token(rt), 1)["token_id"] == token(rt)
+    assert polymarket.sent_in_window(rt) == 17
+
+
+def test_a_polymarket_slot_keeps_its_history_when_its_seat_retires():
+    from tests.runtime.test_real_flows import _register
+
+    rt = world(read_requests_per_minute=76, kernel_reserve_per_minute=60)  # share 1
+    assert "markets" in _search(rt, "seed-observer", "event A")
+    slot = rt.venue_readers.index("seed-observer")
+    rt._retire_assembly("seed-observer", "vote-1")
+    _register(rt, "newcomer")
+    assert rt.venue_readers.index("newcomer") == slot
+    assert _search(rt, "newcomer", "event B")["error"].startswith(polymarket.READ_REFUSAL)
+    rt.clock.now_ns += polymarket.READ_WINDOW_NS
+    assert "markets" in _search(rt, "newcomer", "event B")
+
+
+def test_the_simulated_venue_counts_what_the_live_reader_would_send():
+    fake = still_fake()
+    yes = fake.market("fake-1")["outcomes"][0]["token_id"]
+    before = fake.requests_sent()
+    fake.market_of_token(yes)  # open: the closed listing, then the open one
+    fake.market_of_token("7")  # absent: closed, open, closed
+    fake.order_book(yes, 1)
+    assert fake.requests_sent() - before == 2 + 3 + 1

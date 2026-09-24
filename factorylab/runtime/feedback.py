@@ -1025,8 +1025,15 @@ class FeedbackMixin:
         # The world's reads of each Polymarket token, once for this whole pass: every
         # forecast due now on one token is graded against the same state of it.
         snapshots: dict = {}
+
+        def deferred(count: int) -> None:
+            # The world's Polymarket request budget is spent for this minute: the pass
+            # stops, and these claims settle on a later pass (never as unobservable).
+            self.ledger.append({"kind": "polymarket.settlement_deferred", "count": count,
+                                "ts": self.clock.now_ns})
+
         settled = self.settler.settle_due(self.n, lambda f: self._facts_for(f, snapshots),
-                                          tick=self.ticks_consumed)
+                                          tick=self.ticks_consumed, on_deferred=deferred)
         for result in settled:
             parent = self.queue.get(result.handle).parent_handle
             if parent in self.forecast_returns and result.brier is not None:

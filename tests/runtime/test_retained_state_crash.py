@@ -19,6 +19,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from factorylab.kernel.artifacts import CAPACITY_REFUSAL
 from factorylab.kernel.ledger import Ledger
 from factorylab.runtime import worlds
 from factorylab.runtime.loop import Runtime
@@ -267,24 +268,45 @@ def test_a_kill_between_the_weight_counter_call_and_its_result_resumes(tmp_path)
 RETIRE_AT = 60
 
 
-def _retiring(monkeypatch):
-    """Every runtime this test builds, a resumed one included, retires seed-observer
-    right after event ``RETIRE_AT``: a retirement recorded in the diary like any other,
+def _retiring(monkeypatch, retire=None, register=None):
+    """Every runtime this test builds, a resumed one included, retires each seat of
+    ``retire`` (event -> seat; by default seed-observer after ``RETIRE_AT``) and
+    registers each ``register`` (event -> (proposer, id)) as a model seat's next
+    version right after that event: governance recorded in the diary like any other,
     so the replay applies it at the same point."""
+    from factorylab.cortex.request import Return
+    from factorylab.kernel.queue import PropensityRecord
+
+    retire = {RETIRE_AT: "seed-observer"} if retire is None else retire
+    register = register or {}
     process = Runtime._process_event
 
-    def process_then_retire(self, event):
+    def process_then_govern(self, event):
         result = process(self, event)
-        if self.n == RETIRE_AT and "seed-observer" not in self.retired_assemblies:
-            self._retire_assembly("seed-observer", "vote-retire")
+        seat = retire.get(self.n)
+        if seat is not None and seat not in self.retired_assemblies:
+            self._retire_assembly(seat, f"vote-{seat}")
+        if self.n in register and register[self.n][1] in self.retired_assemblies:
+            proposer, seat_id = register[self.n]
+            handle = self.queue.open(
+                actor=proposer, event_id="re-register", propensity=PropensityRecord(
+                    (proposer,), (1.,), proposer, 0, proposer, "test"), channel="verdict",
+                deadline_ns=10**15, parent_handle=None, cost_ceiling=10_000_000)
+            self.handle_to_assembly[handle] = proposer
+            self._apply_registrations(handle, Return(handle, {"register": [{
+                "kind": "assembly", "id": seat_id, "model_id": "fake-haiku",
+                "role": "producer", "accepts": ["Tick"], "system_prompt": "x",
+                "max_tokens": 128}]}, 0, "ok"))
         return result
 
-    monkeypatch.setattr(Runtime, "_process_event", process_then_retire)
+    monkeypatch.setattr(Runtime, "_process_event", process_then_govern)
 
 
-#: Small enough that the live seats' heads fill it after the retirement: the retired
-#: seat's kept head is released for room, and later live writes are refused.
+#: Small enough that the live seats' heads fill it after the retirements: the retired
+#: seats' kept heads are released for room, and later live writes are refused.
 TIGHT_CAP = 30_000
+#: Three seats retire in a row, so a live write can need all three kept heads.
+THREE_RETIRE = {60: "seed-observer", 61: "antagonist-a", 62: "eval-d"}
 
 
 def _capacity(items):
@@ -306,7 +328,7 @@ def test_retirement_keeps_the_seat_s_state_in_a_world_run(tmp_path, monkeypatch)
 
 def test_a_crash_between_an_eviction_s_ledger_line_and_its_index_change_resumes(
         tmp_path, monkeypatch):
-    _retiring(monkeypatch)
+    _retiring(monkeypatch, retire=THREE_RETIRE)
     manifest = replace(load_manifest("scripted"), storage=StorageSpec(TIGHT_CAP))
     base = tmp_path / "base" / "world.jsonl"
     base.parent.mkdir()
@@ -314,8 +336,9 @@ def test_a_crash_between_an_eviction_s_ledger_line_and_its_index_change_resumes(
     expected = _items(base, manifest)
     evicted = _capacity(expected)
     assert [(owner, kind) for owner, kind, _ in evicted] == [
-        ("seed-observer", "working.state")], "the retired seat's head was released for room"
-    assert any(i["kind"] == "state.refused" and i["reason"].startswith("no space")
+        (seat, "working.state") for seat in THREE_RETIRE.values()], (
+        "the retired seats' heads were released for room, oldest retirement first")
+    assert any(i["kind"] == "state.refused" and i["reason"] == CAPACITY_REFUSAL
                for i in expected)
     path = tmp_path / "crash" / "world.jsonl"
     path.parent.mkdir()
@@ -366,3 +389,81 @@ def test_a_resume_is_never_refused_for_the_host_s_free_disk(uninterrupted, tmp_p
     expected_summary, expected_trail = uninterrupted
     assert _trail(after) == expected_trail
     assert _summary(summary) == expected_summary
+
+
+def _crash_and_resume(tmp_path, manifest, dies_after):
+    """Run uninterrupted, then again killed right after the first ledger item
+    ``dies_after`` accepts, resume, and return (expected items, crashed prefix, resumed
+    items, expected summary, resumed summary)."""
+    base = tmp_path / "base" / "world.jsonl"
+    base.parent.mkdir()
+    expected_summary = _summary(_runtime(base, manifest).run())
+    expected = _items(base, manifest)
+    path = tmp_path / "crash" / "world.jsonl"
+    path.parent.mkdir()
+    rt = _runtime(path, manifest)
+    append = rt.ledger.append
+    seen = []
+
+    def die(item):
+        seq = append(item)
+        if dies_after(item, seen):
+            raise Crash
+        return seq
+
+    rt.ledger.append = die
+    with pytest.raises(Crash):
+        rt.run()
+    before = _items(path, manifest)
+    summary = resume_world(manifest, str(path), provider=Writer())
+    return expected, before, _items(path, manifest), expected_summary, _summary(summary)
+
+
+def test_a_crash_partway_through_a_put_s_evictions_resumes(tmp_path, monkeypatch):
+    """Three seats retire; one live write needs all three kept heads released. The
+    process dies after the second release's ledger line: the replay releases the same
+    references in the same order, and the world ends as the uninterrupted one."""
+    _retiring(monkeypatch, retire=THREE_RETIRE)
+    manifest = replace(load_manifest("scripted"), storage=StorageSpec(TIGHT_CAP))
+
+    def second_eviction(item, seen):
+        if item.get("kind") == "artifact.released" and item.get("cause") == "capacity":
+            seen.append(item)
+        return len(seen) == 2 and item is seen[-1]
+
+    expected, before, after, expected_summary, summary = _crash_and_resume(
+        tmp_path, manifest, second_eviction)
+    evicted = _capacity(expected)
+    assert [owner for owner, _kind, _sha in evicted] == [
+        "seed-observer", "antagonist-a", "eval-d"]
+    assert before[-1]["cause"] == "capacity" and len(_capacity(before)) == 2
+    assert after[:len(before)] == before
+    assert _trail(after) == _trail(expected)
+    assert _capacity(after) == evicted
+    assert summary == expected_summary
+
+
+def test_a_crash_between_a_superseded_release_and_the_registration_resumes(
+        tmp_path, monkeypatch):
+    """seed-observer retires, then seed-decider (not its owner: a seed owns itself)
+    registers its next version, so the kept head is superseded and released. The
+    process dies right after that release's ledger line, before the registration
+    completes: the replay repeats it, and the world ends as the uninterrupted one."""
+    _retiring(monkeypatch, register={80: ("seed-decider", "seed-observer")})
+
+    def superseded(item, _seen):
+        return item.get("kind") == "artifact.released" and item.get("cause") == "superseded"
+
+    manifest = load_manifest("scripted")
+    expected, before, after, expected_summary, summary = _crash_and_resume(
+        tmp_path, manifest, superseded)
+    released = [i for i in expected if i.get("cause") == "superseded"]
+    assert [(i["owner"], i["artifact_kind"]) for i in released] == [
+        ("seed-observer", "working.state")]
+    assert before[-1]["cause"] == "superseded"
+    assert not any(i["kind"] == "assembly.registered" and i.get("id") == "seed-observer"
+                   for i in before[-3:])
+    assert after[:len(before)] == before
+    assert _trail(after) == _trail(expected)
+    assert [i for i in after if i.get("cause") == "superseded"] == released
+    assert summary == expected_summary

@@ -89,11 +89,12 @@ def test_state_restored_by_hash_is_what_the_next_call_sees():
     assert fresh.invoke(req("h2")).outputs["seen"] == 1
 
 
-def test_a_state_the_retained_private_state_cap_cannot_hold_is_refused_as_a_full_disk():
-    """A state replacing the program's own at the cap fits; one that cannot fit is a
-    malformed return, and the program keeps the state it had."""
+def test_a_refused_program_state_is_refused_as_a_seat_s_working_state_is():
+    """A state replacing the program's own at the cap fits. One the cap cannot hold, or
+    one a retired version writes, is refused as a seat's working state is: the return
+    stands, the program keeps the state it had, and ``state.refused`` is recorded."""
     require_jail()
-    asm, _, _ = program()
+    asm, _, recorded = program()
     asm.invoke(req("h1"))
     archive = asm.artifacts
     archive.private_cap = archive.private_bytes()
@@ -101,8 +102,16 @@ def test_a_state_the_retained_private_state_cap_cannot_hold_is_refused_as_a_full
     kept = asm.state_sha
     archive.private_cap = archive.private_bytes() - 1
     ret = asm.invoke(req("h3"))
-    assert ret.status == "malformed" and ret.outputs["reason"].startswith("no space")
-    assert asm.state_sha == kept and archive.private_bytes() == archive.private_cap + 1
+    assert ret.status == "ok" and ret.outputs["seen"] == 2
+    assert asm.state_sha == kept and ret.provider["state_sha"] == kept
+    assert recorded[-2] == {"kind": "state.refused", "assembly_id": "prog-a", "handle": "h3",
+                            "state_kind": "program.state",
+                            "reason": "private state is at the world's capacity"}
+    archive.private_cap = None
+    asm.state_gate = lambda: "retired"
+    ret = asm.invoke(req("h4"))
+    assert ret.status == "ok" and asm.state_sha == kept
+    assert recorded[-2]["reason"] == "retired"
 
 
 #: A program that never stops is stopped by whichever bound trips first. The jail
