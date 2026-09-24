@@ -12,8 +12,15 @@ from factorylab.charter.charter import MetricCard
 
 RETURN_OBSERVATIONS = frozenset({
     "cost_per_return", "cost_per_attempt", "well_formed_rate", "noop_share", "revision_rate",
-    "tool_calls",
+    "tool_calls", "prompt_bytes", "you_bytes", "inputs_bytes", "downstream_read_bytes",
 })
+#: The context-size observations (essay II.IV.a): each a mean, per invocation, of one
+#: ledgered prompt byte count carried on the invocation's own sample row.
+PROMPT_OBSERVATIONS = {"prompt_bytes": "prompt_bytes", "you_bytes": "you_bytes",
+                       "inputs_bytes": "inputs_bytes"}
+#: What a return's readers were rendered: reading rows filed under the return's author
+#: in the window the reading was metered, over that scope's responses there.
+READ_OBSERVATION = "downstream_read_bytes"
 # The two cost selections: per successful response, and per attempt (failed
 # responses included). Both add retained-storage rent to what the selected
 # responses cost and never count a charge as one of them.
@@ -58,9 +65,9 @@ def fresh_sample(card: MetricCard, samples: CardSamples, window) -> bool:
         support = _WINDOW_SUPPORT.get(observation)
         return True if support is None else support(window)
     if kind in ("returns", "forecasts"):
-        rows = getattr(samples, kind)
+        rows = _rows(samples, kind, observation)
     elif observation in RETURN_OBSERVATIONS:
-        rows = samples.returns
+        rows = _rows(samples, "returns", observation)
     elif observation in FORECAST_OBSERVATIONS:
         rows = samples.forecasts
     else:
@@ -110,6 +117,22 @@ def measurement_catalogue(observations=None) -> list[dict]:
         "is not in the sample; one the owner documented as externally unobservable without its "
         "own fault, and an event the seat never committed to observe, are excluded. No eligible "
         "sample is unmeasured, never zero.",
+        "prompt_bytes": "Mean UTF-8 bytes of the opening prompt rendered for each selected "
+        "invocation, every section included: the total of the sections its ledger row "
+        "records. Tool-round continuations are not counted. Global closed windows divide "
+        "the window's summed prompt bytes by its invocations.",
+        "you_bytes": "Mean UTF-8 bytes of the YOU section of the opening prompt rendered for "
+        "each selected invocation, as its ledger row records them. Global closed windows "
+        "divide the window's summed YOU bytes by its invocations.",
+        "inputs_bytes": "Mean UTF-8 bytes of the INPUTS section of the opening prompt rendered "
+        "for each selected invocation, as its ledger row records them. Global closed windows "
+        "divide the window's summed INPUTS bytes by its invocations.",
+        "downstream_read_bytes": "INPUTS bytes of the invocations commissioned on a published "
+        "return, filed under that return's author in the window each reading was metered, "
+        "over the author scope's selected responses. Readings metered in the same windows as "
+        "the selected responses count, whichever return they read; a scope whose returns no "
+        "invocation read in those windows measures zero. Global closed windows divide the "
+        "window's summed reading bytes by its invocations.",
     }
     result = (observations or seed_book()).catalogue()
     for row in result:
@@ -134,10 +157,13 @@ UNSCOPED_COUNTERS = ("notional_micro", "fills", "realized_pnl_micro",
                      "meta_verdicts", "registrations", "registration_rejections",
                      "amendments_proposed", "amendments_activated", "market_purchases")
 #: Observations whose value is not a mean of its samples: no interval states their error.
-NOT_A_MEAN = frozenset({"verdict_std", "evaluator_disagreement"})
+NOT_A_MEAN = frozenset({"verdict_std", "evaluator_disagreement",
+                        # Reading bytes over responses: no reading is one of the responses.
+                        READ_OBSERVATION})
 
 
-def scope_facts(windows: list[dict], returns: list[dict], forecasts: list[dict]) -> dict:
+def scope_facts(windows: list[dict], returns: list[dict], forecasts: list[dict],
+                readings: list[dict] | tuple = ()) -> dict:
     """One scope's share of the selected closed windows, as anonymous public facts.
 
     Charter audit C3. The kernel partitions and the population's code measures:
@@ -148,7 +174,9 @@ def scope_facts(windows: list[dict], returns: list[dict], forecasts: list[dict])
     through whole. The counters are the scope's own: its responses
     (``invocations``, ``ok``, ``costs`` of its well-formed responses, ``tool_calls``,
     ``noop_returns``, ``revision_returns``, ``producer_returns`` as its response
-    count, ``storage_cost_micro``, ``compute_spend_micro``), the verdicts its
+    count, ``storage_cost_micro``, ``compute_spend_micro``, the summed
+    ``prompt_bytes``, ``you_bytes`` and ``inputs_bytes`` of its prompts, and the
+    ``downstream_read_bytes`` its returns' readers were rendered), the verdicts its
     responses gave, and its own settled forecasts (``forecast_skills``,
     ``outcomes``, ``censored``, ``consequences_settled``, ``consequences_paid_off``).
     A counter no row attributes (``UNSCOPED_COUNTERS``) is null. The result
@@ -178,6 +206,9 @@ def scope_facts(windows: list[dict], returns: list[dict], forecasts: list[dict])
         "revision_handles": {row["handle"] for row in responses if row["revision"]},
         "storage_cost_micro": sum(row["cost"] for row in storage),
         "compute_spend_micro": sum(row["cost"] for row in returns),
+        **{key: sum(row.get(key) or 0 for row in responses)
+           for key in PROMPT_OBSERVATIONS.values()},
+        "downstream_read_bytes": sum(row["read_bytes"] for row in readings),
         "verdicts": {row["handle"]: {"judge": [row["verdict"]]} for row in responses
                      if row.get("verdict") is not None},
         "forecast_skills": [row["skill"] for row in forecasts if row.get("skill") is not None],
@@ -203,6 +234,10 @@ def _sample_values(observation: str, rows: list[dict]) -> list[float] | None:
         return [float(bool(row[key])) for row in rows if not row.get("storage")]
     if observation == "tool_calls":
         return [float(row["tool_calls"]) for row in rows if not row.get("storage")]
+    if observation in PROMPT_OBSERVATIONS:
+        key = PROMPT_OBSERVATIONS[observation]
+        return [float(row[key]) for row in rows
+                if not row.get("storage") and row.get(key) is not None]
     if observation == "censored_share":
         return [float(row["status"] == "censored") for row in rows]
     if observation == "avoidably_unresolved_share":
@@ -223,6 +258,10 @@ class CardSamples:
     returns: list[dict] = field(default_factory=list)
     forecasts: list[dict] = field(default_factory=list)
     windows: list[dict] = field(default_factory=list)
+    # Reading rows: a reader's INPUTS bytes filed under the author of the return it
+    # was commissioned on. Kept apart from ``returns``: a reading is neither a response
+    # nor a cost, so no other observation can select one.
+    readings: list[dict] = field(default_factory=list)
     values: dict[str, float] = field(default_factory=dict)
     scopes: dict[str, dict[str, float]] = field(default_factory=dict)
     medians: dict[str, float] = field(default_factory=dict)
@@ -230,14 +269,33 @@ class CardSamples:
     holdouts: dict[str, float] = field(default_factory=dict)
 
     def returned(self, *, handle: str, assembly: str, role: str, window: int, ret) -> None:
-        """One completed invocation, including its continuation costs, is one return sample."""
+        """One completed invocation, including its continuation costs, is one return sample.
+
+        Its prompt byte counts are the ones its ledger row records, or None when the
+        runtime rendered it no prompt: an unmeasured prompt is never a zero-byte one.
+        """
+        sections = getattr(ret, "prompt_sections", None) or {}
         self.returns.append({
             "handle": handle, "assembly": assembly, "role": role, "window": window,
             "cost": ret.cost, "ok": ret.status == "ok",
             "noop": str(ret.outputs.get("action", "")).lower() in ("noop", "hold"),
             "revision": False, "tool_calls": len(ret.tool_calls),
             "verdict": ret.outputs.get("verdict"),
+            "prompt_bytes": sections.get("total"), "you_bytes": sections.get("you"),
+            "inputs_bytes": sections.get("inputs"),
         })
+
+    def read(self, *, handle: str, assembly: str, role: str, window: int,
+             read_bytes: int) -> None:
+        """One reading of the return ``handle`` is a reading row of its author's scope.
+
+        Filed in the window the reading was metered, like retained-storage rent,
+        and under the author (``assembly``, ``role``), never the reader: the reader's
+        identity is not in the row at all.
+        """
+        self.readings.append({"handle": handle, "assembly": assembly, "role": role,
+                              "window": window, "read_bytes": int(read_bytes),
+                              "reading": True})
 
     def stored(self, *, handle: str, assembly: str | None, role: str, window: int,
                cost: int) -> None:
@@ -321,6 +379,18 @@ class CardSamples:
                 row["handle"] in pending_handles or id(row) in keep
                 or (first_window is not None and row["window"] >= first_window)
             )]
+        # A reading row is kept while a horizon that reads it, or a retained window, can.
+        keep = set()
+        for card in cards:
+            if card.window.kind != "returns" or (
+                    card.observation.strip().lower() != READ_OBSERVATION):
+                continue
+            rows = _selected(READ_OBSERVATION, _rows(self, "returns", READ_OBSERVATION))
+            for group in _groups(card, rows).values():
+                keep.update(id(row) for row in _horizon(
+                    READ_OBSERVATION, group, card.window.n, partial=True))
+        self.readings[:] = [row for row in self.readings if (
+            id(row) in keep or (first_window is not None and row["window"] >= first_window))]
 
 
 def record_card_forecasts(runtime, pending, baseline) -> None:
@@ -417,7 +487,9 @@ def preflight_measurement(card: MetricCard, observations=None, *,
         role = measured_role(kind)
         samples.returned(handle=kind, assembly=kind, role=role, window=1,
                          ret=Return(kind, {"verdict": 0.0} if kind in ("Verdict", "CounterVerdict")
-                                    else {}, 1, "ok"))
+                                    else {}, 1, "ok",
+                                    prompt_sections={"total": 1, "you": 1, "inputs": 1}))
+        samples.read(handle=kind, assembly=kind, role=role, window=1, read_bytes=1)
     # Use the real row constructor, with judge and subject separated. The card
     # cannot manufacture either identity by assigning its answers_for to a row.
     for source in samples.returns:
@@ -433,7 +505,9 @@ def preflight_measurement(card: MetricCard, observations=None, *,
     window = MeasureWindow(1, 1, costs=[1], invocations=1, ok=1, producer_returns=1,
                            consequences_settled=1, exposures_settled=1, outcomes=1,
                            meta_verdicts=[0.0], max_position_notional_micro=0,
-                           verdicts={"sample": {"a": [0.0], "b": [0.0]}})
+                           verdicts={"sample": {"a": [0.0], "b": [0.0]}},
+                           prompt_bytes=1, you_bytes=1, inputs_bytes=1,
+                           downstream_read_bytes=1)
     if unit.id not in measure_cards((unit,), samples, window, observations=observations):
         raise ValueError(f"card {card.id} window: measurement preflight produced no value")
 
@@ -446,9 +520,20 @@ def _selected(observation: str, rows: list[dict]) -> list[dict]:
     loses it here, before any grouping or horizon; a cost selection keeps it for
     `_horizon`, which admits it as mass and never as a slot.
     """
-    if observation.strip().lower() in COST_OBSERVATIONS:
-        return rows
-    return [row for row in rows if not row.get("storage")]
+    observation = observation.strip().lower()
+    if observation in COST_OBSERVATIONS:
+        return [row for row in rows if not row.get("reading")]
+    if observation == READ_OBSERVATION:
+        return [row for row in rows if not row.get("storage")]
+    return [row for row in rows if not row.get("storage") and not row.get("reading")]
+
+
+def _rows(samples: CardSamples, kind: str, observation: str) -> list[dict]:
+    """The sample rows an observation selects from: reading rows join only its own."""
+    rows = getattr(samples, kind)
+    if kind == "returns" and observation.strip().lower() == READ_OBSERVATION:
+        return rows + samples.readings
+    return rows
 
 
 def _horizon(observation: str, group: list[dict], n: int, *,
@@ -465,7 +550,7 @@ def _horizon(observation: str, group: list[dict], n: int, *,
     from outside their span does not. `partial` keeps a horizon that has not
     filled yet, which retention needs and measurement refuses.
     """
-    responses = [row for row in group if not row.get("storage")]
+    responses = [row for row in group if not row.get("storage") and not row.get("reading")]
     if observation.strip().lower() == "avoidably_unresolved_share":
         # The horizon is the last `n` *eligible* due commitments: a documented
         # exclusion never occupies a slot, so external unobservability cannot
@@ -475,10 +560,14 @@ def _horizon(observation: str, group: list[dict], n: int, *,
         return None
     responses = responses[-n:]
     keep = {id(row) for row in responses}
-    if responses and observation.strip().lower() in COST_OBSERVATIONS:
+    charge = ("storage" if observation.strip().lower() in COST_OBSERVATIONS
+              else "reading" if observation.strip().lower() == READ_OBSERVATION else None)
+    if responses and charge is not None:
+        # A reading row joins the horizon the way rent does: metered in the windows
+        # of the selected responses, never one of them.
         first, last = responses[0]["window"], responses[-1]["window"]
         keep.update(id(row) for row in group
-                    if row.get("storage") and first <= row["window"] <= last)
+                    if row.get(charge) and first <= row["window"] <= last)
     return [row for row in group if id(row) in keep]
 
 
@@ -527,6 +616,18 @@ def _measure_rows(observation: str, rows: list[dict]) -> float | None:
         # The card's unit is calls per return: ten responses of one call each
         # measure one, not ten.
         return fmean(row["tool_calls"] for row in rows)
+    if observation in PROMPT_OBSERVATIONS:
+        # Only a prompt the runtime rendered and measured is a sample of its size.
+        key = PROMPT_OBSERVATIONS[observation]
+        sizes = [row[key] for row in rows if row.get(key) is not None]
+        return fmean(sizes) if sizes else None
+    if observation == READ_OBSERVATION:
+        # What the scope's returns were read for, over the responses it made in the
+        # same windows: a reading is added to them and never counted as one.
+        responses = [row for row in rows if not row.get("reading")]
+        if not responses:
+            return None
+        return sum(row["read_bytes"] for row in rows if row.get("reading")) / len(responses)
     if observation == "censored_share":
         return fmean(row["status"] == "censored" for row in rows)
     if observation == "avoidably_unresolved_share":
@@ -601,7 +702,8 @@ def measure_card(card: MetricCard, samples: CardSamples, observations=None) -> d
                     elif isinstance(value, set):
                         merged[key].update(value)
                     elif isinstance(value, int | float):
-                        merged[key] += value
+                        # A record closed before a counter existed lacks it: zero.
+                        merged[key] = (merged.get(key) or 0) + value
             if observation.id in ("forecast_skill", "cost_per_attempt"):
                 # A closed record keeps no per-response attribution, so these
                 # are measured from the samples the selected windows retained.
@@ -633,10 +735,10 @@ def measure_card(card: MetricCard, samples: CardSamples, observations=None) -> d
         if observation.registered:
             return _measure_scoped(card, observation, book, samples, selected)
         kind = "returns" if observation.id in RETURN_OBSERVATIONS else "forecasts"
-        rows = [r for r in getattr(samples, kind)
+        rows = [r for r in _rows(samples, kind, observation.id)
                 if selected[0]["index"] <= r["window"] <= selected[-1]["index"]]
     else:
-        rows = getattr(samples, window.kind)
+        rows = _rows(samples, window.kind, observation.id)
     rows = _selected(observation.id, rows)
     result = {}
     for scope, group in _groups(card, rows).items():
@@ -677,19 +779,23 @@ def _measure_scoped(card: MetricCard, observation, book, samples: CardSamples,
     returns = _scope_rows(card, [r for r in samples.returns if first <= r["window"] <= last])
     forecasts = _scope_rows(card, [r for r in samples.forecasts
                                    if first <= r["window"] <= last])
+    readings = _scope_rows(card, [r for r in samples.readings
+                                  if first <= r["window"] <= last])
     result = {}
     for scope in sorted(set(returns) | set(forecasts), key=str):
         own_returns, own_forecasts = returns.get(scope, []), forecasts.get(scope, [])
+        own_readings = readings.get(scope, [])
         if card.window.interval is not None:
             per_window = [value for record in selected if (value := book.value_of_facts(
                 observation, scope_facts(
                     [record], [r for r in own_returns if r["window"] == record["index"]],
-                    [r for r in own_forecasts if r["window"] == record["index"]])))
+                    [r for r in own_forecasts if r["window"] == record["index"]],
+                    [r for r in own_readings if r["window"] == record["index"]])))
                 is not None]
             if not card.window.interval.satisfied(per_window):
                 continue
         value = book.value_of_facts(observation, scope_facts(selected, own_returns,
-                                                             own_forecasts))
+                                                             own_forecasts, own_readings))
         if value is not None:
             result[scope] = value
     return result

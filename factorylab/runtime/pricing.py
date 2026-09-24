@@ -99,6 +99,15 @@ class MeasureWindow:
     # observations read these; the names are not a public window fact.
     calls_by_provider: dict[str, int] = field(default_factory=dict)
     calls_by_family: dict[str, int] = field(default_factory=dict)
+    # UTF-8 bytes of the opening prompts the window's invocations were rendered, summed
+    # whole and for the YOU and INPUTS sections: the ledgered ``sections`` counts (essay
+    # II.IV.a, the ceded metrics layer; the context-size observations read these).
+    prompt_bytes: int = 0
+    you_bytes: int = 0
+    inputs_bytes: int = 0
+    # The INPUTS bytes of the window's invocations commissioned on a published return,
+    # summed: what reading returns cost in context, filed under no author here.
+    downstream_read_bytes: int = 0
 
 
 #: The definition of a censored settlement that carries a price: its decision left

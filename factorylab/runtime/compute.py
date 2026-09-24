@@ -1958,6 +1958,10 @@ class ComputeMixin:
         self.stats.invocations_by_role[role] = self.stats.invocations_by_role.get(role, 0) + 1
         sr = ret.stop_reason or "none"
         self.stats.stop_reasons[sr] = self.stats.stop_reasons.get(sr, 0) + 1
+        # Rendered bytes per prompt section (edition 3, C4), counted once: the ledger
+        # row, the window's public counters and the return's measurement sample all
+        # carry these same numbers, so no second measurement can drift from the first.
+        sections = replace(req, inputs={**req.inputs, "you": action_id}).section_bytes()
         self.ledger.append(
             {
                 "kind": "invocation",
@@ -1982,8 +1986,7 @@ class ComputeMixin:
                 # institutional catalogue behind catalogue.search is a claim about
                 # bytes; the claim is recorded beside the bill it is supposed to
                 # move, so the change is measured rather than assumed.
-                "sections": replace(
-                    req, inputs={**req.inputs, "you": action_id}).section_bytes(),
+                "sections": sections,
                 **({"prompt_cache": prompt_cache} if prompt_cache is not None else {}),
                 "ts": self.clock.now_ns,
             }
@@ -2001,6 +2004,14 @@ class ComputeMixin:
                 "max_tokens": ret.provider.get("max_tokens"), "ts": self.clock.now_ns,
             })
         self.window.invocations += 1
+        # Essay II.IV.a: the metrics layer is ceded, and the factory can propose a
+        # metric only on a quantity the world publishes. These are that quantity for
+        # context size: facts, with no target attached (the seed observations
+        # ``prompt_bytes``, ``you_bytes`` and ``inputs_bytes`` read them).
+        self.window.prompt_bytes += sections["total"]
+        self.window.you_bytes += sections.get("you", 0)
+        self.window.inputs_bytes += sections.get("inputs", 0)
+        ret = replace(ret, prompt_sections=dict(sections))
         if ret.status == "ok":
             self.window.ok += 1
             if role == "producer":

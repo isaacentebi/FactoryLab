@@ -72,8 +72,9 @@ def test_catalogue_is_exact_and_public_metadata_cannot_mutate_it():
     # + cost_per_attempt (C6), + avoidably_unresolved_share (edition 3 C3), + burn_per_window
     # (charter audit M6), + ews_variance and ews_autocorrelation (ruling R3, evaluations M2),
     # + evaluator_compute_share (the #132 review, item 2), + provider_concentration and
-    # family_concentration (time audit T15)
-    assert len(public) == len({o.id for o in CATALOGUE}) == 30
+    # family_concentration (time audit T15), + prompt_bytes, you_bytes, inputs_bytes and
+    # downstream_read_bytes (wave 7, context size published as a fact)
+    assert len(public) == len({o.id for o in CATALOGUE}) == 34
     # A11: the public row now also names where the observation came from and which
     # version of it this is, because the population can register its own.
     assert all(set(item) == {"id", "description", "units", "unit_range", "scale",

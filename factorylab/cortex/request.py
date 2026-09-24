@@ -713,3 +713,7 @@ class Return:
     # Optional sections of the reply that did not validate and were dropped while
     # the answer stood: ``{"section", "reason"[, "index"]}`` each, in section order.
     dropped: tuple[dict[str, Any], ...] = ()
+    # UTF-8 bytes per section of the prompt the runtime rendered for this invocation,
+    # plus ``total``: the same counts the invocation's ledger row carries as
+    # ``sections``. None when the runtime rendered no prompt for it.
+    prompt_sections: dict[str, int] | None = None

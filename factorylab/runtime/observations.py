@@ -397,6 +397,47 @@ CATALOGUE: tuple[Observation, ...] = (
         (0.0, 1_000_000.0),
         per_window=True,
     ),
+    # Essay II.IV.a: the metrics layer is ceded, and the factory proposes metrics only
+    # on quantities the world publishes. Context size is one: these publish the byte
+    # counts every invocation's ledger row already carries (``sections``), with no
+    # target, threshold or advice attached. Bytes, not provider tokens: the kernel
+    # renders the bytes for every seat alike, while tokenizers differ by family and the
+    # reported usage covers only an invocation's last provider call.
+    Observation(
+        "prompt_bytes",
+        "Mean UTF-8 bytes of the opening prompt rendered for each invocation, every "
+        "section included (the total its ledger row records); tool-round continuations "
+        "are not counted.",
+        "bytes per invocation",
+        lambda w: _ratio(getattr(w, "prompt_bytes", 0), w.invocations),
+        (0.0, 100_000.0),
+    ),
+    Observation(
+        "you_bytes",
+        "Mean UTF-8 bytes of the YOU section of the opening prompt rendered for each "
+        "invocation, as its ledger row records them.",
+        "bytes per invocation",
+        lambda w: _ratio(getattr(w, "you_bytes", 0), w.invocations),
+        (0.0, 100_000.0),
+    ),
+    Observation(
+        "inputs_bytes",
+        "Mean UTF-8 bytes of the INPUTS section of the opening prompt rendered for each "
+        "invocation, as its ledger row records them.",
+        "bytes per invocation",
+        lambda w: _ratio(getattr(w, "inputs_bytes", 0), w.invocations),
+        (0.0, 100_000.0),
+    ),
+    Observation(
+        "downstream_read_bytes",
+        "INPUTS bytes rendered to the invocations commissioned on a published return "
+        "(judges, adversarial judges, metas, any contract routed on it), summed over the "
+        "window and divided by the window's invocations; per role or assembly, filed "
+        "under the return's author.",
+        "bytes per return",
+        lambda w: _ratio(getattr(w, "downstream_read_bytes", 0), w.invocations),
+        (0.0, 1_000_000.0),
+    ),
 )
 
 
