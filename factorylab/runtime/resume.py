@@ -560,6 +560,9 @@ class JournalProxy:
         # being what the journal returned: the recorded one on replay, so whatever an
         # observer builds from it is the same in a live run and its replay.
         self.observer = None
+        # Every public call dispatched through this proxy, answered or not: tells a
+        # caller whether anything reached the adapter. Counted identically on replay.
+        self.dispatched = 0
 
     def __getattr__(self, name):
         attr = getattr(self.target, name)
@@ -571,6 +574,7 @@ class JournalProxy:
 
         def call(*args, **kwargs):
             started = time.monotonic_ns()
+            self.dispatched += 1
             try:
                 result = self.journal.call(f"{self._journal_name}.{name}", attr, args, kwargs,
                                            deterministic=self.deterministic)
@@ -587,14 +591,14 @@ class JournalProxy:
 
     def __setattr__(self, name, value):
         if name in ("target", "journal", "_journal_name", "deterministic", "call_metrics",
-                    "observer"):
+                    "observer", "dispatched"):
             object.__setattr__(self, name, value)
         else:
             setattr(self.target, name, value)
 
     def __delattr__(self, name):
         if name in ("target", "journal", "_journal_name", "deterministic", "call_metrics",
-                    "observer"):
+                    "observer", "dispatched"):
             object.__delattr__(self, name)
         else:
             delattr(self.target, name)

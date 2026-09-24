@@ -281,6 +281,23 @@ def test_an_unanswered_funding_read_emits_no_funding_event():
     assert not [e for e in events if e.kind.name == "FUNDING"]
 
 
+def test_a_schema_invalid_read_charges_nothing_on_any_adapter(monkeypatch):
+    """Refused before admission, it sends nothing and is charged nothing, the same on
+    the simulated venue (no weight counter) as on the live adapter."""
+    bad = {"coin": "BTC", "n": 0}  # n has minimum 1
+    simulated = _read_runtime(100)
+    live, _venue, requests = _rate_limited_runtime(monkeypatch)
+    for rt in (simulated, live):
+        result = _read(rt, "seed-decider", "venue.funding_history", **bad)
+        assert "error" in result and "funding_history" not in result
+        assert rt._venue_read_used("seed-decider") == 0
+    assert requests == []
+    # A read that reached dispatch on the simulated venue is still charged.
+    assert "error" not in _read(simulated, "seed-decider", "venue.funding_history",
+                                coin="BTC", n=10)
+    assert simulated._venue_read_used("seed-decider") == 21
+
+
 def test_the_single_attempt_flag_never_outlives_the_seat_read(monkeypatch):
     """Whatever raises during a seat's read, before or inside the metered call, the
     flag is clear afterwards and a following kernel read still retries."""

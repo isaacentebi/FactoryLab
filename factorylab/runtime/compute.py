@@ -1305,19 +1305,26 @@ class ComputeMixin:
             self.exchange.single_attempt = single
 
     def _charge_venue_read(self, seat: str, tool_id: str, args: Any,
-                           before: int | None) -> None:
+                           before: int | None, dispatched: int | None = None) -> None:
         """Charge a seat's read what the adapter reports it sent for it.
 
         A seat read is sent once (``_seat_read_attempts``), so what is charged is at
         most the first-attempt weight it was admitted on. A simulated venue sends
-        nothing and reports nothing; it is charged the first-attempt weight, so the
-        limit binds the same way in a scripted world. Never raises.
+        nothing and reports nothing; it is charged the first-attempt weight only when
+        the read reached the adapter (the journal proxy's ``dispatched`` count moved),
+        so a read refused before dispatch costs nothing there, as it costs nothing on
+        the live adapter. Never raises.
         """
         from factorylab.world.venue_tools import public_read_weight
 
         after = self._venue_weight_sent()
-        sent = (after - before if before is not None and after is not None
-                and after >= before else public_read_weight(tool_id, args))
+        if before is not None and after is not None and after >= before:
+            sent = after - before
+        elif dispatched is not None and getattr(self.exchange, "dispatched",
+                                                dispatched) == dispatched:
+            sent = 0  # nothing reached the adapter
+        else:
+            sent = public_read_weight(tool_id, args)
         if sent:
             self._venue_read_used(seat)
             self.venue_read_use.setdefault(seat, []).append([self.clock.now_ns, sent])
@@ -1602,6 +1609,18 @@ class ComputeMixin:
         from factorylab.world.venue_tools import public_read_weight
 
         venue_read = public_read_weight(tool_id, args) is not None
+        if venue_read:
+            # A read the tool's own schema refuses is refused here, before admission
+            # and before any charge: it can never reach the venue, on any adapter.
+            from factorylab.world.venue_tools import _validate
+
+            try:
+                _validate(args, spec["args_schema"])
+            except ValueError as exc:
+                self.ledger.append({"kind": "tool.refused", "handle": handle,
+                                    "assembly_id": action_id, "tool": tool_id,
+                                    "reason": str(exc)[:200], "ts": self.clock.now_ns})
+                return {"error": str(exc)}, 0
         answered = self._tick_answer(tool_id, args) if venue_read else None
         if answered is not None:
             # No request, no weight: the tick already holds the venue's answer.
@@ -1621,6 +1640,7 @@ class ComputeMixin:
                                     "reason": refusal, "ts": self.clock.now_ns})
                 return {"error": refusal}, 0
             weight_before = self._venue_weight_sent()
+            dispatched_before = getattr(self.exchange, "dispatched", None)
         price = int(spec["price_micro_per_call"])
 
         def execute() -> dict:
@@ -1737,7 +1757,8 @@ class ComputeMixin:
                 try:
                     self._seat_read_attempts(False)
                 finally:
-                    self._charge_venue_read(action_id, tool_id, args, weight_before)
+                    self._charge_venue_read(action_id, tool_id, args, weight_before,
+                                            dispatched_before)
         if spec["kind"] == "venue":
             if tool_id in self.venue_tools.PUBLIC_READS:
                 from factorylab.runtime.observations import record_venue_facts
