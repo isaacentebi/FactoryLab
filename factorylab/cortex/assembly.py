@@ -640,18 +640,24 @@ def _finite_json(value: Any) -> None:
 
 
 def validate_schema(value: Any, schema: dict, *, partial: bool = False) -> None:
-    """Enforce the supported JSON-schema types, required fields, enums and numeric bounds."""
+    """Enforce the supported JSON-schema types, required fields, enums and numeric bounds.
+
+    Guarantees a refusal names what failed: an absent required field by name, and a
+    value no alternative admits by each alternative's own reason, so a refused
+    answer reads against the published schema it failed.
+    """
     if not isinstance(schema, dict):
         raise ValueError("schema must be an object")
     if "anyOf" in schema:
+        reasons = []
         for alternative in schema["anyOf"]:
             try:
                 validate_schema(value, alternative, partial=partial)
                 break
-            except (ValueError, TypeError):
-                pass
+            except (ValueError, TypeError) as exc:
+                reasons.append(str(exc) or type(exc).__name__)
         else:
-            raise ValueError("no matching alternative")
+            raise ValueError("no matching alternative: " + " | ".join(reasons))
     kind = schema.get("type")
     types = {"object": dict, "array": list, "string": str, "boolean": bool,
              "integer": int, "number": (int, float), "null": type(None)}
@@ -672,14 +678,18 @@ def validate_schema(value: Any, schema: dict, *, partial: bool = False) -> None:
             if key in schema and invalid(schema[key]):
                 raise ValueError("number out of range")
     if isinstance(value, dict):
-        if not partial and any(k not in value for k in schema.get("required", [])):
-            raise ValueError("required field absent")
+        absent = [k for k in schema.get("required", []) if k not in value] if not partial else []
+        if absent:
+            raise ValueError("required field absent: " + ", ".join(map(str, absent)))
         properties = schema.get("properties", {})
         for key, item in value.items():
             if key in properties:
-                validate_schema(item, properties[key])
+                try:
+                    validate_schema(item, properties[key])
+                except ValueError as exc:
+                    raise ValueError(f"{key}: {exc}") from None
             elif schema.get("additionalProperties") is False:
-                raise ValueError("unexpected field")
+                raise ValueError(f"unexpected field: {key}")
             elif isinstance(schema.get("additionalProperties"), dict):
                 validate_schema(item, schema["additionalProperties"])
     if isinstance(value, list):
@@ -790,6 +800,86 @@ def with_counterfactual(schema: Any) -> Any:
     return {**schema, "properties": properties}
 
 
+def producing_contract(shape: Any, *, listed: Any, answer_order: bool) -> Any:
+    """The final answers a producing kind's ``shape`` admits, as the kernel enforces them.
+
+    Chapter II §II.b: physics is enforced, not announced, and the published contract
+    is the enforced one. The one builder of this union: the request publishes it and
+    the kernel validates the reply against it, and ``wire_schema`` carries the same
+    forms to a constrained decoder, so the three cannot diverge.
+
+    ``listed`` is the coins the world lists now, or None for a decision that already
+    acted (a venue write accepted or pending, lots or earnings). Guarantees a copy
+    (``shape`` is never mutated), and:
+
+    - ``listed`` None: ``shape`` publishing ``COUNTERFACTUAL_FIELD``, not required;
+    - ``listed`` empty: ``shape`` without the field, which then names no listed coin;
+    - otherwise the union of (a) ``shape`` with ``counterfactual`` required, its coin
+      one of ``listed``, and, when ``answer_order`` (a kind that owns the answer order,
+      from a decision that may write), (b) ``shape`` with ``action`` ``"order"`` and
+      ``coin``, ``side`` and ``size`` required. A lone form is returned bare.
+
+    A shape that is not an object answer is returned as a copy, unchanged.
+    """
+    shape = deepcopy(shape)
+    if not isinstance(shape, dict) or not (
+            shape.get("type") == "object" or isinstance(shape.get("properties"), dict)):
+        return shape
+    properties = dict(shape.get("properties") or {})
+    required = [k for k in shape.get("required", []) if k != "counterfactual"]
+    if listed is None:
+        properties["counterfactual"] = deepcopy(COUNTERFACTUAL_FIELD)
+        return {**shape, "properties": properties, "required": required}
+    listed = sorted(str(coin) for coin in listed)
+    if not listed:
+        properties.pop("counterfactual", None)
+        return {**shape, "properties": properties, "required": required}
+    named = deepcopy(COUNTERFACTUAL_FIELD)
+    named["properties"]["coin"] = {"type": "string", "enum": listed}
+    properties["counterfactual"] = named
+    forms = [{**shape, "properties": properties, "required": [*required, "counterfactual"]}]
+    if answer_order:
+        action = _intersect(properties.get("action", {"type": "string"}),
+                            {"type": "string", "enum": ["order"]})
+        if action is not None:
+            forms.append({**shape, "properties": {
+                **properties, "action": action,
+                "coin": {"type": "string"}, "side": {"enum": ["buy", "sell"]},
+                "size": {"type": ["string", "number"]}},
+                "required": [*required, *(k for k in ("action", "coin", "side", "size")
+                                          if k not in required)]})
+    return forms[0] if len(forms) == 1 else {"anyOf": forms}
+
+
+def cap_continuation(schema: Any, *, tool_calls: bool) -> Any:
+    """``schema`` stating that this round admits no children, and tool calls only if allowed.
+
+    Guarantees a copy in which every open object answer shape bounds ``requests`` to
+    no items, and ``tool_calls`` too unless ``tool_calls``: the kernel refuses a
+    child in any continuation round, and treats the answer to a round that grants no
+    further tools as final. A closed shape that does not name a list already forbids
+    it and is left as it is.
+    """
+    schema = deepcopy(schema)
+    if not isinstance(schema, dict):
+        return schema
+    alternatives = schema.get("anyOf")
+    if (set(schema) == {"anyOf"} and isinstance(alternatives, list)
+            and all(isinstance(a, dict) for a in alternatives)):
+        return {"anyOf": [cap_continuation(a, tool_calls=tool_calls) for a in alternatives]}
+    properties = schema.get("properties")
+    if schema.get("type") != "object" and not isinstance(properties, dict):
+        return schema
+    properties = dict(properties) if isinstance(properties, dict) else {}
+    closed = schema.get("additionalProperties") is False
+    for key in ("requests", *(() if tool_calls else ("tool_calls",))):
+        if key in properties:
+            properties[key] = {**properties[key], "maxItems": 0}
+        elif not closed:
+            properties[key] = {"type": "array", "maxItems": 0}
+    return {**schema, "properties": properties}
+
+
 def kind_return_fields(kind: str | None) -> dict:
     """The reserved fields ``kind`` owns beside the universal envelope; {} for any other."""
     return {name: dict(shape) for name, shape in KIND_RETURN_FIELDS.get(kind or "", {}).items()}
@@ -887,7 +977,7 @@ def validate_return_sections(parsed: dict, schema: dict, validator=None, req=Non
 
     reserved = reserved_return_fields()
     owned = kind_return_fields(kind)
-    declared = schema.get("properties", {}) if isinstance(schema, dict) else {}
+    declared = _declared_fields(schema)
     for section in OPTIONAL_SECTIONS:
         if section not in parsed:
             continue
@@ -923,7 +1013,10 @@ def validate_return_sections(parsed: dict, schema: dict, validator=None, req=Non
             faults.extend((index, f"more than {min(limits)} {section}")
                           for index in where[min(limits):])
             kept, where = kept[:min(limits)], where[:min(limits)]
-        if faults and section == "tool_calls" and validator is not None:
+        # A round whose contract admits no tool calls at all (``cap_continuation``) has no
+        # slot to answer one in: the section goes whole, as a child request's does.
+        closed_round = bool(limits) and min(limits) == 0
+        if faults and section == "tool_calls" and validator is not None and not closed_round:
             # Each refused call keeps its slot, marked, and is answered there with its
             # reason; the runtime validator voids the whole batch if it writes, so a
             # write never runs beside a refused call and a read-only turn survives.
@@ -1022,6 +1115,30 @@ def validate_return_sections(parsed: dict, schema: dict, validator=None, req=Non
     raise ValueError("return sections did not settle")
 
 
+def _declared_fields(schema: Any) -> dict:
+    """The field shapes a contract declares for every answer of one kind.
+
+    Guarantees a plain object contract's own properties, and, for a union of answers
+    of one kind (``producing_contract``: every alternative pins the same ``emits``, or
+    none does), the properties every alternative declares identically; {} for a union
+    over several kinds, whose alternatives each declare their own.
+    """
+    if not isinstance(schema, dict):
+        return {}
+    if set(schema) != {"anyOf"} or not isinstance(schema.get("anyOf"), list):
+        properties = schema.get("properties", {})
+        return properties if isinstance(properties, dict) else {}
+    shapes = _answer_shapes(schema)
+    if not shapes or not all(isinstance(s.get("properties"), dict) for s in shapes):
+        return {}
+    pins = {json.dumps(s["properties"].get("emits"), sort_keys=True) for s in shapes}
+    if len(pins) != 1:
+        return {}
+    first = shapes[0]["properties"]
+    return {k: v for k, v in first.items()
+            if all(s["properties"].get(k) == v for s in shapes[1:])}
+
+
 def _check_child(child: dict) -> None:
     """A child request names a target and a task, carries no authorship, and a real schema.
 
@@ -1112,16 +1229,13 @@ def wire_schema(schema: Any, emits: Any = None, *, policy: bool = False) -> dict
     - every object left open is marked open (``additionalProperties: true``, the
       JSON-schema default), so a decoder whose default is closed cannot forbid a
       field the kernel accepts, such as ``working_state``;
-    - a final answer whose contract publishes ``COUNTERFACTUAL_FIELD`` is sent as a
-      form that requires it and, for a kind that owns the answer order, a form whose
-      action is ``order`` (``_counterfactual_forms``): the decoder cannot see the
-      venue writes of the decision's earlier rounds, so it gets the stricter side.
+    - a contract that is a union of answers is carried as those answers: a producing
+      kind's union (``producing_contract``) reaches the decoder as the same forms the
+      request publishes and the kernel validates, never rebuilt here.
 
     What the wire cannot state stays the kernel's alone, and a wire-valid reply may
     still fail it there: the answer-order rules of the producer kinds, a child
-    request's semantic checks (``_check_child``), and the runtime's own validator
-    (among its checks, that a counterfactual names a coin the world lists, and that
-    an ``order`` answer that names no trade reports one a venue tool made).
+    request's semantic checks (``_check_child``), and the runtime's own validator.
     The kernel also accepts a few habits the wire does not produce: a null optional
     field, ``reason`` read as a missing ``rationale``, and an invalid optional
     section it drops. The kernel's validation stays the authority over what a reply
@@ -1165,7 +1279,7 @@ def wire_schema(schema: Any, emits: Any = None, *, policy: bool = False) -> dict
                 if final is not None:
                     final = _intersect(final, {"type": "object", "properties": fields})
         if final is not None:
-            forms.extend(_counterfactual_forms(final, _shape_kinds(shape, kinds, policy)))
+            forms.append(final)
         properties = merged.get("properties", {})
         for key in ("tool_calls", "requests"):
             if key not in properties:
@@ -1191,28 +1305,6 @@ def wire_schema(schema: Any, emits: Any = None, *, policy: bool = False) -> dict
         return None
     # Every reply is an object (``_validate_return``'s envelope), so the root says so.
     return deepcopy(_open({"type": "object", "anyOf": forms}))
-
-
-def _counterfactual_forms(final: dict, kinds: tuple[str, ...]) -> list[dict]:
-    """The final-answer forms of a shape that publishes ``COUNTERFACTUAL_FIELD``.
-
-    The kernel requires the field on a final answer that executes no venue
-    operation, and the decoder cannot see whether an earlier round of the same
-    decision wrote to the venue. So the wire states the stricter side it can: a
-    final answer names its counterfactual or, for a kind that owns the answer order
-    (``ANSWER_ORDER_KINDS``), is an ``order``. Guarantees every form returned is
-    ``final`` or narrower, and ``[final]`` for a shape that does not publish the
-    field exactly as ``COUNTERFACTUAL_FIELD``.
-    """
-    if (final.get("properties") or {}).get("counterfactual") != COUNTERFACTUAL_FIELD:
-        return [final]
-    forms = [f for f in (_intersect(final, {"required": ["counterfactual"]}),) if f]
-    if kinds and all(k in ANSWER_ORDER_KINDS for k in kinds):
-        order = _intersect(final, {"properties": {"action": {"enum": ["order"]}},
-                                   "required": ["action"]})
-        if order is not None:
-            forms.append(order)
-    return forms
 
 
 def _shape_kinds(shape: dict, kinds: tuple[str, ...], policy: bool) -> tuple[str, ...]:

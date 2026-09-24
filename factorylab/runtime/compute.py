@@ -10,7 +10,12 @@ from dataclasses import dataclass, replace
 from decimal import Decimal
 from typing import Any
 
-from factorylab.cortex.assembly import Assembly, AssemblySpec, ProgramAssembly
+from factorylab.cortex.assembly import (
+    Assembly,
+    AssemblySpec,
+    ProgramAssembly,
+    cap_continuation,
+)
 from factorylab.cortex.request import (
     ChildRequest,
     Request,
@@ -1658,6 +1663,53 @@ class ComputeMixin:
             return None
         return counterfactual_refusal(parsed, dict(latest_mids(self)))
 
+    def _published_contract(self, action_id: str, handle: str, schema: Any,
+                            scoring_channel: str | None) -> Any:
+        """The outcome schema a request publishes: its contract as the kernel enforces it now.
+
+        Chapter II §II.b (physics is enforced, and the published contract is the
+        enforced one). Guarantees every answer shape of a producing kind is the union
+        ``producing_contract`` builds from the same facts ``_counterfactual_refusal``
+        reads: whether the decision acted (``_acted``), the coins the world lists now
+        (``latest_mids``), and whether an answer order may be placed (``_may_write``).
+        A shape's kind is the ``emits`` it pins, else the seat's only kind; a shape a
+        seat of several kinds may answer as any of them is expanded only when all of
+        them produce, so nothing is required of an answer the kernel would not require
+        it of. A policy ballot, a judgement and every other shape are unchanged.
+        """
+        from factorylab.cortex.assembly import (
+            ANSWER_ORDER_KINDS,
+            _answer_shapes,
+            producing_contract,
+        )
+        from factorylab.runtime.grounded import latest_mids
+
+        assembly = self.assemblies.get(action_id)
+        if (assembly is None or scoring_channel == "policy" or not isinstance(schema, dict)):
+            return schema
+        spec = assembly.spec
+        acted = self._acted(handle)
+        listed = None if acted else [coin for coin, _ in latest_mids(self)]
+        writes = not acted and self._may_write(handle)
+
+        def expand(shape: Any) -> Any:
+            if not isinstance(shape, dict):
+                return shape
+            pinned = ((shape.get("properties") or {}).get("emits") or {}).get("enum")
+            kinds = (tuple(pinned) if isinstance(pinned, list) and len(pinned) == 1
+                     else tuple(spec.emits))
+            if not kinds or any(self._return_shape(spec, k) not in self.PRODUCING_SHAPES
+                                for k in kinds):
+                return shape
+            return producing_contract(
+                shape, listed=listed,
+                answer_order=writes and all(k in ANSWER_ORDER_KINDS for k in kinds))
+
+        shapes = _answer_shapes(schema)
+        if len(shapes) == 1 and shapes[0] is schema:
+            return expand(schema)
+        return {"anyOf": [expand(shape) for shape in shapes]}
+
     def _allowed_tools(self, action_id: str) -> set[str]:
         """Every registered tool is a public primitive; schematics are public.
 
@@ -2121,6 +2173,26 @@ class ComputeMixin:
         effects: list[str] = []  # venue and treasury writes, children: the action so far
         taken: set[str] = set()  # the tool actions this decision dispatched (action_key)
         niche_spent = 0  # what this decision's unhistoried actions used of the niche
+        # §II.b: the schema a request publishes is the contract the kernel enforces on
+        # its answer, rebuilt for every round from the base contract and the facts of
+        # that round (``_published_contract``, ``cap_continuation``).
+        contract = req.outcome_schema
+
+        def published(*, tools: bool | None) -> Any:
+            schema = self._published_contract(action_id, req.handle, contract,
+                                               req.scoring_channel)
+            return schema if tools is None else cap_continuation(schema, tool_calls=tools)
+
+        req = replace(req, outcome_schema=published(tools=None))
+
+        def closing() -> Request:
+            # A round that grants no further tools: its answer is the final one.
+            return replace(req, outcome_schema=published(tools=False))
+
+        def granted_round() -> Request:
+            # A granted reading round: tools again, children refused.
+            return replace(req, outcome_schema=published(tools=True))
+
         ret = self._invoke_compute(action_id, req)
         # The opening prompt's bytes, as the first call rendered them. ``req`` changes
         # below (the cover cap, a working state written in a tool round, the niche's
@@ -2177,7 +2249,8 @@ class ComputeMixin:
                       "consumed. Further tool calls and requests are refused.")
         minimum_inputs = {**req.inputs, "continuation": final_note,
                           "context_notice": "Tool bodies were not loaded: insufficient budget."}
-        minimum_answer = req.continuation(inputs=minimum_inputs, cost_ceiling=req.cost_ceiling)
+        minimum_answer = closing().continuation(inputs=minimum_inputs,
+                                                cost_ceiling=req.cost_ceiling)
         answer_reserve = self._call_reserve(assembly, minimum_answer) or 0
         while (not self.wallet.dead and ret.status == "ok" and (ret.tool_calls or ret.children)
                and granted):
@@ -2346,7 +2419,7 @@ class ComputeMixin:
             note = final_note
             follow_inputs = {**req.inputs, "tool_results": results,
                              "seen_tool_results": seen_results, "continuation": note}
-            follow = req.continuation(inputs=follow_inputs, cost_ceiling=remaining)
+            follow = closing().continuation(inputs=follow_inputs, cost_ceiling=remaining)
             final_quote = self._call_reserve(assembly, follow)
             if final_quote is not None and final_quote > remaining:
                 # Result size is unknown before dispatch. Keep it exact but unloaded
@@ -2358,11 +2431,11 @@ class ComputeMixin:
                                  "context_notice": "Tool bodies were not loaded because their "
                                  "input cost exceeds the remaining decision budget."}
                 delivered_reads = []
-                follow = req.continuation(inputs=follow_inputs, cost_ceiling=remaining)
+                follow = closing().continuation(inputs=follow_inputs, cost_ceiling=remaining)
                 compact_quote = self._call_reserve(assembly, follow)
                 if compact_quote is not None and compact_quote > remaining:
                     follow_inputs = minimum_inputs
-                    follow = req.continuation(inputs=follow_inputs, cost_ceiling=remaining)
+                    follow = closing().continuation(inputs=follow_inputs, cost_ceiling=remaining)
                 learned = False  # do not buy another read after withholding its body
             # A decision acts once: a write or a child ends the retrieval and the
             # next call is the answer. Nothing executed in one wake can therefore
@@ -2391,8 +2464,8 @@ class ComputeMixin:
                     "You may call tools again to use what you retrieved, then return the "
                     "final answer. Requests are refused."
                 )
-                follow = req.continuation(inputs={**follow_inputs, "continuation": note},
-                                          cost_ceiling=remaining)
+                follow = granted_round().continuation(
+                    inputs={**follow_inputs, "continuation": note}, cost_ceiling=remaining)
             if isinstance(assembly, Assembly):
                 # The invocation's usage is the final provider call's usage. Keep
                 # the diagnostic identity aligned with that same continuation.
@@ -2440,7 +2513,7 @@ class ComputeMixin:
                 minimum_inputs = {**req.inputs, "continuation": final_note,
                                   "context_notice": "Tool bodies were not loaded: "
                                                     "insufficient budget."}
-                minimum_answer = req.continuation(
+                minimum_answer = closing().continuation(
                     inputs=minimum_inputs, cost_ceiling=req.cost_ceiling)
                 answer_reserve = self._call_reserve(assembly, minimum_answer) or 0
             # The extra round composes the retrieved text through ordinary jailed
@@ -2462,11 +2535,14 @@ class ComputeMixin:
 
                 if ret.status == "ok":
                     try:
-                        validate_schema(ret.outputs, req.outcome_schema)
+                        validate_schema(ret.outputs, closing().outcome_schema)
                         self._validate_output_contract(ret.outputs, req)
-                    except (ValueError, TypeError, RecursionError):
-                        ret = replace(ret, status="malformed",
-                                      outputs={"reason": "incomplete continuation answer"})
+                    except (ValueError, TypeError, RecursionError) as exc:
+                        # The reason names what the answer lacked, against the schema
+                        # this round published.
+                        ret = replace(ret, status="malformed", outputs={
+                            "reason": "incomplete continuation answer",
+                            "validation_error": (str(exc) or type(exc).__name__)[:200]})
                 break
         if self.ledger.without_connector_bodies(ret.outputs) != ret.outputs:
             # A body cannot become durable output. Refuse rather than rewriting an

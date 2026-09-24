@@ -329,7 +329,10 @@ class SchematicsMixin:
             "rejected write executing nothing, and no answer order with coin, side and "
             "size that the decision may place), and "
             "optional otherwise. Without it, or with a coin recent_mids does not list, the "
-            "return is malformed. It is not required while recent_mids is empty"
+            "return is malformed. It is not required while recent_mids is empty. Each "
+            "request's outcome schema states this for that request as a union: an answer "
+            "with counterfactual required, its coin one of the listed coins, or, where an "
+            "answer order may be placed, an answer order with coin, side and size"
         ),
         "verdict": (
             "evaluator returns (required): the judged return against the charter, 0 to 1; "

@@ -33,6 +33,12 @@ from factorylab.world.scripted import _description_from_prompt
 from tests.runtime.test_loop import _consequence_produce
 from tests.runtime.test_reward_chain import Population, _advance, _judge, _mids, _rows
 
+#: The refusals the published schema itself gives (``validate_schema``), naming what failed.
+ABSENT_ON_SCHEMA = ("no matching alternative: required field absent: counterfactual | "
+                    "required field absent: coin, side, size")
+UNLISTED_ON_SCHEMA = ("no matching alternative: counterfactual: coin: field is outside enum | "
+                      "required field absent: coin, side, size")
+
 
 class Seat(Population):
     """Producers answer exactly the queued replies, verbatim; judges as ``Population``."""
@@ -77,7 +83,7 @@ def test_a_return_that_executes_nothing_and_names_nothing_is_malformed(label):
     operation and names no declined trade is malformed, and the reason is a fact."""
     rt = _world({"action": label, "rationale": "no edge"})
     handle, event = _consequence_produce(rt)
-    assert _returned(rt, handle) == ("malformed", COUNTERFACTUAL_ABSENT)
+    assert _returned(rt, handle) == ("malformed", ABSENT_ON_SCHEMA)
     assert event.payload["status"] == "malformed"
     assert handle not in rt.reference_mids
     # The seat is told, in its own inbox, that its return was refused (the ledgered
@@ -98,7 +104,7 @@ def test_the_refusal_reasons_state_facts_and_give_no_advice():
 def test_a_counterfactual_naming_a_coin_the_world_does_not_list_is_malformed(coin):
     rt = _world({"action": "hold", "counterfactual": {"coin": coin, "side": "buy"}})
     handle, _event = _consequence_produce(rt)
-    assert _returned(rt, handle) == ("malformed", COUNTERFACTUAL_UNLISTED)
+    assert _returned(rt, handle) == ("malformed", UNLISTED_ON_SCHEMA)
     assert COUNTERFACTUAL_UNLISTED == "counterfactual names a coin the world does not list"
 
 
@@ -154,7 +160,7 @@ def test_an_acting_return_needs_no_counterfactual():
 
     rt = _world({"action": "order"})
     reported, _event = _consequence_produce(rt)
-    assert _returned(rt, reported) == ("malformed", COUNTERFACTUAL_ABSENT)
+    assert _returned(rt, reported) == ("malformed", ABSENT_ON_SCHEMA)
 
 
 LIMIT = {"coin": "BTC", "side": "buy", "size": "0.0001", "price": "30000"}
@@ -186,7 +192,7 @@ def test_a_rejected_venue_write_followed_by_a_bare_report_is_malformed(monkeypat
     handle, _event = _consequence_produce(rt)
     assert [row["status"] for row in rt.executed_operations(handle)] == ["rejected"]
     assert not rt._acted(handle)
-    assert _returned(rt, handle) == ("malformed", COUNTERFACTUAL_ABSENT)
+    assert _returned(rt, handle) == ("malformed", ABSENT_ON_SCHEMA)
 
 
 def test_a_rejected_venue_write_with_a_counterfactual_is_priced_by_the_named_trade(
@@ -324,19 +330,143 @@ def test_the_contract_is_checked_against_the_listing_alone():
 # --- the contract, published ---------------------------------------------------------
 
 
-def test_a_producing_request_publishes_the_field_and_a_judging_one_does_not():
+def _published(prompt):
+    return json.loads(prompt.split("OUTCOME SCHEMA\n", 1)[1].split("\n", 1)[0])
+
+
+def test_a_producing_request_publishes_the_contract_the_kernel_enforces():
+    """Chapter II §II.b: the published contract is the enforced one. A producing final
+    answer names a counterfactual on a listed coin, or is a complete answer order; the
+    request says so as structure, and a judging request carries none of it."""
     rt = _world({"action": "hold", "counterfactual": {"coin": "BTC", "side": "buy"}})
     _consequence_produce(rt)
     (prompt,) = rt.provider.prompts
-    schema = json.loads(prompt.split("OUTCOME SCHEMA\n", 1)[1].split("\n", 1)[0])
-    assert schema["properties"]["counterfactual"] == COUNTERFACTUAL_FIELD
-    assert "counterfactual" not in schema.get("required", [])  # the kernel says when
+    named, order = _published(prompt)["anyOf"]
+    assert "counterfactual" in named["required"]
+    assert named["properties"]["counterfactual"]["properties"]["coin"]["enum"] == ["BTC"]
+    assert named["properties"]["emits"] == {"enum": ["ProducerReturn"]}
+    assert order["properties"]["action"]["enum"] == ["order"]
+    assert {"action", "coin", "side", "size"} <= set(order["required"])
+    assert "counterfactual" not in order["required"]
     for seat, asm in rt.assemblies.items():
         contract = rt._contract_schema(seat)
         shapes = contract.get("anyOf", [contract])
         for kind, shape in zip(asm.spec.emits, shapes, strict=True):
             published = "counterfactual" in shape["properties"]
             assert published == (kind in ("ProducerReturn", "Exposure")), (seat, kind)
+
+
+ANSWERS = [
+    {"action": "hold"},
+    {"action": "defer", "defer": 2},
+    {"action": "hold", "counterfactual": {"coin": "BTC", "side": "sell"}},
+    {"action": "hold", "counterfactual": {"coin": "ETH", "side": "buy"}},
+    {"action": "hold", "counterfactual": {"coin": "BTC", "side": "hold"}},
+    {"action": "order"},
+    {"action": "order", "coin": "BTC", "side": "buy", "size": "0.0001"},
+    {"action": "investigate", "emits": "ProducerReturn",
+     "counterfactual": {"coin": "BTC", "side": "buy"}},
+    {"action": "hold", "emits": "Exposure", "counterfactual": {"coin": "BTC", "side": "buy"}},
+]
+
+
+@pytest.mark.parametrize("answer", ANSWERS)
+def test_the_published_schema_refuses_what_the_kernel_refuses(answer):
+    """The request's own outcome schema says what the kernel will do with an answer: one
+    it accepts validates against it, and one it refuses (for an absent or unlisted
+    counterfactual above all) fails it too."""
+    from factorylab.cortex.assembly import validate_schema
+
+    rt = _world(answer)
+    handle, _event = _consequence_produce(rt)
+    (prompt,) = rt.provider.prompts
+    status, _reason = _returned(rt, handle)
+    try:
+        validate_schema(answer, _published(prompt))
+        admitted = True
+    except ValueError:
+        admitted = False
+    assert admitted == (status == "ok"), (answer, status, _reason)
+
+
+class Literal(Seat):
+    """A seat that follows the published schema to the letter and no further: it sends the
+    first alternative's required fields, each at its first admissible value, and nothing
+    the schema does not require. The ``json_object`` route: the schema is all it has."""
+
+    def complete(self, req):
+        text = "\n".join(str(m.get("content", "")) for m in req.messages)
+        if not _description_from_prompt(text).startswith("Respond to event"):
+            return Population.complete(self, req)
+        self.prompts.append(text)
+        return ModelResponse(req.model_id, json.dumps(_minimal(_published(text))),
+                             self.input_tokens, self.output_tokens, "end_turn")
+
+
+def _minimal(schema):
+    if "anyOf" in schema:
+        return _minimal(schema["anyOf"][0])
+    if "enum" in schema:
+        return schema["enum"][0]
+    kind = schema.get("type")
+    kind = kind[0] if isinstance(kind, list) else kind
+    if kind == "object" or "properties" in schema:
+        properties = schema.get("properties", {})
+        return {k: _minimal(properties.get(k, {})) for k in schema.get("required", [])}
+    return {"string": "x", "integer": schema.get("minimum", 0), "number": 0,
+            "array": [], "boolean": False}.get(kind, "x")
+
+
+def test_a_seat_that_follows_only_the_published_schema_returns_a_kernel_valid_answer():
+    """The live defect: the schema showed the counterfactual as optional while the kernel
+    refused its absence, so a seat that read the schema literally was malformed."""
+    from tests.runtime.test_reward_chain import _consequence_runtime
+
+    rt = _consequence_runtime(provider=Literal())
+    rt._manage_reserve_window()
+    _mids(rt, BTC="100", ETH="10")
+    handle, _event = _consequence_produce(rt)
+    (prompt,) = rt.provider.prompts
+    sent = _minimal(_published(prompt))
+    assert set(sent) == {"action", "counterfactual"}
+    assert _returned(rt, handle) == ("ok", None)
+    assert rt.reference_mids[handle]["declined"] == sent["counterfactual"]
+
+
+READ = {"tool_calls": [{"tool": "world.read", "args": {"section": "composition"}}]}
+CHILD = {"target": "ProducerReturn", "description": "d", "inputs": {},
+         "outcome_schema": {"type": "object"}}
+
+
+def test_a_continuation_round_publishes_that_it_takes_no_children():
+    """The live pattern: a continuation answer that also asked for a child. The round's
+    schema says children are refused there, so the child is dropped as the section it is
+    and the answer beside it stands."""
+    answer = {"action": "hold", "counterfactual": {"coin": "BTC", "side": "buy"},
+              "requests": [CHILD]}
+    rt = _world(READ, answer)
+    handle, _event = _consequence_produce(rt)
+    first, second = (_published(p) for p in rt.provider.prompts)
+    assert first["anyOf"][0]["properties"].get("requests", {}).get("maxItems", 1) > 0
+    for form in second["anyOf"]:
+        assert form["properties"]["requests"]["maxItems"] == 0
+        assert form["properties"].get("tool_calls", {}).get("maxItems", 1) > 0  # granted
+    assert _returned(rt, handle) == ("ok", None)
+    (dropped,) = _rows(rt, "return.sections_dropped", handle=handle)
+    assert dropped["dropped"][0]["section"] == "requests"
+
+
+def test_an_incomplete_final_answer_names_what_it_lacked():
+    """A round that grants no further tools publishes that too; an answer that still
+    continues is refused with the reason its fields failed, not a bare label."""
+    rt = _world(READ, READ, READ, READ, READ, {"action": "hold", **READ})
+    handle, _event = _consequence_produce(rt)
+    last = _published(rt.provider.prompts[-1])
+    assert all(f["properties"]["tool_calls"]["maxItems"] == 0 for f in last["anyOf"])
+    (invocation,) = [r for r in _rows(rt, "invocation", handle=handle)
+                     if r["role"] == "producer"]
+    assert invocation["status"] == "malformed"
+    assert "counterfactual" in json.loads(invocation["outputs"])["validation_error"]
 
 
 def test_a_declared_producing_kind_carries_the_field_even_in_a_closed_schema():

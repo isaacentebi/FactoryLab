@@ -119,13 +119,11 @@ is the intersection of what the kernel checks a reply against: the universal
 envelope, the fields the answer's kind owns, and the contract. A form the kernel
 cannot accept is not sent. For example, a closed contract that does not name
 `tool_calls` has no continuation through it. Every object the contract leaves
-open is marked open. A final answer whose contract publishes `counterfactual`
-(a judged or exposure kind; see "A verdict is also a prediction") is sent as two
-forms: one that requires `counterfactual`, and, for ProducerReturn and Exposure, one
-whose `action` is `"order"`. The decoder cannot see the venue writes of a
-decision's earlier rounds, so it is given the stricter side. What a schema cannot
-state (an answer order's semantics, a child request's checks, the runtime's
-validator, including whether the named coin is listed) stays the kernel's alone.
+open is marked open. A contract that is a union of answers (a producing kind's;
+see "The declined trade is part of the return contract") is carried as the same
+answers the request publishes and the kernel validates, never rebuilt for the
+wire. What a schema cannot state (an answer order's semantics, a child request's
+checks, the rest of the runtime's validator) stays the kernel's alone.
 Hosts enforce the schema on a best-effort basis: the 23 September 2026 probes
 saw json_schema routes still return replies outside it. On OpenRouter, `provider.require_parameters` is set
 unless `extra_body` names it, as it is for `json_object`. The key is accepted only
@@ -490,15 +488,26 @@ write the venue accepted or left `uncertain`, and no answer order it may place),
 carries `counterfactual
 {coin, side}`: `side` is `buy` or `sell`, and `coin` is a key of `recent_mids` (the
 world's broadcast mids, the record the trade is priced from) when the return is
-made. Without it the return is `malformed`
-(`counterfactual {coin, side} is absent from a return that executed no venue
-operation`), as it is with a coin the world does not list (`counterfactual names a
-coin the world does not list`) or any other shape; the seat's inbox and
-`return.validation_failed` carry the reason. Nothing is required while
-`recent_mids` is empty. A return that executed venue operations needs none. The
-field is published in the request's outcome schema (a requested child's too, even
-under a closed requester schema) and in `world.read {"section":
-"a_return_may_include"}`. Policy ballots, judgements, forecasts, metas and counters
+made. Without it the return is `malformed`, as it is with a coin the world does
+not list or any other shape; the seat's inbox and `return.validation_failed` carry
+the reason, which names the fields that failed. Nothing is required while
+`recent_mids` is empty. A return that executed venue operations needs none.
+
+The request states this contract as structure, and the published schema is the
+enforced one (§II.b). Every round's `outcome_schema` is rebuilt by one function
+(`producing_contract`) from the facts the kernel checks: before the decision
+acts, a producing answer is `anyOf` (a) the kind's answer with `counterfactual`
+required and its `coin` an `enum` of the coins `recent_mids` lists, or, when the
+decision may place an answer order and the kind owns one, (b) `action: "order"`
+with `coin`, `side` and `size` required. After a venue write the venue accepted or
+left `uncertain`, the field is optional. With nothing listed it is absent. The kernel
+validates the reply against that same schema, and `wire_schema` carries the same
+forms, so a `json_object` route and a `json_schema` route read one contract. A
+continuation round states its own bounds: `requests` has `maxItems: 0` in every
+continuation (children are refused there), and so does `tool_calls` in a round that
+grants no further tools, whose answer is the final one. A single-kind contract
+publishes its kind as `emits: {"enum": [kind]}`. The field is also described in
+`world.read {"section": "a_return_may_include"}`. Policy ballots, judgements, forecasts, metas and counters
 are not returns a first-tier verdict judges and carry no such requirement; neither does a
 declined commission (`status: "cannot"`), which is not a contract return. The
 scoring above is unchanged.
