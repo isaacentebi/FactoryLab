@@ -1310,11 +1310,28 @@ class HybridRail(LiveRail):
                     "start_block": self.venice_base.block(), "fee_ceiling_micro": 0}
         return super().prepare(step, state, gas_spent)
 
+    #: The write-ahead authorization record the runner binds before the world runs
+    #: (``factorylab.runtime.capital_loop.AuthorizationLog``): called with the reference,
+    #: it returns only once the authorization is on stable storage outside the diary.
+    authorization_log: Callable[[dict], None] | None = None
+
     def send(self, step: str, reference: dict) -> dict | None:
         if step == "venice_top_up":
-            from factorylab.world.venice import top_up
+            from factorylab.world.venice import _pinned, top_up
 
             # Signed only for the pinned payee, whatever the journal's reference says.
+            _pinned(self.pay_to, reference["accepted"].get("payTo"))
+            _pinned(self.pay_to, reference["authorization"].get("to"))
+            # Written ahead, durably, outside the diary, or not signed at all: a diary
+            # can be cut, restored or deleted, and the next launch must still find every
+            # authorization that could settle.
+            if self.authorization_log is None:
+                raise RailError("no write-ahead authorization record; nothing was signed")
+            try:
+                self.authorization_log(reference)
+            except Exception:  # noqa: BLE001 - unrecorded means unsigned
+                raise RailError("write-ahead authorization record failed; "
+                                "nothing was signed") from None
             return top_up(self._x402, reference, pay_to=self.pay_to)
         if step != "shadow_send":
             return super().send(step, reference)

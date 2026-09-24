@@ -1,4 +1,5 @@
-"""Print what a capital-loop run left outstanding on chain: READ-ONLY and keyless.
+"""Print what a capital-loop run left outstanding on chain: keyless, and read-only
+unless ``--acknowledge`` is given.
 
 Guarantees nothing is signed and no signing key is read. The run's diary is decrypted
 with its own ledger key file (``<run>/ledger.jsonl.key``), exactly as
@@ -12,6 +13,14 @@ then every shadow send left unconfirmed. Use it after a crash, before touching t
 reserve or relaunching (docs/architecture/capital-loop-rehearsal.md, "After a crash").
 
     uv run python scripts/capital_loop_outstanding.py work/capital-loop/<run>
+
+``--acknowledge NONCE`` is the one write: after the operator has settled by hand an
+authorization the launch check reports ``recorded_authorization_settled_unbooked`` (real
+USDC moved and no diary booked it), it appends a resolution to the reserve's write-ahead
+authorization record. It takes the reserve's lock, reads the chain keylessly, and
+refuses unless finalized Base shows that recorded authorization used; it signs nothing.
+
+    uv run python scripts/capital_loop_outstanding.py --acknowledge 0x<nonce>
 """
 
 from __future__ import annotations
@@ -27,11 +36,13 @@ if str(ROOT) not in sys.path:
 
 from factorylab.runtime.capital_loop import (  # noqa: E402
     CapitalLoopRefused,
+    ReserveLock,
+    acknowledge,
     keyless_base,
     outstanding,
 )
 from factorylab.runtime.worlds import load_manifest  # noqa: E402
-from factorylab.world.x402 import http_request  # noqa: E402
+from factorylab.world.x402 import BASE_RPC, http_request  # noqa: E402
 
 DEFAULT_WORLD = ROOT / "worlds/edition6-capital-loop.toml"
 
@@ -50,16 +61,33 @@ def verdict(row: dict) -> str:
 def main(argv: list[str] | None = None, *, transport=http_request) -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("run_dir", type=Path)
+    parser.add_argument("run_dir", type=Path, nargs="?")
     parser.add_argument("--world", type=Path, default=DEFAULT_WORLD,
                         help="the manifest whose treasury.reserve_address paid the top-ups")
     parser.add_argument("--rpc", default=None, help="Base mainnet JSON-RPC URL")
     parser.add_argument("--json", action="store_true", help="print one JSON object")
+    parser.add_argument("--acknowledge", metavar="NONCE",
+                        help="after settling its books by hand: mark a recorded "
+                        "authorization finalized Base shows used as resolved (takes the "
+                        "reserve's lock, so no capital-loop run may be alive)")
+    parser.add_argument("--lock-dir", type=Path, default=None, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     reserve = load_manifest(str(args.world)).treasury.reserve_address
     if reserve is None:
         print("the world declares no treasury.reserve_address", file=sys.stderr)
         return 2
+    if args.acknowledge:
+        try:
+            with ReserveLock(reserve, lock_dir=args.lock_dir) as lock:
+                done = acknowledge(lock, args.acknowledge, transport=transport,
+                                   rpc=args.rpc or BASE_RPC)
+        except CapitalLoopRefused as exc:
+            print(json.dumps({"error": exc.reason, **exc.detail}), file=sys.stderr)
+            return 2
+        print(json.dumps(done))
+        return 0
+    if args.run_dir is None:
+        parser.error("a run directory, or --acknowledge NONCE, is required")
     try:
         report = outstanding(args.run_dir, reserve_address=reserve,
                              base=keyless_base(transport=transport, rpc=args.rpc))

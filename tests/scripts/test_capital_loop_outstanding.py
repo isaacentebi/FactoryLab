@@ -405,10 +405,21 @@ def test_a_removed_last_run_record_refuses_until_the_deliberate_reset(tmp_path):
             lock.last_run()
     report = rehearse(tmp_path / "runs" / "after-removal", rpc, tmp_path)
     assert report["refusal"]["reason"] == "capital_loop_last_run_missing"
-    # The runbook's manual reset removes both files while no run holds the reserve.
-    (locks / f"{reserve.lower()}.lock").unlink()
+    # Deleting the write-ahead authorization record cannot switch its check off either.
+    authorizations = locks / f"{reserve.lower()}.authorizations.jsonl"
+    record.write_text(json.dumps({"reserve_address": reserve, "run_dir": None}))
+    authorizations.unlink()
     with ReserveLock(reserve, lock_dir=locks) as lock:
-        assert lock.last_run() is None
+        with pytest.raises(CapitalLoopRefused,
+                           match="capital_loop_authorization_record_missing"):
+            lock.authorizations()
+    report = rehearse(tmp_path / "runs" / "after-record-removal", rpc, tmp_path)
+    assert report["refusal"]["reason"] == "capital_loop_authorization_record_missing"
+    # The runbook's manual reset removes all three files while no run holds the reserve.
+    (locks / f"{reserve.lower()}.lock").unlink()
+    record.unlink()
+    with ReserveLock(reserve, lock_dir=locks) as lock:
+        assert lock.last_run() is None and lock.authorizations() == []
     # Removing only the lock file, as a run still holding it would never notice, refuses
     # and recreates nothing: a fresh lock file would be a second, free lock.
     with ReserveLock(reserve, lock_dir=locks) as lock:
@@ -488,19 +499,27 @@ def test_a_recorded_run_is_durable_with_its_rename(monkeypatch, tmp_path):
     from factorylab.runtime import capital_loop
     from factorylab.runtime.capital_loop import ReserveLock
 
-    synced, durable = [], capital_loop._durable
+    synced, durable, replace = [], capital_loop._durable, capital_loop.os.replace
 
     def spy(fd):
-        synced.append(stat.S_ISDIR(os.fstat(fd).st_mode))
+        synced.append("directory" if stat.S_ISDIR(os.fstat(fd).st_mode) else "file")
         durable(fd)
 
+    def renamed(*args):
+        replace(*args)
+        synced.append("rename")
+
     monkeypatch.setattr(capital_loop, "_durable", spy)
+    monkeypatch.setattr(capital_loop.os, "replace", renamed)
     with ReserveLock(RESERVE, lock_dir=tmp_path) as lock:
-        # The first lock writes its record naming no run: its bytes, then its directory.
-        assert synced == [False, True]
+        # The first lock writes its record naming no run and its empty authorization
+        # record: each file's bytes, then the directory holding its name.
+        assert synced == ["file", "directory", "file", "directory"]
+        del synced[:]
         lock.record_run(tmp_path / "run")
-        # The record's bytes, then the directory holding its new name.
-        assert synced == [False, True, False, True]
+        # The record's bytes, the rename, and only then the directory holding the new
+        # name: without that last flush a power loss could bring the old record back.
+        assert synced == ["file", "rename", "directory"]
         assert lock.last_run() == (tmp_path / "run").resolve()
 
 
@@ -626,9 +645,26 @@ def test_the_runner_refuses_the_old_thirty_minute_run_and_a_ticks_bound_one(tmp_
     assert report["refusal"]["reason"] == "capital_loop_duration_below_settlement_bound"
     assert report["refusal"]["minimum_run_ns"] == 3 * ((600 + 2 * 960) * S + 10 * S)
     report = rehearse(tmp_path / "runs" / "few-ticks", rpc, tmp_path,
-                      duration_ns=duration_ns("3h"), target_ticks=360)  # one hour of ticks
+                      duration_ns=duration_ns("3h"), target_ticks=361)  # one hour of ticks
     assert report["refusal"]["reason"] == "capital_loop_duration_below_settlement_bound"
-    assert report["refusal"]["run_ns"] == 360 * 10 * S
+    assert report["refusal"]["run_ns"] == 360 * 10 * S  # 361 ticks span 360 intervals
+
+
+def test_n_ticks_are_credited_n_minus_one_intervals_exactly(tmp_path):
+    # The clock's first tick comes at once: N ticks run for N - 1 intervals. The bound is
+    # 7,590 s, 759 intervals of 10 s, so 760 ticks are just enough and 759 are not
+    # (crediting 759 x 10 s used to admit the 759-tick run 10 s short).
+    from factorylab.runtime.worlds import duration_ns
+
+    rpc = Rpc()
+    short = rehearse(tmp_path / "runs" / "759", rpc, tmp_path,
+                     duration_ns=duration_ns("3h"), target_ticks=759)
+    assert short["refusal"]["reason"] == "capital_loop_duration_below_settlement_bound"
+    assert short["refusal"]["run_ns"] == 758 * 10 * S
+    assert short["refusal"]["minimum_run_ns"] == 759 * 10 * S
+    exact = rehearse(tmp_path / "runs" / "760", rpc, tmp_path,
+                     duration_ns=duration_ns("3h"), target_ticks=760)
+    assert exact["refusal"]["reason"] == "source_root_mismatch"  # the bound admitted it
 
 
 def test_a_run_that_ends_with_a_top_up_submitted_says_so_loudly(tmp_path, capsys):
@@ -648,8 +684,8 @@ def test_a_run_that_ends_with_a_top_up_submitted_says_so_loudly(tmp_path, capsys
     report = {"capital_loop": {}}
     rehearsal._report_outstanding(report, SimpleNamespace(ledger=ledger), run)
     loud = report["capital_loop_outstanding"]
-    assert loud["top_ups_submitted"] == [{"transfer_id": "treasury-1", "nonce": LIVE_NONCE,
-                                          "valid_before": 3_000,
+    assert loud["top_ups_submitted"] == [{"transfer_id": "treasury-1", "status": "submitted",
+                                          "nonce": LIVE_NONCE, "valid_before": 3_000,
                                           "last_reason": "submission outcome unknown"}]
     assert loud["next_step"] == f"uv run python scripts/capital_loop_outstanding.py {run}"
     assert loud["next_step_argv"] == ["uv", "run", "python",
@@ -660,7 +696,17 @@ def test_a_run_that_ends_with_a_top_up_submitted_says_so_loudly(tmp_path, capsys
     printed = capsys.readouterr()
     assert "CAPITAL LOOP OUTSTANDING" in printed.err and loud["next_step"] in printed.err
     assert '"capital_loop_outstanding"' in printed.out
-    ledger.append({"kind": "treasury.confirmed", "state": {**live, "status": "confirmed"}})
+    confirmed = {**live, "status": "confirmed", "receipts": [{"nonce": LIVE_NONCE}]}
+    ledger.append({"kind": "treasury.confirmed", "state": confirmed})
+    # A stop between treasury.confirmed and treasury.financing: the debit happened, the
+    # booking did not. It stays unresolved, loudly, until the financing exists.
+    stopped = {"capital_loop": {}}
+    rehearsal._report_outstanding(stopped, SimpleNamespace(ledger=ledger), run)
+    assert [(r["transfer_id"], r["status"]) for r in stopped["capital_loop_outstanding"][
+        "top_ups_submitted"]] == [("treasury-1", "confirmed")]
+    assert rehearsal.exit_code({"status": "stopped", **stopped}) == 3
+    capsys.readouterr()
+    ledger.append({"kind": "treasury.financing", "transfer_id": "treasury-1"})
     quiet = {"capital_loop": {}}
     rehearsal._report_outstanding(quiet, SimpleNamespace(ledger=ledger), run)
     rehearsal._announce_outstanding(quiet)
@@ -859,3 +905,135 @@ def test_a_real_launch_records_itself_before_its_world_runs_and_reports_its_end(
     assert rehearsal.exit_code(report) == 3
     assert "CAPITAL LOOP OUTSTANDING" in capsys.readouterr().err
     ReserveLock(reserve.address, lock_dir=locks).close()  # released on the way out
+
+
+# ---- Wave 10, Codex on PR #144: a write-ahead authorization record outside the diary
+
+
+def signed(nonce, valid_before):
+    """A journal reference as the rail holds it when it is about to sign."""
+    return {"authorization": {"nonce": nonce, "from": RESERVE, "to": "0x" + "9" * 40,
+                              "value": 5_000_000, "validAfter": 0,
+                              "validBefore": valid_before},
+            "start_block": 800, "network": "eip155:8453"}
+
+
+def test_a_diary_cut_at_a_line_boundary_cannot_hide_a_recorded_authorization(tmp_path):
+    from factorylab.runtime.capital_loop import ReserveLock, read_authorizations
+
+    rpc = Rpc()
+    locks = tmp_path / "locks"
+    run = write_run(tmp_path / "elsewhere" / "cut", crash=False)
+    with ReserveLock(RESERVE, lock_dir=locks) as lock:
+        lock.record_run(run)
+        lock.authorization_log(run)(signed(LIVE_NONCE, 3_000))  # before its signature
+    # Cut the diary at a complete-line boundary just before the live step_submitted:
+    # what is left is a valid, readable, non-empty prefix that shows nothing live.
+    rewrite(run, diary_lines(run)[:3])
+    assert LIVE_NONCE not in json.dumps(read_items(run))
+    report = rehearse(tmp_path / "runs" / "after-cut", rpc, tmp_path)
+    assert report["refusal"]["reason"] == "recorded_authorization_may_still_settle"
+    assert [a["nonce"] for a in report["refusal"]["authorizations"]] == [LIVE_NONCE]
+    rpc.final_ts = 3_001  # finalized Base is past its validBefore, and it is unused
+    report = rehearse(tmp_path / "runs" / "after-expiry", rpc, tmp_path)
+    assert report["refusal"]["reason"] == "source_root_mismatch"  # every check passed
+    assert {"kind": "resolved", "nonce": LIVE_NONCE, "how": "expired"} in (
+        read_authorizations(locks / f"{RESERVE.lower()}.authorizations.jsonl"))
+
+
+def test_a_deleted_diary_cannot_hide_a_recorded_authorization(tmp_path, capsys):
+    import shutil
+
+    from factorylab.runtime.capital_loop import ReserveLock, acknowledge
+    from scripts import edition4_rehearsal as rehearsal
+
+    rpc = Rpc()
+    locks = tmp_path / "locks"
+    run = write_run(tmp_path / "elsewhere" / "deleted", crash=False)
+    with ReserveLock(RESERVE, lock_dir=locks) as lock:
+        lock.authorization_log(run)(signed(LIVE_NONCE, 3_000))
+    shutil.rmtree(run)  # the diary is gone; the last-run record never named it
+    report = rehearse(tmp_path / "runs" / "live", rpc, tmp_path)
+    assert report["refusal"]["reason"] == "recorded_authorization_may_still_settle"
+    # It settled after all, and no diary can show it was booked: a recovery.
+    rpc.used.add(LIVE_NONCE)
+    report = rehearse(tmp_path / "runs" / "settled", rpc, tmp_path)
+    assert report["refusal"]["reason"] == "recorded_authorization_settled_unbooked"
+    assert rehearsal.exit_code(report) == 3
+    printed = capsys.readouterr().err
+    assert "CAPITAL LOOP RECOVERY" in printed and f"--acknowledge {LIVE_NONCE}" in printed
+    # Once the books are settled by hand, the operator acknowledges it, and only then.
+    with ReserveLock(RESERVE, lock_dir=locks) as lock:
+        with pytest.raises(CapitalLoopRefused, match="acknowledge_refused"):
+            acknowledge(lock, OLD_NONCE, transport=rpc)  # not in the record
+        assert acknowledge(lock, LIVE_NONCE, transport=rpc)["acknowledged"]
+    assert rehearse(tmp_path / "runs" / "after", rpc, tmp_path)["refusal"]["reason"] == (
+        "source_root_mismatch")
+
+
+def test_a_recorded_authorization_the_diary_booked_resolves_once(tmp_path):
+    from factorylab.runtime.capital_loop import (
+        ReserveLock,
+        check_authorization_record,
+        read_authorizations,
+    )
+
+    rpc = Rpc()
+    run = tmp_path / "booked"
+    run.mkdir()
+    path = run / "ledger.jsonl"
+    ledger = Ledger(str(path), manifest={"name": "edition6-capital-loop"},
+                    clock_ns=lambda: 0, key_path=str(path) + ".key")
+    state = {"id": "treasury-0", "steps": ["shadow_send", "venice_top_up"], "index": 1,
+             "status": "confirmed", "reference": signed(SETTLED_NONCE, 1_000),
+             "receipts": [{"nonce": 1_700_000_000_000}, {"nonce": SETTLED_NONCE}]}
+    ledger.append({"kind": "treasury.confirmed", "state": state})
+    ledger.append({"kind": "treasury.financing", "transfer_id": "treasury-0"})
+    with ReserveLock(RESERVE, lock_dir=tmp_path) as lock:
+        lock.authorization_log(run)(signed(SETTLED_NONCE, 1_000))
+        summary = check_authorization_record(lock, transport=rpc)
+        assert [(r["nonce"], r["how"]) for r in summary["resolved_now"]] == [
+            (SETTLED_NONCE, "financed")]
+        # Resolved for good: the diary is no longer needed to prove it.
+        path.unlink()
+        assert check_authorization_record(lock, transport=rpc)["open"] == 0
+    entries = read_authorizations(tmp_path / f"{RESERVE.lower()}.authorizations.jsonl")
+    assert [e["kind"] for e in entries] == ["authorization", "resolved"]
+    assert entries[0]["run_dir"] == str(run.resolve()) and entries[0]["validBefore"] == "1000"
+
+
+def test_the_authorization_record_refuses_damage_and_tolerates_only_a_torn_append(tmp_path):
+    from factorylab.runtime.capital_loop import ReserveLock, read_authorizations
+
+    with ReserveLock(RESERVE, lock_dir=tmp_path) as lock:
+        log = lock.authorization_log(tmp_path / "run")
+        log(signed(LIVE_NONCE, 3_000))
+        with pytest.raises(ValueError, match="payer"):
+            log({**signed(OLD_NONCE, 3_000), "authorization": {
+                **signed(OLD_NONCE, 3_000)["authorization"], "from": "0x" + "12" * 20}})
+    path = tmp_path / f"{RESERVE.lower()}.authorizations.jsonl"
+    whole = path.read_bytes()
+    path.write_bytes(whole + b'{"kind": "authoriz')  # a crash mid-append: never signed
+    assert len(read_authorizations(path)) == 1
+    path.write_bytes(b"not json\n" + whole)
+    with pytest.raises(CapitalLoopRefused, match="authorization_record_unreadable"):
+        read_authorizations(path)
+
+
+def test_the_script_acknowledges_only_what_finalized_base_shows_used(tmp_path, capsys):
+    from factorylab.runtime.capital_loop import ReserveLock, read_authorizations
+    from scripts import capital_loop_outstanding
+
+    rpc = Rpc()
+    with ReserveLock(RESERVE, lock_dir=tmp_path) as lock:
+        lock.authorization_log(tmp_path / "run")(signed(LIVE_NONCE, 3_000))
+    argv = ["--acknowledge", LIVE_NONCE, "--lock-dir", str(tmp_path)]
+    assert capital_loop_outstanding.main(argv, transport=rpc) == 2  # unused: refused
+    assert "acknowledge_refused" in capsys.readouterr().err
+    rpc.used.add(LIVE_NONCE)
+    with ReserveLock(RESERVE, lock_dir=tmp_path):  # a run is alive: it waits for it
+        assert capital_loop_outstanding.main(argv, transport=rpc) == 2
+    assert "capital_loop_reserve_locked" in capsys.readouterr().err
+    assert capital_loop_outstanding.main(argv, transport=rpc) == 0
+    entries = read_authorizations(tmp_path / f"{RESERVE.lower()}.authorizations.jsonl")
+    assert entries[-1] == {"kind": "resolved", "nonce": LIVE_NONCE, "how": "acknowledged"}

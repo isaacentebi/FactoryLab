@@ -207,9 +207,12 @@ covered every block up to it. The runtime clock is never consulted.
       The reserve's recorded last run must not read empty (header only, or torn at its
       first record): a run records itself only after its launch items exist, so an
       empty diary there is truncation (`recorded_run_ledger_empty`). Any other diary cut
-      exactly at a line boundary cannot be told from a shorter one by its file alone;
-      the last-run record, which makes every launch read the last run, and the chain
-      reads of every authorization found are the defence there.
+      exactly at a line boundary cannot be told from a shorter one by its file alone:
+      the write-ahead authorization record (step 5) is the defence there;
+   5. resolves every authorization in the reserve's write-ahead authorization record
+      against finalized Base, whatever any diary now holds (see "The write-ahead
+      authorization record"), and refuses while one may still settle, or while one
+      settled that no diary booked (a recovery: exit 3).
 
 ### How long a run must be
 
@@ -239,7 +242,10 @@ authorization. So one conversion's settlement horizon, in Base's own time, is:
 The run commands the conversion, and AGENTS.md rule 12 (essay II, IV.c) asks an inner
 loop to settle at least 3× faster than the outer loop that commands it, so the runner
 refuses a run *planned* shorter than **three** horizons. The planned length is
-`--duration`, or `--ticks` × the tick when that is shorter; the admission cap, a
+`--duration`, or (`--ticks` − 1) × the tick when that is shorter: the clock's first tick
+comes at once, so N ticks span N − 1 intervals. The signer stamps `validBefore` with the
+run's own clock, the same one the bound's host time was read from, so the two cannot
+disagree. The admission cap, a
 failure, a signal or a kill can still end a run sooner, and the bound says nothing of
 those. With the numbers of 23 September 2026 (no clock lead, a lag of about 16 minutes, the
 rehearsal's 10 s tick) the bound is 3 × (600 + 1,920 + 10) s = 7,590 s, about 127
@@ -283,6 +289,10 @@ it returns:
   create and lock a fresh file at the same path, and the two runs would each hold "the"
   lock.
 
+- Beside them, `<reserve>.authorizations.jsonl` is the write-ahead authorization record
+  (next section), created with the lock file. A lock file without it refuses every
+  launch (`capital_loop_authorization_record_missing`).
+
 Reading only the sibling directories of `--out` is **not enough** on its own, even
 with the lock: the lock ends with its run, and a run can end (or die) with an
 authorization still live for up to its validity window plus finality. A later run
@@ -313,10 +323,46 @@ this way:
 2. wait until at least 600 s plus twice the finality lag have passed since the last run
    died (its authorizations are then settled or dead), and read the reserve's balance
    (step 3 of "Before a live run");
-3. remove **both** `<reserve>.lock` and `<reserve>.last-run.json`. The next launch
-   creates them afresh with a record naming no run.
+3. remove **all three**: `<reserve>.lock`, `<reserve>.last-run.json` and
+   `<reserve>.authorizations.jsonl`. The next launch creates them afresh, with a record
+   naming no run and an empty authorization record. The authorization record is the
+   one file whose loss can hide real money: remove it only once every authorization in
+   it is settled and booked, or dead (step 2, and `--acknowledge` below).
 
-Removing only one of the two refuses every launch until both are gone.
+Removing some of them and not the others refuses every launch until all are gone.
+
+### The write-ahead authorization record
+
+A diary can be truncated at a line boundary, restored from an older copy, or deleted,
+and a file alone cannot tell a cut diary from a shorter one. So an authorization's
+existence does not rest on any diary:
+
+- **Before the rail signs** an EIP-3009 authorization it appends one line (nonce,
+  value, payer, payee, `validAfter`, `validBefore`, run directory) to
+  `<reserve>.authorizations.jsonl` beside the lock and flushes it to stable storage
+  (`F_FULLFSYNC` on macOS). If that write fails, nothing is signed; a rail with no
+  record bound refuses to sign at all. A crash between the append and the signature
+  leaves an authorization recorded and never signed: it can never be used, and it
+  resolves as soon as it expires.
+- **At every launch**, every recorded authorization not yet resolved is read against
+  USDC's `authorizationState` at the finalized block:
+  - used, and its run's diary holds the `treasury.financing` of the transfer whose
+    confirmed receipt carries that nonce: resolved;
+  - used, and no diary shows it booked: **recovery**. The launch is refused
+    (`recorded_authorization_settled_unbooked`), `CAPITAL LOOP RECOVERY` is printed and
+    the runner exits 3. Real USDC left the reserve and bought Venice credit no world
+    booked. Settle the books by hand ("After a crash", step 3), then acknowledge it:
+
+        uv run python scripts/capital_loop_outstanding.py --acknowledge 0x<nonce>
+
+    which takes the reserve's lock, refuses unless finalized Base shows that recorded
+    authorization used, and appends its resolution;
+  - unused, and the finalized block is past its `validBefore`: dead for good, resolved;
+  - unused and not yet past it: the launch is refused
+    (`recorded_authorization_may_still_settle`) until it settles or expires.
+- A resolution is appended to the record too, so a diary deleted after its financing
+  was proven is never needed again. A torn last line (a crash mid-append, never signed)
+  is skipped; any other unreadable line refuses (`authorization_record_unreadable`).
 
 ## After the run
 
@@ -325,7 +371,11 @@ Removing only one of the two refuses every launch until both are gone.
   ended with a conversion unbooked: a top-up still `submitted` (its authorization may
   settle after the world died, or settled with its credit short), or a shadow send
   still pending. Its `top_ups_submitted` names each transfer, nonce and `validBefore`.
-  The runner exits 3 when a top-up was left submitted or the diary could not be read
+  A conversion counts as unbooked until its `treasury.financing` exists, whatever its
+  last status: a stop between `treasury.confirmed` and `treasury.financing` leaves a
+  confirmed transfer with no booking, and it is reported (and exits 3) like a top-up
+  still submitted.
+  The runner exits 3 when a top-up was left unbooked or the diary could not be read
   (1 for any other failure, 0 otherwise; a pending shadow send alone is testnet money
   and exits 0). From the world's construction on, SIGINT (Ctrl-C), SIGTERM and SIGHUP
   (unless it is ignored, as under `nohup`) stop the run in order (`status: stopped`,
@@ -393,11 +443,13 @@ A killed or crashed capital-loop world is not resumed. Instead:
    unconfirmed. It exits 1 while anything is live or pending.
 3. **Settle the books by hand from that output.** A `settled` authorization with no
    `treasury.financing` in the dead diary bought real credit the dead world never
-   booked; the next run counts it in its first credit observation. A pending shadow
-   send is testnet money only.
+   booked; the next run counts it in its first credit observation. Then acknowledge it
+   (`scripts/capital_loop_outstanding.py --acknowledge 0x<nonce>`): until then every
+   launch refuses it as a recovery and exits 3. A pending shadow send is testnet money
+   only.
 4. **Relaunch** as in "Before a live run". The launch check re-reads every sibling run
-   directory and the reserve's last recorded run, and refuses while any authorization
-   could still settle.
+   directory, the reserve's last recorded run and the write-ahead authorization record,
+   and refuses while any authorization could still settle or settled unbooked.
 
 ## What is not proven live
 

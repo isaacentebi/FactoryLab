@@ -1168,6 +1168,11 @@ def wired(monkeypatch):
     rail = HybridRail(HyperliquidExchange(mainnet=False), spec, transport=transport)
     monkeypatch.delenv("RESERVE_PRIVATE_KEY")  # the runner clears it once the rail has it
     rail.metered_usage_since = lambda since_ns: 0
+    from factorylab.runtime.capital_loop import ReserveLock
+
+    # The write-ahead record the runner binds (the lock directory is the test's own).
+    lock = ReserveLock(reserve.address)
+    rail.authorization_log = lock.authorization_log(lock.path.parent / "run")
     ledger = Ledger(clock_ns=lambda: 0)
     wallet = Wallet(100_000_000, ledger, clock_ns=lambda: 0)
     treasury = Treasury(ledger, wallet, rail, fee_ceiling_micro=0,
@@ -1175,7 +1180,8 @@ def wired(monkeypatch):
     wallet.bind_pots(treasury.pots)
     treasury.open_window(1)
     return SimpleNamespace(treasury=treasury, wallet=wallet, ledger=ledger, rail=rail,
-                           chain=chain, venice=venice, venue=venue, reserve=reserve.address)
+                           chain=chain, venice=venice, venue=venue, reserve=reserve.address,
+                           lock=lock)
 
 
 def test_both_legs_confirm_end_to_end_through_the_real_rail_and_book_once(monkeypatch):
@@ -1256,3 +1262,80 @@ def test_a_facilitator_settling_anything_but_our_tranche_books_nothing(monkeypat
         assert w.treasury.state["status"] == "stranded" and w.treasury.state["recoverable"]
     else:
         assert w.treasury.state["status"] == "submitted"
+
+
+# ---- Wave 10, Codex on PR #144: written ahead, outside the diary, or not signed
+
+
+def paid_requests(rail):
+    return [r for r in rail._x402.requests if "X-402-Payment" in r[2]]
+
+
+def test_an_authorization_is_recorded_before_it_is_signed_or_not_signed(monkeypatch, tmp_path):
+    from factorylab.runtime.capital_loop import ReserveLock, read_authorizations
+
+    rail = live(monkeypatch)
+    state = top_up_state(rail)
+    nonce = state["reference"]["authorization"]["nonce"]
+    rail.authorization_log = None
+    with pytest.raises(RailError, match="no write-ahead authorization record"):
+        rail.send("venice_top_up", state["reference"])
+
+    def full_disk(reference):
+        raise OSError("No space left on device")
+
+    rail.authorization_log = full_disk
+    with pytest.raises(RailError, match="record failed; nothing was signed"):
+        rail.send("venice_top_up", state["reference"])
+    assert paid_requests(rail) == []  # neither refusal signed or sent anything
+    lock = ReserveLock(rail.reserve_address, lock_dir=tmp_path)
+    log, seen = lock.authorization_log(tmp_path / "run"), []
+
+    def recording_client_request(method, path, body, **headers):
+        # At the moment the payment leaves, the record already holds its nonce.
+        seen.append([e["nonce"] for e in read_authorizations(lock.authorizations_path)])
+        return HTTPResponse(402, deepcopy(rail._x402.quote))
+
+    rail._x402._request = recording_client_request
+    rail.authorization_log = log
+    with pytest.raises(X402Error):
+        rail.send("venice_top_up", state["reference"])  # the fake answers 402: unknown
+    assert seen == [[nonce]]
+    lock.close()
+
+
+def test_a_crash_between_the_record_and_the_signature_resolves_once_it_expires(
+        monkeypatch, tmp_path):
+    from factorylab.runtime.capital_loop import (
+        CapitalLoopRefused,
+        ReserveLock,
+        check_authorization_record,
+    )
+    from tests.scripts.test_capital_loop_outstanding import Rpc
+
+    class Crash(BaseException):
+        """The process dies right after the record is on disk."""
+
+    rail = live(monkeypatch)
+    state = top_up_state(rail)  # validBefore = the rail's clock (1,000) + 300
+    lock = ReserveLock(rail.reserve_address, lock_dir=tmp_path)
+    log = lock.authorization_log(tmp_path / "run")
+
+    def record_then_die(reference):
+        log(reference)
+        raise Crash
+
+    rail.authorization_log = record_then_die
+    with pytest.raises(Crash):
+        rail.send("venice_top_up", state["reference"])
+    assert paid_requests(rail) == []  # recorded, never signed
+    lock.close()
+    rpc = Rpc()
+    rpc.final_ts = 1_300  # finalized Base has not passed validBefore: it could still be
+    with ReserveLock(rail.reserve_address, lock_dir=tmp_path) as relaunched:
+        with pytest.raises(CapitalLoopRefused,
+                           match="recorded_authorization_may_still_settle"):
+            check_authorization_record(relaunched, transport=rpc)
+        rpc.final_ts = 1_301  # past it, and USDC shows it unused: it never can be
+        resolved = check_authorization_record(relaunched, transport=rpc)
+        assert [r["how"] for r in resolved["resolved_now"]] == ["expired"]

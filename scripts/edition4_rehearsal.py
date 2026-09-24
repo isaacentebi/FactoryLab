@@ -926,6 +926,7 @@ def _rehearse(
             # still settle (a crashed world's last one stays valid for its timeout).
             from factorylab.runtime.capital_loop import (
                 ReserveLock,
+                check_authorization_record,
                 launch_check,
                 settlement_bound,
             )
@@ -937,8 +938,9 @@ def _rehearse(
                                lock_dir=capital_loop_lock_dir)
             held.append(lock)
             transport = capital_loop_transport or _http_request()
+            # The clock's first tick comes at once, so N ticks span N - 1 intervals.
             run_ns = (duration_ns if target_ticks is None
-                      else min(duration_ns, target_ticks * manifest.tick_interval_ns))
+                      else min(duration_ns, (target_ticks - 1) * manifest.tick_interval_ns))
             # The host clock that will stamp validBefore is the runtime's own clock.
             settlement = settlement_bound(run_ns, manifest.tick_interval_ns,
                                           transport=transport,
@@ -949,8 +951,12 @@ def _rehearse(
             runs = tuple(previous_runs) + _sibling_runs(output_dir)
             launch = launch_check(manifest, previous_runs=runs, recorded_run=last,
                                   transport=transport)
+            # Every authorization ever written ahead of signing, whatever any diary now
+            # holds, is resolved against finalized Base before this run may sign.
+            recorded = check_authorization_record(lock, transport=transport)
             launch = {**launch, "settlement": settlement, "reserve_lock": str(lock.path),
-                      "last_run": None if last is None else str(last)}
+                      "last_run": None if last is None else str(last),
+                      "authorization_record": recorded}
             print(json.dumps({"capital_loop_launch_check": {
                 k: v for k, v in launch.items() if k != "previous_runs"}}), flush=True)
         source_path, frozen_hash = source_hash(Path(source_root) if source_root else None)
@@ -966,6 +972,7 @@ def _rehearse(
             if capital_loop:
                 print(json.dumps({"capital_loop_refused": report["refusal"]}, default=str),
                       flush=True)
+                _announce_recovery(report)
         if report_path is not None:
             report_path.write_text(json.dumps(report, indent=2, default=str) + "\n")
         return report
@@ -1098,12 +1105,22 @@ def _rehearse(
                 if capital_loop:
                     os.environ.pop("RESERVE_PRIVATE_KEY", None)
             if capital_loop:
-                # Only the conversion is admitted; the CCTP exits and class moves are
-                # refused before signing, exactly as the denied rail refuses them.
-                runtime.treasury.rail.target = CapitalLoopRail(runtime.treasury.rail.target)
+                from factorylab.world.treasury_rails import HybridRail
+
+                hybrid = runtime.treasury.rail.target
+                if not isinstance(hybrid, HybridRail):
+                    raise RehearsalRefused("capital_loop_requires_the_hybrid_rail")
                 # This run's diary exists now and nothing has signed yet: from here on the
                 # next launch on this reserve reads it, wherever its --out is.
                 lock.record_run(output_dir)
+                # Every authorization is written ahead, outside the diary, before it is
+                # signed; and its validBefore is stamped by the one clock the settlement
+                # bound was measured against, so the two cannot disagree.
+                hybrid.authorization_log = lock.authorization_log(output_dir)
+                hybrid.now_s = lambda: now_ns() // 1_000_000_000
+                # Only the conversion is admitted; the CCTP exits and class moves are
+                # refused before signing, exactly as the denied rail refuses them.
+                runtime.treasury.rail.target = CapitalLoopRail(hybrid)
             else:
                 # Bootstrap gives an unconfigured rail for a manifest without a reserve, but
                 # that rail still supports the venue's spot/perps class move. Replace its
@@ -1257,14 +1274,42 @@ def _announce_outstanding(report: dict) -> None:
             pass
 
 
+def _announce_recovery(report: dict) -> None:
+    """Print, loudly, a launch refused because real money may have moved unbooked."""
+    import shlex
+    import sys
+
+    from factorylab.runtime.capital_loop import OUTSTANDING_SCRIPT, RECOVERY_REASONS
+
+    refusal = report.get("refusal") or {}
+    if refusal.get("reason") not in RECOVERY_REASONS:
+        return
+    nonces = [row.get("nonce") for row in refusal.get("authorizations") or ()]
+    steps = [shlex.join(["uv", "run", "python", OUTSTANDING_SCRIPT, "--acknowledge", n])
+             for n in nonces]
+    try:
+        print(f"CAPITAL LOOP RECOVERY: finalized Base shows {len(nonces)} recorded "
+              f"authorization(s) used that no diary booked as financing: {nonces}. Settle "
+              "the books by hand (docs/architecture/capital-loop-rehearsal.md, After a "
+              f"crash), then acknowledge each: {'; '.join(steps)}", file=sys.stderr,
+              flush=True)
+    except (OSError, ValueError):
+        pass
+
+
 def exit_code(report: dict) -> int:
     """0 for a completed run with nothing outstanding and its report on disk; 3 when a
-    conversion is left unbooked (a top-up still submitted, or a diary unread at the
-    end), whatever else happened, report write included, since that is the operator's
-    next step; otherwise 1."""
+    conversion is left unbooked (a top-up with no financing booked, or a diary unread at
+    the end) or a launch was refused because a recorded authorization settled unbooked,
+    whatever else happened, report write included, since that is the operator's next
+    step; otherwise 1."""
+    from factorylab.runtime.capital_loop import RECOVERY_REASONS
+
     outstanding = report.get("capital_loop_outstanding") or {}
     if outstanding.get("top_ups_submitted") or outstanding.get("diary_unreadable"):
         return 3
+    if (report.get("refusal") or {}).get("reason") in RECOVERY_REASONS:
+        return 3  # a recorded authorization settled with no booking: a recovery
     if report.get("report_write_failed"):
         return 1
     return 0 if report.get("status") == "completed" else 1

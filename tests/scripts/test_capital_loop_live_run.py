@@ -175,6 +175,13 @@ def test_a_run_ends_with_its_top_up_submitted_and_the_next_waits_for_the_chain(
     assert rehearsal.exit_code(report) == 3
     assert "CAPITAL LOOP OUTSTANDING" in capsys.readouterr().err
     assert not any(r["kind"] == "treasury.financing" for r in rows)
+    # The authorization was written ahead, outside the diary, before it was signed.
+    from factorylab.runtime.capital_loop import ReserveLock, acknowledge, read_authorizations
+
+    nonce = signed[0]["state"]["reference"]["authorization"]["nonce"]
+    record = w["locks"] / f"{w['reserve'].address.lower()}.authorizations.jsonl"
+    assert [(e["kind"], e["nonce"], e["run_dir"]) for e in read_authorizations(record)] == [
+        ("authorization", nonce, str(out.resolve()))]
     # The next launch, wherever its --out is, waits for the chain.
     elsewhere = tmp_path / "elsewhere"
     refused = relaunch(w, elsewhere / "second", tmp_path)
@@ -182,10 +189,38 @@ def test_a_run_ends_with_its_top_up_submitted_and_the_next_waits_for_the_chain(
     assert refused["refusal"]["run_dir"] == str(out.resolve())
     if fate == "settled":
         w["chain"].advance(w["chain"].lag)  # the debit is finalized: it settled
+        # Real money moved and the dead world never booked it: a recovery, exit 3,
+        # until the operator has settled the books by hand and acknowledged it.
+        recovery = relaunch(w, elsewhere / "recovery", tmp_path)
+        assert recovery["refusal"]["reason"] == "recorded_authorization_settled_unbooked"
+        assert rehearsal.exit_code(recovery) == 3
+        with ReserveLock(w["reserve"].address, lock_dir=w["locks"]) as lock:
+            acknowledge(lock, nonce, transport=rehearsal._http_request())
     else:
         w["chain"].advance(400)  # finalized Base is past validBefore, and it is unused
     admitted = relaunch(w, elsewhere / "third", tmp_path)
     assert admitted["refusal"]["reason"] == "source_root_mismatch"  # every check passed
+
+
+def test_the_rail_stamps_validbefore_with_the_clock_the_bound_measured(
+        tmp_path, monkeypatch):
+    # Codex on PR #144: the bound sampled the injected clock while the rail stamped
+    # validBefore with time.time_ns(). One clock now serves both.
+    from scripts import edition4_rehearsal as rehearsal
+
+    w = wired(tmp_path, monkeypatch)
+    lag_s = 100  # this run's clock runs 100 s behind the wall clock
+    out = tmp_path / "runs" / "lagging"
+    report = rehearsal.run_rehearsal(
+        str(w["world"]), out=out, capital_loop=True, duration_ns=3_600 * 1_000_000_000,
+        source_root=repo_root(), now_ns=lambda: time.time_ns() - lag_s * 1_000_000_000,
+        **launch_kwargs(w))
+    assert report["status"] == "completed", report.get("error")
+    rows = json.loads((out / "events.json").read_text())
+    [top_up] = [r for r in rows if r["kind"] == "treasury.step_submitted"]
+    created = top_up["state"]["reference"]["created_s"]
+    assert abs(created - (time.time() - lag_s)) < 30  # the injected clock, not the wall's
+    assert int(top_up["state"]["reference"]["authorization"]["validBefore"]) == created + 300
 
 
 @pytest.mark.parametrize("name", ["SIGINT", "SIGTERM", "SIGHUP"])
