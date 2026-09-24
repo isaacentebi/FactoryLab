@@ -658,7 +658,11 @@ the reported `usage` covers only an invocation's final provider call.
 The byte counts are of the invocation's opening prompt, the one its ledger row
 records; tool-round continuations are not counted. A response the runtime rendered
 no prompt for (a ballot whose assembly was unavailable) is not a zero-byte sample:
-it is outside the three prompt means. All four are measurable over `returns` and
+none of the four selects it, so it is not new evidence for a card's price, never
+takes a horizon slot from a measured response, and is not among the responses
+`downstream_read_bytes` divides by, exactly as a global window divides by its
+invocations. A whole window with no invocation (only rent, or only such a ballot)
+is no new sample for them either. All four are measurable over `returns` and
 over `windows`, per role, per assembly or globally, and none over `forecasts`;
 none is `per_window`, since each is a ratio of summable numerators and
 denominators.

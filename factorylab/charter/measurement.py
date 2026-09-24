@@ -60,6 +60,10 @@ def fresh_sample(card: MetricCard, samples: CardSamples, window) -> bool:
     observation = card.observation.strip().lower()
     kind = card.window.kind
     if kind == "windows" and card.window.per is None and observation not in FORECAST_ROWS:
+        if observation in PROMPT_OBSERVATIONS or observation == READ_OBSERVATION:
+            # Measured over the window's invocations: a window with none (only rent,
+            # or only a ballot no assembly answered) rendered no prompt to measure.
+            return window.invocations > 0
         if observation in RETURN_OBSERVATIONS:
             return window.invocations > 0 or bool(window.decisions)
         support = _WINDOW_SUPPORT.get(observation)
@@ -531,12 +535,23 @@ def _selected(observation: str, rows: list[dict]) -> list[dict]:
     it neither answers a schema nor declares an action. Every other observation
     loses it here, before any grouping or horizon; a cost selection keeps it for
     `_horizon`, which admits it as mass and never as a slot.
+
+    A context-size observation selects only the responses the runtime rendered a
+    prompt for (a ballot whose assembly was unavailable was rendered none). An
+    unmeasured row is dropped here, before freshness, grouping or horizon, so it
+    is never new evidence and never takes a measured response's horizon slot.
     """
     observation = observation.strip().lower()
     if observation in COST_OBSERVATIONS:
         return [row for row in rows if not row.get("reading")]
     if observation == READ_OBSERVATION:
-        return [row for row in rows if not row.get("storage")]
+        # Its responses are the rendered invocations, as the global window's are.
+        return [row for row in rows if not row.get("storage") and (
+            row.get("reading") or row.get("prompt_bytes") is not None)]
+    if observation in PROMPT_OBSERVATIONS:
+        key = PROMPT_OBSERVATIONS[observation]
+        return [row for row in rows if not row.get("storage") and not row.get("reading")
+                and row.get(key) is not None]
     return [row for row in rows if not row.get("storage") and not row.get("reading")]
 
 

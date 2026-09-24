@@ -14,6 +14,7 @@ import pytest
 from factorylab.charter.charter import MetricCard
 from factorylab.charter.measurement import (
     CardSamples,
+    fresh_sample,
     measure_card,
     measurement_catalogue,
     preflight_card,
@@ -72,11 +73,12 @@ def _samples():
 ])
 def test_prompt_sizes_are_means_over_measured_prompts_per_assembly_and_role(observation, a, b):
     samples = _samples()
-    # b2 was never rendered a prompt: it is not a zero-byte sample, so b's horizon of
-    # two responses still measures b1 alone, and a failed response's prompt counts.
-    assert measure_card(_card(observation), samples) == {
-        "a": pytest.approx(a), "b": pytest.approx(b)}
-    per_role = measure_card(_card(observation, n=4, per="role"), samples)
+    # b2 was never rendered a prompt: it is not a zero-byte sample and not a response
+    # of a prompt-size selection, so b has one measured response and a horizon of two
+    # is not yet filled. A failed response's prompt counts.
+    assert measure_card(_card(observation), samples) == {"a": pytest.approx(a)}
+    assert measure_card(_card(observation, n=1), samples)["b"] == pytest.approx(b)
+    per_role = measure_card(_card(observation, n=3, per="role"), samples)
     assert per_role == {"producer": pytest.approx((2 * a + b) / 3)}
     judges = measure_card(_card(observation, n=1, per="role", answers_for="evaluator"), samples)
     assert judges == {"evaluator": pytest.approx(
@@ -93,12 +95,15 @@ def test_prompt_size_of_a_scope_with_no_measured_prompt_is_unmeasured():
 def test_downstream_read_bytes_is_filed_under_the_author_over_its_responses():
     samples = _samples()
     # a's two responses span windows 1-2, where 4_000 reading bytes of its returns were
-    # metered: 2_000 per return. b's returns were read by nobody: zero, not unmeasured.
+    # metered: 2_000 per return. b has one rendered response (b2 was rendered no
+    # prompt), so a horizon of two is not filled; of one, b1 was read by nobody: zero.
     card = _card("downstream_read_bytes")
-    assert measure_card(card, samples) == {"a": pytest.approx(2_000.0), "b": 0.0}
-    # Per role: the producer responses span windows 1-2 (a1, a2, b1, b2).
-    assert measure_card(_card("downstream_read_bytes", n=4, per="role"), samples) == {
-        "producer": pytest.approx(1_000.0)}
+    assert measure_card(card, samples) == {"a": pytest.approx(2_000.0)}
+    assert measure_card(_card("downstream_read_bytes", n=1), samples) == {
+        "a": pytest.approx(4_000.0), "b": 0.0}
+    # Per role: the rendered producer responses span windows 1-2 (a1, a2, b1).
+    assert measure_card(_card("downstream_read_bytes", n=3, per="role"), samples) == {
+        "producer": pytest.approx(4_000 / 3)}
     # The judge that read is charged nothing for reading: no reading is filed under it.
     judges = _card("downstream_read_bytes", n=1, per="assembly", answers_for="evaluator")
     assert measure_card(judges, samples) == {"j": 0.0}
@@ -309,3 +314,32 @@ def test_readings_no_future_horizon_can_select_are_not_retained():
     # it can be selected again, however many readings there were. The window-8 one
     # stays, both inside the floor and after the latest response.
     assert [(row["window"], row["read_bytes"]) for row in samples.readings] == [(8, 5)]
+
+
+@pytest.mark.parametrize("observation", CONTEXT)
+def test_a_row_no_prompt_was_rendered_for_neither_reprices_nor_evicts(observation):
+    # PR #143 review: an assembly-unavailable ballot row carries no prompt bytes. For
+    # an answers_for="all" card it was a fresh sample (the PID repriced on the same
+    # measurement) and it took a horizon slot (evicting a measured response).
+    samples = CardSamples()
+    for handle, total in (("p1", 1_000), ("p2", 3_000)):
+        samples.returned(handle=handle, assembly="p", role="producer", window=1,
+                         ret=_ret(handle, total=total, you=total // 10, inputs=total // 2))
+    samples.read(handle="p1", assembly="p", role="producer", window=1, read_bytes=800)
+    card = _card(observation, n=2, per=None, answers_for="all")
+    before = measure_card(card, samples)
+    assert before
+    samples.returned(handle="ballot", assembly="gone", role="other", window=2,
+                     ret=Return("ballot", {"reason": "assembly unavailable"}, 0, "failed"))
+    assert not fresh_sample(card, samples, MeasureWindow(2, 1))
+    assert measure_card(card, samples) == before
+    # Over whole windows: a window whose only activity is not an invocation (rent, a
+    # ballot no assembly answered) rendered no prompt, so it is no new sample either.
+    whole = _card(observation, kind="windows", n=1, per=None, answers_for="all")
+    idle = MeasureWindow(3, 1, decisions={"rent-h": {"role": "producer", "cost": 5}})
+    assert not fresh_sample(whole, samples, idle)
+    assert fresh_sample(whole, samples, MeasureWindow(4, 1, invocations=1))
+    # A rendered response in the window is new evidence.
+    samples.returned(handle="p3", assembly="p", role="producer", window=5,
+                     ret=_ret("p3", total=500, you=50, inputs=250))
+    assert fresh_sample(card, samples, MeasureWindow(5, 1))
