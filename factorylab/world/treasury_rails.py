@@ -87,6 +87,7 @@ FORWARD_SCAN_PAGES = 40
 
 
 AUTHORIZATION_USED = "AuthorizationUsed(address,bytes32)"
+AUTHORIZATION_CANCELED = "AuthorizationCanceled(address,bytes32)"
 #: How far short of "tranche less metered spend" a hybrid top-up's observed Venice credit
 #: may fall before financing is held. The comparison is between three imperfect reads:
 #: the diary's metered spend is an estimate (a table price when Venice reports no cost),
@@ -109,6 +110,10 @@ def authorization_status(base: EVM, authorizer: str, reference: dict) -> dict:
     consulted and no grace is needed: finality lag delays the answer, never flips it.
     Every read is ``eth_getBlockByNumber``, ``eth_call`` or ``eth_getLogs``: nothing
     here signs, so an operator's script may call it with ``EVM(BASE, None)``.
+
+    A nonce whose state is true with no ``AuthorizationUsed`` log is looked up once more
+    for an ``AuthorizationCanceled`` (EIP-3009 ``cancelAuthorization``, which a wallet
+    may send): ``canceled`` is then true, and like ``expired`` it can never settle.
     """
     auth = reference["authorization"]
     nonce = auth["nonce"]
@@ -119,11 +124,19 @@ def authorization_status(base: EVM, authorizer: str, reference: dict) -> dict:
     state = base.call("eth_call", [{"to": address(base.chain.usdc), "data": data}, hex(number)])
     used = int(state, 16) != 0
     topics = [event_topic(AUTHORIZATION_USED), "0x" + word_address(authorizer).hex(), nonce]
-    logs, scanned_to = base.scan(base.chain.usdc, topics, int(reference["start_block"]))
+    # The scan ends at the very block the state was read at, not a re-read tag.
+    logs, scanned_to = base.scan(base.chain.usdc, topics, int(reference["start_block"]),
+                                 end=number)
+    canceled: list = []
+    if used and not logs:
+        canceled, _ = base.scan(
+            base.chain.usdc, [event_topic(AUTHORIZATION_CANCELED), *topics[1:]],
+            int(reference["start_block"]), end=number)
     valid_before = int(auth["validBefore"])
     return {"nonce": nonce, "valid_before": valid_before, "finalized_block": number,
             "finalized_timestamp": timestamp, "authorization_used": used,
             "debits": [log.get("transactionHash") for log in logs], "scanned_to": scanned_to,
+            "canceled": bool(canceled),
             "live": timestamp <= valid_before and not used and not logs,
             "expired": (timestamp > valid_before and not used and not logs
                         and scanned_to >= number)}
@@ -135,6 +148,22 @@ def hype_text(wei: int) -> str:
     return str(amount.quantize(Decimal(1)) if whole else amount.normalize())
 
 
+def _guarded_top_up(client: Any, reference: dict, *, guard: Any, head: Any,
+                    pay_to: str | None = None) -> dict:
+    """Sign and submit a journaled top-up only once ``guard`` recorded it ahead.
+
+    A refused or failed write-ahead is definitive (nothing was signed), so it becomes a
+    ``RailError``; every other outcome is ``venice.top_up``'s own.
+    """
+    from factorylab.world.venice import top_up
+    from factorylab.world.x402 import AuthorizationNotRecorded
+
+    try:
+        return top_up(client, reference, pay_to=pay_to, guard=guard, head=head)
+    except AuthorizationNotRecorded as exc:
+        raise RailError(str(exc)) from None
+
+
 class LiveRail(ClassTransferRail):
     """Only pinned, receipt-confirmed native USDC transfers advance the treasury's opaque plan."""
 
@@ -142,6 +171,32 @@ class LiveRail(ClassTransferRail):
     #: A real top-up is submitted once, then only observed (X402Client.top_up's rule for
     #: an unknown outcome): never resent by the retry loop, never replayed on resume.
     poll_only_steps = ("venice_top_up",)
+    #: The write-ahead guard every top-up authorization passes before it is signed
+    #: (``factorylab.world.x402.sign_transfer_authorization``). The runtime binds it: a
+    #: ``ReserveGuard``, or a capital-loop run's ``AuthorizationLog`` under its held lock.
+    #: Unbound, the rail signs nothing.
+    authorization_log: Any = None
+
+    def bind_guard(self, guard: Any) -> None:
+        """Bind one write-ahead guard to every signer this rail holds the reserve key in:
+        its top-up authorizations and every plain transaction of its EVM chains."""
+        self.authorization_log = guard
+        for name in ("hyper", "base", "venice_base"):
+            chain = getattr(self, name, None)
+            if chain is not None:
+                chain.transaction_guard = guard
+
+    @staticmethod
+    def now_s() -> int:
+        """Wall-clock seconds for an authorization's validity window (journaled with it).
+
+        A real ``validBefore`` is stamped by the wall clock, never by the runtime's clock,
+        which may be virtual: a world's clock deciding a mainnet authorization's life
+        would make the capital loop's settlement bound and the signer disagree.
+        """
+        from time import time_ns
+
+        return time_ns() // 1_000_000_000
 
     def __init__(self, exchange: Any, spec: Any, *, transport: Transport = http_request):
         from hyperliquid.utils.constants import MAINNET_API_URL, TESTNET_API_URL
@@ -585,8 +640,7 @@ class LiveRail(ClassTransferRail):
             from factorylab.world.venice import prepare_top_up
 
             client = self._venice_client()
-            return {**prepare_top_up(client, now_s=state["started_ns"] // 1_000_000_000,
-                                     nonce=os.urandom(32)),
+            return {**prepare_top_up(client, now_s=self.now_s(), nonce=os.urandom(32)),
                     "network": "eip155:8453", "start_block": self.base.block(),
                     "fee_ceiling_micro": 0}
         amount = state["received_micro"]
@@ -679,9 +733,12 @@ class LiveRail(ClassTransferRail):
         if step in ("spot_to_perps", "perps_to_spot"):
             return self.class_send(reference)
         if step == "venice_top_up":
-            from factorylab.world.venice import top_up
-
-            return top_up(self._venice_client(), reference)
+            # Recorded ahead under the reserve lock, or never signed: the runtime binds
+            # ``authorization_log`` (a ``ReserveGuard``); an unbound rail signs nothing.
+            if self.authorization_log is None:
+                raise RailError("no write-ahead authorization record; nothing was signed")
+            return _guarded_top_up(self._venice_client(), reference,
+                                   guard=self.authorization_log, head=self.base.block)
         if step != "withdraw_burn":
             if reference.get("forwarded"):
                 return None  # Circle's forwarder sends this transaction, never the reserve
@@ -783,6 +840,8 @@ class LiveRail(ClassTransferRail):
                 or reference.get("start_block") is None):
             return None
         status = authorization_status(self._venice_base(), self.reserve_address, reference)
+        if status["canceled"]:
+            return "Venice authorization canceled on finalized Base"
         return "Venice authorization expired unused on finalized Base" if status[
             "expired"] else None
 
@@ -833,6 +892,10 @@ class LiveRail(ClassTransferRail):
         ref = state["reference"]
         auth = ref["authorization"]
         base = self._venice_base()
+        # Rescanned from ``start_block`` every poll on purpose, with no cursor: a clean
+        # poll persists nothing (only a Pending carries a cursor, and a pending step is
+        # never tested for expiry), and a cursor would trust one RPC's empty answer for
+        # a range forever, where the rescan asks again and heals a lagging node.
         topics = [event_topic("AuthorizationUsed(address,bytes32)"),
                   "0x" + word_address(self.reserve_address).hex(), auth["nonce"]]
         for log in base.logs(base.chain.usdc, topics, ref["start_block"]):
@@ -1210,13 +1273,6 @@ class HybridRail(LiveRail):
         if self._x402.address.lower() != self.reserve_address.lower():
             raise RailError("Venice payer differs from the reserve")
 
-    @staticmethod
-    def now_s() -> int:
-        """Wall-clock seconds for an authorization's validity window (journaled with it)."""
-        from time import time_ns
-
-        return time_ns() // 1_000_000_000
-
     def _venice_base(self) -> EVM:
         return self.venice_base
 
@@ -1308,10 +1364,18 @@ class HybridRail(LiveRail):
 
     def send(self, step: str, reference: dict) -> dict | None:
         if step == "venice_top_up":
-            from factorylab.world.venice import top_up
+            from factorylab.world.venice import _pinned
 
             # Signed only for the pinned payee, whatever the journal's reference says.
-            return top_up(self._x402, reference, pay_to=self.pay_to)
+            _pinned(self.pay_to, reference["accepted"].get("payTo"))
+            _pinned(self.pay_to, reference["authorization"].get("to"))
+            # Written ahead, durably, outside the diary, or not signed at all: a diary
+            # can be cut, restored or deleted, and the next launch must still find every
+            # authorization that could settle (``sign_transfer_authorization``).
+            if self.authorization_log is None:
+                raise RailError("no write-ahead authorization record; nothing was signed")
+            return _guarded_top_up(self._x402, reference, pay_to=self.pay_to,
+                                   guard=self.authorization_log, head=self.venice_base.block)
         if step != "shadow_send":
             return super().send(step, reference)
         from hyperliquid.utils.signing import sign_usd_transfer_action

@@ -14,6 +14,7 @@ import pytest
 
 from factorylab.cortex.sandbox import jail_available
 from factorylab.kernel.ledger import canonical
+from factorylab.runtime.capital_loop import default_lock_dir as operator_default_lock_dir
 from factorylab.runtime.loop import Runtime, run_world
 from factorylab.runtime.resume import restore_runtime, runtime_state
 from factorylab.runtime.worlds import load_manifest
@@ -343,3 +344,235 @@ def _forget_in_process_kills():
     witness._killed_here.clear()
     yield
     witness._killed_here.clear()
+
+
+@pytest.fixture(autouse=True)
+def _capital_loop_locks_stay_in_tmp(monkeypatch, tmp_path_factory):
+    """No test can touch the operator's real capital-loop lock or last-run record.
+
+    ``ReserveLock`` without a ``lock_dir`` resolves ``default_lock_dir()``, the operator
+    account's ``~/.factorylab/capital-loop``, which holds the live reserve's record. Every
+    test gets its own temporary directory there instead, made only if a test asks.
+    """
+    from factorylab.runtime import capital_loop
+
+    made = []
+
+    def temporary():
+        if not made:
+            made.append(tmp_path_factory.mktemp("capital-loop-locks"))
+        return made[0]
+
+    monkeypatch.setattr(capital_loop, "default_lock_dir", temporary)
+
+
+@pytest.fixture
+def write_ahead(monkeypatch):
+    """A real write-ahead guard made the default of every X402Client and X402Provider.
+
+    Production signs an EIP-3009 authorization only through
+    ``x402.sign_transfer_authorization`` with a guard, and every signer is handed one
+    (``ReserveGuard``). A test that signs asks for this fixture: its clients get a real
+    ``ReserveGuard``, whose lock and record live in the test's temporary lock directory
+    (``_capital_loop_locks_stay_in_tmp``), so the test exercises the same chokepoint.
+    """
+    from factorylab.runtime.capital_loop import ReserveGuard
+    from factorylab.world import market, x402
+
+    default = ReserveGuard("test")
+    for cls in (x402.X402Client, market.X402Provider):
+        def init(self, *args, _original=cls.__init__, guard=None, **kwargs):
+            _original(self, *args, guard=guard if guard is not None else default, **kwargs)
+
+        monkeypatch.setattr(cls, "__init__", init)
+    # These tests' fake wires answer only the calls they were written for; the chain
+    # head the chokepoint records as start_block is a fixed block here. The head read
+    # itself is tested where it matters (tests/world/test_signing_chokepoint.py).
+    monkeypatch.setattr(x402.X402Client, "chain_head", lambda self: 1)
+    return default
+
+
+@pytest.fixture
+def operator_lock_dir():
+    """The real ``default_lock_dir`` the autouse fixture above replaces: call it only to
+    compute a path, never to lock anything there."""
+    return operator_default_lock_dir
+
+
+# ---- No test touches the network
+
+
+class NetworkForbidden(RuntimeError):
+    """A test tried to reach a non-local host; it must use a fake (or be marked
+    ``network``, which keeps it out of the check and gate tiers)."""
+
+
+#: Hosts a test may reach: this machine only (a jail or a local server may use them).
+_LOCAL_HOSTS = {"localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback"}
+
+
+def _local_host(host) -> bool:
+    import ipaddress
+
+    if host in (None, "", b""):
+        return True
+    if isinstance(host, bytes):
+        host = host.decode(errors="replace")
+    host = str(host).strip("[]").lower()
+    if host in _LOCAL_HOSTS:
+        return True
+    try:
+        return ipaddress.ip_address(host.split("%", 1)[0]).is_loopback
+    except ValueError:
+        return False  # a name that is not this machine's is resolved over the network
+
+
+def _ip_literal(host) -> bool:
+    import ipaddress
+
+    try:
+        ipaddress.ip_address(str(host).strip("[]").split("%", 1)[0])
+        return True
+    except ValueError:
+        return False
+
+
+def _url_host(url) -> str | None:
+    from urllib.parse import urlsplit
+
+    return urlsplit(getattr(url, "full_url", url)).hostname
+
+
+@pytest.fixture(autouse=True)
+def _no_network(request, monkeypatch):
+    """Every outbound network path raises ``NetworkForbidden``, naming what it reached.
+
+    Covers ``socket.getaddrinfo`` (a DNS lookup is already traffic),
+    ``socket.socket.connect``/``connect_ex``, a datagram's ``sendto``/``sendmsg`` to an
+    address, and ``socket.create_connection`` (loopback and unix sockets allowed),
+    ``urllib.request.urlopen`` and every ``OpenerDirector.open``, which the project's
+    own seams ``x402.http_request`` and ``polymarket.http_get_json`` both open through
+    (a test that fakes the opener beneath a seam reaches nothing, and is not stopped).
+    Each attempt is also remembered and fails the test at teardown, so code that
+    catches the error (a rail that turns any transport failure into a retry) cannot
+    hide it.
+
+    Isolation covers this test process and the known subprocess seams of
+    ``factorylab/`` and ``scripts/``, whose children the in-process patches cannot
+    reach:
+
+    * ``connector.resolve_addresses`` resolves a name in a ``python -I`` child: a name
+      that is neither local nor an IP literal is refused (unless the test replaced
+      ``subprocess.run`` with a fake, when nothing leaves);
+    * ``scripts/rehearsal.py`` ``run_command`` and ``scripts/fastloop.py`` ``run_seeds``
+      start child worlds, which may call providers or venues: refused.
+
+    The other subprocesses cannot reach the network: ``cortex.sandbox`` runs population
+    code jailed with no network grant (bubblewrap ``--unshare-all`` on Linux, a
+    sandbox-exec profile without one on macOS), and ``runtime.release`` asks a local
+    ``git rev-parse HEAD``. A subprocess a test starts itself, and OS-level isolation,
+    are out of scope. A test marked ``network`` is left alone; such tests
+    are never in the check or gate tiers.
+    """
+    if request.node.get_closest_marker("network"):
+        yield
+        return
+    import socket
+    import urllib.request
+
+    attempts: list[str] = []
+
+    def forbid(what: str):
+        attempts.append(what)
+        raise NetworkForbidden(f"tests may not touch the network: {what} "
+                               "(use a fake, or mark the test @pytest.mark.network)")
+
+    real_getaddrinfo = socket.getaddrinfo
+
+    def getaddrinfo(host, *args, **kwargs):
+        if not _local_host(host):
+            forbid(f"DNS lookup of {host!r}")
+        return real_getaddrinfo(host, *args, **kwargs)
+
+    def guarded(real):
+        def connect(self, address):
+            if self.family in (socket.AF_INET, socket.AF_INET6) and not _local_host(
+                    address[0] if isinstance(address, tuple) else address):
+                forbid(f"socket connect to {address!r}")
+            return real(self, address)
+        return connect
+
+    def remote(sock, address) -> bool:
+        return sock.family in (socket.AF_INET, socket.AF_INET6) and not _local_host(
+            address[0] if isinstance(address, tuple) else address)
+
+    real_sendto, real_sendmsg = socket.socket.sendto, socket.socket.sendmsg
+
+    def sendto(self, data, *args):
+        # sendto(data, address) or sendto(data, flags, address): a datagram needs no
+        # DNS lookup or connect to leave for a numeric address.
+        if args and remote(self, args[-1]):
+            forbid(f"socket sendto {args[-1]!r}")
+        return real_sendto(self, data, *args)
+
+    def sendmsg(self, buffers, *args, **kwargs):
+        address = kwargs.get("address", args[2] if len(args) > 2 else None)
+        if address is not None and remote(self, address):
+            forbid(f"socket sendmsg to {address!r}")
+        return real_sendmsg(self, buffers, *args, **kwargs)
+
+    real_create_connection = socket.create_connection
+
+    def create_connection(address, *args, **kwargs):
+        if not _local_host(address[0]):
+            forbid(f"socket connection to {address!r}")
+        return real_create_connection(address, *args, **kwargs)
+
+    real_open = urllib.request.OpenerDirector.open
+
+    def opener_open(self, fullurl, *args, **kwargs):
+        if not _local_host(_url_host(fullurl)):
+            forbid(f"urllib open of {getattr(fullurl, 'full_url', fullurl)}")
+        return real_open(self, fullurl, *args, **kwargs)
+
+    real_urlopen = urllib.request.urlopen
+
+    def urlopen(url, *args, **kwargs):
+        if not _local_host(_url_host(url)):
+            forbid(f"urlopen of {getattr(url, 'full_url', url)}")
+        return real_urlopen(url, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
+    monkeypatch.setattr(socket.socket, "connect", guarded(socket.socket.connect))
+    monkeypatch.setattr(socket.socket, "connect_ex", guarded(socket.socket.connect_ex))
+    monkeypatch.setattr(socket.socket, "sendto", sendto)
+    monkeypatch.setattr(socket.socket, "sendmsg", sendmsg)
+    monkeypatch.setattr(socket, "create_connection", create_connection)
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", opener_open)
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+
+    import subprocess
+
+    from factorylab.world import connector
+    from scripts import fastloop, rehearsal
+
+    real_run, real_resolve = subprocess.run, connector.resolve_addresses
+
+    def resolve_addresses(host, *args, **kwargs):
+        # The child does the DNS lookup; only a real subprocess.run starts one.
+        if (subprocess.run is real_run and not _local_host(host)
+                and not _ip_literal(host)):
+            forbid(f"resolve_addresses({host!r}) in a python -I child")
+        return real_resolve(host, *args, **kwargs)
+
+    def child_world(name):
+        def refuse(*args, **kwargs):
+            forbid(f"{name}: a child world outside this guard")
+        return refuse
+
+    monkeypatch.setattr(connector, "resolve_addresses", resolve_addresses)
+    monkeypatch.setattr(rehearsal, "run_command", child_world("scripts/rehearsal.py run_command"))
+    monkeypatch.setattr(fastloop, "run_seeds", child_world("scripts/fastloop.py run_seeds"))
+    yield attempts  # the guard's own tests read (and clear) what it stopped
+    if attempts:
+        pytest.fail("the test touched the network: " + "; ".join(attempts), pytrace=False)

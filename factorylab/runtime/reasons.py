@@ -66,6 +66,8 @@ class Reason(StrEnum):
     TOPUP_AMOUNT_REFUSED = "topup_amount_refused"
     QUOTE_ABOVE_CAP = "quote_above_cap"
     ARGUMENTS_INCOMPLETE = "arguments_incomplete"
+    # A world whose treasury rail signs with the mainnet reserve key needs --ledger.
+    MAINNET_RAIL_REQUIRES_A_LEDGER = "mainnet_rail_requires_a_ledger"
 
 
 class CredentialMissing(RuntimeError):

@@ -68,6 +68,27 @@ CAPITAL_LOOP_REFUSED = (
     "(docs/architecture/capital-loop-rehearsal.md)")
 
 
+#: Why a world whose treasury rail signs with the mainnet reserve key will not start
+#: without a diary on disk.
+MAINNET_RAIL_REFUSED = (
+    "mainnet_rail_requires_a_ledger: this world's treasury rail signs with the mainnet "
+    "reserve key; run it with --ledger, so the reserve's record can name the diary its "
+    "transfers are booked in and a cancel can tell whether it has ended")
+
+
+def mainnet_rail(manifest: WorldManifest) -> bool:
+    """Whether a live world's treasury rail signs with the mainnet reserve key: a
+    reserve on a mainnet venue, or a hybrid rail's Venice leg on Base mainnet."""
+    treasury = manifest.treasury
+    return treasury.reserve_address is not None and (
+        manifest.exchange.mainnet
+        or getattr(treasury, "venice_network", None) == "base-mainnet")
+
+
+class MainnetRailRequiresALedger(ValueError):
+    """A live world with a mainnet treasury rail was given no ledger: nothing started."""
+
+
 class BootstrapMixin:
     """Preserve runtime state and behavior for bootstrap operations."""
 
@@ -100,6 +121,12 @@ class BootstrapMixin:
             from factorylab.world.evm import RailError
 
             raise RailError(CAPITAL_LOOP_REFUSED)
+        if self.live and not ledger_path and _journal is None and mainnet_rail(manifest):
+            # Every reserve-key entry of a world names its diary: without one, a used
+            # authorization could never be shown booked (a false recovery), and a
+            # cancel could never tell whether the world has ended. Refused before any
+            # venue, key or file is touched.
+            raise MainnetRailRequiresALedger(MAINNET_RAIL_REFUSED)
         self._ledger_lock = _lock or LedgerLock(ledger_path)
         self.m = manifest
         self.kill_at_end = kill_at_end
@@ -222,7 +249,21 @@ class BootstrapMixin:
             )
         )
         self.market.max_request_micro = manifest.treasury.max_request_micro
+        from pathlib import Path as _Path
+
+        from factorylab.runtime.capital_loop import ReserveGuard
         from factorylab.world.treasury import UnconfiguredRail
+
+        # Every EIP-3009 authorization this world signs with the reserve key is written
+        # ahead to the reserve's record, under its lock, or never signed
+        # (x402.sign_transfer_authorization): a capital-loop run on the same reserve can
+        # then neither overlap it nor miss what it authorized. The entry names this
+        # world's exact diary (``--ledger runs/foo.jsonl`` included), where a used
+        # authorization of its must be booked.
+        ledger = _Path(ledger_path).resolve() if ledger_path else None
+        run_dir = ledger.parent if ledger is not None else None
+        if isinstance(self.market, X402Provider) and self.market.guard is None:
+            self.market.guard = ReserveGuard("x402_purchase", run_dir=run_dir, ledger=ledger)
 
         if self.live:
             if manifest.treasury.reserve_address is not None:
@@ -236,6 +277,8 @@ class BootstrapMixin:
                 # metered spend since the purchase started is recorded beside the
                 # advisory balance so a lost acknowledgment stays explainable (C5).
                 rail.metered_usage_since = self._venice_usage_since
+                # The capital-loop runner replaces this with its held lock's record.
+                rail.bind_guard(ReserveGuard("treasury", run_dir=run_dir, ledger=ledger))
             else:
                 rail = UnconfiguredRail(self.exchange)
 

@@ -16,6 +16,8 @@ class RPC:
         self.final = {"number": "0x10", "hash": "0xabc"}
         self.logs = []
         self.sent = []
+        self.head = "0x10"
+        self.on_send = None
 
     def __call__(self, method, url, body, headers):
         name, args = body["method"], body["params"]
@@ -29,10 +31,13 @@ class RPC:
             "eth_getTransactionReceipt": self.receipt,
             "eth_getBlockByNumber": self.final,
             "eth_getLogs": self.logs,
+            "eth_blockNumber": self.head,
         }.get(name)
         if name == "eth_sendRawTransaction":
             from eth_utils import keccak
 
+            if self.on_send is not None:
+                self.on_send()
             self.sent.append(args[0])
             result = "0x" + keccak(bytes.fromhex(args[0][2:])).hex()
         return HTTPResponse(200, {"result": result}, {})
@@ -41,6 +46,9 @@ class RPC:
 def setup():
     rpc = RPC()
     chain = EVM(HYPEREVM_TESTNET, Account.create(), transport=rpc, gas_budget_wei=10**15)
+    from factorylab.runtime.capital_loop import ReserveGuard
+
+    chain.transaction_guard = ReserveGuard("test")  # written ahead, in the test's lock dir
     ref = chain.transfer(chain.chain.usdc, Account.create().address, 5_000_000, 10**15)
     return rpc, chain, ref
 
@@ -218,3 +226,130 @@ def test_scan_pages_from_a_cursor_with_a_page_cap_and_reports_the_last_block_rea
     # Nothing finalized past the cursor: no page is requested and the cursor holds.
     assert chain.scan(chain.chain.usdc, [], 1_118, max_pages=2) == ([], 1_117)
     assert pages == []
+
+
+# ---- Wave 10, the reviews of 0b5b487: plain reserve-key transactions on the record
+
+
+def transactions(chain):
+    from factorylab.runtime import capital_loop
+
+    path = (capital_loop.default_lock_dir()
+            / f"{chain.account.address.lower()}.authorizations.jsonl")
+    if not path.exists():
+        return []
+    return [e for e in capital_loop.read_authorizations(path) if e["kind"] == "transaction"]
+
+
+def test_a_reserve_transaction_is_written_ahead_before_it_is_returned():
+    rpc, chain, ref = setup()
+    [written] = transactions(chain)
+    assert written == {
+        "kind": "transaction", "tx_hash": ref["tx_hash"].lower(), "chain_id": 998,
+        "from": chain.account.address, "to": ref["tx"]["to"], "tx_nonce": 3,
+        "data": ref["tx"]["data"], "value": 0, "step": "transfer",
+        "gas_price": 125, "start_block": 16, "origin": "test", "run_dir": None, "ledger": None}
+    replaced = chain.replace(ref, gas_remaining_wei=10**15)
+    assert [t["tx_hash"] for t in transactions(chain)] == [
+        ref["tx_hash"].lower(), replaced["tx_hash"].lower()]
+
+
+def test_no_reserve_transaction_is_prepared_or_sent_unrecorded():
+    from factorylab.runtime.capital_loop import ReserveLock
+
+    rpc, chain, ref = setup()
+    to = Account.create().address
+    guard, chain.transaction_guard = chain.transaction_guard, None
+    for attempt in (lambda: chain.transfer(chain.chain.usdc, to, 1, 10**15),
+                    lambda: chain.approve(chain.chain.usdc, to, 1, 10**15),
+                    lambda: chain.replace(ref, gas_remaining_wei=10**15),
+                    lambda: chain.broadcast(ref)):
+        with pytest.raises(RailError, match="no write-ahead transaction record"):
+            attempt()
+    chain.transaction_guard = guard
+    rpc.head = None  # the chain head cannot be read: nothing to record, nothing prepared
+    with pytest.raises(RailError, match="record refused"):
+        chain.transfer(chain.chain.usdc, to, 1, 10**15)
+    rpc.head = "0x10"
+    # A capital-loop run holds the reserve: nothing is prepared, replaced or broadcast.
+    with ReserveLock(chain.account.address):
+        for attempt in (lambda: chain.transfer(chain.chain.usdc, to, 1, 10**15),
+                        lambda: chain.replace(ref, gas_remaining_wei=10**15)):
+            with pytest.raises(RailError, match="capital_loop_reserve_locked"):
+                attempt()
+        with pytest.raises(RailError, match="capital_loop_reserve_locked"):
+            chain.broadcast(ref)
+    assert rpc.sent == [] and len(transactions(chain)) == 1  # only setup's own
+    chain.broadcast(ref)
+    assert len(rpc.sent) == 1
+
+
+def test_a_live_rail_binds_its_guard_to_every_chain_it_signs_on():
+    from factorylab.world.treasury_rails import LiveRail
+
+    rail = LiveRail.__new__(LiveRail)
+    rail.hyper, rail.base = SimpleNamespace(), SimpleNamespace()
+    guard = object()
+    rail.bind_guard(guard)
+    assert rail.authorization_log is guard
+    assert rail.hyper.transaction_guard is guard and rail.base.transaction_guard is guard
+
+
+# ---- Wave 10, the reviews of 98fa627
+
+
+def test_a_transaction_whose_hash_is_not_on_the_record_is_never_broadcast(tmp_path):
+    from factorylab.runtime.capital_loop import ReserveGuard
+
+    rpc, chain, ref = setup()
+    chain.transaction_guard = ReserveGuard("test", lock_dir=tmp_path / "elsewhere")
+    with pytest.raises(RailError, match="transaction_not_on_record"):
+        chain.broadcast(ref)
+    assert rpc.sent == []
+
+
+def test_the_reserve_is_held_from_the_record_check_until_the_send_returns():
+    # Codex P1: a capital-loop launch between the lock's release and the send could
+    # admit a run beside a transaction just leaving the reserve.
+    from factorylab.runtime.capital_loop import CapitalLoopRefused, ReserveLock
+
+    rpc, chain, ref = setup()
+    seen = []
+
+    def a_launch_during_the_send():
+        try:
+            ReserveLock(chain.account.address).close()
+            seen.append("launched")
+        except CapitalLoopRefused as exc:
+            seen.append(exc.reason)
+
+    rpc.on_send = a_launch_during_the_send
+    chain.broadcast(ref)
+    assert seen == ["capital_loop_reserve_locked"] and len(rpc.sent) == 1
+    ReserveLock(chain.account.address).close()  # released once the send returned
+
+
+def test_a_transaction_whose_line_was_damaged_and_repaired_is_still_sendable():
+    # The fourth review: after --repair-damaged, a torn transaction's legible hash is the
+    # record's, and the world that journaled it may still send it.
+    from factorylab.runtime import capital_loop
+
+    rpc, chain, ref = setup()
+    chain.transfer(chain.chain.usdc, Account.create().address, 1, 10**15)  # a later line
+    path = capital_loop.default_lock_dir() / f"{chain.account.address.lower()}.authorizations.jsonl"
+    first, rest = path.read_bytes().split(b"\n", 1)
+    assert ref["tx_hash"].lower().encode() in first
+    path.write_bytes(first[:first.index(b'"tx_nonce"')] + b"\xff\n" + rest)
+    from factorylab.world.evm import BASE, HYPEREVM
+
+    def mainnets(method, url, body, headers):
+        # A damaged line's chain is never trusted: both mainnet chains are bounded.
+        chain_id = {BASE.rpc: 8453, HYPEREVM.rpc: 999}[url]
+        result = {"eth_chainId": hex(chain_id), "eth_getTransactionCount": "0x3"}
+        return HTTPResponse(200, {"result": result[body["method"]]}, {})
+
+    with capital_loop.ReserveLock(chain.account.address) as lock:
+        repaired = capital_loop.repair_damaged(lock, transport=mainnets)
+        assert repaired["open_transactions"] == [ref["tx_hash"].lower()]
+    chain.broadcast(ref)
+    assert len(rpc.sent) == 1

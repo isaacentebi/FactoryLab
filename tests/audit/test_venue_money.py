@@ -19,6 +19,11 @@ from factorylab.world.venue_tools import VenueTools
 from tests.helpers import place, venue_runtime
 from tests.runtime.test_connectors import ledger_items
 
+# Every signature here goes through the production chokepoint, with a real
+# ReserveGuard in this test's temporary lock directory (tests/conftest.py).
+pytestmark = pytest.mark.usefixtures("write_ahead")
+
+
 
 def _live_stub(**state) -> HyperliquidExchange:
     """A Hyperliquid adapter with every SDK call stubbed; no network is reachable."""

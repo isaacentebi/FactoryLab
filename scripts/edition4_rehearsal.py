@@ -36,6 +36,7 @@ from factorylab.runtime.loop import Runtime
 from factorylab.runtime.worlds import PromptSpec, WorldManifest, load_manifest
 from factorylab.world.metering import UnbilledFailure, classify_provider_failure
 from factorylab.world.models import ModelRequest, ModelResponse
+from factorylab.world.x402 import BASE_RPC
 
 DEFAULT_WORLD = Path("worlds/edition6-testnet-rehearsal.toml")
 DEFAULT_SOURCE = Path("/tmp/factorylab-edition4-baseline-source")
@@ -684,6 +685,16 @@ def build_prepaid_provider(manifest: WorldManifest, *, keep_reserve_env: bool = 
     return MultiProvider(openrouter, venice, DeniedMarket())
 
 
+def _wall_ns() -> int:
+    """The wall clock: the only clock a capital-loop run stamps a real validBefore with."""
+    return time.time_ns()
+
+
+def _sleep(seconds: float) -> None:
+    """The wall clock's own wait, which paces a capital-loop run's live deadline clock."""
+    time.sleep(seconds)
+
+
 def _http_request():
     from factorylab.world.x402 import http_request
 
@@ -734,9 +745,121 @@ def _safe_exception(exc: BaseException) -> dict[str, str]:
     }
 
 
-def run_rehearsal(
+class RunStopped(BaseException):
+    """An operator's SIGINT, SIGTERM or SIGHUP, turned into an orderly stop of a run.
+
+    A BaseException, like ``KeyboardInterrupt``, so the world's own ``except Exception``
+    handlers (a treasury send, a provider call) cannot swallow the stop.
+    """
+
+
+class _StopOnSignal:
+    """Guarantees SIGINT, SIGTERM and SIGHUP end a run through its own ``finally``.
+
+    While armed, the first of them raises ``RunStopped`` in the main thread, wherever
+    the run is, and blocks all three there before it raises, so none can interrupt the
+    stop. ``hold`` (the first thing the run's ``finally`` does) disarms and blocks them
+    too; ``release`` unblocks them once the report is written and announced, when a
+    signal that arrived meanwhile is only recorded; ``restore`` puts back the handlers
+    ``arm`` replaced. A signal whose disposition is ``SIG_IGN`` when armed (SIGHUP under
+    ``nohup``) is left alone. No thread is started. Python runs signal handlers, and
+    raises ``KeyboardInterrupt``, only in the main thread: off it nothing is installed
+    and nothing here stops a run, which then ends only as its process does.
+    """
+
+    NAMES = ("SIGINT", "SIGTERM", "SIGHUP")
+
+    def __init__(self) -> None:
+        self.previous: dict[int, Any] = {}
+        self.armed = False
+        self.received: list[str] = []
+        self._mask: set | None = None
+
+    def arm(self) -> None:
+        import signal
+        import threading
+
+        if threading.current_thread() is not threading.main_thread():
+            return
+        for name in self.NAMES:
+            number = getattr(signal, name, None)
+            if number is None or signal.getsignal(number) is signal.SIG_IGN:
+                continue  # an operator's nohup (or any ignore) is theirs to keep
+            self.previous[number] = signal.signal(number, self._stop)
+        self.armed = True
+
+    def _stop(self, number: int, _frame: Any) -> None:
+        import signal
+
+        name = signal.Signals(number).name
+        self.received.append(name)
+        if self.armed:
+            self.armed = False
+            self._block()
+            raise RunStopped(name)
+
+    def _block(self) -> None:
+        import signal
+        import threading
+
+        if (self._mask is None and self.previous and hasattr(signal, "pthread_sigmask")
+                and threading.current_thread() is threading.main_thread()):
+            self._mask = signal.pthread_sigmask(signal.SIG_BLOCK, set(self.previous))
+
+    def hold(self) -> None:
+        """No handled signal is raised or delivered from here until ``release``."""
+        self.armed = False
+        self._block()
+
+    def release(self) -> None:
+        """Unblock; a signal that arrived while held reaches ``_stop`` and is recorded."""
+        import signal
+
+        self.armed = False
+        if self._mask is not None:
+            mask, self._mask = self._mask, None
+            signal.pthread_sigmask(signal.SIG_SETMASK, mask)
+
+    def restore(self) -> None:
+        """Put back every handler ``arm`` replaced; never raises.
+
+        A previous handler of ``None`` was installed from C and cannot be reinstalled
+        from Python: its signal gets ``SIG_DFL``.
+        """
+        import signal
+
+        self.release()
+        for number, handler in self.previous.items():
+            try:
+                signal.signal(number, signal.SIG_DFL if handler is None else handler)
+            except (ValueError, OSError, TypeError):
+                pass
+        self.previous = {}
+
+
+def run_rehearsal(world: str | Path = DEFAULT_WORLD, **kwargs: Any) -> dict[str, Any]:
+    """Run a fresh bounded testnet rehearsal and persist a sanitized evidence report.
+
+    Keywords are ``_rehearse``'s. Guarantees a capital-loop run's reserve lock is
+    released when this returns or raises, whatever the path, so a library caller can
+    never keep a reserve locked in a living process by an exception it caught; and the
+    signal handlers a capital-loop run installs are restored before it returns.
+    """
+    held: list = []
+    stops = _StopOnSignal()
+    try:
+        return _rehearse(world, held=held, stops=stops, **kwargs)
+    finally:
+        stops.restore()
+        for lock in held:
+            lock.close()
+
+
+def _rehearse(
     world: str | Path = DEFAULT_WORLD,
     *,
+    held: list,
+    stops: _StopOnSignal | None = None,
     out: str | Path | None = None,
     duration_ns: int = DEFAULT_DURATION_NS,
     target_ticks: int | None = None,
@@ -746,7 +869,7 @@ def run_rehearsal(
     exchange: Any | None = None,
     clock_source: Any | None = None,
     source_root: str | Path | None = None,
-    now_ns: Callable[[], int] = time.time_ns,
+    now_ns: Callable[[], int] | None = None,
     observe: bool = False,
     prompt_mode: str | None = None,
     reasoning: str = "preserve",
@@ -754,15 +877,52 @@ def run_rehearsal(
     capital_loop: bool = False,
     previous_runs: tuple = (),
     capital_loop_transport: Callable | None = None,
+    capital_loop_lock_dir: str | Path | None = None,
+    capital_loop_rpcs: dict | None = None,
 ) -> dict[str, Any]:
     """Run a fresh bounded testnet rehearsal and persist a sanitized evidence report.
 
     ``capital_loop`` runs a hybrid Venice world (docs/architecture/
     capital-loop-rehearsal.md): ``to_venice`` stays open and spends real Base mainnet
-    USDC, every other treasury route and x402 purchase stays denied.
+    USDC, every other treasury route and x402 purchase stays denied. It then also
+    guarantees: the reserve is held by this run alone on this host from before its
+    launch check until the run returns (``ReserveLock``, in ``capital_loop_lock_dir``,
+    by default the operator's ``~/.factorylab/capital-loop``; ``held`` receives it so
+    ``run_rehearsal`` releases it); the run is planned at least ``SETTLEMENT_RATIO``
+    conversion settlement horizons long; and a run that ends with a top-up still
+    submitted says so in ``report["capital_loop_outstanding"]``, written to
+    ``report.json`` first and then printed on stdout and stderr, naming
+    ``scripts/capital_loop_outstanding.py``.
     """
     if type(duration_ns) is not int or duration_ns <= 0:
         raise ValueError("duration_ns must be positive integer")
+    if capital_loop and out is None:
+        # Real money needs a diary on disk: the next launch reads it to refuse while
+        # anything this run authorized could still settle.
+        raise ValueError("a capital-loop rehearsal requires an output directory")
+    if capital_loop and now_ns is not None:
+        # A capital-loop run signs real Base mainnet authorizations: their validBefore,
+        # and the settlement bound measured against it, both read the wall clock. An
+        # injected clock stays for testnet-only runs, where nothing real is stamped.
+        raise RehearsalRefused("capital_loop_requires_the_wall_clock")
+    if capital_loop and clock_source is not None:
+        # Its ticks too: the settlement bound credits the run the wall-clock length its
+        # live deadline clock delivers. A supplied source (a harness that emits every
+        # tick at once) would run the loop faster than the bound it was admitted on.
+        raise RehearsalRefused("capital_loop_requires_the_live_clock")
+    if capital_loop and capital_loop_transport is not None:
+        # A funded run reads the chains it bounds itself by over the real network, at the
+        # public RPCs or the ones --rpc-* names; a library caller cannot hand it answers.
+        raise RehearsalRefused("capital_loop_requires_the_live_transport")
+    if capital_loop and capital_loop_lock_dir is not None:
+        from factorylab.runtime.capital_loop import default_lock_dir
+
+        # The operator account's one lock directory is the lock: another one would let a
+        # second run hold "the" reserve beside the first.
+        if Path(capital_loop_lock_dir).resolve() != default_lock_dir().resolve():
+            raise RehearsalRefused("capital_loop_requires_the_operator_lock_dir")
+    if now_ns is None:
+        now_ns = _wall_ns
     if target_ticks is not None and (type(target_ticks) is not int or target_ticks <= 0):
         raise ValueError("target_ticks must be a positive integer")
     if type(cap_micro) is not int or cap_micro <= 0:
@@ -783,6 +943,7 @@ def run_rehearsal(
         output_dir.mkdir(parents=True, exist_ok=False)
         report_path = output_dir / "report.json"
     admission = Admission(cap_micro, max_calls, recover_provider_failures=True)
+    lock = None
     try:
         base = load_manifest(str(world))
         manifest = effective_manifest(
@@ -798,15 +959,62 @@ def run_rehearsal(
             # reserve, read keylessly now, may lose at most max_venice_total_usd before
             # reaching it, and no earlier run may have left an authorization that can
             # still settle (a crashed world's last one stays valid for its timeout).
-            from factorylab.runtime.capital_loop import launch_check
+            from factorylab.runtime.capital_loop import (
+                MAX_AUTHORIZATION_S,
+                ReserveLock,
+                check_authorization_record,
+                cooling_off_check,
+                launch_check,
+                settlement_bound,
+            )
 
+            # Taken before the check and held until the run returns: the floor check
+            # reads the chain, which cannot see another run's signed-but-unsettled
+            # authorization, so two runs on one reserve must never overlap.
+            lock = ReserveLock(manifest.treasury.reserve_address,
+                               lock_dir=capital_loop_lock_dir)
+            held.append(lock)
+            transport = _http_request()
+            # Each chain's RPC, overridable (--rpc-base, --rpc-hyperevm and the testnet
+            # ones), and the same for every check below.
+            rpcs = dict(capital_loop_rpcs or {})
+            base_rpc = rpcs.get(8453, BASE_RPC)
+            # The clock delivers floor(duration / tick) ticks, or --ticks when fewer,
+            # and its first tick comes at once: N ticks span N - 1 intervals.
+            ticks = duration_ns // manifest.tick_interval_ns
+            if target_ticks is not None:
+                ticks = min(ticks, target_ticks)
+            run_ns = max(0, ticks - 1) * manifest.tick_interval_ns
+            # The host clock that will stamp validBefore is the runtime's own clock.
+            settlement = settlement_bound(run_ns, manifest.tick_interval_ns,
+                                          transport=transport, rpc=base_rpc,
+                                          now_s=lambda: now_ns() // 1_000_000_000)
+            # The reserve's last holder is read wherever it ran, not only beside --out:
+            # it is the one earlier run whose authorization can still be live.
+            last = lock.last_run()
             runs = tuple(previous_runs) + _sibling_runs(output_dir)
-            launch = launch_check(manifest, previous_runs=runs,
-                                  transport=capital_loop_transport or _http_request())
+            launch = launch_check(manifest, previous_runs=runs, recorded_run=last,
+                                  transport=transport, rpc=base_rpc)
+            # Every authorization ever written ahead of signing, whatever any diary now
+            # holds, is resolved against finalized Base before this run may sign.
+            recorded = check_authorization_record(
+                lock, transport=transport, rpc=base_rpc, rpcs=rpcs,
+                now_s=lambda: now_ns() // 1_000_000_000)
+            # And the chain itself, for a record rolled back with its directory: no
+            # authorization the reserve made within one settlement window of finalized
+            # blocks may be missing from the record.
+            cooling = cooling_off_check(
+                lock, transport=transport, rpc=base_rpc,
+                window_s=MAX_AUTHORIZATION_S + 2 * settlement["finalized_behind_s"])
+            launch = {**launch, "settlement": settlement, "reserve_lock": str(lock.path),
+                      "last_run": None if last is None else str(last),
+                      "authorization_record": recorded, "cooling_off": cooling}
             print(json.dumps({"capital_loop_launch_check": {
                 k: v for k, v in launch.items() if k != "previous_runs"}}), flush=True)
         source_path, frozen_hash = source_hash(Path(source_root) if source_root else None)
     except Exception as exc:
+        if lock is not None:
+            lock.close()
         report = {"status": "failed", "error": _safe_exception(exc),
                   "cost": admission.report(), "denied_rails": _denied_rails(capital_loop)}
         refusal = getattr(exc, "reason", None)
@@ -816,12 +1024,15 @@ def run_rehearsal(
             if capital_loop:
                 print(json.dumps({"capital_loop_refused": report["refusal"]}, default=str),
                       flush=True)
+                _announce_recovery(report)
         if report_path is not None:
             report_path.write_text(json.dumps(report, indent=2, default=str) + "\n")
         return report
     planned_ticks = target_ticks or max(1, duration_ns // manifest.tick_interval_ns)
     minimum_ticks = minimum_ticks or manifest.evaluation.consequence_backstop_ticks
     if minimum_ticks > planned_ticks:
+        if lock is not None:
+            lock.close()
         raise ValueError("minimum_ticks exceeds the rehearsal's planned tick ceiling")
     before_reasoning = {model.id: dict(model.reasoning) for model in base.models}
     after_reasoning = {model.id: dict(model.reasoning) for model in manifest.models}
@@ -913,95 +1124,257 @@ def run_rehearsal(
         }
     runtime = None
     observer = None
+    if stops is None:
+        stops = _StopOnSignal()  # never armed: only run_rehearsal arms, and restores
+    elif capital_loop:
+        # From the world's construction on, SIGINT, SIGTERM or SIGHUP stop it through
+        # the finally below: the report, the outstanding warning and the exit code are
+        # written whatever stopped it (a default SIGTERM would write none of them).
+        stops.arm()
     try:
         try:
-            if provider is None:
-                provider = build_prepaid_provider(manifest, keep_reserve_env=capital_loop)
-            guarded = provider if isinstance(provider, PrepaidProvider) else PrepaidProvider(
-                provider, manifest, admission)
-            events = planned_ticks
-            if clock_source is None and manifest.exchange.kind != "fake":
-                clock_source = LiveClock(manifest.tick_interval_ns, events,
-                                         now_ns=now_ns, deadline_ns=now_ns() + duration_ns)
-            clock_source = (AdmissionClock(clock_source, admission)
-                            if clock_source is not None else None)
-            runtime = Runtime(
-                manifest, events=events, seed=manifest.seed, initial_balance_micro=None,
-                ledger_path=None if output_dir is None else str(output_dir / "ledger.jsonl"),
-                router_gamma=0.1, provider=guarded, market=DeniedMarket(),
-                exchange=exchange, clock_source=clock_source,
-                kill_at_end=True, capital_loop=capital_loop,
-            )
-        finally:
-            # The hybrid rail captured its signer during construction; the running
-            # world never inherits the reserve key, capital loop or not.
+            try:
+                if provider is None:
+                    provider = build_prepaid_provider(manifest, keep_reserve_env=capital_loop)
+                guarded = provider if isinstance(provider, PrepaidProvider) else PrepaidProvider(
+                    provider, manifest, admission)
+                events = planned_ticks
+                if clock_source is None and manifest.exchange.kind != "fake":
+                    clock_source = LiveClock(manifest.tick_interval_ns, events,
+                                             now_ns=now_ns, sleep=_sleep,
+                                             deadline_ns=now_ns() + duration_ns)
+                clock_source = (AdmissionClock(clock_source, admission)
+                                if clock_source is not None else None)
+                runtime = Runtime(
+                    manifest, events=events, seed=manifest.seed, initial_balance_micro=None,
+                    ledger_path=None if output_dir is None else str(output_dir / "ledger.jsonl"),
+                    router_gamma=0.1, provider=guarded, market=DeniedMarket(),
+                    exchange=exchange, clock_source=clock_source,
+                    kill_at_end=True, capital_loop=capital_loop,
+                )
+            finally:
+                # The hybrid rail captured its signer during construction; the running
+                # world never inherits the reserve key, capital loop or not.
+                if capital_loop:
+                    os.environ.pop("RESERVE_PRIVATE_KEY", None)
             if capital_loop:
-                os.environ.pop("RESERVE_PRIVATE_KEY", None)
-        if capital_loop:
-            # Only the conversion is admitted; the CCTP exits and class moves are
-            # refused before signing, exactly as the denied rail refuses them.
-            runtime.treasury.rail.target = CapitalLoopRail(runtime.treasury.rail.target)
-        else:
-            # Bootstrap gives an unconfigured rail for a manifest without a reserve, but
-            # that rail still supports the venue's spot/perps class move. Replace its
-            # target before launch so every treasury direction is refused pre-signing.
-            runtime.treasury.rail.target = DeniedTransferRail(runtime.treasury.rail.target)
-        if observe:
-            from scripts import edition4_observer
+                from factorylab.world.treasury_rails import HybridRail
 
-            observer = edition4_observer.attach_rehearsal_observer(
-                runtime, output_dir / "observer", admission_report=admission.report)
-            report["observer"] = {
-                "enabled": True,
-                "scope": "rehearsal_only_recent_evidence_window",
-                "path": str(output_dir / "observer"),
-                "module_sha256": hashlib.sha256(
-                    Path(edition4_observer.__file__).read_bytes()).hexdigest(),
+                hybrid = runtime.treasury.rail.target
+                if not isinstance(hybrid, HybridRail):
+                    raise RehearsalRefused("capital_loop_requires_the_hybrid_rail")
+                # This run's diary exists now and nothing has signed yet: from here on the
+                # next launch on this reserve reads it, wherever its --out is.
+                lock.record_run(output_dir)
+                # Every authorization is written ahead, outside the diary, before it is
+                # signed; and its validBefore is stamped by the one clock the settlement
+                # bound was measured against, so the two cannot disagree.
+                hybrid.bind_guard(lock.authorization_log(
+                    output_dir, ledger=output_dir / "ledger.jsonl"))
+                hybrid.now_s = lambda: now_ns() // 1_000_000_000
+                # Only the conversion is admitted; the CCTP exits and class moves are
+                # refused before signing, exactly as the denied rail refuses them.
+                runtime.treasury.rail.target = CapitalLoopRail(hybrid)
+            else:
+                # Bootstrap gives an unconfigured rail for a manifest without a reserve, but
+                # that rail still supports the venue's spot/perps class move. Replace its
+                # target before launch so every treasury direction is refused pre-signing.
+                runtime.treasury.rail.target = DeniedTransferRail(runtime.treasury.rail.target)
+            if observe:
+                from scripts import edition4_observer
+
+                observer = edition4_observer.attach_rehearsal_observer(
+                    runtime, output_dir / "observer", admission_report=admission.report)
+                report["observer"] = {
+                    "enabled": True,
+                    "scope": "rehearsal_only_recent_evidence_window",
+                    "path": str(output_dir / "observer"),
+                    "module_sha256": hashlib.sha256(
+                        Path(edition4_observer.__file__).read_bytes()).hexdigest(),
+                }
+            report["venue_before"] = venue_snapshot(runtime.exchange)
+            report["venue_confounds"] = {
+                "declared_start_cash_usd": manifest.exchange.start_cash_usd,
+                "observed_equity_usd": report["venue_before"].get("equity_usd"),
             }
-        report["venue_before"] = venue_snapshot(runtime.exchange)
-        report["venue_confounds"] = {
-            "declared_start_cash_usd": manifest.exchange.start_cash_usd,
-            "observed_equity_usd": report["venue_before"].get("equity_usd"),
-        }
-        summary = runtime.run()
-        report["status"] = "completed"
-        report["summary"] = summary
-        report["venue_after"] = venue_snapshot(runtime.exchange)
-        report["timing"] = {
-            "declared_interval_ns": manifest.tick_interval_ns,
-            "ticks": runtime.ticks_consumed,
-            "events": summary.get("stats", {}).get("events"),
-            "measured_interval_ns": (
-                clock_source.base.measured_interval_ns()
-                if clock_source is not None
-                and hasattr(clock_source.base, "measured_interval_ns") else None
-            ),
-        }
-        items = runtime.ledger._recovery_items()
-        report["behavioral_screen"] = _behavioral_screen(
-            manifest,
-            runtime,
-            summary,
-            items,
-            admission,
-            planned_ticks=planned_ticks,
-            minimum_ticks=minimum_ticks,
-        )
-        if output_dir is not None:
-            selected = [item for item in items if item.get("kind") != "snapshot"]
-            (output_dir / "events.json").write_text(
-                json.dumps(selected, indent=2, default=str) + "\n"
+            summary = runtime.run()
+            report["status"] = "completed"
+            report["summary"] = summary
+            report["venue_after"] = venue_snapshot(runtime.exchange)
+            report["timing"] = {
+                "declared_interval_ns": manifest.tick_interval_ns,
+                "ticks": runtime.ticks_consumed,
+                "events": summary.get("stats", {}).get("events"),
+                "measured_interval_ns": (
+                    clock_source.base.measured_interval_ns()
+                    if clock_source is not None
+                    and hasattr(clock_source.base, "measured_interval_ns") else None
+                ),
+            }
+            items = runtime.ledger._recovery_items()
+            report["behavioral_screen"] = _behavioral_screen(
+                manifest,
+                runtime,
+                summary,
+                items,
+                admission,
+                planned_ticks=planned_ticks,
+                minimum_ticks=minimum_ticks,
             )
-    except Exception as exc:
-        report["status"] = "failed"
-        report["error"] = _safe_exception(exc)
+            if output_dir is not None:
+                selected = [item for item in items if item.get("kind") != "snapshot"]
+                (output_dir / "events.json").write_text(
+                    json.dumps(selected, indent=2, default=str) + "\n"
+                )
+        except (RunStopped, KeyboardInterrupt) as stop:
+            # An operator's stop is an orderly end: the world is not resumed, and what it
+            # left outstanding is reported below like any other end.
+            report["status"] = "stopped"
+            report["stopped_by"] = str(stop) if isinstance(stop, RunStopped) else "SIGINT"
+        except Exception as exc:
+            report["status"] = "failed"
+            report["error"] = _safe_exception(exc)
+    except (RunStopped, KeyboardInterrupt) as late:
+        # A stop that landed inside one of the handlers above, before it could finish.
+        report["status"] = "stopped"
+        report["stopped_by"] = str(late) if isinstance(late, RunStopped) else "SIGINT"
     finally:
+        try:
+            stops.hold()  # from here no handled signal interrupts the report
+        except RunStopped as late:  # one that landed as the finally began
+            stops.hold()
+            report["status"], report["stopped_by"] = "stopped", str(late)
+        if stops.received:
+            report["signals_received"] = list(stops.received)
         if observer is not None:
             observer.detach()
+        if capital_loop and runtime is not None:
+            _report_outstanding(report, runtime, output_dir)
         report["cost"] = admission.report()
-        if report_path is not None:
-            report_path.write_text(json.dumps(report, indent=2, default=str) + "\n")
+        try:
+            if report_path is not None:
+                report_path.write_text(json.dumps(report, indent=2, default=str) + "\n")
+        except Exception as exc:  # noqa: BLE001 - the warning and exit code must survive it
+            # Not raised: the caller still gets the report, and ``exit_code`` still
+            # answers 3 for an outstanding top-up (1 otherwise).
+            report["report_write_failed"] = type(exc).__name__
+        # Written first, then printed; and printed even when the write failed.
+        _announce_outstanding(report)
+        if lock is not None:
+            lock.close()
+        stops.release()  # a signal that arrived meanwhile is only recorded now
     return report
+
+
+def _report_outstanding(report: dict, runtime: Any, output_dir: Path | None) -> None:
+    """Guarantees a run that ends with an unbooked conversion says so, and never raises.
+
+    A top-up still submitted at the end (its authorization may settle after the world
+    is dead, or settled with its credit unbooked), a shadow send still pending, or a
+    diary that cannot be read is written to ``report["capital_loop_outstanding"]`` with
+    the next step, ``scripts/capital_loop_outstanding.py`` on this run's directory, for
+    ``_announce_outstanding`` to print once the report is on disk. Nothing is signed or
+    retried.
+    """
+    from factorylab.runtime.capital_loop import (
+        OUTSTANDING_SCRIPT,
+        journaled_references,
+        submitted_top_ups,
+    )
+
+    try:
+        items = runtime.ledger._recovery_items()
+        top_ups, shadows, unreadable = submitted_top_ups(items), journaled_references(
+            items)[1], None
+    except Exception as exc:  # noqa: BLE001 - an unread diary is reported, never guessed
+        top_ups, shadows, unreadable = None, None, type(exc).__name__
+    section = report.setdefault("capital_loop", {})
+    if not top_ups and not shadows and unreadable is None:
+        section["outstanding_at_end"] = {"top_ups_submitted": [], "shadow_sends_pending": []}
+        return
+    import shlex
+
+    # Quoted for a shell, and given as an argument list too: a run directory with a
+    # space or a ";" must neither split nor run as syntax while a top-up may be live.
+    argv = ["uv", "run", "python", OUTSTANDING_SCRIPT, str(output_dir)]
+    command = shlex.join(argv)
+    outstanding = {
+        "warning": ("the run ended with a Venice conversion unbooked: a top-up "
+                    "authorization may still settle on Base mainnet after the world died"
+                    if top_ups or unreadable else
+                    "the run ended with a shadow send unconfirmed (testnet money)"),
+        "top_ups_submitted": top_ups, "shadow_sends_pending": shadows,
+        "diary_unreadable": unreadable, "next_step": command, "next_step_argv": argv,
+        "runbook": "docs/architecture/capital-loop-rehearsal.md, After the run",
+    }
+    section["outstanding_at_end"] = report["capital_loop_outstanding"] = outstanding
+
+
+def _announce_outstanding(report: dict) -> None:
+    """Print a run's outstanding conversion on stdout and stderr, if it left one."""
+    import sys
+
+    outstanding = report.get("capital_loop_outstanding")
+    if outstanding is None:
+        return
+    # stderr first, and each print alone: a closed stdout must not silence stderr.
+    for line, stream in (
+            (f"CAPITAL LOOP OUTSTANDING: {outstanding['warning']}. Before touching the "
+             f"reserve or relaunching, run: {outstanding['next_step']}", sys.stderr),
+            (json.dumps({"capital_loop_outstanding": outstanding}, default=str), sys.stdout)):
+        try:
+            print(line, file=stream, flush=True)
+        except (OSError, ValueError):
+            pass
+
+
+def _announce_recovery(report: dict) -> None:
+    """Print, loudly, a launch refused because real money may have moved unbooked."""
+    import shlex
+    import sys
+
+    from factorylab.runtime.capital_loop import OUTSTANDING_SCRIPT, RECOVERY_REASONS
+
+    refusal = report.get("refusal") or {}
+    if refusal.get("reason") not in RECOVERY_REASONS:
+        return
+    if refusal["reason"] == "unrecorded_reserve_authorization":
+        message = (f"CAPITAL LOOP RECOVERY: finalized Base shows the reserve's "
+                   f"authorization(s) {refusal.get('nonces')} used within the last "
+                   "settlement window, and the write-ahead record does not know them (a "
+                   "restored or copied lock directory, or a signer outside this code). "
+                   "Settle the books by hand (docs/architecture/capital-loop-rehearsal.md, "
+                   "After a crash); launches refuse until they fall outside the window.")
+    else:
+        nonces = [row.get("nonce") for row in refusal.get("authorizations") or ()]
+        steps = [shlex.join(["uv", "run", "python", OUTSTANDING_SCRIPT, "--acknowledge", n])
+                 for n in nonces]
+        message = (f"CAPITAL LOOP RECOVERY: finalized Base shows {len(nonces)} recorded "
+                   f"authorization(s) used that no diary booked as financing: {nonces}. "
+                   "Settle the books by hand (docs/architecture/capital-loop-rehearsal.md, "
+                   f"After a crash), then acknowledge each: {'; '.join(steps)}")
+    try:
+        print(message, file=sys.stderr, flush=True)
+    except (OSError, ValueError):
+        pass
+
+
+def exit_code(report: dict) -> int:
+    """0 for a completed run with nothing outstanding and its report on disk; 3 when a
+    conversion is left unbooked (a top-up with no financing booked, or a diary unread at
+    the end) or a launch was refused because a recorded authorization settled unbooked,
+    whatever else happened, report write included, since that is the operator's next
+    step; otherwise 1."""
+    from factorylab.runtime.capital_loop import RECOVERY_REASONS
+
+    outstanding = report.get("capital_loop_outstanding") or {}
+    if outstanding.get("top_ups_submitted") or outstanding.get("diary_unreadable"):
+        return 3
+    if (report.get("refusal") or {}).get("reason") in RECOVERY_REASONS:
+        return 3  # a recorded authorization settled with no booking: a recovery
+    if report.get("report_write_failed"):
+        return 1
+    return 0 if report.get("status") == "completed" else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1027,8 +1400,18 @@ def main(argv: list[str] | None = None) -> int:
                         help="with --capital-loop: an earlier run directory whose top-up "
                         "authorizations must all be settled or expired before launch "
                         "(sibling run directories of --out are always checked)")
+    for flag, chain in (("--rpc-base", "Base mainnet"), ("--rpc-hyperevm", "HyperEVM"),
+                        ("--rpc-base-sepolia", "Base Sepolia"),
+                        ("--rpc-hyperevm-testnet", "HyperEVM testnet")):
+        parser.add_argument(flag, default=None,
+                            help=f"with --capital-loop: the {chain} JSON-RPC URL its launch "
+                            "checks read")
     args = parser.parse_args(argv)
     from factorylab.runtime.worlds import duration_ns
+
+    rpcs = {chain_id: url for chain_id, url in (
+        (8453, args.rpc_base), (999, args.rpc_hyperevm), (84532, args.rpc_base_sepolia),
+        (998, args.rpc_hyperevm_testnet)) if url}
 
     report = run_rehearsal(args.world, out=args.out, duration_ns=duration_ns(args.duration),
                            target_ticks=args.ticks,
@@ -1038,11 +1421,17 @@ def main(argv: list[str] | None = None) -> int:
                            reasoning=args.reasoning,
                            minimum_ticks=args.minimum_ticks,
                            capital_loop=args.capital_loop,
-                           previous_runs=tuple(args.previous_run))
-    print(json.dumps({"status": report["status"], "out": str(args.out),
-                      "cost": report["cost"],
-                      "behavioral_screen": report.get("behavioral_screen")}, indent=2))
-    return 0 if report["status"] == "completed" else 1
+                           previous_runs=tuple(args.previous_run),
+                           **({"capital_loop_rpcs": rpcs} if rpcs else {}))
+    summary = {"status": report["status"], "out": str(args.out), "cost": report["cost"],
+               "behavioral_screen": report.get("behavioral_screen")}
+    if "capital_loop_outstanding" in report:
+        summary["capital_loop_outstanding"] = report["capital_loop_outstanding"]
+    try:
+        print(json.dumps(summary, indent=2, default=str))
+    except (OSError, ValueError):
+        pass  # the terminal is gone; the report is on disk and the exit code stands
+    return exit_code(report)
 
 
 if __name__ == "__main__":
