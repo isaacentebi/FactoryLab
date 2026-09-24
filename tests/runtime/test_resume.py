@@ -23,7 +23,7 @@ from factorylab.runtime.worlds import load_manifest
 from factorylab.world.clock import ClockSource
 from factorylab.world.events import WorldEvent, WorldEventKind
 from factorylab.world.exchange import FakeExchange, Order
-from factorylab.world.scripted import ScriptedProvider
+from factorylab.world.scripted import ScriptedProvider, _inputs_from_prompt, names_declined_trade
 
 pytestmark = pytest.mark.slow
 
@@ -626,7 +626,11 @@ class CompositionProvider(ScriptedProvider):
                 'outcome_schema': {'type': 'object', 'properties': {'answer': {'type': 'integer'}},
                                    'required': ['answer']}}]}))
         if 'REQUEST\nchild task' in text:
-            return replace(response, text='{"answer":42}')
+            # A child's final answer that executes nothing names the trade it declined,
+            # on a coin its prompt shows listed, as every scripted producing answer does.
+            answer = names_declined_trade({'answer': 42}, text, _inputs_from_prompt(text),
+                                          self._producer_calls)
+            return replace(response, text=json.dumps(answer))
         return response
 
 
@@ -653,7 +657,10 @@ def test_child_dispatch_after_durable_intent_replays_without_duplicate_decisions
     assert restored.queue.get(child['handle']).parent_handle == child['resource_liability']
     calls = [i for i in restored.ledger._recovery_items()
              if i['kind'] == 'invocation' and i['handle'] == child['handle']]
-    assert len(calls) == 1 and json.loads(calls[0]['outputs']) == {'answer': 42}
+    assert len(calls) == 1
+    outputs = json.loads(calls[0]['outputs'])
+    assert outputs['answer'] == 42 and set(outputs) == {'answer', 'counterfactual'}
+    assert outputs['counterfactual']['coin'] in m.exchange.coins
     assert restored.run()['ledger_verify']
 
 
