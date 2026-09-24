@@ -608,6 +608,8 @@ class JournalProxy:
 # Explicit schemas keep SDK clients, keys, bound callbacks and dependencies out of snapshots.
 _RUNTIME_FIELDS = (
     "rng", "cascade", "stats", "charter", "pending_exposure",
+    # Exposure refusals awaiting settlement; defaults empty for an older checkpoint.
+    "declined_exposures",
     "delivered_seen", "snapshot_keys", "noop_credits", "recent_mids", "realized_to_date",
     "fees_to_date",
     "funding_to_date", "spot_inventory", "handle_to_assembly", "tool_specs",
@@ -774,6 +776,12 @@ _DERIVED_STATE = {
                             "start; the event's own termination check acts on it",
     "FakeTreasury.forward_wait_ticks": "the runtime restates it before every treasury tick "
                                        "from the manifest floor and the measured capital loop",
+    "Runtime._tick_reads": "the tick's venue answers, dropped at every checkpoint, so a "
+                           "replay starts with none as the recording did",
+    "Runtime._venue_drains": "the simulated venue's local drains, counted only to key the "
+                             "tick's answers, which every checkpoint drops",
+    "ArtifactStore.checkpointed": "the hashes the latest durable checkpoint's index held, set "
+                                  "identically by a live run and a resume (seal_released)",
 }
 # Transient: belongs to this process or this file, not to the world.
 _TRANSIENT_STATE = {
@@ -785,6 +793,8 @@ _TRANSIENT_STATE = {
     "NormInbox.ledger_path": "where this process finds the norm house's files beside the "
                              "ledger; what they said is journaled at the boundary that read it",
     "JournalProxy.call_metrics": "this process's wall-clock timing of its own adapter calls",
+    "JournalProxy.dispatched": "this process's count of calls that reached the adapter, "
+                               "compared only before and after one call",
 }
 # Unordered: mappings a checkpoint saves in sorted order because nothing reads
 # their order (lookups and order-free reductions only).

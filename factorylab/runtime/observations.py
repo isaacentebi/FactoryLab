@@ -94,6 +94,33 @@ def _concentration(counts: Mapping[str, int] | None) -> float | None:
     return max(counts.values()) / total if total else None
 
 
+def _prompt_mean(w: MeasureWindow, key: str) -> float | None:
+    """A prompt byte count per measured prompt; a window with none measured has no mean.
+
+    The denominator is ``prompts``, the invocations whose opening prompt was rendered
+    and measured, not ``invocations``: a request that could not be rendered is an
+    invocation (it failed) but no prompt, and averaging it in as zero bytes would be
+    a byte count nobody sent. A record closed before prompts were measured carries
+    neither ``prompts`` nor prompt bytes: it measured zero prompts, so it adds
+    nothing to either side of the mean, and a selection of such records alone is
+    unmeasured, never a mean of zero.
+    """
+    return _ratio(getattr(w, key, 0) or 0, getattr(w, "prompts", 0) or 0)
+
+
+def _read_mean(w: MeasureWindow) -> float | None:
+    """Reading bytes per invocation whose readings are measured; none measured, no mean.
+
+    The denominator is ``read_measured``. A record closed before readings were
+    measured carries neither it nor reading bytes: its invocations' readings were
+    never metered, so it adds nothing to either side of the mean, and a selection
+    of such records alone is unmeasured, never a mean of zero. A current invocation
+    no one read is a measured zero and counts.
+    """
+    return _ratio(getattr(w, "downstream_read_bytes", 0) or 0,
+                  getattr(w, "read_measured", 0) or 0)
+
+
 def _cost_per_return(w: MeasureWindow) -> float | None:
     """Mean metered cost of the window's well-formed producer returns, or None without one.
 
@@ -390,6 +417,49 @@ CATALOGUE: tuple[Observation, ...] = (
         lambda w: float(getattr(w, "compute_spend_micro", 0)),
         (0.0, 1_000_000.0),
         per_window=True,
+    ),
+    # Essay II.IV.a: the metrics layer is ceded, and the factory proposes metrics only
+    # on quantities the world publishes. Context size is one: these publish the byte
+    # counts every invocation's ledger row already carries (``sections``), with no
+    # target, threshold or advice attached. Bytes, not provider tokens: the kernel
+    # renders the bytes for every seat alike, while tokenizers differ by family and the
+    # reported usage covers only an invocation's last provider call.
+    Observation(
+        "prompt_bytes",
+        "Mean UTF-8 bytes of the opening prompt rendered for each invocation, every "
+        "section included (the total its ledger row records), over the invocations whose "
+        "prompt was rendered; tool-round continuations are not counted.",
+        "bytes per invocation",
+        lambda w: _prompt_mean(w, "prompt_bytes"),
+        (0.0, 100_000.0),
+    ),
+    Observation(
+        "you_bytes",
+        "Mean UTF-8 bytes of the YOU section of the opening prompt rendered for each "
+        "invocation, as its ledger row records them, over the invocations whose prompt was "
+        "rendered.",
+        "bytes per invocation",
+        lambda w: _prompt_mean(w, "you_bytes"),
+        (0.0, 100_000.0),
+    ),
+    Observation(
+        "inputs_bytes",
+        "Mean UTF-8 bytes of the INPUTS section of the opening prompt rendered for each "
+        "invocation, as its ledger row records them, over the invocations whose prompt was "
+        "rendered.",
+        "bytes per invocation",
+        lambda w: _prompt_mean(w, "inputs_bytes"),
+        (0.0, 100_000.0),
+    ),
+    Observation(
+        "downstream_read_bytes",
+        "INPUTS bytes rendered to the invocations commissioned on a published return "
+        "(judges, adversarial judges, metas, any contract routed on it), summed over the "
+        "window and divided by the window's invocations whose readings are measured; per "
+        "role or assembly, filed under the return's author.",
+        "bytes per return",
+        lambda w: _read_mean(w),
+        (0.0, 1_000_000.0),
     ),
 )
 

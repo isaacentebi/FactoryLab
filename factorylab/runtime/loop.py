@@ -72,6 +72,7 @@ from factorylab.runtime.shared import (
     NOOP,
     _to_plain,
     assembly_rewards,
+    declined_reason,
 )
 from factorylab.runtime.subscriptions import SubscriptionBook, ThinkingMixin
 from factorylab.runtime.summary import SummaryMixin, _as_unit
@@ -162,7 +163,34 @@ class Runtime(
                                        or self.assemblies[action_id].spec.emits),
                                    window=self.window.index, ret=ret)
         self.card_samples.returns[-1]["tool_calls"] = self.window.tool_calls - tool_calls
+        self._record_reading(req.handle, ret)
         return ret
+
+    def _record_reading(self, handle: str, ret) -> None:
+        """File a reader's INPUTS bytes under the author of the return it was commissioned on.
+
+        Essay II.IV.a (the metrics layer is ceded) and II.I.b (minimal disclosure):
+        a decision routed on a published return reads that return in its INPUTS, so
+        those bytes are a fact about the return as much as about the reader. The
+        kernel files them under the author's scope in the window the reading was
+        metered; the reader's request is not touched, so nothing about the author
+        reaches it. A decision with no subject, a subject no assembly authored, an
+        invocation for which the runtime rendered no prompt, or one
+        whose request never reached its executor (refused over its ceiling, its
+        reservation refused, the world terminal: ``Return.delivered`` is False),
+        records nothing: no reader read those bytes.
+        """
+        sections = getattr(ret, "prompt_sections", None)
+        subject = self.decision_subjects.get(handle)
+        author = self.handle_to_assembly.get(subject) if subject is not None else None
+        if (not sections or not getattr(ret, "delivered", False) or author is None
+                or subject == handle):
+            return
+        read = int(sections.get("inputs", 0))
+        self.window.downstream_read_bytes += read
+        self.card_samples.read(handle=subject, assembly=author,
+                               role=self._decision_role(subject),
+                               window=self.window.index, read_bytes=read)
 
     def _settle_due_forecasts(self) -> None:
         """A6 sampling and A2 cadence openings both wrap the one settlement implementation."""
@@ -1100,9 +1128,7 @@ class Runtime(
                 return
             if emitted is None:
                 self.consequences.finish(handle, ret.cost)
-                self.queue.settle(handle, channel=self.queue.get(handle).channel, score=0.0,
-                                  status=SettleStatus.CENSORED,
-                                  definition_version="unselected-return-v1", sampling_ref=None)
+                self._settle_unselected(handle, ret)
                 return
             if self._may_write(handle):
                 # Only a producer kind's answer is an order (primitive audit F7).
@@ -1132,9 +1158,14 @@ class Runtime(
         self.window.revision_handles.discard(handle)
         if self.queue.get(handle).channel == CH_EXPOSURE:
             self.pending_exposure[handle] = self.ticks_consumed
+            if (reason := declined_reason(ret)) is not None:
+                self.declined_exposures[handle] = reason
         else:
+            # A refusal is still published and may be judged like any return (II.III.b);
+            # only if no judge grades it does it settle as the abstention it is.
             self.pending[handle] = PendingJudgement(handle, CH_VERDICT, self.n,
-                                                    opened_at_tick=self.ticks_consumed)
+                                                    opened_at_tick=self.ticks_consumed,
+                                                    declined=declined_reason(ret))
         self.stats.producer_returns += 1
         emitted = self.return_kinds.get(handle, "ProducerReturn" if sample.chosen == NOOP
                                         else self.assemblies[sample.chosen].spec.emits[0])
@@ -1167,6 +1198,10 @@ class Runtime(
             handle, sample.chosen, self._event_subject(ev) or handle,
             ret.outputs.get("forecasts") if ret.status == "ok" else None)
         self.forecast_returns[handle] = {"handles": forecasts, "results": {}}
+        if (reason := declined_reason(ret)) is not None:
+            # A refusal makes no prediction, so nothing will ever score it: it settles
+            # declined now, priced as an abstention, never censored at a free neutral.
+            self._settle_declined(handle, reason)
         self._settle_forecast_returns()
         self._emit(emitted, {"about_handle": handle, "outputs": public_return(ret.outputs),
                              "cost": ret.cost, "status": ret.status,
@@ -1282,13 +1317,12 @@ class Runtime(
         self.consequences.finish(handle, ret.cost)
         self._apply_registrations(handle, ret)
         self.handle_to_assembly[handle] = sample.chosen
-        answered = str(ret.outputs.get("status", "")).strip().lower()
-        reason = str(ret.outputs.get("reason", ""))[:500]
-        if ret.status == "ok" and answered == "cannot":
-            # A commission may be declined. The seat is charged the call it made
-            # and nothing else: no score, no penalty, no quota (§6.B).
-            self._settle_declined(handle, CH_CONFORMITY,
-                                  reason or "the seat declined this commission")
+        reason = declined_reason(ret)
+        if reason is not None:
+            # A commission may be declined (§6.B). The seat is charged the call it
+            # made; no score, no quota; its learners credit the decline as an
+            # abstention, less its role's price (ruling R9), as the schematic says.
+            self._settle_declined(handle, reason)
             return
         verdict = _as_unit(ret.outputs.get("verdict")) if ret.status == "ok" else None
         if verdict is None:
@@ -1439,13 +1473,11 @@ class Runtime(
         self.consequences.finish(handle, ret.cost)
         self.handle_to_assembly[handle] = sample.chosen
         self._apply_registrations(handle, ret)
-        answered = str(ret.outputs.get("status", "")).strip().lower()
-        if ret.status == "ok" and answered == "cannot":
+        reason = declined_reason(ret)
+        if reason is not None:
             # Meta work is a commission like any other: it may be declined, at the
-            # cost of the call.
-            self._settle_declined(
-                handle, channel, str(ret.outputs.get("reason", ""))[:500] or
-                "the seat declined this commission")
+            # cost of the call, and is priced as an abstention (ruling R9).
+            self._settle_declined(handle, reason)
             return
         conformity = _as_unit(ret.outputs.get("conformity")) if ret.status == "ok" else None
         if conformity is None:
@@ -1548,10 +1580,9 @@ class Runtime(
         self.consequences.finish(handle, ret.cost)
         self.handle_to_assembly[handle] = sample.chosen
         self._apply_registrations(handle, ret)
-        answered = str(ret.outputs.get("status", "")).strip().lower()
-        if ret.status == "ok" and answered == "cannot":
-            self._settle_declined(handle, channel, str(ret.outputs.get("reason", ""))[:500]
-                                  or "the seat declined this commission")
+        reason = declined_reason(ret)
+        if reason is not None:
+            self._settle_declined(handle, reason)
             return
         q = _as_unit(ret.outputs.get("verdict")) if ret.status == "ok" else None
         if q is None:
