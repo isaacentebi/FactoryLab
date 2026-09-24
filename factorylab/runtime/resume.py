@@ -495,7 +495,7 @@ def _read_only(name: str) -> bool:
             "search_markets", "market", "market_of_token", "midpoint"):
         return True  # the public Polymarket reads (world/polymarket.py)
     if name.startswith("hosting.") and name.rsplit(".", 1)[-1] in (
-            "billing", "droplet", "sizes"):
+            "billing", "droplet", "catalogue"):
         return True  # DigitalOcean's billing and droplet reads (world/digitalocean.py)
     return name.rsplit(".", 1)[-1] in (
         # The safety path's wall-clock and delivered-tick reads (time audit T8).

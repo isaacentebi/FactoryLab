@@ -1,13 +1,17 @@
-"""The host in a running world: its own pot, verified at start, and two structured reads.
+"""The host in a running world: its own pot, booked from its invoices, and two reads.
 
-A world that enables ``[hosting]`` runs on a DigitalOcean droplet whose prepaid
-credit is its own pot (``Treasury.observe_hosting``, read once a reserve window;
-world/hosting.py books what DigitalOcean reports it took, on that pot alone). The
-population sees two free reads: the droplet, and DigitalOcean's size list with its
-prices. Both publish structured facts only (slugs, counts, prices, times), never
-DigitalOcean-authored prose, so no outside text reaches a wake that can write.
-There is no write: a resize powers the droplet off, nothing here could power it
-back on, and the factory runs on it.
+A world that enables ``[hosting]`` runs on a DigitalOcean droplet. What the droplet
+costs is booked from DigitalOcean's own invoice lines for it, once a reserve
+window (``Treasury.observe_hosting``; world/hosting.py). The population sees two
+free reads, the droplet and DigitalOcean's size list with its prices, capped per
+seat per reserve window. Both publish structured facts only (slugs, counts,
+prices, times), never DigitalOcean-authored prose, so no outside text reaches a
+wake that can write. There is no write: a resize powers the droplet off, nothing
+here could power it back on, and the factory runs on it.
+
+Every DigitalOcean read runs under one monotonic deadline of at most one tick,
+name lookup included (AGENTS.md rule 12): a slow DigitalOcean leaves the pot
+unknown until the next window, and never stalls the world longer than a tick.
 """
 
 from __future__ import annotations
@@ -15,27 +19,40 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from factorylab.world.hosting import HostingAccount, verify
+from factorylab.world.hosting import SEAT_READS_PER_WINDOW, HostingAccount, verify
 
 KIND = "hosting"
 READS = ("hosting.droplet", "hosting.sizes")
-#: A world's own DigitalOcean reads: one attempt, a short wait. A slow answer costs a
-#: bounded pause, never a retry loop (AGENTS.md rule 12).
-READ_TIMEOUT_S = 5
 READ_FAILED = "hosting read unavailable"
+READ_LIMITED = f"hosting reads are limited to {SEAT_READS_PER_WINDOW} a seat a reserve window"
+
+
+def budget_s(rt: Any) -> float:
+    """One tick, in seconds, as the clock now declares it: the most any DigitalOcean
+    read may take (rule 12). A clock amendment that shortens the tick shortens it."""
+    interval = getattr(rt.tick_clock, "interval_ns", None) or rt.m.tick_interval_ns
+    return interval / 1_000_000_000
+
+
+def observe(rt: Any) -> None:
+    """Book this reserve window's billing reading, within one tick."""
+    rt.hosting.budget_s = budget_s(rt)
+    rt.treasury.observe_hosting()
 
 
 def tool_specs() -> dict[str, dict[str, Any]]:
     """The two reads a ``[hosting]`` world publishes, with examples their schemas accept."""
+    limit = (f" At most {SEAT_READS_PER_WINDOW} hosting reads a seat a reserve window. "
+             "Free.")
     tools = {
         "hosting.droplet": (
             "This world's DigitalOcean droplet: its size slug, vCPUs, memory, disk, "
-            "status, region and monthly and hourly price, and the hosting pot: "
-            "DigitalOcean's credit remaining and month-to-date usage with their "
-            "generated_at, and what the books took from them. Free."),
+            "status, region and monthly and hourly price; and the hosting pot: this "
+            "droplet's booked burn by month, from DigitalOcean's invoice lines for it."
+            + limit),
         "hosting.sizes": (
             "DigitalOcean's published droplet sizes available in this droplet's region: "
-            "slug, vCPUs, memory, disk, monthly and hourly price. Free."),
+            "slug, vCPUs, memory, disk, monthly and hourly price." + limit),
     }
     return {
         tool_id: {
@@ -48,16 +65,17 @@ def tool_specs() -> dict[str, dict[str, Any]]:
     }
 
 
-def install(rt: Any, client: Any | None = None) -> None:
-    """Verify the host and open its pot; a world without ``[hosting]`` is untouched.
+def install(rt: Any, client: Any | None = None, *, resuming: bool = False) -> None:
+    """Open the hosting pot and publish its reads; a world without ``[hosting]`` is untouched.
 
-    Guarantees an enabled world starts only on a verified, dedicated droplet
+    Guarantees a launch starts only on a verified droplet of the token's account
     (``world.hosting.verify``: raises ``HostingRefused`` with a named reason
-    otherwise). ``client`` is the DigitalOcean adapter at its HTTP boundary;
-    without one the live adapter is built from ``DIGITALOCEAN_TOKEN``. The
-    verification reads are a precondition, like a credential check, and are not
-    journaled; every later read is, under ``hosting.<name>``, so a replay answers
-    from the record and never asks DigitalOcean twice.
+    otherwise), and binds that account. A resume never asks DigitalOcean anything
+    to start: the binding comes from the checkpoint, and the next billing reading
+    checks it live and refuses to book on a mismatch. ``client`` is the
+    DigitalOcean adapter at its HTTP boundary; without one the live adapter is
+    built from ``DIGITALOCEAN_TOKEN``. Every read after start is journaled under
+    ``hosting.<name>``, so a replay answers from the record.
     """
     spec = rt.m.hosting
     if not spec.enabled:
@@ -70,10 +88,10 @@ def install(rt: Any, client: Any | None = None) -> None:
             from factorylab.runtime.reasons import CredentialMissing
 
             raise CredentialMissing(f"[hosting] needs {TOKEN_ENV}")
-        client = DigitalOceanClient(timeout_s=READ_TIMEOUT_S, attempts=1)
-    identity = verify(client, spec.droplet_id)
+        client = DigitalOceanClient()
+    bound = None if resuming else verify(client, spec.droplet_id, budget_s(rt))
     account = HostingAccount(JournalProxy(client, rt.ledger, "hosting"),
-                             droplet_id=spec.droplet_id, identity=identity)
+                             droplet_id=spec.droplet_id, bound=bound, budget_s=budget_s(rt))
     rt.treasury.hosting = account
     rt.hosting = account
     rt.tool_specs.update(tool_specs())
@@ -85,9 +103,16 @@ def execute(rt: Any, action_id: str, handle: str, tool_id: str, args: dict,
     if args:
         return {"error": "hosting reads take no arguments"}
     account: HostingAccount = rt.hosting
+    if not account.admit_read(action_id, rt.window.index):
+        return {"error": READ_LIMITED}
+    account.budget_s = budget_s(rt)
     try:
-        droplet = account.client.droplet(account.droplet_id)
-        sizes = account.client.sizes() if tool_id == "hosting.sizes" else None
+        # One journaled call, with its budget in seconds, under one deadline.
+        if tool_id == "hosting.sizes":
+            found = account.client.catalogue(account.droplet_id, account.budget_s)
+            droplet, sizes = found["droplet"], found["sizes"]
+        else:
+            droplet = account.client.droplet(account.droplet_id, account.budget_s)
     except Exception:  # noqa: BLE001 - a read failure is a fact, not a crash
         return {"error": READ_FAILED}
     rt.ledger.append({"kind": "hosting.read", "handle": handle, "assembly_id": action_id,

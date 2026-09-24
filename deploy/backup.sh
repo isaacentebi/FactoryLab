@@ -72,8 +72,13 @@ if archive.is_dir():
         (stage / 'runs/funded.artifacts' / name).chmod(0o600)
         count += 1
         size += len(data)
-for relative in ('runs/funded.jsonl.key', 'openrouter.key', 'hyperliquid.key', 'reserve.key'):
+# digitalocean.key exists only on a world with [hosting]; the others always do.
+optional = ('digitalocean.key',)
+for relative in ('runs/funded.jsonl.key', 'openrouter.key', 'hyperliquid.key', 'reserve.key',
+                 *optional):
     source = root / relative
+    if relative in optional and not (source.exists() or source.is_symlink()):
+        continue
     mode = source.lstat().st_mode
     if not stat.S_ISREG(mode) or stat.S_IMODE(mode) != 0o600:
         raise RuntimeError('key must be a regular 0600 file')
@@ -102,6 +107,7 @@ PY
 # No unencrypted tar is ever created. The stage is root-only in systemd's PrivateTmp.
 members=(runs repo openrouter.key hyperliquid.key reserve.key)
 [[ -d "$stage/witness" ]] && members+=(witness)
+[[ -f "$stage/digitalocean.key" ]] && members+=(digitalocean.key)
 tar -C "$stage" -cf - "${members[@]}" |
     age --encrypt --recipient "$AGE_RECIPIENT" --output "$stage/backup.tar.age"
 name="factorylab-$(date -u +%Y%m%dT%H%M%SZ).tar.age"

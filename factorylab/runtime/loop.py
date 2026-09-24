@@ -339,7 +339,9 @@ class Runtime(
             # The host's billing is read once a reserve window, never on the tick
             # path (AGENTS.md rule 12): DigitalOcean updates it hourly at best, and a
             # slow answer costs one short, unretried wait a window.
-            self.treasury.observe_hosting()
+            from factorylab.runtime import hosting
+
+            hosting.observe(self)
         self._observe_delivered_event(ev)
         if ev.kind is EventKind.TICK:
             self._open_pending_epochs()

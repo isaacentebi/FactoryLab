@@ -1,12 +1,12 @@
-"""The hosting pot: its own pot, booked only by what DigitalOcean took, bound to one account.
+"""The hosting pot: this droplet's invoice lines, booked month by month, never twice.
 
-Every test runs against ``tests.digitalocean_fake`` at the HTTP boundary. The fake
-keeps DigitalOcean's books by DigitalOcean's rules (``taken``, ``prepaid``), and the
-billing tests assert the pot's books against those, never against themselves.
+Every test runs against ``tests.digitalocean_fake``, which bills by DigitalOcean's rules
+(hourly accrual per resource, a preview for the month in progress, invoices that post
+when the test says, adjustments, credits and refunds in the billing history). The
+books are checked, month by month, against what the fake shows for this droplet.
 """
 
 from copy import deepcopy
-from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
@@ -26,7 +26,7 @@ def token(monkeypatch):
 
 
 def micro(usd) -> int:
-    return int(Decimal(usd) * 1_000_000)
+    return int(usd * 1_000_000)
 
 
 def world(fake=None, **fake_args):
@@ -43,11 +43,12 @@ def world(fake=None, **fake_args):
     treasury = FakeTreasury(ledger, wallet)
     wallet.bind_pots(treasury.pots)
     fake = fake or FakeDigitalOcean(**fake_args)
-    client = DigitalOceanClient(http=fake, attempts=1, timeout_s=5)
+    client = DigitalOceanClient(http=fake)
     treasury.hosting = HostingAccount(client, droplet_id=fake.droplet_id,
-                                      identity=verify(client, fake.droplet_id))
+                                      bound=verify(client, fake.droplet_id, 10), budget_s=10)
     w = SimpleNamespace(ledger=ledger, wallet=wallet, treasury=treasury, fake=fake,
-                        records=records, hosting=treasury.hosting)
+                        records=records, hosting=treasury.hosting,
+                        droplet=str(fake.droplet_id))
     w.observe = treasury.observe_hosting
     return w
 
@@ -56,24 +57,19 @@ def items(w, kind):
     return [r for r in w.records if r["kind"] == kind]
 
 
-def invoice_credits(w):
-    return sum(r["micro"] for r in items(w, "treasury.hosting_credited")
-               if r["cause"] == "invoice")
-
-
-def outside_credits(w):
-    return sum(r["micro"] for r in items(w, "treasury.hosting_credited")
-               if r["cause"] == "outside")
-
-
-def assert_books_are_digitaloceans(w, taken_at_start, prepaid_at_start=Decimal(0)):
-    """What the books took is what DigitalOcean took, and the pot's books are its balance."""
-    booked = sum(r["micro"] for r in items(w, "treasury.hosting_burn"))
-    assert booked == w.hosting.burned_micro
-    assert booked - invoice_credits(w) == micro(w.fake.taken - taken_at_start)
-    assert outside_credits(w) == micro(w.fake.prepaid - prepaid_at_start)
-    view = w.hosting.view()
-    assert view["books_micro"] == view["credit_micro"] and view["discrepancy_micro"] == 0
+def assert_every_month_is_digitaloceans(w):
+    """Each booked month is DigitalOcean's figure for this droplet, less the launch baseline;
+    and the ledger's burn items sum, month by month, to the same."""
+    booked = w.hosting.burn_by_month()
+    assert booked, "nothing booked"
+    for month, amount in booked.items():
+        truth = micro(w.fake.billed(w.droplet, month)) - w.hosting.baseline.get(month, 0)
+        assert amount == truth, (month, amount, truth)
+        ledgered = (sum(r["micro"] for r in items(w, "treasury.hosting_burn")
+                        if r["month"] == month)
+                    - sum(r["micro"] for r in items(w, "treasury.hosting_burn_reversed")
+                          if r["month"] == month))
+        assert ledgered == amount, (month, ledgered, amount)
 
 
 def assert_wallet_untouched(w):
@@ -83,214 +79,266 @@ def assert_wallet_untouched(w):
 
 # --- the pot -------------------------------------------------------------------------------
 
-def test_the_first_reading_is_the_endowment_and_nothing_moves():
-    w = world(credit="200.00")
-    assert w.observe() == {"effect": "endowment", "micro": 200_000_000}
-    endowment = items(w, "treasury.hosting_endowment")[0]
-    assert (endowment["micro"], endowment["counterparty"]) == (200_000_000, "digitalocean")
-    assert endowment["generated_at"] == "2026-09-23T12:00:00Z"
-    assert w.wallet.pots()["hosting"] == 200_000_000
+def test_the_first_reading_is_a_baseline_and_nothing_moves():
+    w = world()
+    result = w.observe()
+    baseline = micro(w.fake.billed(w.droplet, "2026-09"))
+    assert result["baseline"] == {"month": "2026-09", "micro": baseline} and baseline > 0
+    assert items(w, "treasury.hosting_baseline")[0]["micro"] == baseline
+    assert not items(w, "treasury.hosting_burn") and w.hosting.burned_micro() == 0
+    pots = w.wallet.pots()
+    assert pots["hosting"] is None and pots["hosting_detail"]["balance"] == "unknown"
     assert_wallet_untouched(w)
 
 
-def test_a_burn_lowers_the_hosting_pot_and_never_the_wallet():
+def test_a_reading_books_the_droplets_line_increase_and_never_the_wallet():
     w = world()
     w.observe()
-    w.fake.bill("0.37")
-    effect = w.observe()
-    assert effect["burn_micro"] == 370_000
-    burn = items(w, "treasury.hosting_burn")[0]
-    assert burn["counterparty"] == "digitalocean" and burn["micro"] == 370_000
-    assert burn["generated_at"] == "2026-09-23T13:00:00Z"
-    assert burn["previous_generated_at"] == "2026-09-23T12:00:00Z"
-    assert burn["month_to_date_usage_micro"] == [0, 370_000]
-    assert w.wallet.pots()["hosting"] == 199_630_000
+    w.fake.advance(48)
+    w.observe()
+    burn = items(w, "treasury.hosting_burn")
+    assert len(burn) == 1 and burn[0]["counterparty"] == "digitalocean"
+    assert burn[0]["month"] == "2026-09" and burn[0]["source"] == "preview"
+    # 48 hours at the droplet's hourly price, as DigitalOcean rounds its line to cents.
+    assert abs(burn[0]["micro"] - micro(48 * w.fake.resources[w.droplet]["hourly"])) <= 10_000
+    assert_every_month_is_digitaloceans(w)
     assert_wallet_untouched(w)
+
+
+def test_reading_the_same_figures_again_books_nothing():
+    w = world()
+    w.observe()
+    w.fake.advance(10)
+    w.observe()
+    before = len(w.records)
+    for _ in range(3):
+        w.observe()
+    assert len(items(w, "treasury.hosting_burn")) == 1
+    assert [r["kind"] for r in w.records[before:]] == []
+    # The same reading handed over twice books once.
+    reading = DigitalOceanClient(http=w.fake).billing(
+        w.fake.droplet_id, since=w.hosting.since, done=w.hosting.finalized, budget_s=10)
+    assert w.hosting.observe(reading)["changes"] == []
 
 
 def test_the_pot_is_not_in_the_total_the_wallet_is_reconciled_with():
-    w = world(credit="100.00")
+    w = world()
     before = Reconciler.snapshot(w.wallet.balance, None, None, pots_view=w.wallet.pots())
     w.observe()
-    w.fake.bill("2.50")
+    w.fake.advance(100)
     w.observe()
-    pots = w.wallet.pots()
-    assert pots["hosting"] == 97_500_000
-    assert pots["total_micro"] == before["pots_micro"]  # DigitalOcean credit backs nothing
-    after = Reconciler.snapshot(w.wallet.balance, None, None, pots_view=pots)
+    after = Reconciler.snapshot(w.wallet.balance, None, None, pots_view=w.wallet.pots())
+    assert after["pots_micro"] == before["pots_micro"]
     assert after["discrepancy_micro"] == before["discrepancy_micro"]
-    # The pot is reconciled against its own counterparty instead.
-    assert pots["hosting_detail"]["discrepancy_micro"] == 0
 
 
-def test_a_stale_or_failed_reading_books_nothing_and_leaves_the_pot_unknown():
+# --- month by month, against DigitalOcean ------------------------------------------------------
+
+def test_months_close_and_their_invoices_replace_the_preview():
     w = world()
-    w.fake.bill("1.00")
     w.observe()
-    w.fake.generated = w.fake.generated.replace(hour=1)  # older than the last reading
-    w.fake.usage += 5
-    assert w.observe()["effect"] == "stale"
-    w.fake.down = True
+    for _ in range(3):                       # three month ends, each invoice on time
+        w.fake.advance(24 * 12)
+        w.observe()
+        w.fake.advance(24 * 20)
+        if w.fake.closed:
+            w.fake.post_invoice(tax="1.20")
+        w.observe()
+    assert w.hosting.finalized == ["2026-09", "2026-10", "2026-11"]
+    assert_every_month_is_digitaloceans(w)
+    # The invoice's tax is on the account, not on this droplet's line.
+    assert all(inv["amount"] > inv["lines"][w.droplet] for inv in w.fake.invoices)
+
+
+def test_reads_missed_across_month_ends_are_booked_once_the_invoices_post():
+    w = world()
+    w.observe()
+    w.fake.advance(24 * 3)
+    w.observe()                              # September, three days on
+    w.fake.advance(24 * 60)                  # no reading for two month ends
+    w.observe()                              # November's preview; nothing has posted
+    assert w.hosting.finalized == []
+    w.fake.post_invoice()
+    w.fake.post_invoice()
+    w.observe()
+    w.observe()
+    assert w.hosting.finalized == ["2026-09", "2026-10"]
+    assert_every_month_is_digitaloceans(w)
+    october = [r for r in items(w, "treasury.hosting_burn") if r["month"] == "2026-10"]
+    assert [r["source"] for r in october] == ["invoice"]   # never seen in preview
+
+
+def test_late_adjustments_up_and_down_are_followed_to_digitaloceans_figure():
+    w = world()
+    w.observe()
+    w.fake.advance(24)
+    w.fake.adjust(w.droplet, "1.25")
+    w.observe()
+    w.fake.adjust(w.droplet, "-0.75")
+    w.observe()
+    assert items(w, "treasury.hosting_burn_reversed")[0]["micro"] == 750_000
+    w.fake.advance(24 * 10)                  # September closes
+    w.fake.adjust(w.droplet, "-2.00", month="2026-09")   # adjusted before it posts
+    w.observe()
+    w.fake.post_invoice()
+    w.observe()
+    assert_every_month_is_digitaloceans(w)
+
+
+def test_a_promo_covered_month_books_the_droplets_line_and_the_credit_as_an_account_fact():
+    w = world()
+    w.observe()
+    w.fake.advance(24 * 10)
+    w.fake.post_invoice(promo="50.00")      # the whole month covered by a promotion
+    w.fake.pay("20.00")
+    w.fake.pay("3.00", kind="Refund")
+    w.observe()
+    assert_every_month_is_digitaloceans(w)
+    entries = {r["entry_type"]: r for r in items(w, "treasury.hosting_account_entry")}
+    assert set(entries) == {"Invoice", "Credit", "Payment", "Refund"}
+    assert all(r["attributed"] is False for r in entries.values())
+    assert entries["Credit"]["micro"] == -50_000_000
+    detail = w.wallet.pots()["hosting_detail"]
+    assert detail["account_entries_micro"]["Credit"] == -50_000_000
+    assert detail["balance_micro"] is None     # no credit is taken to be this droplet's
+    assert_wallet_untouched(w)
+
+
+def test_history_already_on_the_account_at_launch_is_not_this_worlds():
+    fake = FakeDigitalOcean()
+    fake.pay("100.00")
+    w = world(fake)
+    w.observe()
+    assert w.wallet.pots()["hosting_detail"]["account_entries_micro"] == {}
+    fake.pay("7.00")
+    w.observe()
+    assert w.wallet.pots()["hosting_detail"]["account_entries_micro"] == {"Payment": -7_000_000}
+
+
+def test_other_resources_added_and_removed_are_never_booked():
+    w = world()
+    w.observe()
+    w.fake.add("888", "Droplets", "0.07143", "a-bigger-host")
+    w.fake.add("vol-1", "Volumes", "0.01400", "data")
+    w.fake.advance(24 * 3)
+    w.observe()
+    w.fake.remove("888")
+    w.fake.advance(24 * 10)
+    w.fake.post_invoice()
+    w.observe()
+    w.fake.advance(24)
+    w.observe()
+    assert_every_month_is_digitaloceans(w)
+    assert all(r["line"] for r in items(w, "treasury.hosting_burn"))
+    total = sum(micro(w.fake.billed(rid, m)) for rid in ("888", "vol-1")
+                for m in ("2026-09", "2026-10"))
+    assert total > 0 and w.hosting.burned_micro() < total + 1   # none of theirs in it
+
+
+def test_lines_that_name_no_resource_are_flagged_and_never_booked():
+    w = world()
+    w.observe()
+    w.fake.untagged = True
+    w.fake.advance(24)
+    w.observe()
+    w.observe()
+    assert [r["month"] for r in items(w, "treasury.hosting_unmatched")] == ["2026-09"]
+    # The droplet's line could not be told apart: nothing is booked for it, and nothing
+    # already booked is taken back.
+    assert not items(w, "treasury.hosting_burn")
+    assert not items(w, "treasury.hosting_burn_reversed")
+    w.fake.untagged = False
+    w.observe()
+    assert_every_month_is_digitaloceans(w)
+
+
+# --- the account this world is bound to --------------------------------------------------------
+
+@pytest.mark.parametrize(("change", "reason"), [
+    (lambda f: setattr(f, "user_uuid", "00000000-0000-4000-8000-000000000bad"),
+     HostingRefused.ACCOUNT_MISMATCH),
+    (lambda f: f.remove(str(f.droplet_id)), HostingRefused.DROPLET_NOT_HELD),
+    (lambda f: setattr(f, "droplet_id", 42), HostingRefused.DROPLET_MISMATCH),
+])
+def test_a_reading_that_is_not_the_bound_droplets_is_refused_and_books_nothing(change, reason):
+    w = world()
+    w.observe()
+    w.fake.advance(24)
+    change(w.fake)
+    w.fake.advance(24)
     assert w.observe() is None and w.observe() is None
-    assert [r["reason"] for r in items(w, "treasury.hosting_unread")] == ["billing read failed"]
-    assert w.wallet.pots()["hosting"] is None
-    assert w.hosting.burned_micro == 0
-    assert_wallet_untouched(w)
+    assert [r["reason"] for r in items(w, "treasury.hosting_refused")] == [reason]
+    assert not items(w, "treasury.hosting_burn")
 
 
-# --- billing, against what DigitalOcean took --------------------------------------------------
-
-def test_a_rollover_whose_usage_resets_before_the_invoice_lands():
-    w = world(usage="3.00")
-    w.observe()
-    start = w.fake.taken
-    w.fake.bill("7.00")
-    w.observe()
-    w.fake.bill("0.40")      # usage after the last reading of the month
-    w.fake.reset_usage()     # the month closes; the invoice has not landed
-    w.fake.bill("0.25")
-    w.observe()
-    assert w.hosting.burned_micro == micro("7.25")  # the dip in the balance booked nothing
-    w.fake.land_invoice(tax="0.50")
-    w.observe()
-    w.fake.bill("1.00")
-    w.observe()
-    assert_books_are_digitaloceans(w, start)
-    assert_wallet_untouched(w)
-
-
-def test_a_rollover_whose_invoice_lands_before_the_usage_resets():
+def test_back_on_the_bound_account_the_books_catch_up_to_its_figure_once():
     w = world()
     w.observe()
-    start = w.fake.taken
-    w.fake.bill("10.00")
-    w.observe()
-    w.fake.invoice_before_reset()   # the balance double counts until the reset
-    w.observe()
-    assert w.hosting.burned_micro == micro("10")
-    w.fake.reset_after_invoice()
-    w.fake.bill("0.30")
-    w.observe()
-    assert_books_are_digitaloceans(w, start)
-
-
-def test_a_rollover_read_only_across_it_still_books_once():
-    w = world()
-    w.observe()
-    start = w.fake.taken
-    w.fake.bill("4.00")
-    w.observe()
-    w.fake.bill("1.00")
-    w.fake.rollover(tax="0.20")
-    w.fake.bill("0.50")
-    w.observe()   # one reading spans the end of the month, the reset and the invoice
-    assert_books_are_digitaloceans(w, start)
-
-
-def test_a_downward_revision_later_reaccrued_books_only_what_is_above_the_mark():
-    w = world()
-    w.observe()
-    start = w.fake.taken
-    w.fake.bill("5.00")
-    w.observe()
-    w.fake.revise("2.00")
-    w.observe()
-    w.fake.bill("2.00")         # back to the mark: nothing new was taken
-    w.observe()
-    assert w.hosting.burned_micro == micro("5")
-    w.fake.bill("1.50")
-    w.observe()
-    assert w.hosting.burned_micro == micro("6.5")
-    assert_books_are_digitaloceans(w, start)
-
-
-def test_a_revision_never_reaccrued_is_returned_when_the_invoice_lands():
-    w = world()
-    w.observe()
-    start = w.fake.taken
-    w.fake.bill("5.00")
-    w.observe()
-    w.fake.revise("2.00")
-    w.observe()
-    w.fake.rollover()
-    w.observe()
-    assert_books_are_digitaloceans(w, start)
-
-
-def test_credit_applied_at_invoice_is_credit_and_a_prepayment_is_credit_from_outside():
-    w = world()
-    w.observe()
-    start, prepaid = w.fake.taken, w.fake.prepaid
-    w.fake.bill("12.00")
-    w.observe()
-    w.fake.prepay("50.00")
-    w.observe()
-    w.fake.bill("3.00")
-    w.observe()
-    w.fake.reset_usage()
-    w.observe()
-    w.fake.land_invoice(promo="4.00")
-    w.observe()
-    assert invoice_credits(w) == micro("4") and outside_credits(w) == micro("50")
-    # The prepayment reduced no burn: every dollar of usage after it was booked.
-    assert w.hosting.burned_micro == micro("15")
-    assert_books_are_digitaloceans(w, start, prepaid)
-    assert_wallet_untouched(w)
-
-
-# --- the account this world is bound to -------------------------------------------------------
-
-def test_a_reading_from_another_account_is_refused_loudly_and_never_booked():
-    w = world()
-    w.observe()
-    w.fake.bill("1.00")
-    w.fake.user_uuid = "00000000-0000-4000-8000-000000000bad"   # another account's token
-    w.fake.bill("40.00")
-    assert w.observe() is None and w.observe() is None
-    refused = items(w, "treasury.hosting_refused")
-    assert [r["reason"] for r in refused] == [HostingRefused.ACCOUNT_MISMATCH]
-    assert w.hosting.burned_micro == 0 and w.wallet.pots()["hosting"] is None
-    w.fake.user_uuid = w.hosting.bound["billing_uuid"]
-    w.observe()
-    # Back on the bound account, the gap is unattributable: it was not seen to be this
-    # world's while it accrued, so it is counted apart and never as burn.
-    assert w.hosting.burned_micro == 0 and w.hosting.unattributed_micro == micro("41")
-    w.fake.bill("0.30")
-    w.observe()
-    assert w.hosting.burned_micro == micro("0.3")
-    w.fake.droplets = []
+    w.fake.user_uuid, real = "00000000-0000-4000-8000-000000000bad", w.fake.user_uuid
+    w.fake.advance(48)
     assert w.observe() is None
-    assert items(w, "treasury.hosting_refused")[-1]["reason"] == HostingRefused.DROPLET_NOT_HELD
-
-
-def test_a_checkpoint_bound_to_another_account_is_refused_on_restore():
-    w = world()
+    w.fake.user_uuid = real
     w.observe()
-    saved = w.treasury.snapshot()
-    other = world(FakeDigitalOcean(user_uuid="00000000-0000-4000-8000-0000000000aa"))
-    with pytest.raises(HostingRefused) as refused:
-        other.treasury.restore(deepcopy(saved))
-    assert refused.value.reason == HostingRefused.ACCOUNT_MISMATCH
-    twin = world()
-    twin.treasury.restore(deepcopy(saved))
-    assert twin.hosting.state() == w.hosting.state()
+    w.observe()
+    assert len(items(w, "treasury.hosting_burn")) == 1
+    assert_every_month_is_digitaloceans(w)
 
 
 @pytest.mark.parametrize(("change", "reason"), [
     (lambda f: setattr(f, "on_droplet", False), HostingRefused.NOT_ON_DROPLET),
     (lambda f: setattr(f, "droplet_id", 42), HostingRefused.DROPLET_MISMATCH),
-    (lambda f: f.droplets.append(777), HostingRefused.NOT_DEDICATED),
-    (lambda f: setattr(f, "volumes", 1), HostingRefused.NOT_DEDICATED),
-    (lambda f: setattr(f, "snapshots", 1), HostingRefused.NOT_DEDICATED),
-    (lambda f: setattr(f, "droplets", [123]), HostingRefused.DROPLET_NOT_HELD),
-    (lambda f: setattr(f, "down", True), HostingRefused.NOT_ON_DROPLET),
 ])
-def test_verification_refuses_a_host_that_is_not_a_dedicated_droplet(change, reason):
+def test_a_launch_off_the_droplet_is_refused(change, reason):
     fake = FakeDigitalOcean()
     change(fake)
     with pytest.raises(HostingRefused) as refused:
-        verify(DigitalOceanClient(http=fake), 599960972)
+        verify(DigitalOceanClient(http=fake), 599960972, 10)
     assert refused.value.reason == reason
+
+
+def test_a_launch_on_an_account_with_other_resources_is_accepted():
+    fake = FakeDigitalOcean()
+    fake.add("888", "Droplets", "0.07143", "another")
+    fake.add("vol-1", "Volumes", "0.01400", "data")
+    assert verify(DigitalOceanClient(http=fake), fake.droplet_id, 10)["droplet_id"] == \
+        fake.droplet_id
+
+
+# --- deadlines, resume, secrets ----------------------------------------------------------------
+
+def test_a_read_that_passes_its_deadline_books_nothing():
+    import time
+
+    w = world()
+    w.observe()
+    w.fake.advance(24)
+    w.hosting.budget_s = 0.05
+    w.fake.stall = lambda url, timeout: time.sleep(0.03)
+    assert w.observe() is None
+    assert items(w, "treasury.hosting_unread")[0]["reason"] == (
+        "billing read failed or passed its deadline")
+    assert not items(w, "treasury.hosting_burn")
+    w.fake.stall, w.hosting.budget_s = None, 10
+    w.observe()
+    assert_every_month_is_digitaloceans(w)
+
+
+def test_the_books_survive_a_checkpoint_and_book_on_from_it():
+    w = world()
+    w.observe()
+    w.fake.advance(24 * 10)
+    w.observe()
+    saved = w.treasury.snapshot()
+    twin = world(w.fake)
+    twin.treasury.restore(deepcopy(saved))
+    assert twin.hosting.state() == w.hosting.state()
+    twin.observe()                            # the same figures: nothing new
+    assert not items(twin, "treasury.hosting_burn")
+    w.fake.post_invoice()
+    twin.observe()
+    booked = twin.hosting.burn_by_month()["2026-09"]
+    assert booked == micro(w.fake.billed(twin.droplet, "2026-09")) - twin.hosting.baseline[
+        "2026-09"]
 
 
 def test_the_token_never_reaches_the_ledger_even_when_an_error_echoes_it(monkeypatch):
@@ -302,81 +350,3 @@ def test_the_token_never_reaches_the_ledger_even_when_an_error_echoes_it(monkeyp
     assert items(w, "treasury.hosting_unread")
     assert "b" * 64 not in str(w.records) and TOKEN not in str(w.records)
     assert "b" * 64 not in str(w.treasury.snapshot())
-
-
-def test_a_revised_month_invoiced_before_its_reset_does_not_open_the_new_cycle_early():
-    """Codex P1 on fd36f86: usage revised $5 -> $3, the invoice lands in the new month
-    while the counter still shows $3, then the counter resets. The stale $3 is not the
-    new month's usage, so nothing is booked for it, and the new month's usage is burn
-    from its first cent."""
-    w = world()
-    w.observe()
-    start = w.fake.taken
-    w.fake.bill("5.00")
-    w.observe()
-    w.fake.revise("2.00")
-    w.observe()
-    w.fake.invoice_before_reset()        # a later month; the counter still says $3
-    w.observe()
-    assert w.hosting.burned_micro == micro("5")   # the stale $3 is not new usage
-    w.fake.reset_after_invoice()
-    w.fake.bill("1.00")
-    w.observe()
-    assert w.hosting.burned_micro == micro("6")   # the new month's $1, booked at once
-    assert_books_are_digitaloceans(w, start)
-    w.fake.bill("3.00")
-    w.observe()
-    assert_books_are_digitaloceans(w, start)
-
-
-def test_a_revised_month_whose_counter_resets_before_its_invoice():
-    w = world()
-    w.observe()
-    start = w.fake.taken
-    w.fake.bill("5.00")
-    w.observe()
-    w.fake.revise("2.00")
-    w.observe()
-    w.fake.reset_usage()
-    w.fake.bill("0.40")
-    w.observe()
-    assert w.hosting.burned_micro == micro("5.4")
-    w.fake.land_invoice(tax="0.10")
-    w.observe()
-    assert_books_are_digitaloceans(w, start)
-
-
-@pytest.mark.parametrize(("change", "undo"), [
-    (lambda f: setattr(f, "snapshots", 1), lambda f: setattr(f, "snapshots", 0)),
-    (lambda f: setattr(f, "volumes", 2), lambda f: setattr(f, "volumes", 0)),
-    (lambda f: f.droplets.append(4242), lambda f: f.droplets.remove(4242)),
-])
-def test_an_account_that_stops_being_dedicated_books_nothing_until_it_is_again(change, undo):
-    """Codex P1 on fd36f86: dedication is checked with every reading, not once at launch.
-    While the account pays for anything else its account-wide figures are not this
-    world's burn; and what accrued across the gap is unattributable, never burn."""
-    w = world()
-    w.observe()
-    start = w.fake.taken
-    w.fake.bill("1.00")
-    w.observe()
-    change(w.fake)
-    w.fake.bill("7.00")                  # the other resource's charges, and the host's
-    assert w.observe() is None and w.observe() is None
-    refused = items(w, "treasury.hosting_refused")
-    assert [r["reason"] for r in refused] == [HostingRefused.NOT_DEDICATED]
-    assert w.hosting.burned_micro == micro("1") and w.wallet.pots()["hosting"] is None
-    undo(w.fake)
-    w.fake.bill("0.50")
-    w.observe()
-    assert w.hosting.burned_micro == micro("1")          # the gap is not burn
-    gap = items(w, "treasury.hosting_unattributed")
-    assert [r["micro"] for r in gap] == [micro("7.5")]
-    w.fake.bill("0.25")
-    w.observe()
-    assert w.hosting.burned_micro == micro("1.25")       # dedicated again: burn again
-    booked = w.hosting.burned_micro + w.hosting.unattributed_micro
-    assert booked - invoice_credits(w) == micro(w.fake.taken - start)
-    view = w.hosting.view()
-    assert view["books_micro"] == view["credit_micro"] and view["discrepancy_micro"] == 0
-    assert_wallet_untouched(w)

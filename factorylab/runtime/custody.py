@@ -184,18 +184,16 @@ def custody_view(rt: Any) -> dict[str, Any]:
                                 if _micro(pots.get("vaults")) is not None
                                 else unavailable("vault equity unavailable", pots_ns))
     if "hosting" in pots:
-        # Only a world with a hosting pot ([hosting]) has this account: prepaid
-        # credit at DigitalOcean, as DigitalOcean last reported it, beside what the
-        # books kept from its reports. It backs nothing else, so it is its own
-        # account and is never added to the others.
+        # Only a world with a hosting pot ([hosting]) has this account. Its balance is
+        # not reported (DigitalOcean credit is account-wide), so it states none; what
+        # it states is this droplet's burn, from DigitalOcean's invoice lines for it.
         detail = pots.get("hosting_detail") or {}
-        view["hosting_credit"] = (
-            observed(pots_ns, balance_micro=pots["hosting"],
-                     generated_at=detail.get("generated_at"),
-                     books_micro=detail.get("books_micro"),
-                     discrepancy_micro=detail.get("discrepancy_micro"))
-            if _micro(pots.get("hosting")) is not None
-            else unavailable(detail.get("unread") or "hosting balance unavailable", pots_ns))
+        view["hosting_credit"] = {
+            **unavailable(detail.get("balance_reason") or "hosting balance unavailable",
+                          pots_ns),
+            "burned_micro": detail.get("burned_micro"),
+            "burn_by_month": detail.get("burn_by_month"),
+            "last_read": detail.get("unread") or "booked"}
     from factorylab.runtime.polymarket import custody as polymarket_custody
 
     polymarket = polymarket_custody(rt)

@@ -13,7 +13,7 @@ import pytest
 from factorylab.runtime import hosting
 from factorylab.runtime.worlds import HostingSpec, load_manifest, manifest_from_dict
 from factorylab.world.digitalocean import TOKEN_ENV, DigitalOceanClient
-from factorylab.world.hosting import HostingRefused
+from factorylab.world.hosting import SEAT_READS_PER_WINDOW, HostingRefused
 from tests.digitalocean_fake import TOKEN, FakeDigitalOcean
 from tests.helpers import collateral_decision
 
@@ -30,22 +30,18 @@ def manifest(fake):
                    hosting=HostingSpec(enabled=True, droplet_id=fake.droplet_id))
 
 
-def client(fake):
-    return DigitalOceanClient(http=fake, attempts=1, timeout_s=hosting.READ_TIMEOUT_S)
-
-
 def world(fake=None, **kwargs):
     from factorylab.runtime.loop import Runtime
 
     fake = fake or FakeDigitalOcean()
     rt = Runtime(manifest(fake), **{"events": 0, "seed": 1, "initial_balance_micro": None,
                                     "ledger_path": None, "router_gamma": 0.2, **kwargs},
-                 hosting_client=client(fake))
+                 hosting_client=DigitalOceanClient(http=fake))
     return rt, fake
 
 
-def read(rt, handle, tool):
-    return rt._run_tool("seed-decider", handle, {"tool": tool, "args": {}})[0]
+def read(rt, handle, tool, seat="seed-decider"):
+    return rt._run_tool(seat, handle, {"tool": tool, "args": {}})[0]
 
 
 # --- the manifest ------------------------------------------------------------------------
@@ -93,12 +89,12 @@ def test_a_world_without_the_block_reads_nothing_and_publishes_nothing():
     assert "hosting" not in runtime_state(rt)["treasury"]
 
 
-def test_an_enabled_world_does_not_start_without_a_token_or_off_a_droplet(monkeypatch):
+def test_a_launch_needs_a_token_and_its_droplet(monkeypatch):
     from factorylab.runtime.loop import Runtime
     from factorylab.runtime.reasons import CredentialMissing
 
     fake = FakeDigitalOcean()
-    fake.on_droplet = False  # a test, a laptop: the metadata service is not there
+    fake.on_droplet = False   # a test, a laptop: the metadata service is not there
     with pytest.raises(HostingRefused) as refused:
         world(fake)
     assert refused.value.reason == HostingRefused.NOT_ON_DROPLET
@@ -108,17 +104,21 @@ def test_an_enabled_world_does_not_start_without_a_token_or_off_a_droplet(monkey
                 ledger_path=None, router_gamma=0.2)
 
 
-def test_an_account_paying_for_anything_else_does_not_start():
+def test_an_account_with_other_resources_launches_and_books_only_its_droplet():
     fake = FakeDigitalOcean()
-    fake.snapshots = 1
-    with pytest.raises(HostingRefused) as refused:
-        world(fake)
-    assert refused.value.reason == HostingRefused.NOT_DEDICATED
+    fake.add("888", "Droplets", "0.07143", "another-host")
+    rt, _ = world(fake)
+    rt.treasury.observe_hosting()
+    fake.advance(24)
+    rt.treasury.observe_hosting()
+    month = rt.hosting.burn_by_month()["2026-09"]
+    assert month == (int(fake.billed(str(fake.droplet_id), "2026-09") * 10**6)
+                     - rt.hosting.baseline["2026-09"])
 
 
 # --- the surface ---------------------------------------------------------------------------
 
-def test_two_free_reads_and_no_write():
+def test_two_free_reads_that_state_their_limit_and_no_write():
     from factorylab.cortex.assembly import validate_schema
 
     rt, _ = world()
@@ -129,6 +129,7 @@ def test_two_free_reads_and_no_write():
             validate_schema(example, spec["args_schema"])
         text = spec["description"].lower()
         assert "free" in text and spec["price_micro_per_call"] == 0
+        assert f"at most {SEAT_READS_PER_WINDOW} hosting reads a seat" in text
         # A surface, never a suggestion (AGENTS.md: physics is enforced, not announced).
         assert not any(word in text for word in ("should", "profit", "opportunit", "edge",
                                                  "recommend", "consider", "worth", "better",
@@ -147,62 +148,58 @@ def test_the_reads_publish_structured_facts_and_no_provider_prose():
             "price_monthly_usd": "48", "price_hourly_usd": "0.07143"} in sizes["sizes"]
     droplet = read(rt, handle, "hosting.droplet")
     assert droplet["droplet"]["size_slug"] == "s-1vcpu-2gb"
-    assert droplet["pot"]["custodian"] == "digitalocean"
+    assert droplet["pot"]["balance"] == "unknown"
     # The fake's descriptions carry an instruction; no read passes any of it on.
     assert "Ignore" not in str(sizes) + str(droplet)
-    fake.down = True
-    assert read(rt, handle, "hosting.sizes") == {"error": hosting.READ_FAILED}
 
 
-def test_the_pot_is_its_own_custody_account():
+def test_a_seat_may_ask_digitalocean_only_so_often_a_window():
+    rt, fake = world()
+    handle = collateral_decision(rt)
+    answers = [read(rt, handle, "hosting.droplet") for _ in range(SEAT_READS_PER_WINDOW + 2)]
+    assert all("droplet" in a for a in answers[:SEAT_READS_PER_WINDOW])
+    assert all(a == {"error": hosting.READ_LIMITED}
+               for a in answers[SEAT_READS_PER_WINDOW:])
+    asked = len(fake.calls)
+    read(rt, handle, "hosting.sizes")
+    assert len(fake.calls) == asked       # refused before DigitalOcean was asked
+    assert "droplet" in read(rt, handle, "hosting.droplet", seat="seed-observer")
+    rt.window.index += 1                   # a new reserve window
+    assert "droplet" in read(rt, handle, "hosting.droplet")
+
+
+def test_the_pot_is_its_own_custody_account_with_no_balance():
     from factorylab.runtime.custody import custody_view
 
     rt, fake = world()
     rt.treasury.observe_hosting()
+    fake.advance(24)
+    rt.treasury.observe_hosting()
     view = custody_view(rt)["hosting_credit"]
-    assert view["status"] == "observed" and view["balance_micro"] == 200_000_000
-    assert view["generated_at"] == "2026-09-23T12:00:00Z" and view["discrepancy_micro"] == 0
-    fake.down = True
-    rt.treasury.observe_hosting()
-    unread = custody_view(rt)["hosting_credit"]
-    assert unread["status"] == "unavailable" and unread["reason"] == "billing read failed"
-
-
-def test_the_pot_survives_a_checkpoint_and_another_account_cannot_restore_it():
-    from factorylab.runtime.resume import restore_runtime, runtime_state
-
-    rt, fake = world()
-    rt.treasury.observe_hosting()
-    fake.bill("0.25")
-    rt.treasury.observe_hosting()
-    state = runtime_state(rt)
-    twin, _ = world(fake)
-    restore_runtime(twin, state)
-    assert twin.hosting.state() == rt.hosting.state()
-    assert TOKEN not in str(state)
-    stranger, _ = world(FakeDigitalOcean(team_uuid="aaaaaaaa-0000-4000-8000-000000000001"))
-    with pytest.raises(HostingRefused) as refused:
-        restore_runtime(stranger, runtime_state(rt))
-    assert refused.value.reason == HostingRefused.ACCOUNT_MISMATCH
+    assert view["status"] == "unavailable" and "account-wide" in view["reason"]
+    assert view["burned_micro"] == rt.hosting.burned_micro() > 0
 
 
 # --- a running world ---------------------------------------------------------------------------
 
 def _billing_reads(fake):
-    return sum(c["url"].endswith("/v2/customers/my/balance") for c in fake.calls)
+    return sum(c["url"].endswith("/v2/customers/my/invoices/preview?per_page=200&page=1")
+               for c in fake.calls)
 
 
 @pytest.mark.gate
-def test_billing_is_read_once_a_reserve_window_and_a_replayed_burn_is_booked_once(tmp_path):
+def test_billing_is_read_once_a_window_and_a_replayed_burn_is_booked_once(tmp_path):
     from factorylab.runtime.loop import Runtime
     from factorylab.runtime.resume import resume_runtime
     from tests.runtime.test_resume import stop_after
 
     fake = FakeDigitalOcean()
-    fake.accrue_per_read = "0.10"
+    fake.stall = lambda url, timeout: (fake.advance(1) if "invoices/preview" in url
+                                       else None)   # the host accrues while the world runs
     path = tmp_path / "hosting.jsonl"
     rt = Runtime(manifest(fake), events=200, seed=1, initial_balance_micro=None,
-                 ledger_path=str(path), router_gamma=0.1, hosting_client=client(fake))
+                 ledger_path=str(path), router_gamma=0.1,
+                 hosting_client=DigitalOceanClient(http=fake))
     windows = []
     open_window = rt._manage_reserve_window
 
@@ -215,22 +212,37 @@ def test_billing_is_read_once_a_reserve_window_and_a_replayed_burn_is_booked_onc
     rt._manage_reserve_window = counted
     stop_after(rt, lambda r, e: len(windows) >= 3 and str(e.kind) == "Tick")
     reads = _billing_reads(fake)
-    assert reads == len(windows) >= 3                  # once a window, never per tick
-    assert rt.ticks_consumed > reads
-    booked = rt.hosting.burned_micro
-    burns = [i for i in rt.ledger.ledger._recovery_items()
-             if i["kind"] == "treasury.hosting_burn"]
-    assert booked == sum(i["micro"] for i in burns) > 0
-    # The host's burn never moved the model wallet.
-    assert not any(i["kind"] == "wallet.settle" for i in rt.ledger.ledger._recovery_items())
-    restored = resume_runtime(rt.m, str(path), hosting_client=client(fake))
-    # The replay answered from the record: DigitalOcean was not asked again, and the
-    # burn it books is the burn the crashed process booked, once.
-    assert _billing_reads(fake) == reads
-    assert restored.hosting.burned_micro == booked
+    assert reads == len(windows) >= 3 and rt.ticks_consumed > reads   # never per tick
+    booked = rt.hosting.burn_by_month()
+    assert booked["2026-09"] == (int(fake.billed(str(fake.droplet_id), "2026-09") * 10**6)
+                                 - rt.hosting.baseline["2026-09"]) > 0
+    items = rt.ledger.ledger._recovery_items()
+    assert not any(i["kind"] == "wallet.settle" for i in items)
+    # A resume never waits on DigitalOcean: it is down, and the world comes back anyway.
+    fake.down = True
+    restored = resume_runtime(rt.m, str(path), hosting_client=DigitalOceanClient(http=fake))
+    assert _billing_reads(fake) == reads           # the replay answered from the record
+    assert restored.hosting.burn_by_month() == booked
     replayed = [i for i in restored.ledger.ledger._recovery_items()
                 if i["kind"] == "treasury.hosting_burn"]
-    assert sum(i["micro"] for i in replayed) == booked
-    # And it is what DigitalOcean took after the endowment reading, which itself
-    # followed one accrual.
-    assert booked == (reads - 1) * 100_000 == int(fake.taken * 1_000_000) - 100_000
+    assert sum(i["micro"] for i in replayed) == sum(booked.values())
+    assert restored.hosting.bound == rt.hosting.bound
+    # The next live reading checks the binding: another account's token books nothing.
+    fake.down = False
+    fake.user_uuid = "00000000-0000-4000-8000-000000000bad"
+    assert restored.treasury.observe_hosting() is None
+    assert restored.hosting.unread == HostingRefused.ACCOUNT_MISMATCH
+    assert restored.hosting.burn_by_month() == booked
+
+
+def test_the_deploy_covers_the_digitalocean_key():
+    deploy = ROOT / "deploy"
+    static = (deploy / "factorylab-static.service").read_text()
+    assert "-/srv/factorylab/digitalocean.key" in static.split("InaccessiblePaths=")[1]
+    backup = (deploy / "backup.sh").read_text()
+    assert "'digitalocean.key'" in backup and "members+=(digitalocean.key)" in backup
+    readme = (deploy / "README.md").read_text()
+    assert "digitalocean.key" in readme
+    assert all(scope in readme for scope in ("billing:read", "droplet:read", "account:read",
+                                             "sizes:read"))
+    assert "read-only" in (ROOT / "docs/manifest.md").read_text().split("## The host")[1]

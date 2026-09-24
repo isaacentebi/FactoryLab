@@ -239,6 +239,8 @@ class _Observatory:
         # dormancy and termination.
         self.money_in: Counter = Counter()
         self.money_out: Counter = Counter()
+        # The host's pot ([hosting]): its burn by month, and the account's own entries.
+        self.hosting: dict = {"burn_by_month": {}, "account_entries": {}}
         # Venue effects by the venue account they landed in, kept apart from the
         # compute wallet's own movements.
         self.venue_by_custody: dict[str, Counter] = {}
@@ -398,9 +400,29 @@ class _Observatory:
             self.money_out[reason] += -amount
 
     def _on_treasury_hosting_burn(self, item: dict) -> None:
-        # What DigitalOcean took from the hosting pot ([hosting]; world/hosting.py).
+        # What DigitalOcean billed this droplet ([hosting]; world/hosting.py), by month.
         if type(item.get("micro")) is int and item["micro"] > 0:
             self.money_out["hosting"] += item["micro"]
+            month = str(item.get("month"))
+            self.hosting["burn_by_month"][month] = (
+                self.hosting["burn_by_month"].get(month, 0) + item["micro"])
+
+    def _on_treasury_hosting_burn_reversed(self, item: dict) -> None:
+        # DigitalOcean's figure for a line went down: the booked burn follows it.
+        if type(item.get("micro")) is int and item["micro"] > 0:
+            self.money_out["hosting"] -= item["micro"]
+            month = str(item.get("month"))
+            self.hosting["burn_by_month"][month] = (
+                self.hosting["burn_by_month"].get(month, 0) - item["micro"])
+
+    def _on_treasury_hosting_account_entry(self, item: dict) -> None:
+        # A payment, credit, refund or adjustment on the host's account. DigitalOcean
+        # names no resource for it, so it is a fact about the account, never this
+        # world's money: reported beside the flows, in no class of them.
+        if type(item.get("micro")) is int:
+            kind = str(item.get("entry_type"))
+            self.hosting["account_entries"][kind] = (
+                self.hosting["account_entries"].get(kind, 0) + item["micro"])
 
     def _on_venue_settled(self, item: dict) -> None:
         """Venue P&L, fees and funding, reported under the venue's own custody.
@@ -804,6 +826,12 @@ class _Observatory:
                 "venue_by_custody": {custody: dict(sorted(counts.items()))
                                      for custody, counts in sorted(
                                          self.venue_by_custody.items())},
+                # Only a world with [hosting] has anything here: this droplet's burn by
+                # month, and the host account's entries, which are not this world's.
+                "hosting": {"burn_by_month": dict(sorted(
+                                self.hosting["burn_by_month"].items())),
+                            "account_entries_not_attributed": dict(sorted(
+                                self.hosting["account_entries"].items()))},
             },
             "deliveries": {
                 # Rows, not keys: a channel name such as "verdict" is a sealed key

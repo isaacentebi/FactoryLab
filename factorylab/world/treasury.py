@@ -258,9 +258,9 @@ class Treasury:
         result["observed_at_ns"] = self.pots_observed_ns
         if self.hosting is not None:
             # Its own pot, beside the others and never in their total: DigitalOcean
-            # credit pays only DigitalOcean, and backs no model spending. It is
-            # reconciled against its own counterparty (``view``'s discrepancy).
-            result["hosting"] = self.hosting.credit_micro()
+            # credit pays only DigitalOcean and backs no model spending. Its balance
+            # is unknown (world/hosting.py); its burn is published by month.
+            result["hosting"] = None
             result["hosting_detail"] = self.hosting.view()
         # The compute wallet is not a pot. It is the constitutional ceiling on
         # what may be spent -- authority, not cash -- and the assets above are
@@ -476,77 +476,63 @@ class Treasury:
         return booked
 
     def observe_hosting(self) -> dict | None:
-        """Read the host's account once and book, on the hosting pot alone, what it shows.
+        """Read this droplet's billing once and book exactly its invoice lines.
 
-        Guarantees no wallet moves: DigitalOcean credit pays for hosting and nothing
-        else, so a hosting charge lowers the hosting pot and no other (the wallet
-        moves only when money moves, and this money never passes through it). A
-        reading is booked only when the account it came from is the one this world
-        is bound to and still holds the droplet; otherwise it is refused, ledgered
-        as ``treasury.hosting_refused`` with its named reason, and the pot is left
-        unknown. A failed read leaves the pot unknown until the next one. Each
-        booking is ledgered with DigitalOcean as the counterparty and both
-        readings' ``generated_at`` as the evidence (world/hosting.py says how).
+        Guarantees no wallet moves: a hosting charge lowers the hosting pot and no
+        other (the wallet moves only when money moves, and this money never passes
+        through it). A reading is booked only when it comes from the account this
+        world is bound to, which still holds the droplet this process runs on;
+        otherwise it is refused, ledgered as ``treasury.hosting_refused`` with its
+        named reason, and books nothing. A failed or late read books nothing and is
+        ledgered once as ``treasury.hosting_unread``. Every booked change is one
+        ``treasury.hosting_burn`` (or ``hosting_burn_reversed`` when DigitalOcean's
+        figure for a line went down), naming DigitalOcean, the month and the line.
         """
         hosting = self.hosting
         if hosting is None:
             return None
-        from factorylab.world.hosting import HostingRefused, dedicated
+        from factorylab.world.hosting import refusal
 
         def unread(kind: str, reason: str) -> None:
             if hosting.unread != reason:
                 self._write(kind, reason=reason)
             hosting.unread = reason
-            if kind == "hosting_refused":
-                # What accrues until the next accepted reading is not attributable.
-                hosting.rebase = True
 
         try:
-            reading = hosting.client.billing(hosting.droplet_id)
+            reading = hosting.client.billing(
+                hosting.droplet_id, since=hosting.since, done=list(hosting.finalized),
+                budget_s=hosting.budget_s)
         except Exception:  # noqa: BLE001 - an unread custodian is unknown, not empty
             # A fixed reason, never the exception's class: a replay raises the recorded
             # failure under another class, and the diary must read the same.
-            unread("hosting_unread", "billing read failed")
+            unread("hosting_unread", "billing read failed or passed its deadline")
             return None
-        identity = reading["identity"]
-        if {k: identity.get(k) for k in hosting.bound} != hosting.bound:
-            unread("hosting_refused", HostingRefused.ACCOUNT_MISMATCH)
+        reason = refusal(hosting.bound, reading["identity"])
+        if reason is not None:
+            unread("hosting_refused", reason)
             return None
-        if not identity.get("droplet_held"):
-            unread("hosting_refused", HostingRefused.DROPLET_NOT_HELD)
-            return None
-        if not dedicated(reading["resources"], hosting.droplet_id):
-            # Checked with every reading, not once at launch (Codex on #147): an
-            # account that also pays for another droplet, a volume or a snapshot
-            # reports that spending in the same balance and usage.
-            unread("hosting_refused", HostingRefused.NOT_DEDICATED)
-            return None
-        read = reading["balance"]
-        effect = hosting.observe(read)
-        if effect["effect"] == "endowment":
-            self._write("hosting_endowment", micro=effect["micro"],
-                        counterparty="digitalocean", droplet_id=hosting.droplet_id,
-                        generated_at=read["generated_at"])
-        elif effect["effect"] == "stale":
-            self._write("hosting_stale", generated_at=read["generated_at"])
-        else:
-            evidence = {k: effect[k] for k in ("generated_at", "previous_generated_at",
-                                               "month_to_date_usage_micro",
-                                               "account_balance_micro", "rolled_over")}
-            if effect["burn_micro"]:
-                self._write("hosting_burn", counterparty="digitalocean",
-                            micro=effect["burn_micro"], **evidence)
-            if effect["unattributed_micro"]:
-                self._write("hosting_unattributed", counterparty="digitalocean",
-                            micro=effect["unattributed_micro"],
-                            reason="readings were refused since the last booked one",
-                            **evidence)
-            for cause in ("invoice", "outside"):
-                micro = effect[f"{cause}_credit_micro"]
-                if micro:
-                    self._write("hosting_credited", counterparty="digitalocean",
-                                micro=micro, cause=cause, **evidence)
-        return effect
+        result = hosting.observe(reading)
+        if result["baseline"] is not None:
+            self._write("hosting_baseline", counterparty="digitalocean",
+                        droplet_id=hosting.droplet_id, **result["baseline"])
+        for change in result["changes"]:
+            kind = "hosting_burn" if change["delta_micro"] > 0 else "hosting_burn_reversed"
+            self._write(kind, counterparty="digitalocean", droplet_id=hosting.droplet_id,
+                        micro=abs(change["delta_micro"]),
+                        **{k: v for k, v in change.items() if k != "delta_micro"})
+        if result["closed"] is not None:
+            self._write("hosting_invoice", month=result["closed"],
+                        burn_micro=hosting.burn_by_month().get(result["closed"], 0))
+        for month in result["unmatched"]:
+            # The droplet's own lines could not be told apart that month: the burn is
+            # not known, and the diary says so rather than book the account's.
+            self._write("hosting_unmatched", month=month, droplet_id=hosting.droplet_id)
+        for entry in result["entries"]:
+            self._write("hosting_account_entry", counterparty="digitalocean",
+                        attributed=False, entry_type=entry["type"],
+                        micro=entry["amount_micro"], date=entry["date"],
+                        invoice_uuid=entry["invoice_uuid"])
+        return result
 
     def _gas_view(self) -> dict:
         """The exit route's gas position: never money, so it cannot change completeness."""
