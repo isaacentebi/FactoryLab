@@ -1503,8 +1503,13 @@ class ComputeMixin:
         req = replace(req, cost_ceiling=min(
             req.cost_ceiling, max(0, self.wallet.available_for(req.handle, reason)), cover,
         ))
+        # The bytes of the prompt this call renders, counted on the very request the
+        # assembly is handed: its ``YOU`` states this ceiling, so a count taken before
+        # the cap, or after the caller has since changed the request, is of a prompt
+        # nobody was sent (edition 3, C4).
+        sections = replace(req, inputs={**req.inputs, "you": action_id}).section_bytes()
         try:
-            ret = asm.invoke(req)
+            ret = replace(asm.invoke(req), prompt_sections=sections)
         finally:
             self.entitlement_bridges.pop(req.handle, None)
         if ceiling is not None:
@@ -1603,6 +1608,11 @@ class ComputeMixin:
         taken: set[str] = set()  # the tool actions this decision dispatched (action_key)
         niche_spent = 0  # what this decision's unhistoried actions used of the niche
         ret = self._invoke_compute(action_id, req)
+        # The opening prompt's bytes, as the first call rendered them. ``req`` changes
+        # below (the cover cap, a working state written in a tool round, the niche's
+        # ceiling) and each continuation renders its own prompt, so these are taken
+        # now and never recomputed. None when no prompt was rendered for the call.
+        sections = getattr(ret, "prompt_sections", None)
         # The routing bridge buys only the routed call. Reads and children spend
         # the liable seat's remaining cover, never a fresh claim on the commons.
         seat = self._liable_seat(req.handle) or action_id
@@ -1958,10 +1968,9 @@ class ComputeMixin:
         self.stats.invocations_by_role[role] = self.stats.invocations_by_role.get(role, 0) + 1
         sr = ret.stop_reason or "none"
         self.stats.stop_reasons[sr] = self.stats.stop_reasons.get(sr, 0) + 1
-        # Rendered bytes per prompt section (edition 3, C4), counted once: the ledger
-        # row, the window's public counters and the return's measurement sample all
-        # carry these same numbers, so no second measurement can drift from the first.
-        sections = replace(req, inputs={**req.inputs, "you": action_id}).section_bytes()
+        # Rendered bytes per prompt section (edition 3, C4), counted once on the opening
+        # call: the ledger row, the window's public counters and the return's
+        # measurement sample all carry these same numbers, so none can drift.
         self.ledger.append(
             {
                 "kind": "invocation",
@@ -2008,10 +2017,11 @@ class ComputeMixin:
         # metric only on a quantity the world publishes. These are that quantity for
         # context size: facts, with no target attached (the seed observations
         # ``prompt_bytes``, ``you_bytes`` and ``inputs_bytes`` read them).
-        self.window.prompt_bytes += sections["total"]
-        self.window.you_bytes += sections.get("you", 0)
-        self.window.inputs_bytes += sections.get("inputs", 0)
-        ret = replace(ret, prompt_sections=dict(sections))
+        if sections is not None:
+            self.window.prompt_bytes += sections["total"]
+            self.window.you_bytes += sections.get("you", 0)
+            self.window.inputs_bytes += sections.get("inputs", 0)
+        ret = replace(ret, prompt_sections=dict(sections) if sections is not None else None)
         if ret.status == "ok":
             self.window.ok += 1
             if role == "producer":

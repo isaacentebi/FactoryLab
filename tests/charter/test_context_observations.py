@@ -265,3 +265,47 @@ def test_the_runtime_files_a_readers_inputs_under_the_subjects_author():
     Runtime._record_reading(rt, "orphan-h", Return("orphan-h", {}, 1, "ok",
                                                     prompt_sections=sections))
     assert rt.window.downstream_read_bytes == 700 and len(rt.card_samples.readings) == 1
+
+
+def test_a_reading_after_the_authors_latest_response_survives_the_window_floor():
+    # PR #143 review: a reading metered after its author's latest response lies outside
+    # today's horizon; once the retained-window floor passed it, prune dropped it, and
+    # the author's next response opened a horizon spanning a window whose reading was
+    # gone, so downstream_read_bytes undercounted.
+    samples = CardSamples()
+    card = _card("downstream_read_bytes")
+
+    def respond(handle, window):
+        samples.returned(handle=handle, assembly="a", role="producer", window=window,
+                         ret=_ret(handle, total=10, you=1, inputs=1))
+
+    respond("a1", 1)
+    respond("a2", 2)
+    samples.read(handle="a2", assembly="a", role="producer", window=4, read_bytes=600)
+    for index in (3, 4, 5):
+        samples.closed(MeasureWindow(index, 1))
+        samples.prune((card,))
+    assert [row["window"] for row in samples.readings] == [4]
+    respond("a3", 6)
+    # The horizon is a2 (window 2) and a3 (window 6): the window-4 reading is in it.
+    assert measure_card(card, samples) == {"a": pytest.approx(300.0)}
+
+
+def test_readings_no_future_horizon_can_select_are_not_retained():
+    samples = CardSamples()
+    card = _card("downstream_read_bytes")
+    for handle, window in (("a1", 1), ("a2", 2)):
+        samples.returned(handle=handle, assembly="a", role="producer", window=window,
+                         ret=_ret(handle, total=10, you=1, inputs=1))
+    for _ in range(1_000):
+        samples.read(handle="a1", assembly="a", role="producer", window=3, read_bytes=1)
+    samples.read(handle="a2", assembly="a", role="producer", window=8, read_bytes=5)
+    for handle, window in (("a3", 6), ("a4", 7)):
+        samples.returned(handle=handle, assembly="a", role="producer", window=window,
+                         ret=_ret(handle, total=10, you=1, inputs=1))
+    samples.closed(MeasureWindow(8, 1))
+    samples.prune((card,))
+    # The horizon now opens at window 6 and only moves forward: nothing metered before
+    # it can be selected again, however many readings there were. The window-8 one
+    # stays, both inside the floor and after the latest response.
+    assert [(row["window"], row["read_bytes"]) for row in samples.readings] == [(8, 5)]

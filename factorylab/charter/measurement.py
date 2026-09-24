@@ -379,16 +379,28 @@ class CardSamples:
                 row["handle"] in pending_handles or id(row) in keep
                 or (first_window is not None and row["window"] >= first_window)
             )]
-        # A reading row is kept while a horizon that reads it, or a retained window, can.
+        # A reading row is kept while any horizon, present or future, can still select
+        # it. A returns horizon is a scope's latest n responses, so it only moves
+        # forward, and it selects the readings metered from its first response's
+        # window on. A reading metered after the scope's latest response is outside
+        # today's horizon but inside the next one if the scope responds again, so
+        # it is kept; one metered before the current horizon's first response can
+        # never be selected again, so it goes. That bounds what is kept per scope:
+        # the readings metered since its n-th latest response. A scope with no
+        # response retained is held by the retained-window floor alone, like
+        # every other row.
         keep = set()
+        rows = _selected(READ_OBSERVATION, _rows(self, "returns", READ_OBSERVATION))
         for card in cards:
             if card.window.kind != "returns" or (
                     card.observation.strip().lower() != READ_OBSERVATION):
                 continue
-            rows = _selected(READ_OBSERVATION, _rows(self, "returns", READ_OBSERVATION))
             for group in _groups(card, rows).values():
-                keep.update(id(row) for row in _horizon(
-                    READ_OBSERVATION, group, card.window.n, partial=True))
+                horizon = [row for row in group if not row.get("reading")][-card.window.n:]
+                if horizon:
+                    start = horizon[0]["window"]
+                    keep.update(id(row) for row in group
+                                if row.get("reading") and row["window"] >= start)
         self.readings[:] = [row for row in self.readings if (
             id(row) in keep or (first_window is not None and row["window"] >= first_window))]
 
