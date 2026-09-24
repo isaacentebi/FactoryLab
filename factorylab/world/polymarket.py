@@ -366,10 +366,13 @@ class PolymarketReader:
         Gamma's ``/markets`` lists open markets unless asked for closed ones (read
         2026-09-23: a resolved market's token answered ``[]`` without ``closed=true``).
         Closing is final, so the closed listing is asked first and the open one only
-        for a token it does not hold. Both are read past the shared cache
-        (``CACHE_KEY``), which served a just-resolved market as still open.
+        for a token it does not hold. A market that closes between those two reads is
+        in neither, so an empty open answer asks the closed listing once more: None
+        means the token was absent from the closed listing on both sides of the open
+        read, never that the lookup straddled a close. Every read goes past the shared
+        cache (``CACHE_KEY``), which served a just-resolved market as still open.
         """
-        for closed in ("true", None):
+        for closed in ("true", None, "true"):
             raw = self._gamma("/markets", clob_token_ids=token_id, closed=closed)
             for row in raw if isinstance(raw, list) else []:
                 detail = market_detail(row)

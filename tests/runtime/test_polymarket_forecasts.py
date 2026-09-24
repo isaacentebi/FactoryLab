@@ -52,9 +52,9 @@ def results_of(rt):
     return results
 
 
-def seal(rt, *claims, judge="judge-a"):
+def seal(rt, *claims, judge="judge-a", about=None):
     handle = collateral_decision(rt, owner=judge)
-    return rt._open_forecasts(handle, judge, handle, [
+    return rt._open_forecasts(handle, judge, about or handle, [
         {"predicate": pid, "q": q, "params": params} for pid, q, params in claims])
 
 
@@ -172,3 +172,56 @@ def test_a_live_read_world_can_answer_from_the_simulated_venue_offline():
     assert rt.polymarket.account() is None
     with pytest.raises(ValueError, match="live reader only"):
         polymarket.simulate_reads(world())
+
+
+class Resolving:
+    """A live reader whose market resolves, or whose read fails, between two calls."""
+
+    deterministic = False
+
+    def __init__(self, *answers):
+        self.answers = list(answers)
+        self.calls = 0
+
+    def market_of_token(self, token_id):
+        self.calls += 1
+        answer = self.answers[min(self.calls, len(self.answers)) - 1]
+        if isinstance(answer, Exception):
+            raise answer
+        closed = answer == "resolved"
+        return {"market_id": "1", "closed": closed,
+                "uma_resolution_status": "resolved" if closed else None,
+                "outcomes": [{"token_id": YES, "price": "1" if closed else "0.6"},
+                             {"token_id": NO, "price": "0" if closed else "0.4"}]}
+
+    def order_book(self, token_id, depth):
+        return {"token_id": token_id, "bids": [{"price": "0.59", "size": "5"}],
+                "asks": [{"price": "0.61", "size": "5"}], "midpoint": "0.6"}
+
+
+def test_the_judges_of_one_question_are_graded_against_one_read_of_the_world():
+    """PR #145 review: a resolution between two judges' reads graded one question two
+    ways. The world is read once a token a settlement pass, and every claim on it in
+    that pass is answered from that snapshot."""
+    for answers, expected in ((("open", "resolved"), {0}),
+                              ((PolymarketUnavailable("transport: TimeoutError"), "open"),
+                               {None})):
+        rt = world(venue="live")
+        reader = rt.polymarket.venue.target = Resolving(*answers)
+        results = results_of(rt)
+        about = collateral_decision(rt, owner="author")
+        claim = ("event_pays", 0.5, {"horizon_events": 2, "token_id": YES})
+        seal(rt, claim, judge="judge-a", about=about)
+        seal(rt, claim, judge="judge-b", about=about)
+        advance(rt, 3)
+        assert len(results) == 2 and reader.calls == 1
+        assert {r.y for r in results} == expected
+        assert len({(r.status, r.excluded) for r in results}) == 1
+    # The next pass reads the world again: a later question sees the resolution.
+    rt = world(venue="live")
+    reader = rt.polymarket.venue.target = Resolving("open", "resolved")
+    results = results_of(rt)
+    seal(rt, ("event_pays", 0.5, {"horizon_events": 2, "token_id": YES}))
+    seal(rt, ("event_pays", 0.5, {"horizon_events": 4, "token_id": YES}), judge="judge-b")
+    advance(rt, 5)
+    assert [r.y for r in results] == [0, 1] and reader.calls == 2

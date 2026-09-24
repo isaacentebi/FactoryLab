@@ -1668,10 +1668,12 @@ predicate enum); a world without the block offers neither and refuses them. Both
 | `event_pays` | `horizon_events`, `token_id` | 1 when the token's market has resolved and the token redeems for 1; 0 while it is open, closed without a final resolution, or resolved 50-50 |
 | `event_price_above` | `horizon_events`, `token_id`, `level` in (0, 1) | 1 when the token's price exceeds `level`: its redemption value once resolved, else the midpoint of its CLOB book's best bid and ask (exact comparison) |
 
-The world reads the token once, at the forecast's due tick, through the surface's journal
+The world reads the token at the forecast's due tick, through the surface's journal
 (`polymarket.event_read`): the market that lists it (Gamma's closed listing first, since
-its open listing excludes closed markets), and for a price claim on an unresolved market
-its book. A payout exists only for a closed market whose outcome prices are a redemption (1 and 0, or 0.5 each) and whose UMA status, when stated,
+its open listing excludes closed markets, and the closed listing once more after an empty
+open answer, so a market closing between the two is still found), and for a price claim
+on an unresolved market its book. Each token is read once a settlement pass, and every
+forecast due on it in that pass settles on that one snapshot. A payout exists only for a closed market whose outcome prices are a redemption (1 and 0, or 0.5 each) and whose UMA status, when stated,
 is `resolved`. A read that did not answer, or a price claim with no midpoint, is
 `polymarket.event_unavailable`: the claim settles censored and is excluded as
 `external_unobservable`. A token no market lists settles censored and is not excluded.

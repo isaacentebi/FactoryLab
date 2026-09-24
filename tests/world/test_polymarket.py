@@ -113,6 +113,26 @@ def test_a_resolved_markets_token_is_found_among_the_closed_and_redeems_at_its_p
     assert payout(market, market["outcomes"][1]["token_id"]) == Decimal(0)
     assert payout(market, "1") is None
     assert PolymarketReader(get=lambda url: []).market_of_token(CLOSED_OVER) is None
+
+
+def test_a_market_that_closes_between_the_two_listings_is_still_found():
+    """PR #145 review: the market is open when the closed listing is asked and closed
+    when the open listing is, so both answer [] for a valid token."""
+    urls = []
+
+    def closing(url):
+        urls.append(parse_qs(urlsplit(url).query).get("closed"))
+        # The closed listing holds it only from the third read on; the open never does.
+        return fixture("gamma_market_closed.json") if len(urls) >= 3 and urls[-1] else []
+
+    market = PolymarketReader(get=closing).market_of_token(CLOSED_OVER)
+    assert market is not None and market["market_id"] == "4283025" and market["closed"]
+    assert urls == [["true"], None, ["true"]]
+    # Only a token absent from the closed listing on both sides of the open read is
+    # not listed, and it costs exactly those three reads.
+    urls.clear()
+    empty = PolymarketReader(get=lambda url: urls.append(url) or [])
+    assert empty.market_of_token(CLOSED_OVER) is None and len(urls) == 3
     # A token the closed listing does not hold is looked up among the open markets.
     urls.clear()
     reader = PolymarketReader(get=lambda url: urls.append(url) or (

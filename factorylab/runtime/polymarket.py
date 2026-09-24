@@ -265,7 +265,8 @@ def vocabulary(manifest: Any) -> tuple:
     return EVENT_VOCABULARY if spec is not None and spec.enabled else ()
 
 
-def event_facts(rt: Any, predicate_id: str, token_id: str) -> Any:
+def event_facts(rt: Any, predicate_id: str, token_id: str,
+                snapshots: dict[str, dict[str, Any]] | None = None) -> Any:
     """One outcome token as the world reads it at settlement, for an event predicate.
 
     Returns ``{listed, closed, payout, midpoint}`` (numbers as decimal strings) or
@@ -278,6 +279,13 @@ def event_facts(rt: Any, predicate_id: str, token_id: str) -> Any:
     its owner. The book is read only for a price claim on an unresolved market, and
     a midpoint exists only where it has both a bid and an ask.
 
+    ``snapshots`` holds the world's reads of each token for one settlement pass.
+    Every claim on a token in that pass is answered from the same snapshot: the
+    market is read once and the book at most once, so the judges of one question
+    are graded against one state of the world, never against a resolution or a
+    failed read that fell between their calls (``Settler`` counts them as one
+    observation).
+
     The reads go through the surface's journal, so a replay settles on what was
     read. Only ids and numbers enter the facts; no market text does.
     """
@@ -285,32 +293,42 @@ def event_facts(rt: Any, predicate_id: str, token_id: str) -> Any:
     from factorylab.world.polymarket import payout
 
     surface = rt.polymarket
+    snapshots = {} if snapshots is None else snapshots
 
     def unavailable(read: str) -> Any:
         rt.ledger.append({"kind": "polymarket.event_unavailable", "token_id": token_id,
                           "predicate": predicate_id, "read": read, "ts": rt.clock.now_ns})
         return UNOBSERVABLE
 
-    try:
-        market = surface.venue.market_of_token(token_id)
-    except Exception:  # noqa: BLE001 - an unanswered read is an absent fact
+    snapshot = snapshots.get(token_id)
+    if snapshot is None:
+        try:
+            snapshot = {"market": surface.venue.market_of_token(token_id), "answered": True}
+        except Exception:  # noqa: BLE001 - an unanswered read is an absent fact
+            snapshot = {"market": None, "answered": False}
+        snapshots[token_id] = snapshot
+    if not snapshot["answered"]:
         return unavailable("market")
+    market = snapshot["market"]
     facts: dict[str, Any] = {"listed": market is not None, "closed": None, "payout": None,
                              "midpoint": None}
     if market is not None:
         paid = payout(market, token_id)
         facts.update(closed=market["closed"], payout=None if paid is None else str(paid))
         if predicate_id == "event_price_above" and paid is None:
-            # The midpoint of the book's best bid and ask, never the CLOB's /midpoint,
-            # which answers 0.5 for an empty book (read 2026-09-23 on a resolved market).
-            try:
-                mid = None if market["closed"] else _decimal(
-                    surface.venue.order_book(token_id, 1)["midpoint"])
-            except Exception:  # noqa: BLE001
-                mid = None
-            if mid is None or not 0 < mid < 1:
+            if "midpoint" not in snapshot:
+                # The midpoint of the book's best bid and ask, never the CLOB's
+                # /midpoint, which answers 0.5 for an empty book (read 2026-09-23 on a
+                # resolved market).
+                try:
+                    mid = None if market["closed"] else _decimal(
+                        surface.venue.order_book(token_id, 1)["midpoint"])
+                except Exception:  # noqa: BLE001
+                    mid = None
+                snapshot["midpoint"] = mid if mid is not None and 0 < mid < 1 else None
+            if snapshot["midpoint"] is None:
                 return unavailable("midpoint")
-            facts["midpoint"] = str(mid)
+            facts["midpoint"] = str(snapshot["midpoint"])
     rt.ledger.append({"kind": "polymarket.event_read", "token_id": token_id,
                       "predicate": predicate_id, **facts, "ts": rt.clock.now_ns})
     return facts

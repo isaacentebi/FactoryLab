@@ -595,7 +595,7 @@ class FeedbackMixin:
                                  outcome={"status": "declined", "reason": reason})
         return True
 
-    def _facts_for(self, f: Forecast) -> WindowFacts | None:
+    def _facts_for(self, f: Forecast, snapshots: dict | None = None) -> WindowFacts | None:
         if f.made_at_event >= len(self.balance_at):
             return None
         start = f.made_at_event
@@ -621,7 +621,8 @@ class FeedbackMixin:
 
             # A Polymarket claim settles on the world's own read of its token now,
             # at settlement (essay II.III.b): the market's resolution or its price.
-            event = event_facts(self, f.predicate_id, f.params["token_id"])
+            # One snapshot a token a pass, so one question has one answer.
+            event = event_facts(self, f.predicate_id, f.params["token_id"], snapshots)
             if event is UNOBSERVABLE:
                 return UNOBSERVABLE
             public["event"] = event
@@ -1021,7 +1022,11 @@ class FeedbackMixin:
                 # it, whoever forecast it (the seed observation consequence_paid_off_rate).
                 self.window.consequences_settled += 1
                 self.window.consequences_paid_off += int(payoff.y == 1)
-        settled = self.settler.settle_due(self.n, self._facts_for, tick=self.ticks_consumed)
+        # The world's reads of each Polymarket token, once for this whole pass: every
+        # forecast due now on one token is graded against the same state of it.
+        snapshots: dict = {}
+        settled = self.settler.settle_due(self.n, lambda f: self._facts_for(f, snapshots),
+                                          tick=self.ticks_consumed)
         for result in settled:
             parent = self.queue.get(result.handle).parent_handle
             if parent in self.forecast_returns and result.brier is not None:
