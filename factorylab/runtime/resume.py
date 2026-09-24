@@ -424,6 +424,12 @@ class RecoveryJournal:
             if name == "provider.complete":
                 self.append({"kind": "io.result", "call": seq, "error": "RuntimeError"})
                 raise _recorded_error("RuntimeError")
+            if name.startswith("hosting."):
+                # A DigitalOcean read whose answer died with the process is completed as
+                # unavailable, never sent again: the pot waits for the next window's
+                # read, and a resume never depends on DigitalOcean (world/hosting.py).
+                self.append({"kind": "io.result", "call": seq, "error": "OSError"})
+                raise _recorded_error("OSError")
             if not _read_only(name) and name != "treasury.rail.send":
                 self.fail(f"unacknowledged external write {name} at seq {seq}; "
                           "refusing to submit it twice")

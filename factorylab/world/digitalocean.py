@@ -326,13 +326,19 @@ def _by_id(raw: Any, droplet_id: int) -> bool:
 
 
 def droplet_uuid(rows: list, droplet_id: int) -> str | None:
-    """The droplet's billing uuid, from its own ``Droplets`` line, matched by id."""
+    """The droplet's billing uuid, from its own ``Droplets`` line, matched by id.
+
+    ``None`` while no such line has been seen: unknown. ``""`` when the droplet's own
+    line carries no uuid: known to have none, so lines are matched by id alone.
+    """
+    found = None
     for raw in rows:
-        uuid = raw.get("resource_uuid") if isinstance(raw, dict) else None
-        if (_by_id(raw, droplet_id) and raw.get("product") == DROPLET_PRODUCT
-                and isinstance(uuid, str) and _UUID.fullmatch(uuid)):
-            return uuid.lower()
-    return None
+        if _by_id(raw, droplet_id) and raw.get("product") == DROPLET_PRODUCT:
+            uuid = raw.get("resource_uuid")
+            if isinstance(uuid, str) and _UUID.fullmatch(uuid):
+                return uuid.lower()
+            found = ""
+    return found
 
 
 def _is_mine(raw: Any, droplet_id: int, uuid: str | None) -> bool:
@@ -347,7 +353,7 @@ def _is_mine(raw: Any, droplet_id: int, uuid: str | None) -> bool:
     if not isinstance(raw, dict):
         return False
     named = raw.get("resource_uuid")
-    if uuid is not None and isinstance(named, str) and named.lower() == uuid:
+    if uuid and isinstance(named, str) and named.lower() == uuid:
         return True
     return _by_id(raw, droplet_id) and raw.get("product") in DROPLET_PRODUCTS
 
@@ -536,21 +542,20 @@ class DigitalOceanClient:
                 "droplet_held": droplet is not None and droplet["id"] == int(droplet_id),
                 "metadata_id": self.metadata_droplet_id(deadline), "droplet": droplet}
 
-    def lines(self, invoice: str, period: str, droplet_id: int,
-              deadline: Deadline | float, uuid: str | None = None) -> dict[str, Any]:
-        """One invoice's lines (``preview`` for the month so far): this droplet's, parsed
-        strictly, how many other lines it had, unparsed, and the droplet's billing uuid
-        (``uuid`` as known, else learned from this invoice's own droplet line)."""
-        deadline = _deadline(deadline)
-        target = "preview" if invoice == "preview" else invoice
-        if target != "preview" and _UUID.fullmatch(target) is None:
+    def _rows(self, invoice: str, deadline: Deadline) -> list:
+        """One invoice's raw lines (``preview`` for the month so far), every page."""
+        if invoice != "preview" and _UUID.fullmatch(invoice) is None:
             raise DigitalOceanError(None, "invoice uuid is malformed")
-        rows, _ = self._pages(f"/v2/customers/my/invoices/{target}", "invoice_items",
+        rows, _ = self._pages(f"/v2/customers/my/invoices/{invoice}", "invoice_items",
                               deadline)
-        uuid = uuid or droplet_uuid(rows, droplet_id)
-        mine = [_line(row, period, target) for row in rows
+        return rows
+
+    @staticmethod
+    def _classify(rows: list, invoice: str, period: str, droplet_id: int,
+                  uuid: str | None) -> dict[str, Any]:
+        mine = [_line(row, period, invoice) for row in rows
                 if _is_mine(row, droplet_id, uuid)]
-        return {"mine": mine, "others": len(rows) - len(mine), "uuid": uuid}
+        return {"mine": mine, "others": len(rows) - len(mine)}
 
     def billing(self, droplet_id: int, *, since: str, done: list[str],
                 budget_s: float, uuid: str | None = None) -> dict[str, Any]:
@@ -560,9 +565,14 @@ class DigitalOceanClient:
         published sizes, the preview's period and this droplet's preview lines, up to
         ``INVOICES_PER_READ`` closed invoices not yet reconciled (every one with a
         period at or after ``since`` and a uuid not in ``done``, oldest first, each
-        with this droplet's lines), how many invoices are still waiting, and the
-        billing history's first page, read leniently. One call, so a journal records
-        and replays it as one read.
+        with this droplet's lines), the periods still waiting, and the billing
+        history's first page, read leniently. One call, so a journal records and
+        replays it as one read.
+
+        The droplet's billing uuid (``uuid`` as known, else learned from the droplet's
+        own line on the preview or on any invoice read) is settled before any line is
+        classified. While it is unknown, no closed invoice is returned: an invoice is
+        reconciled only once its lines can be told apart, and waits until then.
         """
         deadline = Deadline(budget_s)
         identity = self.identity(droplet_id, deadline)
@@ -575,21 +585,27 @@ class DigitalOceanClient:
         waiting = sorted((inv for inv in invoices
                           if inv["period"] >= since and inv["uuid"] not in done),
                          key=lambda inv: (inv["period"], inv["uuid"]))
-        closed = []
-        for invoice in waiting[:INVOICES_PER_READ]:
-            found = self.lines(invoice["uuid"], invoice["period"], droplet_id, deadline,
-                               uuid)
-            uuid = uuid or found.pop("uuid")
-            found.pop("uuid", None)
-            closed.append({**invoice, **found})
-        current = self.lines("preview", period, droplet_id, deadline, uuid)
+        preview_rows = self._rows("preview", deadline)
+        read = [(inv, self._rows(inv["uuid"], deadline))
+                for inv in waiting[:INVOICES_PER_READ]]
+        if uuid is None:
+            for found in (preview_rows, *(raw for _, raw in read)):
+                uuid = droplet_uuid(found, droplet_id)
+                if uuid is not None:
+                    break
+        current = self._classify(preview_rows, "preview", period, droplet_id, uuid)
+        closed = ([] if uuid is None else
+                  [{**inv, **self._classify(raw, inv["uuid"], inv["period"], droplet_id,
+                                            uuid)} for inv, raw in read])
+        pending = waiting[len(closed):]
         sizes = self.sizes(deadline)
         raw = self._get(f"/v2/customers/my/billing_history?per_page={PER_PAGE}&page=1",
                         deadline)
         history = raw.get("billing_history") if isinstance(raw, dict) else None
         entries = [e for e in (_entry(row) for row in history or []) if e is not None]
         return {"identity": identity, "droplet": droplet, "sizes": sizes,
-                "droplet_uuid": current["uuid"],
+                "droplet_uuid": uuid,
                 "period": period, "lines": current["mine"], "others": current["others"],
-                "closed": closed, "waiting": len(waiting) - len(closed),
+                "closed": closed, "waiting": len(pending),
+                "waiting_periods": sorted({inv["period"] for inv in pending}),
                 "unreadable_invoices": len(rows) - len(invoices), "history": entries}

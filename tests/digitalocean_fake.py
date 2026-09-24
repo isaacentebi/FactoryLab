@@ -108,6 +108,7 @@ class FakeDigitalOcean:
         self.down = False
         self.stall = None                          # a callable run before each answer
         self.untagged = False                      # lines that name no resource
+        self.uuid_of: dict[str, str] = {}          # resource -> the uuid its lines carry
 
     # ---- the account's own model -------------------------------------------------------
 
@@ -163,13 +164,14 @@ class FakeDigitalOcean:
                  if self.hours(rid, month, month_start(next_month(month)))}
         return self._invoice(month, lines, tax, promo)
 
-    def post_supplement(self, month, lines):
+    def post_supplement(self, month, lines, *, uuid=None):
         """A second invoice for a month, with its own lines."""
-        return self._invoice(month, {rid: Decimal(v) for rid, v in lines.items()}, "0", "0")
+        return self._invoice(month, {rid: Decimal(v) for rid, v in lines.items()}, "0", "0",
+                             uuid)
 
-    def _invoice(self, month, lines, tax, promo):
+    def _invoice(self, month, lines, tax, promo, uuid=None):
         total = sum(lines.values(), Decimal(0)) + Decimal(tax)
-        invoice = {"uuid": str(uuidlib.uuid4()), "period": month, "lines": lines,
+        invoice = {"uuid": uuid or str(uuidlib.uuid4()), "period": month, "lines": lines,
                    "amount": total}
         self.invoices.append(invoice)
         self.history.append({"type": "Invoice", "amount": total, "date": self.now,
@@ -182,6 +184,14 @@ class FakeDigitalOcean:
     def pay(self, usd, kind="Payment"):
         self.history.append({"type": kind, "amount": -Decimal(usd), "date": self.now,
                              "invoice_uuid": None})
+
+    def visible(self, resource_id, month) -> Decimal:
+        """What DigitalOcean shows for a resource in a month now: its invoices once one
+        posted, else the preview's figure (generated daily)."""
+        if any(inv["period"] == month for inv in self.invoices):
+            return self.billed(resource_id, month)
+        until = min(self.generated(), month_start(next_month(month)))
+        return self.accrued(resource_id, month, until).quantize(CENT, ROUND_HALF_UP)
 
     def billed(self, resource_id, month) -> Decimal:
         """What DigitalOcean finally charged the resource for the month, over every invoice."""
@@ -309,7 +319,8 @@ class FakeDigitalOcean:
             items.append({"product": res["product"],
                           "resource_id": "" if self.untagged else res["billed_as"],
                           "resource_uuid": "" if self.untagged
-                          else str(uuidlib.uuid5(uuidlib.NAMESPACE_URL, rid)),
+                          else self.uuid_of.get(rid,
+                                                str(uuidlib.uuid5(uuidlib.NAMESPACE_URL, rid))),
                           "group_description": "", "description": res["description"],
                           "amount": f"{amount:.2f}",
                           "duration": str(max(0, int((end - start) // HOUR))),

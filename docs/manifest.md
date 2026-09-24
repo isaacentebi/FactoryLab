@@ -1753,7 +1753,9 @@ its `product` is one billed against a droplet (`DROPLET_PRODUCTS`: `Droplets`,
 invoice's names, and a line carrying the droplet's uuid is matched whatever its product is
 called). The droplet object carries no uuid (docs.digitalocean.com/reference/api/reference/droplets/),
 so the billing uuid is learned from the droplet's own `Droplets` line, matched by id, and
-checkpointed. A snapshot or volume whose numeric id happens to equal the droplet's has
+checkpointed. It is settled before any line of a read is classified (from the preview, or from
+any invoice read with it); while it is still unknown, no closed invoice is reconciled: it
+waits, unread as foreign, until its lines can be told apart. A snapshot or volume whose numeric id happens to equal the droplet's has
 neither that uuid nor a droplet product, and is not matched. Only this droplet's lines are
 parsed, strictly (exact decimal amounts, ISO 8601 `start_time` and `end_time`); every other
 line, whatever it holds, is only counted, so no other resource's line can make a read fail.
@@ -1776,7 +1778,11 @@ many of its lines were this droplet's and how many were not.
 
 **The launch month.** What the droplet accrued before the launch is not this world's burn.
 It is each of this droplet's launch-month lines' amount shared by DigitalOcean's own span for
-the line, `start_time` to `end_time`: the share before the launch. Only a reading in which
+the line, `start_time` to `end_time`: the share before the launch. It is recomputed, with its
+bound, from the current version of every launch-month line on each read while the month is
+open, supplemental invoices for it included, so a line that appears late (a backup billed
+from before the launch) or a revision moves it, and the month's burn is booked from that
+recomputation. Only a reading in which
 one of those lines reaches past the launch can say it (the preview is generated daily, so the
 first reading after a launch often cannot); until one does, the launch month books nothing,
 the pot says `launch_share: "pending"`, and the diary says so once
@@ -1791,7 +1797,10 @@ discounts the end of a month, which sharing spreads over the whole of it. So the
 share, every `hosting_burn` and `hosting_burn_reversed` item for the launch month, and the
 launch month's entry in the pot's `burn_by_month` carry `estimated: true` and
 `overshoot_bound_micro`: the most the booked launch-month burn can exceed the true
-post-launch charge by. For the droplet's own line it is the pre-launch part of the line's
+post-launch charge by, and `estimate_final`, which becomes true only once the launch month has
+closed, an invoice for it carrying this droplet's lines is reconciled, and no invoice known
+for it is still waiting. At every read the booked launch-month burn is at most the published
+bound plus the true post-launch charge. For the droplet's own line it is the pre-launch part of the line's
 discount against the droplet's published hourly price for the hours in its span (the true
 pre-launch charge is at most that price for those hours); for any other line billed against
 the droplet, whose accrual over its span is not reported, it is that line's whole post-launch
@@ -1824,7 +1833,9 @@ requests it makes: the name is looked up with the system resolver through
 `getent ahostsv4` in a child process killed at the deadline (the system call has no timeout
 of its own, and no thread is started), and the connection (to that address, TLS still
 validating the host name), the handshake, the send and every receive are bounded by what the
-deadline leaves. Nothing is retried. So the read can delay the event it runs in, and with it
+deadline leaves. Nothing is retried. A read whose answer died with the process (an `io.call` for
+`hosting.*` with no `io.result`) is completed on resume as unavailable and never sent again,
+as an interrupted model completion is. So the read can delay the event it runs in, and with it
 the world's next event, by at most a tick over `min_ratio`. A read that fails or passes its
 deadline books nothing (`treasury.hosting_unread`, ledgered once per reason) and the next
 window reads again.

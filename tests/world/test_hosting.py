@@ -78,14 +78,26 @@ def ledgered(w, month) -> int:
                   if r["month"] == month))
 
 
-def assert_months(w, months):
-    """Each invoiced month's booked burn is what the fake charged after the launch."""
+def launch_bound(w) -> int:
+    entry = next((m for m in w.hosting.view()["burn_by_month"]
+                  if m["month"] == w.launch.strftime("%Y-%m")), None)
+    return entry["overshoot_bound_micro"] if entry else 0
+
+
+def assert_months(w, months, extra=None):
+    """Each invoiced month's booked burn is what the fake charged after the launch: exactly
+    for every month but the launch month, whose pre-launch share is an estimate that may
+    over-reach by at most its published bound (and falls short by under a cent)."""
     booked = w.hosting.burn_by_month()
     for month in months:
-        slack = CENT_MICRO if month == w.launch.strftime("%Y-%m") else 0
-        assert abs(booked.get(month, 0) - truth(w, month)) <= slack, (
-            month, booked.get(month), truth(w, month))
-        assert ledgered(w, month) == booked.get(month, 0)
+        expected = truth(w, month) + (extra or {}).get(month, 0)
+        got = booked.get(month, 0)
+        if month == w.launch.strftime("%Y-%m"):
+            assert expected - CENT_MICRO <= got <= expected + launch_bound(w) + CENT_MICRO, (
+                month, got, expected, launch_bound(w))
+        else:
+            assert got == expected, (month, got, expected)
+        assert ledgered(w, month) == got
 
 
 def assert_wallet_untouched(w):
@@ -225,18 +237,19 @@ def test_a_month_that_ends_while_the_preview_still_shows_it_books_once():
 
 def test_late_adjustments_up_and_down_are_followed():
     w = world()
-    windows(w, 2)
+    windows(w, 12)                           # into October, a month measured whole
     w.fake.adjust(w.droplet, "1.25")
     windows(w, 1)
     w.fake.adjust(w.droplet, "-0.75")
     windows(w, 1)
-    assert items(w, "treasury.hosting_burn_reversed")
-    w.fake.advance(24 * 10)                  # September ends
-    w.fake.adjust(w.droplet, "-0.30", month="2026-09")
+    assert [r["month"] for r in items(w, "treasury.hosting_burn_reversed")] == ["2026-10"]
+    w.fake.advance(24 * 29)                  # October ends
+    w.fake.adjust(w.droplet, "-0.30", month="2026-10")
     w.observe()
     w.fake.post_invoice("2026-09")
-    w.observe()
-    assert_months(w, ["2026-09"])
+    w.fake.post_invoice("2026-10")
+    windows(w, 2, hours=1)
+    assert_months(w, ["2026-09", "2026-10"])
 
 
 def test_a_month_below_zero_is_not_booked_below_zero():
@@ -293,8 +306,8 @@ def test_the_droplets_backups_are_its_burn_and_a_snapshot_sharing_its_id_is_not(
     windows(w, 1)
     backups = micro(w.fake.billed("bk-1", "2026-09"))
     assert backups > 0 and micro(w.fake.billed("snap-1", "2026-09")) > 0
-    booked = w.hosting.burn_by_month()["2026-09"]
-    assert abs(booked - (truth(w, "2026-09") + backups)) <= CENT_MICRO   # backups in
+    assert_months(w, ["2026-09"], extra={"2026-09": backups -   # backups in, pre-launch out
+                                         micro(w.fake.accrued_before("bk-1", w.launch))})
     reconciled = items(w, "treasury.hosting_invoice")[0]
     assert (reconciled["lines"], reconciled["other_lines"]) == (2, 2)     # snapshot out
 
@@ -392,7 +405,8 @@ def test_the_books_survive_a_checkpoint_and_book_on_from_it():
     twin.observe()
     # Measured from the launch the checkpoint carries, not from when the twin started.
     assert twin.hosting.launch_ns == w.hosting.launch_ns
-    assert abs(twin.hosting.burn_by_month()["2026-09"] - truth(w, "2026-09")) <= CENT_MICRO
+    got, expected = twin.hosting.burn_by_month()["2026-09"], truth(w, "2026-09")
+    assert expected - CENT_MICRO <= got <= expected + launch_bound(twin) + CENT_MICRO
 
 
 def test_the_token_never_reaches_the_ledger_even_when_an_error_echoes_it(monkeypatch):
@@ -419,11 +433,12 @@ def test_the_launch_months_burn_is_labelled_an_estimate_with_its_bound(late):
     windows(w, 2)
     share = items(w, "treasury.hosting_launch_share")[0]
     assert share["estimated"] is True and share["source"] == ("invoice" if late else "preview")
-    bound = share["overshoot_bound_micro"]
-    assert bound >= 0 and "at most overshoot_bound_micro" in share["bound"]
+    assert share["overshoot_bound_micro"] >= 0
+    assert "at most overshoot_bound_micro" in share["bound"]
+    bound = items(w, "treasury.hosting_launch_share")[-1]["overshoot_bound_micro"]
     launch = [r for r in items(w, "treasury.hosting_burn") + items(
         w, "treasury.hosting_burn_reversed") if r["month"] == "2026-09"]
-    assert launch and all(r["estimated"] is True and r["overshoot_bound_micro"] == bound
+    assert launch and all(r["estimated"] is True and r["overshoot_bound_micro"] >= 0
                           for r in launch)
     later = [r for r in items(w, "treasury.hosting_burn") if r["month"] != "2026-09"]
     assert later and all(r["estimated"] is False for r in later)
@@ -436,3 +451,98 @@ def test_the_launch_months_burn_is_labelled_an_estimate_with_its_bound(late):
     assert overshoot <= bound + CENT_MICRO
     if late:
         assert overshoot > CENT_MICRO        # the capped invoice made it a real estimate
+
+
+# --- Codex on e78b8ae --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("name", ["hosting.billing", "hosting.droplet", "hosting.catalogue"])
+def test_an_interrupted_hosting_read_replays_as_unavailable_and_is_never_sent(name):
+    """A crash between a hosting read's io.call and its io.result: the resume completes
+    the call as unavailable and asks DigitalOcean nothing."""
+    import hashlib
+
+    from factorylab.kernel.ledger import canonical
+    from factorylab.runtime.resume import RecoveryJournal, encode
+
+    recorded = []
+
+    def append(item):
+        recorded.append(item)
+        return len(recorded) - 1
+
+    journal = RecoveryJournal(SimpleNamespace(append=append), lambda: 0)
+    journal.active = journal.recovering = True
+    args = (599960972,)
+    fingerprint = hashlib.sha256(canonical(encode((args, {})))).hexdigest()
+    journal.tail = [{"kind": "io.call", "name": name, "input_hash": fingerprint,
+                     "seq": 0, "ts": 0}]
+    fake = FakeDigitalOcean()
+    live = DigitalOceanClient(http=fake)
+    with pytest.raises(OSError):
+        journal.call(name, lambda *a: live.identity(a[0], 10), args, {})
+    assert fake.calls == []                          # zero DigitalOcean calls
+    assert recorded == [{"kind": "io.result", "call": 0, "error": "OSError"}]
+
+
+def test_a_uuid_only_attached_line_on_a_supplement_read_first_is_booked_not_dropped():
+    """The first read finds a closed supplemental invoice, ordered before the month's main
+    invoice, whose only line names the droplet by uuid alone. It is booked once the uuid is
+    known, never reconciled as foreign."""
+    import uuid as uuidlib
+
+    w = world()
+    w.fake.down = True
+    windows(w, 9)                            # nothing read until October
+    w.fake.post_invoice("2026-09")
+    droplet_uuid = str(uuidlib.uuid5(uuidlib.NAMESPACE_URL, w.droplet))
+    supplement = w.fake.post_supplement("2026-09", {"attached-1": "2.50"},
+                                        uuid="00000000-0000-4000-8000-00000000000a")
+    w.fake.resources["attached-1"] = {**w.fake.resources[w.droplet],
+                                      "product": "Reserved Capacity", "billed_as": ""}
+    w.fake.uuid_of["attached-1"] = droplet_uuid          # billed against the droplet's uuid
+    w.fake.down = False
+    windows(w, 3, hours=1)
+    assert supplement["uuid"] in w.hosting.reconciled
+    reconciled = {r["uuid"]: r for r in items(w, "treasury.hosting_invoice")}
+    assert reconciled[supplement["uuid"]]["lines"] == 1          # matched, not foreign
+    assert w.hosting.lines["2026-09"] and sum(
+        v for k, v in w.hosting.lines["2026-09"].items()
+        if k.startswith(supplement["uuid"])) == 2_500_000
+
+
+def test_the_launch_share_follows_a_backup_line_that_arrives_after_the_first_read():
+    """The pre-launch share and its bound are recomputed from every current launch-month
+    line on each read: a backup billed from before the launch, appearing later, is not
+    booked as post-launch burn. At every read: booked <= bound + true post-launch."""
+    w = world()
+    ours = [w.droplet]
+
+    def check():
+        booked = w.hosting.burn_by_month().get("2026-09", 0)
+        entry = next((m for m in w.hosting.view()["burn_by_month"]
+                      if m["month"] == "2026-09"), None)
+        bound = entry["overshoot_bound_micro"] if entry else 0
+        post = sum(micro(w.fake.visible(r, "2026-09")) for r in ours) - sum(
+            micro(w.fake.accrued_before(r, w.launch)) for r in ours)
+        assert booked <= bound + max(0, post) + CENT_MICRO, (booked, bound, post)
+        if entry:
+            assert entry["estimated"] is True
+
+    windows(w, 2)
+    check()
+    # A weekly backup, billed against the droplet since the start of the month, whose
+    # line only now appears.
+    w.fake.add("bk-1", "Droplet Backups", "0.00357", "weekly", billed_as=w.droplet,
+               since=month_start("2026-09"))
+    ours.append("bk-1")
+    for _ in range(4):
+        windows(w, 1)
+        check()
+    assert w.hosting.view()["burn_by_month"][0]["estimate_final"] is False
+    w.fake.advance(24 * 3)
+    w.fake.post_invoice("2026-09")
+    windows(w, 1)
+    check()
+    assert w.hosting.view()["burn_by_month"][0]["estimate_final"] is True
+    shares = items(w, "treasury.hosting_launch_share")
+    assert len(shares) > 1                            # recomputed as lines changed
