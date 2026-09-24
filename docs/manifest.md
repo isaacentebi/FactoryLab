@@ -460,7 +460,9 @@ proved right, and one that only repeats the base rate earns 0.5. `y` is:
 
 - for a return that executed venue operations (or earned service income):
   `return_paid_off`, 0 or 1, fixed when its lots close or marked at the
-  consequence backstop;
+  consequence backstop. A venue write counts once the venue accepted it or may
+  have (`uncertain`); a return whose every write the venue rejected executed
+  nothing;
 - for a return that executed nothing and named a declined trade
   (`counterfactual {coin, side}`): `opportunity-cost-v2`,
   `y = 0.5 - 0.5 * tanh(g / opportunity_scale_bps)` with `g` the trade's gross
@@ -475,7 +477,8 @@ proved right, and one that only repeats the base rate earns 0.5. `y` is:
 graded by realized consequence, the priced road not taken included). A final
 answer of ProducerReturn, Exposure or a declared kind whose reward shape is
 `judged` or `exposure`, from a decision that executed no venue operation (no venue
-write through a tool and no answer order it may place), carries `counterfactual
+write the venue accepted or left `uncertain`, and no answer order it may place),
+carries `counterfactual
 {coin, side}`: `side` is `buy` or `sell`, and `coin` is a key of `recent_mids` (the
 world's broadcast mids, the record the trade is priced from) when the return is
 made. Without it the return is `malformed`
