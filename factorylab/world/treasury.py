@@ -501,7 +501,8 @@ class Treasury:
         try:
             reading = hosting.client.billing(
                 hosting.droplet_id, since=hosting.since, done=list(hosting.reconciled),
-                budget_s=hosting.budget_s, uuid=hosting.droplet_uuid)
+                budget_s=hosting.budget_s, uuid=hosting.droplet_uuid or None,
+                cursor=hosting.cursor)
         except Exception:  # noqa: BLE001 - an unread custodian is unknown, not empty
             # A fixed reason, never the exception's class: a replay raises the recorded
             # failure under another class, and the diary must read the same.
@@ -527,6 +528,10 @@ class Treasury:
                         **result["launch_price"])
         for invoice in result["reconciled"]:
             self._write("hosting_invoice", **invoice)
+        for invoice in result["held"]:
+            # Read, and not yet classifiable with certainty: never called done, and
+            # read again in its turn (the reason says why).
+            self._write("hosting_invoice_pending", **invoice)
         if result["baseline"] is not None:
             self._write("hosting_launch_share", **common, **result["baseline"])
         if result["pending"]:

@@ -112,6 +112,9 @@ class FakeDigitalOcean:
         self.span_of: dict[str, tuple] = {}        # resource -> the span its lines state
         self.duplicated: set[str] = set()          # resources whose line is billed twice
         self.bad_index_row = False                 # an invoice row with no usable identity
+        # When set, the droplet's own line carries its uuid only on these invoices (and
+        # never on the preview); elsewhere its resource_uuid is empty.
+        self.uuid_only_in: set[str] | None = None
 
     # ---- the account's own model -------------------------------------------------------
 
@@ -124,7 +127,7 @@ class FakeDigitalOcean:
             "product": product, "hourly": Decimal(hourly),
             "monthly": None if monthly is None else Decimal(monthly),
             "description": description, "since": since or self.now, "until": None,
-            "billed_as": billed_as or resource_id}
+            "billed_as": resource_id if billed_as is None else billed_as}
 
     def remove(self, resource_id):
         self.resources[resource_id]["until"] = self.now
@@ -160,12 +163,14 @@ class FakeDigitalOcean:
         cap = self.resources[resource_id]["monthly"]
         return (min(amount, cap) if cap is not None else amount).quantize(CENT, ROUND_HALF_UP)
 
-    def post_invoice(self, month, *, promo="0", tax="0"):
-        """A month's invoice posts: a line per resource, and tax on the invoice."""
+    def post_invoice(self, month, *, promo="0", tax="0", uuid=None, only=None):
+        """A month's invoice posts: a line per resource (or per resource in ``only``),
+        and tax on the invoice."""
         assert month_start(next_month(month)) <= self.now, "a month is invoiced once it ends"
         lines = {rid: self.final(rid, month) for rid in self.resources
-                 if self.hours(rid, month, month_start(next_month(month)))}
-        return self._invoice(month, lines, tax, promo)
+                 if self.hours(rid, month, month_start(next_month(month)))
+                 and (only is None or rid in only)}
+        return self._invoice(month, lines, tax, promo, uuid)
 
     def post_supplement(self, month, lines, *, uuid=None):
         """A second invoice for a month, with its own lines."""
@@ -325,7 +330,9 @@ class FakeDigitalOcean:
             start, end = self.span_of.get(rid, (start, end))
             items.append({"product": res["product"],
                           "resource_id": "" if self.untagged else res["billed_as"],
-                          "resource_uuid": "" if self.untagged
+                          "resource_uuid": "" if self.untagged or (
+                              self.uuid_only_in is not None and rid == str(self.droplet_id)
+                              and which not in self.uuid_only_in)
                           else self.uuid_of.get(rid,
                                                 str(uuidlib.uuid5(uuidlib.NAMESPACE_URL, rid))),
                           "group_description": "", "description": res["description"],

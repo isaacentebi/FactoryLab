@@ -1739,8 +1739,11 @@ docs.digitalocean.com/reference/api/reference/billing/):
   the whole read unavailable: an invoice nobody can place might be this droplet's, so
   nothing is booked from that read and the launch estimate does not become final;
 - `GET /v2/customers/my/invoices/{invoice_uuid}` for up to two finalized invoices of the
-  launch month or later that have not been reconciled, oldest first, each read once by
-  its uuid (a month can have several invoices);
+  launch month or later that have not been reconciled, each reconciled once by its uuid (a
+  month can have several invoices). They are read from a checkpointed cursor that rotates
+  through the waiting invoices in (period, uuid) order, so each of n waiting invoices is
+  read within ceil(n / 2) reads: within that bound every one is reconciled, or held for a
+  stated reason, or its read failed and the whole read is unavailable;
 - `GET /v2/customers/my/invoices/preview`: the month's accruing lines ("an invoice preview
   is generated daily, which can be accessed with the `preview` keyword in place of
   `$INVOICE_UUID`");
@@ -1755,9 +1758,14 @@ its `product` is one billed against a droplet (`DROPLET_PRODUCTS`: `Droplets`,
 invoice's names, and a line carrying the droplet's uuid is matched whatever its product is
 called). The droplet object carries no uuid (docs.digitalocean.com/reference/api/reference/droplets/),
 so the billing uuid is learned from the droplet's own `Droplets` line, matched by id, and
-checkpointed. It is settled before any line of a read is classified (from the preview, or from
-any invoice read with it); while it is still unknown, no closed invoice is reconciled: it
-waits, unread as foreign, until its lines can be told apart. A snapshot or volume whose numeric id happens to equal the droplet's has
+checkpointed once a valid one is actually seen; until then it is unknown, nothing else is
+ever recorded in its place, and every read looks for it again (on the preview, and on every
+invoice read with it) before any line of that read is classified. While it is unknown, the
+id-and-product match still books what it matches with certainty, and a line that names a uuid
+and could be the droplet's (it names no id, or the droplet's id under another product) cannot
+be classified: an invoice holding one is held (`treasury.hosting_invoice_pending`, reason
+`uuid unknown`), never called reconciled, and read again in its turn. An invoice is reconciled
+only when every line in it is classified with certainty. A snapshot or volume whose numeric id happens to equal the droplet's has
 neither that uuid nor a droplet product, and is not matched. Only this droplet's lines are
 parsed, strictly (exact decimal amounts, ISO 8601 `start_time` and `end_time`, and an
 ordered span: a line that ends before it starts makes the whole read unavailable); every

@@ -700,3 +700,74 @@ def test_an_unreadable_invoice_row_makes_the_read_unavailable_and_nothing_final(
     w.fake.bad_index_row = False
     windows(w, 1, hours=1)
     assert w.hosting.estimate_final is True
+
+
+# --- Codex on 7bf7569 --------------------------------------------------------------------------
+
+def _uuid_only_charge(w, name="att-1", hourly="0.00200"):
+    """A charge DigitalOcean bills against the droplet by its uuid alone: no id."""
+    import uuid as uuidlib
+
+    w.fake.add(name, "Reserved IPv4", hourly, "attached", billed_as="",
+               since=month_start("2026-09"))
+    w.fake.uuid_of[name] = str(uuidlib.uuid5(uuidlib.NAMESPACE_URL, w.droplet))
+
+
+def test_a_droplet_line_without_a_uuid_is_not_a_verdict_and_a_later_uuid_is_learned():
+    w = world()
+    _uuid_only_charge(w)
+    w.fake.uuid_of[w.droplet] = ""            # the droplet's own line names no uuid, yet
+    windows(w, 3)
+    assert w.hosting.droplet_uuid is None     # unknown, never a checkpointed sentinel
+    assert w.hosting.state()["droplet_uuid"] is None
+    booked = w.hosting.burn_by_month()["2026-09"]
+    del w.fake.uuid_of[w.droplet]             # now it does
+    windows(w, 1)
+    assert w.hosting.droplet_uuid is not None
+    assert w.hosting.burn_by_month()["2026-09"] > booked
+    w.fake.advance(24 * 8)
+    w.fake.post_invoice("2026-09")
+    windows(w, 1)
+    attached = micro(w.fake.billed("att-1", "2026-09")) - micro(
+        w.fake.accrued_before("att-1", w.launch))
+    assert attached > 0
+    assert_months(w, ["2026-09"], extra={"2026-09": attached})
+
+
+def test_the_identifying_line_in_the_third_waiting_invoice_is_found_within_two_reads():
+    w = world()
+    _uuid_only_charge(w)
+    w.fake.down = True
+    windows(w, 9)                             # nothing read until October
+    first, second, third = (f"00000000-0000-4000-8000-00000000000{n}" for n in (1, 2, 3))
+    # Two supplements holding only the uuid-only charge, then the month's own invoice,
+    # the one line anywhere that names the droplet's uuid.
+    w.fake.uuid_only_in = {third}
+    w.fake.post_supplement("2026-09", {"att-1": "1.00"}, uuid=first)
+    w.fake.post_supplement("2026-09", {"att-1": "2.00"}, uuid=second)
+    w.fake.post_invoice("2026-09", uuid=third, only={w.droplet})
+    w.fake.down = False
+    windows(w, 2, hours=1)
+    assert w.hosting.droplet_uuid is not None and third in w.hosting.reconciled
+    windows(w, 2, hours=1)
+    assert {first, second, third} <= set(w.hosting.reconciled)
+    september = sum(w.hosting.lines["2026-09"].values())
+    assert september == micro(w.fake.billed(w.droplet, "2026-09")) + 3_000_000
+
+
+def test_an_invoice_with_an_unclassifiable_uuid_only_line_stays_pending():
+    w = world()
+    _uuid_only_charge(w)
+    w.fake.uuid_only_in = set()               # the droplet's uuid is never shown
+    w.fake.down = True
+    windows(w, 9)
+    held = w.fake.post_supplement("2026-09", {"att-1": "1.00"})["uuid"]
+    plain = w.fake.post_invoice("2026-09", only={w.droplet})["uuid"]
+    w.fake.down = False
+    windows(w, 4, hours=1)
+    assert w.hosting.droplet_uuid is None
+    assert plain in w.hosting.reconciled      # every line classified with certainty
+    assert held not in w.hosting.reconciled   # re-read, never called foreign
+    pending = items(w, "treasury.hosting_invoice_pending")
+    assert [(p["uuid"], p["reason"]) for p in pending] == [(held, "uuid unknown")]
+    assert w.hosting.estimate_final is False

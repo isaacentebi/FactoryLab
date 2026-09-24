@@ -334,17 +334,33 @@ def _by_id(raw: Any, droplet_id: int) -> bool:
 def droplet_uuid(rows: list, droplet_id: int) -> str | None:
     """The droplet's billing uuid, from its own ``Droplets`` line, matched by id.
 
-    ``None`` while no such line has been seen: unknown. ``""`` when the droplet's own
-    line carries no uuid: known to have none, so lines are matched by id alone.
+    ``None`` until a valid uuid is actually seen: a droplet line without one says
+    nothing about the next, so the uuid stays unknown and is looked for again.
     """
-    found = None
     for raw in rows:
         if _by_id(raw, droplet_id) and raw.get("product") == DROPLET_PRODUCT:
             uuid = raw.get("resource_uuid")
             if isinstance(uuid, str) and _UUID.fullmatch(uuid):
                 return uuid.lower()
-            found = ""
-    return found
+    return None
+
+
+def _uncertain(raw: Any, droplet_id: int) -> bool:
+    """Whether a line cannot be classified while the droplet's uuid is unknown.
+
+    A line that names a uuid and is not the droplet's by id and product, yet could be
+    (it names no id, or the droplet's id under another product), might be a charge
+    billed against the droplet by its uuid alone.
+    """
+    if not isinstance(raw, dict):
+        return False
+    named = raw.get("resource_uuid")
+    if not (isinstance(named, str) and _UUID.fullmatch(named)):
+        return False
+    if _is_mine(raw, droplet_id, None):
+        return False
+    resource = raw.get("resource_id")
+    return resource in (None, "") or _by_id(raw, droplet_id)
 
 
 def _is_mine(raw: Any, droplet_id: int, uuid: str | None) -> bool:
@@ -586,21 +602,29 @@ class DigitalOceanClient:
         return {"mine": mine, "others": len(rows) - len(mine)}
 
     def billing(self, droplet_id: int, *, since: str, done: list[str],
-                budget_s: float, uuid: str | None = None) -> dict[str, Any]:
+                budget_s: float, uuid: str | None = None,
+                cursor: list | None = None) -> dict[str, Any]:
         """One window's billing observation, whole or not at all, within ``budget_s``.
 
         Returns the identity (account, droplet, metadata), the droplet itself, the
-        published sizes, the preview's period and this droplet's preview lines, up to
-        ``INVOICES_PER_READ`` closed invoices not yet reconciled (every one with a
-        period at or after ``since`` and a uuid not in ``done``, oldest first, each
-        with this droplet's lines), the periods still waiting, and the billing
-        history's first page, read leniently. One call, so a journal records and
-        replays it as one read.
+        published sizes, the preview's period and this droplet's preview lines, the
+        closed invoices read this time and classified with certainty (each with this
+        droplet's lines), those read and held for a stated reason, the cursor to
+        resume from, the periods still waiting, and the billing history's first page,
+        read leniently. One call, so a journal records and replays it as one read.
 
-        The droplet's billing uuid (``uuid`` as known, else learned from the droplet's
-        own line on the preview or on any invoice read) is settled before any line is
-        classified. While it is unknown, no closed invoice is returned: an invoice is
-        reconciled only once its lines can be told apart, and waits until then.
+        The waiting invoices (every one with a period at or after ``since`` and a uuid
+        not in ``done``) are read ``INVOICES_PER_READ`` at a time from ``cursor`` (the
+        last one read), in (period, uuid) order, wrapping round: every waiting invoice
+        is read within ceil(n / INVOICES_PER_READ) reads of n waiting. The droplet's
+        billing uuid (``uuid`` when known, else learned from the droplet's own line on
+        the preview or on any invoice read this time) is settled before any line is
+        classified, and is unknown until a valid one is seen. While it is unknown, a
+        line that names a uuid and could be the droplet's cannot be classified: its
+        invoice is held (``uuid unknown``), never called done, and read again in its
+        turn. So within ceil(n / INVOICES_PER_READ) reads every waiting invoice is
+        either reconciled or held for that stated reason, or its read failed and the
+        whole read is unavailable.
         """
         deadline = Deadline(budget_s)
         identity = self.identity(droplet_id, deadline)
@@ -618,19 +642,29 @@ class DigitalOceanClient:
         waiting = sorted((inv for inv in invoices
                           if inv["period"] >= since and inv["uuid"] not in done),
                          key=lambda inv: (inv["period"], inv["uuid"]))
+        after = tuple(cursor) if cursor else None
+        start = next((n for n, inv in enumerate(waiting)
+                      if after is not None and (inv["period"], inv["uuid"]) > after), 0)
+        batch = (waiting[start:] + waiting[:start])[:INVOICES_PER_READ]
         preview_rows = self._rows("preview", deadline)
-        read = [(inv, self._rows(inv["uuid"], deadline))
-                for inv in waiting[:INVOICES_PER_READ]]
+        read = [(inv, self._rows(inv["uuid"], deadline)) for inv in batch]
         if uuid is None:
             for found in (preview_rows, *(raw for _, raw in read)):
                 uuid = droplet_uuid(found, droplet_id)
                 if uuid is not None:
                     break
+        # The preview is re-read every window: what cannot be classified on it yet is
+        # simply not booked yet.
         current = self._classify(preview_rows, "preview", period, droplet_id, uuid)
-        closed = ([] if uuid is None else
-                  [{**inv, **self._classify(raw, inv["uuid"], inv["period"], droplet_id,
-                                            uuid)} for inv, raw in read])
-        pending = waiting[len(closed):]
+        closed, held = [], []
+        for inv, raw in read:
+            if uuid is None and any(_uncertain(row, droplet_id) for row in raw):
+                held.append({**inv, "reason": "uuid unknown"})
+            else:
+                closed.append({**inv, **self._classify(raw, inv["uuid"], inv["period"],
+                                                       droplet_id, uuid)})
+        reconciled = {inv["uuid"] for inv in closed}
+        pending = [inv for inv in waiting if inv["uuid"] not in reconciled]
         sizes = self.sizes(deadline)
         raw = self._get(f"/v2/customers/my/billing_history?per_page={PER_PAGE}&page=1",
                         deadline)
@@ -639,6 +673,7 @@ class DigitalOceanClient:
         return {"identity": identity, "droplet": droplet, "sizes": sizes,
                 "droplet_uuid": uuid,
                 "period": period, "lines": current["mine"], "others": current["others"],
-                "closed": closed, "waiting": len(pending),
+                "closed": closed, "held": held, "waiting": len(pending),
+                "cursor": [batch[-1]["period"], batch[-1]["uuid"]] if batch else None,
                 "waiting_periods": sorted({inv["period"] for inv in pending}),
                 "history": entries}

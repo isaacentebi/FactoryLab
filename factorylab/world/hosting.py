@@ -119,7 +119,7 @@ class HostingAccount:
     FIELDS = ("bound", "launch_ns", "lines", "baseline", "reconciled", "invoiced",
               "unmatched", "booked", "negative", "unread", "history", "snapshot",
               "pending_baseline", "pending_noted", "droplet_uuid", "spans",
-              "estimate_final", "launch_price")
+              "estimate_final", "launch_price", "cursor", "held")
 
     def __init__(self, client: Any, *, droplet_id: int, bound: dict[str, Any] | None,
                  launch_ns: int | None, budget_s: float) -> None:
@@ -151,6 +151,10 @@ class HostingAccount:
         # The droplet's hourly rate and monthly cap as first read in the launch month:
         # the prices its launch-month lines were billed at, whatever it is resized to.
         self.launch_price: dict[str, int] | None = None
+        # Where the next read of the waiting invoices starts: the last one read.
+        self.cursor: list | None = None
+        # Invoices read and held, by uuid, with the reason they could not be classified.
+        self.held: dict[str, str] = {}
 
     @property
     def since(self) -> str | None:
@@ -316,15 +320,24 @@ class HostingAccount:
             result_price = dict(self.launch_price)
         else:
             result_price = None
-        if self.droplet_uuid is None:
-            self.droplet_uuid = reading.get("droplet_uuid")
+        if not self.droplet_uuid and reading.get("droplet_uuid"):
+            # Only a valid uuid, actually seen, is ever kept: unknown is the only other
+            # state, and every read looks again.
+            self.droplet_uuid = reading["droplet_uuid"]
+        self.cursor = reading.get("cursor") or self.cursor
         result: dict[str, Any] = {"changes": [], "baseline": None, "unmatched": [],
                                   "cleared": [], "negative": [], "reconciled": [],
-                                  "entries": [], "launch_price": result_price}
+                                  "entries": [], "launch_price": result_price,
+                                  "held": []}
+        for invoice in reading.get("held", []):
+            if self.held.get(invoice["uuid"]) != invoice["reason"]:
+                self.held[invoice["uuid"]] = invoice["reason"]
+                result["held"].append({k: invoice[k] for k in ("uuid", "period", "reason")})
         for invoice in reading["closed"]:
             if invoice["uuid"] in self.reconciled:
                 continue
             self.reconciled.append(invoice["uuid"])
+            self.held.pop(invoice["uuid"], None)
             month = invoice["period"]
             result["reconciled"].append({"uuid": invoice["uuid"], "month": month,
                                          "lines": len(invoice["mine"]),
