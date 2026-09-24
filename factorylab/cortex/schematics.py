@@ -325,8 +325,9 @@ class SchematicsMixin:
             'exposure: {"coin", "side": "buy" | "sell"}, a trade the return declined; coin '
             "is a key of public_observations.recent_mids when the return is made. It is "
             "required on a final answer of those kinds from a decision that executed no "
-            "venue operation (no venue write through a tool, and no answer order with coin, "
-            "side and size that the decision may place), and "
+            "venue operation (no venue write the venue accepted or left uncertain, a "
+            "rejected write executing nothing, and no answer order with coin, side and "
+            "size that the decision may place), and "
             "optional otherwise. Without it, or with a coin recent_mids does not list, the "
             "return is malformed. It is not required while recent_mids is empty"
         ),
@@ -1895,7 +1896,8 @@ class SchematicsMixin:
             ),
             "verdict_is_a_prediction": (
                 "a verdict q is also scored against the judged return's measured outcome y: "
-                "for a return that executed venue operations (or earned service income), "
+                "for a return that executed venue operations (or earned service income; a "
+                "write the venue rejected executed nothing, one left uncertain counts), "
                 "y = return_paid_off, 1 when its realised or marked P&L exceeds its own "
                 "compute and tool cost; for a return that executed nothing and named a "
                 "counterfactual {coin, side}, y = 0.5 - 0.5 * tanh(g / "

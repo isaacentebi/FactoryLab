@@ -1583,8 +1583,9 @@ class ComputeMixin:
         Essay II.III.b (evaluations graded by realized consequence, the priced road
         not taken included): a producing return that executes no venue operation
         names the trade it declined (``runtime.grounded.counterfactual_refusal``).
-        Guarantees None for a decision that already wrote to the venue or holds lots
-        or earnings (``_acted``: ``return_paid_off`` measures it), and for an answer
+        Guarantees None for a decision that acted (``_acted``, the one definition the
+        world's measurement also reads: a venue write accepted or possibly accepted,
+        lots or earnings; a write the venue refused is not acting), and for an answer
         order this decision may place (``_execute_outputs``); otherwise the answer is
         held to the contract against the coins the world lists now (``latest_mids``,
         the mids a declined trade is frozen from).
@@ -1594,11 +1595,6 @@ class ComputeMixin:
 
         if self._acted(handle):
             return None
-        try:
-            if self.executed_operations(handle):
-                return None
-        except (AttributeError, KeyError):
-            pass
         if (kind in ANSWER_ORDER_KINDS and parsed.get("action") == "order"
                 and all(k in parsed for k in ("coin", "side", "size"))
                 and self._may_write(handle)):

@@ -1256,11 +1256,21 @@ class FeedbackMixin:
             return False
         return account.payoff is not None and self._acted(about)
 
+    #: The terminal answers that say a venue write did not execute. Any other state,
+    #: ``uncertain`` included, may have moved the venue.
+    REFUSED_WRITES = frozenset({"rejected", "error", "failed"})
+
     def _acted(self, handle: str) -> bool:
         """Whether a decision executed anything at the venue or earned anything.
 
-        Guarantees a durable venue intent, a lot opened or closed, or a paid service
-        receipt: the operations whose outcome ``return_paid_off`` measures.
+        Guarantees True for a lot opened or closed, a paid service receipt, or a
+        durable venue intent the venue accepted or may have accepted (any state but a
+        terminal rejection or error; ``uncertain`` counts, since it may have
+        executed): the operations whose outcome ``return_paid_off`` measures. A
+        decision whose every venue write was refused executed nothing. This one
+        definition decides both what the world measures (``_final_outcome``) and
+        which returns owe a counterfactual (``ComputeMixin._counterfactual_refusal``),
+        so the two never disagree (essay II.III.b: the priced road not taken).
         """
         try:
             account = self.consequences.table.account(handle)
@@ -1269,9 +1279,10 @@ class FeedbackMixin:
         if account.opened_lots or account.closes or account.earnings:
             return True
         try:
-            return bool(self.executed_operations(handle))
+            operations = self.executed_operations(handle)
         except (AttributeError, KeyError):
             return False
+        return any(row.get("status") not in self.REFUSED_WRITES for row in operations)
 
     def _horizon_reached(self, about: str, account: Any, frozen: dict | None,
                          ticks: int) -> bool:

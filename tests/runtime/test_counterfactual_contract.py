@@ -154,6 +154,70 @@ def test_an_acting_return_needs_no_counterfactual():
     assert _returned(rt, reported) == ("malformed", COUNTERFACTUAL_ABSENT)
 
 
+LIMIT = {"coin": "BTC", "side": "buy", "size": "0.0001", "price": "30000"}
+
+
+def _venue_answers(rt, monkeypatch, answer):
+    """The venue answers every placement with ``answer`` (an OrderResult, or an exception
+    raised on placement and on lookup alike)."""
+    from factorylab.world.exchange import OrderResult
+
+    def place(order):
+        if isinstance(answer, Exception):
+            raise answer
+        return OrderResult(None, answer, 0, None, "venue rejected order")
+
+    def lookup(client_id, *, order_id=None):
+        raise answer if isinstance(answer, Exception) else RuntimeError("no lookup")
+
+    monkeypatch.setattr(rt.exchange, "place", place)
+    monkeypatch.setattr(rt.exchange, "lookup", lookup)
+
+
+def test_a_rejected_venue_write_followed_by_a_bare_report_is_malformed(monkeypatch):
+    """A write the venue rejected executed nothing: the report that follows owes a
+    counterfactual, like any return that executed nothing."""
+    rt = _world({"action": "order", "tool_calls": [{"tool": "venue.place_limit",
+                                                    "args": LIMIT}]}, {"action": "order"})
+    _venue_answers(rt, monkeypatch, "rejected")
+    handle, _event = _consequence_produce(rt)
+    assert [row["status"] for row in rt.executed_operations(handle)] == ["rejected"]
+    assert not rt._acted(handle)
+    assert _returned(rt, handle) == ("malformed", COUNTERFACTUAL_ABSENT)
+
+
+def test_a_rejected_venue_write_with_a_counterfactual_is_priced_by_the_named_trade(
+        monkeypatch):
+    rt = _world({"action": "order", "tool_calls": [{"tool": "venue.place_limit",
+                                                    "args": LIMIT}]},
+                {"action": "hold", "counterfactual": {"coin": "BTC", "side": "sell"}},
+                verdicts=(0.4,))
+    _venue_answers(rt, monkeypatch, "rejected")
+    producer, event = _consequence_produce(rt)
+    assert _returned(rt, producer) == ("ok", None)
+    assert not rt._acted(producer)
+    judge = _judge(rt, event)
+    rt._settle_arrived_verdicts()
+    _mids(rt, BTC="99")
+    _advance(rt, rt.ev.consequence_backstop_ticks + 1)
+    (priced,) = _rows(rt, "consequence.opportunity", handle=producer)
+    assert priced["declined"] == {"coin": "BTC", "side": "sell"}
+    assert rt.world_outcomes[producer]["kind"] == OPPORTUNITY_DEFINITION
+    (scored, *_) = _rows(rt, "verdict.consequence", handle=judge)
+    assert scored["outcome"] == OPPORTUNITY_DEFINITION
+
+
+def test_an_uncertain_venue_write_is_acting_and_needs_no_counterfactual(monkeypatch):
+    """A write whose answer never came may have executed: it counts as acting."""
+    rt = _world({"action": "order", "tool_calls": [{"tool": "venue.place_limit",
+                                                    "args": LIMIT}]}, {"action": "order"})
+    _venue_answers(rt, monkeypatch, ConnectionError("lost"))
+    handle, _event = _consequence_produce(rt)
+    assert [row["status"] for row in rt.executed_operations(handle)] == ["uncertain"]
+    assert rt._acted(handle)
+    assert _returned(rt, handle) == ("ok", None)
+
+
 def test_nothing_is_required_while_the_world_lists_no_coin():
     """With no coin listed no trade can be named: a bare return then stands, and has no
     world outcome, as a delisted coin at the horizon has none."""
