@@ -2407,7 +2407,8 @@ def test_a_hash_no_node_knows_never_resolves_on_its_own(tmp_path):
                            match="recorded_transaction_may_still_execute"):
             resolve(tmp_path, rpc, now_s=lambda host=host: host)
     torn = read_authorizations(path)[0]
-    # Illegible chain: both mainnet chains bound it (Base's pending nonce is 0 here).
+    # A damaged line's chain is never trusted: both mainnet chains bound it (Base's
+    # pending nonce is 0 here).
     assert torn["tx_hashes"] == [tx_hash] and torn["pending_nonces"] == {"8453": 0, "999": 4}
     rpc.consume(RESERVE, 1, at_ts=11_000)
     hyper.latest = 5  # every nonce it may have is final on both chains
@@ -2445,8 +2446,15 @@ def test_a_torn_transaction_is_cancelled_by_consuming_every_nonce_it_may_have(
     assert tool(s, "--cancel-transaction", key) == 2  # the consequence must be accepted
     assert "consumes" in json.loads(capsys.readouterr().err)["why"]
     s["hyper"].pending = 11  # later ones queued: the bound stays the repair's
+    # Codex on b69c3ad: its own call and world are unknown; the abandonment flag alone
+    # does not let it through.
     assert tool(s, "--cancel-transaction", key,
-                "--i-understand-the-world-step-is-abandoned") == 0
+                "--i-understand-the-world-step-is-abandoned") == 2
+    refusal = json.loads(capsys.readouterr().err)
+    assert "--i-verified-the-torn-transaction-by-hand" in refusal["why"]
+    assert s["hyper"].sent == []
+    assert tool(s, "--cancel-transaction", key, "--i-understand-the-world-step-is-abandoned",
+                "--i-verified-the-torn-transaction-by-hand") == 0
     done = json.loads(capsys.readouterr().out)
     sent = [decoded(raw) for raw in s["hyper"].sent]
     assert [t["nonce"] for t in sent] == [5, 6, 7, 8]  # from the first unused to the bound
@@ -2470,8 +2478,8 @@ def test_a_torn_transactions_cancel_spares_a_mint_at_those_nonces(
     s["chain"].prepare(HYPEREVM.transmitter, data, gas_remaining_wei=10**15, nonce=6)
     key = torn_transaction(s)
     monkeypatch.setenv("RESERVE_PRIVATE_KEY", s["reserve"].key.hex())
-    assert tool(s, "--cancel-transaction", key,
-                "--i-understand-the-world-step-is-abandoned") == 2
+    assert tool(s, "--cancel-transaction", key, "--i-understand-the-world-step-is-abandoned",
+                "--i-verified-the-torn-transaction-by-hand") == 2
     assert "never cancelled" in json.loads(capsys.readouterr().err)["why"]
     assert s["hyper"].sent == []
 
@@ -2516,3 +2524,41 @@ def test_no_world_can_take_its_diary_while_its_step_is_being_cancelled(
                 "--i-understand-the-world-step-is-abandoned") == 0
     assert seen == ["busy"] and len(s["hyper"].sent) == 1
     LedgerLock(s["diary"]).close()  # released once the broadcast returned
+
+
+# ---- Wave 10, Codex on b69c3ad
+
+
+def test_a_damaged_lines_chain_is_never_trusted(tmp_path):
+    # P1: a damaged line whose chain_id reads 8453 may be HyperEVM's: both are bounded,
+    # and it blocks until both pass. A torn (cleanly cut) line keeps its terminated one.
+    from factorylab.runtime.capital_loop import ReserveLock, read_authorizations, repair_damaged
+    from factorylab.world.evm import HYPEREVM
+
+    path = record(tmp_path, entry(OLD_NONCE, 11_500, origin="reserve_topup",
+                                  start_block=11_000))
+    damaged = (b'{"chain_id": 8453, "from": "' + RESERVE.encode() + b'", "kind": '
+               b'"transaction", "tx_hash": "0x' + b"ae" * 32 + b'", "tx_n\xffnce": 4}')
+    path.write_bytes(damaged + b"\n" + path.read_bytes())
+    rpc = Rpc()
+    rpc.consume(RESERVE, 3, at_ts=0)
+    rpc.others[HYPEREVM.rpc] = hyper = Hyper(nonce=5, pending=6)
+    with ReserveLock(RESERVE, lock_dir=tmp_path) as lock:
+        repair_damaged(lock, now_s=lambda: 12_000, transport=rpc)
+    torn = read_authorizations(path)[0]
+    assert torn["chain_id"] is None and torn["pending_nonces"] == {"8453": 3, "999": 6}
+    rpc.consume(RESERVE, 4, at_ts=11_000)  # Base is past its bound; HyperEVM is not
+    with pytest.raises(CapitalLoopRefused, match="recorded_transaction_may_still_execute"):
+        resolve(tmp_path, rpc, now_s=lambda: rpc.latest_ts)
+    hyper.latest = 7
+    assert ("0x" + "ae" * 32, "nonce_consumed") in [
+        (r.get("tx_hash"), r["how"]) for r in resolve(tmp_path, rpc, now_s=lambda: rpc.latest_ts)[
+            "resolved_now"]]
+    # A torn last line is a clean prefix: its terminated chain id is what was written.
+    other = tmp_path / "torn"
+    other.mkdir()
+    torn_path = record(other)
+    torn_path.write_bytes(b'{"chain_id": 999, "from": "' + RESERVE.encode()
+                          + b'", "kind": "transaction", "tx_hash": "0x' + b"af" * 20)
+    repair(other, 12_000, transport=rpc)
+    assert read_authorizations(torn_path)[0]["pending_nonces"] == {"999": 6}

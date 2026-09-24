@@ -340,8 +340,16 @@ def test_a_transaction_whose_line_was_damaged_and_repaired_is_still_sendable():
     first, rest = path.read_bytes().split(b"\n", 1)
     assert ref["tx_hash"].lower().encode() in first
     path.write_bytes(first[:first.index(b'"tx_nonce"')] + b"\xff\n" + rest)
+    from factorylab.world.evm import BASE, HYPEREVM
+
+    def mainnets(method, url, body, headers):
+        # A damaged line's chain is never trusted: both mainnet chains are bounded.
+        chain_id = {BASE.rpc: 8453, HYPEREVM.rpc: 999}[url]
+        result = {"eth_chainId": hex(chain_id), "eth_getTransactionCount": "0x3"}
+        return HTTPResponse(200, {"result": result[body["method"]]}, {})
+
     with capital_loop.ReserveLock(chain.account.address) as lock:
-        repaired = capital_loop.repair_damaged(lock, transport=rpc)
+        repaired = capital_loop.repair_damaged(lock, transport=mainnets)
         assert repaired["open_transactions"] == [ref["tx_hash"].lower()]
     chain.broadcast(ref)
     assert len(rpc.sent) == 1

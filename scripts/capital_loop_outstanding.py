@@ -201,8 +201,15 @@ def _hold_worlds(known: list, refused, held: ExitStack) -> None:
 
 
 def _cancel_opaque(lock: ReserveLock, key: str, entry: dict, entries: list, *, account,
-                   transport, rpcs, gas_budget_wei, abandon, refused) -> dict:
-    """Consume every nonce a torn transaction may have, on every chain it may be on."""
+                   transport, rpcs, gas_budget_wei, abandon, verified, refused) -> dict:
+    """Consume every nonce a torn transaction may have, on every chain it may be on.
+
+    The torn transaction's own call and world are unknown: it may be a CCTP mint or a
+    running world's step. So beyond ``abandon`` this needs ``verified``, the operator's
+    attestation that they looked those nonces up by hand (a block explorer) and none is
+    a ``receiveMessage`` or a live world's; otherwise it refuses, and the exit is to wait
+    for those nonces to be consumed.
+    """
     from factorylab.world.evm import EVM
 
     if str(entry["from"]).lower() != account.address.lower():
@@ -228,6 +235,13 @@ def _cancel_opaque(lock: ReserveLock, key: str, entry: dict, entries: list, *, a
         if not abandon:
             raise refused(f"{OPAQUE_CANCEL_CONSEQUENCE}; to accept that, pass "
                           "--i-understand-the-world-step-is-abandoned")
+        if not verified:
+            raise refused("a torn transaction's own call and world are unknown: it may be a "
+                          "CCTP mint or a running world's step. Look up the reserve's "
+                          "transactions at these nonces in a block explorer; only when none "
+                          "is a receiveMessage or a live world's, pass "
+                          "--i-verified-the-torn-transaction-by-hand. Otherwise wait for "
+                          f"the nonces to be consumed: {[list(p) for p in plan]}")
         for chain_id, nonce in plan:
             here = [e for e in known if (e["chain_id"], e["tx_nonce"]) == (chain_id, nonce)]
             prices = [e.get("gas_price") for e in here]
@@ -243,7 +257,7 @@ def _cancel_opaque(lock: ReserveLock, key: str, entry: dict, entries: list, *, a
 
 def cancel_transaction(lock: ReserveLock, tx_hash: str, *, account, transport,
                        rpcs: dict | None = None, gas_budget_wei: int | None = None,
-                       abandon: bool = False) -> dict:
+                       abandon: bool = False, verified: bool = False) -> dict:
     """Consume a recorded, unexecuted reserve-key transaction's nonce with a no-op.
 
     Guarantees a CCTP mint is never cancelled (its burn would stay with nothing minted;
@@ -261,7 +275,7 @@ def cancel_transaction(lock: ReserveLock, tx_hash: str, *, account, transport,
     A torn transaction's nonce is unknown: its cancellation consumes, the same way, every
     reserve nonce not yet used up to the pending one recorded at its repair, on each
     chain it may be on, under the same checks for every entry known at those nonces
-    (``OPAQUE_CANCEL_CONSEQUENCE``).
+    (``OPAQUE_CANCEL_CONSEQUENCE``), and only with ``verified`` as well.
     """
     entries = lock.authorizations()
     match = {k.lower(): (k, e) for k, e in open_transactions(entries).items()}
@@ -273,7 +287,7 @@ def cancel_transaction(lock: ReserveLock, tx_hash: str, *, account, transport,
 
         return _cancel_opaque(lock, key, entry, entries, account=account,
                               transport=transport, rpcs=rpcs, gas_budget_wei=gas_budget_wei,
-                              abandon=abandon, refused=refused_torn)
+                              abandon=abandon, verified=verified, refused=refused_torn)
     key, entry, same, floor, refused = _target(lock, tx_hash, account, "cancel_refused")
     with ExitStack() as held:
         _hold_worlds(same, refused, held)
@@ -366,6 +380,11 @@ def main(argv: list[str] | None = None, *, transport=http_request) -> int:
                         "--i-understand-the-world-step-is-abandoned")
     parser.add_argument("--i-understand-the-world-step-is-abandoned", dest="abandon",
                         action="store_true", help=CANCEL_CONSEQUENCE)
+    parser.add_argument("--i-verified-the-torn-transaction-by-hand", dest="verified",
+                        action="store_true",
+                        help="for a torn transaction: you looked up the reserve's "
+                        "transactions at its nonces in a block explorer, and none is a "
+                        "CCTP receiveMessage or a live world's")
     parser.add_argument("--max-gas-wei", type=int, default=None,
                         help="the most a replacement may spend on gas (default: "
                         f"{REPLACEMENT_BUDGET_MULTIPLE}x the replacement's own cost at the "
@@ -399,7 +418,7 @@ def main(argv: list[str] | None = None, *, transport=http_request) -> int:
                     done = cancel_transaction(lock, args.cancel_transaction, account=account,
                                               transport=transport, rpcs=rpcs,
                                               gas_budget_wei=args.max_gas_wei,
-                                              abandon=args.abandon)
+                                              abandon=args.abandon, verified=args.verified)
                 else:
                     done = speed_up(lock, args.speed_up, account=account,
                                     transport=transport, rpcs=rpcs,

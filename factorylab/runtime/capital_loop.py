@@ -587,7 +587,8 @@ def _terminated(pattern: re.Pattern, fragment: bytes) -> int | None:
     return int(next(group for group in found.groups() if group is not None))
 
 
-def _torn_entry(fragment: bytes, reserve: str, sidecar: Path, now: int, bound: int) -> dict:
+def _torn_entry(fragment: bytes, reserve: str, sidecar: Path, now: int, bound: int, *,
+                damaged: bool = False) -> dict:
     """What a line that is not a whole entry may have recorded, kept open.
 
     Only what is looked for is read from the line; nothing read from it shortens a
@@ -602,7 +603,10 @@ def _torn_entry(fragment: bytes, reserve: str, sidecar: Path, now: int, bound: i
     entry = {"kind": "torn", "from": reserve, "fragment_hex": fragment.hex(),
              "sidecar": str(sidecar), "repaired_s": now}
     if _TRANSACTION.search(fragment):
-        chain_id = _terminated(_CHAIN_ID, fragment)
+        # A torn line is a clean prefix of what was written: a terminated chain id in it
+        # is what was written. A damaged line's legible bytes may be wrong, so its chain
+        # is unknown and every candidate chain is bounded (``_pending_nonces``).
+        chain_id = None if damaged else _terminated(_CHAIN_ID, fragment)
         chain_id = chain_id if chain_id in _chains() else None
         found = _TX_HASH.search(fragment)
         entry.update({
@@ -678,8 +682,9 @@ def _repair(lock: ReserveLock, *, damaged: bool, now_s: Callable[[], int] | None
     bound = now + MAX_AUTHORIZATION_S
     torn: list[dict] = []
 
-    def set_aside(line: bytes) -> bytes:
-        entry = _torn_entry(line, lock.reserve_address, Path(), now, bound)
+    def set_aside(line: bytes, *, damaged_line: bool = False) -> bytes:
+        entry = _torn_entry(line, lock.reserve_address, Path(), now, bound,
+                            damaged=damaged_line)
         if entry["torn_kind"] == "transaction":
             # Read before anything is written: an unreadable chain leaves no sidecar.
             entry["pending_nonces"] = _pending_nonces(
@@ -688,7 +693,9 @@ def _repair(lock: ReserveLock, *, damaged: bool, now_s: Callable[[], int] | None
         torn.append(entry)
         return json.dumps(entry, sort_keys=True).encode()
 
-    kept = [set_aside(line) if damaged and _entry(line) is None else line for line in lines]
+    # A middle line is damaged; only the last one can be a clean torn prefix.
+    kept = [set_aside(line, damaged_line=True) if damaged and _entry(line) is None else line
+            for line in lines]
     if tail:
         kept.append(tail if _entry(tail) is not None else set_aside(tail))
     if not torn:
@@ -1030,7 +1037,8 @@ def replacement_exit(key: str, entry: dict) -> dict:
                              "reset (docs/architecture/capital-loop-rehearsal.md)"}
         return {"wait": "it resolves once every nonce up to its recorded bound is final",
                 "cancel": f"{script} --cancel-transaction {key} "
-                          "--i-understand-the-world-step-is-abandoned",
+                          "--i-understand-the-world-step-is-abandoned "
+                          "--i-verified-the-torn-transaction-by-hand",
                 "cancel_consequence": OPAQUE_CANCEL_CONSEQUENCE}
     if step is None or entry.get("data") is None:
         return {"wait": "it resolves once its nonce is used"}

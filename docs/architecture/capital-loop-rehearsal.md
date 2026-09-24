@@ -414,9 +414,11 @@ existence does not rest on any diary:
   `tx_nonce`) is kept as a torn transaction. Its legible hash (and its chain, when
   the number is terminated) is kept, and no value in it is read as a nonce. The repair
   also reads, on every chain the transaction may be on, the reserve's *pending*
-  account nonce, and records it as the bound `U`. A torn transaction's chain is its
-  own when legible; otherwise it may be on Base or HyperEVM (and on the testnets too,
-  with `--testnet`). If any of those chains cannot be read, the repair refuses and
+  account nonce, and records it as the bound `U`. A torn last line is a clean prefix of
+  what was written, so its terminated chain id is its chain. A damaged line's legible
+  bytes may be wrong, so its chain id is never trusted. Otherwise, and for every
+  damaged line, it may be on Base or HyperEVM (and on the testnets too, with
+  `--testnet`), and each of those chains gets a bound. If any of those chains cannot be read, the repair refuses and
   writes nothing: retry, or pass that chain's `--rpc-*` flag. The transaction was
   signed before the repair, so its nonce is at most `U` on its own chain. In any other fragment every
   nonce-like value becomes an open authorization, resolved against the chain like any
@@ -569,9 +571,18 @@ existence does not rest on any diary:
   same flag and checks:
 
       uv run python scripts/capital_loop_outstanding.py --cancel-transaction <key> \
-          --i-understand-the-world-step-is-abandoned
+          --i-understand-the-world-step-is-abandoned \
+          --i-verified-the-torn-transaction-by-hand
 
-  Here `<key>` is its legible hash, or its sidecar path when none. **This consumes
+  Here `<key>` is its legible hash, or its sidecar path when none. A torn
+  transaction's own call and world are unknown: it may be a CCTP mint or a running
+  world's step. So this cancel also needs the second flag, your attestation that you
+  checked by hand. The refusal without it lists the chain and nonce pairs. Open the
+  reserve's address in a block explorer for each chain (basescan.org for Base, the
+  HyperEVM explorer for HyperEVM) and look at its transactions at those nonces,
+  pending ones included. Pass the flag only when none is a CCTP `receiveMessage` (to
+  the message transmitter) and none belongs to a world that is still running. If you
+  cannot tell, do not pass it: wait until those nonces are consumed on their own. **This consumes
   nonces.** On each chain it may be on, the tool sends a 0-value transfer from the
   reserve to itself at every nonce from the first not yet used (at the latest block)
   up to `U`. Any treasury step waiting at those nonces will not complete and must be
@@ -627,9 +638,9 @@ exits 1.
 | `previous_run_authorization_may_still_settle`, `recorded_authorization_may_still_settle` | Wait: it settles or passes its `validBefore` (at most 600 s plus finality). Cancelling it from a wallet also clears it. |
 | `recorded_authorization_reads_disagree` | Retry: the node's state and logs did not match. If it persists, relaunch with `--rpc-base <url>` naming another Base RPC. |
 | `recorded_authorization_settled_unbooked` (exit 3) | Settle the books by hand, then `--acknowledge 0x<nonce>`. |
-| `recorded_transaction_may_still_execute` | Wait for it to be mined (and on Base finalized), or `--speed-up 0x<hash>`. For a CCTP mint (`step: mint`) that is the only exit. For any other step, once its world has ended, there is also `--cancel-transaction 0x<hash> --i-understand-the-world-step-is-abandoned`: that world's treasury step will not complete and must be recovered by hand. A torn one clears once every nonce up to its bound `U` is final on each chain it may be on. Its exit is `--cancel-transaction <key> --i-understand-the-world-step-is-abandoned`, which consumes those nonces with 0-value self-transfers. |
+| `recorded_transaction_may_still_execute` | Wait for it to be mined (and on Base finalized), or `--speed-up 0x<hash>`. For a CCTP mint (`step: mint`) that is the only exit. For any other step, once its world has ended, there is also `--cancel-transaction 0x<hash> --i-understand-the-world-step-is-abandoned`: that world's treasury step will not complete and must be recovered by hand. A torn one clears once every nonce up to its bound `U` is final on each chain it may be on. Its exit is `--cancel-transaction <key> --i-understand-the-world-step-is-abandoned --i-verified-the-torn-transaction-by-hand`, after checking those nonces in a block explorer ("The write-ahead authorization record"). It consumes those nonces with 0-value self-transfers. Without that check, wait. |
 | `transaction_not_on_record` | A broadcast refused its unrecorded hash; nothing was sent. Prepare the transaction again: it is recorded as it is prepared. |
-| `cancel_refused` | Its reason says which: not open (nothing to cancel); no chain or nonce known (it clears by waiting); wrong key (put the reserve's in `reserve.key`); a mint (`--speed-up` instead); its call not recorded (wait); a world's entry that names no diary, so the world cannot be shown to have ended (`--speed-up`, or wait); its world still running (stop it, then cancel); or the consequence not accepted (add `--i-understand-the-world-step-is-abandoned`). |
+| `cancel_refused` | Its reason says which: not open (nothing to cancel); no chain or nonce known (it clears by waiting); wrong key (put the reserve's in `reserve.key`); a mint (`--speed-up` instead); its call not recorded (wait); a torn transaction without `--i-verified-the-torn-transaction-by-hand` (check its nonces in a block explorer first, or wait); a world's entry that names no diary, so the world cannot be shown to have ended (`--speed-up`, or wait); its world still running (stop it, then cancel); or the consequence not accepted (add `--i-understand-the-world-step-is-abandoned`). |
 | `mainnet_rail_requires_a_ledger` | `factorylab run` (or any Runtime) refused a world whose treasury rail signs with the mainnet reserve key and was given no ledger; nothing started. Run it again with `--ledger <path>`: its reserve-key entries then name that diary, where their bookings are read and whose writer lock shows whether the world has ended. |
 | `speed_up_refused` | Its reason says which: not open, no chain or nonce known, or its call not recorded (it clears by waiting); or wrong key (put the reserve's in `reserve.key`). |
 | `replacement_needs_native_gas` | Fund the reserve's native gas (ETH on Base, HYPE on HyperEVM) on the chain it names, with at least the `needed_wei` it names, then speed up or cancel again. |
