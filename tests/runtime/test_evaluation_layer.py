@@ -255,6 +255,12 @@ def test_the_grades_a_tier_above_delivers_count_and_none_vanishes(seed):
         assert len(counted) + len(refused) == count, tier
         # A clear majority of what the tier above delivers counts.
         assert 3 * len(counted) >= 2 * count, (tier, len(counted), count)
+    # II.IV.c: a judgement unsettled at its window's release is withheld, not dropped.
+    closed = [i["reason"] for i in items if i["kind"] == "evaluator.grade_censored"]
+    assert not [r for r in closed if r.startswith("unsettled")]
+    carried = {e for i in items if i["kind"] == "cascade.carry" for e in i["carried"]}
+    risen = carried & {i["event_id"] for i in items if i["kind"] == "cascade.release"}
+    assert carried and 2 * len(risen) >= len(carried), (len(risen), len(carried))
 
 
 # --- the adversarial layer (M1, P5) --------------------------------------------------

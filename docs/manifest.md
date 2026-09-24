@@ -538,10 +538,18 @@ tier upon tier). Before this, 0 to 4 of the 11 to 17 tier-three grades delivered
 counts. A judgement held in a window closes at the latest after
 `consequence_backstop_ticks + verdict_timeout_ticks` plus that window's drawn
 duration; one no window took (a judgement a judge chose rather than a routed one)
-waits `verdict_timeout_ticks`. A delivered grade that cannot count, and a grade
-window that closes with no grade, are ledgered as `evaluator.grade_censored` with
-the reason (passed over, unsettled at release, no grade returned, no read, or
-backstop); nothing is dropped unseen.
+waits `verdict_timeout_ticks`. A judgement whose decision has not settled when its
+window releases is withheld, not dropped (II.IV.c: "withheld ... until it
+settles"): it is carried into the tier's next window, which opens at the release
+with a duration drawn by the same law (`CascadeGate.carried`, `cascade.carry`),
+keeps its own open time and open grade window, and is read in the first release
+after its decision settles, ahead of that window's own arrivals of equal priority,
+within `meta_read_share`. It is carried until `consequence_backstop_ticks +
+verdict_timeout_ticks` after it was made; past that it is listed under `backstop`
+in `cascade.carry` and its grade window closes. A delivered grade that cannot
+count, and a grade window that closes with no grade, are ledgered as
+`evaluator.grade_censored` with the reason (passed over, no grade returned, no
+read, or backstop); nothing is dropped unseen.
 
 **Metas are graded by the world too.** A meta's conformity `k` is a prediction of
 the consequence score `s` of the decision it graded, scored the same way against
@@ -657,7 +665,9 @@ opens and never redrawn inside it (`cascade.arrival` carries `window_ns`,
 elapsed and some of the evidence inside it has completed — for a verdict, that
 the return it judged has an outcome. Every arrival is named in the released
 report, only its representative is graded, and only completed evidence is
-averaged. Three judgements arriving in the same nanosecond are three arrivals
+averaged. An arrival whose evidence has not completed at the release is carried
+into the tier's next window (see "The grade window is the read above it"). Three
+judgements arriving in the same nanosecond are three arrivals
 in an empty window and trigger nothing. Execution facts and safety actions never
 enter the cascade and are never slowed by it.
 

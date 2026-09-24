@@ -143,3 +143,16 @@ def test_invalid_gate_state_is_rejected(window):
         CascadeGate(window)
     with pytest.raises(ValueError):
         CascadeGate(3, -1)
+
+
+def test_a_carried_arrival_is_read_first_among_equals_and_its_count_is_bounded():
+    """II.IV.c: a judgement carried in was withheld only until its subject settled."""
+    carried = CascadeGate(3, 0, (arrival(0),), carried=1)
+    gate, _ = carried.add(arrival(1), now=1)
+    _, released = gate.add(arrival(2), now=3)
+    assert released.id == "event-0"
+    _, released = CascadeGate(3, 0, (arrival(0),)).add(arrival(1), now=3)
+    assert released.id == "event-1"  # without carrying, the latest
+    for count in (-1, 2, True):
+        with pytest.raises(ValueError, match="carried"):
+            CascadeGate(3, 0, (arrival(0),), carried=count)

@@ -363,22 +363,22 @@ class FeedbackMixin:
         least the representative). Essay II.III: "evaluations of evaluations ...
         stacking to some arbitrary level"; one reading a window left most verdicts
         read by nobody above them (evaluations C7). Each carries the window it came
-        from, so the tier above still reads it as a distribution (II.IV.c).        """
-        from factorylab.runtime.clockwork import jitter_draw
+        from, so the tier above still reads it as a distribution (II.IV.c).
 
+        A judgement whose subject has not settled when its window releases is
+        withheld, not dropped (II.IV.c: information "is intentionally withheld from
+        management until it settles"): it is carried into the next window of its
+        tier, which opens at the release with a duration drawn by the same law, and
+        rises in the first release after its subject settles. It is carried until
+        its consequence horizon (``consequence_backstop_ticks +
+        verdict_timeout_ticks`` since it opened), and past that its grade window
+        closes as ``backstop`` (``_cascade_carry``).
+        """
         tier = event_tier(ev)
         gate = self.cascade.get(tier)
         now = self.ticks_consumed
         if gate is None:
-            judged = {1: "producer", 2: "evaluator"}.get(tier, "meta")
-            inner = self.clockwork.measured(f"scored:{judged}")
-            loop = f"cascade:{tier}"
-            count = self.clockwork.loops.get(loop, {}).get("fires", 0) + 1
-            window = release_window(self.m.timing.min_ratio, self.m.timing.jitter_fraction,
-                                    jitter_draw(self.clockwork.seed, loop, count), inner)
-            self.clockwork.loops[loop] = {"opened": now, "due": now + ceil(window),
-                                          "period": window, "inner": inner, "fires": count}
-            gate = CascadeGate(window, opened=now)
+            gate = self._open_cascade_window(tier, now)
         next_gate, released = gate.add(ev, now=now, complete=self._cascade_evidence_complete,
                                        priority=self._cascade_priority)
         arriving = self._arrival_judgement(ev)
@@ -408,6 +408,14 @@ class FeedbackMixin:
                     "ts": self.clock.now_ns,
                 }
             )
+        carried, lapsed = ([], []) if released is None else self._cascade_carry(gate, ev)
+        if carried or lapsed:
+            self.ledger.append({"kind": "cascade.carry", "tier": tier,
+                                "arrival_event_id": ev.id,
+                                "carried": [a.id for a in carried],
+                                "backstop": [a.id for a in lapsed], "ts": self.clock.now_ns})
+        if next_gate is None and carried:
+            next_gate = self._open_cascade_window(tier, now, carried)
         if next_gate is None:
             self.cascade.pop(tier, None)
         else:
@@ -418,8 +426,50 @@ class FeedbackMixin:
         if released is None:
             return []
         rising = [released, *self._cascade_companions(gate, ev, released)]
-        self._mark_risen(gate, ev, rising, now)
+        self._mark_risen(gate, ev, rising, now, carried=next_gate if carried else None,
+                         lapsed=lapsed)
         return rising
+
+    def _open_cascade_window(self, tier: int, now: int,
+                             carried: list[Event] | tuple[Event, ...] = ()) -> CascadeGate:
+        """Open the next window of one tier at ``now``, holding what was carried into it.
+
+        Guarantees a duration of ``min_ratio`` times the tier's measured inner loop,
+        lengthened by the tier's own jitter draw for this window (II.IV.c), whatever
+        it holds: a carried judgement never shortens or reshapes a window.
+        """
+        from factorylab.runtime.clockwork import jitter_draw
+
+        judged = {1: "producer", 2: "evaluator"}.get(tier, "meta")
+        inner = self.clockwork.measured(f"scored:{judged}")
+        loop = f"cascade:{tier}"
+        count = self.clockwork.loops.get(loop, {}).get("fires", 0) + 1
+        window = release_window(self.m.timing.min_ratio, self.m.timing.jitter_fraction,
+                                jitter_draw(self.clockwork.seed, loop, count), inner)
+        self.clockwork.loops[loop] = {"opened": now, "due": now + ceil(window),
+                                      "period": window, "inner": inner, "fires": count}
+        return CascadeGate(window, opened=now, arrivals=tuple(carried), carried=len(carried))
+
+    def _cascade_carry(self, gate: CascadeGate, ev: Event) -> tuple[list[Event], list[Event]]:
+        """A released window's unsettled judgements: those carried on, and those past carrying.
+
+        Guarantees every arrival whose subject has not settled and whose evaluator
+        decision still waits on a grade is in exactly one list: carried while its
+        age is within its consequence horizon (``consequence_backstop_ticks +
+        verdict_timeout_ticks``, by which what it judged has settled), lapsed past
+        it. An arrival no open grade window awaits has nothing to rise for and is
+        in neither.
+        """
+        horizon = self.ev.consequence_backstop_ticks + self.ev.verdict_timeout_ticks
+        carried, lapsed = [], []
+        for arrival in (*gate.arrivals, ev):
+            if self._cascade_evidence_complete(arrival):
+                continue
+            rec = self._arrival_judgement(arrival)
+            if rec is None or rec.grade_closed:
+                continue
+            (lapsed if self._tick_age(rec) > horizon else carried).append(arrival)
+        return carried, lapsed
 
     def _arrival_judgement(self, ev: Event) -> PendingJudgement | None:
         """The evaluator decision a cascade arrival is the judgement of, while it waits."""
@@ -427,37 +477,47 @@ class FeedbackMixin:
         rec = self.pending.get(ev.payload.get(key))
         return rec if rec is not None and rec.evaluation else None
 
-    def _mark_risen(self, gate: CascadeGate, ev: Event, rising: list[Event], now: int) -> None:
+    def _mark_risen(self, gate: CascadeGate, ev: Event, rising: list[Event], now: int, *,
+                    carried: CascadeGate | None = None, lapsed: list[Event] = ()) -> None:
         """Every judgement a released window held learns, at release, whether it rose.
 
         Guarantees each waiting evaluator decision whose judgement sat in the window
-        is marked released at ``now``, and the ones the tier above was not handed are
-        given the reason no grade can reach them: the window's read share passed them
-        over, or what they judged had not settled when the window released (essay
-        II.IV.c: verdicts rise a tier only after settling). A grade window then closes
-        on the first later tick (``_grade_window_over``), once the tier above's reads
-        of this release, which all land in this tick, have landed.
+        is marked released at ``now`` unless it was carried (its grade window then
+        follows the window it was carried into), and the ones the tier above was not
+        handed are given the reason no grade can reach them: the window's read share
+        passed them over, or what they judged had not settled within their
+        consequence horizon (essay II.IV.c: verdicts rise a tier only after
+        settling). A grade window then closes on the first later tick
+        (``_grade_window_over``), once the tier above's reads of this release, which
+        all land in this tick, have landed.
         """
         read = {e.id for e in rising}
+        held = {e.id for e in carried.arrivals} if carried is not None else set()
+        overdue = {e.id for e in lapsed}
+        horizon = self.ev.consequence_backstop_ticks + self.ev.verdict_timeout_ticks
         arrivals = [*gate.arrivals, ev]
         finished = sum(1 for a in arrivals if self._cascade_evidence_complete(a))
         for arrival in arrivals:
             rec = self._arrival_judgement(arrival)
-            if rec is None or rec.risen_at_tick is not None:
+            # A closed grade window has already ledgered why it closed.
+            if rec is None or rec.risen_at_tick is not None or rec.grade_closed:
+                continue
+            if arrival.id in held:
+                rec.rise_window = carried.window
                 continue
             rec.risen_at_tick = now
             if arrival.id in read:
                 continue
             rec.ungraded = (
-                f"unread: its window released {len(read)} of {finished} completed judgements"
-                if self._cascade_evidence_complete(arrival) else
-                "unsettled: what it judged had not settled when its window released")
+                f"backstop: what it judged had not settled within {horizon} ticks"
+                if arrival.id in overdue else
+                f"unread: its window released {len(read)} of {finished} completed judgements")
 
     def _cascade_companions(self, gate: CascadeGate, ev: Event, released: Event) -> list[Event]:
         """The completed arrivals released beside a window's representative, best first.
 
         Guarantees at most ``ceil(meta_read_share * completed) - 1`` of them, ranked as
-        the gate ranks its representative (``_cascade_priority``, then the latest),
+        the gate ranks its representative (``CascadeGate.rank``, then the latest),
         each with the representative's window evidence and a ``cascade.release``
         ledger item of its own.
         """
@@ -466,8 +526,8 @@ class FeedbackMixin:
         arrivals = [*gate.arrivals, ev]
         finished = [(i, e) for i, e in enumerate(arrivals) if self._cascade_evidence_complete(e)]
         reads = max(1, ceil(self.ev.meta_read_share * len(finished)))
-        ranked = sorted(finished, key=lambda item: (self._cascade_priority(item[1]), item[0]),
-                        reverse=True)
+        rank = gate.rank(self._cascade_priority)
+        ranked = sorted(finished, key=lambda item: (*rank(item[1]), item[0]), reverse=True)
         chosen = [e for _i, e in ranked if e.id != released.id][:reads - 1]
         companions = []
         for arrival in chosen:
@@ -1602,9 +1662,10 @@ class FeedbackMixin:
         * until the tick after the cascade window holding this decision's judgement
           released it or passed it over, since every read of a release lands in its
           tick;
-        * while it waits in a window, at most its own consequence horizon
-          (``consequence_backstop_ticks + verdict_timeout_ticks``, by which what it
-          judged has settled) plus the drawn duration of that window;
+        * while it waits in a window, or is carried into the next one because what
+          it judged had not settled (``_cascade_carry``), at most its own consequence
+          horizon (``consequence_backstop_ticks + verdict_timeout_ticks``, by which
+          what it judged has settled) plus the drawn duration of the window it is in;
         * for a judgement no cascade window took, ``verdict_timeout_ticks``, the
           wait for a judge that chose it.
         """
@@ -1624,9 +1685,9 @@ class FeedbackMixin:
 
         Guarantees a decision the tier above could have graded and did not is never
         dropped unseen: ``evaluator.grade_censored`` names why (the tier above passed
-        it over, it had not settled when its window released, the tier above
-        returned no grade, no window took it, or its window did not release it
-        within its backstop). It then settles on its consequence alone, or censored.
+        it over, what it judged had not settled within its consequence horizon, the
+        tier above returned no grade, no window took it, or its window did not
+        release it within its backstop). It then settles on its consequence alone, or censored.
         """
         rec.grade_closed = True
         if rec.grades:
