@@ -331,9 +331,8 @@ every field name. Funding and carry state the venue's sign convention and
 settlement period in the result: a positive `funding_usd` is what the position
 pays. It prescribes no objective: `carry` reports `net_usd_positive`, a fact
 about a subtraction, and never a recommendation. It is published wherever the
-fixed primitives are (a resume included), priced at
-`prices.tool_micro_per_call` where a world commits one and free otherwise, and
-metered and ledgered like any other tool. It answers every fee, funding and
+fixed primitives are (a resume included), free (arithmetic in the world's own
+process pays no one), and metered and ledgered like any other tool. It answers every fee, funding and
 carry case of `scripts/calibrate_seats.py` exactly.
 
 ## Round-two W2: judges, consequences, the reserve
@@ -364,7 +363,7 @@ A world whose seeds emit a `Verdict` is refused at load unless all of these hold
   `population.evaluator_majority` (`held`, the counts, the cause) each time the
   majority is lost or regained. The evaluators' share of compute is not enforced: the
   seed observation `evaluator_compute_share` (evaluator-role compute over all compute
-  in the window, rent included) is published every window for a card to price.
+  in the window) is published every window for a card to price.
 - **At least three model families serve the evaluator tier.** A family is the
   foundation model, not the route (`runtime/families.py: model_family`):
   `venice:z-ai-glm-5-3-flash` and `z-ai/glm-5.3-flash` are one family, and so are
@@ -623,14 +622,8 @@ selected rows contribute to the mean. `cost_per_attempt` (edition 2, cold audit
 F4) is the mean over every selected response, failed and malformed ones
 included, so an expensive failure cannot hide inside the tenth the well-formed
 floor tolerates; over global closed windows it uses every return the window
-made. For both, a retained-storage charge is selected beside the responses as
-a cost row of the decision that holds it: it adds to what those responses cost
-and is never divided into as one of them, so paying rent can only raise a cost
-per response. The `n` are counted over responses alone, before any charge joins
-them, and the charges that join a selected horizon are the ones metered in the
-same measurement windows as its selected responses, so a charge never fills a
-response slot, never displaces a response from a full horizon and never
-supplies the support a short scope lacks. No other observation selects one.
+made. Every cost in either is a debit with a real counterparty (Wave 11): retained
+working state is never charged, so no cost row exists without a response.
 Well-formedness uses all selected responses as its denominator. `tool_calls`
 is the mean attempted tool calls per selected response, failures included, as
 its card prose always said (edition 2, cold audit F5): ten returns of one call
@@ -1090,8 +1083,9 @@ end) and for money rails. No manifest key casts a window: `novelty.window`,
   out (`decision.call_expired`). Before every model call, once a delivered tick of
   wall time has passed in the event, a live world settles venue fills, reconciles
   orders and settles watchers (`safety.pass`), reading its wall clock and delivered
-  tick through the journal. A watcher pays its program price once per world tick,
-  so a sweep inside a tick it paid for is free. A terminal state the pass sees is
+  tick through the journal. A watcher's evaluation, on a tick or in a sweep, moves
+  no money: the kernel runs the predicate in the world's own process, which pays no
+  one. A terminal state the pass sees is
   latched: later calls in the event are refused unbilled, routing draws no one
   else, and the event's termination check kills the world through the one kill
   path. No thread is used.
@@ -1170,10 +1164,8 @@ For card j, `v_j = distance_outside_region / card_region.scale`, and
 Cost shares use the card's selected scopes. For `cost_per_return` only
 successful returns own cost; for `cost_per_attempt` every invocation's cost is
 spent and owned, failed ones included. Each selected row contributes its cost
-divided by the count of responses the observation divides over in that scope,
-so a retained-storage charge adds its own cost to the scope it is held in and is
-never one of the responses that count is taken over; a scope with no response
-of its own is measured nowhere and attributed nowhere. The contributions are
+divided by the count of responses the observation divides over in that scope;
+a scope with no response of its own is measured nowhere and attributed nowhere. The contributions are
 normalised across supported scopes. Evaluator and meta cost cards therefore
 charge those roles. Global window cost retains the producer-cost sufficient
 statistics. Tool attempts and turnover use the decision's contribution divided
@@ -1182,8 +1174,8 @@ malformed invocations, so a correct return does not pay for someone else's
 malformed one; an upper-bound violation uses well-formed invocations. A zero
 attributable total contributes zero. Other observations use `1/n` decisions
 for the card's role (or all roles for `answers_for = "all"`), counting the
-decisions that responded in the window and not one whose only entry there is a
-retained-storage charge, and that generic share never falls below
+decisions that responded in the window and not one whose only entry there is
+money spent without a response, and that generic share never falls below
 `prices.min_blame_share` (edition 2, cold audit F6): splitting participation
 across many decisions cannot dilute what each one carries of a violation below
 the floor. The generic share is `max(min_blame_share, 1/n)`, so two decisions
@@ -1450,7 +1442,7 @@ USDC through the same intent, submission and receipt journal. Venue pots show
 
 `venue.vault_tools` is a boolean, default `false`, fixed at launch. When
 true the world publishes the venue's vaults as a surface: `venue.vault_details`
-(priced like the other public venue reads) and `venue.vault_positions` (free),
+(free, like the other public venue reads) and `venue.vault_positions` (free),
 and the consequence writes `venue.vault_create`, `venue.vault_deposit` and
 `venue.vault_withdraw` (free, like every venue write). The venue's terms and
 their sources are in `factorylab/world/vaults.py`: a 10% leader commission on a
@@ -1521,14 +1513,13 @@ The floor is not a guaranteed liquidation price.
 | --- | --- | --- |
 | `max_bytes` | `262144` | Positive integer response-body cap; an extra detection byte causes refusal. |
 | `timeout_s` | `10` | Positive integer wall-time bound for DNS, TLS and reading. |
-| `call_price_usd` | `"0.001"` | Exact USD text or integer, converted to nonnegative integer micro-USD. |
 | `max_calls_per_window` | `60` | Positive integer attempted calls per assembly per novelty reserve window. |
 | `origin_denylist` | The world's own rail hosts: the venue API and RPC on both networks, the model providers and the discovery index | Hostnames (matched exactly or as a parent domain) or CIDRs; every registered seller's host is added to them. Bare addresses, private names and nonpublic resolved addresses are always refused. |
 
 Population proposals have `{kind: "connector", id, description, origin, predicted_effect}`
 and may add `preflight_path`, `pay` and `max_call_usd`, with an
 origin of `https://<host>` and no credentials, port, path, query or fragment.
-A priced `GET` of `preflight_path`, which defaults to `/`, precedes the same
+A `GET` of `preflight_path`, which defaults to `/`, precedes the same
 experienced, proposer-excluding sortition ballot path as amendments. A strict majority admits the next
 `connector:<id>` registry version. `predicted_effect` names a current measurable
 card and carries `direction` and `window`. Admission starts the same delayed
@@ -1541,9 +1532,12 @@ The response body remains bounded by `max_bytes`; headers and body together
 are bounded by `max_bytes + HEADER_ALLOWANCE_BYTES`, with a fixed `65536`-byte
 allowance in `world/connector.py`.
 
-`connector.fetch {id, path}` costs the flat price even for transport or
-size failures once dispatched; malformed, denylisted, over-quota and unaffordable
-requests never dispatch. Preflights share the proposer's price and window cap.
+`connector.fetch {id, path}` of a public origin costs no money: the fetch pays no
+one, so the wallet does not move for it (Wave 11; `call_price_usd` was removed and
+is refused), and `max_calls_per_window` is its limit. A transport or size failure
+once dispatched still counts against that cap; malformed, denylisted, over-quota
+and unaffordable requests never dispatch. Preflights share the proposer's window
+cap.
 Paths may include a query but cannot change origin. HTTP status is returned
 as evidence rather than treated as a fetch error.
 Responses decode as UTF-8 with replacement and arrive in `seen_tool_results`
@@ -1570,19 +1564,21 @@ Scripted manifests use an offline fake transport; live manifests use bounded HTT
 
 ## Reading the web (edition 3)
 
-`[web]` registers one tool, `web.search {query, max_results?}`, and takes exactly three
+`[web]` registers one tool, `web.search {query, max_results?}`, and takes exactly two
 keys: `search_model`, a model on the menu whose `:online` route the provider searches with
-(OpenRouter's web plugin, Venice's `enable_web_search`); `call_price_micro`, the tool's own
-flat price; and `max_call_usd`, the ceiling on one whole search. With no `[web]` block no
-tool is registered. A search is one model call on that route under a fixed system
-prompt asking for a JSON list of `{title, url, snippet, published?}` and nothing else; the
-seat is charged the flat price plus the metered cost of that call, held against its
-entitlement before the call and refused before any call when the ceiling exceeds
-`max_call_usd` or the seat cannot afford it. The result is bounded — at most ten results, a
+(OpenRouter's web plugin, Venice's `enable_web_search`); and `max_call_usd`, the ceiling on
+one whole search. With no `[web]` block no tool is registered. A search is one model call
+on that route under a fixed system prompt asking for a JSON list of
+`{title, url, snippet, published?}` and nothing else; the seat is charged the metered cost
+of that call — what the provider bills, the plugin's per-request charge (the menu entry's
+`web.usd_per_request`) included — and nothing on top of it, held against its entitlement
+before the call and refused before any call when the ceiling exceeds `max_call_usd` or the
+seat cannot afford it. `web.call_price_micro`, a flat price no one was paid, was removed in
+Wave 11 and is refused. The result is bounded — at most ten results, a
 snippet of at most 600 characters, 16 KB in all — and returned with `cost_micro` and
 `as_of_ns`. A provider error, an unparsable answer or an answer that is not a result list
-comes back as `{error}` charged what the wallet was actually charged, and a malformed answer
-pays the metered call but not the tool's flat price. It is a kernel call, not a wake: no
+comes back as `{error}` charged what the wallet was actually charged: a malformed answer
+pays the metered call, because the provider billed it. It is a kernel call, not a wake: no
 propensity, no judgement, no return, and its cost lands on the calling seat's consequence
 account the way a connector read's does. The completion runs through the provider journal
 proxy, so a resumed diary replays the same results from its `io.call`/`io.result` pair
@@ -1610,7 +1606,6 @@ keys, all fixed for the world's life:
 |---|---|---|
 | `enabled` | `false` | publish the Polymarket tools and open the `polymarket` custody pot |
 | `venue` | `"fake"` | `fake`: the seeded simulated venue (`world/polymarket.py`, `FakePolymarket`) for reads and writes. `live`: the public Gamma and CLOB read APIs only; no write tool and no pot are registered, because live order signing on Polygon is not built |
-| `read_price_usd` | `"0.001"` | the flat price of each read tool |
 | `collateral_usd` | `"0"` | the simulated pot's opening USDC; refused with `venue = "live"` |
 | `max_order_usd` | `"10"` | the most one order's notional (`price x size`) may be |
 | `max_open_usd` | `"100"` | the most the pot may have committed: tokens held at cost plus resting buys |
@@ -1618,7 +1613,8 @@ keys, all fixed for the world's life:
 | `seed` | `0` | the simulated venue's seed |
 
 Tools: `polymarket.search {query, limit?}`, `polymarket.market {market_id}` and
-`polymarket.book {token_id, depth?}` are reads priced at `read_price_usd`. Their answers
+`polymarket.book {token_id, depth?}` are free reads (a public market read pays no one;
+`read_price_usd` was removed in Wave 11 and is refused). Their answers
 carry text third parties wrote (questions, rules, slugs, resolution sources), so they are
 outside text exactly as a `connector.fetch` body is: prose of at least
 `MIN_PROTECTED_BODY_CHARS` is protected, and a round that read them runs population,
@@ -1750,7 +1746,7 @@ dispatch still checks the coin against the venue and refuses an unlisted one.
 or pair the venue lists, and `venue.funding_history` refuses a spot pair.
 `venue.place_market`, `venue.place_limit`, `venue.close`, `venue.cancel` and
 `venue.set_leverage` still refuse a market that is not registered for trading.
-These six public reads are priced at `connectors.call_price_usd` per call. The
+These six public reads are free: the venue charges nothing for them. The
 launch seed only ever adds to the adapter's own listing; on the deterministic
 venue a seeded market the adapter does not list is dropped, and on a live one an
 unlisted spot pair fails launch. An adapter that publishes no listing keeps the
@@ -1768,7 +1764,8 @@ registered markets, inventory and lots survive a restart. An order refused befor
 
 A connector may pay for data through x402 with an exact per-call cap from the
 world's own wallet, journaled as one `io.call`/`io.result` pair and never
-resubmitted on replay; above the cap only the flat read is billed. The proposal
+resubmitted on replay; the seller's charge is the read's whole cost, and above
+the cap nothing is billed. The proposal
 carries `pay: "x402"` and `max_call_usd` as exact USD text or an integer, parsed
 into `max_call_micro`; a cap above `treasury.max_request_micro` is refused. The
 paid read is the journal call `connector.paid_fetch`, and the ledger retains
@@ -1777,43 +1774,21 @@ paid read is the journal call `connector.paid_fetch`, and the ledger retains
 HTTP 402 with no data cost. `world.connectors` publishes `optional_fields`,
 the `payment` note, and each registered connector's `pay` and `max_call_micro`.
 
-`[storage]` is a hard cast with exactly one key. The public notebook
-(`note.put`, `note.get`, `note.list` and `[notes]`) is deleted by ruling R11:
-Chapter II §I.b prescribes two channels, rich requests and thin rewards, and a
-population-wide blackboard is neither. What survives is its storage rent, which a
-seat's working state pays.
-
-| Key | Default | Meaning |
-| --- | --- | --- |
-| `micro_per_byte_day` | `"0.04"` | Exact positive decimal text (or integer) micro-USD per retained byte per day: the storage rent (edition 2, contract C3). |
-
-A world file that still carries `[notes]` loads only if that table names nothing
-but `micro_per_byte_day`, which is then read as `[storage] micro_per_byte_day`;
-any notebook key (`max_keys`, `max_bytes`, `byte_window_micro`) is refused, and so
-is naming both tables. No world under `worlds/` carries `[notes]`. Rent is
-`bytes × elapsed_ns × rate`, accrued from the moment a head is written (a rewrite
-inherits the open interval, so rewriting forgives nothing) and collected at each
-reserve-window boundary for the time elapsed since the last boundary: the rate is
-an exact ratio of micro-USD per byte-nanosecond, and whatever fraction of a
-micro-USD an interval leaves over is carried on the head (`rent_carry`), so
-collecting hourly charges exactly what collecting daily charges.
-
-Retained storage is an explicit, resumable liability of the decision that holds
-the state, not only a wallet debit. Every paid charge is added to that
-decision's cost contribution for the window the charge landed in and enters
-that window's measured rows — a producer's charge its cost statistics too, as
-cost the window spent and never as a return it received — as a cost of the same
-decision and never as a response, so a cost card sees it whether it selects
-returns or whole closed windows, and so do the penalty shares it attributes,
-and while the decision's own consequence outcome is still open it is also
-carried into that outcome's cost, so a return cannot resolve
-`return_paid_off = 1` on a margin its storage has already consumed. An outcome
-is fixed once and never reopened, so rent falling due afterwards stays with the
-head's owner decision as a cost contribution alone, and the state is kept rather
-than released. The carried amount is
-`ReturnAccount.carried_micro`, resumes with the consequence table, and appears
-as `consequence.carried`; the matching `price.contribution` item carries
-`storage` and `carried`.
+Retained storage costs no money, and there is no `[storage]` table. The public
+notebook (`note.put`, `note.get`, `note.list` and `[notes]`) was deleted by ruling
+R11: Chapter II §I.b prescribes two channels, rich requests and thin rewards, and
+a population-wide blackboard is neither. Its storage rent survived it until Wave
+11, which removed it: the bytes sit on the world's own fixed-price disk, so the
+rent paid no one, and a debit with no counterparty makes the books lie (the
+wallet moves only when money moves). Retained working state is a constraint: the
+64 KiB hard limit is the cast (§II.b), and the size of every head is ledgered on
+its `state.put` item, where a registered measurement can read it so the charter
+can price it through λ on reward (§II.b soft casts, §IV.a) if the population
+proposes to. A world file naming `[storage]` or `[notes]` is refused by name.
+Nothing about retained state reaches a decision's cost, a cost card or a
+consequence outcome: `ReturnAccount.carried_micro`, `consequence.carried`, the
+`storage` rows of a card's samples and the window's `storage_cost_micro` were
+removed with the rent.
 
 Window facts carry the market, funding, wallet and tick series of the closed
 window, retained to `MAX_WORLD_SAMPLES`, so a registered observation can measure
@@ -1913,8 +1888,8 @@ While dormant the event is not routed: no seat is woken for it, so no model or
 program call, no return, no registration and no tool call comes of it, and the
 compute-insolvency streak is not advanced. Everything mandatory continues on
 every event: due releases, reserve-window management (windows still
-close, cards are still measured and priced, storage rent still accrues and is
-collected, and an activation boundary still falls due), the treasury's window
+close, cards are still measured and priced, the archive still collects, and an
+activation boundary still falls due), the treasury's window
 cap and its tick, order reconciliation, fills and settled funding from the
 venue, x402 reconciliation, the reconciler's snapshot, settlement of due
 forecasts, censoring of stale judgements, queue expiry and return delivery,
@@ -1932,9 +1907,9 @@ checkpointed. The wake shows `liveness.status` as `alive`, `dormant` or
 
 ### Program seats
 
-| Key | Type | Default | Hard cast? |
-| --- | --- | --- | --- |
-| `prices.program_micro_per_call` | nonnegative integer micro-USD | `50` | Yes: the flat price of one program-seat call. |
+A program seat's call costs no money: its code runs in the world's own jail,
+which pays no one, so the wallet does not move for it. `prices.program_micro_per_call`,
+the flat price it used to be debited, was removed in Wave 11 and is refused.
 
 An assembly proposal whose `model_id` is `program` registers a seat whose
 executor is population Python in the tool jail rather than a model
@@ -1953,12 +1928,10 @@ the seat's id), `description`, `inputs` (whose world block's `seats` carries
 the program's own row only, the partition the prompt applies; information audit
 C3), `outcome_schema` and `state` — and expects on stdout the same Return JSON a model would print, tool calls,
 child requests and registrations included; it passes through the same output
-validator. The price is reserved and committed through the meter under the
-reason `model:program`, so every call is a wallet transaction and the novelty
-reserve treats it as the seat's own compute; a call whose price exceeds the
-request's cost ceiling is a `failed` return that ran nothing. A non-zero exit,
-a wall timeout, a reply that is not valid Return JSON, or a `state` printed
-under `state_policy = "none"` is a billed `malformed` return, exactly as a
+validator. The call runs through the meter under the reason `model:program` at a
+price of zero, so it is ledgered beside a model call and moves no money. A
+non-zero exit, a wall timeout, a reply that is not valid Return JSON, or a `state`
+printed under `state_policy = "none"` is a `malformed` return, exactly as a
 model's malformed reply would be. Programs are routed, judged, given standing,
 priced by the cards and retired exactly like model seats; the wake's roster
 counts them under the model id `program`.
@@ -2037,7 +2010,8 @@ reference per writer, each with its own kind and its own moment, so a second
 writer of identical bytes owns what it wrote and can read it rather than being
 told the first writer's bytes are private. Nothing is published (ruling R11
 deleted the unused `public` flag). The **first** reference stays the owner of
-record — `owner_for(sha)`, one payer of rent and one subject of retirement.
+record — `owner_for(sha)`, one subject of retirement. Holding bytes costs no
+money: the archive is the world's own disk.
 `entries()` returns one row per reference, with that reference's owner.
 `artifact.list {cursor?}` is free and returns only the caller's own rows (sha,
 kind, bytes, when), newest first, 50 a page with `next_cursor` and the caller's
@@ -2048,7 +2022,7 @@ another seat's artifacts (information audit C4).
 can only reach blobs **no reference names** — what a crash
 between the durable write and its ledger item leaves behind. Each removal is
 ledgered `artifact.collected {sha, ts}`. The runtime calls it at each
-reserve-window boundary (`continuity.charge_window`). An owned blob is never a
+reserve-window boundary (`continuity.collect_window`). An owned blob is never a
 candidate, so collection can never take a seat's working state, an inbox body or
 an archived rationale.
 
@@ -2063,7 +2037,7 @@ a program's `program.state` is readable within the program's own lineage
 (`BudgetBook.lineage`); anything else answers `{sha, error: "artifact_private"}`
 and nothing about the bytes, and the ledger row carries `reason`. `entries()`
 returns `(sha, owner, bytes, created_ns)` rows. There is no `artifact.put` tool: the writers are a private-state program
-seat and a seat's own working state. `owner_for(sha)` names who pays rent.
+seat and a seat's own working state. `owner_for(sha)` names the owner of record.
 
 ### Continuity: working state and the outcome inbox
 
@@ -2075,13 +2049,12 @@ advances its own head by returning `working_state` (a JSON object): the kernel
 canonicalises it, puts it as `working.state` owned by that seat, ledgers
 `state.put {assembly_id, sha, bytes, handle, over_soft, ts}`, and the seat's
 next request carries `your_state: {sha, bytes, state}` verbatim. The soft
-allowance is 8,192 bytes (accepted, and the rent is what it is); above 65,536
-the field is refused, the head is unchanged and `state.refused {assembly_id,
-handle, reason}` is ledgered. A manifest may seed a head with an assembly's
-`initial_state`; without one the head is None. Rent is byte-time at
-`storage.micro_per_byte_day` collected at each reserve-window boundary through the
-seat's own meter (`state.rent`, or `state.rent_due` when unaffordable); there is no
-transfer toll.
+allowance is 8,192 bytes (accepted, and marked `over_soft`); above 65,536 the
+field is refused, the head is unchanged and `state.refused {assembly_id, handle,
+reason}` is ledgered. A manifest may seed a head with an assembly's
+`initial_state`; without one the head is None. Retained state costs no money
+(Wave 11: the storage rent paid no one and was removed; see "Seeing the world");
+the hard limit is the constraint, and there is no transfer toll.
 
 `OutcomeInbox` addresses every settled consequence to the seat that decided it:
 `{handle, said: {rationale, payoff, forecasts}, outcome, observed_at_ns,
@@ -2439,9 +2412,12 @@ tick's hundred prompts ask an unreachable venue once.
 
 ### What moves the compute wallet
 
-Model, tool and program charges; rent, as authority; releases; transfers between
-seats; verified income; and confirmed conversions into provider credit. That is
-the whole list.
+It moves only when money moves (Wave 11): provider bills for model calls and
+searches, a seller's price for a paid read or an x402 call, treasury fees
+(gas, the venue's withdrawal fee, a forwarder's fee); releases; verified income;
+and confirmed conversions into provider credit. A transfer of entitlement between
+seats (an endowment, a trial, a grant, a bridge) reclassifies money the wallet
+already holds and does not move it. That is the whole list.
 
 Venue P&L, fees and funding are not on it. They settle on the venue accounts,
 which are the record of them, and the diary carries one `venue.settled {custody,
@@ -2565,8 +2541,7 @@ with a generated summary or made inaccessible. `Request.section_bytes` measures
 actual rendered bytes; the offline comparison is in `docs/audits/edition4-context/`.
 
 Own working state stays inline through 4,096 UTF-8 bytes. Larger state retains its
-exact artifact address and `artifact.get` route; storage limits and rent do not
-change. The inbox carries eight typed indices, not eight full bodies. `outcome.list`
+exact artifact address and `artifact.get` route; storage limits do not change. The inbox carries eight typed indices, not eight full bodies. `outcome.list`
 pages further unread indices without acknowledgement, and `outcome.get` returns an
 exact body. An index is notice of an outcome, not evidence that its body was read.
 
