@@ -28,7 +28,7 @@ from factorylab.kernel.queue import PropensityRecord, SettleStatus
 from factorylab.learners.base import NEUTRAL_REWARD
 from factorylab.runtime import pricing
 from factorylab.runtime.loop import Runtime
-from factorylab.runtime.shared import CH_CONFORMITY, NOOP
+from factorylab.runtime.shared import CH_CONFORMITY, CH_COUNTER, CH_FAST, NOOP
 from factorylab.runtime.worlds import load_manifest, manifest_from_dict
 from factorylab.settlement.vocabulary import DECLINED_DEFINITION
 from factorylab.world.models import ModelResponse
@@ -173,6 +173,136 @@ def test_the_refusing_seats_own_learner_is_priced_as_its_router_is(monkeypatch):
     assert fb.reward < NEUTRAL_REWARD
 
 
+# --- a judge, a meta and a counter-judge decline their commissions ---------------------
+
+
+class Decliner(ScriptedProvider):
+    """Producers answer as scripted; every judging seat declines, in the real form."""
+
+    def complete(self, req):
+        text = "\n".join(str(m.get("content", "")) for m in req.messages)
+        if _description_from_prompt(text).startswith(("Give verdict", "Assess",
+                                                      "Give your own verdict")):
+            return ModelResponse(req.model_id, json.dumps({"status": "cannot",
+                                                           "reason": "no view"}),
+                                 self.input_tokens, self.output_tokens, "end_turn")
+        return super().complete(req)
+
+
+def _declining_runtime(monkeypatch):
+    """The priced world above, with an adversarial seat, where every judge declines."""
+    from factorylab.runtime.worlds import AssemblySeed
+
+    monkeypatch.setattr(pricing, "close_window", lambda *_a: None)
+    card = _card(per=None)
+    seed = load_manifest("scripted")
+    adversary = AssemblySeed(id="adv-a", model_id="fake-sonnet", accepts=("Verdict",),
+                             role="adversary", max_tokens=128)
+    manifest = replace(seed, assemblies=(*seed.assemblies, adversary),
+                       charter=replace(seed.charter, cards=(card,)))
+    rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=None,
+                 ledger_path=None, router_gamma=0.1, provider=Decliner())
+    rt._manage_reserve_window()
+    rt._derive_regions()
+    rt.controller.set_price(card.id, 0.8, amendment_id="test")
+    return rt
+
+
+def _draw(rt, seat, channel):
+    """One decision the router holding ``seat`` drew for it (or for NOOP), at its odds."""
+    state = next(s for s in rt._all_router_states() if seat in s.universe
+                 and not s.kind.startswith("request:"))
+    feasible = lambda a: (a == seat, "")  # noqa: E731 - only this arm may be woken
+    sample = next(s for s in (state.router.route(state.kind, feasible, random.Random(i))
+                              for i in range(500)) if s.chosen == seat)
+    handle = rt.queue.open(actor=state.learner.id, event_id=f"draw-{seat}-{rt.n}",
+                           propensity=rt._propensity(sample), channel=channel,
+                           deadline_ns=10**18, parent_handle=None,
+                           cost_ceiling=rt.wallet.available)
+    return state, handle
+
+
+def _produced(rt):
+    rt.n += 1
+    _state, handle = _drawn(rt, "seed-decider")
+    rt._producer_step(
+        Event(f"tick-{rt.n}", EventKind.TICK, rt.clock.now_ns, {"index": 0}, "test"),
+        handle, SimpleNamespace(chosen="seed-decider"), rt.queue.get(handle).deadline_ns)
+    return next(e for e in rt.internal if str(e.kind) == str(EventKind.PRODUCER_RETURN)
+                and e.payload["about_handle"] == handle)
+
+
+def _verdict(rt):
+    """A first-tier verdict event, from a judge whose answer is handed in."""
+    event = _produced(rt)
+    judge = rt.queue.open(actor="test-router", event_id="judge", channel=CH_CONFORMITY,
+                          propensity=PropensityRecord(("eval-c",), (1.0,), "eval-c", 0,
+                                                      "test-router", "state"),
+                          deadline_ns=10**18, parent_handle=None,
+                          cost_ceiling=rt.wallet.available)
+    rt._evaluator_step(event, judge, SimpleNamespace(chosen="eval-c"), 10**18,
+                       returned=Return(judge, {"verdict": 0.6, "rationale": "r"}, 0, "ok"))
+    return rt.return_events[judge]
+
+
+def _decline(rt, step, seat, channel):
+    if step == "evaluator":
+        event, run = _produced(rt), rt._evaluator_step
+    elif step == "meta":
+        event, run = _verdict(rt), rt._meta_step
+    else:
+        event, run = _verdict(rt), rt._counter_step
+    state, handle = _draw(rt, seat, channel)
+    run(event, handle, SimpleNamespace(chosen=seat), rt.queue.get(handle).deadline_ns)
+    return state, handle
+
+
+@pytest.mark.parametrize(("step", "seat", "channel"), [
+    ("evaluator", "eval-a", CH_CONFORMITY),
+    ("meta", "meta-a", CH_FAST),
+    ("counter", "adv-a", CH_COUNTER),
+])
+def test_a_judging_seat_that_declines_is_priced_as_an_abstention_never_censored_free(
+        monkeypatch, step, seat, channel):
+    """The real decline, as ``_invoke`` hands it on (status ``refused``), is a decline:
+    the published schematic says its router is credited as for an abstention."""
+    rt = _declining_runtime(monkeypatch)
+    _commitments(rt, "eval-a", censored=4)
+    rt._close_price_window()  # a violation measured, and priced, before the decline
+    state, handle = _decline(rt, step, seat, channel)
+    (invocation,) = _rows(rt, "invocation", handle=handle)
+    assert invocation["status"] == "refused" and invocation["cost"] > 0
+    (declined,) = _rows(rt, "evaluation.declined", handle=handle)
+    assert declined["channel"] == channel and declined["reason"] == "no view"
+    assert not _rows(rt, "evaluation.censored", handle=handle)
+    (settled,) = rt.queue.history(handle)
+    assert settled.status is SettleStatus.INAPPLICABLE
+    assert settled.definition_version == DECLINED_DEFINITION
+    # Learned in the window it was declined in, as the loop learns it.
+    rt._deliver_returns()
+    (priced,) = _rows(rt, "router.decline_priced", handle=handle)
+    assert priced["penalty"] > 0
+    assert priced["reward"] == pytest.approx(state.neutral() - priced["penalty"])
+    assert priced["reward"] < state.neutral()
+    # Never above a NOOP the same router drew in the same window.
+    _noop_state, noop = _draw(rt, NOOP, channel)
+    rt._contribution(noop, rt.window.decisions[handle]["role"])
+    noop_reward, _noop_penalty = rt._priced_abstention(noop, state.neutral())
+    assert priced["reward"] <= noop_reward
+
+
+def test_a_model_refusal_with_no_decline_is_still_censored(monkeypatch):
+    """A provider's own refusal says nothing a seat chose: it stays a form failure."""
+    rt = _declining_runtime(monkeypatch)
+    event = _produced(rt)
+    _state, handle = _draw(rt, "eval-a", CH_CONFORMITY)
+    rt._evaluator_step(event, handle, SimpleNamespace(chosen="eval-a"), 10**18,
+                       returned=Return(handle, {"reason": "refused"}, 5, "refused"))
+    (settled,) = rt.queue.history(handle)
+    assert settled.status is SettleStatus.CENSORED
+    assert not _rows(rt, "evaluation.declined", handle=handle)
+
+
 # --- the harness: one seat always refuses, one always holds -----------------------------
 
 
@@ -243,3 +373,15 @@ def test_in_a_world_a_seat_that_always_refuses_earns_less_than_one_that_holds_or
         rewards.setdefault(seat, []).append(reward)
     mean = {seat: sum(r) / len(r) for seat, r in rewards.items()}
     assert mean[REFUSER] < mean[NOOP] and mean[REFUSER] < mean[HOLDER]
+    # The judges who declined to grade a refusal ("no return to judge") declined too,
+    # in the form ``_invoke`` hands on: none is censored at a free neutral, each is
+    # priced on its router as an abstention, and some of those prices bite.
+    judge_routers = {s.learner.id for s in rt._all_router_states()
+                     if s.kind == "ProducerReturn"}
+    assert not _rows(rt, "evaluation.censored")
+    declined = {row["handle"] for row in _rows(rt, "evaluation.declined",
+                                                channel=CH_CONFORMITY)}
+    judged = [row for row in priced if row["router"] in judge_routers]
+    assert declined and {row["handle"] for row in judged} == declined
+    assert any(row["penalty"] > 0 for row in judged)
+    assert all(row["reward"] <= row["neutral"] for row in judged)

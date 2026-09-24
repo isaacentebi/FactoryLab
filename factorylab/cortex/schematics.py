@@ -1786,7 +1786,8 @@ class SchematicsMixin:
                 "ProducerReturn and custom return kinds settle on the verdict channel: the "
                 "score is the mean of the verdicts (0 to 1) the judges that read it gave, "
                 f"less the card penalty; a return no judge read within {ev.verdict_timeout_ticks} "
-                "ticks is censored (no score, no learning), except a return that answered "
+                "ticks is censored: no score, and its router and the seat's own learner are "
+                "credited the zero-consequence reward, unpriced; except a return that answered "
                 "status: cannot, which then settles as declined: the router that drew the "
                 "seat and the seat's own learner are credited as for an abstention, less the "
                 "card penalty its role bears"
@@ -1826,8 +1827,9 @@ class SchematicsMixin:
             "malformed_judgement": (
                 "a judgement with no verdict or conformity in [0, 1], a model refusal, or one "
                 "whose target is refused settles censored; its call is charged. status: "
-                "cannot declines the commission: the call is charged, and the router that "
-                "drew the seat is credited as for an abstention"
+                "cannot declines the commission: the call is charged, it settles as "
+                "declined, and the router that drew the seat and the seat's own learner are "
+                "credited as for an abstention"
             ),
             "antagonist_exposure": (
                 "an Exposure return settles on the exposure channel: the mean over the judges "

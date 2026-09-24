@@ -95,6 +95,22 @@ UNJUDGED_OUTPUT_FIELDS = frozenset({"propensity"})
 PRODUCING_KINDS = frozenset({"ProducerReturn", "Exposure"})
 
 
+def declined_reason(ret: Return) -> str | None:
+    """The reason a return declined its commission, or None when it did not decline.
+
+    Guarantees a decline is recognised in the form it actually arrives in: ``_invoke``
+    rewrites an answer of ``{"status": "cannot", "reason": <str>}`` to status
+    ``refused`` (``ComputeMixin._invoke``), and a return handed in unrewritten keeps
+    status ``ok``. A provider's own refusal names no ``cannot`` and is not a decline:
+    it is a form failure, censored like any unusable judgement.
+    """
+    if ret.status not in ("ok", "refused") or not isinstance(ret.outputs, dict):
+        return None
+    if str(ret.outputs.get("status", "")).strip().lower() != "cannot":
+        return None
+    return str(ret.outputs.get("reason", ""))[:500] or "the seat declined this commission"
+
+
 def judged_outputs(outputs: Any) -> Any:
     """A return's outputs as a judge reads them: the work, without its sealed side-claims."""
     if not isinstance(outputs, dict):
@@ -1280,13 +1296,12 @@ class Runtime(
         self.consequences.finish(handle, ret.cost)
         self._apply_registrations(handle, ret)
         self.handle_to_assembly[handle] = sample.chosen
-        answered = str(ret.outputs.get("status", "")).strip().lower()
-        reason = str(ret.outputs.get("reason", ""))[:500]
-        if ret.status == "ok" and answered == "cannot":
-            # A commission may be declined. The seat is charged the call it made
-            # and nothing else: no score, no penalty, no quota (§6.B).
-            self._settle_declined(handle, CH_CONFORMITY,
-                                  reason or "the seat declined this commission")
+        reason = declined_reason(ret)
+        if reason is not None:
+            # A commission may be declined (§6.B). The seat is charged the call it
+            # made; no score, no quota; its learners credit the decline as an
+            # abstention, less its role's price (ruling R9), as the schematic says.
+            self._settle_declined(handle, CH_CONFORMITY, reason)
             return
         verdict = _as_unit(ret.outputs.get("verdict")) if ret.status == "ok" else None
         if verdict is None:
@@ -1437,13 +1452,11 @@ class Runtime(
         self.consequences.finish(handle, ret.cost)
         self.handle_to_assembly[handle] = sample.chosen
         self._apply_registrations(handle, ret)
-        answered = str(ret.outputs.get("status", "")).strip().lower()
-        if ret.status == "ok" and answered == "cannot":
+        reason = declined_reason(ret)
+        if reason is not None:
             # Meta work is a commission like any other: it may be declined, at the
-            # cost of the call.
-            self._settle_declined(
-                handle, channel, str(ret.outputs.get("reason", ""))[:500] or
-                "the seat declined this commission")
+            # cost of the call, and is priced as an abstention (ruling R9).
+            self._settle_declined(handle, channel, reason)
             return
         conformity = _as_unit(ret.outputs.get("conformity")) if ret.status == "ok" else None
         if conformity is None:
@@ -1546,10 +1559,9 @@ class Runtime(
         self.consequences.finish(handle, ret.cost)
         self.handle_to_assembly[handle] = sample.chosen
         self._apply_registrations(handle, ret)
-        answered = str(ret.outputs.get("status", "")).strip().lower()
-        if ret.status == "ok" and answered == "cannot":
-            self._settle_declined(handle, channel, str(ret.outputs.get("reason", ""))[:500]
-                                  or "the seat declined this commission")
+        reason = declined_reason(ret)
+        if reason is not None:
+            self._settle_declined(handle, channel, reason)
             return
         q = _as_unit(ret.outputs.get("verdict")) if ret.status == "ok" else None
         if q is None:
