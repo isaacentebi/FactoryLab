@@ -66,7 +66,8 @@ def fresh_sample(card: MetricCard, samples: CardSamples, window) -> bool:
             # Measured over the window's rendered prompts: a window with none (only
             # rent, a ballot no assembly answered, a request that could not be
             # rendered) has no prompt to measure.
-            return getattr(window, "prompts", window.invocations) > 0
+            # A record closed before prompts were measured measured none.
+            return (getattr(window, "prompts", 0) or 0) > 0
         if observation == READ_OBSERVATION:
             return window.invocations > 0  # measured over the window's invocations
         if observation in RETURN_OBSERVATIONS:

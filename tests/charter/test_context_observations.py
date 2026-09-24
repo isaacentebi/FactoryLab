@@ -163,8 +163,50 @@ def test_seed_measure_of_one_window_and_its_empty_window(observation):
                                     "inputs_bytes": 3.0,
                                     "downstream_read_bytes": 5.0}[observation]
     assert seed.measure(MeasureWindow(1, 1)) is None
-    # A record closed before these counters existed measures zero bytes, not a crash.
-    assert seed.measure(SimpleNamespace(invocations=2)) == 0.0
+    # A record closed before these counters existed measured no prompt: a prompt mean
+    # over it is unmeasured, and nothing was read in it, so no reading bytes.
+    legacy = SimpleNamespace(invocations=2)
+    assert seed.measure(legacy) == (0.0 if observation == "downstream_read_bytes" else None)
+
+
+PRE_PROMPT_FIELDS = ("prompts", "prompt_bytes", "you_bytes", "inputs_bytes",
+                     "downstream_read_bytes")
+
+
+def _legacy(samples, index, invocations):
+    """A window closed before prompts were measured: none of their counters at all."""
+    samples.closed(MeasureWindow(index, 1, invocations=invocations, ok=invocations))
+    for key in PRE_PROMPT_FIELDS:
+        del samples.windows[-1][key]
+
+
+@pytest.mark.parametrize("legacy_first", [True, False])
+@pytest.mark.parametrize("observation", PROMPT)
+def test_a_legacy_window_adds_nothing_to_a_prompt_mean(observation, legacy_first):
+    # PR #143 review, architect's ruling: a record without ``prompts`` measured zero
+    # prompts. It adds nothing to either side of the mean, whichever order it merges in.
+    samples = CardSamples()
+    current = MeasureWindow(2, 1, invocations=1, ok=1, prompts=1, prompt_bytes=100,
+                            you_bytes=100, inputs_bytes=100)
+    if legacy_first:
+        _legacy(samples, 1, 2)
+        samples.closed(current)
+    else:
+        samples.closed(current)
+        _legacy(samples, 3, 2)
+    card = _card(observation, kind="windows", n=2, per=None, answers_for="all")
+    assert measure_card(card, samples) == {"all": pytest.approx(100.0)}
+
+
+@pytest.mark.parametrize("observation", PROMPT)
+def test_a_legacy_only_selection_is_unmeasured_and_not_fresh(observation):
+    samples = CardSamples()
+    _legacy(samples, 1, 2)
+    _legacy(samples, 2, 3)
+    card = _card(observation, kind="windows", n=2, per=None, answers_for="all")
+    assert measure_card(card, samples) == {}
+    legacy_window = SimpleNamespace(**samples.windows[-1], decisions={})
+    assert not fresh_sample(card, samples, legacy_window)
 
 
 def test_windows_per_scope_selects_rows_and_readings_of_the_selected_windows():

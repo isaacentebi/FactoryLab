@@ -666,6 +666,10 @@ serialise) fails as the assembly fails it: it is an invocation, counted in
 `invocations`, but no prompt. Its ledger row's `sections` is null and the window's
 `prompts` (the invocations whose opening prompt was rendered, the three prompt
 means' denominator) does not count it. Measuring a prompt never fails a call. A
+window record closed before prompts were measured carries no `prompts` and no
+prompt bytes: it measured zero prompts, so merged with later windows it adds nothing
+to either side of a prompt mean, and a selection of such records alone is
+unmeasured (never a mean of zero) and no new sample. A
 whole window with no measured prompt (only rent, such a ballot or such a request)
 is no new sample for the three prompt means, and one with no invocation none for
 `downstream_read_bytes`. All four are measurable over `returns` and

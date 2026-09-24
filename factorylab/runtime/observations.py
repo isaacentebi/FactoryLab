@@ -100,11 +100,12 @@ def _prompt_mean(w: MeasureWindow, key: str) -> float | None:
     The denominator is ``prompts``, the invocations whose opening prompt was rendered
     and measured, not ``invocations``: a request that could not be rendered is an
     invocation (it failed) but no prompt, and averaging it in as zero bytes would be
-    a byte count nobody sent. A record closed before ``prompts`` existed counted
-    every invocation's prompt, so its invocations stand in.
+    a byte count nobody sent. A record closed before prompts were measured carries
+    neither ``prompts`` nor prompt bytes: it measured zero prompts, so it adds
+    nothing to either side of the mean, and a selection of such records alone is
+    unmeasured, never a mean of zero.
     """
-    prompts = getattr(w, "prompts", None)
-    return _ratio(getattr(w, key, 0), w.invocations if prompts is None else prompts)
+    return _ratio(getattr(w, key, 0) or 0, getattr(w, "prompts", 0) or 0)
 
 
 def _cost_per_return(w: MeasureWindow) -> float | None:
