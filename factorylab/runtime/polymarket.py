@@ -30,14 +30,15 @@ What the kernel enforces, and where:
   borrows the Hyperliquid accounts or the Base reserve.
 * **The market's price settles early; its resolution settles late.** Fills enter
   the consequence book as ``event`` lots (``settlement/lots.py``), marked each
-  tick at the CLOB midpoint. At the consequence backstop a held position is
-  scored at that mark, exactly as an open spot lot is: the price is the
+  tick at the midpoint of the token's book (``mark``). At the consequence
+  backstop a held position is scored at that mark, exactly as an open spot lot
+  is: the price is the
   market's anticipatory settlement of the belief, the cure the essay names for
   learning death (II.IV.b: "the compensation period of any exploratory learner
   must be shorter than the lifetime of the things it is being compensated for
   discovering"). The resolution closes the lot later (``LotTable.redeem``) and
   its money reaches the owner through ``_settle_late``; the score is never
-  revised. A token with no midpoint is not marked, and its decision falls back
+  revised. A token with no two-sided book is not marked, and its decision falls back
   on its provisional verdict like any other unobserved consequence.
 * **Claims stay in their custody.** What a Polymarket position realises is a
   claim on the polymarket pot (``claim_share``), never on the venue, and
@@ -91,7 +92,7 @@ def coin_of(token_id: str) -> str:
 def tool_specs(spec: Any, *, writes: bool) -> dict[str, dict[str, Any]]:
     """The tools a ``[polymarket]`` world publishes: what each does and what it costs."""
     price = spec.read_price_micro
-    usd = f"${Decimal(price) / 1_000_000:f}"
+    usd = "Free." if price == 0 else f"${Decimal(price) / 1_000_000:f} a call."
     token = {"type": "string", "pattern": r"^[0-9]{1,100}$", "minLength": 1}
     decimal = {"type": ["string", "number"]}
     tools = {
@@ -99,18 +100,18 @@ def tool_specs(spec: Any, *, writes: bool) -> dict[str, dict[str, Any]]:
             f"Search Polymarket event markets by text. Returns up to {MAX_SEARCH_RESULTS} "
             "markets: id, question, outcomes with their token ids and last prices, end date, "
             "resolution source, tick size, minimum order size, fee schedule and whether the "
-            f"market accepts orders. Market text is written by third parties. {usd} a call.",
+            f"market accepts orders. Market text is written by third parties. {usd}",
             {"query": {"type": "string", "minLength": 1, "maxLength": MAX_QUERY_CHARS},
              "limit": {"type": "integer", "minimum": 1, "maximum": MAX_SEARCH_RESULTS}},
             ["query"], [{"query": "election", "limit": 5}], price),
         "polymarket.market": (
             "One Polymarket market by id: its contract fields and its resolution rules "
-            f"text, which third parties wrote. {usd} a call.",
+            f"text, which third parties wrote. {usd}",
             {"market_id": {"type": "string", "minLength": 1, "maxLength": 80}},
             ["market_id"], [{"market_id": "fake-1"}], price),
         "polymarket.book": (
             "The order book of one outcome token, best price first on both sides, with "
-            f"its midpoint, tick size and minimum order size. {usd} a call.",
+            f"its midpoint, tick size and minimum order size. {usd}",
             {"token_id": token, "depth": {"type": "integer", "minimum": 1,
                                           "maximum": MAX_DEPTH}},
             ["token_id"], [{"token_id": "100000000000000000000", "depth": 5}], price),
@@ -694,16 +695,18 @@ def tick(rt: Any) -> None:
 def mark(rt: Any) -> None:
     """Give the consequence book this tick's midpoint of every token a lot holds.
 
-    Guarantees a mark is the market's own price strictly between 0 and 1. A token
-    whose midpoint is unavailable loses its mark rather than keeping a stale one,
-    so its lot is not marked and its decision falls back as any unobserved
-    consequence does.
+    Guarantees a mark is the market's own price strictly between 0 and 1: the
+    midpoint of the book's best bid and ask, never the CLOB's ``/midpoint``, which
+    answers 0.5 for an empty book (read 2026-09-23 on a resolved market). A token
+    with no two-sided book, or whose book is unreadable, loses its mark rather than
+    keeping a stale one or taking an invented one, so its lot is not marked and its
+    decision falls back as any unobserved consequence does.
     """
     surface = rt.polymarket
     for coin in sorted({lot.coin for lot in rt.consequences.table.lots
                         if lot.market == "event"}):
         try:
-            mid = _decimal(surface.venue.midpoint(coin.removeprefix("PM:")))
+            mid = _decimal(surface.venue.order_book(coin.removeprefix("PM:"), 1)["midpoint"])
         except Exception:  # noqa: BLE001 - an unread price is an absent price
             mid = None
         if mid is not None and 0 < mid < 1:

@@ -631,5 +631,5 @@ mode = "compact"
 [polymarket]
 enabled = true
 venue = "live"
-# The price of one read call; a venue public read costs the same here (connectors default).
-read_price_usd = "0.001"
+# Gamma and the CLOB charge nothing for a public read; the key defaults to $0.001.
+read_price_usd = "0"

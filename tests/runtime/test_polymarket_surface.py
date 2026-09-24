@@ -106,7 +106,21 @@ def test_only_the_edition6_worlds_enable_event_markets_and_only_to_read():
             # The public read APIs only: no world under worlds/ trades event markets.
             assert world.polymarket.venue == "live", path.name
             assert world.polymarket.collateral_micro == 0, path.name
+            # A public read costs the factory nothing, so the world debits nothing for it.
+            assert world.polymarket.read_price_micro == 0, path.name
     assert enabled == {"edition6-testnet-rehearsal.toml", "edition6-capital-loop.toml"}
+
+
+def test_a_free_read_is_published_free_and_debits_nothing():
+    rt = world(venue="live", read_price_micro=0)
+    for tool_id in polymarket.READS:
+        assert rt.tool_specs[tool_id]["price_micro_per_call"] == 0
+        assert rt.tool_specs[tool_id]["description"].endswith("Free.")
+        assert "$" not in rt.tool_specs[tool_id]["description"]
+    handle = collateral_decision(rt)
+    result, cost = rt._run_tool("seed-decider", handle,
+                                {"tool": "polymarket.search", "args": {"query": "event A"}})
+    assert result["markets"] and cost == 0
 
 
 def test_published_tools_state_what_they_do_and_cost_and_carry_valid_examples():
@@ -505,3 +519,63 @@ def test_a_kill_cancels_resting_orders_and_leaves_tokens_to_resolve_as_residual(
     assert report["exposure_state"] == "wind_down_pending"
     account = rt.polymarket.account()
     assert account["open_orders"] == [] and account["positions"][0]["size"] == "10"
+
+
+# --- only true facts: no stale market, no invented price ------------------------------------
+
+def test_the_market_tool_serves_the_markets_current_state_never_a_cached_copy():
+    """Read 2026-09-23: Gamma's shared cache served /markets/<id> still open after the
+    market had resolved, while the same path with a query no one had asked was current."""
+    from pathlib import Path
+    from urllib.parse import urlsplit
+
+    from factorylab.world.polymarket import PolymarketReader
+
+    fixtures = Path(__file__).parents[1] / "world" / "fixtures" / "polymarket"
+    stale = json.loads((fixtures / "gamma_market.json").read_text(), parse_float=Decimal)
+    current = {**stale, "closed": True, "acceptingOrders": False,
+               "umaResolutionStatus": "resolved", "outcomePrices": '["1", "0"]'}
+    urls = []
+
+    def cached(url):
+        urls.append(url)
+        return current if urlsplit(url).query else stale  # the bare path is the cached copy
+
+    rt = world(venue="live")
+    rt.polymarket.venue.target = PolymarketReader(get=cached)
+    handle = collateral_decision(rt)
+    result, _ = rt._run_tool("seed-decider", handle, {
+        "tool": "polymarket.market", "args": {"market_id": "2589812"}})
+    market = result["market"]
+    assert market["closed"] is True and market["uma_resolution_status"] == "resolved"
+    assert [o["price"] for o in market["outcomes"]] == ["1", "0"]
+    # Every Gamma read asks a URL no earlier read asked.
+    rt._run_tool("seed-decider", handle, {
+        "tool": "polymarket.market", "args": {"market_id": "2589812"}})
+    assert len(urls) == 2 and urls[0] != urls[1]
+    assert all(urlsplit(u).path == "/markets/2589812" for u in urls)
+
+
+def test_a_token_with_no_two_sided_book_is_not_marked_at_an_invented_price():
+    """Read 2026-09-23: the CLOB's /midpoint answered 0.5 for a resolved market's empty
+    book. A mark is the book's own best bid and ask, or no mark at all."""
+    rt = world()
+    handle = collateral_decision(rt)
+    assert buy(rt, handle)["status"] == "filled"
+    coin = polymarket.coin_of(token(rt))
+    polymarket.mark(rt)
+    assert rt.consequences.mids[coin] == "0.40"
+    fake = rt.polymarket.venue.target
+    fake.midpoint = lambda token_id: "0.5"
+    fake.order_book = lambda token_id, depth: {"token_id": token_id, "bids": [], "asks": [],
+                                               "midpoint": None}
+    polymarket.mark(rt)
+    assert coin not in rt.consequences.mids
+    marks = [i for i in _consequence_diary(rt) if i["kind"] == "polymarket.mark_unavailable"]
+    assert [m["coin"] for m in marks] == [coin]
+    # A one-sided book has no midpoint either; the lot stays unmarked.
+    fake.order_book = lambda token_id, depth: {"token_id": token_id, "asks": [],
+                                               "bids": [{"price": "0.3", "size": "5"}],
+                                               "midpoint": None}
+    polymarket.mark(rt)
+    assert coin not in rt.consequences.mids

@@ -1603,8 +1603,9 @@ one wake. A search that returned no results buys no extra round.
 
 `[polymarket]` is off by default. A disabled block registers nothing, but its keys are
 still part of the manifest and are hashed like any other. The two edition 6 worlds enable
-it with `venue = "live"` (reads only); no world under `worlds/` enables the simulated
-venue's writes. The keys, all fixed for the world's life:
+it with `venue = "live"` (reads only) and `read_price_usd = "0"`, since Gamma and the CLOB
+charge nothing for a public read; no world under `worlds/` enables the simulated venue's
+writes. The keys, all fixed for the world's life:
 
 | key | default | meaning |
 |---|---|---|
@@ -1618,7 +1619,10 @@ venue's writes. The keys, all fixed for the world's life:
 | `seed` | `0` | the simulated venue's seed |
 
 Tools: `polymarket.search {query, limit?}`, `polymarket.market {market_id}` and
-`polymarket.book {token_id, depth?}` are reads priced at `read_price_usd`. Their answers
+`polymarket.book {token_id, depth?}` are reads priced at `read_price_usd` (a zero price
+is published as "Free."). Gamma answers through a shared cache (`max-age=300`) that served
+a resolved market as still open (read 2026-09-23), so every Gamma read carries a fresh
+query value (`_`) and returns the origin's state at the read; the CLOB is not cached. Their answers
 carry text third parties wrote (questions, rules, slugs, resolution sources), so they are
 outside text exactly as a `connector.fetch` body is: prose of at least
 `MIN_PROTECTED_BODY_CHARS` is protected, and a round that read them runs population,
@@ -1643,13 +1647,14 @@ cannot convert a Polymarket profit out of Hyperliquid money. Every tick the pot 
 micro-USD. A kill cancels resting orders only: held tokens are paid for, cannot be liquidated
 and resolve into the pot, so they are reported as residual exposure (`wind_down_pending`).
 
-Settlement: a fill opens an `event` lot, marked every tick at the CLOB midpoint. At the
+Settlement: a fill opens an `event` lot, marked every tick at the midpoint of its book's
+best bid and ask (never the CLOB's `/midpoint`, which answers 0.5 for an empty book). At the
 consequence backstop a held lot is marked there like a spot lot, so the decision is scored on
 the normal horizon at the market's price: the market's anticipatory settlement (essay
 II.IV.b). The resolution later closes every lot on the token at its payout (1, 0, or 0.5 on a
 50-50), ledgered as `consequence.resolution` with one `resolution` execution receipt per
 decision, and its money reaches the owner through `_settle_late` without rescoring. A token
-with no midpoint loses its mark (`polymarket.mark_unavailable`) and its decision falls back as
+with no two-sided book loses its mark (`polymarket.mark_unavailable`) and its decision falls back as
 any unobserved consequence does. Outcome labels are third-party text: outside the jailed reads
 every surface carries ids and a normalised `YES`, `NO` or `outcome <n>`.
 
@@ -1665,9 +1670,8 @@ predicate enum); a world without the block offers neither and refuses them. Both
 
 The world reads the token once, at the forecast's due tick, through the surface's journal
 (`polymarket.event_read`): the market that lists it (Gamma's closed listing first, since
-its open listing can lag a resolution), and for a price claim on an unresolved market its
-book (never the CLOB's `/midpoint`, which answers 0.5 for an empty book). A payout exists only for a closed market whose
-outcome prices are a redemption (1 and 0, or 0.5 each) and whose UMA status, when stated,
+its open listing excludes closed markets), and for a price claim on an unresolved market
+its book. A payout exists only for a closed market whose outcome prices are a redemption (1 and 0, or 0.5 each) and whose UMA status, when stated,
 is `resolved`. A read that did not answer, or a price claim with no midpoint, is
 `polymarket.event_unavailable`: the claim settles censored and is excluded as
 `external_unobservable`. A token no market lists settles censored and is not excluded.

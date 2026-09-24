@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import json
 import random
+import time
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -324,10 +325,23 @@ class PolymarketReader:
     get: Any = http_get_json
     name: str = "polymarket"
     deterministic: bool = False
+    #: A value no earlier Gamma read carried, for ``CACHE_KEY``.
+    nonce: Any = time.time_ns
+
+    #: Gamma answers through a shared cache (``cache-control: public, max-age=300``),
+    #: keyed by the whole URL. Read 2026-09-23: ``/markets/4827887`` was served from it
+    #: (``cf-cache-status: HIT``) still ``closed: false``, UMA ``proposed``, after the
+    #: market had resolved, while the same path with a query parameter no one had
+    #: asked for was a MISS and current. Every Gamma read carries a fresh value
+    #: under this key, which Gamma ignores, so what it returns is the origin's state
+    #: at the read and never a copy up to five minutes old. The CLOB is not cached
+    #: (``cf-cache-status: DYNAMIC``).
+    CACHE_KEY = "_"
 
     def _gamma(self, path: str, **params: Any) -> Any:
-        query = parse.urlencode({k: v for k, v in params.items() if v is not None})
-        return self.get(f"{self.gamma_url}{path}" + (f"?{query}" if query else ""))
+        fresh = {k: v for k, v in params.items() if v is not None}
+        fresh[self.CACHE_KEY] = self.nonce()
+        return self.get(f"{self.gamma_url}{path}?{parse.urlencode(fresh)}")
 
     def _clob(self, path: str, **params: Any) -> Any:
         return self.get(f"{self.clob_url}{path}?{parse.urlencode(params)}")
@@ -339,7 +353,8 @@ class PolymarketReader:
         return parse_search(raw, limit)
 
     def market(self, market_id: str) -> dict[str, Any]:
-        """One market's contract and rules text, by Gamma market id."""
+        """One market's contract and rules text, by Gamma market id, as the origin holds
+        it at the read (never the shared cache's copy: ``CACHE_KEY``)."""
         detail = market_detail(self._gamma(f"/markets/{parse.quote(market_id, safe='')}"))
         if detail is None:
             raise PolymarketUnavailable("market response has no tradable shape")
@@ -348,11 +363,11 @@ class PolymarketReader:
     def market_of_token(self, token_id: str) -> dict[str, Any] | None:
         """The market listing ``token_id`` among its outcomes, closed or open, or None.
 
-        Gamma's ``/markets`` lists open markets unless asked for closed ones, and its
-        open listing can lag a resolution (read 2026-09-23: a market resolved minutes
-        earlier still answered ``closed: false``, UMA ``proposed``, without
-        ``closed=true``, and ``[]`` for another). Closing is final, so the closed
-        listing is asked first and the open one only for a token it does not hold.
+        Gamma's ``/markets`` lists open markets unless asked for closed ones (read
+        2026-09-23: a resolved market's token answered ``[]`` without ``closed=true``).
+        Closing is final, so the closed listing is asked first and the open one only
+        for a token it does not hold. Both are read past the shared cache
+        (``CACHE_KEY``), which served a just-resolved market as still open.
         """
         for closed in ("true", None):
             raw = self._gamma("/markets", clob_token_ids=token_id, closed=closed)
