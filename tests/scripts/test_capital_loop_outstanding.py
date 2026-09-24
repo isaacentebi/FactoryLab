@@ -128,7 +128,7 @@ class Rpc:
             number = self._final_number
             self._final_number += self.drift
             return number
-        return self.latest_number if tag == "latest" else int(tag, 16)
+        return self.latest_number if tag in ("latest", "pending") else int(tag, 16)
 
     def logs(self, query):
         low, high = int(query["fromBlock"], 16), int(query["toBlock"], 16)
@@ -1523,11 +1523,13 @@ def torn_record(tmp_path, fragment, *, old=True):
     return path
 
 
-def repair(tmp_path, now):
+def repair(tmp_path, now, *, transport=None):
+    """``--repair-torn`` at ``now``; a torn transaction's chains are read through
+    ``transport`` (a fake Base that answers nothing else, when none is given)."""
     from factorylab.runtime.capital_loop import ReserveLock, repair_torn
 
     with ReserveLock(RESERVE, lock_dir=tmp_path) as lock:
-        return repair_torn(lock, now_s=lambda: now)
+        return repair_torn(lock, now_s=lambda: now, transport=transport or Rpc())
 
 
 @pytest.mark.parametrize(("tail", "expected"), [
@@ -1790,6 +1792,7 @@ class Hyper:
         self.latest, self.chain_id, self.balance = nonce, chain_id, 10**18
         self.pending = nonce + 3 if pending is None else pending
         self.sent, self.requests, self.nonce_tags = [], [], []
+        self.on_send = None
 
     def __call__(self, method, url, payload, headers):
         name, params = payload["method"], payload["params"]
@@ -1814,6 +1817,8 @@ class Hyper:
         elif name == "eth_sendRawTransaction":
             from eth_utils import keccak
 
+            if self.on_send is not None:
+                self.on_send()
             self.sent.append(params[0])
             result = "0x" + keccak(bytes.fromhex(params[0][2:])).hex()
         else:
@@ -2076,20 +2081,25 @@ def test_a_cut_hyperevm_transaction_line_is_a_torn_transaction_not_an_authorizat
     fragment = line[:line.index(b'"tx_nonce": ') + len(b'"tx_nonce": 1')]
     path = record(tmp_path)
     path.write_bytes(fragment)
-    assert repair(tmp_path, 12_000)["open_transactions"] == [tx_hash]
+    rpc = Rpc()
+    rpc.others[HYPEREVM.rpc] = hyper = Hyper(nonce=12, pending=15)
+    assert repair(tmp_path, 12_000, transport=rpc)["open_transactions"] == [tx_hash]
     torn = read_authorizations(path)[-1]
     assert (torn["torn_kind"], torn["nonces"], torn["tx_hashes"]) == (
         "transaction", [], [tx_hash])
     assert (torn["chain_id"], torn["tx_nonce"], torn["start_block"]) == (999, None, None)
-    rpc = Rpc()
-    rpc.others[HYPEREVM.rpc] = hyper = Hyper(nonce=12)
-    with pytest.raises(CapitalLoopRefused, match="recorded_transaction_may_still_execute"):
-        resolve(tmp_path, rpc, now_s=lambda: 12_100)  # the cooling-off window is open
+    # Its nonce is at most the pending one at the repair, on the one chain it names.
+    assert torn["pending_nonces"] == {"999": 15}
+    for used in (12, 15):  # until nonce 15 itself is final, some nonce it may have is open
+        hyper.latest = used
+        with pytest.raises(CapitalLoopRefused,
+                           match="recorded_transaction_may_still_execute"):
+            resolve(tmp_path, rpc, now_s=lambda: rpc.latest_ts)
     assert get_logs(rpc) == []  # nothing of it was taken for an authorization's nonce
-    later = 12_000 + 600 + 2 * rpc.lag_s
-    summary = resolve(tmp_path, rpc, now_s=lambda: later)
-    assert [(r["tx_hash"], r["how"]) for r in summary["resolved_now"]] == [(tx_hash, "dropped")]
-    assert "eth_getTransactionByHash" in hyper.requests
+    hyper.latest = 16
+    summary = resolve(tmp_path, rpc, now_s=lambda: rpc.latest_ts)
+    assert [(r["tx_hash"], r["how"]) for r in summary["resolved_now"]] == [
+        (tx_hash, "nonce_consumed")]
 
 
 def test_a_canceled_authorization_is_dead_without_an_acknowledgement(tmp_path):
@@ -2371,3 +2381,138 @@ def test_a_worlds_entry_that_names_no_diary_is_never_cancelled(tmp_path, monkeyp
         if code:
             assert "without naming its diary" in json.loads(printed.err)["why"]
     assert len(s["hyper"].sent) == 1  # only the diary-less CLI's own transaction
+
+
+# ---- Wave 10, Codex on 4b4fbbc
+
+
+def test_a_hash_no_node_knows_never_resolves_on_its_own(tmp_path):
+    # P1: a signed EVM transaction never expires. A torn line whose chain is illegible
+    # was resolved "dropped" once no RPC knew its hash.
+    from factorylab.runtime.capital_loop import ReserveLock, read_authorizations, repair_damaged
+    from factorylab.world.evm import HYPEREVM
+
+    tx_hash = "0x" + "ac" * 32
+    path = record(tmp_path, entry(OLD_NONCE, 11_500, origin="reserve_topup",
+                                  start_block=11_000))
+    damaged = (b'{"chain_id": 9x9, "from": "' + RESERVE.encode() + b'", "kind": "transaction", '
+               b'"tx_hash": "' + tx_hash.encode() + b'", "tx_nonce": 4}')
+    path.write_bytes(damaged + b"\n" + path.read_bytes())
+    rpc = Rpc()
+    rpc.others[HYPEREVM.rpc] = hyper = Hyper(nonce=2, pending=4)
+    with ReserveLock(RESERVE, lock_dir=tmp_path) as lock:
+        repair_damaged(lock, now_s=lambda: 12_000, transport=rpc)
+    for host in (12_100, 10**9):  # however long after, and although no node knows it
+        with pytest.raises(CapitalLoopRefused,
+                           match="recorded_transaction_may_still_execute"):
+            resolve(tmp_path, rpc, now_s=lambda host=host: host)
+    torn = read_authorizations(path)[0]
+    # Illegible chain: both mainnet chains bound it (Base's pending nonce is 0 here).
+    assert torn["tx_hashes"] == [tx_hash] and torn["pending_nonces"] == {"8453": 0, "999": 4}
+    rpc.consume(RESERVE, 1, at_ts=11_000)
+    hyper.latest = 5  # every nonce it may have is final on both chains
+    assert (tx_hash, "nonce_consumed") in [
+        (r.get("tx_hash"), r["how"]) for r in resolve(tmp_path, rpc, now_s=lambda: 10**9)[
+            "resolved_now"]]
+
+
+def torn_transaction(s, *, now=12_000):
+    """A torn line of a chain-999 transaction in ``s``'s reserve record, repaired."""
+    from factorylab.runtime.capital_loop import ReserveLock, repair_torn
+    from factorylab.world.evm import HYPEREVM
+
+    line = json.dumps({"chain_id": 999, "from": s["reserve"].address, "kind": "transaction",
+                       "to": HYPEREVM.usdc, "tx_hash": "0x" + "ad" * 32, "tx_nonce": 7},
+                      sort_keys=True).encode()
+    with ReserveLock(s["reserve"].address, lock_dir=s["locks"]) as lock:
+        path = lock.authorizations_path
+        path.write_bytes(path.read_bytes() + line[:line.index(b'"tx_hash"') + 20])
+        repaired = repair_torn(lock, now_s=lambda: now, transport=s["rpc"])
+    return repaired["sidecar"]
+
+
+def test_a_torn_transaction_is_cancelled_by_consuming_every_nonce_it_may_have(
+        tmp_path, monkeypatch, capsys):
+    s = hyper_signer(tmp_path, monkeypatch)
+    s["hyper"].latest, s["hyper"].pending = 5, 8
+    key = torn_transaction(s)  # no legible hash: keyed by its sidecar
+    with pytest.raises(CapitalLoopRefused,
+                       match="recorded_transaction_may_still_execute") as refused:
+        launch_on(s)
+    [row] = refused.value.detail["transactions"]
+    assert "consumes" in row["cancel_consequence"] and "--cancel-transaction" in row["cancel"]
+    monkeypatch.setenv("RESERVE_PRIVATE_KEY", s["reserve"].key.hex())
+    assert tool(s, "--cancel-transaction", key) == 2  # the consequence must be accepted
+    assert "consumes" in json.loads(capsys.readouterr().err)["why"]
+    s["hyper"].pending = 11  # later ones queued: the bound stays the repair's
+    assert tool(s, "--cancel-transaction", key,
+                "--i-understand-the-world-step-is-abandoned") == 0
+    done = json.loads(capsys.readouterr().out)
+    sent = [decoded(raw) for raw in s["hyper"].sent]
+    assert [t["nonce"] for t in sent] == [5, 6, 7, 8]  # from the first unused to the bound
+    assert all(t["to"] == bytes.fromhex(s["reserve"].address[2:]) and t["value"] == b""
+               and t["data"] == b"" for t in sent)
+    assert [c["tx_nonce"] for c in done["consumed"]] == [5, 6, 7, 8]
+    with pytest.raises(CapitalLoopRefused, match="recorded_transaction_may_still_execute"):
+        launch_on(s)  # not final yet
+    s["hyper"].latest = 9
+    resolved = {r["tx_hash"] for r in launch_on(s)["resolved_now"]}
+    assert key in resolved and {c["cancel_tx_hash"] for c in done["consumed"]} <= resolved
+
+
+def test_a_torn_transactions_cancel_spares_a_mint_at_those_nonces(
+        tmp_path, monkeypatch, capsys):
+    from factorylab.world.evm import HYPEREVM, calldata
+
+    s = hyper_signer(tmp_path, monkeypatch)
+    s["hyper"].latest, s["hyper"].pending = 5, 8
+    data = calldata("receiveMessage(bytes,bytes)", ["bytes", "bytes"], [b"m" * 40, b"a" * 65])
+    s["chain"].prepare(HYPEREVM.transmitter, data, gas_remaining_wei=10**15, nonce=6)
+    key = torn_transaction(s)
+    monkeypatch.setenv("RESERVE_PRIVATE_KEY", s["reserve"].key.hex())
+    assert tool(s, "--cancel-transaction", key,
+                "--i-understand-the-world-step-is-abandoned") == 2
+    assert "never cancelled" in json.loads(capsys.readouterr().err)["why"]
+    assert s["hyper"].sent == []
+
+
+def test_a_running_world_whose_diary_was_moved_is_still_running(
+        tmp_path, monkeypatch, capsys):
+    # P2: a missing diary is no evidence its world ended; the writer lock is probed.
+    from factorylab.kernel.ledger import LedgerLock
+    from factorylab.world.evm import HYPEREVM
+
+    s = hyper_signer(tmp_path, monkeypatch)
+    stuck = s["chain"].transfer(HYPEREVM.usdc, "0x" + "12" * 20, 1, 10**15)
+    monkeypatch.setenv("RESERVE_PRIVATE_KEY", s["reserve"].key.hex())
+    with LedgerLock(s["diary"]):  # the world is running
+        s["diary"].rename(s["diary"].with_name("moved.jsonl"))
+        assert tool(s, "--cancel-transaction", stuck["tx_hash"],
+                    "--i-understand-the-world-step-is-abandoned") == 2
+        assert "still running" in json.loads(capsys.readouterr().err)["why"]
+    assert s["hyper"].sent == []
+
+
+def test_no_world_can_take_its_diary_while_its_step_is_being_cancelled(
+        tmp_path, monkeypatch, capsys):
+    # P2: the diary lock the cancel checked is held until the broadcast returns.
+    from factorylab.kernel.ledger import LedgerBusyError, LedgerLock
+    from factorylab.world.evm import HYPEREVM
+
+    s = hyper_signer(tmp_path, monkeypatch)
+    stuck = s["chain"].transfer(HYPEREVM.usdc, "0x" + "12" * 20, 1, 10**15)
+    seen = []
+
+    def a_resume_during_the_send():
+        try:
+            LedgerLock(s["diary"]).close()
+            seen.append("resumed")
+        except LedgerBusyError:
+            seen.append("busy")
+
+    s["hyper"].on_send = a_resume_during_the_send
+    monkeypatch.setenv("RESERVE_PRIVATE_KEY", s["reserve"].key.hex())
+    assert tool(s, "--cancel-transaction", stuck["tx_hash"],
+                "--i-understand-the-world-step-is-abandoned") == 0
+    assert seen == ["busy"] and len(s["hyper"].sent) == 1
+    LedgerLock(s["diary"]).close()  # released once the broadcast returned

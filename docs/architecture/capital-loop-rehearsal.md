@@ -411,9 +411,14 @@ existence does not rest on any diary:
   sidecar (nothing is deleted; the random suffix means two repairs never collide), and
   records a `torn` entry carrying its bytes. A fragment of a **transaction** line (its
   keys start with `"chain_id"`, or it names `"kind": "transaction"`, a `tx_hash` or a
-  `tx_nonce`) is kept as a torn transaction. Its legible hash, chain and account nonce
-  stay open under the transaction rule below (a number counts only when it is
-  terminated), and no value in it is read as a nonce. In any other fragment every
+  `tx_nonce`) is kept as a torn transaction. Its legible hash (and its chain, when
+  the number is terminated) is kept, and no value in it is read as a nonce. The repair
+  also reads, on every chain the transaction may be on, the reserve's *pending*
+  account nonce, and records it as the bound `U`. A torn transaction's chain is its
+  own when legible; otherwise it may be on Base or HyperEVM (and on the testnets too,
+  with `--testnet`). If any of those chains cannot be read, the repair refuses and
+  writes nothing: retry, or pass that chain's `--rpc-*` flag. The transaction was
+  signed before the repair, so its nonce is at most `U` on its own chain. In any other fragment every
   nonce-like value becomes an open authorization, resolved against the chain like any
   other (a torn append was never signed, but the record does not assume it). A torn
   nonce always resolves as a recovery if it was used: nothing shows where it was
@@ -535,9 +540,13 @@ existence does not rest on any diary:
     world whose rail signs with the mainnet reserve key cannot run without a ledger at
     all (`mainnet_rail_requires_a_ledger`), so on mainnet only an older record holds such an
     entry;
-  - a nonce whose world is still running (its diary's writer lock is held). Every entry
-    at that nonce is checked, the original and each replacement alike, so a
-    replacement's hash is no way around it.
+  - a nonce whose world is still running. The tool takes each such world's diary
+    writer lock, whether or not the diary file is still there: a moved or deleted
+    diary is no evidence the world ended. A lock that cannot even be tried (its
+    directory is gone) is refused too. Every entry at that nonce is checked, the
+    original and each replacement alike, so a replacement's hash is no way around it.
+    The locks it took stay held until the replacement's `eth_sendRawTransaction`
+    returns, so no world can start or resume between the check and the send.
 
   It is also refused without the flag, because **this world's treasury step will not
   complete; it must be recovered by hand**. A cancelled burn, approval or deposit
@@ -552,10 +561,25 @@ existence does not rest on any diary:
   HYPE on HyperEVM), then speed up or cancel again. `--rpc-base`, `--rpc-hyperevm`,
   `--rpc-base-sepolia` and `--rpc-hyperevm-testnet` replace each chain's public RPC.
 
-  A torn transaction line whose chain and nonce are illegible resolves differently. It
-  must wait out a whole cooling-off window (600 s + 2 × the finality lag) after its
-  repair, and every chain it could be on must answer `eth_getTransactionByHash` for its
-  legible hash with nothing, or with a finalized block.
+  A torn transaction's own nonce is unknown, and a signed EVM transaction never
+  expires: no node's ignorance of its hash resolves it. It resolves only once, on every
+  chain it may be on, the final account nonce is past its bound `U`, because every nonce
+  it can have is then used. Until then the launch refuses
+  (`recorded_transaction_may_still_execute`). Its exit is the same cancel, with the
+  same flag and checks:
+
+      uv run python scripts/capital_loop_outstanding.py --cancel-transaction <key> \
+          --i-understand-the-world-step-is-abandoned
+
+  Here `<key>` is its legible hash, or its sidecar path when none. **This consumes
+  nonces.** On each chain it may be on, the tool sends a 0-value transfer from the
+  reserve to itself at every nonce from the first not yet used (at the latest block)
+  up to `U`. Any treasury step waiting at those nonces will not complete and must be
+  recovered by hand. It is refused if any recorded transaction at those nonces is a
+  mint or has no recorded call, or belongs to a running world or to one that named no
+  diary, and it holds those worlds' diary locks through every send. A torn
+  transaction set aside by an older build of this branch, before bounds were recorded,
+  has no such exit: the manual reset is its exit.
 - A resolution is appended to the record too, so a diary deleted after its financing
   was proven is never needed again. Any unreadable line other than a torn last one
   refuses (`authorization_record_unreadable`, repaired with `--repair-damaged`).
@@ -603,7 +627,7 @@ exits 1.
 | `previous_run_authorization_may_still_settle`, `recorded_authorization_may_still_settle` | Wait: it settles or passes its `validBefore` (at most 600 s plus finality). Cancelling it from a wallet also clears it. |
 | `recorded_authorization_reads_disagree` | Retry: the node's state and logs did not match. If it persists, relaunch with `--rpc-base <url>` naming another Base RPC. |
 | `recorded_authorization_settled_unbooked` (exit 3) | Settle the books by hand, then `--acknowledge 0x<nonce>`. |
-| `recorded_transaction_may_still_execute` | Wait for it to be mined (and on Base finalized), or `--speed-up 0x<hash>`. For a CCTP mint (`step: mint`) that is the only exit. For any other step, once its world has ended, there is also `--cancel-transaction 0x<hash> --i-understand-the-world-step-is-abandoned`: that world's treasury step will not complete and must be recovered by hand. A torn one with no legible nonce clears after one cooling-off window. |
+| `recorded_transaction_may_still_execute` | Wait for it to be mined (and on Base finalized), or `--speed-up 0x<hash>`. For a CCTP mint (`step: mint`) that is the only exit. For any other step, once its world has ended, there is also `--cancel-transaction 0x<hash> --i-understand-the-world-step-is-abandoned`: that world's treasury step will not complete and must be recovered by hand. A torn one clears once every nonce up to its bound `U` is final on each chain it may be on. Its exit is `--cancel-transaction <key> --i-understand-the-world-step-is-abandoned`, which consumes those nonces with 0-value self-transfers. |
 | `transaction_not_on_record` | A broadcast refused its unrecorded hash; nothing was sent. Prepare the transaction again: it is recorded as it is prepared. |
 | `cancel_refused` | Its reason says which: not open (nothing to cancel); no chain or nonce known (it clears by waiting); wrong key (put the reserve's in `reserve.key`); a mint (`--speed-up` instead); its call not recorded (wait); a world's entry that names no diary, so the world cannot be shown to have ended (`--speed-up`, or wait); its world still running (stop it, then cancel); or the consequence not accepted (add `--i-understand-the-world-step-is-abandoned`). |
 | `mainnet_rail_requires_a_ledger` | `factorylab run` (or any Runtime) refused a world whose treasury rail signs with the mainnet reserve key and was given no ledger; nothing started. Run it again with `--ledger <path>`: its reserve-key entries then name that diary, where their bookings are read and whose writer lock shows whether the world has ended. |
@@ -612,8 +636,8 @@ exits 1.
 | `cancel_failed`, `speed_up_failed` | Nothing may have been sent. Its `why` is the chain's answer. A gas budget that is too low: raise `--max-gas-wei`. A node that refused the replacement ("nonce too low", "underpriced"): the nonce was consumed (the next launch resolves it) or needs a higher fee (run it again, which prices 12.5% above every recorded attempt). An RPC that failed: retry, or pass that chain's `--rpc-*` flag. |
 | `unrecorded_reserve_authorization` (exit 3) | Book it by hand. It clears by itself when finalized Base is 600 s + 2 × the lag past it. |
 | `unrecorded_reserve_transfer` | Clears by itself when finalized Base is 600 s + 2 × the lag past it (about 58 minutes after a hand transfer). |
-| `authorization_record_torn` | `--repair-torn`. |
-| `authorization_record_unreadable` | `--repair-damaged`. Each damaged line's legible nonces and hashes stay open, bounded by the repair time + 600 s. If a line's nonce itself was corrupted, the true nonce is unknown, and only the cooling-off scan protects it (it refuses `unrecorded_reserve_authorization` once that authorization is used). |
+| `authorization_record_torn` | `--repair-torn`. A torn transaction line needs the chains it may be on to be readable (it records their pending nonces): if one is not, the repair refuses `recorded_authorization_unreadable` naming it; retry, or pass its `--rpc-*` flag. |
+| `authorization_record_unreadable` | `--repair-damaged` (the same `--rpc-*` flags apply). Each damaged line's legible nonces and hashes stay open: an authorization is bounded by the repair time + 600 s, a transaction by the pending nonces recorded at the repair. If a line's nonce itself was corrupted, the true nonce is unknown, and only the cooling-off scan protects it (it refuses `unrecorded_reserve_authorization` once that authorization is used). |
 | `acknowledge_refused` | Its reason says which: not an open nonce (nothing to acknowledge), or finalized Base does not show it used yet (wait, then retry). |
 | `capital_loop_requires_the_wall_clock`, `capital_loop_requires_the_live_clock` | Launch without an injected clock (the operator's command never passes one). |
 | `capital_loop_requires_the_live_transport`, `capital_loop_requires_the_operator_lock_dir` | Launch without an injected transport or lock directory (the operator's command never passes one; `--rpc-*` names another RPC instead). |

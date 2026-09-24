@@ -639,7 +639,35 @@ def _create_sidecar(path: Path, now: int, data: bytes) -> Path:
         return sidecar
 
 
-def _repair(lock: ReserveLock, *, damaged: bool, now_s: Callable[[], int] | None) -> dict:
+def _pending_nonces(entry: dict, reserve: str, *, transport: Transport,
+                    rpcs: dict | None, testnet: bool) -> dict:
+    """Each chain a torn transaction may be on, and the reserve's pending account nonce
+    there now: an upper bound on its nonce, since it was signed before this repair.
+
+    Its own chain when legible; otherwise mainnet Base and HyperEVM, and the testnet
+    ones too when ``testnet``. A chain that cannot be read refuses the repair
+    (``recorded_authorization_unreadable``, naming its RPC); nothing is written.
+    """
+    from factorylab.world.evm import address
+
+    chain_id = entry.get("chain_id")
+    candidates = ([chain_id] if chain_id in _chains()
+                  else [*MAINNET_CHAINS, *(TESTNET_CHAINS if testnet else ())])
+    bounds = {}
+    for identity in candidates:
+        chain = chain_reader(identity, transport=transport, rpcs=rpcs)
+
+        def pending(chain: EVM = chain) -> str:
+            chain.check_chain()
+            return chain.call("eth_getTransactionCount", [address(reserve), "pending"])
+
+        bounds[str(identity)] = int(_reading(chain, pending), 16)
+    return bounds
+
+
+def _repair(lock: ReserveLock, *, damaged: bool, now_s: Callable[[], int] | None,
+            transport: Transport = http_request, rpcs: dict | None = None,
+            testnet: bool = False) -> dict:
     if lock.fd is None:
         raise RuntimeError("the reserve lock is not held")
     path = lock.authorizations_path
@@ -651,8 +679,12 @@ def _repair(lock: ReserveLock, *, damaged: bool, now_s: Callable[[], int] | None
     torn: list[dict] = []
 
     def set_aside(line: bytes) -> bytes:
-        entry = _torn_entry(line, lock.reserve_address, _create_sidecar(path, now, line),
-                            now, bound)
+        entry = _torn_entry(line, lock.reserve_address, Path(), now, bound)
+        if entry["torn_kind"] == "transaction":
+            # Read before anything is written: an unreadable chain leaves no sidecar.
+            entry["pending_nonces"] = _pending_nonces(
+                entry, lock.reserve_address, transport=transport, rpcs=rpcs, testnet=testnet)
+        entry["sidecar"] = str(_create_sidecar(path, now, line))
         torn.append(entry)
         return json.dumps(entry, sort_keys=True).encode()
 
@@ -678,7 +710,9 @@ def _repair(lock: ReserveLock, *, damaged: bool, now_s: Callable[[], int] | None
             "valid_before": int(torn[-1]["validBefore"])}
 
 
-def repair_torn(lock: ReserveLock, *, now_s: Callable[[], int] | None = None) -> dict:
+def repair_torn(lock: ReserveLock, *, now_s: Callable[[], int] | None = None,
+                transport: Transport = http_request, rpcs: dict | None = None,
+                testnet: bool = False) -> dict:
     """Set a torn last fragment aside, losing nothing, and replace the record atomically.
 
     Guarantees, at every instant of a crash, either the old record (fragment included,
@@ -689,13 +723,17 @@ def repair_torn(lock: ReserveLock, *, now_s: Callable[[], int] | None = None) ->
     What the fragment may have recorded stays open (``_torn_entry``): an authorization's
     nonce-like values, with its terminated ``validBefore`` capped at the repair time plus
     ``MAX_AUTHORIZATION_S`` (that cap when unknown), or a transaction's hash, chain and
-    account nonce. Only the lock's holder repairs; a record that is not torn is left as
-    it is.
+    account nonce, with the reserve's pending account nonce on every chain it may be on
+    (``_pending_nonces``), read now through ``transport``. Only the lock's holder
+    repairs; a record that is not torn is left as it is.
     """
-    return _repair(lock, damaged=False, now_s=now_s)
+    return _repair(lock, damaged=False, now_s=now_s, transport=transport, rpcs=rpcs,
+                   testnet=testnet)
 
 
-def repair_damaged(lock: ReserveLock, *, now_s: Callable[[], int] | None = None) -> dict:
+def repair_damaged(lock: ReserveLock, *, now_s: Callable[[], int] | None = None,
+                   transport: Transport = http_request, rpcs: dict | None = None,
+                   testnet: bool = False) -> dict:
     """``repair_torn`` for every line that is not a whole entry, the middle included.
 
     Guarantees the same atomic sidecar-and-replace, one sidecar per damaged line, each
@@ -703,7 +741,8 @@ def repair_damaged(lock: ReserveLock, *, now_s: Callable[[], int] | None = None)
     legible nonce and transaction hash stays open under the same rules. Whole entries
     are kept byte for byte; a record with nothing damaged is left as it is.
     """
-    return _repair(lock, damaged=True, now_s=now_s)
+    return _repair(lock, damaged=True, now_s=now_s, transport=transport, rpcs=rpcs,
+                   testnet=testnet)
 
 
 AUTHORIZATION_USED = "AuthorizationUsed(address,bytes32)"
@@ -927,16 +966,16 @@ def _reading(chain: EVM, read: Callable[[], Any]) -> Any:
 def _transaction_fate(entry: dict, view: dict, host_s: int, *, base: EVM,
                       transport: Transport, rpcs: dict | None = None,
                       network: tuple = MAINNET_CHAINS) -> str:
-    """``consumed``, ``dropped`` or ``pending`` for one recorded reserve-key transaction.
+    """``consumed`` or ``pending`` for one recorded reserve-key transaction; never
+    ``dropped``, since a signed EVM transaction never expires.
 
     Consumed once the reserve's account nonce on the transaction's own chain is past its
     ``tx_nonce`` at a final block (Base's finalized block; HyperEVM's latest, which is
     final): neither it nor any replacement at that nonce can execute any more (an
     unrecorded transaction that took the nonce is the cooling-off scan's to find). A
-    torn line with no legible chain and account nonce is dropped only once a whole
-    cooling-off window (``MAX_AUTHORIZATION_S`` plus twice the finality lag) has passed
-    since its repair and no chain of ``network`` it can be on knows its hash, or knows
-    it only in a final block; otherwise it is pending. A read that fails names its RPC.
+    torn transaction is consumed only once, on every chain it may be on, the final
+    account nonce is past the pending nonce recorded at its repair (``pending_nonces``):
+    every nonce it can have is then used. A read that fails names its RPC.
     """
     from factorylab.world.evm import address
 
@@ -954,34 +993,25 @@ def _transaction_fate(entry: dict, view: dict, host_s: int, *, base: EVM,
             return "latest"  # HyperBFT: a produced block is final (HYPEREVM_CHAINS)
         return hex(_finalized_number(chain))
 
-    if chain_id in chains and type(tx_nonce) is int:
+    if entry["kind"] == "transaction" and chain_id in chains and type(tx_nonce) is int:
         chain = reader(chain_id)
         count = _reading(chain, lambda: chain.call(
             "eth_getTransactionCount", [address(entry["from"]), final_tag(chain)]))
         return "consumed" if int(count, 16) > tx_nonce else "pending"
-    window = MAX_AUTHORIZATION_S + 2 * (view["latest_timestamp"] - view["final_timestamp"])
-    if host_s - int(entry["repaired_s"]) < window:
-        return "pending"
-    mined = False
-    for tx_hash in entry.get("tx_hashes") or ():
-        for identity in ([chain_id] if chain_id in chains else network):
-            chain = reader(identity)
-
-            def lookup(chain: EVM = chain, tx_hash: str = tx_hash) -> str:
-                chain.check_chain()
-                found = chain.call("eth_getTransactionByHash", [tx_hash])
-                if found is None:
-                    return "unknown"
-                number, tag = found.get("blockNumber"), final_tag(chain)
-                final = (int(chain.call("eth_getBlockByNumber", ["latest", False])["number"],
-                             16) if tag == "latest" else int(tag, 16))
-                return "final" if number is not None and int(number, 16) <= final else "open"
-
-            seen = _reading(chain, lookup)
-            if seen == "open":
-                return "pending"
-            mined = mined or seen == "final"
-    return "consumed" if mined else "dropped"
+    # A torn transaction: a signed EVM transaction never expires, and a node's not
+    # knowing its hash proves nothing. It was signed before its repair, so its nonce is
+    # at most the pending nonce recorded then on its chain; once every such nonce is
+    # final on every chain it may be on, it can never execute.
+    bounds = entry.get("pending_nonces")
+    if not isinstance(bounds, dict) or not bounds:
+        return "pending"  # set aside before bounds were recorded: the manual reset
+    for identity, upper in sorted(bounds.items()):
+        chain = reader(int(identity))
+        count = _reading(chain, lambda chain=chain: chain.call(
+            "eth_getTransactionCount", [address(entry["from"]), final_tag(chain)]))
+        if int(count, 16) <= int(upper):
+            return "pending"
+    return "consumed"
 
 
 def replacement_exit(key: str, entry: dict) -> dict:
@@ -994,9 +1024,16 @@ def replacement_exit(key: str, entry: dict) -> dict:
     """
     script = "uv run python scripts/capital_loop_outstanding.py"
     step = entry.get("step")
-    if entry.get("kind") != "transaction" or step is None or entry.get("data") is None:
-        return {"wait": "it resolves once its nonce is used or, torn, once a cooling-off "
-                        "window has passed"}
+    if entry.get("kind") == "torn":
+        if not entry.get("pending_nonces"):
+            return {"reset": "set aside before its nonce bounds were recorded: the manual "
+                             "reset (docs/architecture/capital-loop-rehearsal.md)"}
+        return {"wait": "it resolves once every nonce up to its recorded bound is final",
+                "cancel": f"{script} --cancel-transaction {key} "
+                          "--i-understand-the-world-step-is-abandoned",
+                "cancel_consequence": OPAQUE_CANCEL_CONSEQUENCE}
+    if step is None or entry.get("data") is None:
+        return {"wait": "it resolves once its nonce is used"}
     exits = {"speed_up": f"{script} --speed-up {key}"}
     if step != "mint":
         exits["cancel"] = (f"{script} --cancel-transaction {key} "
@@ -1005,6 +1042,11 @@ def replacement_exit(key: str, entry: dict) -> dict:
     return exits
 
 
+#: What cancelling a torn transaction does: its nonce is unknown, so every one it may be.
+OPAQUE_CANCEL_CONSEQUENCE = (
+    "it consumes, with 0-value transfers to the reserve itself, every reserve nonce not yet "
+    "used up to the one pending at its repair, on each chain it may be on; any treasury "
+    "step waiting at those nonces will not complete and must be recovered by hand")
 #: What cancelling a recorded reserve-key transaction costs the world that made it.
 CANCEL_CONSEQUENCE = ("this world's treasury step will not complete; it must be recovered "
                       "by hand")
@@ -1066,7 +1108,7 @@ def check_authorization_record(lock: ReserveLock, *, transport: Transport = http
 
     For each transaction not yet resolved on this launch's network (``MAINNET_CHAINS``,
     or ``TESTNET_CHAINS`` when ``testnet``; the other network's never blocks it),
-    ``_transaction_fate``: consumed or dropped is resolved; pending refuses,
+    ``_transaction_fate``: consumed is resolved; pending refuses,
     ``recorded_transaction_may_still_execute``, naming each one's exits
     (``replacement_exit``). ``rpcs`` overrides each non-Base chain's RPC by chain id.
     Each resolution is appended to the record. A chain that cannot be read refuses
@@ -1124,7 +1166,7 @@ def check_authorization_record(lock: ReserveLock, *, transport: Transport = http
         if fate == "pending":
             executing.append({**row, **replacement_exit(key, entry)})
             continue
-        how = "nonce_consumed" if fate == "consumed" else "dropped"
+        how = "nonce_consumed"
         lock.resolve_transaction(entry, how)
         summary["resolved_now"].append({**row, "how": how})
     if unbooked:

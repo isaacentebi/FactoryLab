@@ -341,6 +341,7 @@ def test_a_transaction_whose_line_was_damaged_and_repaired_is_still_sendable():
     assert ref["tx_hash"].lower().encode() in first
     path.write_bytes(first[:first.index(b'"tx_nonce"')] + b"\xff\n" + rest)
     with capital_loop.ReserveLock(chain.account.address) as lock:
-        assert capital_loop.repair_damaged(lock)["open_transactions"] == [ref["tx_hash"].lower()]
+        repaired = capital_loop.repair_damaged(lock, transport=rpc)
+        assert repaired["open_transactions"] == [ref["tx_hash"].lower()]
     chain.broadcast(ref)
     assert len(rpc.sent) == 1

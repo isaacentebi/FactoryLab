@@ -56,6 +56,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from contextlib import ExitStack
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -64,6 +65,7 @@ if str(ROOT) not in sys.path:
 
 from factorylab.runtime.capital_loop import (  # noqa: E402
     CANCEL_CONSEQUENCE,
+    OPAQUE_CANCEL_CONSEQUENCE,
     WORLD_ORIGINS,
     CapitalLoopRefused,
     ReserveLock,
@@ -163,6 +165,82 @@ def _replace(lock: ReserveLock, entry: dict, floor: int, *, account, transport, 
     return {**reference, "max_gas_wei": budget}
 
 
+def _hold_worlds(known: list, refused, held: ExitStack) -> None:
+    """Hold the diary writer lock of every world ``known`` names, in ``held``.
+
+    Refuses unless no entry is a mint, every entry's call was recorded, every world
+    entry names its diary, and no such world is running: each diary's writer lock is
+    taken, whether or not the diary file is still there (a moved or deleted diary is no
+    evidence its world ended), and stays held in ``held`` until the caller closes it
+    after its broadcasts return, so no world can start or resume between the check and
+    the send.
+    """
+    from factorylab.kernel.ledger import LedgerBusyError, LedgerLock
+
+    if any(e.get("step") == "mint" for e in known):
+        raise refused("a CCTP mint is never cancelled: its burn would stay with nothing "
+                      "minted. Its exit is --speed-up")
+    if any(e.get("step") is None or e.get("data") is None for e in known):
+        raise refused("its call was not recorded, so it may be a CCTP mint: it is never "
+                      "cancelled; it resolves by waiting")
+    if any((e.get("origin") or "capital_loop") in WORLD_ORIGINS and not e.get("ledger")
+           for e in known):
+        raise refused("a world recorded it without naming its diary, so it cannot be shown "
+                      "to have ended: it is never cancelled. Its exit is --speed-up, or "
+                      "waiting")
+    for ledger in sorted({e["ledger"] for e in known if e.get("ledger")}):
+        try:
+            held.enter_context(LedgerLock(ledger))
+        except LedgerBusyError:
+            raise refused("the world that recorded it is still running: stop it first"
+                          ) from None
+        except OSError:
+            raise refused("its world's diary cannot be locked (its directory is gone), so "
+                          "it cannot be shown to have ended: --speed-up it, or wait"
+                          ) from None
+
+
+def _cancel_opaque(lock: ReserveLock, key: str, entry: dict, entries: list, *, account,
+                   transport, rpcs, gas_budget_wei, abandon, refused) -> dict:
+    """Consume every nonce a torn transaction may have, on every chain it may be on."""
+    from factorylab.world.evm import EVM
+
+    if str(entry["from"]).lower() != account.address.lower():
+        raise refused("the key given is not the reserve that signed it")
+    bounds = entry.get("pending_nonces")
+    if not isinstance(bounds, dict) or not bounds:
+        raise refused("it was set aside before its nonce bounds were recorded: its exit is "
+                      "the manual reset")
+    plan = []
+    for identity, upper in sorted(bounds.items()):
+        chain_id = int(identity)
+        chain = EVM(_chains()[chain_id], account, transport=transport,
+                    rpc=(rpcs or {}).get(chain_id))
+        chain.check_chain()
+        used = int(chain.call("eth_getTransactionCount", [account.address, "latest"]), 16)
+        plan += [(chain_id, nonce) for nonce in range(used, int(upper) + 1)]
+    known = [e for e in entries if e["kind"] == "transaction"
+             and str(e.get("from", "")).lower() == account.address.lower()
+             and (e.get("chain_id"), e.get("tx_nonce")) in set(plan)]
+    sent = []
+    with ExitStack() as held:
+        _hold_worlds(known, refused, held)
+        if not abandon:
+            raise refused(f"{OPAQUE_CANCEL_CONSEQUENCE}; to accept that, pass "
+                          "--i-understand-the-world-step-is-abandoned")
+        for chain_id, nonce in plan:
+            here = [e for e in known if (e["chain_id"], e["tx_nonce"]) == (chain_id, nonce)]
+            prices = [e.get("gas_price") for e in here]
+            floor = max([(p * 9 + 7) // 8 for p in prices if type(p) is int and p > 0] or [0])
+            owner = here[0] if here else {"origin": "cancel_transaction"}
+            reference = _replace(lock, {**owner, "chain_id": chain_id, "tx_nonce": nonce},
+                                 floor, account=account, transport=transport, rpcs=rpcs,
+                                 gas_budget_wei=gas_budget_wei, to=account.address, data="0x")
+            sent.append({"chain_id": chain_id, "tx_nonce": nonce,
+                         "cancel_tx_hash": reference["tx_hash"]})
+    return {"canceled": key, "consumed": sent, "consequence": OPAQUE_CANCEL_CONSEQUENCE}
+
+
 def cancel_transaction(lock: ReserveLock, tx_hash: str, *, account, transport,
                        rpcs: dict | None = None, gas_budget_wei: int | None = None,
                        abandon: bool = False) -> dict:
@@ -170,44 +248,41 @@ def cancel_transaction(lock: ReserveLock, tx_hash: str, *, account, transport,
 
     Guarantees a CCTP mint is never cancelled (its burn would stay with nothing minted;
     its exit is ``speed_up``), nor a transaction whose call was not recorded (it may be
-    one), nor one whose world is still running (its diary's writer lock is held), nor
+    one), nor one whose world is still running or cannot be shown to have ended, nor
     anything without ``abandon``: the world's step it belonged to then never completes
     (``CANCEL_CONSEQUENCE``). Otherwise refuses ``cancel_refused`` and signs nothing.
-    The cancellation is a 0-value transfer from the reserve to itself at the recorded
-    nonce, priced 12.5% above every price the record holds for it, recorded ahead as
-    its world's, and sent under this held lock. Every entry at that nonce is checked:
-    one replacement of a running world's step is as much that world's as the original.
-    """
-    key, entry, same, floor, refused = _target(lock, tx_hash, account, "cancel_refused")
-    # Every entry at this nonce (the original and each replacement) is the same step of
-    # the same world: none may be a mint, unrecorded, or a running world's.
-    if any(e.get("step") == "mint" for e in same):
-        raise refused("a CCTP mint is never cancelled: its burn would stay with nothing "
-                      "minted. Its exit is --speed-up")
-    if any(e.get("step") is None or e.get("data") is None for e in same):
-        raise refused("its call was not recorded, so it may be a CCTP mint: it is never "
-                      "cancelled; it resolves by waiting")
-    if any((e.get("origin") or "capital_loop") in WORLD_ORIGINS and not e.get("ledger")
-           for e in same):
-        raise refused("a world recorded it without naming its diary, so it cannot be shown "
-                      "to have ended: it is never cancelled. Its exit is --speed-up, or "
-                      "waiting")
-    from factorylab.kernel.ledger import LedgerBusyError, LedgerLock
+    Every entry at that nonce is checked (one replacement of a running world's step is
+    as much that world's as the original), and every such world's diary lock is held
+    until the broadcast returns (``_hold_worlds``). The cancellation is a 0-value
+    transfer from the reserve to itself at the recorded nonce, priced 12.5% above every
+    price the record holds for it, recorded ahead as its world's, and sent under this
+    held lock.
 
-    for ledger in {e.get("ledger") for e in same if e.get("ledger")}:
-        if not Path(ledger).exists():
-            continue
-        try:
-            LedgerLock(ledger).close()
-        except LedgerBusyError:
-            raise refused("the world that recorded it is still running: stop it first"
-                          ) from None
-    if not abandon:
-        raise refused(f"{CANCEL_CONSEQUENCE}; to accept that, pass "
-                      "--i-understand-the-world-step-is-abandoned")
-    reference = _replace(lock, entry, floor, account=account, transport=transport,
-                         rpcs=rpcs, gas_budget_wei=gas_budget_wei, to=account.address,
-                         data="0x")
+    A torn transaction's nonce is unknown: its cancellation consumes, the same way, every
+    reserve nonce not yet used up to the pending one recorded at its repair, on each
+    chain it may be on, under the same checks for every entry known at those nonces
+    (``OPAQUE_CANCEL_CONSEQUENCE``).
+    """
+    entries = lock.authorizations()
+    match = {k.lower(): (k, e) for k, e in open_transactions(entries).items()}
+    if str(tx_hash).lower() in match and match[str(tx_hash).lower()][1]["kind"] == "torn":
+        key, entry = match[str(tx_hash).lower()]
+
+        def refused_torn(why: str) -> CapitalLoopRefused:
+            return CapitalLoopRefused("cancel_refused", {"tx_hash": key, "why": why})
+
+        return _cancel_opaque(lock, key, entry, entries, account=account,
+                              transport=transport, rpcs=rpcs, gas_budget_wei=gas_budget_wei,
+                              abandon=abandon, refused=refused_torn)
+    key, entry, same, floor, refused = _target(lock, tx_hash, account, "cancel_refused")
+    with ExitStack() as held:
+        _hold_worlds(same, refused, held)
+        if not abandon:
+            raise refused(f"{CANCEL_CONSEQUENCE}; to accept that, pass "
+                          "--i-understand-the-world-step-is-abandoned")
+        reference = _replace(lock, entry, floor, account=account, transport=transport,
+                             rpcs=rpcs, gas_budget_wei=gas_budget_wei, to=account.address,
+                             data="0x")
     return {"canceled": key, "cancel_tx_hash": reference["tx_hash"],
             "chain_id": entry["chain_id"], "tx_nonce": entry["tx_nonce"],
             "gas_price": reference["tx"]["gasPrice"], "max_gas_wei": reference["max_gas_wei"],
@@ -277,6 +352,9 @@ def main(argv: list[str] | None = None, *, transport=http_request) -> int:
                         help="set every line of the record that is not a whole entry aside "
                         "to its own sidecar and keep what it may have recorded open (takes "
                         "the reserve's lock; deletes nothing)")
+    parser.add_argument("--testnet", action="store_true",
+                        help="with --repair-torn or --repair-damaged: a torn transaction "
+                        "line of unknown chain may also be on the testnets")
     parser.add_argument("--speed-up", metavar="TX_HASH",
                         help="re-sign a recorded, unexecuted reserve-key transaction's own "
                         "call at its nonce with a higher fee (the reserve key from "
@@ -337,7 +415,8 @@ def main(argv: list[str] | None = None, *, transport=http_request) -> int:
     if args.repair_torn or args.repair_damaged:
         try:
             with ReserveLock(reserve, lock_dir=args.lock_dir) as lock:
-                done = (repair_damaged if args.repair_damaged else repair_torn)(lock)
+                done = (repair_damaged if args.repair_damaged else repair_torn)(
+                    lock, transport=transport, rpcs=rpcs, testnet=args.testnet)
         except CapitalLoopRefused as exc:
             print(json.dumps({"error": exc.reason, **exc.detail}), file=sys.stderr)
             return 2
