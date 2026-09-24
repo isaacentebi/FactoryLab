@@ -678,9 +678,13 @@ windows measures zero. Reading rows live apart from the return samples
 (`CardSamples.readings`), so no other observation selects one, and they carry no
 identity of the reader. The reader's request is not touched. `downstream_read_bytes`
 is not a mean of per-response samples, so a card over it cannot declare an
-`interval`. A registered observation measured per scope reads the scope's summed
-`prompt_bytes`, `you_bytes`, `inputs_bytes` and `downstream_read_bytes` among its
-facts. Its violations are attributed by the generic `1/n` share described below.
+`interval`. A reading is new evidence for a card's price only once the card's
+current selection reads it: inside a full returns horizon, or beside a response of
+its scope in the selected closed windows. One metered after its author's latest
+response is kept for the next horizon but moves no price until then. A registered
+observation measured per scope reads the scope's summed `prompt_bytes`,
+`you_bytes`, `inputs_bytes` and `downstream_read_bytes` among its facts, and a
+scope whose only row in the selected windows is a reading is measured too. Its violations are attributed by the generic `1/n` share described below.
 
 `forecasts` selects the latest `n` resolved forecast records in each scope.
 `forecast_skill` uses paired Brier skill against the baseline as it stood before

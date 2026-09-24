@@ -76,8 +76,33 @@ def fresh_sample(card: MetricCard, samples: CardSamples, window) -> bool:
         rows = samples.forecasts
     else:
         return True
+    if observation == READ_OBSERVATION:
+        return _fresh_reading(card, samples, _selected(observation, rows), window)
     rows = [row for row in _selected(observation, rows) if row["window"] == window.index]
     return bool(_groups(card, rows))
+
+
+def _fresh_reading(card: MetricCard, samples: CardSamples, rows: list[dict], window) -> bool:
+    """Whether the closed window added a row the card's current selection actually reads.
+
+    A reading metered after its author's latest response is retained (a later
+    horizon may span it) but no current horizon selects it, so the measurement
+    has not moved and counting it as evidence would integrate the same value
+    twice (time audit T2). It becomes new evidence when a selection reads it:
+    inside a full returns horizon, or, over closed windows, beside a response of
+    its scope in the selected windows.
+    """
+    selected = {record["index"] for record in samples.windows[-card.window.n:]}
+    for group in _groups(card, rows).values():
+        if card.window.kind == "returns":
+            group = _horizon(READ_OBSERVATION, group, card.window.n) or []
+        else:
+            group = [row for row in group if row["window"] in selected]
+            if all(row.get("reading") for row in group):
+                continue  # no response to divide by: the scope is not measured
+        if any(row["window"] == window.index for row in group):
+            return True
+    return False
 
 
 def measurement_catalogue(observations=None) -> list[dict]:
@@ -809,7 +834,9 @@ def _measure_scoped(card: MetricCard, observation, book, samples: CardSamples,
     readings = _scope_rows(card, [r for r in samples.readings
                                   if first <= r["window"] <= last])
     result = {}
-    for scope in sorted(set(returns) | set(forecasts), key=str):
+    # A reading can be its author's only row in the selected windows: the scope is
+    # still one the population's code measures, on facts that carry that reading.
+    for scope in sorted(set(returns) | set(forecasts) | set(readings), key=str):
         own_returns, own_forecasts = returns.get(scope, []), forecasts.get(scope, [])
         own_readings = readings.get(scope, [])
         if card.window.interval is not None:

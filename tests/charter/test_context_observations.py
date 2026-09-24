@@ -343,3 +343,59 @@ def test_a_row_no_prompt_was_rendered_for_neither_reprices_nor_evicts(observatio
     samples.returned(handle="p3", assembly="p", role="producer", window=5,
                      ret=_ret("p3", total=500, you=50, inputs=250))
     assert fresh_sample(card, samples, MeasureWindow(5, 1))
+
+
+def test_a_reading_no_current_horizon_selects_is_not_new_evidence_until_one_does():
+    # PR #143 review: a reading metered after its author's latest response is retained
+    # but outside the selected horizon; declaring it fresh let the PID integrate the
+    # unchanged measurement twice.
+    samples = CardSamples()
+    card = _card("downstream_read_bytes")  # returns, n=2, per assembly
+    for handle, window in (("a1", 1), ("a2", 2)):
+        samples.returned(handle=handle, assembly="a", role="producer", window=window,
+                         ret=_ret(handle, total=10, you=1, inputs=1))
+    samples.read(handle="a2", assembly="a", role="producer", window=2, read_bytes=100)
+    assert fresh_sample(card, samples, MeasureWindow(2, 1))  # inside the horizon
+    before = measure_card(card, samples)
+    samples.read(handle="a2", assembly="a", role="producer", window=3, read_bytes=600)
+    assert not fresh_sample(card, samples, MeasureWindow(3, 1))
+    assert measure_card(card, samples) == before
+    # The author responds again: the horizon now spans window 3, and its reading counts.
+    samples.returned(handle="a3", assembly="a", role="producer", window=4,
+                     ret=_ret("a3", total=10, you=1, inputs=1))
+    assert fresh_sample(card, samples, MeasureWindow(4, 1))
+    assert measure_card(card, samples) == {"a": pytest.approx(700 / 2)}
+    # Over closed windows, a scope with only a reading there is not measured, so its
+    # reading is not new evidence; beside a response of its own it is.
+    whole = _card("downstream_read_bytes", kind="windows", n=1, per="assembly")
+    samples.read(handle="a3", assembly="a", role="producer", window=5, read_bytes=50)
+    samples.closed(MeasureWindow(5, 1))
+    assert measure_card(whole, samples) == {}
+    assert not fresh_sample(whole, samples, MeasureWindow(5, 1))
+    samples.returned(handle="a4", assembly="a", role="producer", window=6,
+                     ret=_ret("a4", total=10, you=1, inputs=1))
+    samples.read(handle="a4", assembly="a", role="producer", window=6, read_bytes=70)
+    samples.closed(MeasureWindow(6, 1))
+    assert fresh_sample(whole, samples, MeasureWindow(6, 1))
+
+
+def test_a_registered_observation_measures_a_scope_whose_only_row_is_a_reading():
+    # PR #143 review: a scoped registered observation over windows iterated only the
+    # scopes with returns or forecasts, so an author read in the selected windows
+    # without responding there was never measured and its readings vanished.
+    from factorylab.runtime.observations import ObservationBook
+
+    book = ObservationBook(
+        {"read_seen": {"description": "reading bytes of the scope", "units": "bytes",
+                       "unit_range": [0, 1_000_000], "code": "def observe(facts): ...",
+                       "version": 1, "provenance": "population"}},
+        run=lambda _code, facts: (float(facts["downstream_read_bytes"]), None))
+    samples = CardSamples()
+    samples.returned(handle="a1", assembly="a", role="producer", window=1,
+                     ret=_ret("a1", total=10, you=1, inputs=1))
+    samples.returned(handle="b1", assembly="b", role="producer", window=2,
+                     ret=_ret("b1", total=10, you=1, inputs=1))
+    samples.read(handle="a1", assembly="a", role="producer", window=2, read_bytes=400)
+    samples.closed(MeasureWindow(2, 1))
+    card = _card("read_seen", kind="windows", n=1, per="assembly")
+    assert measure_card(card, samples, observations=book) == {"a": 400.0, "b": 0.0}
