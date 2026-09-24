@@ -622,3 +622,14 @@ lambda = 0.2
 [prompt]
 
 mode = "compact"
+
+# Polymarket event markets on the public read APIs (docs/manifest.md, "Event markets"):
+# polymarket.search, polymarket.market and polymarket.book read Gamma and the CLOB, and
+# the event_pays and event_price_above forecast predicates settle on a market's own
+# resolution and midpoint. `live` registers no write tool and no pot: live order signing
+# on Polygon is not built.
+[polymarket]
+enabled = true
+venue = "live"
+# Gamma and the CLOB charge nothing for a public read; the key defaults to $0.001.
+read_price_usd = "0"

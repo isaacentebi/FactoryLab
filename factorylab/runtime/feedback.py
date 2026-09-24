@@ -45,7 +45,9 @@ from factorylab.settlement import (
 from factorylab.settlement.settle import PredicateForecast
 from factorylab.settlement.vocabulary import (
     DECLINED_DEFINITION,
+    EVENT_PREDICATE_IDS,
     RETURN_PAID_OFF,
+    UNOBSERVABLE,
 )
 
 
@@ -593,7 +595,7 @@ class FeedbackMixin:
                                  outcome={"status": "declined", "reason": reason})
         return True
 
-    def _facts_for(self, f: Forecast) -> WindowFacts | None:
+    def _facts_for(self, f: Forecast, snapshots: dict | None = None) -> WindowFacts | None:
         if f.made_at_event >= len(self.balance_at):
             return None
         start = f.made_at_event
@@ -614,6 +616,16 @@ class FeedbackMixin:
                                     "predicate": f.predicate_id, "window": self.window.index,
                                     "ts": self.clock.now_ns})
             public = {"public_window": since}
+        if f.predicate_id in EVENT_PREDICATE_IDS:
+            from factorylab.runtime.polymarket import event_facts
+
+            # A Polymarket claim settles on the world's own read of its token now,
+            # at settlement (essay II.III.b): the market's resolution or its price.
+            # One snapshot a token a pass, so one question has one answer.
+            event = event_facts(self, f.predicate_id, f.params["token_id"], snapshots)
+            if event is UNOBSERVABLE:
+                return UNOBSERVABLE
+            public["event"] = event
         events = tuple(self.events_log[start + 1 : self.n + 1])
         if f.predicate_id == "failure_within":
             public["independent_failures"] = self._independent_failures(f.evaluator_id, events)
@@ -1010,7 +1022,11 @@ class FeedbackMixin:
                 # it, whoever forecast it (the seed observation consequence_paid_off_rate).
                 self.window.consequences_settled += 1
                 self.window.consequences_paid_off += int(payoff.y == 1)
-        settled = self.settler.settle_due(self.n, self._facts_for, tick=self.ticks_consumed)
+        # The world's reads of each Polymarket token, once for this whole pass: every
+        # forecast due now on one token is graded against the same state of it.
+        snapshots: dict = {}
+        settled = self.settler.settle_due(self.n, lambda f: self._facts_for(f, snapshots),
+                                          tick=self.ticks_consumed)
         for result in settled:
             parent = self.queue.get(result.handle).parent_handle
             if parent in self.forecast_returns and result.brier is not None:

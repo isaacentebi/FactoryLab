@@ -30,20 +30,27 @@ What the kernel enforces, and where:
   borrows the Hyperliquid accounts or the Base reserve.
 * **The market's price settles early; its resolution settles late.** Fills enter
   the consequence book as ``event`` lots (``settlement/lots.py``), marked each
-  tick at the CLOB midpoint. At the consequence backstop a held position is
-  scored at that mark, exactly as an open spot lot is: the price is the
+  tick at the midpoint of the token's book (``mark``). At the consequence
+  backstop a held position is scored at that mark, exactly as an open spot lot
+  is: the price is the
   market's anticipatory settlement of the belief, the cure the essay names for
   learning death (II.IV.b: "the compensation period of any exploratory learner
   must be shorter than the lifetime of the things it is being compensated for
   discovering"). The resolution closes the lot later (``LotTable.redeem``) and
   its money reaches the owner through ``_settle_late``; the score is never
-  revised. A token with no midpoint is not marked, and its decision falls back
+  revised. A token with no two-sided book is not marked, and its decision falls back
   on its provisional verdict like any other unobserved consequence.
 * **Claims stay in their custody.** What a Polymarket position realises is a
   claim on the polymarket pot (``claim_share``), never on the venue, and
   financing converts only venue claims, so a profit made on Polygon is never
   withdrawn from Hyperliquid money. The pot reconciles against its own books
   every tick (``reconcile``).
+* **The world settles claims on its markets.** An enabled block, on either venue,
+  offers the forecast predicates ``event_pays`` and ``event_price_above``
+  (``settlement/vocabulary.py``). A claim is settled on this surface's own read of
+  the named token at its due tick (``event_facts``): the market's resolution or its
+  midpoint, a fact the world measures, never another model's reading (essay
+  II.III.b). An unanswered read is an excluded sample, never a zero.
 * **Third-party labels are not ours to repeat.** Outcome names are written by
   market creators. Every surface outside the jailed reads (the pot, custody, the
   pots, receipts, outcomes, the ledger) carries token and market ids and a
@@ -85,7 +92,7 @@ def coin_of(token_id: str) -> str:
 def tool_specs(spec: Any, *, writes: bool) -> dict[str, dict[str, Any]]:
     """The tools a ``[polymarket]`` world publishes: what each does and what it costs."""
     price = spec.read_price_micro
-    usd = f"${Decimal(price) / 1_000_000:f}"
+    usd = "Free." if price == 0 else f"${Decimal(price) / 1_000_000:f} a call."
     token = {"type": "string", "pattern": r"^[0-9]{1,100}$", "minLength": 1}
     decimal = {"type": ["string", "number"]}
     tools = {
@@ -93,18 +100,18 @@ def tool_specs(spec: Any, *, writes: bool) -> dict[str, dict[str, Any]]:
             f"Search Polymarket event markets by text. Returns up to {MAX_SEARCH_RESULTS} "
             "markets: id, question, outcomes with their token ids and last prices, end date, "
             "resolution source, tick size, minimum order size, fee schedule and whether the "
-            f"market accepts orders. Market text is written by third parties. {usd} a call.",
+            f"market accepts orders. Market text is written by third parties. {usd}",
             {"query": {"type": "string", "minLength": 1, "maxLength": MAX_QUERY_CHARS},
              "limit": {"type": "integer", "minimum": 1, "maximum": MAX_SEARCH_RESULTS}},
             ["query"], [{"query": "election", "limit": 5}], price),
         "polymarket.market": (
             "One Polymarket market by id: its contract fields and its resolution rules "
-            f"text, which third parties wrote. {usd} a call.",
+            f"text, which third parties wrote. {usd}",
             {"market_id": {"type": "string", "minLength": 1, "maxLength": 80}},
             ["market_id"], [{"market_id": "fake-1"}], price),
         "polymarket.book": (
             "The order book of one outcome token, best price first on both sides, with "
-            f"its midpoint, tick size and minimum order size. {usd} a call.",
+            f"its midpoint, tick size and minimum order size. {usd}",
             {"token_id": token, "depth": {"type": "integer", "minimum": 1,
                                           "maximum": MAX_DEPTH}},
             ["token_id"], [{"token_id": "100000000000000000000", "depth": 5}], price),
@@ -226,6 +233,105 @@ def install(rt: Any) -> None:
     venue = JournalProxy(target, rt.ledger, "polymarket", deterministic=writes)
     rt.polymarket = PolymarketSurface(spec, venue, writes=writes)
     rt.tool_specs.update(tool_specs(spec, writes=writes))
+
+
+def simulate_reads(rt: Any) -> None:
+    """Answer a live-read world's Polymarket reads from the seeded simulated venue.
+
+    For offline runs of a world whose ``venue = "live"`` (``scripts/fastloop.py``):
+    the fake answers the same reads as ``PolymarketReader`` and moves on the world's
+    clock. Guarantees the published surface is untouched: no write tool, no pot,
+    and the manifest the world was launched with, so the run is the launch path's
+    with only the outside answer simulated.
+    """
+    from factorylab.runtime.resume import JournalProxy
+    from factorylab.world.polymarket import FakePolymarket
+
+    surface = rt.polymarket
+    if surface.writes:
+        raise ValueError("simulate_reads replaces a live reader only")
+    surface.venue = JournalProxy(FakePolymarket(seed=surface.spec.seed), rt.ledger,
+                                 "polymarket", deterministic=True)
+
+
+# --- world-settled forecasts ----------------------------------------------------------------
+
+def vocabulary(manifest: Any) -> tuple:
+    """The event predicates a world offers: all of them where ``[polymarket]`` is enabled,
+    none elsewhere. Fixed by the manifest for the world's life."""
+    from factorylab.settlement.vocabulary import EVENT_VOCABULARY
+
+    spec = getattr(manifest, "polymarket", None)
+    return EVENT_VOCABULARY if spec is not None and spec.enabled else ()
+
+
+def event_facts(rt: Any, predicate_id: str, token_id: str,
+                snapshots: dict[str, dict[str, Any]] | None = None) -> Any:
+    """One outcome token as the world reads it at settlement, for an event predicate.
+
+    Returns ``{listed, closed, payout, midpoint}`` (numbers as decimal strings) or
+    ``UNOBSERVABLE`` when the world did not answer: the market read failed, or a
+    price claim met an unresolved market with no midpoint (a closed market, an
+    empty or one-sided book, a failed read). That absence is the world's,
+    not the forecaster's, so the claim settles censored and is excluded from
+    accountable resolution. A token the venue does not list is a fact
+    (``listed: false``): the claim named nothing, and it settles censored against
+    its owner. The book is read only for a price claim on an unresolved market, and
+    a midpoint exists only where it has both a bid and an ask.
+
+    ``snapshots`` holds the world's reads of each token for one settlement pass.
+    Every claim on a token in that pass is answered from the same snapshot: the
+    market is read once and the book at most once, so the judges of one question
+    are graded against one state of the world, never against a resolution or a
+    failed read that fell between their calls (``Settler`` counts them as one
+    observation).
+
+    The reads go through the surface's journal, so a replay settles on what was
+    read. Only ids and numbers enter the facts; no market text does.
+    """
+    from factorylab.settlement.vocabulary import UNOBSERVABLE
+    from factorylab.world.polymarket import payout
+
+    surface = rt.polymarket
+    snapshots = {} if snapshots is None else snapshots
+
+    def unavailable(read: str) -> Any:
+        rt.ledger.append({"kind": "polymarket.event_unavailable", "token_id": token_id,
+                          "predicate": predicate_id, "read": read, "ts": rt.clock.now_ns})
+        return UNOBSERVABLE
+
+    snapshot = snapshots.get(token_id)
+    if snapshot is None:
+        try:
+            snapshot = {"market": surface.venue.market_of_token(token_id), "answered": True}
+        except Exception:  # noqa: BLE001 - an unanswered read is an absent fact
+            snapshot = {"market": None, "answered": False}
+        snapshots[token_id] = snapshot
+    if not snapshot["answered"]:
+        return unavailable("market")
+    market = snapshot["market"]
+    facts: dict[str, Any] = {"listed": market is not None, "closed": None, "payout": None,
+                             "midpoint": None}
+    if market is not None:
+        paid = payout(market, token_id)
+        facts.update(closed=market["closed"], payout=None if paid is None else str(paid))
+        if predicate_id == "event_price_above" and paid is None:
+            if "midpoint" not in snapshot:
+                # The midpoint of the book's best bid and ask, never the CLOB's
+                # /midpoint, which answers 0.5 for an empty book (read 2026-09-23 on a
+                # resolved market).
+                try:
+                    mid = None if market["closed"] else _decimal(
+                        surface.venue.order_book(token_id, 1)["midpoint"])
+                except Exception:  # noqa: BLE001
+                    mid = None
+                snapshot["midpoint"] = mid if mid is not None and 0 < mid < 1 else None
+            if snapshot["midpoint"] is None:
+                return unavailable("midpoint")
+            facts["midpoint"] = str(snapshot["midpoint"])
+    rt.ledger.append({"kind": "polymarket.event_read", "token_id": token_id,
+                      "predicate": predicate_id, **facts, "ts": rt.clock.now_ns})
+    return facts
 
 
 # --- dispatch -------------------------------------------------------------------------------
@@ -582,6 +688,11 @@ def tick(rt: Any) -> None:
 
     surface = rt.polymarket
     if not surface.writes:
+        if surface.venue.deterministic:
+            # A simulated read-only venue (``simulate_reads``) still moves and resolves,
+            # so what an event forecast settles on changes with the world's clock. With
+            # no writes it holds nothing, so its events are empty.
+            settle(rt, surface.venue.advance(rt.clock.now_ns))
         return
     for client_id, intent in list(surface.intents.items()):
         if intent["result"]["status"] != "uncertain" or intent.get("unresolved"):
@@ -602,16 +713,18 @@ def tick(rt: Any) -> None:
 def mark(rt: Any) -> None:
     """Give the consequence book this tick's midpoint of every token a lot holds.
 
-    Guarantees a mark is the market's own price strictly between 0 and 1. A token
-    whose midpoint is unavailable loses its mark rather than keeping a stale one,
-    so its lot is not marked and its decision falls back as any unobserved
-    consequence does.
+    Guarantees a mark is the market's own price strictly between 0 and 1: the
+    midpoint of the book's best bid and ask, never the CLOB's ``/midpoint``, which
+    answers 0.5 for an empty book (read 2026-09-23 on a resolved market). A token
+    with no two-sided book, or whose book is unreadable, loses its mark rather than
+    keeping a stale one or taking an invented one, so its lot is not marked and its
+    decision falls back as any unobserved consequence does.
     """
     surface = rt.polymarket
     for coin in sorted({lot.coin for lot in rt.consequences.table.lots
                         if lot.market == "event"}):
         try:
-            mid = _decimal(surface.venue.midpoint(coin.removeprefix("PM:")))
+            mid = _decimal(surface.venue.order_book(coin.removeprefix("PM:"), 1)["midpoint"])
         except Exception:  # noqa: BLE001 - an unread price is an absent price
             mid = None
         if mid is not None and 0 < mid < 1:
