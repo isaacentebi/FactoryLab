@@ -528,6 +528,10 @@ class Treasury:
                         **result["launch_price"])
         for invoice in result["reconciled"]:
             self._write("hosting_invoice", **invoice)
+        if result["auxiliary_unread"]:
+            # A read that feeds nothing booked failed; logged once per change.
+            self._write("hosting_auxiliary_unread", **common,
+                        reads=result["auxiliary_unread"])
         for invoice in result["held"]:
             # Read, and not yet classifiable with certainty: never called done, and
             # read again in its turn (the reason says why).

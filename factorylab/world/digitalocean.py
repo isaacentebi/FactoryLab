@@ -658,14 +658,27 @@ class DigitalOceanClient:
         start = next((n for n, inv in enumerate(waiting)
                       if after is not None and (inv["period"], inv["uuid"]) > after), 0)
         batch = (waiting[start:] + waiting[:start])[:INVOICES_PER_READ]
-        # What the whole read stands on: the preview, the sizes and the history. A
-        # failure in any of them makes the whole read unavailable.
+        # What the whole read stands on (with the account, the droplet and the index
+        # above): the preview. A failure in it makes the whole read unavailable.
         preview_rows = self._rows("preview", deadline)
-        sizes = self.sizes(deadline)
-        raw = self._get(f"/v2/customers/my/billing_history?per_page={PER_PAGE}&page=1",
-                        deadline)
-        history = raw.get("billing_history") if isinstance(raw, dict) else None
-        entries = [e for e in (_entry(row) for row in history or []) if e is not None]
+        # Two auxiliary reads, each scoped to what it feeds. The size catalogue feeds
+        # only the population's size list (the launch price behind the bound is the
+        # droplet's own, read with the droplet); the billing history feeds only the
+        # private diary's account entries, and no line is attributed or booked from
+        # it. A failure of either is reported as unread and nothing else changes; a
+        # failed catalogue is None, never an older one served as current.
+        auxiliary = []
+        try:
+            sizes = self.sizes(_deadline(min(deadline.remaining(), budget_s / 4)))
+        except (DigitalOceanError, TimeoutError, ValueError):
+            sizes, auxiliary = None, [*auxiliary, "sizes"]
+        try:
+            raw = self._get(f"/v2/customers/my/billing_history?per_page={PER_PAGE}&page=1",
+                            _deadline(min(deadline.remaining(), budget_s / 4)))
+            history = raw.get("billing_history") if isinstance(raw, dict) else None
+            entries = [e for e in (_entry(row) for row in history or []) if e is not None]
+        except (DigitalOceanError, TimeoutError, ValueError):
+            entries, auxiliary = [], [*auxiliary, "billing history"]
         # Then the closed invoices of this turn, each on its own share of what the
         # deadline leaves: a failure in one (a 404, a timeout, a malformed line of this
         # droplet's) holds that invoice alone, as ``unreadable``, and is retried when
@@ -701,6 +714,7 @@ class DigitalOceanClient:
                 "droplet_uuid": uuid,
                 "period": period, "lines": current["mine"], "others": current["others"],
                 "closed": closed, "held": held, "waiting": len(pending),
+                "auxiliary_unread": auxiliary,
                 "cursor": [batch[-1]["period"], batch[-1]["uuid"]] if batch else None,
                 "waiting_periods": sorted({inv["period"] for inv in pending}),
                 "history": entries}

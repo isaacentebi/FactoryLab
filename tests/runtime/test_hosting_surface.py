@@ -261,3 +261,15 @@ def test_the_deploy_covers_the_digitalocean_key():
     assert all(scope in readme for scope in ("billing:read", "droplet:read", "account:read",
                                              "sizes:read"))
     assert "read-only" in (ROOT / "docs/manifest.md").read_text().split("## The host")[1]
+
+
+def test_a_seat_is_told_the_catalogue_is_unread_never_served_an_old_one():
+    rt, fake = world()
+    handle = collateral_decision(rt)
+    hosting.observe(rt)
+    assert read(rt, handle, "hosting.sizes")["sizes"]
+    fake.failing.add("/v2/sizes")
+    fake.advance(24)
+    hosting.observe(rt)
+    assert read(rt, handle, "hosting.sizes") == {"error": hosting.SIZES_UNREAD}
+    assert read(rt, handle, "hosting.droplet")["droplet"]["size_slug"] == "s-1vcpu-2gb"

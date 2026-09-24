@@ -29,6 +29,7 @@ from factorylab.world.hosting import HostingAccount, HostingRefused, verify
 KIND = "hosting"
 READS = ("hosting.droplet", "hosting.sizes")
 NOT_YET_READ = "hosting not read yet"
+SIZES_UNREAD = "the size catalogue could not be read at the last billing read"
 
 
 def budget_s(rt: Any) -> float:
@@ -117,6 +118,10 @@ def execute(rt: Any, action_id: str, handle: str, tool_id: str, args: dict,
     if droplet is None:
         return {"error": NOT_YET_READ}
     if tool_id == "hosting.sizes":
+        if account.snapshot.get("sizes") is None:
+            # The catalogue could not be read at the last billing read: an older one is
+            # not served as current.
+            return {"error": SIZES_UNREAD}
         return {"region": droplet["region"], "current": droplet["size_slug"],
                 "sizes": [{k: row[k] for k in ("slug", "vcpus", "memory_mb", "disk_gb",
                                                "price_monthly_usd", "price_hourly_usd")}

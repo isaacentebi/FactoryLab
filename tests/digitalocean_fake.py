@@ -117,6 +117,7 @@ class FakeDigitalOcean:
         self.uuid_only_in: set[str] | None = None
         # Invoices that answer 404, by uuid: how many more times (float("inf"): always).
         self.broken: dict[str, float] = {}
+        self.failing: set[str] = set()             # routes that answer 500, always
 
     # ---- the account's own model -------------------------------------------------------
 
@@ -247,6 +248,8 @@ class FakeDigitalOcean:
         page = int(params.get("page", 1))
         per_page = min(int(params.get("per_page", 20)), self.per_page_cap)
         live = self.resources.get(str(self.droplet_id))
+        if route in self.failing:
+            return 500, b'{"id": "server_error", "message": "try again later"}'
         if route == "/v2/account":
             return 200, self._account()
         if route == f"/v2/droplets/{self.droplet_id}" and live and live["until"] is None:

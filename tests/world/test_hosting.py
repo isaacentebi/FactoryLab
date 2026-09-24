@@ -845,3 +845,62 @@ def test_a_uuid_that_is_not_canonical_is_no_uuid_and_the_canonical_one_is_learne
     del w.fake.uuid_of[w.droplet]
     windows(w, 1)
     assert w.hosting.droplet_uuid == str(uuidlib.uuid5(uuidlib.NAMESPACE_URL, w.droplet))
+
+
+# --- Codex on 3f13417 --------------------------------------------------------------------------
+
+def test_the_size_catalogue_failing_never_stops_booking_and_is_never_served_stale():
+    """The catalogue feeds only the population's size list: the launch price behind the
+    bound is the droplet's own, read with the droplet. A catalogue outage books on, and
+    the size list says it is unavailable rather than serve an old one as current."""
+    w = world()
+    windows(w, 1)
+    assert w.hosting.snapshot["sizes"]
+    w.fake.failing.add("/v2/sizes")
+    windows(w, 3)
+    assert w.hosting.unread is None
+    assert w.hosting.snapshot["sizes"] is None
+    unread = items(w, "treasury.hosting_auxiliary_unread")
+    assert [u["reads"] for u in unread] == [["sizes"]]            # once, not every read
+    assert items(w, "treasury.hosting_launch_price")              # the droplet's own rate
+    w.fake.advance(24 * 8)
+    w.fake.post_invoice("2026-09")
+    windows(w, 2)
+    assert_months(w, ["2026-09"])
+    w.fake.failing.clear()
+    windows(w, 1)
+    assert w.hosting.snapshot["sizes"]
+
+
+def test_the_catalogue_failing_before_any_launch_price_leaves_the_bound_conservative():
+    w = world()
+    w.fake.failing.update({"/v2/sizes", f"/v2/droplets/{w.fake.droplet_id}"})
+    windows(w, 1)
+    assert w.hosting.unread is not None       # no droplet: no identity, nothing booked
+    w.fake.failing.discard(f"/v2/droplets/{w.fake.droplet_id}")
+    w.fake.down = True
+    windows(w, 8)                             # the launch month passes unread
+    w.fake.down = False
+    w.fake.post_invoice("2026-09")
+    windows(w, 2)
+    assert not items(w, "treasury.hosting_launch_price")
+    assert launch_bound(w) == w.hosting.burn_by_month()["2026-09"] > 0   # conservative
+
+
+def test_the_billing_history_failing_never_affects_booking():
+    w = world()
+    windows(w, 1)
+    w.fake.failing.add("/v2/customers/my/billing_history")
+    w.fake.pay("5.00")
+    windows(w, 3)
+    assert w.hosting.unread is None
+    assert [u["reads"] for u in items(w, "treasury.hosting_auxiliary_unread")] == [
+        ["billing history"]]
+    assert not items(w, "treasury.hosting_account_entry")
+    w.fake.advance(24 * 8)
+    w.fake.post_invoice("2026-09")
+    windows(w, 2)
+    assert_months(w, ["2026-09"])
+    w.fake.failing.clear()
+    windows(w, 1)
+    assert items(w, "treasury.hosting_account_entry")        # read again once it answers

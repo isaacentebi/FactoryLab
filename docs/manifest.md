@@ -1748,13 +1748,19 @@ docs.digitalocean.com/reference/api/reference/billing/):
   `unreadable` (`treasury.hosting_invoice_pending`, once per change of reason), the cursor
   moves past it, the rest of the read is booked, and it is read again when the rotation
   comes back round. Only a failure of what the whole read stands on (the invoice index, the
-  preview, the sizes, the history, or the account and droplet) makes the whole read
-  unavailable;
+  preview, the account, the droplet, or authentication) makes the whole read unavailable;
 - `GET /v2/customers/my/invoices/preview`: the month's accruing lines ("an invoice preview
   is generated daily, which can be accessed with the `preview` keyword in place of
   `$INVOICE_UUID`");
 - the account, the droplet, the metadata id, the published sizes, and the billing
-  history's first page.
+  history's first page. The last two are auxiliary, each scoped to what it feeds and
+  each on at most a quarter of the read's budget. The size catalogue feeds only the
+  population's `hosting.sizes` list (the launch-month price behind the overshoot bound is
+  the droplet's own, read with the droplet); the billing history feeds only the private
+  diary's account entries, and no line is attributed or booked from it. A failure of
+  either is logged once per change as `treasury.hosting_auxiliary_unread` and changes
+  nothing else; a catalogue that could not be read is not replaced by an older one, and
+  `hosting.sizes` then says so.
 
 Every charge DigitalOcean bills against this droplet is this world's burn: the droplet
 itself, its backups, anything attributed to it. A line is this droplet's when its

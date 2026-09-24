@@ -119,7 +119,7 @@ class HostingAccount:
     FIELDS = ("bound", "launch_ns", "lines", "baseline", "reconciled", "invoiced",
               "unmatched", "booked", "negative", "unread", "history", "snapshot",
               "pending_baseline", "pending_noted", "droplet_uuid", "spans",
-              "estimate_final", "launch_price", "cursor", "held")
+              "estimate_final", "launch_price", "cursor", "held", "auxiliary_unread")
 
     def __init__(self, client: Any, *, droplet_id: int, bound: dict[str, Any] | None,
                  launch_ns: int | None, budget_s: float) -> None:
@@ -155,6 +155,9 @@ class HostingAccount:
         self.cursor: list | None = None
         # Invoices read and held, by uuid, with the reason they could not be classified.
         self.held: dict[str, str] = {}
+        # The auxiliary reads (the size catalogue, the billing history) the last read
+        # could not make; they affect nothing booked.
+        self.auxiliary_unread: list[str] = []
 
     @property
     def since(self) -> str | None:
@@ -328,7 +331,12 @@ class HostingAccount:
         result: dict[str, Any] = {"changes": [], "baseline": None, "unmatched": [],
                                   "cleared": [], "negative": [], "reconciled": [],
                                   "entries": [], "launch_price": result_price,
-                                  "held": []}
+                                  "held": [], "auxiliary_unread": None}
+        auxiliary = list(reading.get("auxiliary_unread", []))
+        if auxiliary != self.auxiliary_unread:
+            self.auxiliary_unread = auxiliary
+            if auxiliary:
+                result["auxiliary_unread"] = auxiliary
         for invoice in reading.get("held", []):
             if self.held.get(invoice["uuid"]) != invoice["reason"]:
                 self.held[invoice["uuid"]] = invoice["reason"]
