@@ -130,20 +130,6 @@ class ReturnConsequences:
         """
         self._apply("void", {"handle": handle, "event": event}, self.table.void(handle))
 
-    def carry(self, handle: str, cost_micro: int) -> bool:
-        """Add a retained liability to an open return; report whether it could be borne.
-
-        A charge that arrives after the return's outcome is final changes
-        nothing here: an outcome is fixed once and never reopened, so the caller
-        keeps the liability wherever else it is scored.
-        """
-        try:
-            table = self.table.carry(handle, cost_micro)
-        except (KeyError, ValueError):
-            return False
-        self._apply("carried", {"handle": handle, "cost_micro": cost_micro}, table)
-        return True
-
     def bind_service(self, service: str, handle: str, event: int) -> bool:
         """Bind a registered service to the return that registered it (C11); report
         whether the return has an account to bind to."""

@@ -13,16 +13,16 @@ durable bytes"); a put is idempotent
 by content, so replay after a crash rewrites nothing; a read verifies the hash
 it was asked for, so a tampered file is refused rather than served; retirement
 of an owner is not the archive's business, and the first owner of a hash stays
-its owner of record. Rent (C3) and entitlements (C10) are charged by their own
-workstreams through ``owner_for``.
+its owner of record (``owner_for``). Holding bytes here costs no money: the
+archive is the world's own disk, which pays no one.
 
 **Ownership is a (sha, owner) reference (edition 3, R3-F).** One blob may carry
 several references: a second writer of identical bytes owns its own reference,
 with its own kind and its own moment, and can read what it wrote rather than
 being told the first writer's bytes are private. The first reference stays the
-owner of record (``owner_for``), so rent has one payer and retirement has one
-subject. Nothing is published: an artifact is its owners' private state (essay
-II.I.b), and ruling R11 deleted the publication path nothing ever used.
+owner of record (``owner_for``), so retirement has one subject. Nothing is
+published: an artifact is its owners' private state (essay II.I.b), and ruling
+R11 deleted the publication path nothing ever used.
 
 **Nothing is deleted except an unreferenced blob.** ``collect()`` removes exactly
 those — durable bytes no reference names, which is what a crash between
@@ -129,8 +129,8 @@ class ArtifactStore:
         self._write(sha, data)  # Durable bytes before any authenticated reference.
         self.ledger.append({"kind": "artifact.put", "sha": sha, "owner": owner,
                             "artifact_kind": kind, "bytes": len(data), "ts": ts})
-        # The first record of a hash stands as the owner of record — one payer of
-        # rent, one subject of retirement — but every writer gets its own reference
+        # The first record of a hash stands as the owner of record — one subject
+        # of retirement — but every writer gets its own reference
         # (R3-F): a second writer of identical bytes owns what it wrote and reads it.
         self.index.setdefault(sha, {"owner": owner, "kind": kind, "bytes": len(data), "ts": ts})
         record = self.index[sha]
@@ -251,10 +251,10 @@ class ArtifactStore:
         return False
 
     def owner_for(self, sha: str) -> str | None:
-        """The seat liable for an artifact's rent, or None for a hash the archive never saw.
+        """The artifact's owner of record, or None for a hash the archive never saw.
 
-        Retirement never changes this: whoever charges rent decides whether a
-        retired owner's artifact is billed at the commons rate.
+        Retirement never changes this. Holding an artifact costs no money: the
+        archive is the world's own disk, which pays no one.
         """
         record = self.index.get(_valid_sha(sha))
         return None if record is None else record["owner"]

@@ -95,28 +95,23 @@ def _concentration(counts: Mapping[str, int] | None) -> float | None:
 
 
 def _cost_per_return(w: MeasureWindow) -> float | None:
-    """Mean cost of the window's well-formed producer returns, rent included.
+    """Mean metered cost of the window's well-formed producer returns, or None without one.
 
-    Retained-storage rent is cost the window spent without a return to carry
-    it, so it is added to what those returns cost and never counted as one of
-    them: a window paying rent measures a higher cost per return, not a lower
-    one. Rent alone is therefore unmeasurable — a window with no well-formed
-    producer return has no per-return cost, however much storage it paid for.
+    Every cost here is a debit with a real counterparty (a provider's bill, a
+    seller's price): nothing the wallet did not pay enters it.
     """
     costs = w.costs
     if not costs:
         return None
-    return (sum(costs) + getattr(w, "storage_cost_micro", 0)) / len(costs)
+    return sum(costs) / len(costs)
 
 
 def _cost_per_attempt(w: MeasureWindow) -> float | None:
-    """Mean cost of every invocation the window made, failed ones and rent included.
+    """Mean cost of every invocation the window made, failed ones included.
 
     A tolerated failure is compute the window spent: nine cheap successes and
-    one expensive failure cost what all ten cost, not what the nine did. The
-    live window's per-decision costs already carry retained-storage rent, so
-    it is in the numerator and never a divisor. A closed record keeps no
-    attribution, so it is measured from the window's return samples instead
+    one expensive failure cost what all ten cost, not what the nine did. A
+    closed record keeps no attribution, so it is measured from the window's return samples instead
     (``charter.measurement``), and a window with no invocation has no cost
     per attempt.
     """
@@ -146,14 +141,14 @@ def _verdict_std(w: MeasureWindow) -> float | None:
 CATALOGUE: tuple[Observation, ...] = (
     Observation(
         "cost_per_return",
-        "Mean cost of well-formed producer returns, including retained-storage rent.",
+        "Mean metered cost of well-formed producer returns.",
         "micro-USD per return",
         _cost_per_return,
         (0.0, 1_000_000.0),
     ),
     Observation(
         "cost_per_attempt",
-        "Mean cost of every selected return, failed ones included, plus retained-storage rent.",
+        "Mean metered cost of every selected return, failed ones included.",
         "micro-USD per attempt",
         _cost_per_attempt,
         (0.0, 1_000_000.0),
@@ -360,8 +355,7 @@ CATALOGUE: tuple[Observation, ...] = (
     Observation(
         "evaluator_compute_share",
         "Compute the evaluator roles (judges, adversarial judges, every tier of meta) "
-        "spent in the window over all compute spent in it, retained-storage rent "
-        "included.",
+        "spent in the window over all compute spent in it.",
         "fraction",
         lambda w: _ratio(getattr(w, "evaluator_spend_micro", 0),
                          getattr(w, "compute_spend_micro", 0)),
@@ -390,8 +384,8 @@ CATALOGUE: tuple[Observation, ...] = (
     ),
     Observation(
         "burn_per_window",
-        "Compute spent in the window: every invocation's metered cost plus "
-        "retained-storage rent.",
+        "Compute spent in the window: every invocation's metered cost, each a "
+        "debit paid to a real counterparty.",
         "micro-USD per window",
         lambda w: float(getattr(w, "compute_spend_micro", 0)),
         (0.0, 1_000_000.0),

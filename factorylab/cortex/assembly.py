@@ -323,7 +323,7 @@ class ProgramAssemblySpec(AssemblySpec):
     state_policy: str = "none"
     reward_shapes: dict[str, str] = field(default_factory=dict)
     # A watcher (edition 3, C2): the predicate the kernel settles from world state
-    # each tick, at the program price and without a model call. Empty for a program
+    # each tick, without a model call and without a debit. Empty for a program
     # seat that is not a watcher.
     trigger: dict[str, Any] = field(default_factory=dict)
 

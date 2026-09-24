@@ -374,13 +374,13 @@ class VenueTools:
         return ex.set_leverage(args["coin"], args["leverage"], market=args.get("market", "perp"))
 
 
-def vault_specs(read_price_micro: int) -> tuple[dict[str, dict], dict[str, list[dict]]]:
+def vault_specs() -> tuple[dict[str, dict], dict[str, list[dict]]]:
     """Guarantees the vault surface's contracts and one schema-valid example for each.
 
     Descriptions state what a call does and what the venue charges or refuses, and
-    nothing about what a vault is for. The public vault record is priced like the
-    other public venue reads; this account's own positions are free like
-    ``venue.positions``; the writes are free like every venue write.
+    nothing about what a vault is for. Every call is free: the venue charges
+    nothing for a read, and what it charges for a write (the creation fee) lands
+    on the venue account, where it happens.
     """
     address = {"type": "string", "pattern": ADDRESS_PATTERN}
     usd = {
@@ -395,7 +395,7 @@ def vault_specs(read_price_micro: int) -> tuple[dict[str, dict], dict[str, list[
          "A vault's venue record: name, leader, total equity, depositor count, leader "
          "fraction and commission, whether it takes deposits or is closed, and this "
          "account's own equity, lockup end and withdrawable amount in it.",
-         {"vault": address}, ["vault"], read_price_micro),
+         {"vault": address}, ["vault"], 0),
         ("venue.vault_positions",
          "This account's equity in each vault it holds, with each lockup end, and the "
          "vaults it leads.", {}, [], 0),

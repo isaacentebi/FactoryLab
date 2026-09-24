@@ -698,8 +698,6 @@ _RUNTIME_FIELDS = (
     # tier is taken as viable until measured, no epoch waits, and the anchor is
     # rebuilt from the treasury's own window.
     "card_clock", "governance_viable", "pending_epochs", "cap_anchor_ns",
-    # The tick each watcher last paid for (T8): a safety sweep charges none twice.
-    "watcher_ticks",
 )
 # Runtime fields read through a property with no setter, and the attribute behind it.
 _RUNTIME_BACKING = {

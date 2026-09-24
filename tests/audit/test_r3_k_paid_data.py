@@ -58,7 +58,8 @@ def test_paid_fetch_debits_the_runtime_wallet_before_return(monkeypatch):
     before = rt.wallet.balance
     result, cost = rt._run_tool("seed-decider", decision(rt), {
         "tool": "connector.fetch", "args": {"id": "source", "path": "/data"}})
-    assert result["body"] == "paid fact" and cost == 2734
+    # The seller's charge is the whole cost: the fetch itself pays no one (Wave 11).
+    assert result["body"] == "paid fact" and cost == 1734
     assert rt.wallet.balance == before - cost and rt.wallet.check_conservation()
     assert ledger_items(rt, "connector.call")[-1]["cost"] == cost
     assert (ledger_items(rt, "wallet.commit")[-1]["seq"]

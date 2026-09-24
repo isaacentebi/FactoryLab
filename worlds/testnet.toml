@@ -182,7 +182,6 @@ sampling_step = 0.1
 sampling_cap = 0.7
 
 [tools]
-population_tool_micro_per_call = 50
 max_leverage = 3
 
 [prices]

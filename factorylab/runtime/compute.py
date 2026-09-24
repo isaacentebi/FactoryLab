@@ -533,10 +533,12 @@ class ComputeMixin:
         if spec.model_id == "program":
             from factorylab.cortex.assembly import ProgramAssembly
 
-            # The seat's executor is its own code in the jail; its flat price is
-            # reserved and committed through the same meter as a model call.
+            # The seat's executor is its own code in the world's own jail, which
+            # pays no one: its price is zero (the wallet moves only when money
+            # moves), and the call still runs through the meter so it is ledgered
+            # beside a model call.
             asm = ProgramAssembly(
-                spec, self.program_runner, meter, self.m.prices.program_micro_per_call,
+                spec, self.program_runner, meter, 0,
                 artifacts=self.artifacts, validator=self._validate_output_contract,
                 record=lambda entry: self.ledger.append(entry),
             )
@@ -869,8 +871,7 @@ class ComputeMixin:
         from factorylab.cortex.tools import connector_spec
 
         self._init_connectors()
-        self.tool_specs.setdefault(
-            "connector.fetch", connector_spec(self.m.connectors.call_price_micro))
+        self.tool_specs.setdefault("connector.fetch", connector_spec())
         self._ensure_web_tool()
         self._ensure_calc_tool()
         self._ensure_directory_tools()
@@ -885,14 +886,12 @@ class ComputeMixin:
         manifest, the roster or the manifest hash changes — the spec is a
         constant of the runtime, not a committed parameter.
 
-        The price is ``prices.tool_micro_per_call`` where a world commits one
-        (GPT-6 §7 allows free or the flat tool price) and free otherwise, which
-        is what every world in this repository is today.
+        It is free: arithmetic in the world's own process pays no one, and the
+        wallet moves only when money moves (GPT-6 §7 allowed free).
         """
         from factorylab.cortex.tools import calc_spec
 
-        price = getattr(self.m.prices, "tool_micro_per_call", 0)
-        self.tool_specs.setdefault("calc", calc_spec(price if type(price) is int else 0))
+        self.tool_specs.setdefault("calc", calc_spec(0))
 
     def _ensure_web_tool(self) -> None:
         """Register ``web.search`` exactly when the manifest names a search route.
@@ -907,7 +906,7 @@ class ComputeMixin:
             return
         cap = (Decimal(self.m.web.max_call_micro) / 1_000_000).normalize()
         self.tool_specs.setdefault(
-            "web.search", web_search_spec(self.m.web.call_price_micro, f"{cap}"))
+            "web.search", web_search_spec(f"{cap}"))
 
     #: What one page of a shared-directory listing returns before a cursor.
     DIRECTORY_PAGE = 50
@@ -1000,11 +999,16 @@ class ComputeMixin:
 
     def _fetch_connector(self, action_id: str, handle: str, args: dict, *,
                          origin: str | None = None) -> tuple[dict, int]:
-        """Reserve first; count attempts durably; return text only after the flat debit."""
+        """Count attempts durably; return text only after any paid read is debited.
+
+        A public fetch pays no one, so the fetch itself moves no money (the wallet
+        moves only when money moves); ``max_calls_per_window`` is its limit. A paid
+        source debits the seller's own price before its text is returned.
+        """
         from factorylab.cortex.tools import _validate_args, connector_spec
         from factorylab.world.connector import ConnectorRefused
 
-        error = _validate_args(connector_spec(0)["args_schema"], args)
+        error = _validate_args(connector_spec()["args_schema"], args)
         if error:
             return self._connector_refused(handle, error)
         preflight = origin is not None
@@ -1032,8 +1036,7 @@ class ComputeMixin:
             count = 0
         if count >= self.m.connectors.max_calls_per_window:
             return self._connector_refused(handle, "connector window call cap reached", **fields)
-        price = self.m.connectors.call_price_micro
-        if price + (paid_cap or 0) > self.wallet.available_for(handle, "tool:connector.fetch"):
+        if (paid_cap or 0) > self.wallet.available_for(handle, "tool:connector.fetch"):
             return self._connector_refused(handle, "connector call unaffordable", **fields)
         data_cost = 0
 
@@ -1063,8 +1066,8 @@ class ComputeMixin:
 
         try:
             paid = self._seat_meter(action_id).run(
-                handle=handle, reason="tool:connector.fetch", ceiling=price,
-                execute=execute, cost_of=lambda _: price)
+                handle=handle, reason="tool:connector.fetch", ceiling=0,
+                execute=execute, cost_of=lambda _: 0)
         except BillingUncertain as exc:
             result, cost = {"error": str(exc), "status": "uncertain", "bytes": 0}, exc.cost
         except Exception:
@@ -1103,8 +1106,8 @@ class ComputeMixin:
                 contract = self.registry.get(f"connector:{call['args']['id']}")
                 price += contract.input_schema.get("max_call_micro", 0)
             if tool == "web.search":
-                # The flat price is not what a search costs: the metered completion
-                # rides with it, and the manifest's ceiling is what must fit.
+                # A search costs its metered completion, and the manifest's ceiling
+                # on it is what must fit.
                 price = self.m.web.max_call_micro
         except (KeyError, ValueError):
             pass  # The normal dispatcher supplies the shape or identity refusal.

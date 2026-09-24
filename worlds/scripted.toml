@@ -172,7 +172,6 @@ spot_pairs = ["BTC/USDC"]
 [connectors]
 max_bytes = 262144
 timeout_s = 10
-call_price_usd = "0.001"
 max_calls_per_window = 60
 # No origin_denylist override: the default is built from the world's own rail hosts.
 

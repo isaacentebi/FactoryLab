@@ -85,6 +85,8 @@ def test_a_world_without_the_block_has_no_surface_and_a_named_block_is_hashed():
     assert base.polymarket == PolymarketSpec()
     with pytest.raises(ValueError, match="unknown polymarket"):
         manifest_from_dict({**raw, "polymarket": {"enabled": True, "leverage": 3}})
+    with pytest.raises(ValueError, match="polymarket.read_price_usd was removed"):
+        manifest_from_dict({**raw, "polymarket": {"enabled": True, "read_price_usd": "0"}})
     with pytest.raises(ValueError, match="simulated venue"):
         manifest_from_dict({**raw, "polymarket": {"enabled": True, "venue": "live",
                                                   "collateral_usd": "5"}})
@@ -106,14 +108,15 @@ def test_no_world_in_the_repository_enables_event_markets():
 def test_published_tools_state_what_they_do_and_cost_and_carry_valid_examples():
     from factorylab.cortex.assembly import validate_schema
 
-    rt = world(read_price_micro=2000)
+    rt = world()
     specs = {k: v for k, v in rt.tool_specs.items() if k.startswith("polymarket.")}
     assert set(specs) == {*polymarket.READS, polymarket.ACCOUNT, *polymarket.WRITES}
-    for tool_id, spec in specs.items():
+    for spec in specs.values():
         for example in spec["args_schema"]["examples"]:
             validate_schema(example, spec["args_schema"])
         text = spec["description"].lower()
-        assert "$0.002" in text if tool_id in polymarket.READS else "free" in text
+        # Wave 11: a public market read pays no one, so every call is free.
+        assert "free" in text and spec["price_micro_per_call"] == 0
         # A surface, never a suggestion (AGENTS.md: physics is enforced, not announced).
         assert not any(word in text for word in ("should", "profit", "opportunit", "edge",
                                                  "recommend", "consider", "worth", "better"))
@@ -123,12 +126,13 @@ def test_published_tools_state_what_they_do_and_cost_and_carry_valid_examples():
 
 # --- reads and the jail ----------------------------------------------------------------------
 
-def test_reads_are_priced_and_their_prose_is_kept_off_durable_surfaces():
-    rt = world(read_price_micro=1500)
+def test_reads_move_no_money_and_their_prose_is_kept_off_durable_surfaces():
+    rt = world()
     handle = collateral_decision(rt)
+    before = rt.wallet.balance
     result, cost = rt._run_tool("seed-decider", handle,
                                 {"tool": "polymarket.search", "args": {"query": "event A"}})
-    assert cost == 1500
+    assert cost == 0 and rt.wallet.balance == before
     [market] = result["markets"]
     question = market["question"]
     assert len(question) >= 32

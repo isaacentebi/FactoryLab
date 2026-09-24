@@ -27,7 +27,6 @@ from factorylab.charter.provenance import (
 )
 from factorylab.kernel.money import usd_to_micro
 from factorylab.runtime.cards import parses
-from factorylab.runtime.continuity import StorageSpec
 from factorylab.runtime.observations import observation_for
 from factorylab.world.connector import DEFAULT_DENYLIST, validate_denylist
 from factorylab.world.market import DISCOVERY_URL
@@ -133,7 +132,6 @@ class AssemblySeed:
 
 @dataclass(frozen=True)
 class ToolsSpec:
-    population_tool_micro_per_call: int = 50
     # DEPRECATED and inert (architect decision D1): leverage is whatever the venue
     # allows. Still read, validated and hashed; nothing enforces it.
     max_leverage: int = 3
@@ -145,18 +143,22 @@ class ToolsSpec:
 
 @dataclass(frozen=True)
 class ConnectorsSpec:
-    """Connector reads share immutable size, time, flat-price and assembly-window bounds."""
+    """Connector reads share immutable size, time and assembly-window bounds.
+
+    A fetch of a public origin pays no one, so it carries no price: the
+    per-window call cap is its hard limit. Paid data is the seller's own x402
+    price, debited as a real outflow when it is bought.
+    """
 
     max_bytes: int = 262144
     timeout_s: int = 10
-    call_price_micro: int = 1000
     max_calls_per_window: int = 60
     origin_denylist: tuple[str, ...] = DEFAULT_DENYLIST
 
     def __post_init__(self):
-        for name in ("max_bytes", "timeout_s", "max_calls_per_window", "call_price_micro"):
+        for name in ("max_bytes", "timeout_s", "max_calls_per_window"):
             value = getattr(self, name)
-            if type(value) is not int or value < (0 if name == "call_price_micro" else 1):
+            if type(value) is not int or value < 1:
                 raise ValueError(f"connectors.{name} must be an integer within its bounds")
         validate_denylist(self.origin_denylist)
         object.__setattr__(self, "origin_denylist", tuple(self.origin_denylist))
@@ -175,26 +177,24 @@ def online_id(model_id: str) -> str:
 
 @dataclass(frozen=True)
 class WebSpec:
-    """The search route, its flat call price and the ceiling on one search.
+    """The search route and the ceiling on one search.
 
     ``search_model`` names a model on the menu; the tool calls its ``:online``
     route. With no model named there is no ``[web]`` block and no ``web.search``
-    tool.
+    tool. A search costs what the route's provider bills for it (tokens plus the
+    plugin's own per-request charge) and nothing else.
     """
 
     search_model: str | None = None
-    call_price_micro: int = 0
     max_call_micro: int = 0
 
     def __post_init__(self):
         if self.search_model is not None and not isinstance(self.search_model, str):
             raise ValueError("web.search_model must be a model id on the menu")
-        for name in ("call_price_micro", "max_call_micro"):
-            value = getattr(self, name)
-            if type(value) is not int or value < 0:
-                raise ValueError(f"web.{name} must be a non-negative integer")
-        if self.search_model is not None and self.max_call_micro <= self.call_price_micro:
-            raise ValueError("web.max_call_usd must leave room above the flat call price")
+        if type(self.max_call_micro) is not int or self.max_call_micro < 0:
+            raise ValueError("web.max_call_micro must be a non-negative integer")
+        if self.search_model is not None and self.max_call_micro <= 0:
+            raise ValueError("web.max_call_usd must be positive")
 
 
 #: The hybrid capital-loop keys: unset (``None``) in every world but the capital loop.
@@ -219,7 +219,6 @@ class PolymarketSpec:
 
     enabled: bool = False
     venue: str = "fake"
-    read_price_micro: int = 1000
     collateral_micro: int = 0
     max_order_micro: int = 10_000_000
     max_open_micro: int = 100_000_000
@@ -231,7 +230,7 @@ class PolymarketSpec:
             raise ValueError("polymarket.enabled must be true or false")
         if self.venue not in ("fake", "live"):
             raise ValueError("polymarket.venue must be fake or live")
-        for name in ("read_price_micro", "collateral_micro", "max_order_micro",
+        for name in ("collateral_micro", "max_order_micro",
                      "max_open_micro", "max_orders_per_window", "seed"):
             value = getattr(self, name)
             if type(value) is not int or value < 0:
@@ -299,8 +298,6 @@ class PricesSpec:
     # Floor on a decision's share of a generic (non-attributable) violation, so
     # splitting participation across many decisions cannot dilute it away.
     min_blame_share: float = 0.1
-    # The flat price of one program seat call (C8), reserved and committed like a model call.
-    program_micro_per_call: int = 50
     #: The one price law is the PID (``charter.controller.PriceController``, essay
     #: II.II.b): ``kp`` is the proportional gain and ``kd`` the derivative-on-measurement
     #: gain beside the integral gain ``eta``. At zero the law is the integral alone.
@@ -559,7 +556,6 @@ class WorldManifest:
     connectors: ConnectorsSpec = ConnectorsSpec()
     web: WebSpec = WebSpec()
     polymarket: PolymarketSpec = PolymarketSpec()
-    storage: StorageSpec = StorageSpec()
     prices: PricesSpec = PricesSpec()
     treasury: TreasurySpec = TreasurySpec()
     clock: ClockSpec = ClockSpec()
@@ -1281,34 +1277,62 @@ def _norm_house(raw: Any) -> NormHouseSpec:
     return NormHouseSpec(signer.lower() if signer is not None else None)
 
 
+#: Keys that priced a resource no counterparty is paid for, removed with that price
+#: (Wave 11). The wallet moves only when money moves (essay II.II.b, II.IV.a): a
+#: scarce resource that costs nothing at the margin is a limit or a λ on reward.
+REMOVED_PRICE_KEYS = {
+    ("connectors", "call_price_usd"): "a public fetch pays no one; "
+                                      "connectors.max_calls_per_window is its limit",
+    ("web", "call_price_micro"): "a search costs what its route's provider bills, "
+                                 "the plugin's per-request charge included",
+    ("polymarket", "read_price_usd"): "a public market read pays no one",
+    ("tools", "population_tool_micro_per_call"): "a tool runs in the world's own jail "
+                                                 "and pays no one",
+    ("prices", "program_micro_per_call"): "a program seat runs in the world's own jail "
+                                          "and pays no one",
+}
+
+
+def _refuse_removed_prices(d: dict[str, Any]) -> None:
+    """Refuse a manifest naming a price this kernel no longer debits (R8).
+
+    Guarantees a world file that still prices storage, a public read or local
+    compute is refused by name rather than loaded as if the price applied: such a
+    debit had no counterparty, so the books would lie.
+    """
+    for table in ("storage", "notes"):
+        if table in d:
+            raise ValueError(
+                f"[{table}] was removed: retained working state pays no one, so it is a "
+                "constraint (the 64 KiB hard limit), never a money debit; the wallet moves "
+                "only when money moves")
+    for (table, key), why in REMOVED_PRICE_KEYS.items():
+        if isinstance(d.get(table), dict) and key in d[table]:
+            raise ValueError(f"{table}.{key} was removed: {why}; the wallet moves only "
+                             "when money moves")
+
+
 def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
-    storage = _manifest_storage(d.get("storage"), d.get("notes"))
+    _refuse_removed_prices(d)
     endowment = _manifest_endowment(d.get("endowment"))
     conn = d.get("connectors", {})
     if not isinstance(conn, dict) or set(conn) - {
-        "max_bytes", "timeout_s", "call_price_usd", "max_calls_per_window", "origin_denylist"
+        "max_bytes", "timeout_s", "max_calls_per_window", "origin_denylist"
     }:
         raise ValueError("unknown connectors manifest key")
-    connector_price = conn.get("call_price_usd", "0.001")
-    if type(connector_price) not in (str, int):
-        raise ValueError("connectors.call_price_usd must be exact USD text or integer")
     connectors = ConnectorsSpec(
         max_bytes=conn.get("max_bytes", 262144), timeout_s=conn.get("timeout_s", 10),
-        call_price_micro=usd_to_micro(connector_price, rounding="exact"),
         max_calls_per_window=conn.get("max_calls_per_window", 60),
         origin_denylist=conn.get("origin_denylist", DEFAULT_DENYLIST),
     )
     web_block = d.get("web", {})
-    if not isinstance(web_block, dict) or set(web_block) - {
-        "search_model", "call_price_micro", "max_call_usd"
-    }:
+    if not isinstance(web_block, dict) or set(web_block) - {"search_model", "max_call_usd"}:
         raise ValueError("unknown web manifest key")
     max_call = web_block.get("max_call_usd", "0")
     if type(max_call) not in (str, int):
         raise ValueError("web.max_call_usd must be exact USD text or integer")
     web = WebSpec(
         search_model=web_block.get("search_model"),
-        call_price_micro=web_block.get("call_price_micro", 0),
         max_call_micro=usd_to_micro(max_call, rounding="exact"),
     )
     venice_cap = (d.get("treasury") or {}).get("max_venice_per_window", "10")
@@ -1447,7 +1471,6 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         min_window_events=int(pr.get("min_window_events", 1)),
         penalty_cap=pr.get("penalty_cap", 0.5),
         min_blame_share=pr.get("min_blame_share", 0.1),
-        program_micro_per_call=int(pr.get("program_micro_per_call", 50)),
         kp=pr.get("kp", 0.0),
         kd=pr.get("kd", 0.0),
     )
@@ -1501,9 +1524,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         connectors=connectors,
         web=web,
         polymarket=_manifest_polymarket(d.get("polymarket")),
-        storage=storage,
         tools=ToolsSpec(
-            int((d.get("tools") or {}).get("population_tool_micro_per_call", 50)),
             int((d.get("tools") or {}).get("max_leverage", 3)),
             int((d.get("tools") or {}).get("max_routers_per_kind", 3)),
             (d.get("tools") or {}).get("max_depth", 4),
@@ -1621,27 +1642,6 @@ def _manifest_kinds(raw: Any) -> tuple[str, ...]:
     return tuple(sorted(raw))
 
 
-def _manifest_storage(raw: Any, legacy: Any) -> StorageSpec:
-    """``[storage] micro_per_byte_day``: the byte-day rent retained working state pays.
-
-    Guarantees the public notebook's keys are refused (R11 deleted it). ``[notes]``
-    is read only for the one key that priced storage, ``micro_per_byte_day``,
-    because world files kept outside ``worlds/`` still carry it; naming both tables
-    is refused rather than resolved.
-    """
-    if legacy is not None:
-        if raw is not None:
-            raise ValueError("name the storage rent in [storage] only, not also in [notes]")
-        if not isinstance(legacy, dict) or set(legacy) - {"micro_per_byte_day"}:
-            raise ValueError("the public notebook was removed (ruling R11): [notes] may name "
-                             "only micro_per_byte_day, which is read as [storage]")
-        raw = legacy
-    raw = {} if raw is None else raw
-    if not isinstance(raw, dict) or set(raw) - {"micro_per_byte_day"}:
-        raise ValueError("storage accepts only micro_per_byte_day")
-    return StorageSpec(**raw)
-
-
 def _manifest_polymarket(raw: Any) -> PolymarketSpec:
     """``[polymarket] enabled = true`` and its caps, in exact USD text like every price.
 
@@ -1650,7 +1650,7 @@ def _manifest_polymarket(raw: Any) -> PolymarketSpec:
     """
     if raw is None:
         return PolymarketSpec()
-    keys = {"enabled", "venue", "read_price_usd", "collateral_usd", "max_order_usd",
+    keys = {"enabled", "venue", "collateral_usd", "max_order_usd",
             "max_open_usd", "max_orders_per_window", "seed"}
     if not isinstance(raw, dict) or set(raw) - keys:
         raise ValueError("unknown polymarket manifest key")
@@ -1666,7 +1666,6 @@ def _manifest_polymarket(raw: Any) -> PolymarketSpec:
 
     return PolymarketSpec(
         enabled=raw.get("enabled", False), venue=raw.get("venue", "fake"),
-        read_price_micro=usd("read_price_usd", default.read_price_micro),
         collateral_micro=usd("collateral_usd", default.collateral_micro),
         max_order_micro=usd("max_order_usd", default.max_order_micro),
         max_open_micro=usd("max_open_usd", default.max_open_micro),

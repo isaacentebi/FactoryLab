@@ -677,43 +677,23 @@ class ThinkingMixin:
         return observed
 
     def _evaluate_watchers(self, *, sweep: str = "") -> None:
-        """Settle every watcher once this tick, at the program price and no model call.
+        """Settle every watcher once this tick, with no model call and no debit.
 
-        A watcher is a seat like any other: the evaluation is reserved and
-        committed against its own entitlement under ``model:program``, so a
-        watcher nobody funds stops watching instead of watching for free.
+        A watcher's predicate is evaluated by the kernel in the world's own
+        process, which pays no one, so it moves no money (the wallet moves only
+        when money moves; essay II.II.b). Its limits are the kernel's: one
+        evaluation per world tick, plus the safety sweeps between model calls.
         ``sweep`` names an extra evaluation inside one event (the safety pass
-        between model calls, time audit T8), so its metered handle is its own.
+        between model calls, time audit T8).
         """
-        from factorylab.world.metering import Meter
-
         book = self.subscription_book
         for seat in sorted(book.watchers):
             if seat not in self.assemblies or seat in self.retired_assemblies:
                 continue
             record = book.watchers[seat]
-            # A watcher pays once per world tick. A safety sweep inside a tick it has
-            # already paid for settles it again at no further charge.
-            paid = self.watcher_ticks.get(seat) == self.ticks_consumed
-            price = 0 if sweep and paid else self.m.prices.program_micro_per_call
-            meter = Meter(self._seat_wallet(seat))
-            observed = self._observed_world()
-            handle = f"watch-{seat}-{self.n}{'-' + sweep if sweep else ''}"
-            if not price:
-                fact, cost = book.evaluate(seat, observed), 0
-            else:
-                try:
-                    metered = meter.run(handle=handle, reason="model:program", ceiling=price,
-                                        execute=lambda s=seat, o=observed: book.evaluate(s, o),
-                                        cost_of=lambda _r, p=price: p)
-                except Exception as exc:  # an unfunded watcher simply does not look
-                    self.ledger.append({"kind": "watcher.unaffordable", "watcher": seat,
-                                        "reason": type(exc).__name__, "ts": self.clock.now_ns})
-                    continue
-                fact, cost = metered.result, metered.cost
-                self.watcher_ticks[seat] = self.ticks_consumed
+            fact = book.evaluate(seat, self._observed_world())
             self.ledger.append({"kind": "watcher.evaluated", "watcher": seat,
-                                "owner": record["owner"], "cost": cost,
+                                "owner": record["owner"], "cost": 0,
                                 "fired": fact is not None, "ts": self.clock.now_ns})
             if fact is None:
                 continue

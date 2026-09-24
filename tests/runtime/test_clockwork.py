@@ -601,7 +601,9 @@ def test_a_fill_the_venue_makes_while_a_model_thinks_settles_between_tool_rounds
     assert len(_items(rt, "fill.counted")) == 1
 
 
-def test_a_safety_sweep_charges_no_watcher_twice_in_one_tick(monkeypatch):
+def test_a_watcher_evaluation_moves_no_money_on_a_tick_or_a_sweep(monkeypatch):
+    """Wave 11: a watcher's predicate runs in the world's own process, which pays no
+    one, so neither its tick evaluation nor a safety sweep debits the wallet."""
     rt = make_runtime()
     rt.subscription_book.watchers["seed-observer"] = {
         "owner": "seed-decider", "trigger": {"kind": "mid_above", "coin": "BTC", "px": "1"},
@@ -609,15 +611,12 @@ def test_a_safety_sweep_charges_no_watcher_twice_in_one_tick(monkeypatch):
     monkeypatch.setattr(rt.subscription_book, "evaluate", lambda seat, observed: None)
     balance = rt.wallet.balance
     rt._evaluate_watchers()
-    charged = balance - rt.wallet.balance
-    assert charged == rt.m.prices.program_micro_per_call
     rt._evaluate_watchers(sweep="safety-1")
+    rt.ticks_consumed += 1
     rt._evaluate_watchers(sweep="safety-2")
-    assert balance - rt.wallet.balance == charged
-    assert [i["cost"] for i in _items(rt, "watcher.evaluated")] == [charged, 0, 0]
-    rt.ticks_consumed += 1  # a new tick: the sweep is the watcher's first evaluation
-    rt._evaluate_watchers(sweep="safety-3")
-    assert balance - rt.wallet.balance == 2 * charged
+    assert rt.wallet.balance == balance
+    assert [i["cost"] for i in _items(rt, "watcher.evaluated")] == [0, 0, 0]
+    assert not [i for i in _items(rt, "wallet.commit") if i["reason"] == "model:program"]
 
 
 def test_the_price_loop_does_not_wait_on_forecast_horizons_seats_chose():

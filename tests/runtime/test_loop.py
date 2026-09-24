@@ -531,7 +531,9 @@ def test_x402_feasibility_uses_one_fixed_request_and_on_chain_reserve(market_htt
     assert not market_http.payments  # registration and feasibility never authorize payments
 
 
-def test_market_discovery_tool_is_priced_and_debited_before_return(market_http, monkeypatch):
+def test_market_discovery_is_a_free_read_that_moves_no_money(market_http, monkeypatch):
+    """Wave 11: the discovery index is a public read that pays no one, so the wallet
+    does not move for it."""
     from factorylab.world.x402 import HTTPResponse
     from tests.world.test_market import resource
 
@@ -548,8 +550,7 @@ def test_market_discovery_tool_is_priced_and_debited_before_return(market_http, 
     result, cost = runtime._run_tool("seed-market", "discovery", {
         "tool": "market.discover", "args": {"url_substring": "chat"},
     })
-    assert cost == runtime.m.tools.population_tool_micro_per_call
-    assert runtime.wallet.balance == initial - cost
+    assert cost == 0 and runtime.wallet.balance == initial
     assert result["sellers"][0]["resource"] == "https://seller.test/chat"
     assert runtime.tool_specs["market.discover"]["kind"] == "market" and len(calls) == 1
 

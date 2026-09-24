@@ -83,9 +83,12 @@ def coin_of(token_id: str) -> str:
 # --- contracts ------------------------------------------------------------------------
 
 def tool_specs(spec: Any, *, writes: bool) -> dict[str, dict[str, Any]]:
-    """The tools a ``[polymarket]`` world publishes: what each does and what it costs."""
-    price = spec.read_price_micro
-    usd = f"${Decimal(price) / 1_000_000:f}"
+    """The tools a ``[polymarket]`` world publishes: what each does, every call free.
+
+    A read of the public market API (or of the seeded simulated venue) pays no one,
+    so it carries no price: the wallet moves only when money moves. What a write
+    costs is the market's own, paid from and settled into the polymarket pot.
+    """
     token = {"type": "string", "pattern": r"^[0-9]{1,100}$", "minLength": 1}
     decimal = {"type": ["string", "number"]}
     tools = {
@@ -93,21 +96,21 @@ def tool_specs(spec: Any, *, writes: bool) -> dict[str, dict[str, Any]]:
             f"Search Polymarket event markets by text. Returns up to {MAX_SEARCH_RESULTS} "
             "markets: id, question, outcomes with their token ids and last prices, end date, "
             "resolution source, tick size, minimum order size, fee schedule and whether the "
-            f"market accepts orders. Market text is written by third parties. {usd} a call.",
+            "market accepts orders. Market text is written by third parties. Free.",
             {"query": {"type": "string", "minLength": 1, "maxLength": MAX_QUERY_CHARS},
              "limit": {"type": "integer", "minimum": 1, "maximum": MAX_SEARCH_RESULTS}},
-            ["query"], [{"query": "election", "limit": 5}], price),
+            ["query"], [{"query": "election", "limit": 5}], 0),
         "polymarket.market": (
             "One Polymarket market by id: its contract fields and its resolution rules "
-            f"text, which third parties wrote. {usd} a call.",
+            "text, which third parties wrote. Free.",
             {"market_id": {"type": "string", "minLength": 1, "maxLength": 80}},
-            ["market_id"], [{"market_id": "fake-1"}], price),
+            ["market_id"], [{"market_id": "fake-1"}], 0),
         "polymarket.book": (
             "The order book of one outcome token, best price first on both sides, with "
-            f"its midpoint, tick size and minimum order size. {usd} a call.",
+            "its midpoint, tick size and minimum order size. Free.",
             {"token_id": token, "depth": {"type": "integer", "minimum": 1,
                                           "maximum": MAX_DEPTH}},
-            ["token_id"], [{"token_id": "100000000000000000000", "depth": 5}], price),
+            ["token_id"], [{"token_id": "100000000000000000000", "depth": 5}], 0),
     }
     if writes:
         tools.update({

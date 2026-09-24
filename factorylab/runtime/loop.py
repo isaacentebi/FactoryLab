@@ -373,8 +373,8 @@ class Runtime(
                     self._emit(EventKind.RECONCILED, snap, source="kernel")
             else:
                 self._settle_exchange_effects(self.exchange.advance(self.clock.now_ns))
-            # C2: the kernel settles every registered watcher from world state at the
-            # program price, then offers one coalesced update to the seats that asked
+            # C2: the kernel settles every registered watcher from world state, then
+            # offers one coalesced update to the seats that asked
             # for one. Both are queued behind this tick's own routing.
             self._evaluate_watchers()
             self._emit_world_update()
@@ -1598,14 +1598,13 @@ def run_world(
     outcome is known and settle to their own handle; the world terminates by
     death if the wallet reaches zero and the summary reports the seal state.
 
-    A world whose manifest prices population tools does not launch on a host
-    where the jail cannot start: the world block would promise tools that no
-    proposal could ever obtain. Nothing is written before the refusal.
+    Every world offers population tools, so no world launches on a host where
+    the jail cannot start: the world block would promise tools that no proposal
+    could ever obtain. Nothing is written before the refusal.
     """
-    if manifest.tools.population_tool_micro_per_call > 0:
-        reason = jail_probe()
-        if reason is not None:
-            raise NoJail(f"this world offers population tools and the host has no jail: {reason}")
+    reason = jail_probe()
+    if reason is not None:
+        raise NoJail(f"this world offers population tools and the host has no jail: {reason}")
     return Runtime(
         manifest,
         events=events,

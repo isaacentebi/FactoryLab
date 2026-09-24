@@ -95,17 +95,17 @@ def test_scope_facts_are_the_window_facts_of_the_scope_s_own_rows():
         [{"index": 3, "equity_start_micro": 9}],
         [{"handle": "h", "cost": 7, "ok": True, "noop": True, "revision": True,
           "tool_calls": 2, "verdict": 0.4},
-         {"handle": "s", "cost": 3, "ok": True, "noop": False, "revision": False,
-          "tool_calls": 0, "verdict": None, "storage": True}],
+         {"handle": "s", "cost": 3, "ok": False, "noop": False, "revision": False,
+          "tool_calls": 0, "verdict": None}],
         [{"skill": 0.1, "status": "settled", "predicate": "return_paid_off", "y": 1},
          {"skill": None, "status": "censored", "predicate": "wallet_up", "y": None}])
     assert {key: facts[key] for key in (
         "invocations", "ok", "costs", "tool_calls", "noop_returns", "revision_returns",
-        "revised_decisions", "storage_cost_micro", "compute_spend_micro", "verdicts",
+        "revised_decisions", "compute_spend_micro", "verdicts",
         "forecast_skills", "outcomes", "censored", "consequences_settled",
         "consequences_paid_off", "index")} == {
-        "invocations": 1, "ok": 1, "costs": [7], "tool_calls": 2, "noop_returns": 1,
-        "revision_returns": 1, "revised_decisions": 1, "storage_cost_micro": 3,
+        "invocations": 2, "ok": 1, "costs": [7], "tool_calls": 2, "noop_returns": 1,
+        "revision_returns": 1, "revised_decisions": 1,
         "compute_spend_micro": 10, "verdicts": [[[0.4]]], "forecast_skills": [0.1],
         "outcomes": 2, "censored": 1, "consequences_settled": 1,
         "consequences_paid_off": 1, "index": 3}

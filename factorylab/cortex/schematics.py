@@ -16,6 +16,7 @@ from factorylab.cortex.assembly import (
 )
 from factorylab.kernel.money import money_to_usd
 from factorylab.runtime.cadence import tick_intervals
+from factorylab.runtime.continuity import HARD_STATE_BYTES
 from factorylab.runtime.custody import UNAVAILABLE
 from factorylab.runtime.observations import window_fact_names
 from factorylab.runtime.propensity import MIN_DECLARED_MASS, action_vocabulary
@@ -232,7 +233,7 @@ class SchematicsMixin:
             "timeout_s": 10,
             "state_policy": "private",
             "trigger": "optional; makes the seat a watcher the kernel wakes from world state "
-            "each tick, at the program price and without a model call: {\"kind\": "
+            "each tick, at no cost and without a model call: {\"kind\": "
             "\"price_cross\", \"coin\", \"level\"} | {\"kind\": \"funding_sign\", "
             "\"coin\"} | {\"kind\": \"equity_below\", \"level\"} | {\"kind\": "
             "\"equity_above\", \"level\"}",
@@ -347,8 +348,8 @@ class SchematicsMixin:
         "code runs in the "
         "tool jail instead of a model, reads one JSON object from stdin (prompt, description, "
         "inputs, outcome_schema, state) and prints the Return JSON a model would; it is "
-        "routed, judged, paid and retired exactly like a model seat, each call costing "
-        "prices.program_micro_per_call. With state_policy private the object it prints under "
+        "routed, judged, paid and retired exactly like a model seat; the jail pays no one, "
+        "so a call costs no money. With state_policy private the object it prints under "
         "state is archived as an artifact it owns and handed back on its next call; the "
         "artifact's sha is in the diary and artifact.get reads it, free, for any seat in the "
         "program's own lineage; other readers are refused artifact_private. An observation "
@@ -488,15 +489,14 @@ class SchematicsMixin:
             "recent_mids": {c: list(v) for c, v in self.recent_mids.items()},
             "account": account,
             "venue": self._traded_instruments(),
-            # A price is a public schematic (essay II.I.b): the rent a seat's retained
-            # working state pays is stated here, with how it is collected.
-            "storage": {"micro_per_byte_day": self.m.storage.micro_per_byte_day,
-                        "units": "micro-USD per byte per day",
-                        "pricing": "Your retained working_state pays storage rent of "
-                        "micro_per_byte_day per byte by elapsed time from the moment it is "
-                        "written, collected at each reserve-window boundary from your own "
-                        "spending authority and scored against the decision that wrote it. "
-                        "Rent a boundary cannot collect stays due on the state."},
+            # A limit is a public schematic (essay II.I.b). Retained state pays no one,
+            # so it carries no price (the wallet moves only when money moves): what is
+            # stated is the hard cast (II.II.b), as a fact.
+            "storage": {"working_state_max_bytes": HARD_STATE_BYTES,
+                        "units": "bytes of canonical JSON",
+                        "pricing": "Retained working_state costs no money. A working_state "
+                        "over working_state_max_bytes is refused and the head is left as "
+                        "it was."},
             "tools": self._published_tool_specs(),
             "reserve": {"protected": self.reserve.remaining(), "units": "micro-USD",
                         "trials": self.m.novelty.trials,
@@ -585,15 +585,15 @@ class SchematicsMixin:
             "connectors": {"registered": self._connector_catalogue(),
                            "max_bytes": self.m.connectors.max_bytes,
                            "timeout_s": self.m.connectors.timeout_s,
-                           "call_price_micro": self.m.connectors.call_price_micro,
                            "max_calls_per_window": self.m.connectors.max_calls_per_window,
                            "window_ticks": self.clockwork.period(
                                "price", default=self.m.timing.min_ratio),
                            "origin_denylist": list(self.m.connectors.origin_denylist),
                            "method": "GET",
                            "optional_fields": ["pay", "max_call_usd"],
-                           "payment": "pay=x402 uses max_call_usd as the seller charge cap; "
-                           "the flat call price is additional. Omit pay for free sources.",
+                           "payment": "pay=x402 uses max_call_usd as the seller charge cap "
+                           "and the seller's charge is the call's only cost; a fetch without "
+                           "pay costs no money. Omit pay for free sources.",
                            "result": "UTF-8 text in seen_tool_results[].result.body",
                            "tool_rounds": 2,
                            "continuation_tool_kinds": ["population", "artifact"],
@@ -664,8 +664,7 @@ class SchematicsMixin:
                 max_tool_calls=self.m.tools.max_tool_calls),
             "scoring": self._scoring_block(),
             "prices": {"lambda_max": self.m.prices.lambda_max,
-                       "penalty_cap": self.m.prices.penalty_cap,
-                       "program_micro_per_call": self.m.prices.program_micro_per_call},
+                       "penalty_cap": self.m.prices.penalty_cap},
             "event_kinds": sorted(self._event_kinds()),
             "meta_input": (
                 "A meta judges the released representative verdict. Its window describes "

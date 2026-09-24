@@ -133,8 +133,6 @@ class BootstrapMixin:
         self.card_clock: dict[str, int] = {}
         # Whether a governance tier fits between the slowest loop and the world (T7).
         self.governance_viable = True
-        # watcher seat -> the world tick its program price was last charged (T8).
-        self.watcher_ticks: dict[str, int] = {}
         # event kind -> the tick a grown menu started waiting for its epoch (T6).
         self.pending_epochs: dict[str, int] = {}
         # Where the treasury caps' own wall-clock windows are counted from (T1, T13).
@@ -586,19 +584,18 @@ class BootstrapMixin:
                 "id": spec.id,
                 "description": spec.description,
                 "args_schema": _to_plain(spec.args_schema),
+                # The venue charges nothing for a call: its public reads are free
+                # and its fees land on the venue account where they happen.
                 "price_micro_per_call": spec.price_micro_per_call,
                 "kind": spec.kind,
             }
-            if spec.id in self.venue_tools.PUBLIC_READS:
-                self.tool_specs[spec.id]["price_micro_per_call"] = (
-                    manifest.connectors.call_price_micro)
         vault_examples: dict[str, list[dict]] = {}
         if getattr(manifest.exchange, "vault_tools", False):
             # A surface, published only where the manifest opts in: what each call
             # does and costs, and no word about what a vault might be for.
             from factorylab.world.venue_tools import vault_specs
 
-            specs, vault_examples = vault_specs(manifest.connectors.call_price_micro)
+            specs, vault_examples = vault_specs()
             self.tool_specs.update(specs)
             self.treasury.vault_custody = True
         self.tool_specs["treasury.transfer"] = {
@@ -645,7 +642,7 @@ class BootstrapMixin:
                 "required": ["substring"],
                 "additionalProperties": False,
             },
-            "price_micro_per_call": manifest.tools.population_tool_micro_per_call,
+            "price_micro_per_call": 0,
             "kind": "catalogue",
         }
         self.tool_specs["market.discover"] = {
@@ -660,7 +657,7 @@ class BootstrapMixin:
                 },
                 "additionalProperties": False,
             },
-            "price_micro_per_call": manifest.tools.population_tool_micro_per_call,
+            "price_micro_per_call": 0,
             "kind": "market",
         }
         coin = manifest.exchange.coins[0]
