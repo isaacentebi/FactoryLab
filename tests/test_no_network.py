@@ -57,6 +57,24 @@ def test_a_datagram_to_a_numeric_address_is_refused_and_recorded(_no_network):
         assert local.recv(1) == b"y" and local.recv(1) == b"z"
 
 
+def test_a_subprocess_seam_is_refused_and_recorded(_no_network, tmp_path):
+    # Codex on 0763d05: resolve_addresses does its DNS in a python -I child, which the
+    # in-process patches cannot reach.
+    from factorylab.world.connector import resolve_addresses
+    from scripts import fastloop, rehearsal
+
+    with pytest.raises(NetworkForbidden, match="example.com"):
+        resolve_addresses("example.com")
+    for seam in (lambda: rehearsal.run_command(["true"], tmp_path / "out"),
+                 lambda: fastloop.run_seeds(None, [1])):
+        with pytest.raises(NetworkForbidden, match="child world"):
+            seam()
+    assert len(_no_network) == 3 and "example.com" in _no_network[0]
+    _no_network.clear()
+    # An IP literal resolves to itself with no lookup, and may pass.
+    assert resolve_addresses("127.0.0.1") == ["127.0.0.1"]
+
+
 def test_loopback_and_unix_sockets_stay_open():
     server = socket.socket()
     server.bind(("127.0.0.1", 0))

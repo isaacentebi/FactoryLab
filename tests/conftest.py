@@ -427,6 +427,16 @@ def _local_host(host) -> bool:
         return False  # a name that is not this machine's is resolved over the network
 
 
+def _ip_literal(host) -> bool:
+    import ipaddress
+
+    try:
+        ipaddress.ip_address(str(host).strip("[]").split("%", 1)[0])
+        return True
+    except ValueError:
+        return False
+
+
 def _url_host(url) -> str | None:
     from urllib.parse import urlsplit
 
@@ -445,7 +455,23 @@ def _no_network(request, monkeypatch):
     (a test that fakes the opener beneath a seam reaches nothing, and is not stopped).
     Each attempt is also remembered and fails the test at teardown, so code that
     catches the error (a rail that turns any transport failure into a retry) cannot
-    hide it. A test marked ``network`` is left alone; such tests
+    hide it.
+
+    Isolation covers this test process and the known subprocess seams of
+    ``factorylab/`` and ``scripts/``, whose children the in-process patches cannot
+    reach:
+
+    * ``connector.resolve_addresses`` resolves a name in a ``python -I`` child: a name
+      that is neither local nor an IP literal is refused (unless the test replaced
+      ``subprocess.run`` with a fake, when nothing leaves);
+    * ``scripts/rehearsal.py`` ``run_command`` and ``scripts/fastloop.py`` ``run_seeds``
+      start child worlds, which may call providers or venues: refused.
+
+    The other subprocesses cannot reach the network: ``cortex.sandbox`` runs population
+    code jailed with no network grant (bubblewrap ``--unshare-all`` on Linux, a
+    sandbox-exec profile without one on macOS), and ``runtime.release`` asks a local
+    ``git rev-parse HEAD``. A subprocess a test starts itself, and OS-level isolation,
+    are out of scope. A test marked ``network`` is left alone; such tests
     are never in the check or gate tiers.
     """
     if request.node.get_closest_marker("network"):
@@ -524,6 +550,29 @@ def _no_network(request, monkeypatch):
     monkeypatch.setattr(socket, "create_connection", create_connection)
     monkeypatch.setattr(urllib.request.OpenerDirector, "open", opener_open)
     monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+
+    import subprocess
+
+    from factorylab.world import connector
+    from scripts import fastloop, rehearsal
+
+    real_run, real_resolve = subprocess.run, connector.resolve_addresses
+
+    def resolve_addresses(host, *args, **kwargs):
+        # The child does the DNS lookup; only a real subprocess.run starts one.
+        if (subprocess.run is real_run and not _local_host(host)
+                and not _ip_literal(host)):
+            forbid(f"resolve_addresses({host!r}) in a python -I child")
+        return real_resolve(host, *args, **kwargs)
+
+    def child_world(name):
+        def refuse(*args, **kwargs):
+            forbid(f"{name}: a child world outside this guard")
+        return refuse
+
+    monkeypatch.setattr(connector, "resolve_addresses", resolve_addresses)
+    monkeypatch.setattr(rehearsal, "run_command", child_world("scripts/rehearsal.py run_command"))
+    monkeypatch.setattr(fastloop, "run_seeds", child_world("scripts/fastloop.py run_seeds"))
     yield attempts  # the guard's own tests read (and clear) what it stopped
     if attempts:
         pytest.fail("the test touched the network: " + "; ".join(attempts), pytrace=False)
