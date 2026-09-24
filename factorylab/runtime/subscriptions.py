@@ -358,6 +358,8 @@ class SubscriptionBook:
         # is a fold in ``folds`` with nothing here; ``acknowledged`` is neither.
         self.delivering: dict[str, _Fold] = {}
         self.watchers: dict[str, dict[str, Any]] = {}
+        # The last watcher evaluated: the next sweep resumes after it, in id order.
+        self.watch_cursor: str | None = None
         self.funding: dict[str, str] = {}  # the latest funding rate per coin
 
     # -- subscriptions ----------------------------------------------------
@@ -512,6 +514,7 @@ class SubscriptionBook:
                                 "last": None if w["last"] is None else dict(w["last"])}
                          for seat, w in sorted(self.watchers.items())},
             "funding": dict(sorted(self.funding.items())),
+            "watch_cursor": self.watch_cursor,
         }
 
     def restore(self, state: dict[str, Any]) -> None:
@@ -527,6 +530,7 @@ class SubscriptionBook:
                                 "last": None if w.get("last") is None else dict(w["last"])}
                          for seat, w in (state.get("watchers") or {}).items()}
         self.funding = dict(state.get("funding") or {})
+        self.watch_cursor = state.get("watch_cursor")
 
 
 class ThinkingMixin:
@@ -677,21 +681,34 @@ class ThinkingMixin:
         return observed
 
     def _evaluate_watchers(self, *, sweep: str = "") -> None:
-        """Settle every watcher once this tick, with no model call and no debit.
+        """Settle this sweep's share of the watchers, with no model call and no debit.
 
         A watcher's predicate is evaluated by the kernel in the world's own
         process, which pays no one, so it moves no money (the wallet moves only
-        when money moves; essay II.II.b). Its limits are the kernel's: one
-        evaluation per world tick, plus the safety sweeps between model calls.
-        ``sweep`` names an extra evaluation inside one event (the safety pass
-        between model calls, time audit T8).
+        when money moves; essay II.II.b); its cost is the world's own time, which is
+        a hard limit. Guarantees: at most ``[subscriptions]
+        max_watcher_evaluations_per_sweep`` watchers are evaluated a sweep (a tick,
+        or ``sweep``, a safety pass between model calls, time audit T8); all of them
+        against one snapshot of the world read once for the sweep, so watcher work
+        does no venue I/O of its own; in id order, resuming after the last one
+        evaluated, so each of n live watchers is reached within ceil(n / limit)
+        sweeps whoever registered first; a retired seat's watcher is never evaluated.
         """
+        from bisect import bisect_right
+
         book = self.subscription_book
-        for seat in sorted(book.watchers):
-            if seat not in self.assemblies or seat in self.retired_assemblies:
-                continue
+        live = sorted(seat for seat in book.watchers
+                      if seat in self.assemblies and seat not in self.retired_assemblies)
+        if not live:
+            return
+        start = 0 if book.watch_cursor is None else bisect_right(live, book.watch_cursor)
+        chosen = (live[start:] + live[:start])[
+            :self.m.subscriptions.max_watcher_evaluations_per_sweep]
+        observed = self._observed_world()
+        for seat in chosen:
+            book.watch_cursor = seat
             record = book.watchers[seat]
-            fact = book.evaluate(seat, self._observed_world())
+            fact = book.evaluate(seat, observed)
             self.ledger.append({"kind": "watcher.evaluated", "watcher": seat,
                                 "owner": record["owner"], "cost": 0,
                                 "fired": fact is not None, "ts": self.clock.now_ns})

@@ -132,8 +132,8 @@ class UptakeMixin:
                             "tick": self.ticks_consumed, "ts": self.clock.now_ns})
 
     def _run_tool(self, action_id: str, handle: str, call: dict[str, Any], *,
-                  slot: str = "tool:0", version: int | None = None) -> tuple[dict, int]:
-        result = super()._run_tool(action_id, handle, call, slot=slot, version=version)
+                  slot: str = "tool:0") -> tuple[dict, int]:
+        result = super()._run_tool(action_id, handle, call, slot=slot)
         self._taken_up("tool", str(call.get("tool")), action_id)
         return result
 

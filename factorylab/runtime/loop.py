@@ -262,6 +262,8 @@ class Runtime(
             return self._run()
         finally:
             self._ledger_lock.close()
+            if getattr(self, "_polymarket_ip_lock", None) is not None:
+                self._polymarket_ip_lock.close()
 
     def _run(self) -> dict[str, Any]:
         """Continue the original source budget; restored internal events keep their ordering."""
@@ -367,6 +369,7 @@ class Runtime(
         if ev.kind is EventKind.TICK:
             self._open_pending_epochs()
             self._assign_waiting_readers()
+            self._prune_read_use()
             self._chaos_tick()  # seat-facing faults only (runtime.chaos), drawn per tick
             self._reconcile_orders()
             if getattr(self, "polymarket", None) is not None:

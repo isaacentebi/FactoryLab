@@ -259,25 +259,26 @@ class PolymarketSpec:
     max_open_micro: int = 100_000_000
     max_orders_per_window: int = 20
     seed: int = 0
-    # The world's Polymarket read requests per sliding minute, and the part of them
-    # held back for the kernel's own settlement and marking reads. A limit taken from
-    # Polymarket's published rate limits (world/polymarket.py), never a price.
-    read_requests_per_minute: int = 900
-    kernel_reserve_per_minute: int = 300
+    # The world's Polymarket read requests per sliding 10 s (the window Polymarket
+    # counts), and the part of them held back for the kernel's own settlement and
+    # marking reads. A limit taken from Polymarket's published rate limits
+    # (world/polymarket.py), never a price.
+    read_requests_per_10s: int = 200
+    kernel_reserve_per_10s: int = 100
 
     def __post_init__(self):
-        from factorylab.world.polymarket import PUBLISHED_REQUESTS_PER_MINUTE
+        from factorylab.world.polymarket import PUBLISHED_REQUESTS_PER_10S
 
         if type(self.enabled) is not bool:
             raise ValueError("polymarket.enabled must be true or false")
-        budget, reserve = self.read_requests_per_minute, self.kernel_reserve_per_minute
-        if type(budget) is not int or not 1 <= budget <= PUBLISHED_REQUESTS_PER_MINUTE:
-            raise ValueError("polymarket.read_requests_per_minute must be an integer in "
-                             f"[1, {PUBLISHED_REQUESTS_PER_MINUTE}], Polymarket's "
-                             "tightest published limit a minute")
+        budget, reserve = self.read_requests_per_10s, self.kernel_reserve_per_10s
+        if type(budget) is not int or not 1 <= budget <= PUBLISHED_REQUESTS_PER_10S:
+            raise ValueError("polymarket.read_requests_per_10s must be an integer in "
+                             f"[1, {PUBLISHED_REQUESTS_PER_10S}], Polymarket's "
+                             "tightest published limit per 10 s")
         if type(reserve) is not int or not 1 <= reserve < budget:
-            raise ValueError("polymarket.kernel_reserve_per_minute must be an integer "
-                             "of at least 1 below polymarket.read_requests_per_minute")
+            raise ValueError("polymarket.kernel_reserve_per_10s must be an integer "
+                             "of at least 1 below polymarket.read_requests_per_10s")
         if self.venue not in ("fake", "live"):
             raise ValueError("polymarket.venue must be fake or live")
         for name in ("collateral_micro", "max_order_micro",
@@ -286,7 +287,31 @@ class PolymarketSpec:
             if type(value) is not int or value < 0:
                 raise ValueError(f"polymarket.{name} must be a non-negative integer")
         if self.venue == "live" and self.collateral_micro:
-            raise ValueError("polymarket.collateral_usd seeds only the simulated venue")
+            # A live venue is read-only: writes, positions and the marks that read a
+            # held token's book exist only on the simulated venue, which sends
+            # Polymarket nothing, so the kernel's request bound covers no live mark.
+            # Live trading must bring its own bound (runtime/polymarket.py, open_limit).
+            raise ValueError("polymarket_live_writes_not_built: polymarket.collateral_usd "
+                             "seeds only the simulated venue; a live venue is read-only")
+
+
+@dataclass(frozen=True)
+class SubscriptionsSpec:
+    """``[subscriptions]``: the hard limit on watcher work, fixed for the world's life.
+
+    A watcher's predicate runs in the world's own process and pays no one, so its
+    cost is the world's own time, a limit and never a price (essay II.II.b): at most
+    ``max_watcher_evaluations_per_sweep`` watchers are evaluated a sweep, in a
+    rotating order, against one snapshot of the world.
+    """
+
+    max_watcher_evaluations_per_sweep: int = 32
+
+    def __post_init__(self):
+        value = self.max_watcher_evaluations_per_sweep
+        if type(value) is not int or value < 1:
+            raise ValueError("subscriptions.max_watcher_evaluations_per_sweep must be a "
+                             "positive integer")
 
 
 @dataclass(frozen=True)
@@ -617,6 +642,7 @@ class WorldManifest:
     providers: ProvidersSpec = ProvidersSpec()
     prompt: PromptSpec = PromptSpec()
     chaos: ChaosSpec = ChaosSpec()
+    subscriptions: SubscriptionsSpec = SubscriptionsSpec()
     tick_interval_ns: int = 10 * NS_PER_SECOND
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -1008,18 +1034,18 @@ class WorldManifest:
             from factorylab.world.polymarket import read_requests
 
             pm = self.polymarket
-            pm_share = (pm.read_requests_per_minute - pm.kernel_reserve_per_minute) // readers
+            pm_share = (pm.read_requests_per_10s - pm.kernel_reserve_per_10s) // readers
             lookup = read_requests("market_of_token")
             if pm_share < lookup:
                 # A claim's token lookup is the seat's own read of up to 3 requests: a
                 # share under it could seal no event claim at all.
-                return (f"each reader's polymarket read share, (read_requests_per_minute - "
-                        f"kernel_reserve_per_minute) // venue.max_readers = {pm_share}, "
+                return (f"each reader's polymarket read share, (read_requests_per_10s - "
+                        f"kernel_reserve_per_10s) // venue.max_readers = {pm_share}, "
                         f"cannot cover one claim's token lookup of {lookup} requests")
             if seat_open_share(pm, readers) < 1:
                 # No seat could hold one open read, so no claim could ever be sealed.
                 return (f"each reader's polymarket open read share, "
-                        f"kernel_reserve_per_minute // 2 // venue.max_readers = "
+                        f"kernel_reserve_per_10s // 2 // venue.max_readers = "
                         f"{open_limit(pm)} // {readers}, cannot hold one open read")
         return None
 
@@ -1728,6 +1754,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         providers=_manifest_providers(d.get("providers")),
         prompt=_manifest_prompt(d.get("prompt")),
         chaos=_manifest_chaos(d.get("chaos")),
+        subscriptions=_manifest_subscriptions(d.get("subscriptions")),
         extra={k: v for k, v in d.items() if k.startswith("x_")},
     )
     m.validate()
@@ -1811,8 +1838,15 @@ def _manifest_polymarket(raw: Any) -> PolymarketSpec:
     if raw is None:
         return PolymarketSpec()
     keys = {"enabled", "venue", "collateral_usd", "max_order_usd",
-            "read_requests_per_minute", "kernel_reserve_per_minute",
+            "read_requests_per_10s", "kernel_reserve_per_10s",
             "max_open_usd", "max_orders_per_window", "seed"}
+    for old, new in (("read_requests_per_minute", "read_requests_per_10s"),
+                     ("kernel_reserve_per_minute", "kernel_reserve_per_10s")):
+        if isinstance(raw, dict) and old in raw:
+            # Polymarket counts its limits over a sliding 10 s, so a per-minute budget
+            # cannot bound what reaches it within one 10 s; the key is refused by name.
+            raise ValueError(f"polymarket.{old} was replaced by polymarket.{new}: "
+                             "Polymarket's published limits are per sliding 10 s")
     if not isinstance(raw, dict) or set(raw) - keys:
         raise ValueError("unknown polymarket manifest key")
     default = PolymarketSpec()
@@ -1833,10 +1867,10 @@ def _manifest_polymarket(raw: Any) -> PolymarketSpec:
         max_orders_per_window=raw.get("max_orders_per_window",
                                       default.max_orders_per_window),
         seed=raw.get("seed", default.seed),
-        read_requests_per_minute=raw.get("read_requests_per_minute",
-                                         default.read_requests_per_minute),
-        kernel_reserve_per_minute=raw.get("kernel_reserve_per_minute",
-                                          default.kernel_reserve_per_minute),
+        read_requests_per_10s=raw.get("read_requests_per_10s",
+                                         default.read_requests_per_10s),
+        kernel_reserve_per_10s=raw.get("kernel_reserve_per_10s",
+                                          default.kernel_reserve_per_10s),
     )
 
 
@@ -1847,6 +1881,15 @@ def _manifest_storage(raw: Any) -> StorageSpec:
     if not isinstance(raw, dict) or set(raw) - {"retained_private_bytes"}:
         raise ValueError("unknown storage manifest key")
     return StorageSpec(raw.get("retained_private_bytes", DEFAULT_RETAINED_PRIVATE_BYTES))
+
+
+def _manifest_subscriptions(raw: Any) -> SubscriptionsSpec:
+    """``[subscriptions]``: the watcher-work limit; any other key is unknown."""
+    if raw is None:
+        return SubscriptionsSpec()
+    if not isinstance(raw, dict) or set(raw) - {"max_watcher_evaluations_per_sweep"}:
+        raise ValueError("unknown subscriptions manifest key")
+    return SubscriptionsSpec(**raw)
 
 
 def _manifest_chaos(raw: Any) -> ChaosSpec:

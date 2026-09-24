@@ -15,10 +15,10 @@ import pytest
 from factorylab.kernel.events import EventKind
 from factorylab.kernel.queue import SettleStatus
 from factorylab.runtime import polymarket
-from factorylab.world.polymarket import DEFAULT_FAKE_MARKETS, FakePolymarket, PolymarketUnavailable
+from factorylab.world.polymarket import PolymarketUnavailable
 from tests.helpers import collateral_decision
 from tests.runtime.test_loop import _consequence_diary, _consequence_runtime
-from tests.runtime.test_polymarket_surface import advance, buy, still_fake, world
+from tests.runtime.test_polymarket_surface import advance, still_fake, world
 
 YES = "100000000000000000000"
 NO = "100000000000000000001"
@@ -52,11 +52,24 @@ def results_of(rt):
     return results
 
 
+def judge_seat(rt, judge):
+    """Register ``judge`` through the real path, once: an assembly registered by
+    seed-decider, which takes its venue read slot (or waits for one) as any
+    registration does, and whose reads are counted under ``<id>#<version>``."""
+    if judge not in rt.assemblies:
+        from tests.runtime.test_real_flows import _register
+
+        _register(rt, judge)
+        rt._assign_waiting_readers()
+    assert judge in rt.venue_readers, "no venue read slot is free"
+    return judge
+
+
 def seal(rt, *claims, judge="judge-a", about=None):
-    """Seal claims by ``judge``, a seat with a venue read slot (a Polymarket claim's
-    token lookup is its own read)."""
-    if judge not in rt.venue_readers:
-        assert rt._assign_reader_slot(judge), "no venue read slot is free"
+    """Seal claims by ``judge``, a registered seat with a venue read slot (a
+    Polymarket claim's token lookup is its own read)."""
+    if getattr(rt, "polymarket", None) is not None:
+        judge_seat(rt, judge)
     handle = collateral_decision(rt, owner=judge)
     return rt._open_forecasts(handle, judge, about or handle, [
         {"predicate": pid, "q": q, "params": params} for pid, q, params in claims])
@@ -166,12 +179,14 @@ def test_a_live_price_claim_without_a_midpoint_is_excluded_and_an_unlisted_token
     # A token no market lists is refused at sealing, charged to the seat, and not
     # cached: the next claim on it is looked up again (and may find it listed).
     assert len(sealed) == 1 and "7" not in rt.polymarket.token_markets
+    assert polymarket._read_used(rt, "judge-a") == 2 * 3
+    rt.clock.now_ns += polymarket.READ_WINDOW_NS  # the share's 10 s slides on
     looked = []
     lookup = reader.market_of_token
     reader.market_of_token = lambda token: looked.append(token) or lookup(token)
     assert seal(rt, ("event_pays", 0.5, {"horizon_events": 2, "token_id": "7"})) == []
     assert looked == ["7"]
-    assert polymarket._read_used(rt, "judge-a") == 3 * 3
+    assert polymarket._read_used(rt, "judge-a") == 3
     advance(rt, 3)
     [result] = results
     assert result.predicate_id == "event_price_above"
@@ -317,7 +332,7 @@ def _advance(rt, ticks, *, tick_ns=10**9):
 #: more requests than the whole per-minute budget would have admitted under a global
 #: meter (995268a deferred there): 48 open reads, 3 a seat over 16 slots, 3 requests
 #: a minute a seat (one claim's lookup), and a pass of 2 × 48 = 96 kernel requests.
-SATURATED = {"read_requests_per_minute": 144, "kernel_reserve_per_minute": 96}
+SATURATED = {"read_requests_per_10s": 144, "kernel_reserve_per_10s": 96}
 
 
 def _saturate(rt, *, question=False, hyperliquid=False):
@@ -404,13 +419,13 @@ def test_a_seat_s_open_reads_are_its_own_share():
     # judge-b is untouched by judge-a's keys: it opens its own, one on judge-a's token
     # and tick, charged to itself.
     due = 14 + 50  # judge-a's third claim, sealed at tick 14
-    assert f"judge-a|due:{_token(2)}:{due}" in rt.polymarket.open_reads
+    assert f"{rt._reader_id('judge-a')}|due:{_token(2)}:{due}" in rt.polymarket.open_reads
     assert seal(rt, ("event_pays", 0.5, {"horizon_events": due - rt.ticks_consumed,
                                           "token_id": _token(2)}), judge="judge-b")
-    assert f"judge-b|due:{_token(2)}:{due}" in rt.polymarket.open_reads
+    assert f"{rt._reader_id('judge-b')}|due:{_token(2)}:{due}" in rt.polymarket.open_reads
     assert polymarket.seat_open_reads(rt, rt._reader_id("judge-b")) == 1
     assert polymarket.seat_open_reads(rt, rt._reader_id("judge-a")) == 3
-    assert f"judge-a|due:{_token(2)}:{due}" in rt.polymarket.open_reads
+    assert f"{rt._reader_id('judge-a')}|due:{_token(2)}:{due}" in rt.polymarket.open_reads
     # judge-c at its share gets the same refusal whether or not someone else holds the
     # key it asks for.
     answers = []
@@ -436,74 +451,153 @@ def test_a_seat_s_open_reads_are_its_own_share():
     assert (published["open_reads_limit"], published["seat_open_reads"]) == (48, 3)
 
 
-class Logged(FakePolymarket):
-    """The simulated venue, logging each request it counts with the world time and
-    whether the kernel (a settlement pass or a mark) sent it; every seventh book read
-    fails, as a transport failure would."""
+class Wire:
+    """A live reader that sends what Gamma and the CLOB would, and logs every request
+    with its world time and whether the kernel sent it: a token's lookup is two
+    requests when listed (the closed listing, then the open one) and three when not;
+    every other read one. Tokens ``7`` and ``8`` are listed nowhere, and every seventh
+    book read fails, as a transport failure would."""
 
-    def _count(self, requests):
-        super()._count(requests)
-        log = self.__dict__.setdefault("log", [])
-        log.append((self.clock(), requests, self.kernel[0]))
+    deterministic = False
+
+    def __init__(self, clock):
+        self.clock, self.kernel, self.log, self.books = clock, [False], [], 0
+
+    def _send(self, requests):
+        self.log.append((self.clock(), requests, self.kernel[0]))
+
+    def requests_sent(self):
+        return sum(n for _t, n, _k in self.log)
+
+    def market_of_token(self, token_id):
+        listed = token_id not in ("7", "8")
+        self._send(2 if listed else 3)
+        return self._market(token_id) if listed else None
+
+    def market(self, market_id):
+        self._send(1)
+        return self._market(market_id.removeprefix("m-"))
+
+    def search_markets(self, query, limit):
+        self._send(1)
+        return []
 
     def order_book(self, token_id, depth):
-        self.__dict__["books"] = self.__dict__.get("books", 0) + 1
+        self._send(1)
+        self.books += 1
         if self.books % 7 == 0:
-            self._count(1)
             raise PolymarketUnavailable("transport: TimeoutError")
-        return super().order_book(token_id, depth)
+        return {"token_id": token_id, "bids": [{"price": "0.49", "size": "5"}],
+                "asks": [{"price": "0.51", "size": "5"}], "midpoint": "0.5"}
+
+    @staticmethod
+    def _market(token_id):
+        return {"market_id": f"m-{token_id}", "closed": False, "uma_resolution_status": None,
+                "outcomes": [{"token_id": token_id, "price": "0.5"}]}
 
 
-def test_the_kernel_s_requests_in_any_minute_fit_its_reserve():
-    """The bound ``open_limit`` proves, checked against the simulated venue's counted
-    requests: for eight world minutes seats keep claiming (price claims, which read the
-    book, at horizons up to ``MAX_FORECAST_HORIZON``, some on tokens no market lists)
-    while the pot holds a position the kernel marks and one book read in seven fails;
-    in no 60 s window does the kernel send more than ``kernel_reserve_per_minute``."""
+def _worst_10s(entries):
+    """The most requests any sliding 10 s holds, over ``(world ns, requests)``."""
+    window = polymarket.READ_WINDOW_NS
+    return max((sum(n for ts, n in entries if start - window < ts <= start)
+                for start, _n in entries), default=0)
+
+
+def test_every_polymarket_request_fits_the_published_10s_limit():
+    """The bound ``open_limit`` proves, per Polymarket's own window (10 s), checked on
+    every request a live world sends: seats keep claiming, at horizons up to
+    ``MAX_FORECAST_HORIZON``, price claims that read the book (some on tokens no
+    market lists, some books failing) while reading the market themselves, for five
+    world minutes. In no sliding 10 s does the kernel send more than its reserve, the
+    seats more than the rest, or the world more than ``read_requests_per_10s`` (and
+    so more than Polymarket's 300)."""
     from factorylab.runtime.shared import MAX_FORECAST_HORIZON
 
-    markets = tuple({**m, "resolves_after_s": None} for m in DEFAULT_FAKE_MARKETS)
-    fake = Logged(start_usdc=Decimal(50), markets=markets, step_ticks=0)
-    rt = world(fake=fake, read_requests_per_minute=80, kernel_reserve_per_minute=32)
-    fake.clock, fake.kernel = (lambda: rt.clock.now_ns), [False]
-    assert polymarket.seat_open_share(rt.m.polymarket, rt.m.exchange.max_readers) == 1
-    settle_due, tick = rt._settle_due_forecasts, polymarket.tick
+    rt = world(venue="live")  # the defaults: 200 per 10 s, 100 of them the kernel's
+    wire = rt.polymarket.venue.target = Wire(lambda: rt.clock.now_ns)
+    spec = rt.m.polymarket
+    settle_due = rt._settle_due_forecasts
 
-    def kernel(call):
-        def run(*args, **kwargs):
-            fake.kernel[0] = True
-            try:
-                return call(*args, **kwargs)
-            finally:
-                fake.kernel[0] = False
-        return run
+    def kernel_pass():
+        wire.kernel[0] = True
+        try:
+            settle_due()
+        finally:
+            wire.kernel[0] = False
 
-    rt._settle_due_forecasts = kernel(settle_due)
-    handle = collateral_decision(rt)
-    assert buy(rt, handle)["status"] == "filled"  # a held token, marked once a minute
-    tokens = [o["token_id"] for m in markets
-              for o in fake.market(m["market_id"])["outcomes"]] + ["7", "8"]  # unlisted
-    judges = [s for s in rt.venue_readers if s is not None and s != "seed-decider"]
-    judges += [f"judge-{i}" for i in range(16 - len(judges) - 1)]
-    for step in range(480):
+    judges = [judge_seat(rt, s) for s in rt.venue_readers if s is not None]
+    judges += [judge_seat(rt, f"judge-{i}") for i in range(16 - len(judges))]
+    tokens = [_token(i) for i in range(40)] + ["7", "8"]
+    for step in range(300):
+        seat = judges[step % len(judges)]
         seal(rt, ("event_price_above", 0.5, {
             "horizon_events": 1 + (step * 37) % MAX_FORECAST_HORIZON,
             "token_id": tokens[step % len(tokens)], "level": 0.3}),
-            judge=judges[step % len(judges)])
+            ("event_pays", 0.5, {"horizon_events": 1 + (step * 11) % 30,
+                                 "token_id": tokens[(step * 7) % len(tokens)]}),
+            judge=seat)
+        rt._run_tool(seat, collateral_decision(rt, seat),
+                     {"tool": "polymarket.search", "args": {"query": f"q{step}"}})
         rt.ticks_consumed += 1
         rt.n += 1
         rt.balance_at.append(rt.wallet.balance)
         rt.clock.now_ns += 10**9
-        kernel(tick)(rt)
-        rt._settle_due_forecasts()
-    sent = [(ts, n) for ts, n, by_kernel in fake.log if by_kernel]
-    assert sum(n for _ts, n in sent) > 32  # the kernel read, many times over
-    minute = polymarket.READ_WINDOW_NS
-    worst = max(sum(n for ts, n in sent if start - minute < ts <= start)
-                for start, _n in sent)
-    assert worst <= rt.m.polymarket.kernel_reserve_per_minute
+        polymarket.tick(rt)
+        kernel_pass()
+    kernel = [(ts, n) for ts, n, by_kernel in wire.log if by_kernel]
+    seats = [(ts, n) for ts, n, by_kernel in wire.log if not by_kernel]
+    assert sum(n for _ts, n in kernel) > spec.kernel_reserve_per_10s  # it read plenty
+    assert _worst_10s(kernel) <= spec.kernel_reserve_per_10s
+    assert _worst_10s(seats) <= spec.read_requests_per_10s - spec.kernel_reserve_per_10s
+    assert _worst_10s(kernel + seats) <= spec.read_requests_per_10s <= 300
     diary = _consequence_diary(rt)
     reasons = {i["reason"] for i in diary if i["kind"] == "forecast.refused"}
     assert polymarket.NOT_LISTED_REFUSAL in reasons
-    assert any(r.startswith(polymarket.OPEN_LIMIT_REFUSAL) for r in reasons)
     assert any(i["kind"] == "polymarket.event_unavailable" for i in diary)
+
+
+def test_sixteen_seats_bursting_in_one_tick_stay_within_the_seat_budget():
+    """Every seat claims and reads as hard as it can within one tick: each is refused
+    past its own share, so the seats together send at most
+    ``read_requests_per_10s - kernel_reserve_per_10s`` in that 10 s."""
+    rt = world(venue="live")
+    wire = rt.polymarket.venue.target = Wire(lambda: rt.clock.now_ns)
+    spec = rt.m.polymarket
+    seats = [judge_seat(rt, s) for s in rt.venue_readers if s is not None]
+    seats += [judge_seat(rt, f"judge-{i}") for i in range(16 - len(seats))]
+    assert len(seats) == 16
+    for round_ in range(4):
+        for index, seat in enumerate(seats):
+            seal(rt, ("event_pays", 0.5, {"horizon_events": 50,
+                                          "token_id": _token(round_ * 32 + index)}),
+                 ("event_pays", 0.5, {"horizon_events": 50,
+                                      "token_id": _token(round_ * 32 + 16 + index)}),
+                 judge=seat)
+            rt._run_tool(seat, collateral_decision(rt, seat),
+                         {"tool": "polymarket.search", "args": {"query": "q"}})
+    sent = sum(n for _ts, n, _k in wire.log)
+    budget = spec.read_requests_per_10s - spec.kernel_reserve_per_10s
+    assert 0 < sent <= budget
+    assert polymarket.read_share(spec, rt.m.exchange.max_readers) * 16 <= budget
+
+
+def test_an_outage_refuses_every_claim_alike_whether_or_not_the_token_is_known():
+    """Sealing always sends the claim's lookup, whether or not the world already knows
+    the token (the cache serves only the kernel's settlement reads), so during an
+    outage a claim on a known token and one on a new token get the same answer."""
+    rt = world(venue="live")
+    reader = rt.polymarket.venue.target = Listing()
+    assert seal(rt, ("event_pays", 0.5, {"horizon_events": 50, "token_id": _token(1)}))
+    assert _token(1) in rt.polymarket.token_markets
+
+    def down(token_id):
+        raise PolymarketUnavailable("transport: TimeoutError")
+
+    reader.market_of_token = down
+    rt.clock.now_ns += polymarket.READ_WINDOW_NS
+    assert seal(rt, ("event_pays", 0.5, {"horizon_events": 50, "token_id": _token(1)}),
+                judge="judge-b") == []
+    assert seal(rt, ("event_pays", 0.5, {"horizon_events": 50, "token_id": _token(2)}),
+                judge="judge-c") == []
+    reasons = [i["reason"] for i in _consequence_diary(rt) if i["kind"] == "forecast.refused"]
+    assert reasons == ["polymarket read unavailable"] * 2

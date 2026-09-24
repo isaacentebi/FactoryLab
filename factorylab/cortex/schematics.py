@@ -235,7 +235,8 @@ class SchematicsMixin:
             "timeout_s": 10,
             "state_policy": "private",
             "trigger": "optional; makes the seat a watcher the kernel wakes from world state "
-            "each tick, at no cost and without a model call: {\"kind\": "
+            "(within the world block's watchers limit), at no cost and without a model "
+            "call: {\"kind\": "
             "\"price_cross\", \"coin\", \"level\"} | {\"kind\": \"funding_sign\", "
             "\"coin\"} | {\"kind\": \"equity_below\", \"level\"} | {\"kind\": "
             "\"equity_above\", \"level\"}",
@@ -533,6 +534,18 @@ class SchematicsMixin:
                         "with the error 'private state is at the world's capacity', as on "
                         "a full disk. A live seat's state is never released to make room."},
             **self._polymarket_reads_section(),
+            # A limit on the world's own time, published as a fact (essay II.I.b).
+            "watchers": {
+                "max_watcher_evaluations_per_sweep":
+                    self.m.subscriptions.max_watcher_evaluations_per_sweep,
+                "rule": "Watchers are evaluated at each tick and each safety sweep "
+                        "against one snapshot of the world taken for that sweep, at no "
+                        "cost and without a model call: at most "
+                        "max_watcher_evaluations_per_sweep of them a sweep, in a "
+                        "rotating order by id that resumes after the last one "
+                        "evaluated, so each of n watchers is evaluated within "
+                        "ceil(n / max_watcher_evaluations_per_sweep) sweeps. A retired "
+                        "seat's watcher is not evaluated."},
             "tools": self._published_tool_specs(),
             "reserve": {"protected": self.reserve.remaining(), "units": "micro-USD",
                         "trials": self.m.novelty.trials,
@@ -1295,23 +1308,24 @@ class SchematicsMixin:
         return {"polymarket_reads": {
             "open_reads_limit": open_limit(spec),
             "seat_open_reads": seat_open_share(spec, self.m.exchange.max_readers),
-            "kernel_reserve_per_minute": spec.kernel_reserve_per_minute,
+            "read_requests_per_10s": spec.read_requests_per_10s,
+            "kernel_reserve_per_10s": spec.kernel_reserve_per_10s,
             "rule": (
-                "An open read is a seat's own: the settlement of its Polymarket claims on "
-                "one token due at one tick, or a token it bought that the pot holds or "
-                "orders. Each seat holds at most seat_open_reads = open_reads_limit // "
-                "venue.max_readers of them, counted over its own claims and buys whether "
-                "or not another seat holds the same token and tick, through its venue read "
-                "slot. One stays open while its claims are pending or its token is held, "
-                "and for 60 s after the kernel's last read for it. The kernel sends at "
-                f"most {KERNEL_READS_PER_OPEN} requests for an open read in any sliding "
-                "60 s (the market, and the book for a price claim; a held token's book "
-                "once a minute), so open_reads_limit = kernel_reserve_per_minute // "
-                f"{KERNEL_READS_PER_OPEN} keeps the kernel within its reserve. A claim's "
-                "token is looked up when it is sealed, as the sealing seat's own read, "
-                "charged 3 requests to its share; a token no market lists is refused "
-                "('token not listed'). A claim or buy past the seat's own share is "
-                f"refused with '{OPEN_LIMIT_REFUSAL}'.")}}
+                "Every Polymarket budget is counted over any sliding 10 s of world time, "
+                "the window Polymarket counts. An open read is a seat's own: the "
+                "settlement of its Polymarket claims on one token due at one tick. Each "
+                "seat holds at most seat_open_reads = open_reads_limit // "
+                "venue.max_readers of them, counted over its own claims whether or not "
+                "another seat holds the same token and tick, through its venue read slot. "
+                "One stays open while its claims are pending, and for 10 s after the "
+                f"kernel's last read for it. The kernel sends at most "
+                f"{KERNEL_READS_PER_OPEN} requests for an open read in any sliding 10 s "
+                "(the market, and the book for a price claim), so open_reads_limit = "
+                f"kernel_reserve_per_10s // {KERNEL_READS_PER_OPEN} keeps the kernel "
+                "within its reserve. A claim's token is looked up when it is sealed, "
+                "always, as the sealing seat's own read, charged 3 requests to its "
+                "share; a token no market lists is refused ('token not listed'). A claim "
+                f"past the seat's own share is refused with '{OPEN_LIMIT_REFUSAL}'.")}}
 
     def _published_tool_specs(self, *, full: bool = False) -> list[dict[str, Any]]:
         """Every registered tool's contract, with the venue's listing named rather than spelled.

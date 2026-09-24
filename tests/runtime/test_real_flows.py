@@ -805,28 +805,26 @@ def test_two_seats_reading_the_same_thing_in_a_tick_are_each_charged_alike():
     assert sent == [1]
 
 
-def test_a_registration_s_reads_are_its_own_and_an_older_version_spends_nothing():
+def test_a_registration_s_reads_are_its_own():
     """The review's reuse scenario (cold #2): the read shares are keyed by the
     registration (id and version), never the id string. ``reader`` v1 spends its share
-    and retires; its owner registers v2, whose share is untouched; and a round of v1
-    still in flight runs no tool, so it spends nothing of v2's share. (A seed's own id,
-    seed-observer's in the review, is owned by itself alone, and a seat cannot endow
-    itself, so no one ever takes a retired seed's id.)"""
+    and retires; its owner registers v2, whose share is untouched. (No round in flight
+    straddles versions: a live id is never re-versioned and an invocation runs within
+    one event. A seed's own id, seed-observer's in the review, is owned by itself
+    alone, and a seat cannot endow itself, so no one ever takes a retired seed's id.)"""
     rt = _read_runtime(30)
     _register(rt, "reader")  # by seed-decider
     assert "error" not in _read(rt, "reader", "venue.funding")  # 20 of 30
     v1 = rt.assemblies["reader"].spec.version
-    old_round = decision(rt, "reader")
     rt._retire_assembly("reader", "vote-1")
     _register(rt, "reader")  # its owner, seed-decider, again
     assert rt.assemblies["reader"].spec.version == v1 + 1
     assert rt._reader_id("reader") == f"reader#{v1 + 1}"
     assert rt._venue_read_used("reader") == 0
-    refused = rt._run_tool("reader", old_round, {"tool": "venue.funding", "args": {}},
-                           version=v1)
-    assert refused == ({"error": "retired"}, 0)
-    assert rt._venue_read_used("reader") == 0
-    assert ledger_items(rt, "tool.refused")[-1]["reason"] == "retired"
+    assert f"reader#{v1}" in rt.venue_read_use  # v1's own row, until its window passes
+    rt.clock.now_ns += 60_000_000_000
+    rt._prune_read_use()
+    assert f"reader#{v1}" not in rt.venue_read_use
     # The seed's own id: no one else may take it, and it cannot endow itself.
     rt._retire_assembly("seed-observer", "vote-2")
     from factorylab.cortex.request import Return

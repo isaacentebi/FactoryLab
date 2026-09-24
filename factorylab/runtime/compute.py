@@ -568,7 +568,7 @@ class ComputeMixin:
                 spec, self.program_runner, meter,
                 artifacts=self.artifacts, validator=self._validate_output_contract,
                 record=self._record_program,
-                state_gate=lambda: self._state_write_refusal(spec.id, spec.version),
+                state_gate=lambda: self._state_write_refusal(spec.id),
             )
             self.assemblies[spec.id] = asm
             self.event_schemas.update(spec.schemas)
@@ -1324,6 +1324,21 @@ class ComputeMixin:
             self.ledger.append({"kind": "venue.reader_slot", "assembly_id": seat,
                                 "slot": True, "ts": self.clock.now_ns})
 
+    def _prune_read_use(self) -> None:
+        """Drop the read rows every window has passed, a retired registration's included.
+
+        Guarantees the per-registration read books hold only rows some share still
+        counts (the longest window is the venue's 60 s), so they do not grow with the
+        registrations the world has ever had.
+        """
+        from factorylab.world.venue_tools import READ_WINDOW_NS
+
+        since = self.clock.now_ns - READ_WINDOW_NS
+        for uses in (self.venue_read_use, getattr(self, "polymarket_read_use", {})):
+            for key in [key for key, rows in uses.items()
+                        if all(row[0] <= since for row in rows)]:
+                del uses[key]
+
     def _venue_read_used(self, seat: str) -> int:
         """The venue weight charged to this seat's own reads in the sliding minute."""
         from factorylab.world.venue_tools import READ_WINDOW_NS
@@ -1608,21 +1623,11 @@ class ComputeMixin:
         return batch_refusal(self, seat, handle, writes)
 
     def _run_tool(self, action_id: str, handle: str, call: dict[str, Any], *,
-                  slot: str = "tool:0", version: int | None = None) -> tuple[dict, int]:
-        """Execute one tool call through metering. Returns (result, cost).
-
-        Guarantees a round of a version that is no longer current (retired, or
-        succeeded by a next version) runs no tool, so it spends nothing of the
-        current version's shares, as it writes nothing into its state.
-        """
+                  slot: str = "tool:0") -> tuple[dict, int]:
+        """Execute one tool call through metering. Returns (result, cost)."""
         self._ensure_connector_tool()
         tool_id = str(call.get("tool"))
         args = call.get("args") if isinstance(call.get("args"), dict) else {}
-        if version is not None and self._state_write_refusal(action_id, version):
-            self.ledger.append({"kind": "tool.refused", "handle": handle,
-                                "assembly_id": action_id, "tool": tool_id,
-                                "reason": "retired", "ts": self.clock.now_ns})
-            return {"error": "retired"}, 0
         if tool_id not in self.tool_specs or tool_id not in self._allowed_tools(action_id):
             return {"error": "unknown or disallowed tool"}, 0
         if tool_id == "connector.fetch":
@@ -2041,8 +2046,7 @@ class ComputeMixin:
         if (ret.status == "ok" and (ret.tool_calls or ret.children)
                 and isinstance(ret.outputs, dict) and "working_state" in ret.outputs):
             working_state_handled = True
-            if self._write_working_state(action_id, req.handle, ret.outputs,
-                                         version=assembly.spec.version):
+            if self._write_working_state(action_id, req.handle, ret.outputs):
                 req = replace(req, inputs={**req.inputs,
                                           "your_state": self.working_state.render(action_id)})
         total_cost = ret.cost
@@ -2129,8 +2133,7 @@ class ComputeMixin:
                                             "found": True, "scope": "invocation",
                                             "ts": self.clock.now_ns})
                     else:
-                        result, cost = self._run_tool(action_id, req.handle, call, slot=slot,
-                                                      version=assembly.spec.version)
+                        result, cost = self._run_tool(action_id, req.handle, call, slot=slot)
                     dispatched = True
                     taken.add(self._tool_action(str(call.get("tool"))))
                     if niche is not None:
@@ -2316,8 +2319,7 @@ class ComputeMixin:
             if (ret.status == "ok" and has_continuation
                     and isinstance(ret.outputs, dict) and "working_state" in ret.outputs):
                 working_state_handled = True
-                if self._write_working_state(action_id, req.handle, ret.outputs,
-                                             version=assembly.spec.version):
+                if self._write_working_state(action_id, req.handle, ret.outputs):
                     req = replace(req, inputs={**req.inputs,
                                               "your_state": self.working_state.render(action_id)})
                     state_changed = True
@@ -2441,8 +2443,7 @@ class ComputeMixin:
         self._record_actions(req.handle, taken, record)
         self.niche_rounds.pop(req.handle, None)
         self._apply_continuity(
-            action_id, req.handle, ret, working_state_handled=working_state_handled,
-            version=assembly.spec.version)
+            action_id, req.handle, ret, working_state_handled=working_state_handled)
         ret = replace(ret, dropped=tuple(dropped))
         if dropped and ret.status == "ok":
             self._report_dropped_sections(action_id, req.handle, ret.dropped)
@@ -2498,8 +2499,7 @@ class ComputeMixin:
                           "ts": self.clock.now_ns})
 
     def _apply_continuity(self, action_id: str, handle: str, ret: Return, *,
-                          working_state_handled: bool = False,
-                          version: int | None = None) -> None:
+                          working_state_handled: bool = False) -> None:
         """Advance the seat's own head and inbox cursor from its answer (C1).
 
         Every answer of every shape passes here — producer, verdict, meta, child,
@@ -2527,7 +2527,7 @@ class ComputeMixin:
             self._deliver_program_result_to_inbox(action_id, handle, ret)
         self.outcomes.record_said(action_id, handle, ret.outputs)
         if not working_state_handled:
-            self._write_working_state(action_id, handle, ret.outputs, version=version)
+            self._write_working_state(action_id, handle, ret.outputs)
         if "ack_through" in ret.outputs:
             self.outcomes.ack_through(action_id, ret.outputs["ack_through"])
 
@@ -2537,22 +2537,16 @@ class ComputeMixin:
             entry = {**entry, "ts": self.clock.now_ns}
         return self.ledger.append(entry)
 
-    def _state_write_refusal(self, seat: str, version: int | None = None) -> str | None:
-        """``retired`` when a return of ``seat`` (at ``version``) may not write state.
+    def _state_write_refusal(self, seat: str) -> str | None:
+        """``retired`` when a return of ``seat`` may not write state.
 
         Guarantees a retired version writes no private state: its pending return may
         settle, but a retired id never gains state after it retired, so it never
         holds state the retirement order (and the cap's reclaiming) does not know.
         """
-        if seat in self.retired_assemblies:
-            return "retired"
-        current = self.assemblies.get(seat)
-        if version is not None and (current is None or current.spec.version != version):
-            return "retired"
-        return None
+        return "retired" if seat in self.retired_assemblies else None
 
-    def _write_working_state(self, action_id: str, handle: str, outputs: Any, *,
-                             version: int | None = None) -> bool:
+    def _write_working_state(self, action_id: str, handle: str, outputs: Any) -> bool:
         """Commit one accepted private head, or leave the prior head unchanged.
 
         This is shared by intermediate tool-call returns and the final continuity
@@ -2564,7 +2558,7 @@ class ComputeMixin:
         if (action_id not in self.assemblies or not isinstance(outputs, dict)
                 or "working_state" not in outputs):
             return False
-        refused = self._state_write_refusal(action_id, version)
+        refused = self._state_write_refusal(action_id)
         if refused is not None:
             self.ledger.append({"kind": "state.refused", "assembly_id": action_id,
                                 "handle": handle, "reason": refused,

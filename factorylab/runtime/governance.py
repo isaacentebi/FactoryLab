@@ -897,6 +897,8 @@ class GovernanceMixin:
                 proposer == prop.id
                 or (proposer_key is not None
                     and proposer_key == self.registrants.get(prop.id)))
+            # A live id is never re-versioned and an invocation runs to its end within
+            # one event, so no round in flight ever straddles two versions of an id.
             refuse = ("id already registered: a live assembly is retired by vote before "
                       "its id takes a next version") if live else ""
             if not refuse and prop.id in self.assemblies and not owner:

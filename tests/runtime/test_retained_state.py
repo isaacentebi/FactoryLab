@@ -505,8 +505,7 @@ def test_a_retired_version_writes_no_state():
     assert rt.working_state.head("seed-observer") == head
     assert rt._state_write_refusal("seed-observer") == "retired"
     _register_program(rt, "prog-v")
-    version = rt.assemblies["prog-v"].spec.version
-    assert rt._state_write_refusal("prog-v", version) is None
+    assert rt.assemblies["prog-v"].state_gate() is None
     rt._retire_assembly("prog-v", "vote-2")
     assert rt.assemblies["prog-v"].state_gate() == "retired"
 
@@ -771,28 +770,6 @@ def test_the_owner_re_versioning_keeps_its_key_head_and_outcomes():
     assert rt.lineage_keys["prog-k"] == key
     assert rt.working_state.head("prog-k") == head
     assert rt.outcomes.get("prog-k", f"outcome:{item['seq']}")["outcome"] == {"kind": "fill"}
-
-
-def test_a_tool_round_of_an_older_version_writes_nothing_into_the_next_one():
-    """Cold #11: a v1 round still running after v2 registers writes no working state
-    into v2's head (``state.refused``, reason ``retired``, with its time)."""
-    rt = make_runtime()
-    rt._manage_reserve_window()
-    _register_by(rt, "seed-decider", "prog-v")
-    v1 = rt.assemblies["prog-v"].spec.version
-    handle = decision(rt, "prog-v")
-    rt._retire_assembly("prog-v", "vote-1")
-    _register_by(rt, "seed-decider", "prog-v")
-    assert rt.assemblies["prog-v"].spec.version == v1 + 1
-    rt.working_state.put("prog-v", {"v2": True}, handle=decision(rt, "prog-v"))
-    head = rt.working_state.head("prog-v")
-    assert rt._write_working_state("prog-v", handle, {"working_state": {"v1": True}},
-                                   version=v1) is False
-    refused = ledger_items(rt, "state.refused")[-1]
-    assert (refused["reason"], refused["ts"]) == ("retired", rt.clock.now_ns)
-    assert rt.working_state.head("prog-v") == head
-    assert rt._write_working_state("prog-v", handle, {"working_state": {"v2": 2}},
-                                   version=v1 + 1)
 
 
 def test_a_program_state_refusal_is_ledgered_with_its_time():

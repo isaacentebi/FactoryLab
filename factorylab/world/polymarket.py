@@ -316,20 +316,26 @@ def http_get_json(url: str, *, timeout_s: int = HTTP_TIMEOUT_S) -> Any:
 #: read 2026-09-24): Gamma general 4,000 requests / 10 s, /events 500, /markets 300,
 #: /public-search 350; CLOB general 9,000, /book 1,500, /books 500, /price 1,500,
 #: /midpoint 1,500, each over a sliding 10 s window, throttled when exceeded. The
-#: reads here reach /public-search, /markets and /book, so the tightest endpoint a
-#: request can land on is Gamma /markets: 300 per 10 s, 1,800 a minute.
-PUBLISHED_REQUESTS_PER_MINUTE = 1_800
-#: What the world's Polymarket reads may use by default, all together: 50% of the
-#: tightest published limit. The IP of the host a world runs on is dedicated to
-#: that factory, so no share of the limit is left for other tenants; the other
-#: half is margin, because the world's bound is in world time and Polymarket counts
-#: wall time: a worst-case 2× compression of world time into wall time (a long
-#: tick) stays within the published limit (``runtime/polymarket.py``, ``open_limit``).
-DEFAULT_READ_REQUESTS_PER_MINUTE = 900
-#: Of that, held back for the kernel's own settlement and marking reads, which no
-#: seat can spend: N = 300 // 2 = 150 open reads, 9 a seat at 16 slots, and
-#: (900 - 300) // 16 = 37 requests a minute a seat.
-DEFAULT_KERNEL_RESERVE_PER_MINUTE = 300
+#: reads here reach /public-search, /markets and /book, and every claim's token lookup
+#: lands on /markets, so the tightest endpoint a request can land on is Gamma
+#: /markets: 300 per sliding 10 s. Every Polymarket budget here is per sliding 10 s,
+#: the window Polymarket itself counts (a per-minute budget let 16 seats burst far
+#: past 300 within one 10 s).
+PUBLISHED_REQUESTS_PER_10S = 300
+#: What the world's Polymarket reads may use by default, all together: two thirds of
+#: the tightest published limit, 200 per 10 s. The IP of the host a world runs on is
+#: dedicated to that factory (one live Polymarket world a host, ``ip_lock``), so no
+#: share of the limit is left for other tenants. Half (150) would leave each of 16
+#: seats 3 requests per 10 s, one claim's token lookup, but a judge's one return may
+#: carry ``max_forecasts_per_verdict`` (2) claims, 6 requests, so the default is the
+#: least budget that fits a whole return: (200 - 100) // 16 = 6. The remaining third
+#: is margin, because the world's bound is in world time and Polymarket counts wall
+#: time: a 1.5× compression of world time into wall time (a long tick) stays within
+#: the published limit (``runtime/polymarket.py``, ``open_limit``).
+DEFAULT_READ_REQUESTS_PER_10S = 200
+#: Of that, held back for the kernel's own settlement reads, which no seat can spend:
+#: N = 100 // 2 = 50 open reads, 3 a seat at 16 slots.
+DEFAULT_KERNEL_RESERVE_PER_10S = 100
 #: Requests one seat read sends: every Polymarket read tool is one GET, sent once.
 SEAT_READ_REQUESTS = 1
 #: The most requests one kernel read can send, by reader method: ``market_of_token``

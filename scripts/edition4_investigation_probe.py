@@ -145,13 +145,12 @@ def _runtime(manifest: Any, provider: Any, receipts: list[dict[str, Any]]) -> Ru
     runtime.treasury.rail.target = DeniedTransferRail(runtime.treasury.rail.target)
     inner = runtime._run_tool
 
-    def guarded(action_id: str, handle: str, call: dict[str, Any], *, slot: Any,
-                version: int | None = None):
+    def guarded(action_id: str, handle: str, call: dict[str, Any], *, slot: Any):
         tool = str(call.get("tool"))
         if tool not in ALLOWED_TOOLS:
             receipts.append({"tool": tool, "slot": str(slot), "refused": True})
             return {"error": "capability refused: investigation restriction"}, 0
-        result, cost = inner(action_id, handle, call, slot=slot, version=version)
+        result, cost = inner(action_id, handle, call, slot=slot)
         receipts.append({"tool": tool, "slot": str(slot), "result": result,
                          "cost_micro": cost, "refused": False})
         return result, cost

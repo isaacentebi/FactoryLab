@@ -111,6 +111,15 @@ class BootstrapMixin:
         if problem is not None:
             raise ValueError(problem)
         self._ledger_lock = _lock or LedgerLock(ledger_path)
+        from factorylab.runtime.polymarket import ip_lock
+
+        try:
+            # A live-read Polymarket world's budget assumes the host's IP is its own:
+            # one such world a host, at genesis and at every resume.
+            self._polymarket_ip_lock = ip_lock(manifest, ledger_path)
+        except BaseException:
+            self._ledger_lock.close()
+            raise
         self.m = manifest
         self.kill_at_end = kill_at_end
         self.clock_source = clock_source
@@ -412,9 +421,9 @@ class BootstrapMixin:
         # The retired ids, oldest retirement first: whose kept state is released first
         # when a private-state write needs room under the cap (``[storage]``).
         self.retirement_order: list[str] = []
-        # id -> its lineage key: a registration serial, kept by an id's next version
-        # only when its owner registers it, and fresh otherwise. The seeds take the
-        # first ones. id -> the lineage key of the seat that registered its current
+        # id -> its lineage key: the registration serial a new id draws (the seeds
+        # take the first ones), kept across its versions, since only its owner may
+        # re-version it. id -> the lineage key of the seat that registered its current
         # version (None: no known seat); a seed is in none, so only it owns itself.
         self.lineage_keys: dict[str, int] = {
             a.id: index + 1 for index, a in enumerate(manifest.assemblies)}
