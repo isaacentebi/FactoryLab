@@ -1273,6 +1273,16 @@ class HybridRail(LiveRail):
         if self._x402.address.lower() != self.reserve_address.lower():
             raise RailError("Venice payer differs from the reserve")
 
+    def read_base_through(self, rpc: str) -> None:
+        """Guarantees every Base mainnet read this rail makes from now on (authorization
+        state, the reserve's balance and chain head, the x402 client's balance) goes to
+        ``rpc``, which ``EVM`` validated, with the same transport and write-ahead guard."""
+        base = EVM(BASE, self.venice_base.account, transport=self._transport, rpc=rpc,
+                   gas_budget_wei=0)
+        base.transaction_guard = self.venice_base.transaction_guard
+        self.venice_base = base
+        self._x402.rpc = base.rpc
+
     def _venice_base(self) -> EVM:
         return self.venice_base
 

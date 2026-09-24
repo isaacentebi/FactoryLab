@@ -736,3 +736,34 @@ def test_replaying_the_journaled_wall_clock_reads_makes_the_same_safety_decision
     assert restored.stats.decisions == rt.stats.decisions
     assert restored.subscription_book.state() == rt.subscription_book.state()
     restored._ledger_lock.close()
+
+
+@pytest.mark.gate
+def test_a_resume_refuses_a_wrapped_tick_clock_rather_than_drop_its_wrapper(tmp_path):
+    """A restore puts back a bare ClockSource or LiveClock: a rehearsal's AdmissionClock,
+    and the admission stop it carries, would be gone from the resumed world. A tick
+    clock that is neither is refused before anything is restored or written."""
+    from factorylab.runtime.resume import ResumeError, resume_runtime
+    from factorylab.world.clock import ClockSource
+    from scripts.edition4_rehearsal import Admission, AdmissionClock
+    from tests.runtime.test_resume import make_runtime as ledgered_runtime
+    from tests.runtime.test_resume import stop_after
+
+    m = load_manifest("scripted")
+    path = tmp_path / "wrapped.jsonl"
+    rt = ledgered_runtime(m, path)
+    rt.events_budget = 8
+    stop_after(rt, lambda r, e: r.n == 20)
+    rt._ledger_lock.close()
+    before = path.read_bytes()
+    wrapped = AdmissionClock(ClockSource(10**9, m.tick_interval_ns, 8), Admission(10_000, 10))
+    with pytest.raises(ResumeError) as refused:
+        resume_runtime(m, str(path), clock_source=wrapped)
+    assert refused.value.code == "wrapped_tick_clock"
+    assert "AdmissionClock" in str(refused.value)
+    assert path.read_bytes() == before
+    # The same diary, on a clock a restore puts back as it is, resumes.
+    restored = resume_runtime(m, str(path),
+                              clock_source=ClockSource(10**9, m.tick_interval_ns, 8))
+    assert restored.stats.resumes == 1
+    restored._ledger_lock.close()

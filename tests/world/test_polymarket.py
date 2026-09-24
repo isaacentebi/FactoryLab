@@ -349,3 +349,21 @@ def test_live_order_adapter_refuses_every_write():
                  lambda: adapter.lookup("x")):
         with pytest.raises(PolymarketRefused):
             call()
+
+
+def test_a_request_is_stamped_before_it_is_sent_and_counts_in_flight_or_failed():
+    # The stamp is read before the request leaves (``_stamp``), so a request still in
+    # flight has been counted, and one that fails in flight stays counted.
+    wall = iter(range(1_000, 10_000, 1_000))
+    seen = []
+
+    def in_flight(url):
+        seen.append(list(reader.sends))  # what the reader has counted while it flies
+        raise PolymarketUnavailable("transport: TimeoutError")
+
+    reader = PolymarketReader(get=in_flight, wall=lambda: next(wall), nonce=lambda: 0)
+    with pytest.raises(PolymarketUnavailable):
+        reader.market("1")
+    assert seen == [[1_000]]
+    assert reader.requests_sent() == 1 and reader.drain_sends() == [1_000]
+    assert reader.drain_sends() == []

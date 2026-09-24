@@ -1171,6 +1171,10 @@ def _rehearse(
                 hybrid = runtime.treasury.rail.target
                 if not isinstance(hybrid, HybridRail):
                     raise RehearsalRefused("capital_loop_requires_the_hybrid_rail")
+                # The run reads Base mainnet through the one RPC its launch checks read
+                # (--rpc-base, or the public one): the rail's authorization polling and
+                # balances are not a second view of the chain.
+                hybrid.read_base_through(base_rpc)
                 # This run's diary exists now and nothing has signed yet: from here on the
                 # next launch on this reserve reads it, wherever its --out is.
                 lock.record_run(output_dir)
@@ -1418,12 +1422,13 @@ def main(argv: list[str] | None = None) -> int:
                         help="with --capital-loop: an earlier run directory whose top-up "
                         "authorizations must all be settled or expired before launch "
                         "(sibling run directories of --out are always checked)")
-    for flag, chain in (("--rpc-base", "Base mainnet"), ("--rpc-hyperevm", "HyperEVM"),
-                        ("--rpc-base-sepolia", "Base Sepolia"),
-                        ("--rpc-hyperevm-testnet", "HyperEVM testnet")):
+    for flag, chain, readers in (
+            ("--rpc-base", "Base mainnet", "launch checks and its rail read"),
+            ("--rpc-hyperevm", "HyperEVM", "launch checks read"),
+            ("--rpc-base-sepolia", "Base Sepolia", "launch checks read"),
+            ("--rpc-hyperevm-testnet", "HyperEVM testnet", "launch checks read")):
         parser.add_argument(flag, default=None,
-                            help=f"with --capital-loop: the {chain} JSON-RPC URL its launch "
-                            "checks read")
+                            help=f"with --capital-loop: the {chain} JSON-RPC URL its {readers}")
     args = parser.parse_args(argv)
     from factorylab.runtime.worlds import duration_ns
 

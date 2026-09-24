@@ -294,6 +294,38 @@ def test_a_capital_loop_run_s_safety_path_reads_wall_time_mid_event(tmp_path, mo
     assert {p["ts"] for p in passes} <= set(reads)
 
 
+def test_one_run_reads_base_through_the_operator_s_rpc_only(tmp_path, monkeypatch):
+    # --rpc-base fed only the launch checks: the rail's balance reads and authorization
+    # polling went to the public RPC, so one run read Base through two nodes.
+    from factorylab.world import x402
+    from scripts import edition4_rehearsal as rehearsal
+
+    w = wired(tmp_path, monkeypatch)
+    operator_rpc = "https://base.operator.example/rpc"
+    public, operator = [], []
+
+    class OperatorWires(Wires):
+        def open(self, request, timeout=None):
+            if request.full_url == BASE.rpc:
+                public.append(json.loads(request.data)["method"])
+                raise error.URLError("the public RPC is not this run's")
+            if request.full_url == operator_rpc:
+                operator.append(json.loads(request.data)["method"])
+                request.full_url = BASE.rpc  # the same chain answers it
+            return super().open(request, timeout)
+
+    wires = OperatorWires(w["chain"], w["venice"])
+    monkeypatch.setattr(x402.request, "build_opener", lambda *handlers: wires)
+    out = tmp_path / "runs" / "operator"
+    report = rehearsal.run_rehearsal(
+        str(w["world"]), out=out, capital_loop=True, duration_ns=3_600 * 1_000_000_000,
+        source_root=repo_root(), capital_loop_rpcs={8453: operator_rpc}, **launch_kwargs(w))
+    assert report["status"] == "completed", report.get("error")
+    assert public == []
+    # The conversion ran: the rail read the reserve and the head through the operator's.
+    assert len(w["venice"].paid) == 1 and "eth_call" in operator
+
+
 @pytest.mark.parametrize("name", ["SIGINT", "SIGTERM", "SIGHUP"])
 def test_a_signal_mid_run_still_writes_the_report_warns_and_exits_3(
         tmp_path, monkeypatch, capsys, name):

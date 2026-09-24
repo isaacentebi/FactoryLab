@@ -978,6 +978,13 @@ def restore_runtime(rt, state: dict) -> None:
     if (saved_venue.get("address") != _venue_address(rt.exchange.target)):
         raise ResumeError("venue account differs from the saved world",
                           code="venue_account_mismatch")
+    if not isinstance(rt.tick_clock, (ClockSource, LiveClock)):
+        # The tick clock is restored below as a bare ClockSource or LiveClock. A wrapper
+        # around one (a rehearsal's AdmissionClock, whose stop is the admission guard's)
+        # would be dropped with whatever it enforces, and its own state is not in the
+        # checkpoint to restore: refused, never resumed without it.
+        raise ResumeError(f"the tick clock is wrapped ({type(rt.tick_clock).__name__}); "
+                          "a restore would drop the wrapper", code="wrapped_tick_clock")
     saved_runtime = decode(state["runtime"])
     running_digest = getattr(rt, "release_digest", None)  # read before the saved fields land
     running_facilitator = getattr(rt, "facilitator_url", None)
