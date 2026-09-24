@@ -121,19 +121,19 @@ def test_a_loss_making_fill_does_not_drop_later_fills_or_funding():
     assert not rt.wallet.dead and rt.wallet.check_conservation()
 
 
-def test_public_population_tool_is_debited_to_the_caller(monkeypatch):
+def test_public_population_tool_is_ledgered_to_the_caller_and_moves_no_money(monkeypatch):
     from factorylab.cortex.tools import PopulationTool, as_spec
 
     rt = make_runtime()
     tool = PopulationTool("shared-tool", "test", {"type": "object", "properties": {}},
                           'print("{}")', 1, "author-handle")
     rt.population_tools[tool.id] = tool
-    rt.tool_specs[tool.id] = as_spec(tool, 50)
+    rt.tool_specs[tool.id] = as_spec(tool)
     rt.tool_owner[tool.id] = "different-author"
     monkeypatch.setattr(rt.tool_runner.target, "run", lambda *_: {"ok": True})
     before = rt.wallet.balance
     output, cost = rt._run_tool("seed-decider", "caller-handle", {"tool": tool.id, "args": {}})
-    assert output == {"ok": True} and cost == 50 and rt.wallet.balance == before - 50
+    assert output == {"ok": True} and cost == 0 and rt.wallet.balance == before
     commits = [i for i in rt.ledger._recovery_items() if i["kind"] == "wallet.commit"]
     assert commits[-1]["handle"] == "caller-handle"
     assert tool.id in rt._allowed_tools("different-author")

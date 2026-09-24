@@ -120,6 +120,11 @@ architecture.
 - Allowed third-party packages: `hyperliquid-python-sdk`, `cryptography`,
   `pytest`, `ruff`. Anything else needs a written reason.
 - Money is integer micro-USD. Never a float.
+- The wallet moves only when money moves: every debit names a real counterparty
+  (a provider's bill, a seller's price, a venue fee, gas). A scarce resource that
+  costs nothing at the margin is a constraint, enforced as a limit (§II.b, the hard
+  cast) or priced by the charter's λ on reward (§II.b soft casts, §IV.a), never a
+  money debit.
 - No global mutable state. No background threads.
 - `factorylab.kernel` imports nothing from `cortex`, `world`, or `runtime`.
 - Every kernel invariant gets at least one test that attempts to violate

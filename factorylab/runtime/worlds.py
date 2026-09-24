@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
 import tomllib
 from dataclasses import asdict, dataclass, field, fields, replace
 from decimal import Decimal
@@ -27,11 +28,14 @@ from factorylab.charter.provenance import (
 )
 from factorylab.kernel.money import usd_to_micro
 from factorylab.runtime.cards import parses
-from factorylab.runtime.continuity import StorageSpec
 from factorylab.runtime.observations import observation_for
 from factorylab.world.connector import DEFAULT_DENYLIST, validate_denylist
 from factorylab.world.market import DISCOVERY_URL
 from factorylab.world.models import PriceTable, TokenPrice
+from factorylab.world.venue_tools import (
+    DEFAULT_PUBLIC_READ_WEIGHT_PER_MINUTE,
+    VENUE_WEIGHT_PER_MINUTE,
+)
 
 NS_PER_SECOND = 1_000_000_000
 NS_PER_HOUR = 3_600 * NS_PER_SECOND
@@ -66,6 +70,17 @@ class ExchangeSpec:
     # the vault reads and writes are published, and a vault's equity is a custody pot.
     # Off by default.
     vault_tools: bool = False
+    # ``[venue] public_read_weight_per_minute``: the venue request weight the public
+    # reads may spend per minute of world time, world-wide. The venue's IP limit is a
+    # real constraint shared with the kernel's own calls, so it is a limit, not a price
+    # (essay II.II.b); the default leaves the kernel most of it (world/venue_tools.py).
+    public_read_weight_per_minute: int = DEFAULT_PUBLIC_READ_WEIGHT_PER_MINUTE
+    # ``[venue] max_readers``: the venue read slots. The venue's IP limit bounds who
+    # reads the venue, not how many seats exist: seeds take slots in manifest order,
+    # a registration takes a free one, a retirement frees one, and a seat with none
+    # registers all the same, without the venue read tools. Each slot's share is the
+    # read budget over this count.
+    max_readers: int = 16
 
 
 @dataclass(frozen=True)
@@ -133,7 +148,6 @@ class AssemblySeed:
 
 @dataclass(frozen=True)
 class ToolsSpec:
-    population_tool_micro_per_call: int = 50
     # DEPRECATED and inert (architect decision D1): leverage is whatever the venue
     # allows. Still read, validated and hashed; nothing enforces it.
     max_leverage: int = 3
@@ -145,18 +159,22 @@ class ToolsSpec:
 
 @dataclass(frozen=True)
 class ConnectorsSpec:
-    """Connector reads share immutable size, time, flat-price and assembly-window bounds."""
+    """Connector reads share immutable size, time and assembly-window bounds.
+
+    A fetch of a public origin pays no one, so it carries no price: the
+    per-window call cap is its hard limit. Paid data is the seller's own x402
+    price, debited as a real outflow when it is bought.
+    """
 
     max_bytes: int = 262144
     timeout_s: int = 10
-    call_price_micro: int = 1000
     max_calls_per_window: int = 60
     origin_denylist: tuple[str, ...] = DEFAULT_DENYLIST
 
     def __post_init__(self):
-        for name in ("max_bytes", "timeout_s", "max_calls_per_window", "call_price_micro"):
+        for name in ("max_bytes", "timeout_s", "max_calls_per_window"):
             value = getattr(self, name)
-            if type(value) is not int or value < (0 if name == "call_price_micro" else 1):
+            if type(value) is not int or value < 1:
                 raise ValueError(f"connectors.{name} must be an integer within its bounds")
         validate_denylist(self.origin_denylist)
         object.__setattr__(self, "origin_denylist", tuple(self.origin_denylist))
@@ -175,26 +193,43 @@ def online_id(model_id: str) -> str:
 
 @dataclass(frozen=True)
 class WebSpec:
-    """The search route, its flat call price and the ceiling on one search.
+    """The search route and the ceiling on one search.
 
     ``search_model`` names a model on the menu; the tool calls its ``:online``
     route. With no model named there is no ``[web]`` block and no ``web.search``
-    tool.
+    tool. A search costs what the route's provider bills for it (tokens plus the
+    plugin's own per-request charge) and nothing else.
     """
 
     search_model: str | None = None
-    call_price_micro: int = 0
     max_call_micro: int = 0
 
     def __post_init__(self):
         if self.search_model is not None and not isinstance(self.search_model, str):
             raise ValueError("web.search_model must be a model id on the menu")
-        for name in ("call_price_micro", "max_call_micro"):
-            value = getattr(self, name)
-            if type(value) is not int or value < 0:
-                raise ValueError(f"web.{name} must be a non-negative integer")
-        if self.search_model is not None and self.max_call_micro <= self.call_price_micro:
-            raise ValueError("web.max_call_usd must leave room above the flat call price")
+        if type(self.max_call_micro) is not int or self.max_call_micro < 0:
+            raise ValueError("web.max_call_usd must be a non-negative amount")
+        if self.search_model is not None and self.max_call_micro <= 0:
+            raise ValueError("web.max_call_usd must be positive")
+
+
+#: The default cap on retained private state: 64 MiB.
+DEFAULT_RETAINED_PRIVATE_BYTES = 64 * 1024 * 1024
+#: At genesis the cap may take at most this share of the host's free disk, as a
+#: (numerator, denominator) pair: half, so the diary and the world's record keep room.
+MAX_FREE_DISK_SHARE = (1, 2)
+
+
+@dataclass(frozen=True)
+class StorageSpec:
+    """``[storage]``: the hard cap on retained private state, fixed for the world's life.
+
+    Retained private state is every working-state head and program private state
+    the archive holds, retired ids' included. The disk is finite and pays no one,
+    so this is a limit, never a price (essay II.II.b, the hard cast).
+    """
+
+    retained_private_bytes: int = DEFAULT_RETAINED_PRIVATE_BYTES
 
 
 #: The hybrid capital-loop keys: unset (``None``) in every world but the capital loop.
@@ -219,25 +254,64 @@ class PolymarketSpec:
 
     enabled: bool = False
     venue: str = "fake"
-    read_price_micro: int = 1000
     collateral_micro: int = 0
     max_order_micro: int = 10_000_000
     max_open_micro: int = 100_000_000
     max_orders_per_window: int = 20
     seed: int = 0
+    # The world's Polymarket read requests per sliding 10 s of wall time (the window
+    # Polymarket counts), and the part of them held back for the kernel's own
+    # settlement reads. A limit taken from Polymarket's published rate limits
+    # (world/polymarket.py), never a price.
+    read_requests_per_10s: int = 200
+    kernel_reserve_per_10s: int = 100
 
     def __post_init__(self):
+        from factorylab.world.polymarket import PUBLISHED_REQUESTS_PER_10S
+
         if type(self.enabled) is not bool:
             raise ValueError("polymarket.enabled must be true or false")
+        budget, reserve = self.read_requests_per_10s, self.kernel_reserve_per_10s
+        if type(budget) is not int or not 1 <= budget <= PUBLISHED_REQUESTS_PER_10S:
+            raise ValueError("polymarket.read_requests_per_10s must be an integer in "
+                             f"[1, {PUBLISHED_REQUESTS_PER_10S}], Polymarket's "
+                             "tightest published limit per 10 s")
+        if type(reserve) is not int or not 1 <= reserve < budget:
+            raise ValueError("polymarket.kernel_reserve_per_10s must be an integer "
+                             "of at least 1 below polymarket.read_requests_per_10s")
         if self.venue not in ("fake", "live"):
             raise ValueError("polymarket.venue must be fake or live")
-        for name in ("read_price_micro", "collateral_micro", "max_order_micro",
+        for name in ("collateral_micro", "max_order_micro",
                      "max_open_micro", "max_orders_per_window", "seed"):
             value = getattr(self, name)
             if type(value) is not int or value < 0:
                 raise ValueError(f"polymarket.{name} must be a non-negative integer")
         if self.venue == "live" and self.collateral_micro:
-            raise ValueError("polymarket.collateral_usd seeds only the simulated venue")
+            # A live venue is read-only: writes, positions and the marks that read a
+            # held token's book exist only on the simulated venue, which sends
+            # Polymarket nothing, so the kernel's request bound covers no live mark.
+            # Live trading must bring its own bound (runtime/polymarket.py, open_limit).
+            raise ValueError("polymarket_live_writes_not_built: polymarket.collateral_usd "
+                             "seeds only the simulated venue; a live venue is read-only")
+
+
+@dataclass(frozen=True)
+class SubscriptionsSpec:
+    """``[subscriptions]``: the hard limit on watcher work, fixed for the world's life.
+
+    A watcher's predicate runs in the world's own process and pays no one, so its
+    cost is the world's own time, a limit and never a price (essay II.II.b): at most
+    ``max_watcher_evaluations_per_sweep`` watchers are evaluated a sweep, in a
+    rotating order, against one snapshot of the world.
+    """
+
+    max_watcher_evaluations_per_sweep: int = 32
+
+    def __post_init__(self):
+        value = self.max_watcher_evaluations_per_sweep
+        if type(value) is not int or value < 1:
+            raise ValueError("subscriptions.max_watcher_evaluations_per_sweep must be a "
+                             "positive integer")
 
 
 @dataclass(frozen=True)
@@ -299,8 +373,6 @@ class PricesSpec:
     # Floor on a decision's share of a generic (non-attributable) violation, so
     # splitting participation across many decisions cannot dilute it away.
     min_blame_share: float = 0.1
-    # The flat price of one program seat call (C8), reserved and committed like a model call.
-    program_micro_per_call: int = 50
     #: The one price law is the PID (``charter.controller.PriceController``, essay
     #: II.II.b): ``kp`` is the proportional gain and ``kd`` the derivative-on-measurement
     #: gain beside the integral gain ``eta``. At zero the law is the integral alone.
@@ -570,6 +642,7 @@ class WorldManifest:
     providers: ProvidersSpec = ProvidersSpec()
     prompt: PromptSpec = PromptSpec()
     chaos: ChaosSpec = ChaosSpec()
+    subscriptions: SubscriptionsSpec = SubscriptionsSpec()
     tick_interval_ns: int = 10 * NS_PER_SECOND
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -932,7 +1005,101 @@ class WorldManifest:
             raise ValueError("the evaluator population Chapter II §III requires is not seeded: "
                              + "; ".join(problems))
 
+    def read_share_problem(self) -> str | None:
+        """Why this world's venue read share cannot hold, or None.
+
+        Guarantees a world is refused whose per-slot share (``[venue]
+        public_read_weight_per_minute // max_readers``) cannot cover the first attempt
+        of the heaviest venue read it publishes: a published read no reader could
+        ever be admitted to would be a tool in name only. A seat read is sent once,
+        so its first attempt is all it can spend, and the shares of all
+        ``max_readers`` slots sum to at most the budget: the rest of the venue's
+        per-IP limit is the kernel's.
+        """
+        from factorylab.world.venue_tools import _BASE_WEIGHT, VAULT_READS, public_read_weight
+
+        readers = self.exchange.max_readers
+        if type(readers) is not int or readers < 1:
+            return "venue.max_readers must be a positive integer"
+        share = self.exchange.public_read_weight_per_minute // readers
+        published = [tool for tool in _BASE_WEIGHT
+                     if tool not in VAULT_READS or self.exchange.vault_tools]
+        heaviest = max(published, key=lambda tool: public_read_weight(tool, {}))
+        weight = public_read_weight(heaviest, {})
+        if share < weight:
+            return (f"each reader's venue read share, venue.public_read_weight_per_minute // "
+                    f"venue.max_readers = {share}, cannot cover {heaviest} at {weight}")
+        if self.polymarket.enabled:
+            from factorylab.runtime.polymarket import open_limit, seat_open_share
+            from factorylab.world.polymarket import read_requests
+
+            pm = self.polymarket
+            pm_share = (pm.read_requests_per_10s - pm.kernel_reserve_per_10s) // readers
+            lookup = read_requests("market_of_token")
+            if pm_share < lookup:
+                # A claim's token lookup is the seat's own read of up to 3 requests: a
+                # share under it could seal no event claim at all.
+                return (f"each reader's polymarket read share, (read_requests_per_10s - "
+                        f"kernel_reserve_per_10s) // venue.max_readers = {pm_share}, "
+                        f"cannot cover one claim's token lookup of {lookup} requests")
+            if seat_open_share(pm, readers) < 1:
+                # No seat could hold one open read, so no claim could ever be sealed.
+                return (f"each reader's polymarket open read share, "
+                        f"kernel_reserve_per_10s // 2 // venue.max_readers = "
+                        f"{open_limit(pm)} // {readers}, cannot hold one open read")
+        return None
+
+    def storage_problem(self) -> str | None:
+        """Why this world's retained private state cap cannot hold, or None.
+
+        Guarantees a world is refused whose ``[storage] retained_private_bytes`` is
+        not a positive integer or cannot hold every seeded seat at its per-seat cap (a
+        working-state head and a program private state). These are the cap's fixed
+        invariants, checked at every load, a resume's included; the host's free disk
+        is a genesis admission (``host_disk_problem``).
+        """
+        from factorylab.cortex.assembly import MAX_PROGRAM_STATE_BYTES
+        from factorylab.runtime.continuity import HARD_STATE_BYTES
+
+        cap = self.storage.retained_private_bytes
+        if type(cap) is not int or cap <= 0:
+            return "storage.retained_private_bytes must be a positive integer"
+        per_seat = HARD_STATE_BYTES + MAX_PROGRAM_STATE_BYTES
+        floor = len(self.assemblies) * per_seat
+        if cap < floor:
+            return (f"storage.retained_private_bytes = {cap} cannot hold the "
+                    f"{len(self.assemblies)} seeded seats at {per_seat} bytes each "
+                    f"(a working-state head and a program private state): at least {floor}")
+        return None
+
+    def host_disk_problem(self, ledger_path: str | None = None, *,
+                          free_bytes: int | None = None) -> str | None:
+        """Why this host cannot admit this world's retained private state cap, or None.
+
+        Guarantees a world is refused at genesis whose ``[storage]
+        retained_private_bytes`` exceeds ``MAX_FREE_DISK_SHARE`` of the free disk of
+        the filesystem its ledger (and archive) will live on, the working directory
+        when it has none, read with ``shutil.disk_usage`` unless ``free_bytes`` is
+        given. It is an admission about the host at that moment: the cap is fixed for
+        the world's life, and a resume never asks it again.
+        """
+        cap = self.storage.retained_private_bytes
+        if free_bytes is None:
+            where = Path(ledger_path).resolve().parent if ledger_path else Path.cwd()
+            while not where.exists() and where != where.parent:
+                where = where.parent
+            free_bytes = shutil.disk_usage(where).free
+        num, den = MAX_FREE_DISK_SHARE
+        ceiling = free_bytes * num // den
+        if cap > ceiling:
+            return (f"storage.retained_private_bytes = {cap} exceeds {num}/{den} of the "
+                    f"host's free disk ({free_bytes} bytes free): at most {ceiling}")
+        return None
+
     def validate(self) -> None:
+        problem = self.read_share_problem() or self.storage_problem()
+        if problem is not None:
+            raise ValueError(problem)
         namespace = self.exchange.client_namespace
         if self.prompt.mode not in ("reference", "compact"):
             raise ValueError("prompt.mode must be reference or compact")
@@ -1281,34 +1448,64 @@ def _norm_house(raw: Any) -> NormHouseSpec:
     return NormHouseSpec(signer.lower() if signer is not None else None)
 
 
+#: Keys that priced a resource no counterparty is paid for, removed with that price
+#: (Wave 11). The wallet moves only when money moves (essay II.II.b, II.IV.a): a
+#: scarce resource that costs nothing at the margin is a limit or a λ on reward.
+REMOVED_PRICE_KEYS = {
+    ("connectors", "call_price_usd"): "a public fetch pays no one; "
+                                      "connectors.max_calls_per_window is its limit",
+    ("web", "call_price_micro"): "a search costs what its route's provider bills, "
+                                 "the plugin's per-request charge included",
+    ("polymarket", "read_price_usd"): "a public market read pays no one",
+    ("tools", "population_tool_micro_per_call"): "a tool runs in the world's own jail "
+                                                 "and pays no one",
+    ("prices", "program_micro_per_call"): "a program seat runs in the world's own jail "
+                                          "and pays no one",
+}
+
+
+def _refuse_removed_prices(d: dict[str, Any]) -> None:
+    """Refuse a manifest naming a price this kernel no longer debits (R8).
+
+    Guarantees a world file that still prices storage, a public read or local
+    compute is refused by name rather than loaded as if the price applied: such a
+    debit had no counterparty, so the books would lie.
+    """
+    storage = d.get("storage")
+    for table in ("storage", "notes"):
+        if table in d and (table == "notes" or not isinstance(storage, dict)
+                           or "micro_per_byte_day" in storage):
+            raise ValueError(
+                f"[{table}] was removed: retained working state pays no one, so it is a "
+                "constraint (the 64 KiB hard limit and storage.retained_private_bytes), "
+                "never a money debit; the wallet moves only when money moves")
+    for (table, key), why in REMOVED_PRICE_KEYS.items():
+        if isinstance(d.get(table), dict) and key in d[table]:
+            raise ValueError(f"{table}.{key} was removed: {why}; the wallet moves only "
+                             "when money moves")
+
+
 def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
-    storage = _manifest_storage(d.get("storage"), d.get("notes"))
+    _refuse_removed_prices(d)
     endowment = _manifest_endowment(d.get("endowment"))
     conn = d.get("connectors", {})
     if not isinstance(conn, dict) or set(conn) - {
-        "max_bytes", "timeout_s", "call_price_usd", "max_calls_per_window", "origin_denylist"
+        "max_bytes", "timeout_s", "max_calls_per_window", "origin_denylist"
     }:
         raise ValueError("unknown connectors manifest key")
-    connector_price = conn.get("call_price_usd", "0.001")
-    if type(connector_price) not in (str, int):
-        raise ValueError("connectors.call_price_usd must be exact USD text or integer")
     connectors = ConnectorsSpec(
         max_bytes=conn.get("max_bytes", 262144), timeout_s=conn.get("timeout_s", 10),
-        call_price_micro=usd_to_micro(connector_price, rounding="exact"),
         max_calls_per_window=conn.get("max_calls_per_window", 60),
         origin_denylist=conn.get("origin_denylist", DEFAULT_DENYLIST),
     )
     web_block = d.get("web", {})
-    if not isinstance(web_block, dict) or set(web_block) - {
-        "search_model", "call_price_micro", "max_call_usd"
-    }:
+    if not isinstance(web_block, dict) or set(web_block) - {"search_model", "max_call_usd"}:
         raise ValueError("unknown web manifest key")
     max_call = web_block.get("max_call_usd", "0")
     if type(max_call) not in (str, int):
         raise ValueError("web.max_call_usd must be exact USD text or integer")
     web = WebSpec(
         search_model=web_block.get("search_model"),
-        call_price_micro=web_block.get("call_price_micro", 0),
         max_call_micro=usd_to_micro(max_call, rounding="exact"),
     )
     venice_cap = (d.get("treasury") or {}).get("max_venice_per_window", "10")
@@ -1351,6 +1548,16 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
     vault_tools = venue.get("vault_tools", False)
     if type(vault_tools) is not bool:
         raise ValueError("venue.vault_tools must be true or false")
+    if "max_seats" in (d.get("tools") or {}):
+        raise ValueError("tools.max_seats was removed: the population has no size cap; the "
+                         "venue's IP limit bounds who reads the venue ([venue] max_readers)")
+    max_readers = venue.get("max_readers", 16)
+    read_weight = venue.get("public_read_weight_per_minute",
+                            DEFAULT_PUBLIC_READ_WEIGHT_PER_MINUTE)
+    if type(read_weight) is not int or not 1 <= read_weight < VENUE_WEIGHT_PER_MINUTE:
+        raise ValueError("venue.public_read_weight_per_minute must be an integer below "
+                         f"{VENUE_WEIGHT_PER_MINUTE}, the venue's own per-minute weight "
+                         "limit, which the kernel's own calls share")
     if (not isinstance(spot_pairs, list) or any(
             not isinstance(p, str) or p.count("/") != 1 or not p.endswith("/USDC")
             or not p.split("/")[0] for p in spot_pairs)
@@ -1366,6 +1573,8 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         start_cash_usd=str(ex.get("start_cash_usd", "100")),
         principal_usd=principal,
         vault_tools=vault_tools,
+        public_read_weight_per_minute=read_weight,
+        max_readers=max_readers,
         shocks=tuple(
             Shock(int(sh["step"]), str(sh["coin"]), str(sh["multiplier"]))
             for sh in ex.get("shocks", [])
@@ -1447,7 +1656,6 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         min_window_events=int(pr.get("min_window_events", 1)),
         penalty_cap=pr.get("penalty_cap", 0.5),
         min_blame_share=pr.get("min_blame_share", 0.1),
-        program_micro_per_call=int(pr.get("program_micro_per_call", 50)),
         kp=pr.get("kp", 0.0),
         kd=pr.get("kd", 0.0),
     )
@@ -1500,10 +1708,9 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         evaluation=evaluation,
         connectors=connectors,
         web=web,
+        storage=_manifest_storage(d.get("storage")),
         polymarket=_manifest_polymarket(d.get("polymarket")),
-        storage=storage,
         tools=ToolsSpec(
-            int((d.get("tools") or {}).get("population_tool_micro_per_call", 50)),
             int((d.get("tools") or {}).get("max_leverage", 3)),
             int((d.get("tools") or {}).get("max_routers_per_kind", 3)),
             (d.get("tools") or {}).get("max_depth", 4),
@@ -1547,6 +1754,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         providers=_manifest_providers(d.get("providers")),
         prompt=_manifest_prompt(d.get("prompt")),
         chaos=_manifest_chaos(d.get("chaos")),
+        subscriptions=_manifest_subscriptions(d.get("subscriptions")),
         extra={k: v for k, v in d.items() if k.startswith("x_")},
     )
     m.validate()
@@ -1621,27 +1829,6 @@ def _manifest_kinds(raw: Any) -> tuple[str, ...]:
     return tuple(sorted(raw))
 
 
-def _manifest_storage(raw: Any, legacy: Any) -> StorageSpec:
-    """``[storage] micro_per_byte_day``: the byte-day rent retained working state pays.
-
-    Guarantees the public notebook's keys are refused (R11 deleted it). ``[notes]``
-    is read only for the one key that priced storage, ``micro_per_byte_day``,
-    because world files kept outside ``worlds/`` still carry it; naming both tables
-    is refused rather than resolved.
-    """
-    if legacy is not None:
-        if raw is not None:
-            raise ValueError("name the storage rent in [storage] only, not also in [notes]")
-        if not isinstance(legacy, dict) or set(legacy) - {"micro_per_byte_day"}:
-            raise ValueError("the public notebook was removed (ruling R11): [notes] may name "
-                             "only micro_per_byte_day, which is read as [storage]")
-        raw = legacy
-    raw = {} if raw is None else raw
-    if not isinstance(raw, dict) or set(raw) - {"micro_per_byte_day"}:
-        raise ValueError("storage accepts only micro_per_byte_day")
-    return StorageSpec(**raw)
-
-
 def _manifest_polymarket(raw: Any) -> PolymarketSpec:
     """``[polymarket] enabled = true`` and its caps, in exact USD text like every price.
 
@@ -1650,8 +1837,16 @@ def _manifest_polymarket(raw: Any) -> PolymarketSpec:
     """
     if raw is None:
         return PolymarketSpec()
-    keys = {"enabled", "venue", "read_price_usd", "collateral_usd", "max_order_usd",
+    keys = {"enabled", "venue", "collateral_usd", "max_order_usd",
+            "read_requests_per_10s", "kernel_reserve_per_10s",
             "max_open_usd", "max_orders_per_window", "seed"}
+    for old, new in (("read_requests_per_minute", "read_requests_per_10s"),
+                     ("kernel_reserve_per_minute", "kernel_reserve_per_10s")):
+        if isinstance(raw, dict) and old in raw:
+            # Polymarket counts its limits over a sliding 10 s, so a per-minute budget
+            # cannot bound what reaches it within one 10 s; the key is refused by name.
+            raise ValueError(f"polymarket.{old} was replaced by polymarket.{new}: "
+                             "Polymarket's published limits are per sliding 10 s")
     if not isinstance(raw, dict) or set(raw) - keys:
         raise ValueError("unknown polymarket manifest key")
     default = PolymarketSpec()
@@ -1666,14 +1861,35 @@ def _manifest_polymarket(raw: Any) -> PolymarketSpec:
 
     return PolymarketSpec(
         enabled=raw.get("enabled", False), venue=raw.get("venue", "fake"),
-        read_price_micro=usd("read_price_usd", default.read_price_micro),
         collateral_micro=usd("collateral_usd", default.collateral_micro),
         max_order_micro=usd("max_order_usd", default.max_order_micro),
         max_open_micro=usd("max_open_usd", default.max_open_micro),
         max_orders_per_window=raw.get("max_orders_per_window",
                                       default.max_orders_per_window),
         seed=raw.get("seed", default.seed),
+        read_requests_per_10s=raw.get("read_requests_per_10s",
+                                         default.read_requests_per_10s),
+        kernel_reserve_per_10s=raw.get("kernel_reserve_per_10s",
+                                          default.kernel_reserve_per_10s),
     )
+
+
+def _manifest_storage(raw: Any) -> StorageSpec:
+    """``[storage]``: only the retained private state cap (a price there is refused first)."""
+    if raw is None:
+        return StorageSpec()
+    if not isinstance(raw, dict) or set(raw) - {"retained_private_bytes"}:
+        raise ValueError("unknown storage manifest key")
+    return StorageSpec(raw.get("retained_private_bytes", DEFAULT_RETAINED_PRIVATE_BYTES))
+
+
+def _manifest_subscriptions(raw: Any) -> SubscriptionsSpec:
+    """``[subscriptions]``: the watcher-work limit; any other key is unknown."""
+    if raw is None:
+        return SubscriptionsSpec()
+    if not isinstance(raw, dict) or set(raw) - {"max_watcher_evaluations_per_sweep"}:
+        raise ValueError("unknown subscriptions manifest key")
+    return SubscriptionsSpec(**raw)
 
 
 def _manifest_chaos(raw: Any) -> ChaosSpec:

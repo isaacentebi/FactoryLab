@@ -81,7 +81,10 @@ class LiveLike(FakeExchange):
 
 def _manifest(on=True):
     manifest = load_manifest("scripted")
-    return replace(manifest, exchange=replace(manifest.exchange, vault_tools=on))
+    # venue.vault_positions sends 40 venue weight: a world publishing it has at most
+    # 480 // 40 = 12 venue read slots, so every reader's share can cover it.
+    return replace(manifest, exchange=replace(manifest.exchange, vault_tools=on,
+                                              max_readers=12 if on else 16))
 
 
 def _exchange(cls=FakeExchange, cash="20000"):
@@ -143,8 +146,12 @@ def test_the_manifest_key_is_hashed_off_and_names_a_new_world_on():
     assert on.manifest_hash() != off.manifest_hash()
     raw = tomllib.loads((WORLDS_DIR / "scripted.toml").read_text())
     raw["venue"]["vault_tools"] = True
+    with pytest.raises(ValueError, match="cannot cover venue.vault_positions at 40"):
+        manifest_from_dict(raw)  # sixteen readers' shares of 480 are 30 each
+    raw["venue"]["max_readers"] = 12
     assert manifest_from_dict(raw).manifest_hash() == on.manifest_hash()
     raw["venue"]["vault_tools"] = False
+    del raw["venue"]["max_readers"]
     assert manifest_from_dict(raw).manifest_hash() == off.manifest_hash()
     raw["venue"]["vault_tools"] = "yes"
     with pytest.raises(ValueError, match="vault_tools"):
@@ -167,6 +174,9 @@ def test_create_deposit_and_withdraw_move_money_between_custodians_and_book_its_
     assert pots["total_micro"] == pots_before - 10_000_000_000  # only the fee left
     positions = _call(rt, handle, "venue.vault_positions", slot="tool:1")
     assert positions["positions"][0]["equity_usd"] == "1500"
+    # Two vault reads (40 + 20 venue weight) exceed one seat's share of the default
+    # read budget inside one minute; the next minute renews it.
+    rt.clock.now_ns += 60_000_000_000
     detail = _call(rt, handle, "venue.vault_details", slot="tool:2", vault=vault)
     assert detail["is_leader"] and detail["own_equity_usd"] == "1500"
     rt.exchange.mark_vaults(Decimal(1000))  # the vault's own equity rises 10%

@@ -62,11 +62,16 @@ def test_collection_removes_only_unreferenced_blobs(archive):
     orphan = hashlib.sha256(orphan_bytes).hexdigest()
     store._write(orphan, orphan_bytes)
 
-    assert store.collect() == [orphan]
+    # A leftover no ledger item ever named is removed without an item (a replay could
+    # not know it was on the disk, so ledgering it would make the two diaries differ).
+    ledger.recovering = True
+    assert store.collect() == [] and orphan in store._memory  # never while recovering
+    ledger.recovering = False
+    assert store.collect() == []
 
     assert store.get(owned) == b"a seat's working state"
     assert orphan not in store._memory and orphan not in store.index
-    assert [row["sha"] for row in ledger.kinds("artifact.collected")] == [orphan]
+    assert ledger.kinds("artifact.collected") == []
     # Collection is idempotent and takes nothing on a second pass.
     assert store.collect() == []
 

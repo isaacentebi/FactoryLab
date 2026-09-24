@@ -85,6 +85,8 @@ def test_a_world_without_the_block_has_no_surface_and_a_named_block_is_hashed():
     assert base.polymarket == PolymarketSpec()
     with pytest.raises(ValueError, match="unknown polymarket"):
         manifest_from_dict({**raw, "polymarket": {"enabled": True, "leverage": 3}})
+    with pytest.raises(ValueError, match="polymarket.read_price_usd was removed"):
+        manifest_from_dict({**raw, "polymarket": {"enabled": True, "read_price_usd": "0"}})
     with pytest.raises(ValueError, match="simulated venue"):
         manifest_from_dict({**raw, "polymarket": {"enabled": True, "venue": "live",
                                                   "collateral_usd": "5"}})
@@ -106,16 +108,16 @@ def test_only_the_edition6_worlds_enable_event_markets_and_only_to_read():
             # The public read APIs only: no world under worlds/ trades event markets.
             assert world.polymarket.venue == "live", path.name
             assert world.polymarket.collateral_micro == 0, path.name
-            # A public read costs the factory nothing, so the world debits nothing for it.
-            assert world.polymarket.read_price_micro == 0, path.name
+            # A public read costs the factory nothing, so no world can price it (Wave 11).
+            assert not hasattr(world.polymarket, "read_price_micro"), path.name
     assert enabled == {"edition6-testnet-rehearsal.toml", "edition6-capital-loop.toml"}
 
 
 def test_a_free_read_is_published_free_and_debits_nothing():
-    rt = world(venue="live", read_price_micro=0)
+    rt = world(venue="live")
     for tool_id in polymarket.READS:
         assert rt.tool_specs[tool_id]["price_micro_per_call"] == 0
-        assert rt.tool_specs[tool_id]["description"].endswith("Free.")
+        assert "Free." in rt.tool_specs[tool_id]["description"]
         assert "$" not in rt.tool_specs[tool_id]["description"]
     handle = collateral_decision(rt)
     result, cost = rt._run_tool("seed-decider", handle,
@@ -126,14 +128,15 @@ def test_a_free_read_is_published_free_and_debits_nothing():
 def test_published_tools_state_what_they_do_and_cost_and_carry_valid_examples():
     from factorylab.cortex.assembly import validate_schema
 
-    rt = world(read_price_micro=2000)
+    rt = world()
     specs = {k: v for k, v in rt.tool_specs.items() if k.startswith("polymarket.")}
     assert set(specs) == {*polymarket.READS, polymarket.ACCOUNT, *polymarket.WRITES}
-    for tool_id, spec in specs.items():
+    for spec in specs.values():
         for example in spec["args_schema"]["examples"]:
             validate_schema(example, spec["args_schema"])
         text = spec["description"].lower()
-        assert "$0.002" in text if tool_id in polymarket.READS else "free" in text
+        # Wave 11: a public market read pays no one, so every call is free.
+        assert "free" in text and spec["price_micro_per_call"] == 0
         # A surface, never a suggestion (AGENTS.md: physics is enforced, not announced).
         assert not any(word in text for word in ("should", "profit", "opportunit", "edge",
                                                  "recommend", "consider", "worth", "better"))
@@ -143,12 +146,13 @@ def test_published_tools_state_what_they_do_and_cost_and_carry_valid_examples():
 
 # --- reads and the jail ----------------------------------------------------------------------
 
-def test_reads_are_priced_and_their_prose_is_kept_off_durable_surfaces():
-    rt = world(read_price_micro=1500)
+def test_reads_move_no_money_and_their_prose_is_kept_off_durable_surfaces():
+    rt = world()
     handle = collateral_decision(rt)
+    before = rt.wallet.balance
     result, cost = rt._run_tool("seed-decider", handle,
                                 {"tool": "polymarket.search", "args": {"query": "event A"}})
-    assert cost == 1500
+    assert cost == 0 and rt.wallet.balance == before
     [market] = result["markets"]
     question = market["question"]
     assert len(question) >= 32
@@ -292,7 +296,7 @@ def test_window_cap_unlisted_tokens_and_foreign_cancels_are_refused():
     handle = collateral_decision(rt)
     unlisted = rt._run_tool("seed-decider", handle, {"tool": "polymarket.place_limit", "args": {
         "token_id": "42", "side": "buy", "size": "10", "price": "0.5"}}, slot="tool:2")[0]
-    assert unlisted["error"] == "token is not listed"
+    assert unlisted["error"] == "token not listed"
     assert buy(rt, handle, price="0.30", slot="tool:0")["status"] == "resting"
     capped = buy(rt, handle, price="0.31", slot="tool:1")
     assert "window cap" in capped["error"]
@@ -581,7 +585,9 @@ def test_the_market_tool_serves_the_markets_current_state_never_a_cached_copy():
     market = result["market"]
     assert market["closed"] is True and market["uma_resolution_status"] == "resolved"
     assert [o["price"] for o in market["outcomes"]] == ["1", "0"]
-    # Every Gamma read asks a URL no earlier read asked.
+    # Every Gamma read asks a URL no earlier read asked (in the next tick: within one,
+    # an identical read is answered from the tick's answer and sends nothing).
+    rt.ticks_consumed += 1
     rt._run_tool("seed-decider", handle, {
         "tool": "polymarket.market", "args": {"market_id": "2589812"}})
     assert len(urls) == 2 and urls[0] != urls[1]
@@ -611,3 +617,324 @@ def test_a_token_with_no_two_sided_book_is_not_marked_at_an_invented_price():
                                                "midpoint": None}
     polymarket.mark(rt)
     assert coin not in rt.consequences.mids
+
+
+# --- the read limit: Polymarket's published rate limits, a share per reader slot ---------
+
+
+def _search(rt, seat, query):
+    handle = collateral_decision(rt, seat)
+    return rt._run_tool(seat, handle, {"tool": "polymarket.search",
+                                        "args": {"query": query}})[0]
+
+
+def test_a_seat_s_polymarket_reads_are_refused_once_its_share_is_spent():
+    """(108 - 60) // 16 slots = 3 requests a sliding minute: the fourth read is refused
+    before it is sent, with the share it ran out of; another seat's share is its own."""
+    rt = world(read_requests_per_10s=108, kernel_reserve_per_10s=60)
+    sent = []
+    search = rt.polymarket.venue.target.search_markets
+    rt.polymarket.venue.target.search_markets = lambda *a: sent.append(a) or search(*a)
+    for query in ("event A", "event", "simulated"):
+        assert "markets" in _search(rt, "seed-decider", query)
+    refused = _search(rt, "seed-decider", "event B")
+    assert refused == {"error": "polymarket read share spent: 3 of 3 requests in the "
+                                "last 10 s; this read sends 1"}
+    assert len(sent) == 3
+    assert "markets" in _search(rt, "seed-observer", "event B")
+    rt.clock.now_ns += 61_000_000_000
+    assert "markets" in _search(rt, "seed-decider", "event C")
+    text = rt.tool_specs["polymarket.search"]["description"]
+    assert "108 requests in any sliding 10 s, of which 60 are the kernel's own" in text
+
+
+def test_an_identical_read_in_the_tick_is_answered_and_charged_like_any_read():
+    """Rule 4: a seat cannot tell a tick's answer from a sent read. Two seats reading
+    the same thing in one tick are each charged to their slot's share and get answers
+    of the same shape; only the one request actually sent counts against the world's
+    budget."""
+    rt = world(read_requests_per_10s=108, kernel_reserve_per_10s=60)
+    before = rt.polymarket.venue.target.requests_sent()
+    first = _search(rt, "seed-decider", "event A")
+    second = _search(rt, "seed-observer", "event A")  # answered from the tick
+    assert "markets" in first and first == second
+    assert polymarket._read_used(rt, "seed-decider") == 1
+    assert polymarket._read_used(rt, "seed-observer") == 1
+    assert rt.polymarket.venue.target.requests_sent() - before == 1
+    # With the share spent, a read the tick could answer is refused like any other.
+    _search(rt, "seed-decider", "event")
+    _search(rt, "seed-decider", "simulated")
+    again = _search(rt, "seed-decider", "event A")
+    assert again["error"].startswith(polymarket.READ_REFUSAL)
+    assert [i["kind"] for i in _consequence_diary(rt)
+            if i["kind"] == "polymarket.read_answered"] == ["polymarket.read_answered"]
+
+
+def test_the_kernel_s_settlement_read_succeeds_when_every_seat_is_spent():
+    from factorylab.settlement.vocabulary import UNOBSERVABLE
+
+    rt = world(read_requests_per_10s=108, kernel_reserve_per_10s=60)
+    for seat in rt.venue_readers:
+        for n in range(3):
+            _search(rt, seat, f"spend {seat} {n}")
+        assert "error" in _search(rt, seat, f"again {seat}")
+    rt.polymarket.token_markets[token(rt)] = "fake-1"  # as the claim's sealing found it
+    facts = polymarket.event_facts(rt, "event_price_above", token(rt))
+    assert facts is not UNOBSERVABLE and facts["listed"] is True
+
+
+def test_the_polymarket_budget_is_validated_at_load_against_the_published_limit():
+    import tomllib
+    from pathlib import Path
+
+    raw = tomllib.loads(Path(__file__).parents[2].joinpath("worlds/scripted.toml").read_text())
+    for block, match in (
+            ({"read_requests_per_10s": 301}, "tightest published limit per 10 s"),
+            # The per-minute keys counted the wrong window: refused by name.
+            ({"read_requests_per_minute": 900}, "replaced by polymarket.read_requests"),
+            ({"kernel_reserve_per_minute": 300}, "replaced by polymarket.kernel_reserve"),
+            ({"read_requests_per_10s": 100, "kernel_reserve_per_10s": 100},
+             "kernel_reserve_per_10s"),
+            ({"read_requests_per_10s": 70, "kernel_reserve_per_10s": 60},
+             "cannot cover one claim's token lookup of 3 requests"),
+            # A share of 2 still covers a read, but not a claim's lookup (Codex P2).
+            ({"read_requests_per_10s": 92, "kernel_reserve_per_10s": 60},
+             r"= 2, cannot cover one claim's token lookup of 3 requests"),
+            # N = 30 // 2 = 15 open reads over 16 slots: no seat could hold one.
+            ({"read_requests_per_10s": 180, "kernel_reserve_per_10s": 30},
+             "cannot hold one open read")):
+        with pytest.raises(ValueError, match=match):
+            manifest_from_dict({**raw, "polymarket": {"enabled": True, **block}})
+    assert manifest_from_dict({**raw, "polymarket": {
+        "enabled": True, "read_requests_per_10s": 300}}).polymarket.enabled
+    default = manifest_from_dict({**raw, "polymarket": {"enabled": True}}).polymarket
+    assert (default.read_requests_per_10s, default.kernel_reserve_per_10s) == (200, 100)
+
+
+def test_a_seat_s_admission_depends_on_its_own_share_alone():
+    """No global meter admits seats: the kernel's reads fit its reserve by construction
+    (``open_limit``), so a seat with share left reads, however much the kernel read."""
+    rt = world(read_requests_per_10s=108, kernel_reserve_per_10s=60)
+    rt.polymarket.token_markets[token(rt)] = "fake-1"  # as the claim's sealing found it
+    for _ in range(20):
+        polymarket.event_facts(rt, "event_price_above", token(rt))
+    assert "markets" in _search(rt, "seed-decider", "event A")
+
+
+def test_a_freed_polymarket_slot_waits_until_its_last_read_has_slid_out():
+    """Rule 5: a newcomer never inherits a predecessor's reads. The retired seat's slot
+    is held back until its last Polymarket read has left Polymarket's window (10 s; the
+    simulated venue counts it on the world's clock); the newcomer waits (no slot, no
+    Polymarket reads), then gets it, and the assignment is ledgered."""
+    from tests.runtime.test_real_flows import _register
+
+    rt = world(read_requests_per_10s=108, kernel_reserve_per_10s=60)
+    rt.m = replace(rt.m, exchange=replace(rt.m.exchange, max_readers=len(rt.venue_readers)))
+    assert "markets" in _search(rt, "seed-observer", "event A")
+    slot = rt.venue_readers.index("seed-observer")
+    rt._retire_assembly("seed-observer", "vote-1")
+    _register(rt, "newcomer")
+    assert "newcomer" not in rt.venue_readers and rt.slot_waiting == ["newcomer"]
+    assert "polymarket.search" not in rt._allowed_tools("newcomer")
+    rt.clock.now_ns += polymarket.READ_WINDOW_NS - 1  # the read's window, 10 s
+    rt._assign_waiting_readers()
+    assert "newcomer" not in rt.venue_readers
+    rt.clock.now_ns += 1
+    rt._assign_waiting_readers()
+    assert rt.venue_readers[slot] == "newcomer" and rt.slot_waiting == []
+    assert "markets" in _search(rt, "newcomer", "event B")
+    assert polymarket._read_used(rt, "newcomer") == 1  # its own reads, and only them
+    slots = [i for i in _consequence_diary(rt) if i["kind"] == "venue.reader_slot"]
+    assert [(i["assembly_id"], i["slot"]) for i in slots] == [
+        ("newcomer", False), ("newcomer", True)]
+
+
+def test_the_simulated_venue_counts_what_the_live_reader_would_send():
+    fake = still_fake()
+    yes = fake.market("fake-1")["outcomes"][0]["token_id"]
+    before = fake.requests_sent()
+    fake.market_of_token(yes)  # open: the closed listing, then the open one
+    fake.market_of_token("7")  # absent: closed, open, closed
+    fake.order_book(yes, 1)
+    assert fake.requests_sent() - before == 2 + 3 + 1
+
+
+def test_a_freed_slot_waits_for_its_last_holder_s_open_reads_to_stop_counting():
+    """A slot is given again only once its last holder's reads have slid out of the
+    minute and its open reads no longer count, so the slots together never hold more
+    than ``max_readers × seat_open_share`` open reads."""
+    from tests.runtime.test_polymarket_forecasts import seal
+    from tests.runtime.test_real_flows import _register
+
+    rt = world(read_requests_per_10s=112, kernel_reserve_per_10s=64)  # 2 each
+    rt.m = replace(rt.m, exchange=replace(rt.m.exchange, max_readers=len(rt.venue_readers),
+                                          public_read_weight_per_minute=270))
+    assert seal(rt, ("event_pays", 0.5, {"horizon_events": 200, "token_id": token(rt)}),
+                judge="seed-observer")
+    slot = rt.venue_readers.index("seed-observer")
+    rt._retire_assembly("seed-observer", "vote-1")
+    _register(rt, "newcomer")
+    rt.clock.now_ns += 5 * 60_000_000_000  # its reads slid out long ago
+    rt._assign_waiting_readers()
+    assert "newcomer" not in rt.venue_readers  # its open read still counts
+    rt.ticks_consumed += 201  # the claim's pass has run and read nothing for it
+    rt._assign_waiting_readers()
+    assert rt.venue_readers[slot] == "newcomer"
+
+
+def _live_manifest():
+    base = load_manifest("scripted")
+    return replace(base, polymarket=PolymarketSpec(enabled=True, venue="live"))
+
+
+class _Stop(BaseException):
+    """The process dies here."""
+
+
+def _wall_clock(count=40):
+    """A wall clock the world's ticks are paced against, advancing 1 s a read, that
+    never sleeps."""
+    from factorylab.runtime.live import LiveClock
+
+    now = iter(range(1_900_000_000 * 10**9, 2_000_000_000 * 10**9, 10**9))
+    return LiveClock(10**9, count, now_ns=lambda: next(now), sleep=lambda _s: None)
+
+
+def _live_world(where, *, wall=True, ledger=True):
+    """A world whose Polymarket reads go to the network (the network guard answers
+    every one of them with a failure), in its own run directory."""
+    from factorylab.runtime.loop import Runtime
+
+    where.mkdir(parents=True, exist_ok=True)
+    return Runtime(_live_manifest(), events=40, seed=1, initial_balance_micro=None,
+                   ledger_path=str(where / "world.jsonl") if ledger else None,
+                   router_gamma=.1, exchange=FakeExchange(),
+                   clock_source=_wall_clock() if wall else None)
+
+
+def _stopped(rt):
+    """``rt`` with its first event replaced by the process dying."""
+    def stop():
+        raise _Stop
+
+    rt._run = stop
+    return rt
+
+
+def _host_is_free():
+    lock = polymarket.ip_lock()
+    lock.close()
+    return True
+
+
+def test_one_live_polymarket_reader_a_host_whatever_directory_it_runs_in(tmp_path,
+                                                                        monkeypatch):
+    """The read budget assumes the host's IP is the factory's own, so one live
+    Polymarket reader runs a host at a time. The lock is the host's, in the operator's
+    one lock directory (never beside a run), so a second world in another run
+    directory is refused (``polymarket_ip_in_use``, its own operator code); it is
+    released when the world stops, however it stops."""
+    from factorylab.runtime import capital_loop
+    from factorylab.runtime.reasons import Reason
+    from factorylab.runtime.resume import resume_reason
+
+    monkeypatch.delenv("FACTORYLAB_STATE_DIR", raising=False)
+    first = _stopped(_live_world(tmp_path / "run-a"))
+    second = _stopped(_live_world(tmp_path / "run-b"))
+    polymarket.arm(first)
+    assert (capital_loop.default_lock_dir() / "polymarket-ip.lock").exists()
+    assert not list(tmp_path.rglob("polymarket-ip.lock"))
+    with pytest.raises(polymarket.LiveReaderRefused, match=polymarket.IP_IN_USE) as refused:
+        second.run()
+    assert second._polymarket_ip_lock is None and second._ledger_lock.fd is None
+    assert resume_reason(refused.value) is Reason.POLYMARKET_IP_IN_USE
+    with pytest.raises(_Stop):
+        first.run()  # admitted already; released when the world stops
+    assert first._polymarket_ip_lock is None and _host_is_free()
+    with pytest.raises(_Stop):
+        second.run()
+    assert _host_is_free()
+
+
+def test_a_live_reader_needs_a_ledger_and_the_wall_clock_and_an_offline_one_no_lock(
+        tmp_path):
+    """Polymarket counts wall time, so a world whose reads go to the network runs on
+    the wall clock, with a ledger that journals every request's stamp; each refusal
+    has its own operator code. An offline rehearsal (``simulate_reads``) takes no lock,
+    on any clock, even while the host's reader is held."""
+    from factorylab.runtime.reasons import Reason
+
+    simulated = _live_world(tmp_path / "simulated", wall=False)
+    with pytest.raises(polymarket.LiveReaderRefused,
+                       match=polymarket.LIVE_REQUIRES_THE_WALL_CLOCK) as refused:
+        simulated.run()
+    assert Reason(refused.value.code) is Reason.POLYMARKET_LIVE_REQUIRES_THE_WALL_CLOCK
+    no_ledger = _live_world(tmp_path / "none", ledger=False)
+    with pytest.raises(polymarket.LiveReaderRefused,
+                       match=polymarket.LIVE_REQUIRES_A_LEDGER) as refused:
+        no_ledger.run()
+    assert Reason(refused.value.code) is Reason.POLYMARKET_LIVE_REQUIRES_A_LEDGER
+    assert simulated._polymarket_ip_lock is None and no_ledger._polymarket_ip_lock is None
+    holder = _live_world(tmp_path / "holder")
+    polymarket.arm(holder)
+    offline = _stopped(_live_world(tmp_path / "offline", wall=False))
+    polymarket.simulate_reads(offline)
+    with pytest.raises(_Stop):
+        offline.run()  # admitted, on the simulated clock, with no lock
+    assert offline._polymarket_ip_lock is None
+    polymarket.disarm(holder)
+    holder._ledger_lock.close()
+    assert _host_is_free()
+
+
+def test_a_failed_resume_releases_the_host_and_a_retry_in_process_takes_it(tmp_path,
+                                                                            monkeypatch):
+    """A resume holds the host's reader before it replays anything (the tail's last
+    event runs past the diary's end and may read). A resume that fails after that
+    releases it at once, never at garbage collection, so the same process can retry."""
+    from factorylab.runtime import capital_loop, resume
+
+    lock_dir = capital_loop.default_lock_dir()  # the test's own (tests/conftest.py)
+    world_dir = tmp_path / "run-a"
+    genesis = _live_world(world_dir)
+    process = genesis._process_event
+
+    def stop_at_three(event):
+        result = process(event)
+        if genesis.n == 3:
+            raise _Stop
+        return result
+
+    genesis._process_event = stop_at_three
+    with pytest.raises(_Stop):
+        genesis.run()
+    assert _host_is_free()
+    manifest, ledger = _live_manifest(), str(world_dir / "world.jsonl")
+    held = []
+
+    def failing_replay(rt, *args):
+        held.append(rt._polymarket_ip_lock is not None)
+        raise resume.ResumeError("the witness records this identity's kill",
+                                 code="identity_killed")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(resume, "_replay", failing_replay)
+        with pytest.raises(resume.ResumeError, match="kill"):
+            resume.resume_runtime(manifest, ledger, clock_source=_wall_clock())
+    assert held == [True] and _host_is_free()
+    rt = resume.resume_runtime(manifest, ledger, clock_source=_wall_clock())
+    assert rt._polymarket_ip_lock is not None
+    with pytest.raises(polymarket.LiveReaderRefused, match=polymarket.IP_IN_USE):
+        _live_world(tmp_path / "run-b").run()
+    with pytest.raises(_Stop):
+        _stopped(rt).run()
+    assert _host_is_free() and capital_loop.default_lock_dir() == lock_dir
+
+
+def test_settlement_never_looks_a_token_up():
+    """A claim is admitted only once its token's market is found and cached, so the
+    kernel's settlement read is one GET by market id; an uncached token is a kernel
+    fault and raises, never a lookup of up to 3 requests."""
+    rt = world(venue="live")
+    with pytest.raises(KeyError):
+        polymarket.event_facts(rt, "event_pays", token(rt), due_tick=5)

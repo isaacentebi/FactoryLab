@@ -12,13 +12,13 @@ head verbatim under ``your_state``. Nothing rolls it over: it survives any
 number of intervening returns, the retirement of the model behind the seat, and
 restore, because the head is a hash and the bytes are an artifact the resume
 already verifies. The soft allowance is 8 KiB — above it the state is kept and
-the rent is simply what it is — and the hard limit is 64 KiB, above which the
+the ledger marks it ``over_soft`` — and the hard limit is 64 KiB, above which the
 field is refused, ledgered, and the head is left exactly as it was.
 A third bound is about display, not storage: a head over ``INLINE_STATE_BYTES``
 is named on the request — sha, exact size, ``loaded: False``, and the tool that
-returns it — instead of pasted into it. The bytes are unchanged, the rent is
-unchanged, nothing is summarised, and ``artifact.get`` still hands the seat its
-own state exactly as it wrote it.
+returns it — instead of pasted into it. The bytes are unchanged, nothing is
+summarised, and ``artifact.get`` still hands the seat its own state exactly as it
+wrote it.
 
 **Outcome inbox.** When a consequence settles for a decision a seat made, an
 item addressed to that seat is appended: the original handle, what the seat
@@ -46,67 +46,39 @@ the settler still read it back. A decision with open consequences is never
 evictable (R3-F; GPT-6 third reading §3, "MAX_SAID can evict decision-linked
 material before a delayed consequence").
 
-Rent is by byte-time at the world's ``storage.micro_per_byte_day`` rate (C3),
-accrued on the head's bytes from the moment it is written and collected at each
-reserve-window boundary through the seat's own metered path. The arithmetic is
-exact: whatever fraction of a micro-USD a window leaves over is carried on the
-head, so collecting often can never round it up and collecting rarely can never
-round it down. There is no transfer toll: rendering a seat its own state costs
-the tokens it costs and nothing else.
+Retained bytes are a constraint, not a cash flow. Holding them pays no one: the
+disk is the world's fixed-price machine, so no money leaves the factory at the
+margin and the wallet does not move for them (the wallet moves only when money
+moves; essay II.II.b casts a scarce resource as a hard limit or prices it through
+the charter's λ on reward, II.IV.a). The hard limit above is the cast, and it bounds
+the whole of what a seat retains, not each version: a new head releases the
+superseded one's reference, whose bytes are collected once no durable checkpoint
+names them (``ArtifactStore.release``). Retirement is final for a version, not for
+an id: a retired id's head is kept, so the id registered again as its next version
+by its owner inherits it. A program's next version is new code and starts with no private
+state: the old version's is superseded, and released, at that registration. The
+disk is finite, so the
+whole of retained private state has its own hard limit, fixed for the world's
+life (``[storage] retained_private_bytes``): **retained private state is at most
+``retained_private_bytes``, always**, every holder's reference counted at its full
+size; it bounds the index, and bytes on disk can exceed it by the releases since the
+last checkpoint until collection. A retired id's state is kept until capacity is
+needed: a write that would pass the limit releases retired ids' state, oldest
+retirement first, through the journaled release, only until it fits; a write that
+all of it would not fit is refused, releasing nothing, as on a full disk. A live
+seat's state is never released to make room, and a retired version writes none. The
+head passes to a next version only from its owner (``GovernanceMixin``). The size
+of every head is ledgered on its ``state.put`` item, and the archive's size at every boundary on
+``artifact.retained``, so the charter can price retained state if the population
+proposes to.
+Rendering a seat its own state costs the tokens it costs and nothing else.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
-from fractions import Fraction
 from typing import Any
-
-NS_PER_DAY = 24 * 3_600 * 1_000_000_000
-#: 8 KiB at 0.04 micro-USD per byte-day is about 328 micro-USD a day.
-DEFAULT_MICRO_PER_BYTE_DAY = "0.04"
-
-
-@dataclass(frozen=True)
-class StorageSpec:
-    """The world's byte-day storage rent, fixed at launch (``[storage]``).
-
-    Guarantees the rate is a positive, exact decimal. Storage is a real resource,
-    so a seat's retained working state (essay II.I.a, "memory that persists across
-    rounds") pays for the bytes it holds and the time it holds them.
-    """
-
-    micro_per_byte_day: str = DEFAULT_MICRO_PER_BYTE_DAY
-
-    def __post_init__(self):
-        rate = self.micro_per_byte_day
-        if type(rate) not in (str, int):
-            raise ValueError("storage.micro_per_byte_day must be exact decimal text or an integer")
-        try:
-            value = Decimal(rate)
-        except InvalidOperation:
-            raise ValueError("storage.micro_per_byte_day must be exact decimal text") from None
-        if not value.is_finite() or value <= 0:
-            raise ValueError("storage.micro_per_byte_day must be a positive finite rate")
-        object.__setattr__(self, "micro_per_byte_day", format(value.normalize(), "f"))
-
-    def rate(self) -> tuple[int, int]:
-        """Return the rent rate as an exact ratio of micro-USD per byte-nanosecond."""
-        per_ns = Fraction(Decimal(self.micro_per_byte_day)) / NS_PER_DAY
-        return per_ns.numerator, per_ns.denominator
-
-
-def accrue(entry: dict, now_ns: int, storage: StorageSpec) -> tuple[int, int]:
-    """Return (micro-USD newly due, remainder to carry) for the interval since the last accrual."""
-    since = entry.get("rent_ns")
-    if since is None:
-        return 0, entry.get("rent_carry", 0)
-    numerator, denominator = storage.rate()
-    byte_ns = entry.get("rent_byte_ns", 0) + entry["bytes"] * max(0, now_ns - since)
-    owed = byte_ns * numerator + entry.get("rent_carry", 0)
-    return divmod(owed, denominator)
 
 #: The allowance a seat is told about. Above it the state is accepted anyway.
 SOFT_STATE_BYTES = 8_192
@@ -115,8 +87,8 @@ HARD_STATE_BYTES = 65_536
 #: Inbox items delivered inline on a request; the rest are counted and fetchable.
 INLINE_OUTCOMES = 8
 #: Above this a head is *shown* by reference instead of inline. Storage, the soft
-#: allowance, the hard limit and the rent are untouched: this bounds what a request
-#: carries, never what the world keeps.
+#: allowance and the hard limit are untouched: this bounds what a request carries,
+#: never what the world keeps.
 INLINE_STATE_BYTES = 4_096
 #: The largest page one list call will return, so a paged index cannot become a dump.
 MAX_LIST_LIMIT = 32
@@ -197,8 +169,8 @@ def _bounded_field(field: str, value: Any) -> dict[str, Any]:
 class WorkingState:
     """One head pointer per seat over content-addressed bytes in the archive.
 
-    Guarantees: a refused put changes nothing (the head, its rent accrual and
-    the archive are all untouched); an accepted put is ledgered before it is
+    Guarantees: a refused put changes nothing (the head and the archive are
+    both untouched); an accepted put is ledgered before it is
     readable; ``head`` and ``render`` are pure reads; and a head restored from a
     checkpoint names bytes the resume has already verified, so a seat never
     wakes to a state the world cannot show it.
@@ -208,7 +180,7 @@ class WorkingState:
         self.artifacts = artifacts
         self.ledger = ledger
         self.clock = clock
-        # seat -> {"sha", "bytes", "ns", "handle", "rent_ns", "rent_carry", "rent_due"}
+        # seat -> {"sha", "bytes", "ns", "handle"}
         self.heads: dict[str, dict[str, Any]] = {}
 
     def head(self, seat: str) -> dict[str, Any] | None:
@@ -221,19 +193,15 @@ class WorkingState:
         data = canonical(obj)
         if len(data) > HARD_STATE_BYTES:
             raise ValueError(STATE_TOO_LARGE)
-        sha = self.artifacts.put(data, owner=seat, kind=kind)
-        now = self.clock()
         previous = self.heads.get(seat)
-        successor = {
-            "sha": sha, "bytes": len(data), "ns": now, "handle": handle,
-            # Accrual continues from the last boundary this seat was accounted to:
-            # rewriting a state forgives no rent the old bytes already owed.
-            "rent_ns": now,
-            "rent_byte_ns": (previous.get("rent_byte_ns", 0) + previous["bytes"] *
-                             max(0, now - previous.get("rent_ns", now))) if previous else 0,
-            "rent_carry": previous.get("rent_carry", 0) if previous else 0,
-            "rent_due": previous.get("rent_due", 0) if previous else 0,
-        }
+        # One head per seat is what is retained (the hard limit bounds the whole of
+        # it, not each version): the put releases the superseded head's reference,
+        # whose bytes are collected once no durable checkpoint names them, and is
+        # measured against the retained private state cap with it gone.
+        sha = self.artifacts.put(data, owner=seat, kind=kind,
+                                 supersedes=previous["sha"] if previous else None)
+        now = self.clock()
+        successor = {"sha": sha, "bytes": len(data), "ns": now, "handle": handle}
         self.ledger.append({"kind": "state.put", "assembly_id": seat, "sha": sha,
                             "bytes": len(data), "handle": handle,
                             "over_soft": len(data) > SOFT_STATE_BYTES, "ts": now})
@@ -252,7 +220,7 @@ class WorkingState:
         the true byte size, ``loaded: False``, why, and the tool that returns the
         bytes. Nothing is summarised, shortened or paraphrased — a model's precis of
         a seat's own memory would be a lossy rewrite of a fact the seat owns — and
-        nothing about storage, the soft allowance, the hard limit or rent changes.
+        nothing about storage, the soft allowance or the hard limit changes.
         """
         record = self.heads.get(seat)
         if record is None:
@@ -656,45 +624,22 @@ class OutcomeInbox:
         self.archived_said = dict(state.get("archived_said") or {})
 
 
-def charge_window(rt) -> None:
-    """Every head pays the rent its bytes accrued since the last boundary (C3).
+def collect_window(rt) -> None:
+    """The archive collects at each reserve-window boundary (R3-F); no money moves.
 
-    Exact byte-nanoseconds at ``storage.micro_per_byte_day``, the remainder carried
-    on the head so collecting often can never round up and collecting rarely can
-    never round down. An unaffordable boundary forgives nothing — the accrued
-    interval closes and its amount stays due on the head — and a paid charge is a
-    scored liability of the decision that wrote the state, not merely a debit.
+    Guarantees: only records whose every reference was released and that no
+    checkpoint a resume could start from names are removed, each ledgered by the
+    archive, and bytes no record names (a crash's leftover) without an item. An
+    owned blob is never a candidate, so this can take nothing a seat holds. Retained
+    working state is not charged here or anywhere: it is a constraint with a hard
+    limit, not a debit with no counterparty (see the module docstring).
     """
-    from factorylab.world.metering import Infeasible
-
-    now_ns = rt.clock.now_ns
-    # The window boundary is also where the archive collects (R3-F): blobs no
-    # reference names and nothing published — what a crash between the durable
-    # write and its ledger item leaves — are removed and ledgered. An owned or
-    # published blob is never a candidate, so this can take nothing a seat holds.
     collect = getattr(rt.artifacts, "collect", None)
     if collect is not None:
         collect()
-    for seat, head in rt.working_state.heads.items():
-        micro, carry = accrue(head, now_ns, rt.m.storage)
-        price = head.get("rent_due", 0) + micro
-        head["rent_ns"], head["rent_carry"] = now_ns, carry
-        head["rent_byte_ns"] = 0
-        if not price:
-            continue
-        handle = head.get("handle")
-        try:
-            if handle is None:
-                raise Infeasible("a seeded head has no decision to charge")
-            paid = rt._seat_meter(seat).run(handle=handle, reason="tool:state.storage",
-                                            ceiling=price, execute=lambda: None,
-                                            cost_of=lambda _, price=price: price)
-        except Infeasible:
-            head["rent_due"] = price
-            rt.ledger.append({"kind": "state.rent_due", "assembly_id": seat, "cost": price,
-                              "window": rt.window.index, "handle": handle, "ts": now_ns})
-            continue
-        rt.ledger.append({"kind": "state.rent", "assembly_id": seat, "cost": paid.cost,
-                          "window": rt.window.index, "handle": handle, "ts": now_ns})
-        rt._charge_storage(handle, paid.cost)
-        head["rent_due"] = 0
+    retained = getattr(rt.artifacts, "retained", None)
+    if retained is not None:
+        # The archive's size after collection, so the disk the world keeps is a
+        # fact in the diary (what a card may someday price through λ; II.IV.a).
+        rt.ledger.append({"kind": "artifact.retained", **retained(),
+                          "window": rt.window.index, "ts": rt.clock.now_ns})

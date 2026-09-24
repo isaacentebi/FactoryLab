@@ -28,7 +28,7 @@ def test_each_return_sample_carries_its_invocations_ledgered_sections(world):
         if item["kind"] == "invocation":
             ledgered[item["handle"]].append(item["sections"])
     rows = [r for r in rt.card_samples.returns
-            if not r.get("storage") and r["prompt_bytes"] is not None]
+            if r["prompt_bytes"] is not None]
     assert rows, "the run retained no measured return sample"
     for row in rows:
         assert {"total": row["prompt_bytes"], "you": row["you_bytes"],
@@ -42,7 +42,7 @@ def test_the_closed_windows_counters_are_the_sums_of_its_samples(world):
     assert rt.card_samples.windows, "the run closed no window"
     for record in rt.card_samples.windows:
         rows = [r for r in rt.card_samples.returns if r["window"] == record["index"]
-                and not r.get("storage") and r["prompt_bytes"] is not None]
+                and r["prompt_bytes"] is not None]
         assert (record["invocations"] == record["prompts"] == record["read_measured"]
                 == len(rows))
         for key in ("prompt_bytes", "you_bytes", "inputs_bytes"):

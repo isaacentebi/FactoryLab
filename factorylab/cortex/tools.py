@@ -228,28 +228,37 @@ def _validate_args(schema: dict, args: dict) -> str | None:
     return _check_object(schema, args, "args", additional_default=False)
 
 
-def connector_spec(price_micro_per_call: int) -> dict:
-    """The fetch primitive publishes only an id, path and flat call price."""
+def connector_spec() -> dict:
+    """The fetch primitive publishes only an id and a path; the call itself is free.
+
+    A GET of a public origin pays no one, so it carries no price (the wallet moves
+    only when money moves). A paid source's price is the seller's own, debited when
+    it is bought.
+    """
     return {
         "id": "connector.fetch", "description": "GET a registered connector path as text",
-        "kind": "connector", "price_micro_per_call": price_micro_per_call,
+        "kind": "connector", "price_micro_per_call": 0,
         "args_schema": {"type": "object", "properties": {
             "id": {"type": "string"}, "path": {"type": "string"}},
             "required": ["id", "path"], "additionalProperties": False},
     }
 
 
-def web_search_spec(price_micro_per_call: int, max_call_usd: str) -> dict:
-    """The search primitive publishes a query, a result count and a flat call price."""
+def web_search_spec(max_call_usd: str) -> dict:
+    """The search primitive publishes a query, a result count and its ceiling.
+
+    Its cost is what the route's provider bills for the one model call it makes,
+    and nothing on top of it: no one else is paid.
+    """
     return {
         "id": "web.search",
         "description": (
             "Search the web through this world's search-capable model route. Returns a "
             "bounded list of results, each {title, url, snippet, published?}, with the "
-            "cost of the search and when it was run. Costs the flat call price plus the "
-            f"metered cost of that one model call, and never more than ${max_call_usd}."
+            "cost of the search and when it was run. Costs the metered cost of that one "
+            f"model call, and never more than ${max_call_usd}."
         ),
-        "kind": "web", "price_micro_per_call": price_micro_per_call,
+        "kind": "web", "price_micro_per_call": 0,
         "args_schema": {"type": "object", "properties": {
             "query": {"type": "string"}, "max_results": {"type": "integer"}},
             "required": ["query"], "additionalProperties": False,
@@ -261,30 +270,30 @@ def web_search_spec(price_micro_per_call: int, max_call_usd: str) -> dict:
     }
 
 
-def calc_spec(price_micro_per_call: int) -> dict:
-    """The deterministic arithmetic primitive, at the price a world commits to it.
+def calc_spec() -> dict:
+    """The deterministic arithmetic primitive; free, since it pays no one.
 
     GPT-6's third reading, §7. The published contract lives beside the
-    arithmetic in ``factorylab.cortex.calc`` so the two cannot drift; this only
-    stamps the price, the way ``connector_spec`` and ``web_search_spec`` do.
+    arithmetic in ``factorylab.cortex.calc`` so the two cannot drift. Its price
+    is zero and cannot be otherwise: the wallet moves only when money moves.
     """
     from factorylab.cortex.calc import CALC_SPEC
 
-    if type(price_micro_per_call) is not int or price_micro_per_call < 0:
-        raise ValueError("price_micro_per_call must be a non-negative int")
-    return {**deepcopy(CALC_SPEC), "price_micro_per_call": price_micro_per_call}
+    return {**deepcopy(CALC_SPEC), "price_micro_per_call": 0}
 
 
-def as_spec(tool: PopulationTool, price_micro_per_call: int) -> dict:
-    """Return public ToolSpec fields without source, provenance or schema aliases."""
-    if type(price_micro_per_call) is not int or price_micro_per_call < 0:
-        raise ValueError("price_micro_per_call must be a non-negative int")
+def as_spec(tool: PopulationTool) -> dict:
+    """Return public ToolSpec fields without source, provenance or schema aliases.
+
+    Guarantees a price of zero: a population tool runs in the world's own jail,
+    which pays no one, so no price other than zero can be published for it.
+    """
     return {
         "id": tool.id,
         "description": tool.description,
         "args_schema": deepcopy(tool.args_schema),
         **({"returns_schema": deepcopy(tool.returns_schema)}
            if tool.returns_schema is not None else {}),
-        "price_micro_per_call": price_micro_per_call,
+        "price_micro_per_call": 0,
         "kind": "population",
     }

@@ -10,12 +10,15 @@ from typing import Any
 
 from factorylab.charter.measurement import measurement_catalogue
 from factorylab.cortex.assembly import (
+    MAX_PROGRAM_STATE_BYTES,
     SEED_SYSTEM_PROMPT,
     public_description,
     reserved_return_fields,
 )
+from factorylab.kernel.artifacts import RELEASED_MEMORY
 from factorylab.kernel.money import money_to_usd
 from factorylab.runtime.cadence import tick_intervals
+from factorylab.runtime.continuity import HARD_STATE_BYTES
 from factorylab.runtime.custody import UNAVAILABLE
 from factorylab.runtime.observations import window_fact_names
 from factorylab.runtime.propensity import MIN_DECLARED_MASS, action_vocabulary
@@ -232,7 +235,8 @@ class SchematicsMixin:
             "timeout_s": 10,
             "state_policy": "private",
             "trigger": "optional; makes the seat a watcher the kernel wakes from world state "
-            "each tick, at the program price and without a model call: {\"kind\": "
+            "(within the world block's watchers limit), at no cost and without a model "
+            "call: {\"kind\": "
             "\"price_cross\", \"coin\", \"level\"} | {\"kind\": \"funding_sign\", "
             "\"coin\"} | {\"kind\": \"equity_below\", \"level\"} | {\"kind\": "
             "\"equity_above\", \"level\"}",
@@ -347,8 +351,8 @@ class SchematicsMixin:
         "code runs in the "
         "tool jail instead of a model, reads one JSON object from stdin (prompt, description, "
         "inputs, outcome_schema, state) and prints the Return JSON a model would; it is "
-        "routed, judged, paid and retired exactly like a model seat, each call costing "
-        "prices.program_micro_per_call. With state_policy private the object it prints under "
+        "routed, judged, paid and retired exactly like a model seat; the jail pays no one, "
+        "so a call costs no money. With state_policy private the object it prints under "
         "state is archived as an artifact it owns and handed back on its next call; the "
         "artifact's sha is in the diary and artifact.get reads it, free, for any seat in the "
         "program's own lineage; other readers are refused artifact_private. An observation "
@@ -488,15 +492,61 @@ class SchematicsMixin:
             "recent_mids": {c: list(v) for c, v in self.recent_mids.items()},
             "account": account,
             "venue": self._traded_instruments(),
-            # A price is a public schematic (essay II.I.b): the rent a seat's retained
-            # working state pays is stated here, with how it is collected.
-            "storage": {"micro_per_byte_day": self.m.storage.micro_per_byte_day,
-                        "units": "micro-USD per byte per day",
-                        "pricing": "Your retained working_state pays storage rent of "
-                        "micro_per_byte_day per byte by elapsed time from the moment it is "
-                        "written, collected at each reserve-window boundary from your own "
-                        "spending authority and scored against the decision that wrote it. "
-                        "Rent a boundary cannot collect stays due on the state."},
+            # A limit is a public schematic (essay II.I.b). Retained state pays no one,
+            # so it carries no price (the wallet moves only when money moves): what is
+            # stated is the hard cast (II.II.b), as a fact.
+            "storage": {"working_state_max_bytes": HARD_STATE_BYTES,
+                        "program_state_max_bytes": MAX_PROGRAM_STATE_BYTES,
+                        "retained_private_bytes": self.m.storage.retained_private_bytes,
+                        "units": "bytes of canonical JSON",
+                        "pricing": "Retained working_state costs no money. A working_state "
+                        "over working_state_max_bytes is refused and the head is left as "
+                        "it was.",
+                        "retention": "A seat retains its current working_state head, at "
+                        "most working_state_max_bytes. A program seat retains its current "
+                        "private state, at most program_state_max_bytes, written when a "
+                        "call prints one; seats of its lineage read it while it is current. "
+                        "Writing a successor releases the superseded head or state: "
+                        "artifact.get answers artifact_released to the seat that released "
+                        f"it, for its last {RELEASED_MEMORY} releases, and answers every other "
+                        "reader as it "
+                        "answers for any hash it holds no reference to. Released bytes are "
+                        "removed at the next reserve-window boundary when no checkpoint "
+                        "names them, otherwise at the first boundary after a later "
+                        "checkpoint. Outcome bodies and archived rationales are retained for "
+                        "the world's life and grow with decisions, on the order of 0.5 KiB "
+                        "per outcome addressed to a seat; they are the world's record and "
+                        "outside retained_private_bytes. Retained private state, every head "
+                        "and program private state held, a retired id's included, each "
+                        "holder's at its full size, is at most retained_private_bytes, "
+                        "always; bytes on disk can exceed it by the releases since the last "
+                        "checkpoint, until they are removed. A retired id's head and "
+                        "private state are kept until capacity is needed. A retired id "
+                        "takes its next version only from its owner, the seat that "
+                        "registered its previous version, and keeps its head if still "
+                        "kept; any other proposer is refused. A program's next version "
+                        "always starts with no private state, and the old version's is "
+                        "released at that registration. A retired version "
+                        "writes no state. A write that would take retained private state "
+                        "over retained_private_bytes releases retired ids' state, oldest "
+                        "retirement first, only until the write fits; a write that "
+                        "releasing all of it would not fit is refused, releasing nothing, "
+                        "with the error 'private state is at the world's capacity', as on "
+                        "a full disk. A live seat's state is never released to make room."},
+            **self._polymarket_reads_section(),
+            # A limit on the world's own time, published as a fact (essay II.I.b).
+            "watchers": {
+                "max_watcher_evaluations_per_sweep":
+                    self.m.subscriptions.max_watcher_evaluations_per_sweep,
+                "rule": "Watchers are evaluated at each tick and each safety sweep "
+                        "against one snapshot of the world taken for that sweep, at no "
+                        "cost and without a model call: at most "
+                        "max_watcher_evaluations_per_sweep of them a sweep, in a "
+                        "rotating order by id that resumes after the last one "
+                        "evaluated, so each of n watchers is evaluated within "
+                        "ceil(n / max_watcher_evaluations_per_sweep) sweeps. A watcher "
+                        "that is retired, or whose owner is, is not evaluated and takes "
+                        "no place in the rotation."},
             "tools": self._published_tool_specs(),
             "reserve": {"protected": self.reserve.remaining(), "units": "micro-USD",
                         "trials": self.m.novelty.trials,
@@ -578,22 +628,24 @@ class SchematicsMixin:
                 "venue lists far more than those: call the venue.instruments public read "
                 "for the whole listing, and register a market proposal to trade one of them. "
                 "venue.mids, venue.funding, venue.candles, venue.order_book and "
-                "venue.funding_history read any listed coin or pair without registering it."
+                "venue.funding_history read any listed coin or pair without registering it. "
+                f"The venue reads are held by seats with a venue read slot, at most "
+                f"{self.m.exchange.max_readers}: your YOU block says whether you hold one."
             ),
             "trading_markets": {"perp": list(self.venue_tools.coins),
                                 "spot": list(self.venue_tools.spot_pairs)},
             "connectors": {"registered": self._connector_catalogue(),
                            "max_bytes": self.m.connectors.max_bytes,
                            "timeout_s": self.m.connectors.timeout_s,
-                           "call_price_micro": self.m.connectors.call_price_micro,
                            "max_calls_per_window": self.m.connectors.max_calls_per_window,
                            "window_ticks": self.clockwork.period(
                                "price", default=self.m.timing.min_ratio),
                            "origin_denylist": list(self.m.connectors.origin_denylist),
                            "method": "GET",
                            "optional_fields": ["pay", "max_call_usd"],
-                           "payment": "pay=x402 uses max_call_usd as the seller charge cap; "
-                           "the flat call price is additional. Omit pay for free sources.",
+                           "payment": "pay=x402 uses max_call_usd as the seller charge cap "
+                           "and the seller's charge is the call's only cost; a fetch without "
+                           "pay costs no money. Omit pay for free sources.",
                            "result": "UTF-8 text in seen_tool_results[].result.body",
                            "tool_rounds": 2,
                            "continuation_tool_kinds": ["population", "artifact"],
@@ -664,8 +716,7 @@ class SchematicsMixin:
                 max_tool_calls=self.m.tools.max_tool_calls),
             "scoring": self._scoring_block(),
             "prices": {"lambda_max": self.m.prices.lambda_max,
-                       "penalty_cap": self.m.prices.penalty_cap,
-                       "program_micro_per_call": self.m.prices.program_micro_per_call},
+                       "penalty_cap": self.m.prices.penalty_cap},
             "event_kinds": sorted(self._event_kinds()),
             "meta_input": (
                 "A meta judges the released representative verdict. Its window describes "
@@ -1243,6 +1294,42 @@ class SchematicsMixin:
         return {market: [row for row in rows if row.get("coin") in traded.get(market, ())]
                 for market, rows in memo[1].items()}
 
+    def _polymarket_reads_section(self) -> dict[str, Any]:
+        """The kernel's open-read limit on Polymarket, as a published limit (II.I.b)."""
+        if getattr(self, "polymarket", None) is None:
+            return {}
+        from factorylab.runtime.polymarket import (
+            KERNEL_READS_PER_OPEN,
+            OPEN_LIMIT_REFUSAL,
+            open_limit,
+            seat_open_share,
+        )
+
+        spec = self.m.polymarket
+        return {"polymarket_reads": {
+            "open_reads_limit": open_limit(spec),
+            "seat_open_reads": seat_open_share(spec, self.m.exchange.max_readers),
+            "read_requests_per_10s": spec.read_requests_per_10s,
+            "kernel_reserve_per_10s": spec.kernel_reserve_per_10s,
+            "rule": (
+                "Every Polymarket budget is counted over any sliding 10 s of wall time, "
+                "the window Polymarket counts, each request at the instant it was sent "
+                "(on the simulated venue, which sends nothing, the world's clock). An "
+                "open read is a seat's own: the "
+                "settlement of its Polymarket claims on one token due at one tick. Each "
+                "seat holds at most seat_open_reads = open_reads_limit // "
+                "venue.max_readers of them, counted over its own claims whether or not "
+                "another seat holds the same token and tick, through its venue read slot. "
+                "One stays open while its claims are pending, and for 10 s after the "
+                f"kernel's last read for it. The kernel sends at most "
+                f"{KERNEL_READS_PER_OPEN} requests for an open read in any sliding 10 s "
+                "(the market, and the book for a price claim), so open_reads_limit = "
+                f"kernel_reserve_per_10s // {KERNEL_READS_PER_OPEN} keeps the kernel "
+                "within its reserve. A claim's token is looked up when it is sealed, "
+                "always, as the sealing seat's own read, charged 3 requests to its "
+                "share; a token no market lists is refused ('token not listed'). A claim "
+                f"past the seat's own share is refused with '{OPEN_LIMIT_REFUSAL}'.")}}
+
     def _published_tool_specs(self, *, full: bool = False) -> list[dict[str, Any]]:
         """Every registered tool's contract, with the venue's listing named rather than spelled.
 
@@ -1526,6 +1613,8 @@ class SchematicsMixin:
                 "subscription": self._subscription_view(seat),
                 "last_successful_delivery": self._last_successful_delivery(seat),
                 "directory": self._seat_directory(seat),
+                # This seat's own venue read slot, and nobody else's (AGENTS.md rule 5).
+                "venue_read_slot": seat in getattr(self, "venue_readers", (seat,)),
             })
         return views
 

@@ -312,6 +312,45 @@ def http_get_json(url: str, *, timeout_s: int = HTTP_TIMEOUT_S) -> Any:
         raise PolymarketUnavailable("response is not JSON") from None
 
 
+#: Polymarket's published API rate limits ("Rate Limits", docs.polymarket.com,
+#: read 2026-09-24): Gamma general 4,000 requests / 10 s, /events 500, /markets 300,
+#: /public-search 350; CLOB general 9,000, /book 1,500, /books 500, /price 1,500,
+#: /midpoint 1,500, each over a sliding 10 s window, throttled when exceeded. The
+#: reads here reach /public-search, /markets and /book, and every claim's token lookup
+#: lands on /markets, so the tightest endpoint a request can land on is Gamma
+#: /markets: 300 per sliding 10 s. Every Polymarket budget here is per sliding 10 s,
+#: the window Polymarket itself counts (a per-minute budget let 16 seats burst far
+#: past 300 within one 10 s).
+PUBLISHED_REQUESTS_PER_10S = 300
+#: What the world's Polymarket reads may use by default, all together: two thirds of
+#: the tightest published limit, 200 per 10 s. The IP of the host a world runs on is
+#: dedicated to that factory (one live Polymarket world a host, ``ip_lock``), so no
+#: share of the limit is left for other tenants. Half (150) would leave each of 16
+#: seats 3 requests per 10 s, one claim's token lookup, but a judge's one return may
+#: carry ``max_forecasts_per_verdict`` (2) claims, 6 requests, so the default is the
+#: least budget that fits a whole return: (200 - 100) // 16 = 6. The world counts
+#: every request at the wall-clock instant it was sent (``PolymarketReader.
+#: drain_sends``), in the window Polymarket counts, so its bound (196 of 300,
+#: ``runtime/polymarket.py``, ``open_limit``) holds in wall time; what remains of the
+#: 300 covers only the difference between this host's clock and Polymarket's, and a
+#: request's time in flight.
+DEFAULT_READ_REQUESTS_PER_10S = 200
+#: Of that, held back for the kernel's own settlement reads, which no seat can spend:
+#: N = 100 // 2 = 50 open reads, 3 a seat at 16 slots.
+DEFAULT_KERNEL_RESERVE_PER_10S = 100
+#: Requests one seat read sends: every Polymarket read tool is one GET, sent once.
+SEAT_READ_REQUESTS = 1
+#: The most requests one kernel read can send, by reader method: ``market_of_token``
+#: asks the closed listing, the open one, then the closed one again (up to 3); every
+#: other read is one GET.
+READ_REQUESTS = {"market_of_token": 3}
+
+
+def read_requests(method: str) -> int:
+    """The most requests one read by ``method`` can send."""
+    return READ_REQUESTS.get(method, 1)
+
+
 @dataclass
 class PolymarketReader:
     """The public, credential-free read surface. Guarantees no call signs or moves funds.
@@ -327,6 +366,10 @@ class PolymarketReader:
     deterministic: bool = False
     #: A value no earlier Gamma read carried, for ``CACHE_KEY``.
     nonce: Any = time.time_ns
+    #: The wall clock every request is stamped with as it is sent (``drain_sends``).
+    wall: Any = time.time_ns
+    #: The stamps of the requests sent since the last ``drain_sends``.
+    sends: list = field(default_factory=list)
 
     #: Gamma answers through a shared cache (``cache-control: public, max-age=300``),
     #: keyed by the whole URL. Read 2026-09-23: ``/markets/4827887`` was served from it
@@ -341,10 +384,39 @@ class PolymarketReader:
     def _gamma(self, path: str, **params: Any) -> Any:
         fresh = {k: v for k, v in params.items() if v is not None}
         fresh[self.CACHE_KEY] = self.nonce()
+        self._stamp()
         return self.get(f"{self.gamma_url}{path}?{parse.urlencode(fresh)}")
 
     def _clob(self, path: str, **params: Any) -> Any:
+        self._stamp()
         return self.get(f"{self.clob_url}{path}?{parse.urlencode(params)}")
+
+    def _stamp(self) -> None:
+        # Counted and stamped before it is sent: a request that fails in flight may
+        # still have reached Polymarket, so it counts.
+        self.sent = getattr(self, "sent", 0) + 1
+        self.sends.append(int(self.wall()))
+
+    def requests_sent(self) -> int:
+        """Guarantees the count of every request this reader has sent, monotone. A read
+        of its own counter, journaled read-only, so a replay charges what was sent."""
+        return getattr(self, "sent", 0)
+
+    def drain_sends(self) -> list[int]:
+        """Guarantees the wall-clock stamp (``time.time_ns`` at send) of every request
+        sent since the last drain, one per request, in send order, each returned once.
+
+        Polymarket counts its limits in wall time, so the world charges each request at
+        the instant it was sent. Read through the journal, so a replay charges the
+        stamps the run read.
+        """
+        sends, self.sends = self.sends, []
+        return sends
+
+    def wall_ns(self) -> int:
+        """The wall clock this reader stamps its requests with, now. Read through the
+        journal, so a replay reads the instant the run read."""
+        return int(self.wall())
 
     def search_markets(self, query: str, limit: int) -> list[dict[str, Any]]:
         """Markets matching ``query`` through Gamma's public search, best ranked first."""
@@ -514,26 +586,44 @@ class FakePolymarket:
 
     def search_markets(self, query: str, limit: int) -> list[dict[str, Any]]:
         """Seeded markets whose question contains ``query``, case-insensitively."""
+        self._count(1)
         needle = query.lower()
         rows = [self._public(m) for m in self._markets.values()
                 if needle in m["question"].lower() or needle in m["market_id"]]
         return rows[:limit]
 
     def market(self, market_id: str) -> dict[str, Any]:
+        self._count(1)
         market = self._markets.get(market_id)
         if market is None:
             raise PolymarketUnavailable("HTTP 404")
         return self._public(market, detail=True)
 
+    def _count(self, requests: int) -> None:
+        # The requests the live reader would send for the same read: the simulated
+        # venue is metered as the live one is (``requests_sent``).
+        self.sent = getattr(self, "sent", 0) + requests
+
+    def requests_sent(self) -> int:
+        """Guarantees the count of requests the live reader would have sent for every
+        read this venue answered, monotone."""
+        return getattr(self, "sent", 0)
+
     def market_of_token(self, token_id: str) -> dict[str, Any] | None:
         listed = self._tokens.get(token_id)
-        return None if listed is None else self._public(self._markets[listed[0]], detail=True)
+        if listed is None:
+            self._count(3)  # closed, open, closed: absent from all three
+            return None
+        market = self._markets[listed[0]]
+        self._count(1 if market["closed"] else 2)  # found closed, or closed then open
+        return self._public(market, detail=True)
 
     def _best(self, token_id: str) -> tuple[Decimal, Decimal]:
         mid = self._token_mid(token_id)
         return mid - self.tick, mid + self.tick
 
     def order_book(self, token_id: str, depth: int) -> dict[str, Any]:
+        self._count(1)
         listed = self._tokens.get(token_id)
         if listed is None:
             raise PolymarketUnavailable("HTTP 404")
@@ -554,6 +644,7 @@ class FakePolymarket:
                 "timestamp_ms": str(self._now_ns // 1_000_000)}
 
     def midpoint(self, token_id: str) -> str | None:
+        self._count(1)
         if token_id not in self._tokens:
             raise PolymarketUnavailable("HTTP 404")
         return str(self._token_mid(token_id))

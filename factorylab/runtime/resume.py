@@ -49,6 +49,10 @@ def resume_reason(exc: Exception) -> Reason:
             return Reason.INVALID_SNAPSHOT
     if isinstance(exc, CredentialMissing):
         return Reason.CREDENTIAL_MISSING
+    from factorylab.runtime.polymarket import LiveReaderRefused
+
+    if isinstance(exc, LiveReaderRefused):
+        return Reason(exc.code)
     if isinstance(exc, GenesisMismatchError):
         return Reason.MANIFEST_MISMATCH
     if isinstance(exc, LedgerIntegrityError):
@@ -492,7 +496,8 @@ def _read_only(name: str) -> bool:
     ):
         return True
     if name.startswith("polymarket.") and name.rsplit(".", 1)[-1] in (
-            "search_markets", "market", "market_of_token", "midpoint"):
+            "search_markets", "market", "market_of_token", "midpoint", "order_book",
+            "requests_sent", "drain_sends", "wall_ns"):
         return True  # the public Polymarket reads (world/polymarket.py)
     return name.rsplit(".", 1)[-1] in (
         # The safety path's wall-clock and delivered-tick reads (time audit T8).
@@ -502,6 +507,9 @@ def _read_only(name: str) -> bool:
         "quote", "fetch",
         "registration_price", "seller_models", "funding_payments", "lookup",
         "reserve_balance", "discover_index", "instruments",
+        # The live adapter's count of venue request weight it has sent: a read of its
+        # own counter, replayed from the journal and never a write to the venue.
+        "request_weight_sent",
         # The vault surface's reads: a vault's record, this account's vault equities,
         # its vault ledger rows, and the ledger match that resolves a lost write.
         "vault_details", "vault_equities", "vault_ledger", "vault_lookup",
@@ -553,6 +561,13 @@ class JournalProxy:
         self.target, self.journal, self._journal_name = target, journal, name
         self.deterministic = deterministic
         self.call_metrics = {}
+        # Told of every answered call as ``(method, args, kwargs, result)``, the result
+        # being what the journal returned: the recorded one on replay, so whatever an
+        # observer builds from it is the same in a live run and its replay.
+        self.observer = None
+        # Every public call dispatched through this proxy, answered or not: tells a
+        # caller whether anything reached the adapter. Counted identically on replay.
+        self.dispatched = 0
 
     def __getattr__(self, name):
         attr = getattr(self.target, name)
@@ -564,9 +579,13 @@ class JournalProxy:
 
         def call(*args, **kwargs):
             started = time.monotonic_ns()
+            self.dispatched += 1
             try:
-                return self.journal.call(f"{self._journal_name}.{name}", attr, args, kwargs,
-                                         deterministic=self.deterministic)
+                result = self.journal.call(f"{self._journal_name}.{name}", attr, args, kwargs,
+                                           deterministic=self.deterministic)
+                if self.observer is not None:
+                    self.observer(name, args, kwargs, result)
+                return result
             finally:
                 if not self.deterministic and not self.journal.recovering:
                     metric = self.call_metrics.setdefault(name, {"calls": 0, "elapsed_ns": 0})
@@ -576,13 +595,15 @@ class JournalProxy:
         return call
 
     def __setattr__(self, name, value):
-        if name in ("target", "journal", "_journal_name", "deterministic", "call_metrics"):
+        if name in ("target", "journal", "_journal_name", "deterministic", "call_metrics",
+                    "observer", "dispatched"):
             object.__setattr__(self, name, value)
         else:
             setattr(self.target, name, value)
 
     def __delattr__(self, name):
-        if name in ("target", "journal", "_journal_name", "deterministic", "call_metrics"):
+        if name in ("target", "journal", "_journal_name", "deterministic", "call_metrics",
+                    "observer", "dispatched"):
             object.__delattr__(self, name)
         else:
             delattr(self.target, name)
@@ -660,6 +681,23 @@ _RUNTIME_FIELDS = (
     "facilitator_url",
     "registered_predicates", "kind_reward_shapes", "forecast_returns",
     "connector_calls", "connector_calls_day",
+    # Each seat's venue read weight in the sliding minute. An older checkpoint starts
+    # every share unspent.
+    "venue_read_use",
+    # When each freed venue read slot may be given again, and the seats waiting for one.
+    "slot_free_at", "slot_last_reader", "slot_waiting",
+    # The seats holding a venue read slot. An older checkpoint gives the seeds theirs.
+    "venue_readers",
+    # The retired ids, oldest retirement first (the order the retained private state
+    # cap releases their kept state in).
+    "retirement_order",
+    # Each id's lineage key, the serial they are drawn from, and the key of the seat
+    # that registered each id's current version: whose next version inherits its head.
+    # An older checkpoint knows only the seeds' keys, so only an id itself inherits.
+    "lineage_keys", "registration_serial", "registrants",
+    # Each seat's Polymarket read requests in the sliding minute. An older checkpoint
+    # (or a world without the block) starts every share unspent.
+    "polymarket_read_use",
     # The pause between releases: None while awake, else the entry record (C2).
     "dormancy",
     # C10: each seat's last rendered call ceiling and the world size it was priced at.
@@ -700,8 +738,6 @@ _RUNTIME_FIELDS = (
     # tier is taken as viable until measured, no epoch waits, and the anchor is
     # rebuilt from the treasury's own window.
     "card_clock", "governance_viable", "pending_epochs", "cap_anchor_ns",
-    # The tick each watcher last paid for (T8): a safety sweep charges none twice.
-    "watcher_ticks",
 )
 # Runtime fields read through a property with no setter, and the attribute behind it.
 _RUNTIME_BACKING = {
@@ -744,17 +780,27 @@ _DERIVED_STATE = {
                             "start; the event's own termination check acts on it",
     "FakeTreasury.forward_wait_ticks": "the runtime restates it before every treasury tick "
                                        "from the manifest floor and the measured capital loop",
+    "Runtime._tick_reads": "the tick's venue answers, dropped at every checkpoint, so a "
+                           "replay starts with none as the recording did",
+    "Runtime._venue_drains": "the simulated venue's local drains, counted only to key the "
+                             "tick's answers, which every checkpoint drops",
+    "ArtifactStore.checkpointed": "the hashes the latest durable checkpoint's index held, set "
+                                  "identically by a live run and a resume (seal_released)",
 }
 # Transient: belongs to this process or this file, not to the world.
 _TRANSIENT_STATE = {
     "RecoveryJournal": "the diary itself and this process's replay cursor over it: the "
                        "checkpoint is an item in the diary, not a copy of it",
     "LedgerLock": "this process's exclusive hold on the diary file",
+    "Runtime.ledger_path": "where this process finds the diary it was launched or resumed "
+                           "on",
     "Runtime.diary_id": "bound by the restore to the diary the checkpoint came from",
     "ArtifactStore.root": "where this process finds the archive's bytes beside the ledger",
     "NormInbox.ledger_path": "where this process finds the norm house's files beside the "
                              "ledger; what they said is journaled at the boundary that read it",
     "JournalProxy.call_metrics": "this process's wall-clock timing of its own adapter calls",
+    "JournalProxy.dispatched": "this process's count of calls that reached the adapter, "
+                               "compared only before and after one call",
     "ReserveGuard.ledger": "the diary file this process was launched or resumed on, named "
                            "to the reserve's record so a used authorization is booked there",
     "ReserveGuard.run_dir": "the directory of that same diary file",
@@ -802,7 +848,7 @@ _COMPONENT_FIELDS = (
     ("reconciler", "", ("every", "_ticks")),
     # The artifact archive's index (C9): hash -> owner, kind, size, time, published.
     # The bytes stay beside the ledger and are found again by hash.
-    ("artifacts", "", ("index",)),
+    ("artifacts", "", ("index", "released_recent")),
     # Continuity (C1): the head pointer each seat holds and the inbox indexes and
     # read cursors addressed to it. Both name artifacts; the bodies are in the
     # archive and ``_verify_artifacts`` proves they are still there before the
@@ -916,7 +962,7 @@ def restore_runtime(rt, state: dict) -> None:
     therefore leaves the runtime exactly as it was, rather than half a dead
     world's memory inside a live one.
     """
-    from factorylab.runtime.live import LiveClock
+    from factorylab.runtime.live import LiveClock, wall_paced
     from factorylab.runtime.routing import RouterState
     from factorylab.world.clock import ClockSource
 
@@ -986,6 +1032,9 @@ def restore_runtime(rt, state: dict) -> None:
         if name in _RETIRED_RUNTIME:
             continue
         setattr(rt, _RUNTIME_BACKING.get(name, name), value)
+    if "retirement_order" not in saved_runtime:
+        # An older checkpoint kept no retirement order: its retired ids, by id.
+        rt.retirement_order = sorted(rt.retired_assemblies)
     rt.diary_id = diary
     rt.pending = {handle: p for handle, p in rt.pending.items()
                   if p.channel not in _RETIRED_PENDING}
@@ -1010,7 +1059,7 @@ def restore_runtime(rt, state: dict) -> None:
         rt.tick_clock = ClockSource.restore(saved_clock)
     else:
         callbacks = ({"now_ns": rt.tick_clock.now_ns, "sleep": rt.tick_clock.sleep}
-                     if isinstance(rt.tick_clock, LiveClock) else {})
+                     if wall_paced(rt.tick_clock) else {})
         rt.tick_clock = LiveClock.restore(saved_clock, **callbacks)
     if rt.clock_source is not None:
         rt.clock_source = rt.tick_clock
@@ -1041,6 +1090,9 @@ def restore_runtime(rt, state: dict) -> None:
             if name == "artifacts" and name not in components:
                 # Older checkpoints predate the artifact archive; it starts empty.
                 continue
+            if name == "artifacts" and field not in components[name]:
+                # Older checkpoints predate releases: no seat has released anything.
+                continue
             if name in ("working_state", "outcomes") and name not in components:
                 # Older checkpoints predate continuity; heads and inboxes start empty.
                 continue
@@ -1059,6 +1111,10 @@ def restore_runtime(rt, state: dict) -> None:
                 # Older checkpoints predate the thrash price; it starts at zero.
                 continue
             setattr(getattr(rt, name), prefix + field, components[name][field])
+    # The recorded run sealed every release this checkpoint shows the moment it was
+    # durable; the resumed one does the same, so the tail collects exactly what the
+    # recording collected.
+    rt.artifacts.seal_released()
     rt.prices.prices = decode(state["prices"])
     rt.assemblies.clear()
     for assembly in decode(state["assemblies"]):
@@ -1174,6 +1230,10 @@ def _check_artifacts(store, *, index: dict, assemblies, heads: dict, outcomes: d
                 raise ResumeError("an outcome item's body is not in the archive index",
                                   code="artifact_missing", sha=item["sha"], owner=seat)
     for sha, record in index.items():
+        if record.get("released"):
+            # Released before this checkpoint and possibly collected since: nothing
+            # the saved state names depends on it (kernel/artifacts.py, ``release``).
+            continue
         try:
             store.get(sha)
         except ArtifactError:
@@ -1304,6 +1364,21 @@ def _resume_runtime(manifest, ledger_path, *, provider, market, exchange, clock_
             })
         raise
     journal.bootstrap = False
+    from factorylab.runtime import polymarket
+
+    # A live Polymarket reader is admitted, and holds the host's IP, before the replay:
+    # the tail's last event runs on past the diary's end and may read the network.
+    polymarket.arm(rt)
+    try:
+        return _replay(rt, journal, ledger, tail, snapshot, state, launch_nonce, now_ns)
+    except BaseException:
+        # A resume that fails here never runs, so nothing else would release the host.
+        polymarket.disarm(rt)
+        raise
+
+
+def _replay(rt, journal, ledger, tail, snapshot, state, launch_nonce, now_ns):
+    """Re-run the diary's tail on the restored runtime, then resume at the wall clock."""
     journal.active = journal.recovering = True
     journal.tail = (item for item in tail
                     if item.get("kind") not in ("ledger.repaired", "failed_resume"))

@@ -279,9 +279,9 @@ class ProgramRunner:
     """One program seat call under the tool jail: the request on stdin, a reply on stdout.
 
     The result is a plain mapping and nothing here raises, so the meter that
-    wraps a call always commits the call's flat price: a program that cannot
-    start, exits non-zero or outruns its wall clock is a billed malformed
-    return, exactly as a model that answered nonsense would be. The mapping
+    wraps a call always commits it: a program that cannot start, exits non-zero
+    or outruns its wall clock is a malformed return, exactly as a model that
+    answered nonsense would be. The mapping
     holds only bounded streams and exit facts, so a recovery journal can
     record it and replay it without re-running population code.
     """

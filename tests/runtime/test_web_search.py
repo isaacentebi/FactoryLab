@@ -31,9 +31,8 @@ RESULTS = [
      "snippet": "Open interest rose through the session."},
 ]
 #: fake-haiku is $1/$5 per MTok with a $0.007 web plugin, so a 100/200-token search
-#: costs 100 + 1000 + 7000 micro-USD before the tool's own flat price.
+#: costs 100 + 1000 + 7000 micro-USD: what the provider bills, and the whole cost.
 MODEL_COST = 100 * 1 + 200 * 5 + 7000
-CALL_PRICE = 2000
 
 
 @pytest.fixture(autouse=True)
@@ -62,7 +61,7 @@ class SearchProvider(ScriptedProvider):
 def web_runtime(*, provider=None, max_call_micro=50_000, balance=100_000_000):
     """A scripted world whose manifest names fake-haiku as its search route."""
     manifest = load_manifest("scripted")
-    manifest = replace(manifest, web=WebSpec("fake-haiku", CALL_PRICE, max_call_micro))
+    manifest = replace(manifest, web=WebSpec("fake-haiku", max_call_micro))
     return Runtime(manifest, events=0, seed=1, initial_balance_micro=balance,
                    ledger_path=None, router_gamma=.1, exchange=FakeExchange(),
                    provider=provider if provider is not None else SearchProvider())
@@ -88,14 +87,16 @@ def search(rt, handle, **args):
 # --- the priced, bounded call ------------------------------------------------------------
 
 
-def test_search_returns_the_bounded_list_and_charges_call_price_plus_metered_cost():
-    """The seat pays the flat price and the one completion, and reads the list only after."""
+def test_search_returns_the_bounded_list_and_charges_only_the_metered_cost():
+    """The seat pays what the provider billed for the one completion (the plugin's
+    per-request charge included) and nothing on top of it (Wave 11: the wallet moves
+    only when money moves), and reads the list only after."""
     rt = web_runtime()
     handle = decision(rt)
     before = rt.wallet.balance
     result, cost = search(rt, handle, query="hyperliquid funding rate")
     assert result["results"] == RESULTS
-    assert cost == CALL_PRICE + MODEL_COST and result["cost_micro"] == cost
+    assert cost == MODEL_COST and result["cost_micro"] == cost
     assert result["as_of_ns"] == rt.clock.now_ns
     assert rt.wallet.balance == before - cost
     # One call, on the search route, under the fixed prompt and nothing else.

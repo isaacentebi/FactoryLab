@@ -124,7 +124,8 @@ def test_put_validates_its_arguments():
 def test_read_view_is_bounded_and_marks_binary(tmp_path):
     archive, _ = store(tmp_path)
     text = archive.put(b'{"n": 2}', owner="prog-a", kind="program.state")
-    assert archive.read(text) == {"sha": text, "owner": "prog-a", "kind": "program.state",
+    # No view names an owner (AGENTS.md rule 5): only the reader's own kind.
+    assert archive.read(text) == {"sha": text, "kind": "program.state",
                                   "bytes": 8, "text": '{"n": 2}'}
     binary = archive.put(b"\xff\xfe\x00", owner="a", kind="blob")
     assert archive.read(binary)["base64"] == "//4A"

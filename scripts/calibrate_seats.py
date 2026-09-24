@@ -374,7 +374,7 @@ def padded_world(rt: Runtime, seat: str, req: Request, target_bytes: int) -> Req
                 "args_schema": {"type": "object", "properties": {
                     "coin": {"type": "string"}, "window": {"type": "integer", "minimum": 1}},
                     "required": ["coin", "window"], "additionalProperties": False},
-                "price_micro_per_call": rt.m.tools.population_tool_micro_per_call,
+                "price_micro_per_call": 0,
                 "kind": "population"}
 
     world = dict(req.inputs["world"])

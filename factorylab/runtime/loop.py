@@ -173,10 +173,9 @@ class Runtime(
         a decision routed on a published return reads that return in its INPUTS, so
         those bytes are a fact about the return as much as about the reader. The
         kernel files them under the author's scope in the window the reading was
-        metered, the way retained-storage rent is filed; the reader's request is
-        not touched, so nothing about the author reaches it. A decision with no
-        subject, a subject no assembly authored, an invocation for which the
-        runtime rendered no prompt, or one
+        metered; the reader's request is not touched, so nothing about the author
+        reaches it. A decision with no subject, a subject no assembly authored, an
+        invocation for which the runtime rendered no prompt, or one
         whose request never reached its executor (refused over its ceiling, its
         reservation refused, the world terminal: ``Return.delivered`` is False),
         records nothing: no reader read those bytes.
@@ -259,10 +258,16 @@ class Runtime(
 
     def run(self) -> dict[str, Any]:
         """Keep exclusive ledger ownership through the last runtime action or process death."""
+        from factorylab.runtime import polymarket
+
         try:
+            # A live Polymarket reader is admitted, and holds the host's IP, before the
+            # world's first event; an offline one takes nothing.
+            polymarket.arm(self)
             return self._run()
         finally:
             self._ledger_lock.close()
+            polymarket.disarm(self)
 
     def _run(self) -> dict[str, Any]:
         """Continue the original source budget; restored internal events keep their ordering."""
@@ -367,6 +372,8 @@ class Runtime(
         self._observe_delivered_event(ev)
         if ev.kind is EventKind.TICK:
             self._open_pending_epochs()
+            self._assign_waiting_readers()
+            self._prune_read_use()
             self._chaos_tick()  # seat-facing faults only (runtime.chaos), drawn per tick
             self._reconcile_orders()
             if getattr(self, "polymarket", None) is not None:
@@ -402,8 +409,8 @@ class Runtime(
                     self._emit(EventKind.RECONCILED, snap, source="kernel")
             else:
                 self._settle_exchange_effects(self.exchange.advance(self.clock.now_ns))
-            # C2: the kernel settles every registered watcher from world state at the
-            # program price, then offers one coalesced update to the seats that asked
+            # C2: the kernel settles every registered watcher from world state, then
+            # offers one coalesced update to the seats that asked
             # for one. Both are queued behind this tick's own routing.
             self._evaluate_watchers()
             self._emit_world_update()
@@ -574,6 +581,9 @@ class Runtime(
         self.ledger.append(
             {"kind": "snapshot", "boundary": boundary, "n": self.n, "state": state}
         )
+        # The checkpoint just made durable names no reference to anything released
+        # before it, so those records may now be collected (kernel/artifacts.py).
+        self.artifacts.seal_released()
         # The held venue reads are not in the checkpoint — the listing, the mids and
         # the account state are the venue's own facts, and a checkpoint is a
         # continuation, not a cache. Dropping them here is what makes it safe to leave
@@ -582,6 +592,10 @@ class Runtime(
         # the venue exactly where the recorded tail did.
         self._instruments_memo = None
         self._mids_memo = None
+        # The tick's venue answers are not in the checkpoint either: the replayed tail
+        # starts with none, and so does the run that wrote it.
+        self._tick_reads = None
+        self._polymarket_tick_reads = None
         self._account_memo = None
         self._peak_observed = None
         forget = getattr(self.treasury, "forget_observations", None)
@@ -1630,14 +1644,13 @@ def run_world(
     outcome is known and settle to their own handle; the world terminates by
     death if the wallet reaches zero and the summary reports the seal state.
 
-    A world whose manifest prices population tools does not launch on a host
-    where the jail cannot start: the world block would promise tools that no
-    proposal could ever obtain. Nothing is written before the refusal.
+    Every world offers population tools, so no world launches on a host where
+    the jail cannot start: the world block would promise tools that no proposal
+    could ever obtain. Nothing is written before the refusal.
     """
-    if manifest.tools.population_tool_micro_per_call > 0:
-        reason = jail_probe()
-        if reason is not None:
-            raise NoJail(f"this world offers population tools and the host has no jail: {reason}")
+    reason = jail_probe()
+    if reason is not None:
+        raise NoJail(f"this world offers population tools and the host has no jail: {reason}")
     return Runtime(
         manifest,
         events=events,

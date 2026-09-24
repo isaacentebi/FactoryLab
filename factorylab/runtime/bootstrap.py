@@ -31,7 +31,14 @@ from factorylab.runtime.cascade import CascadeGate
 from factorylab.runtime.compute import ContractConsequences
 from factorylab.runtime.feedback import PendingJudgement
 from factorylab.runtime.immune import thrash_controller
-from factorylab.runtime.live import LiveClock, LiveVenue, Reconciler, WallClock, build_provider
+from factorylab.runtime.live import (
+    LiveClock,
+    LiveVenue,
+    Reconciler,
+    WallClock,
+    build_provider,
+    wall_paced,
+)
 from factorylab.runtime.observations import seed_book
 from factorylab.runtime.pricing import MeasureWindow
 from factorylab.runtime.resume import JournalProxy, RecoveryJournal
@@ -121,6 +128,16 @@ class BootstrapMixin:
             from factorylab.world.evm import RailError
 
             raise RailError(CAPITAL_LOOP_REFUSED)
+        # The venue read share is a load-time invariant, checked before anything is
+        # written, for a manifest built in code as for one read from a file.
+        problem = manifest.read_share_problem()
+        if problem is None and _journal is None:
+            # Genesis admits the retained private state cap against the host's free
+            # disk once; the cap is fixed for the world's life, so a resume (which
+            # arrives with its journal) is never refused for the host's disk since.
+            problem = manifest.host_disk_problem(ledger_path)
+        if problem is not None:
+            raise ValueError(problem)
         if self.live and not ledger_path and _journal is None and mainnet_rail(manifest):
             # Every reserve-key entry of a world names its diary: without one, a used
             # authorization could never be shown booked (a false recovery), and a
@@ -128,6 +145,11 @@ class BootstrapMixin:
             # venue, key or file is touched.
             raise MainnetRailRequiresALedger(MAINNET_RAIL_REFUSED)
         self._ledger_lock = _lock or LedgerLock(ledger_path)
+        # Where this process keeps the world's diary, and the host's one live Polymarket
+        # reader when this world holds it: taken before the first event or replay, and
+        # released when the world stops (``runtime/polymarket.py``, ``arm``).
+        self.ledger_path = ledger_path
+        self._polymarket_ip_lock = None
         self.m = manifest
         self.kill_at_end = kill_at_end
         self.clock_source = clock_source
@@ -160,8 +182,6 @@ class BootstrapMixin:
         self.card_clock: dict[str, int] = {}
         # Whether a governance tier fits between the slowest loop and the world (T7).
         self.governance_viable = True
-        # watcher seat -> the world tick its program price was last charged (T8).
-        self.watcher_ticks: dict[str, int] = {}
         # event kind -> the tick a grown menu started waiting for its epoch (T6).
         self.pending_epochs: dict[str, int] = {}
         # Where the treasury caps' own wall-clock windows are counted from (T1, T13).
@@ -169,7 +189,7 @@ class BootstrapMixin:
         self.clock = SimClock(0) if _journal is None else _journal.clock
         if self.live and _journal is None:
             self.clock.now_ns = (
-                self.tick_clock.now_ns() if isinstance(self.tick_clock, LiveClock)
+                self.tick_clock.now_ns() if wall_paced(self.tick_clock)
                 else self.tick_clock.start_ns
             )
         self.stats = RunStats()
@@ -349,6 +369,10 @@ class BootstrapMixin:
             "exchange",
             deterministic=isinstance(self.exchange, FakeExchange) and not self.live,
         )
+        # Every answered venue read is kept for the rest of its tick, so an identical
+        # seat read is answered without a request (``ComputeMixin._tick_answer``).
+        self._tick_reads = None
+        self.exchange.observer = self._observe_venue_answer
         from factorylab.world.venue_tools import seed_markets
 
         seed_markets(self.exchange, manifest.exchange)
@@ -440,6 +464,17 @@ class BootstrapMixin:
             self._register_seed_contracts()
         self.assemblies: dict[str, Assembly] = {}
         self.retired_assemblies: set[str] = set()
+        # The retired ids, oldest retirement first: whose kept state is released first
+        # when a private-state write needs room under the cap (``[storage]``).
+        self.retirement_order: list[str] = []
+        # id -> its lineage key: the registration serial a new id draws (the seeds
+        # take the first ones), kept across its versions, since only its owner may
+        # re-version it. id -> the lineage key of the seat that registered its current
+        # version (None: no known seat); a seed is in none, so only it owns itself.
+        self.lineage_keys: dict[str, int] = {
+            a.id: index + 1 for index, a in enumerate(manifest.assemblies)}
+        self.registration_serial = len(manifest.assemblies)
+        self.registrants: dict[str, int | None] = {}
         self.retirement_proposals: dict[str, dict] = {}
         self.return_kinds: dict[str, str] = {}
         self.return_bindings: dict[str, dict] = {}
@@ -585,6 +620,11 @@ class BootstrapMixin:
             self.ledger, root=artifact_root(ledger_path) if ledger_path else None,
             clock_ns=self.clock,
         )
+        # The disk is finite: retained private state has a hard cap for the world's
+        # life, and a write that needs room releases retired ids' kept state first.
+        self.artifacts.private_cap = manifest.storage.retained_private_bytes
+        self.artifacts.reclaimable = self._reclaimable_state
+        self.artifacts.on_reclaimed = self._state_reclaimed
         # Continuity (C1): a head pointer per seat over the archive, and an inbox of
         # settled consequences addressed to the seat that decided them. These replace
         # the three-entry memory deque, which lost a decision before its outcome landed.
@@ -632,21 +672,70 @@ class BootstrapMixin:
                 "id": spec.id,
                 "description": spec.description,
                 "args_schema": _to_plain(spec.args_schema),
+                # The venue charges nothing for a call: its public reads are free
+                # and its fees land on the venue account where they happen.
                 "price_micro_per_call": spec.price_micro_per_call,
                 "kind": spec.kind,
             }
-            if spec.id in self.venue_tools.PUBLIC_READS:
-                self.tool_specs[spec.id]["price_micro_per_call"] = (
-                    manifest.connectors.call_price_micro)
         vault_examples: dict[str, list[dict]] = {}
         if getattr(manifest.exchange, "vault_tools", False):
             # A surface, published only where the manifest opts in: what each call
             # does and costs, and no word about what a vault might be for.
             from factorylab.world.venue_tools import vault_specs
 
-            specs, vault_examples = vault_specs(manifest.connectors.call_price_micro)
+            specs, vault_examples = vault_specs()
             self.tool_specs.update(specs)
             self.treasury.vault_custody = True
+        from factorylab.world.venue_tools import (
+            _BASE_WEIGHT,
+            TICK_ANSWER_FACT,
+            VENUE_WEIGHT_PER_MINUTE,
+        )
+
+        budget = manifest.exchange.public_read_weight_per_minute
+        seats = manifest.exchange.max_readers
+        for tool_id, weight in _BASE_WEIGHT.items():
+            if tool_id not in self.tool_specs:
+                continue
+            # A limit is a published fact (essay II.I.b), never advice.
+            if weight == 0:
+                self.tool_specs[tool_id]["description"] += (
+                    " Held by seats with a venue read slot. Answered from the listing the "
+                    "venue adapter loaded: it sends no request and spends none of your "
+                    "venue read share.")
+                continue
+            self.tool_specs[tool_id]["description"] += (
+                f" Held by seats with a venue read slot (at most {seats}). Each slot has "
+                f"a fixed share of {budget // seats} venue request weight ({budget} over "
+                f"{seats} slots) in any sliding 60 s of world time; the rest of the "
+                f"venue's {VENUE_WEIGHT_PER_MINUTE} a minute per IP is the kernel's. This "
+                f"read is sent at most once and weighs {weight}"
+                + (" plus 1 per 60 candles asked" if tool_id == "venue.candles" else
+                   " plus 1 per 20 rates asked" if tool_id == "venue.funding_history"
+                   else "")
+                + ", charged to your share for every read. A read your remaining share "
+                "cannot cover is refused and not sent. " + TICK_ANSWER_FACT)
+        # seat -> [[world ns, venue weight]] of its reads in the sliding minute.
+        self.venue_read_use: dict[str, list[list[int]]] = {}
+        # The same for Polymarket reads (``runtime/polymarket.py``); empty, and never
+        # spent, in a world without the block.
+        self.polymarket_read_use: dict[str, list[list[int]]] = {}
+        self._polymarket_tick_reads = None
+        # slot index -> the world ns from which a freed slot may be given again (its
+        # last holder's last read has left the sliding minute by then), and the seats
+        # registered while no slot was free, in registration order.
+        self.slot_free_at: dict[str, int] = {}
+        # slot index -> the registration that last held it, whose Polymarket open reads
+        # must all have stopped counting before the slot is given again.
+        self.slot_last_reader: dict[str, str] = {}
+        # The venue read slots, by position: the seeds, in manifest order, up to
+        # ``[venue] max_readers``; then registrations into the lowest free slot. A
+        # retired seat's slot is None until it is given again. Seeds past the slots
+        # wait for one like any seat registered without one.
+        seeds = [a.id for a in manifest.assemblies]
+        self.venue_readers: list[str | None] = seeds[:manifest.exchange.max_readers]
+        self.slot_waiting: list[str] = seeds[manifest.exchange.max_readers:]
+
         self.tool_specs["treasury.transfer"] = {
             "id": "treasury.transfer",
             "description": "Move USDC spot_to_perps or perps_to_spot, between venue and reserve, "
@@ -691,7 +780,7 @@ class BootstrapMixin:
                 "required": ["substring"],
                 "additionalProperties": False,
             },
-            "price_micro_per_call": manifest.tools.population_tool_micro_per_call,
+            "price_micro_per_call": 0,
             "kind": "catalogue",
         }
         self.tool_specs["market.discover"] = {
@@ -706,7 +795,7 @@ class BootstrapMixin:
                 },
                 "additionalProperties": False,
             },
-            "price_micro_per_call": manifest.tools.population_tool_micro_per_call,
+            "price_micro_per_call": 0,
             "kind": "market",
         }
         coin = manifest.exchange.coins[0]
@@ -733,10 +822,11 @@ class BootstrapMixin:
         self.tool_specs["artifact.get"] = {
             "id": "artifact.get",
             "description": "Read an archived artifact by its sha256: your own working "
-            "state, an artifact you wrote, or the private state of a program in your "
-            "own lineage. Anything else is "
-            "refused with artifact_private. The read is free and ledgered. Returns "
-            "owner, kind, bytes and text (base64 for binary), up to 64 KiB.",
+            "state, an artifact you hold, or the current private state of a program in "
+            "your own lineage. A hash you released recently is refused with "
+            "artifact_released; any other hash you hold no reference to is refused with "
+            "artifact_private, whether or not the archive holds it. The read is free and "
+            "ledgered. Returns your kind, bytes and text (base64 for binary), up to 64 KiB.",
             "args_schema": {
                 "type": "object",
                 "properties": {"sha": {"type": "string", "minLength": 64, "maxLength": 64}},

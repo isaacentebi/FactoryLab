@@ -460,6 +460,22 @@ class FeedbackMixin:
                 from factorylab.settlement.vocabulary import _validate_params
 
                 _validate_params(pid, params, predicate=known[pid])
+                if pid in EVENT_PREDICATE_IDS:
+                    from factorylab.runtime.polymarket import open_claim
+
+                    # The claim's token is looked up now, as the sealing seat's own
+                    # read, and its settlement read opens under the world's limit
+                    # (``open_limit``); a refused claim is not sealed.
+                    refused = open_claim(self, evaluator_id, params["token_id"],
+                                         self.ticks_consumed + horizon)
+                    if refused is not None:
+                        self.ledger.append({"kind": "forecast.refused",
+                                            "handle": evaluator_handle, "predicate": pid,
+                                            "token_id": params["token_id"],
+                                            "reason": refused, "ts": self.clock.now_ns})
+                        self._refusal_to_owner(evaluator_handle, "forecast", refused,
+                                               predicate=pid, token_id=params["token_id"])
+                        continue
                 fh = open_forecast_decision(
                     self.queue,
                     evaluator_id=evaluator_id,
@@ -648,7 +664,8 @@ class FeedbackMixin:
             # A Polymarket claim settles on the world's own read of its token now,
             # at settlement (essay II.III.b): the market's resolution or its price.
             # One snapshot a token a pass, so one question has one answer.
-            event = event_facts(self, f.predicate_id, f.params["token_id"], snapshots)
+            event = event_facts(self, f.predicate_id, f.params["token_id"], snapshots,
+                                due_tick=f.due_at_tick)
             if event is UNOBSERVABLE:
                 return UNOBSERVABLE
             public["event"] = event

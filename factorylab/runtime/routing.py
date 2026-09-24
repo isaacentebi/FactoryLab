@@ -795,8 +795,10 @@ class RoutingMixin:
         """The ceiling one call of this seat needs now: its last rendered ceiling plus the
         input price of every character the world block has grown by since (at the
         meter's own slack). Before its first call, the ceiling of its last hold.
-        A flat-fee seat (a program) needs its fee: the world block's growth costs
-        it nothing, so there is no growth term and no token price to look up."""
+        A program seat needs nothing: its jail pays no one, so its recorded ceiling
+        is zero, the world block's growth costs it nothing and there is no token
+        price to look up. Its entitlement therefore does not bound it; the limits
+        that do are the kernel's (docs/manifest.md, "Program seats")."""
         record = self.seat_ceilings.get(action_id)
         if record is None:
             return self.budget.last_hold(action_id)
@@ -1518,6 +1520,16 @@ class RoutingMixin:
                             "proposal_id": proposal_id,
                             "version": self.assemblies[assembly_id].spec.version})
         self.retired_assemblies.add(assembly_id)
+        # Retirement is final for a version, not for an id: the id's head and program
+        # state are kept for its next version, until the retained private state cap
+        # needs the room (``_reclaimable_state``).
+        self.retirement_order.append(assembly_id)
+        # A retirement frees its venue read slot, for the next registration once the
+        # seat's last read has left the sliding minute.
+        self._free_reader_slot(assembly_id)
+        if assembly_id in self.slot_waiting:
+            self.slot_waiting.remove(assembly_id)
+        self._assign_waiting_readers()
         book = getattr(self, "subscription_book", None)
         if book is not None:
             # A retired watcher stops being evaluated, and stops being charged for it.
@@ -1526,6 +1538,28 @@ class RoutingMixin:
         for kind in sorted(self.routers):
             self._open_epoch(kind)
         self._watch_evaluator_majority(f"retire:{assembly_id}")
+
+    def _reclaimable_state(self) -> list[str]:
+        """The ids whose kept private state the archive may release for room, oldest
+        retirement first: retired ids only, so a live seat's state is never released
+        (essay II.II.b: the disk is a hard limit, not a price)."""
+        return [seat for seat in self.retirement_order if seat in self.retired_assemblies]
+
+    def _state_reclaimed(self, seat: str, sha: str, kind: str) -> None:
+        """Forget a retired id's pointer to state the archive released for room.
+
+        Guarantees: the id names no head or program state that is no longer held, and
+        it leaves the retirement order once it holds no private state at all. The
+        release itself was ledgered before the index changed (``ArtifactStore``).
+        """
+        head = self.working_state.heads.get(seat)
+        if kind == "working.state" and head is not None and head["sha"] == sha:
+            del self.working_state.heads[seat]
+        retired = self.assemblies.get(seat)
+        if kind == "program.state" and getattr(retired, "state_sha", None) == sha:
+            retired.state_sha = None
+        if not self.artifacts.private_holdings(seat) and seat in self.retirement_order:
+            self.retirement_order.remove(seat)
 
     def _watch_evaluator_majority(self, cause: str) -> None:
         """Ledger the moment the live roster's evaluator seats stop, or resume, outnumbering

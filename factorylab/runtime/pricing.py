@@ -76,12 +76,9 @@ class MeasureWindow:
     # path it is published at. Private attribution, never a window observation:
     # it is what turns a retained index back into a position in the whole window.
     series_discarded: dict[str, int] = field(default_factory=dict)
-    # Retained-storage rent paid in this window, in micro-USD. Cost the window
-    # spent without a return to carry it, so it enters the cost mass of a
-    # per-return observation and never that observation's denominator.
-    storage_cost_micro: int = 0
-    # Every invocation's metered cost plus retained-storage rent, in micro-USD: the
-    # window's compute burn (``burn_per_window``; charter audit M6).
+    # Every invocation's metered cost, in micro-USD: the window's compute burn
+    # (``burn_per_window``; charter audit M6). Only a debit with a real counterparty
+    # is metered, so this is money that left the factory in the window.
     compute_spend_micro: int = 0
     # The world tick the window opened at and the tick its drawn period ends (time
     # audit T1): the price loop's own schedule, published with the window.
@@ -182,40 +179,6 @@ class PricingMixin:
             if action_id in self.assemblies:
                 emitted = self.assemblies[action_id].spec.emits
         return measured_role(emitted) if emitted else "producer"
-
-    def _charge_storage(self, handle: str, cost_micro: int) -> None:
-        """Bind a metered retained-storage charge to a decision that can be scored for it.
-
-        Retained storage is an explicit liability of the decision that
-        holds it. Every charge enters that decision's cost contribution for the
-        window it landed in and the measured rows the charter's cost cards and
-        their penalty shares are read from, so both see it where it was spent. A
-        producer's charge enters the window's own cost statistics too, as cost
-        the window spent and never as a return it received, so a card measured
-        over whole closed windows moves with the charge its shares already blame
-        the writer for while its per-return denominator stays its returns. While
-        the decision's own consequence outcome is still open the charge is also
-        carried into that outcome's cost, so a return cannot pay off on a margin
-        its storage has already consumed. An outcome is fixed once and never
-        reopened, so afterwards the cost contribution is the whole of the
-        liability and it stays with the note's current owner decision.
-        """
-        if cost_micro <= 0:
-            return
-        sample = self._contribution(handle, self._decision_role(handle))
-        sample["cost"] += cost_micro
-        self.window.compute_spend_micro += cost_micro
-        self.card_samples.stored(handle=handle, assembly=self.handle_to_assembly.get(handle),
-                                 role=sample["role"], window=self.window.index, cost=cost_micro)
-        if sample["role"] == "producer":
-            # ``costs`` holds one entry per well-formed producer return, and a
-            # charge is not a return, so it joins the window's separate storage
-            # total instead of opening an entry of its own there.
-            self.window.storage_cost_micro += cost_micro
-        carried = self.consequences.carry(handle, cost_micro)
-        self.ledger.append({"kind": "price.contribution", "handle": handle,
-                            "window": self.window.index, "role": sample["role"],
-                            "cost": cost_micro, "storage": True, "carried": carried})
 
     def _invoke(self, action_id, req, role, *, child=False):
         """Prices retain the completed decision's own cost, schema result and tool attempts."""
@@ -330,9 +293,9 @@ class PricingMixin:
         self.stats.reserve_windows += 1
         self.window = MeasureWindow(self.stats.reserve_windows, self._equity_micro(),
                                     opened_tick=now, due_tick=schedule["due"])
-        from factorylab.runtime.continuity import charge_window as charge_state_window
+        from factorylab.runtime.continuity import collect_window
 
-        charge_state_window(self)  # a seat's working state pays byte-time rent
+        collect_window(self)  # the archive collects; retained state is never charged
         self.price_windows[self.window.index] = self.window
         self._observe_positions()
         self._activate_charter_if_due()
@@ -998,11 +961,9 @@ class PricingMixin:
             rows = [r for r in rows if first <= r["window"] <= last]
             if card.window.per is None:
                 rows = [r for r in rows if r["role"] == "producer"]
-                if all(r.get("storage") for r in rows):
+                if not rows:
                     # Global window sufficient statistics also support native callers
                     # that supplied contribution records without invocation samples.
-                    # A retained-storage charge is not one of those responses, so a
-                    # span holding rent alone still reads the window's own records.
                     rows = [dict(d, handle=h) for index, w in self.price_windows.items()
                             if first <= index <= last for h, d in w.decisions.items()
                             if d["role"] == "producer"]
@@ -1011,15 +972,12 @@ class PricingMixin:
             if supported is not None and scope not in supported:
                 continue
             if card.window.kind == "returns":
-                # The same horizon the card measured: a retained-storage charge
-                # is the holder's cost inside it, never one of its n responses.
+                # The same horizon the card measured.
                 group = _horizon(card.observation, group, card.window.n, partial=True)
             successful = [r for r in group if r["ok"]]
             # The scope's mean cost, measured the way the card measured it: a
-            # retained-storage charge adds its cost to the responses it is
-            # divided over and is never one of them, so a scope with no
-            # response has no measured cost to own and is not attributed.
-            responses = sum(1 for r in successful if not r.get("storage"))
+            # scope with no response has no measured cost to own.
+            responses = len(successful)
             if not responses:
                 continue
             for row in successful:
@@ -1057,10 +1015,9 @@ class PricingMixin:
             key = "tool_calls" if observation == "tool_calls" else "notional_micro"
             numerator, denominator = own.get(key, 0), getattr(window, key)
         else:
-            # A decision whose only entry in this window is money spent — a
-            # retained-storage charge falling due where it never responded —
-            # made no response this observation reads, so it does not take a
-            # share of the violation and does not dilute the shares that do.
+            # A decision whose only entry in this window is money spent made no
+            # response this observation reads, so it does not take a share of the
+            # violation and does not dilute the shares that do.
             n = sum(role == "all"
                     or (as_role if h == handle and as_role is not None else d["role"]) == role
                     for h, d in samples.items()

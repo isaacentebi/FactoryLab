@@ -76,16 +76,13 @@ class Lot:
 class ReturnAccount:
     """Cost is unknown until all invocation rounds and tools have returned.
 
-    ``cost_micro`` is the return's own metered compute and tools, fixed once. A
-    liability the return keeps carrying afterwards — retained public storage
-    renewing each window — accrues separately in ``carried_micro`` while the
-    outcome is open, and the outcome's threshold is their sum.
+    ``cost_micro`` is the return's own metered compute and tools, fixed once, and
+    is the outcome's threshold. It holds only debits with a real counterparty.
     """
 
     handle: str
     opened_at_event: int
     cost_micro: int | None = None
-    carried_micro: int = 0
     realized_micro: Fraction = Fraction(0)
     opened_lots: int = 0
     closed_lots: int = 0
@@ -176,19 +173,6 @@ class LotTable:
                 or any(order.handle == handle for order in self.orders)):
             raise ValueError("only a return that authored nothing may be voided")
         return self._accounts({handle: replace(account, voided=True)})
-
-    def carry(self, handle: str, cost_micro: int) -> "LotTable":
-        """Add a nonnegative retained liability to a return whose outcome is still open.
-
-        Guarantees: a fixed outcome is never reopened, the charge is money, and
-        the return's own final compute cost is left exactly as it was recorded.
-        """
-        require_money(cost_micro, nonnegative=True)
-        account = self.account(handle)
-        if account.payoff is not None:
-            raise ValueError("return outcome already final")
-        return self._accounts({handle: replace(
-            account, carried_micro=account.carried_micro + cost_micro)})
 
     def bind_service(self, service: str, handle: str) -> "LotTable":
         """Bind a registered service to the return that registered it, so the service's
@@ -455,8 +439,8 @@ class LotTable:
         a fill: in world ticks when the caller passes ``tick`` and the account
         recorded the tick it opened at, in the caller's events otherwise. Accepted
         unfilled orders defer early settlement. A return pays off when the realised
-        result credited to it, as opener or closer, exceeds its own cost, carried
-        liabilities included; a no-fill return cannot inherit anyone's P&L.
+        result credited to it, as opener or closer, exceeds its own cost; a no-fill
+        return cannot inherit anyone's P&L.
 
         ``censored`` names returns that also sent an order nobody could observe
         (handle -> documented reason). Such a return resolves on its own schedule
@@ -489,9 +473,8 @@ class LotTable:
                         1 if lot.is_buy else -1
                     ) * 1_000_000 - lot.charges_micro
             micro = net.numerator // net.denominator
-            # Everything the return cost: its own compute and tools, plus every
-            # liability it was still carrying when the outcome was fixed.
-            cost = account.cost_micro + account.carried_micro
+            # Everything the return cost: its own compute and tools.
+            cost = account.cost_micro
             acted = account.opened_lots > 0 or account.closes > 0 or account.earnings > 0
             reason = (censored or {}).get(account.handle)
             outcome = Payoff(
@@ -518,7 +501,7 @@ class LotTable:
         """The outcome this return would be fixed at now, without fixing it.
 
         Guarantees the same arithmetic ``resolve`` fixes a marked outcome with (lots
-        marked to ``mids``, cost including carried liabilities, the paid-off rule),
+        marked to ``mids``, its own cost, the paid-off rule),
         and changes nothing. None for a return with no final cost, one whose lots
         lack a mid, or one with an order nobody could observe. A return already
         fixed returns its fixed outcome.
@@ -539,7 +522,7 @@ class LotTable:
             net += (mid - lot.px) * lot.size * (1 if lot.is_buy else -1) * 1_000_000 \
                 - lot.charges_micro
         micro = net.numerator // net.denominator
-        cost = account.cost_micro + account.carried_micro
+        cost = account.cost_micro
         acted = account.opened_lots > 0 or account.closes > 0 or account.earnings > 0
         return Payoff(handle, int(acted and micro + account.earned_micro > cost), micro, cost,
                       event, bool(lots), account.liquidated, account.earned_micro)

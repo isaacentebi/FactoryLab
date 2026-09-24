@@ -76,14 +76,21 @@ def test_a_subprocess_seam_is_refused_and_recorded(_no_network, tmp_path):
 
 
 def test_loopback_and_unix_sockets_stay_open():
+    # Each connection is accepted before the next is made. With listen(1) and nothing
+    # accepted, the first (closed) connection still filled the accept queue, and macOS
+    # answered the second SYN with a reset: ConnectionResetError on about half the
+    # runs serially and a few percent under load, never a network touch.
     server = socket.socket()
-    server.bind(("127.0.0.1", 0))
-    server.listen(1)
+    server.bind(("127.0.0.1", 0))  # port 0: the OS picks a free one, no collision
+    server.listen(2)
+    server.settimeout(2)
     try:
-        socket.create_connection(server.getsockname(), timeout=2).close()
-        client = socket.socket()
-        client.connect(("localhost", server.getsockname()[1]))
-        client.close()
+        port = server.getsockname()[1]
+        for host in ("127.0.0.1", "localhost"):
+            client = socket.create_connection((host, port), timeout=2)
+            accepted, _ = server.accept()
+            accepted.close()
+            client.close()
     finally:
         server.close()
     left, right = socket.socketpair()

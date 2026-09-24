@@ -262,6 +262,37 @@ def test_the_rail_stamps_validbefore_with_the_clock_the_bound_measured(
     assert int(top_up["state"]["reference"]["authorization"]["validBefore"]) == created + 300
 
 
+def test_a_capital_loop_run_s_safety_path_reads_wall_time_mid_event(tmp_path, monkeypatch):
+    """The run's LiveClock sits behind the rehearsal's ``AdmissionClock``. Every model
+    call here takes a delivered tick of wall time, so before the next call of the same
+    event the safety pass runs, at the wall's instant: the safety path reads wall time
+    through the wrapper (before the fix it read the event's simulated instant, which
+    never moves inside an event, so no pass ever ran)."""
+    from scripts import edition4_rehearsal as rehearsal
+
+    w = wired(tmp_path, monkeypatch)
+    kwargs = launch_kwargs(w)
+    provider, reads = kwargs["provider"], []
+    complete = provider.complete
+
+    def thinking(request):
+        w["wall"].now += TICK_NS  # the call takes a tick of wall time
+        reads.append(w["wall"].now)
+        return complete(request)
+
+    provider.complete = thinking
+    out = tmp_path / "runs" / "thinking"
+    report = rehearsal.run_rehearsal(
+        str(w["world"]), out=out, capital_loop=True, duration_ns=3_600 * 1_000_000_000,
+        source_root=repo_root(), **kwargs)
+    assert report["status"] == "completed", report.get("error")
+    rows = json.loads((out / "events.json").read_text())
+    passes = [r for r in rows if r["kind"] == "safety.pass"]
+    assert passes and len(reads) > 1
+    # Each pass ran at a wall instant a model call reached, mid-event.
+    assert {p["ts"] for p in passes} <= set(reads)
+
+
 @pytest.mark.parametrize("name", ["SIGINT", "SIGTERM", "SIGHUP"])
 def test_a_signal_mid_run_still_writes_the_report_warns_and_exits_3(
         tmp_path, monkeypatch, capsys, name):

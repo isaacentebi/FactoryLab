@@ -1204,10 +1204,19 @@ class HyperliquidExchange:
         import requests
         from hyperliquid.utils.error import ClientError, ServerError
 
+        from factorylab.world.venue_tools import request_weight
+
+        if getattr(self, "single_attempt", False):
+            # A seat's read: sent once, so its weight never exceeds what its share
+            # admitted (runtime/compute.py, ``_seat_read_attempts``).
+            attempts = 1
         delay = 0.5
         for attempt in range(attempts):
+            # Every attempt is a request the venue weighs against the IP limit, a
+            # retry after a 429 included: counted before it is sent, whatever answers.
+            self.request_weight = getattr(self, "request_weight", 0) + request_weight(what)
             try:
-                return call()
+                result = call()
             except ClientError as exc:
                 # A 4xx is the SDK's ClientError, which is not a RuntimeError and used
                 # to escape every catch site and kill the tick. A 429 is the venue
@@ -1226,7 +1235,17 @@ class HyperliquidExchange:
                     raise VenueUnavailable(f"{what}: {type(exc).__name__}: {exc}") from exc
                 time.sleep(delay)
                 delay *= 2
+            else:
+                # The weight that grows with what was returned is known only now.
+                self.request_weight += request_weight(what, result) - request_weight(what)
+                return result
         raise AssertionError("unreachable")
+
+    def request_weight_sent(self) -> int:
+        """Guarantees the documented venue weight of every request this adapter has sent,
+        every attempt counted, monotone. Journaled like any venue read, so a replay
+        charges exactly what the recording measured."""
+        return getattr(self, "request_weight", 0)
 
     # ---- reads
 
@@ -1245,12 +1264,15 @@ class HyperliquidExchange:
         return dict(self._last_mids)
 
     def funding(self) -> list[FundingEvent]:
+        """The venue's current funding rates; raises VenueUnavailable when it did not answer.
+
+        An unanswered read is never an empty one: ``[]`` would say the venue reports
+        no funding. A caller for whom absence is a fact (the tick's events,
+        ``runtime/live.py``) catches the error and emits nothing.
+        """
         import time
 
-        try:
-            raw = self._guarded("meta_and_asset_ctxs", self._info.meta_and_asset_ctxs)
-        except VenueUnavailable:
-            return []
+        raw = self._guarded("meta_and_asset_ctxs", self._info.meta_and_asset_ctxs)
         if not isinstance(raw, (list, tuple)) or len(raw) != 2:
             raise VenueUnavailable("invalid funding response")
         meta, ctxs = raw

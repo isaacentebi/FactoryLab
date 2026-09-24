@@ -169,6 +169,32 @@ def _venue_aliases(call: dict) -> None:
     if "is_buy" in args and "side" not in args and isinstance(args["is_buy"], bool):
         args["side"] = "buy" if args.pop("is_buy") else "sell"
 
+class _TickAnswers:
+    """The venue as one tick's answer: the answered method returns it, all else is the venue."""
+
+    def __init__(self, venue: Any, method: str, value: Any) -> None:
+        self._venue, self._method, self._value = venue, method, value
+
+    def __getattr__(self, name: str) -> Any:
+        if name == self._method:
+            return lambda *_args, **_kwargs: self._value
+        return getattr(self._venue, name)
+
+
+def read_share(manifest: Any) -> int:
+    """A reader's venue read share: the read budget over the venue read slots."""
+    return (manifest.exchange.public_read_weight_per_minute
+            // max(1, manifest.exchange.max_readers))
+
+
+def _cursor_position(cursor: str) -> tuple[int, str] | None:
+    """The listing-order key an ``artifact.list`` cursor ``<ns>:<sha>`` names, or None."""
+    ns, _, sha = cursor.partition(":")
+    if not ns.isdigit() or len(sha) != 64 or any(c not in "0123456789abcdef" for c in sha):
+        return None
+    return (-int(ns), sha)
+
+
 class ArtifactListing:
     """Each owner's directory rows in listing order, kept sorted as the archive changes.
 
@@ -222,8 +248,9 @@ class ArtifactListing:
             return
         references = store.references(sha, record)
         for position, (owner, reference) in enumerate(references.items()):
-            row = self._row(sha, owner, record.get("kind"), record["bytes"],
-                            reference.get("ts", record["ts"]))
+            # The kind this owner holds the bytes under, never another writer's.
+            row = self._row(sha, owner, reference.get("kind", record.get("kind")),
+                            record["bytes"], reference.get("ts", record["ts"]))
             yield self._key(row, position), row
 
     def _rows_from_list(self, store: Any):  # pragma: no cover - a store from before C1
@@ -533,12 +560,15 @@ class ComputeMixin:
         if spec.model_id == "program":
             from factorylab.cortex.assembly import ProgramAssembly
 
-            # The seat's executor is its own code in the jail; its flat price is
-            # reserved and committed through the same meter as a model call.
+            # The seat's executor is its own code in the world's own jail, which
+            # pays no one: its price is zero (the wallet moves only when money
+            # moves), and the call still runs through the meter so it is ledgered
+            # beside a model call.
             asm = ProgramAssembly(
-                spec, self.program_runner, meter, self.m.prices.program_micro_per_call,
+                spec, self.program_runner, meter,
                 artifacts=self.artifacts, validator=self._validate_output_contract,
-                record=lambda entry: self.ledger.append(entry),
+                record=self._record_program,
+                state_gate=lambda: self._state_write_refusal(spec.id),
             )
             self.assemblies[spec.id] = asm
             self.event_schemas.update(spec.schemas)
@@ -874,8 +904,7 @@ class ComputeMixin:
         from factorylab.cortex.tools import connector_spec
 
         self._init_connectors()
-        self.tool_specs.setdefault(
-            "connector.fetch", connector_spec(self.m.connectors.call_price_micro))
+        self.tool_specs.setdefault("connector.fetch", connector_spec())
         self._ensure_web_tool()
         self._ensure_calc_tool()
         self._ensure_directory_tools()
@@ -890,14 +919,12 @@ class ComputeMixin:
         manifest, the roster or the manifest hash changes — the spec is a
         constant of the runtime, not a committed parameter.
 
-        The price is ``prices.tool_micro_per_call`` where a world commits one
-        (GPT-6 §7 allows free or the flat tool price) and free otherwise, which
-        is what every world in this repository is today.
+        It is free: arithmetic in the world's own process pays no one, and the
+        wallet moves only when money moves (GPT-6 §7 allowed free).
         """
         from factorylab.cortex.tools import calc_spec
 
-        price = getattr(self.m.prices, "tool_micro_per_call", 0)
-        self.tool_specs.setdefault("calc", calc_spec(price if type(price) is int else 0))
+        self.tool_specs.setdefault("calc", calc_spec())
 
     def _ensure_web_tool(self) -> None:
         """Register ``web.search`` exactly when the manifest names a search route.
@@ -912,7 +939,7 @@ class ComputeMixin:
             return
         cap = (Decimal(self.m.web.max_call_micro) / 1_000_000).normalize()
         self.tool_specs.setdefault(
-            "web.search", web_search_spec(self.m.web.call_price_micro, f"{cap}"))
+            "web.search", web_search_spec(f"{cap}"))
 
     #: What one page of a shared-directory listing returns before a cursor.
     DIRECTORY_PAGE = 50
@@ -965,9 +992,15 @@ class ComputeMixin:
         """
         rows = self._artifact_listing().rows_for(owner)
         if cursor:
-            shas = [row["sha"] for row in rows]
-            start = shas.index(cursor) + 1 if cursor in shas else len(rows)
-            rows = rows[start:]
+            position = _cursor_position(cursor)
+            if position is not None:
+                # A position, not a row: paging continues past a row that was since
+                # released or collected instead of ending at it.
+                rows = [row for row in rows
+                        if (-(row["updated_ns"] or 0), str(row["sha"])) > position]
+            else:
+                shas = [row["sha"] for row in rows]
+                rows = rows[shas.index(cursor) + 1:] if cursor in shas else []
         return [{k: v for k, v in row.items() if k != "owner"} for row in rows]
 
     def _artifacts_owned_by(self, seat: str, limit: int) -> tuple[int, list[dict[str, Any]]]:
@@ -979,15 +1012,23 @@ class ComputeMixin:
         """One ``artifact.list`` page of the caller's own rows, the total, and the cursor.
 
         ``count`` is the caller's whole listing, not the remainder, so a reader
-        knows how much it has not seen; an unknown cursor ends the listing rather
-        than restarting it, so paging can never loop.
+        knows how much it has not seen. ``next_cursor`` names a position in the
+        listing order (``<ns>:<sha>``), so a row released or collected between two
+        pages never ends the paging; a cursor naming no position and no row ends
+        the listing and says so (``cursor_unknown``) rather than restarting it, so
+        paging can never loop.
         """
         cursor = args.get("cursor") if isinstance(args.get("cursor"), str) else None
-        total = len(self._artifact_index(owner))
+        rows = self._artifact_index(owner)
         remaining = self._artifact_index(owner, cursor)
         page = remaining[:self.DIRECTORY_PAGE]
-        return {"items": page, "count": total,
-                "next_cursor": page[-1]["sha"] if len(remaining) > len(page) else None}
+        last = page[-1] if page else None
+        unknown = (cursor is not None and _cursor_position(cursor) is None
+                   and cursor not in {row["sha"] for row in rows})
+        return {"items": page, "count": len(rows),
+                "next_cursor": (f"{last['updated_ns'] or 0}:{last['sha']}"
+                                if last is not None and len(remaining) > len(page) else None),
+                **({"cursor_unknown": True} if unknown else {})}
 
     def _connector_catalogue(self) -> list[dict]:
         """Public connector contracts expose latest versions, descriptions and origins."""
@@ -1005,11 +1046,16 @@ class ComputeMixin:
 
     def _fetch_connector(self, action_id: str, handle: str, args: dict, *,
                          origin: str | None = None) -> tuple[dict, int]:
-        """Reserve first; count attempts durably; return text only after the flat debit."""
+        """Count attempts durably; return text only after any paid read is debited.
+
+        A public fetch pays no one, so the fetch itself moves no money (the wallet
+        moves only when money moves); ``max_calls_per_window`` is its limit. A paid
+        source debits the seller's own price before its text is returned.
+        """
         from factorylab.cortex.tools import _validate_args, connector_spec
         from factorylab.world.connector import ConnectorRefused
 
-        error = _validate_args(connector_spec(0)["args_schema"], args)
+        error = _validate_args(connector_spec()["args_schema"], args)
         if error:
             return self._connector_refused(handle, error)
         preflight = origin is not None
@@ -1037,8 +1083,7 @@ class ComputeMixin:
             count = 0
         if count >= self.m.connectors.max_calls_per_window:
             return self._connector_refused(handle, "connector window call cap reached", **fields)
-        price = self.m.connectors.call_price_micro
-        if price + (paid_cap or 0) > self.wallet.available_for(handle, "tool:connector.fetch"):
+        if (paid_cap or 0) > self.wallet.available_for(handle, "tool:connector.fetch"):
             return self._connector_refused(handle, "connector call unaffordable", **fields)
         data_cost = 0
 
@@ -1068,8 +1113,8 @@ class ComputeMixin:
 
         try:
             paid = self._seat_meter(action_id).run(
-                handle=handle, reason="tool:connector.fetch", ceiling=price,
-                execute=execute, cost_of=lambda _: price)
+                handle=handle, reason="tool:connector.fetch", ceiling=0,
+                execute=execute, cost_of=lambda _: 0)
         except BillingUncertain as exc:
             result, cost = {"error": str(exc), "status": "uncertain", "bytes": 0}, exc.cost
         except Exception:
@@ -1099,6 +1144,294 @@ class ComputeMixin:
         meter = self._seat_meter(self.handle_to_assembly.get(handle))
         return metered_data(meter, handle, cap, execute, self._record_market)
 
+    PUBLIC_READ_REFUSAL = "venue read share spent"
+
+    def venue_read_share(self) -> int:
+        """Each reader's venue read share: the read budget over the venue read slots.
+
+        Guarantees: a manifest constant, fixed for the world's life (``[venue]
+        public_read_weight_per_minute // max_readers``), so the shares of every slot
+        never sum past the budget, and nothing another seat does (reading,
+        registering, retiring) changes a reader's share or its refusals (AGENTS.md
+        rule 4: no channel between seats).
+        """
+        return read_share(self.m)
+
+    def _tick_key(self) -> tuple[int, int, int] | None:
+        """The tick and the counts of venue and treasury writes that can move an answer.
+
+        An answer is good for the tick it was read in and only until an operation
+        that can change what the venue answers: an order, a cancel, a leverage or
+        vault write, a transfer. ``drain_events`` hands over the simulated venue's
+        local event queue and changes nothing the venue answers, so the journal's
+        venue write count is taken net of the drains the venue answered
+        (``_observe_venue_answer`` counts them). The journal's own classification is
+        untouched: replay still reads a drain as a write. A ledger with no journal
+        keeps no answers.
+        """
+        writes = getattr(self.ledger, "writes", None)
+        if type(writes) is not dict:
+            return None
+        drains = getattr(self, "_venue_drains", 0)
+        return (self.ticks_consumed, writes.get("exchange", 0) - drains,
+                writes.get("treasury", 0))
+
+    @staticmethod
+    def _answer_key(method: str, args: tuple, kwargs: dict) -> str:
+        return json.dumps([method, list(args), kwargs], sort_keys=True, default=str)
+
+    def _observe_venue_answer(self, method: str, args: tuple, kwargs: dict,
+                              result: Any) -> None:
+        """Keep the tick's first answer to each venue read, whoever asked for it.
+
+        Guarantees: fed the journal's own result, so a replay keeps exactly what the
+        recording kept; only reads a seat can make are kept; the first answer of the
+        tick stands until the tick or a venue or treasury write moves the key.
+        """
+        from copy import deepcopy
+
+        from factorylab.world.venue_tools import TICK_ANSWERED
+
+        if method == "drain_events":
+            # Counted so the answers' key can take the journal's write count net of
+            # it; a drain the venue did not answer stays counted, which only ever
+            # drops answers, never keeps a stale one.
+            self._venue_drains = getattr(self, "_venue_drains", 0) + 1
+            return
+        if method not in {name for name, _ in TICK_ANSWERED.values()}:
+            return
+        key = self._tick_key()
+        if key is None:
+            return
+        cache = getattr(self, "_tick_reads", None)
+        if cache is None or cache["key"] != key:
+            cache = self._tick_reads = {"key": key, "answers": {}}
+        cache["answers"].setdefault(self._answer_key(method, args, kwargs), deepcopy(result))
+
+    def _tick_answer(self, tool_id: str, args: dict) -> dict | None:
+        """A seat read answered from this tick's answer to the identical request, or None.
+
+        Guarantees: no request is sent, so nothing is charged; the answer is shaped by
+        the same tool code a sent read is, from the very value the venue returned
+        earlier in this tick (the kernel's own read included), and only while no
+        venue or treasury write has happened since. None when there is no such answer.
+        """
+        from copy import deepcopy
+
+        from factorylab.world.venue_tools import TICK_ANSWERED, _json_value, _validate
+
+        spec = TICK_ANSWERED.get(tool_id)
+        cache = getattr(self, "_tick_reads", None)
+        key = self._tick_key()
+        if spec is None or cache is None or key is None or cache["key"] != key:
+            return None
+        try:
+            _validate(args, self.tool_specs[tool_id]["args_schema"])
+        except ValueError:
+            return None
+        method, names = spec
+        answer_key = self._answer_key(method, tuple(args[name] for name in names), {})
+        if answer_key not in cache["answers"]:
+            return None
+        value = deepcopy(cache["answers"][answer_key])
+        if tool_id in VAULT_READS:
+            return _json_value(value)
+        tools = self.venue_tools
+        real = tools.exchange
+        tools.exchange = _TickAnswers(real, method, value)
+        try:
+            return tools.call(tool_id, args)
+        finally:
+            tools.exchange = real
+
+    def _assign_reader_slot(self, seat: str) -> bool:
+        """Give a seat a venue read slot when one is free; say whether.
+
+        Guarantees at most ``[venue] max_readers`` seats hold a slot, a live seat
+        keeps its own, only retirement frees one (``_free_reader_slot``), and a freed
+        slot is given again only once its last holder's last venue read has left the
+        sliding minute (``slot_free_at``) and nothing of its Polymarket reads or open
+        reads still counts in wall time (``runtime/polymarket.py``, ``reader_counts``,
+        ``open_limit``). So no two
+        registrations' reads or open reads through one slot ever count at once: the
+        slots' totals stay under ``max_readers × share`` on both venues and under
+        the open-read limit, and nothing of a predecessor's reads reaches the seat
+        that follows it (AGENTS.md rule 5).
+        """
+        if seat in self.venue_readers:
+            return True
+        now = self.clock.now_ns
+        for index, holder in enumerate(self.venue_readers):
+            if (holder is None and self.slot_free_at.get(str(index), 0) <= now
+                    and not self._holds_open_reads(self.slot_last_reader.get(str(index)))):
+                self.venue_readers[index] = seat
+                return True
+        if len(self.venue_readers) >= self.m.exchange.max_readers:
+            return False
+        self.venue_readers.append(seat)
+        return True
+
+    def _free_reader_slot(self, seat: str) -> None:
+        """Free a retiring seat's slot, held back until its last read has slid out.
+
+        Guarantees the slot is given to no one before every venue read charged to the
+        retiring seat is older than the sliding minute of world time; its Polymarket
+        reads are held to their own window, in wall time, by ``_holds_open_reads``.
+        """
+        from factorylab.world.venue_tools import READ_WINDOW_NS
+
+        if seat not in self.venue_readers:
+            return
+        index = self.venue_readers.index(seat)
+        reader = self._reader_id(seat)
+        since = self.clock.now_ns - READ_WINDOW_NS
+        last = max((row[0] for row in self.venue_read_use.get(reader, ())
+                    if row[0] > since), default=None)
+        self.venue_readers[index] = None
+        self.slot_free_at[str(index)] = (self.clock.now_ns if last is None
+                                         else last + READ_WINDOW_NS)
+        self.slot_last_reader[str(index)] = reader
+
+    def _holds_open_reads(self, reader: str | None) -> bool:
+        """Whether anything of the registration ``reader`` still counts against a
+        Polymarket window: an open read, or a read in the last 10 s of wall time."""
+        if reader is None or getattr(self, "polymarket", None) is None:
+            return False
+        from factorylab.runtime.polymarket import reader_counts
+
+        return reader_counts(self, reader)
+
+    def _reader_id(self, seat: str) -> str:
+        """The registration a seat's reads and open reads are counted under: its id and
+        version, never the id string alone, so a later registration of the same id
+        (a next version, which can only be its owner's) counts only its own."""
+        assembly = self.assemblies.get(seat) if hasattr(self, "assemblies") else None
+        return seat if assembly is None else f"{seat}#{assembly.spec.version}"
+
+    def _assign_waiting_readers(self) -> None:
+        """Give free slots to the seats registered without one, first in first out.
+
+        Guarantees each assignment is ledgered (``venue.reader_slot``), the queue is
+        served in order (a later seat never takes a slot an earlier one waits for),
+        and a retired seat waits for nothing. Called at every registration and
+        retirement and once a tick, so a slot that comes free goes to the queue.
+        """
+        for seat in list(self.slot_waiting):
+            if seat in self.retired_assemblies or seat not in self.assemblies:
+                self.slot_waiting.remove(seat)
+                continue
+            if not self._assign_reader_slot(seat):
+                return
+            self.slot_waiting.remove(seat)
+            self.ledger.append({"kind": "venue.reader_slot", "assembly_id": seat,
+                                "slot": True, "ts": self.clock.now_ns})
+
+    def _prune_read_use(self) -> None:
+        """Drop the read rows every window has passed, a retired registration's included.
+
+        Guarantees the per-registration read books hold only rows some share still
+        counts (the longest window is the venue's 60 s), so they do not grow with the
+        registrations the world has ever had.
+        """
+        from factorylab.world.venue_tools import READ_WINDOW_NS
+
+        since = self.clock.now_ns - READ_WINDOW_NS
+        uses = self.venue_read_use
+        for key in [key for key, rows in uses.items() if all(row[0] <= since for row in rows)]:
+            del uses[key]
+        if getattr(self, "polymarket", None) is not None:
+            from factorylab.runtime.polymarket import prune_read_use
+
+            prune_read_use(self)  # its own window, in wall time
+
+    def _venue_read_used(self, seat: str) -> int:
+        """The venue weight charged to this seat's own reads in the sliding minute."""
+        from factorylab.world.venue_tools import READ_WINDOW_NS
+
+        reader = self._reader_id(seat)
+        since = self.clock.now_ns - READ_WINDOW_NS
+        uses = getattr(self, "venue_read_use", {})
+        kept = [row for row in uses.get(reader, ()) if row[0] > since]
+        if kept:
+            uses[reader] = kept
+        else:
+            uses.pop(reader, None)
+        return sum(weight for _ts, weight in kept)
+
+    def _venue_read_refusal(self, seat: str, tool_id: str, args: Any) -> str | None:
+        """Refuse a seat's venue read its share cannot cover, before anything is sent.
+
+        Guarantees: a read is admitted only when the weight its first attempt sends
+        fits in what the seat's own reads left of its share over the sliding minute;
+        another seat's reads never enter it. With one seat a slot at a time
+        (``_assign_reader_slot``), the seats together send at most
+        ``public_read_weight_per_minute`` a minute, which leaves the kernel the rest of
+        the venue's 1200. The venue itself enforces its per-IP limit (a 429), which the
+        adapter backs off from. Any other tool passes untouched.
+        """
+        from factorylab.world.venue_tools import public_read_weight
+
+        weight = public_read_weight(tool_id, args)
+        if weight is None or weight == 0:
+            return None
+        share, used = self.venue_read_share(), self._venue_read_used(seat)
+        if used + weight > share:
+            return (f"{self.PUBLIC_READ_REFUSAL}: {used} of {share} venue request weight "
+                    f"in the last 60 s; this read sends {weight}")
+        return None
+
+    def _charge_venue_read(self, seat: str, weight: int) -> None:
+        if weight:
+            self._venue_read_used(seat)
+            self.venue_read_use.setdefault(self._reader_id(seat), []).append(
+                [self.clock.now_ns, weight])
+
+    def _charge_slot_read(self, seat: str, tool_id: str, args: Any) -> None:
+        """Charge an admitted seat read its first-attempt weight, whether the tick already
+        held the answer or the read is sent. A share is a quota on reads asked, so a seat
+        cannot tell a tick's answer from a sent read (AGENTS.md rule 4)."""
+        from factorylab.world.venue_tools import public_read_weight
+
+        self._charge_venue_read(seat, public_read_weight(tool_id, args) or 0)
+
+    def _venue_weight_sent(self) -> int | None:
+        """The live adapter's count of venue weight sent, or None.
+
+        None for a simulated venue, which sends nothing, and for a counter that could
+        not be read. A journaled read-only call (``runtime/resume.py``,
+        ``_read_only``), so a replay returns what was recorded and it moves no memo
+        keyed on venue writes.
+        """
+        if not hasattr(self.exchange, "request_weight_sent"):
+            return None
+        try:
+            sent = self.exchange.request_weight_sent()
+        except Exception:  # noqa: BLE001 - a counter read never fails the seat's call
+            return None
+        return sent if type(sent) is int else None
+
+    def _seat_read_attempts(self, single: bool) -> None:
+        """A seat's read goes to the venue once: no retry can overshoot the seat's share."""
+        if hasattr(self.exchange, "request_weight_sent"):
+            self.exchange.single_attempt = single
+
+    def _charge_excess_sent(self, seat: str, tool_id: str, args: Any,
+                            before: int | None) -> None:
+        """Charge a sent seat read whatever the live adapter reports it sent beyond its
+        first-attempt weight, already charged on admission.
+
+        A seat read is sent once (``_seat_read_attempts``) and its first-attempt weight
+        counts a requested item count at its most, so the excess is normally nothing;
+        should the venue weigh more than documented, the seat's own share pays for it.
+        A simulated venue reports nothing. Never raises.
+        """
+        from factorylab.world.venue_tools import public_read_weight
+
+        after = self._venue_weight_sent()
+        if before is not None and after is not None and after >= before:
+            self._charge_venue_read(
+                seat, max(0, after - before - (public_read_weight(tool_id, args) or 0)))
+
     def _tool_price_bound(self, call: dict) -> int:
         """Variable tool prices fit the remaining request ceiling before dispatch."""
         tool = call["tool"]
@@ -1108,8 +1441,8 @@ class ComputeMixin:
                 contract = self.registry.get(f"connector:{call['args']['id']}")
                 price += contract.input_schema.get("max_call_micro", 0)
             if tool == "web.search":
-                # The flat price is not what a search costs: the metered completion
-                # rides with it, and the manifest's ceiling is what must fit.
+                # A search costs its metered completion, and the manifest's ceiling
+                # on it is what must fit.
                 price = self.m.web.max_call_micro
         except (KeyError, ValueError):
             pass  # The normal dispatcher supplies the shape or identity refusal.
@@ -1176,7 +1509,7 @@ class ComputeMixin:
         round rather than treated as free.
         """
         if isinstance(assembly, ProgramAssembly):
-            return assembly.price
+            return 0  # the jail pays no one: a program call costs nothing
         model = getattr(assembly, "model", None)
         build = getattr(assembly, "build_model_request", None)
         if model is None or build is None:
@@ -1221,8 +1554,19 @@ class ComputeMixin:
         return True
 
     def _allowed_tools(self, action_id: str) -> set[str]:
-        """Every registered tool is a public primitive; schematics are public."""
-        return set(self.tool_specs)
+        """Every registered tool is a public primitive; schematics are public.
+
+        The venue reads are held only by a seat with a venue read slot: the venue's
+        IP limit bounds who reads it (``[venue] max_readers``), never how many
+        seats exist.
+        """
+        from factorylab.runtime.polymarket import READS as POLYMARKET_READS
+        from factorylab.world.venue_tools import _BASE_WEIGHT
+
+        tools = set(self.tool_specs)
+        if action_id not in getattr(self, "venue_readers", (action_id,)):
+            tools -= set(_BASE_WEIGHT) | set(POLYMARKET_READS)
+        return tools
 
     def _weigh_venue_batch(self, action_id: str, handle: str, ret: Return,
                            tool_round: int) -> Return:
@@ -1315,7 +1659,10 @@ class ComputeMixin:
                                 "handle": handle, "assembly_id": action_id,
                                 "found": "error" not in result,
                                 **({"reason": Reason.ARTIFACT_PRIVATE.value}
-                                   if result.get("error") == PRIVATE_REFUSAL else {}),
+                                   if result.get("error") == PRIVATE_REFUSAL else
+                                   {"reason": Reason.ARTIFACT_RELEASED.value}
+                                   if result.get("error") == Reason.ARTIFACT_RELEASED.value
+                                   else {}),
                                 "ts": self.clock.now_ns})
             return result, 0
         if tool_id == "outcome.get":
@@ -1363,6 +1710,45 @@ class ComputeMixin:
         if fault is not None:
             # Decided before the meter reserves: a fault moves no money (runtime.chaos).
             return fault, 0
+        from factorylab.world.venue_tools import public_read_weight
+
+        venue_read = public_read_weight(tool_id, args) is not None
+        if venue_read:
+            # A read the tool's own schema refuses is refused here, before admission
+            # and before any charge: it can never reach the venue, on any adapter.
+            from factorylab.world.venue_tools import _validate
+
+            try:
+                _validate(args, spec["args_schema"])
+            except ValueError as exc:
+                self.ledger.append({"kind": "tool.refused", "handle": handle,
+                                    "assembly_id": action_id, "tool": tool_id,
+                                    "reason": str(exc)[:200], "ts": self.clock.now_ns})
+                return {"error": str(exc)}, 0
+        if venue_read:
+            # Admission and the slot's charge come first and are the same whether the
+            # tick holds the answer or not: a seat cannot tell the two apart, so no
+            # other seat's reads reach it through them (AGENTS.md rule 4).
+            refusal = self._venue_read_refusal(action_id, tool_id, args)
+            if refusal is not None:
+                self.ledger.append({"kind": "tool.refused", "handle": handle,
+                                    "assembly_id": action_id, "tool": tool_id,
+                                    "reason": refusal, "ts": self.clock.now_ns})
+                return {"error": refusal}, 0
+            self._charge_slot_read(action_id, tool_id, args)
+        answered = self._tick_answer(tool_id, args) if venue_read else None
+        if answered is not None:
+            # No request, no weight sent: the tick already holds the venue's answer.
+            self.ledger.append({"kind": "venue.read_answered", "handle": handle,
+                                "assembly_id": action_id, "tool": tool_id,
+                                "ts": self.clock.now_ns})
+            if tool_id in self.venue_tools.PUBLIC_READS:
+                from factorylab.runtime.observations import record_venue_facts
+
+                record_venue_facts(self.window, tool_id, args, answered, self.clock.now_ns)
+            return answered, 0
+        if venue_read:
+            weight_before = self._venue_weight_sent()
         price = int(spec["price_micro_per_call"])
 
         def execute() -> dict:
@@ -1458,6 +1844,11 @@ class ComputeMixin:
             return self.tool_runner.run(tool, args)
 
         try:
+            if venue_read:
+                # Set inside the try whose ``finally`` clears it: nothing between
+                # setting and clearing can leave the kernel's own reads without
+                # their retries.
+                self._seat_read_attempts(True)
             metered = self._seat_meter(action_id).run(
                 handle=handle,
                 reason=f"tool:{tool_id}",
@@ -1469,6 +1860,12 @@ class ComputeMixin:
             return {"error": str(exc)}, exc.cost
         except Exception as exc:  # reservation refused or execution known unbilled
             return {"error": f"{type(exc).__name__}: {exc}"[:200]}, 0
+        finally:
+            if venue_read:
+                try:
+                    self._seat_read_attempts(False)
+                finally:
+                    self._charge_excess_sent(action_id, tool_id, args, weight_before)
         if spec["kind"] == "venue":
             if tool_id in self.venue_tools.PUBLIC_READS:
                 from factorylab.runtime.observations import record_venue_facts
@@ -2139,6 +2536,21 @@ class ComputeMixin:
         if "ack_through" in ret.outputs:
             self.outcomes.ack_through(action_id, ret.outputs["ack_through"])
 
+    def _record_program(self, entry: dict[str, Any]) -> int:
+        """Ledger what a program seat's executor records; a refusal carries its time."""
+        if entry.get("kind") == "state.refused":
+            entry = {**entry, "ts": self.clock.now_ns}
+        return self.ledger.append(entry)
+
+    def _state_write_refusal(self, seat: str) -> str | None:
+        """``retired`` when a return of ``seat`` may not write state.
+
+        Guarantees a retired version writes no private state: its pending return may
+        settle, but a retired id never gains state after it retired, so it never
+        holds state the retirement order (and the cap's reclaiming) does not know.
+        """
+        return "retired" if seat in self.retired_assemblies else None
+
     def _write_working_state(self, action_id: str, handle: str, outputs: Any) -> bool:
         """Commit one accepted private head, or leave the prior head unchanged.
 
@@ -2150,6 +2562,12 @@ class ComputeMixin:
         """
         if (action_id not in self.assemblies or not isinstance(outputs, dict)
                 or "working_state" not in outputs):
+            return False
+        refused = self._state_write_refusal(action_id)
+        if refused is not None:
+            self.ledger.append({"kind": "state.refused", "assembly_id": action_id,
+                                "handle": handle, "reason": refused,
+                                "ts": self.clock.now_ns})
             return False
         state = outputs["working_state"]
         if self.ledger.without_connector_bodies(state) != state:
@@ -2243,6 +2661,15 @@ class ComputeMixin:
                             "assembly_id": action_id, "recommended": recommended,
                             "p": policy[recommended], "ts": self.clock.now_ns})
         return record
+
+    def _note_to_owner(self, handle: str, kind: str, **facts: Any) -> None:
+        """Address one fact about a decision to its owner's inbox, and to no one else."""
+        owner = self.handle_to_assembly.get(handle) or self.outcomes.seat_of(handle)
+        self.outcomes.append(owner, handle=handle,
+                             outcome={"kind": kind, "status": "admitted", **facts},
+                             delta_micro=0,
+                             evidence={"kind": kind, "handle": handle,
+                                       "ts": self.clock.now_ns})
 
     def _refusal_to_owner(self, handle: str, kind: str, reason: str, **extra: Any) -> None:
         """Address one refusal to the inbox of the seat whose decision it was, and to no one else.

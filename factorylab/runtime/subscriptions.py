@@ -358,6 +358,8 @@ class SubscriptionBook:
         # is a fold in ``folds`` with nothing here; ``acknowledged`` is neither.
         self.delivering: dict[str, _Fold] = {}
         self.watchers: dict[str, dict[str, Any]] = {}
+        # The last watcher evaluated: the next sweep resumes after it, in id order.
+        self.watch_cursor: str | None = None
         self.funding: dict[str, str] = {}  # the latest funding rate per coin
 
     # -- subscriptions ----------------------------------------------------
@@ -512,6 +514,7 @@ class SubscriptionBook:
                                 "last": None if w["last"] is None else dict(w["last"])}
                          for seat, w in sorted(self.watchers.items())},
             "funding": dict(sorted(self.funding.items())),
+            "watch_cursor": self.watch_cursor,
         }
 
     def restore(self, state: dict[str, Any]) -> None:
@@ -527,6 +530,7 @@ class SubscriptionBook:
                                 "last": None if w.get("last") is None else dict(w["last"])}
                          for seat, w in (state.get("watchers") or {}).items()}
         self.funding = dict(state.get("funding") or {})
+        self.watch_cursor = state.get("watch_cursor")
 
 
 class ThinkingMixin:
@@ -677,43 +681,39 @@ class ThinkingMixin:
         return observed
 
     def _evaluate_watchers(self, *, sweep: str = "") -> None:
-        """Settle every watcher once this tick, at the program price and no model call.
+        """Settle this sweep's share of the watchers, with no model call and no debit.
 
-        A watcher is a seat like any other: the evaluation is reserved and
-        committed against its own entitlement under ``model:program``, so a
-        watcher nobody funds stops watching instead of watching for free.
-        ``sweep`` names an extra evaluation inside one event (the safety pass
-        between model calls, time audit T8), so its metered handle is its own.
+        A watcher's predicate is evaluated by the kernel in the world's own
+        process, which pays no one, so it moves no money (the wallet moves only
+        when money moves; essay II.II.b); its cost is the world's own time, which is
+        a hard limit. Guarantees: at most ``[subscriptions]
+        max_watcher_evaluations_per_sweep`` watchers are evaluated a sweep (a tick,
+        or ``sweep``, a safety pass between model calls, time audit T8); all of them
+        against one snapshot of the world read once for the sweep, so watcher work
+        does no venue I/O of its own; in id order, resuming after the last one
+        evaluated, so each of n live watchers is reached within ceil(n / limit)
+        sweeps whoever registered first; a watcher that is retired, or whose owner is,
+        is never evaluated and takes no place in the rotation.
         """
-        from factorylab.world.metering import Meter
+        from bisect import bisect_right
 
         book = self.subscription_book
-        for seat in sorted(book.watchers):
-            if seat not in self.assemblies or seat in self.retired_assemblies:
-                continue
+        retired = self.retired_assemblies
+        live = sorted(seat for seat, record in book.watchers.items()
+                      if seat in self.assemblies and seat not in retired
+                      and record["owner"] not in retired)
+        if not live:
+            return
+        start = 0 if book.watch_cursor is None else bisect_right(live, book.watch_cursor)
+        chosen = (live[start:] + live[:start])[
+            :self.m.subscriptions.max_watcher_evaluations_per_sweep]
+        observed = self._observed_world()
+        for seat in chosen:
+            book.watch_cursor = seat
             record = book.watchers[seat]
-            # A watcher pays once per world tick. A safety sweep inside a tick it has
-            # already paid for settles it again at no further charge.
-            paid = self.watcher_ticks.get(seat) == self.ticks_consumed
-            price = 0 if sweep and paid else self.m.prices.program_micro_per_call
-            meter = Meter(self._seat_wallet(seat))
-            observed = self._observed_world()
-            handle = f"watch-{seat}-{self.n}{'-' + sweep if sweep else ''}"
-            if not price:
-                fact, cost = book.evaluate(seat, observed), 0
-            else:
-                try:
-                    metered = meter.run(handle=handle, reason="model:program", ceiling=price,
-                                        execute=lambda s=seat, o=observed: book.evaluate(s, o),
-                                        cost_of=lambda _r, p=price: p)
-                except Exception as exc:  # an unfunded watcher simply does not look
-                    self.ledger.append({"kind": "watcher.unaffordable", "watcher": seat,
-                                        "reason": type(exc).__name__, "ts": self.clock.now_ns})
-                    continue
-                fact, cost = metered.result, metered.cost
-                self.watcher_ticks[seat] = self.ticks_consumed
+            fact = book.evaluate(seat, observed)
             self.ledger.append({"kind": "watcher.evaluated", "watcher": seat,
-                                "owner": record["owner"], "cost": cost,
+                                "owner": record["owner"], "cost": 0,
                                 "fired": fact is not None, "ts": self.clock.now_ns})
             if fact is None:
                 continue

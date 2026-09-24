@@ -135,18 +135,16 @@ def test_a_delivered_request_is_a_downstream_reading(monkeypatch):
     assert rt.window.downstream_read_bytes == ret.prompt_sections["inputs"]
 
 
-def test_a_program_refused_over_its_price_is_read_by_nobody():
-    # The program's flat price above the capped ceiling returns before stdin is built.
+def test_a_program_whose_reservation_is_refused_is_read_by_nobody():
+    # A program's executor pays no one (Wave 11: no flat price to be refused over),
+    # but an infeasible reservation still returns before stdin is built.
     from tests.cortex.test_cortex import TinyWallet
-    from tests.cortex.test_programs import PRICE, program
+    from tests.cortex.test_programs import program
     from tests.cortex.test_programs import req as program_request
 
-    asm, wallet, _ = program()
-    refused = asm.invoke(program_request(ceiling=PRICE - 1))
+    asm, wallet, _ = program(TinyWallet(balance=-1))
+    refused = asm.invoke(program_request())
     assert refused.status == "failed" and not refused.delivered and wallet.log == []
-    # Its reservation refused: nothing was run either.
-    unaffordable, _, _ = program(TinyWallet(balance=PRICE - 1))
-    assert not unaffordable.invoke(program_request()).delivered
     # And the runtime files no reading for a return that says it was not delivered.
     rt = runtime()
     req = _reader(rt, 1_000_000)
@@ -211,7 +209,7 @@ def test_the_ledgered_sections_are_the_first_requests_the_assembly_was_handed(
     if len(replies) == 1:
         available = rt.wallet.available_for
         monkeypatch.setattr(rt.wallet, "available_for",
-                            lambda handle, reason: min(available(handle, reason), 777_777))
+                            lambda handle, reason: min(available(handle, reason), 950_000))
     handed, sent = drive(rt, monkeypatch, replies)
     ret = rt._invoke(SEAT, req, "producer")
     assert len(handed) == len(replies)

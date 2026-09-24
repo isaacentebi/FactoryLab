@@ -767,7 +767,9 @@ class GovernanceMixin:
                 description=prop.description,
                 input_schema=_to_plain(prop.args_schema),
                 output_schema=_to_plain(prop.returns_schema or {"type": "object"}),
-                price=PriceSpec({"call": self.m.tools.population_tool_micro_per_call}),
+                # A tool runs in the world's own jail and pays no one (the wallet
+                # moves only when money moves), so its call is free.
+                price=PriceSpec({"call": 0}),
                 permissions=frozenset({"sandbox.run"}),
                 resource_bounds=ResourceBounds(max_duration_ns=prop.timeout_s * 1_000_000_000),
             )
@@ -782,7 +784,7 @@ class GovernanceMixin:
             owner = self.handle_to_assembly.get(handle)
             if owner is not None:
                 self.tool_owner[prop.id] = owner
-            self.tool_specs[prop.id] = as_spec(tool, self.m.tools.population_tool_micro_per_call)
+            self.tool_specs[prop.id] = as_spec(tool)
             self.stats.population_tools_registered += 1
             self._emit(EventKind.REGISTERED, {
                 "kind": "tool", "id": prop.id,
@@ -883,10 +885,26 @@ class GovernanceMixin:
             # Novelty admission remains the fixed registration trial. A founder's
             # chosen endowment is a conserved transfer after admission, not a demand
             # on the shared novelty runway.
-            self._register_with_trial(
-                contract, handle, self.ev.trial_amount_micro,
-                refuse=("id already registered: a live assembly is retired by vote before "
-                        "its id takes a next version") if live else "")
+            # Ownership is by lineage key, never by id string (the owner is the seat
+            # whose current key registered the id's current version, or the id
+            # itself). A retired id takes its next version only from its owner, so no
+            # other lineage ever holds an id whose records (head, inbox, archived
+            # rationales, artifacts) are another's private state (essay II.I.b). Ids
+            # are public, so the refusal discloses nothing.
+            proposer = self._trial_proposer(handle)
+            proposer_key = self.lineage_keys.get(proposer) if proposer is not None else None
+            owner = proposer is not None and (
+                proposer == prop.id
+                or (proposer_key is not None
+                    and proposer_key == self.registrants.get(prop.id)))
+            # A live id is never re-versioned and an invocation runs to its end within
+            # one event, so no round in flight ever straddles two versions of an id.
+            refuse = ("id already registered: a live assembly is retired by vote before "
+                      "its id takes a next version") if live else ""
+            if not refuse and prop.id in self.assemblies and not owner:
+                refuse = "a retired id takes its next version only from its owner"
+            self._register_with_trial(contract, handle, self.ev.trial_amount_micro,
+                                      refuse=refuse)
             self._instantiate(spec)
             if getattr(spec, "trigger", None):
                 # A watcher answers to the seat that registered it: the kernel wakes
@@ -900,6 +918,35 @@ class GovernanceMixin:
             if custom:
                 self.kind_reward_shapes.update(shapes)
             self.retired_assemblies.discard(prop.id)
+            if prop.id in self.retirement_order:
+                self.retirement_order.remove(prop.id)
+            # Only the owner re-versions an id (above), so the id keeps its head, its
+            # inbox and its key. A program's next version is new code, which cannot be
+            # assumed to read the old code's state, so it never inherits that: it is
+            # superseded, released through the journaled release (ledger before
+            # index), and neither lingers unreachable nor holds capacity.
+            for sha, kind in self.artifacts.private_holdings(prop.id):
+                if kind == "program.state":
+                    self.artifacts.release(sha, owner=prop.id, kind=kind,
+                                           cause="superseded")
+            if prop.id not in self.lineage_keys:
+                self.registration_serial += 1
+                self.lineage_keys[prop.id] = self.registration_serial
+            self.registrants[prop.id] = proposer_key
+            # Seats already waiting are served first, in order; a new registration
+            # joins the back of the queue while anyone waits.
+            self._assign_waiting_readers()
+            if self.slot_waiting or not self._assign_reader_slot(prop.id):
+                # No venue read slot is free: the seat is admitted all the same,
+                # without the venue reads, gets the next slot to come free (ledgered
+                # then), and its proposer's receipt says so.
+                if prop.id not in self.slot_waiting:
+                    self.slot_waiting.append(prop.id)
+                self.ledger.append({"kind": "venue.reader_slot", "assembly_id": prop.id,
+                                    "slot": False, "ts": self.clock.now_ns})
+                self._note_to_owner(handle, "registration_admitted", id=prop.id,
+                                    venue_reads="no venue read slot is free: this seat "
+                                    "holds no venue read tools until one is")
             # Time audit T14: a contract version replaces the seat's configuration; its
             # decisions are corrected on the consequence loop.
             configuration_changed(self, f"seat:{prop.id}", self._consequence_period())
@@ -1001,7 +1048,8 @@ class GovernanceMixin:
                 "origin": prop.origin, "preflight_path": prop.preflight_path,
                 "pay": prop.pay, "max_call_micro": prop.max_call_micro},
             output_schema={"type": "string"},
-            price=PriceSpec({"call": self.m.connectors.call_price_micro}),
+            # A fetch pays no one; a paid source's price is its seller's own.
+            price=PriceSpec({"call": 0}),
             permissions=frozenset({"connector.fetch"}),
             resource_bounds=ResourceBounds(
                 max_duration_ns=self.m.connectors.timeout_s * 1_000_000_000,

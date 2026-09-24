@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass, is_dataclass
 from decimal import Decimal
 from typing import Any
 
-from factorylab.world.exchange import Exchange, Order, OrderKind
+from factorylab.world.exchange import Exchange, Order, OrderKind, VenueUnavailable
 from factorylab.world.vaults import (
     ADDRESS_PATTERN,
     CREATE_FEE_USD,
@@ -129,6 +129,88 @@ def _json_value(value: Any) -> Any:
     if isinstance(value, (tuple, list)):
         return [_json_value(item) for item in value]
     return value
+
+
+#: Hyperliquid's documented REST limits ("Rate limits and user limits",
+#: hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/rate-limits-and-user-limits):
+#: "REST requests share an aggregated weight limit of 1200 per minute" per IP;
+#: l2Book, allMids, clearinghouseState and spotClearinghouseState weigh 2; every
+#: other documented info request weighs 20; candleSnapshot adds weight per 60 items
+#: returned, and fundingHistory, userFunding and userFills per 20. The added weight per
+#: interval is not stated, so it is counted as 1.
+VENUE_WEIGHT_PER_MINUTE = 1200
+#: What the population's venue reads may use by default, all seats together: 40%,
+#: leaving 720 a minute for the kernel's own calls (account and spot state, mids,
+#: asset contexts, open orders, funding and fill pages each tick, and orders).
+DEFAULT_PUBLIC_READ_WEIGHT_PER_MINUTE = 480
+#: The venue requests behind each ``HyperliquidExchange._guarded`` name, by weight.
+REQUEST_WEIGHT = {"all_mids": 2, "spot_mids": 2, "l2_snapshot": 2, "user_state": 2,
+                  "spot_user_state": 2}
+#: Requests whose weight grows with the items returned: one more per this many.
+REQUEST_ITEMS_PER_WEIGHT = {"candles": 60, "funding_history": 20, "user_funding": 20,
+                            "user_fills_by_time": 20, "non_funding_ledger": 20}
+
+
+def request_weight(what: str, result: Any = None) -> int:
+    """The documented weight of one venue request named ``what``; items counted when known."""
+    weight = REQUEST_WEIGHT.get(what, 20)
+    per = REQUEST_ITEMS_PER_WEIGHT.get(what)
+    if per is not None and isinstance(result, (list, tuple)):
+        weight += len(result) // per
+    return weight
+
+
+#: Every venue read a seat can call, and the weight of one attempt of it: the
+#: requests the live adapter sends for it, at their documented weights.
+#: ``venue.instruments`` sends none: the adapter answers from the listing it loaded.
+_BASE_WEIGHT = {"venue.instruments": 0, "venue.mids": 2, "venue.order_book": 2,
+                "venue.funding": 20, "venue.candles": 20, "venue.funding_history": 20,
+                "venue.open_orders": 20,
+                # user state, spot user state and all mids (the last two with spot pairs)
+                "venue.positions": 6,
+                "venue.vault_details": 20,
+                # userVaultEquities and leadingVaults
+                "venue.vault_positions": 40}
+_ITEMS_PER_WEIGHT = {"venue.candles": ("n", 60, 200), "venue.funding_history": ("n", 20, 100)}
+#: The span a seat's venue read share is counted over: any sliding minute.
+READ_WINDOW_NS = 60_000_000_000
+#: Each seat read and the adapter method (and arguments, from the read's own) that
+#: answers it: the key an identical read within one tick is answered under.
+TICK_ANSWERED = {
+    "venue.instruments": ("instruments", ()), "venue.mids": ("mids", ()),
+    "venue.funding": ("funding", ()),
+    "venue.candles": ("candles", ("coin", "interval", "n")),
+    "venue.order_book": ("order_book", ("coin", "depth")),
+    "venue.funding_history": ("funding_history", ("coin", "n")),
+    "venue.open_orders": ("open_orders", ()), "venue.positions": ("account", ()),
+    "venue.vault_details": ("vault_details", ("vault",)),
+    "venue.vault_positions": ("vault_equities", ()),
+}
+TICK_ANSWER_FACT = (
+    "Within one world tick, until a venue write, a read identical to a venue request "
+    "already answered in that tick (the kernel's own included) is answered from that "
+    "answer, and sends no request.")
+
+
+def public_read_weight(tool_id: str, args: Any) -> int | None:
+    """The documented weight of one attempt of a seat's venue read, or None for any other tool.
+
+    Guarantees the weight never undercounts a well-formed call's first attempt: an
+    item count that is missing or out of its schema's range is counted at the
+    schema's maximum. Retries are not in it; they are charged as the adapter sends
+    them.
+    """
+    base = _BASE_WEIGHT.get(tool_id)
+    if base is None:
+        return None
+    extra = _ITEMS_PER_WEIGHT.get(tool_id)
+    if extra is None:
+        return base
+    key, per, most = extra
+    n = args.get(key) if isinstance(args, dict) else None
+    if type(n) is not int or not 1 <= n <= most:
+        n = most
+    return base + -(-n // per)
 
 
 class VenueTools:
@@ -350,6 +432,11 @@ class VenueTools:
             return {"open_orders": ex.open_orders()}
         if tool_id == "venue.positions":
             account = ex.account()
+            if getattr(account, "stale", False):
+                # The adapter fell back to its last complete snapshot because the venue
+                # did not answer: the kernel reads that as stale, and a seat is told
+                # the venue did not answer, never shown old positions as this read's.
+                raise VenueUnavailable("account: the venue did not answer this read")
             return {"positions": account.positions, **({"spot_balances": account.spot_balances}
                     if getattr(ex, "spot_pairs", ()) else {})}
         if tool_id in ("venue.place_market", "venue.place_limit"):
@@ -374,13 +461,13 @@ class VenueTools:
         return ex.set_leverage(args["coin"], args["leverage"], market=args.get("market", "perp"))
 
 
-def vault_specs(read_price_micro: int) -> tuple[dict[str, dict], dict[str, list[dict]]]:
+def vault_specs() -> tuple[dict[str, dict], dict[str, list[dict]]]:
     """Guarantees the vault surface's contracts and one schema-valid example for each.
 
     Descriptions state what a call does and what the venue charges or refuses, and
-    nothing about what a vault is for. The public vault record is priced like the
-    other public venue reads; this account's own positions are free like
-    ``venue.positions``; the writes are free like every venue write.
+    nothing about what a vault is for. Every call is free: the venue charges
+    nothing for a read, and what it charges for a write (the creation fee) lands
+    on the venue account, where it happens.
     """
     address = {"type": "string", "pattern": ADDRESS_PATTERN}
     usd = {
@@ -395,7 +482,7 @@ def vault_specs(read_price_micro: int) -> tuple[dict[str, dict], dict[str, list[
          "A vault's venue record: name, leader, total equity, depositor count, leader "
          "fraction and commission, whether it takes deposits or is closed, and this "
          "account's own equity, lockup end and withdrawable amount in it.",
-         {"vault": address}, ["vault"], read_price_micro),
+         {"vault": address}, ["vault"], 0),
         ("venue.vault_positions",
          "This account's equity in each vault it holds, with each lockup end, and the "
          "vaults it leads.", {}, [], 0),

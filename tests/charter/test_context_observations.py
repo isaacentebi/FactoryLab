@@ -381,10 +381,10 @@ def test_a_row_no_prompt_was_rendered_for_neither_reprices_nor_evicts(observatio
                      invoked=False)
     assert not fresh_sample(card, samples, MeasureWindow(2, 1))
     assert measure_card(card, samples) == before
-    # Over whole windows: a window whose only activity is not an invocation (rent, a
-    # ballot no assembly answered) rendered no prompt, so it is no new sample either.
+    # Over whole windows: a window whose only activity is not an invocation (a ballot
+    # no assembly answered) rendered no prompt, so it is no new sample either.
     whole = _card(observation, kind="windows", n=1, per=None, answers_for="all")
-    idle = MeasureWindow(3, 1, decisions={"rent-h": {"role": "producer", "cost": 5}})
+    idle = MeasureWindow(3, 1, decisions={"idle-h": {"role": "producer", "cost": 5}})
     assert not fresh_sample(whole, samples, idle)
     assert fresh_sample(whole, samples, MeasureWindow(4, 1, invocations=1, prompts=1,
                                                       read_measured=1))

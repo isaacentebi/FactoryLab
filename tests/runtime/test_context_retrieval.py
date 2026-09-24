@@ -519,20 +519,24 @@ def test_unaffordable_recent_working_set_falls_back_to_exact_references(monkeypa
     assert prompts[2].count('"read_with"') >= 2
 
 
-def test_program_cannot_run_tools_with_its_last_answer_budget(monkeypatch):
+def test_a_program_s_tool_rounds_are_bounded_by_rounds_not_by_money(monkeypatch):
+    """Wave 11: a program call costs nothing (its jail pays no one), so its next answer
+    needs no reserve and a zero cost ceiling does not refuse its tool round; the
+    kernel's round limit is what bounds it."""
     from tests.cortex.test_programs import program
 
     rt = runtime()
     req = request(rt)
     asm, _, _ = program()
     rt.assemblies["seed-decider"] = asm
+    assert rt._call_reserve(asm, req) == 0
     monkeypatch.setattr(rt, "_invoke_compute", lambda *_, **__: Return(
-        req.handle, {}, asm.price, "ok", tool_calls=(
+        req.handle, {}, 0, "ok", tool_calls=(
             {"tool": "outcome.list", "args": {}},)))
-    ret = rt._invoke("seed-decider", replace(req, cost_ceiling=2 * asm.price - 1), "producer")
-    assert ret.status == "failed" and ret.cost == asm.price
-    assert not rows(rt, "tool.call")
-    assert rows(rt, "tool.rounds_exhausted")[0]["reserve"] == asm.price
+    ret = rt._invoke("seed-decider", replace(req, cost_ceiling=0), "producer")
+    assert ret.cost == 0
+    assert rows(rt, "tool.call")
+    assert all(row.get("reserve", 0) == 0 for row in rows(rt, "tool.rounds_exhausted"))
 
 
 def test_routing_bridge_does_not_fund_the_seats_retrieval_chain(monkeypatch):

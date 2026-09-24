@@ -349,9 +349,10 @@ class VenueMixin:
         line and an operator can all read what the venue did without reading it
         as money leaving the compute wallet.
 
-        The compute wallet moves for model, tool and program charges, rent,
-        releases, transfers between seats and confirmed conversions into provider
-        credit. Nothing here is any of those.
+        The compute wallet moves only when money moves: provider bills for model
+        calls, a seller's price for a paid read or a paid call, treasury fees,
+        releases and confirmed conversions into provider credit. Nothing here is
+        any of those.
         """
         for delta, reference, reason, custody, order_id in settlements:
             handle = self._order_owner(order_id)

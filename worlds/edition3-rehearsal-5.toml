@@ -149,11 +149,10 @@ extra_body = { provider = { require_parameters = true } }
 web = { engine = "exa", mode = "fast", max_results = 5, usd_per_request = "0.007" }
 
 # C-outside: a seat may read the world through its provider's search, as a tool it calls on
-# purpose and pays for at cost. The flat price is the tool's own; the completion is metered
-# on top of it, and no single search may cost more than `max_call_usd`.
+# purpose and pays for at cost: what the provider bills for the one completion, the plugin's
+# per-request charge included, and no single search may cost more than `max_call_usd`.
 [web]
 search_model = "openai/gpt-5.6-luna"
-call_price_micro = 2000
 max_call_usd = "0.05"
 
 [[assemblies]]
@@ -285,7 +284,6 @@ sampling_step = 0.1
 sampling_cap = 0.7
 
 [tools]
-population_tool_micro_per_call = 50
 max_leverage = 3
 
 [prices]
@@ -294,7 +292,6 @@ decay = 0.1
 lambda_max = 1.0
 min_window_events = 1
 min_blame_share = 0.1
-program_micro_per_call = 50
 
 [termination]
 balance_floor_usd = "0"

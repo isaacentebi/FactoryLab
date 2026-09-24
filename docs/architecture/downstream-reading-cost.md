@@ -2,6 +2,13 @@
 
 Design note, wave 7. Nothing here is built. It asks for a ruling.
 
+*Wave 11 note.* Retained-storage rent, the precedent this note leans on, was removed
+in Wave 11: the bytes sit on the world's own fixed-price disk, so the rent paid no
+one, and the engineering rule is now that the wallet moves only when money moves.
+Option B below (a debit to the commons that credits nobody) is excluded by that
+rule; a reading cost is a constraint, priced by the charter's λ on reward through
+the `downstream_read_bytes` observation, or a limit.
+
 ## 1. The question
 
 In a live run the median rendered prompt grew from 21k to 29k characters in 100

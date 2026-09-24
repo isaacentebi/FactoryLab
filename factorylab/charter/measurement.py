@@ -24,8 +24,7 @@ PROMPT_OBSERVATIONS: Mapping[str, str] = MappingProxyType({
 #: in the window the reading was metered, over that scope's responses there.
 READ_OBSERVATION = "downstream_read_bytes"
 # The two cost selections: per successful response, and per attempt (failed
-# responses included). Both add retained-storage rent to what the selected
-# responses cost and never count a charge as one of them.
+# responses included).
 COST_OBSERVATIONS = frozenset({"cost_per_return", "cost_per_attempt"})
 # The runtime keeps per-decision attribution on the same window object;
 # measurement never observes it.
@@ -63,8 +62,8 @@ def fresh_sample(card: MetricCard, samples: CardSamples, window) -> bool:
     kind = card.window.kind
     if kind == "windows" and card.window.per is None and observation not in FORECAST_ROWS:
         if observation in PROMPT_OBSERVATIONS:
-            # Measured over the window's rendered prompts: a window with none (only
-            # rent, a ballot no assembly answered, a request that could not be
+            # Measured over the window's rendered prompts: a window with none (a
+            # ballot no assembly answered, a request that could not be
             # rendered) has no prompt to measure.
             # A record closed before prompts were measured measured none.
             return (getattr(window, "prompts", 0) or 0) > 0
@@ -130,11 +129,9 @@ def measurement_catalogue(observations=None) -> list[dict]:
 
     descriptions = {
         "cost_per_return": "Mean successful response cost in the selected rows; global closed "
-        "windows use successful producer returns. A retained-storage charge adds to what those "
-        "responses cost and is never counted as one of them.",
+        "windows use successful producer returns.",
         "cost_per_attempt": "Mean cost over every selected response, failed ones included; "
-        "global closed windows use every return the window made. A retained-storage charge "
-        "adds to what those responses cost and is never counted as one of them.",
+        "global closed windows use every return the window made.",
         "well_formed_rate": "Successful responses over selected invocation responses, "
         "including ballots.",
         "tool_calls": "Mean attempted tool calls per selected response, failures included; "
@@ -226,7 +223,7 @@ def scope_facts(windows: list[dict], returns: list[dict], forecasts: list[dict],
     globally. Its responses give (``ok``, ``costs`` of its well-formed responses,
     ``tool_calls``,
     ``noop_returns``, ``revision_returns``, ``producer_returns`` as its response
-    count, ``storage_cost_micro``, ``compute_spend_micro``, the summed
+    count, ``compute_spend_micro``, the summed
     ``prompt_bytes``, ``you_bytes`` and ``inputs_bytes`` of its prompts, and the
     ``downstream_read_bytes`` its returns' readers were rendered), the verdicts its
     responses gave, and its own settled forecasts (``forecast_skills``,
@@ -243,8 +240,7 @@ def scope_facts(windows: list[dict], returns: list[dict], forecasts: list[dict],
             merged.setdefault(key, []).extend(deepcopy(record.get(key) or []))
     merged["index"] = windows[-1]["index"] if windows else 0
     merged["equity_start_micro"] = windows[0].get("equity_start_micro") if windows else None
-    responses = [row for row in returns if not row.get("storage")]
-    storage = [row for row in returns if row.get("storage")]
+    responses = returns
     settled = [row for row in forecasts if row.get("predicate") == "return_paid_off"
                and row.get("status") == "settled"]
     merged.update({
@@ -261,7 +257,6 @@ def scope_facts(windows: list[dict], returns: list[dict], forecasts: list[dict],
         "noop_returns": sum(bool(row["noop"]) for row in responses),
         "revision_returns": sum(bool(row["revision"]) for row in responses),
         "revision_handles": {row["handle"] for row in responses if row["revision"]},
-        "storage_cost_micro": sum(row["cost"] for row in storage),
         "compute_spend_micro": sum(row["cost"] for row in returns),
         **{key: sum(row.get(key) or 0 for row in responses)
            for key in PROMPT_OBSERVATIONS.values()},
@@ -291,13 +286,12 @@ def _sample_values(observation: str, rows: list[dict]) -> list[float] | None:
     if observation in ("well_formed_rate", "noop_share", "revision_rate"):
         key = {"well_formed_rate": "ok", "noop_share": "noop", "revision_rate": "revision"}[
             observation]
-        return [float(bool(row[key])) for row in rows if not row.get("storage")]
+        return [float(bool(row[key])) for row in rows]
     if observation == "tool_calls":
-        return [float(row["tool_calls"]) for row in rows if not row.get("storage")]
+        return [float(row["tool_calls"]) for row in rows]
     if observation in PROMPT_OBSERVATIONS:
         key = PROMPT_OBSERVATIONS[observation]
-        return [float(row[key]) for row in rows
-                if not row.get("storage") and row.get(key) is not None]
+        return [float(row[key]) for row in rows if row.get(key) is not None]
     if observation == "censored_share":
         return [float(row["status"] == "censored") for row in rows]
     if observation == "avoidably_unresolved_share":
@@ -353,41 +347,18 @@ class CardSamples:
              read_bytes: int) -> None:
         """One reading of the return ``handle`` is a reading row of its author's scope.
 
-        Filed in the window the reading was metered, like retained-storage rent,
-        and under the author (``assembly``, ``role``), never the reader: the reader's
-        identity is not in the row at all.
+        Filed in the window the reading was metered, and under the author
+        (``assembly``, ``role``), never the reader: the reader's identity is not in
+        the row at all.
         """
         self.readings.append({"handle": handle, "assembly": assembly, "role": role,
                               "window": window, "read_bytes": int(read_bytes),
                               "reading": True})
 
-    def stored(self, *, handle: str, assembly: str | None, role: str, window: int,
-               cost: int) -> None:
-        """One metered retained-storage charge is a cost sample of the decision that holds it.
-
-        The cost cards and their penalty shares are measured from these rows, so
-        a charge that falls due in a window its decision never responded in is
-        still measured there: it joins that decision's own row when it has one
-        in the window, and otherwise enters as its own successful cost row. It
-        is a cost and not a response, so a selection that counts responses drops
-        it before its horizon is applied and it never occupies a response slot,
-        and a cost selection adds it to what the selected responses cost instead
-        of dividing that total by it.
-        """
-        for sample in reversed(self.returns):
-            if sample["handle"] == handle and sample["window"] == window:
-                sample["cost"] += cost
-                return
-        self.returns.append({
-            "handle": handle, "assembly": assembly, "role": role, "window": window,
-            "cost": cost, "ok": True, "noop": False, "revision": False, "tool_calls": 0,
-            "verdict": None, "storage": True,
-        })
-
     def revised(self, handle: str) -> None:
         """Accepted registrations mark their own return, including pre-continuation proposals."""
         for sample in reversed(self.returns):
-            if sample["handle"] == handle and not sample.get("storage"):
+            if sample["handle"] == handle:
                 sample["revision"] = True
                 return
 
@@ -446,11 +417,9 @@ class CardSamples:
             for card in cards:
                 if card.window.kind != kind:
                     continue
-                for group in _groups(card, _selected(card.observation, rows)).values():
+                for group in _groups(card, rows).values():
                     # Retain the horizon measurement would select, including a
-                    # partly filled one: a charge never evicts a response from
-                    # it, and a charge outside its window span is not kept for
-                    # a horizon that will never read it.
+                    # partly filled one.
                     keep.update(id(row) for row in _horizon(
                         card.observation, group, card.window.n, partial=True))
             rows[:] = [row for row in rows if (
@@ -480,7 +449,7 @@ def record_card_forecasts(runtime, pending, baseline) -> None:
     from factorylab.kernel.events import EventKind
 
     samples = runtime.card_samples
-    returns = {row["handle"]: row for row in samples.returns if not row.get("storage")}
+    returns = {row["handle"]: row for row in samples.returns}
     for event in runtime.internal:
         if event.kind is not EventKind.FORECAST_SETTLED:
             continue
@@ -594,12 +563,10 @@ def preflight_measurement(card: MetricCard, observations=None, *,
 
 
 def _selected(observation: str, rows: list[dict]) -> list[dict]:
-    """Drop retained-storage charges from every selection but a cost one.
+    """The rows an observation selects: reading rows only for the read observation.
 
-    Only cost is measured over a charge: it is money spent, not a response, so
-    it neither answers a schema nor declares an action. Every other observation
-    loses it here, before any grouping or horizon; a cost selection keeps it for
-    `_horizon`, which admits it as mass and never as a slot.
+    A reading row is a reading of a return, not a response, so every observation
+    but ``downstream_read_bytes`` loses it here, before any grouping or horizon.
 
     A context-size observation selects only the responses the runtime rendered a
     prompt for (a ballot whose assembly was unavailable was rendered none). An
@@ -607,20 +574,16 @@ def _selected(observation: str, rows: list[dict]) -> list[dict]:
     is never new evidence and never takes a measured response's horizon slot.
     """
     observation = observation.strip().lower()
-    if observation in COST_OBSERVATIONS:
-        return [row for row in rows if not row.get("reading")]
     if observation == READ_OBSERVATION:
         # Its responses are the invocations whose readings are metered, as the global
         # window's ``read_measured`` are: a ballot no assembly answered is none (a
         # request that failed to render still is one), and a row sampled before
         # readings were metered carries no ``invoked`` marker and is none either.
-        return [row for row in rows if not row.get("storage") and (
-            row.get("reading") or row.get("invoked") is True)]
+        return [row for row in rows if row.get("reading") or row.get("invoked") is True]
     if observation in PROMPT_OBSERVATIONS:
         key = PROMPT_OBSERVATIONS[observation]
-        return [row for row in rows if not row.get("storage") and not row.get("reading")
-                and row.get(key) is not None]
-    return [row for row in rows if not row.get("storage") and not row.get("reading")]
+        return [row for row in rows if not row.get("reading") and row.get(key) is not None]
+    return [row for row in rows if not row.get("reading")]
 
 
 def _rows(samples: CardSamples, kind: str, observation: str) -> list[dict]:
@@ -633,19 +596,12 @@ def _rows(samples: CardSamples, kind: str, observation: str) -> list[dict]:
 
 def _horizon(observation: str, group: list[dict], n: int, *,
              partial: bool = False) -> list[dict] | None:
-    """Select the latest `n` responses, then re-admit the rent those responses cover.
+    """Select the latest `n` responses of a group, or None while it has fewer.
 
-    The horizon is chosen over responses alone: a retained-storage charge is a
-    cost and not a response, so it never occupies one of the `n` slots, never
-    pushes a real response out of a full horizon, and never counts toward the
-    support a scope needs. The charges that belong to a selected horizon are the
-    ones metered in the same measurement windows as its selected responses —
-    the same closed span a windows selector reads its rows over — so rent paid
-    while those responses were being measured adds to what they cost and rent
-    from outside their span does not. `partial` keeps a horizon that has not
-    filled yet, which retention needs and measurement refuses.
+    `partial` keeps a horizon that has not filled yet, which retention needs and
+    measurement refuses.
     """
-    responses = [row for row in group if not row.get("storage") and not row.get("reading")]
+    responses = [row for row in group if not row.get("reading")]
     if observation.strip().lower() == "avoidably_unresolved_share":
         # The horizon is the last `n` *eligible* due commitments: a documented
         # exclusion never occupies a slot, so external unobservability cannot
@@ -655,14 +611,12 @@ def _horizon(observation: str, group: list[dict], n: int, *,
         return None
     responses = responses[-n:]
     keep = {id(row) for row in responses}
-    charge = ("storage" if observation.strip().lower() in COST_OBSERVATIONS
-              else "reading" if observation.strip().lower() == READ_OBSERVATION else None)
-    if responses and charge is not None:
-        # A reading row joins the horizon the way rent does: metered in the windows
-        # of the selected responses, never one of them.
+    if responses and observation.strip().lower() == READ_OBSERVATION:
+        # A reading row joins the horizon metered in the windows of the selected
+        # responses, never as one of them.
         first, last = responses[0]["window"], responses[-1]["window"]
         keep.update(id(row) for row in group
-                    if row.get(charge) and first <= row["window"] <= last)
+                    if row.get("reading") and first <= row["window"] <= last)
     return [row for row in group if id(row) in keep]
 
 
@@ -687,21 +641,18 @@ def _groups(card: MetricCard, rows: list[dict]) -> dict[str, list[dict]]:
 def _cost_responses(observation: str, rows: list[dict]) -> list[dict]:
     """The responses a cost selection divides over: successful ones per return, all per attempt."""
     if observation == "cost_per_return":
-        return [row for row in rows if row["ok"] and not row.get("storage")]
-    return [row for row in rows if not row.get("storage")]
+        return [row for row in rows if row["ok"]]
+    return rows
 
 
 def _measure_rows(observation: str, rows: list[dict]) -> float | None:
     if not rows:
         return None
     if observation in COST_OBSERVATIONS:
-        # A retained-storage charge is cost without a response: it is added to
-        # what the selected responses cost and never divided into as one of
-        # them, so paying rent can only raise a cost per response. Per attempt,
-        # a failed response is one of the responses and its cost is spent.
+        # Per attempt, a failed response is one of the responses and its cost
+        # is spent.
         values = [row["cost"] for row in _cost_responses(observation, rows)]
-        rent = sum(row["cost"] for row in rows if row["ok"] and row.get("storage"))
-        return (sum(values) + rent) / len(values) if values else None
+        return sum(values) / len(values) if values else None
     if observation in ("well_formed_rate", "noop_share", "revision_rate"):
         key = {"well_formed_rate": "ok", "noop_share": "noop", "revision_rate": "revision"}[
             observation
@@ -803,7 +754,7 @@ def measure_card(card: MetricCard, samples: CardSamples, observations=None) -> d
                 # A closed record keeps no per-response attribution, so these
                 # are measured from the samples the selected windows retained.
                 source = samples.forecasts if observation.id == "forecast_skill" else (
-                    _selected(observation.id, samples.returns))
+                    samples.returns)
                 rows = [r for r in source if selected[0]["index"] <= r["window"]
                         <= selected[-1]["index"]]
                 value = _measure_rows(observation.id, rows)

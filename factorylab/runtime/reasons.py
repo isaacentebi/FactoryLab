@@ -39,7 +39,8 @@ class Reason(StrEnum):
     WITNESS_REQUIRED = "witness_required"  # This world launched under a receiver; none is set.
     WITNESS_MISMATCH = "witness_mismatch"  # The receiver set is not the one it launched under.
     ARTIFACT_MISSING = "artifact_missing"  # The archive index names bytes that are not there.
-    ARTIFACT_PRIVATE = "artifact_private"  # The archive holds it; this reader is not scoped to it.
+    ARTIFACT_PRIVATE = "artifact_private"  # No reference of this reader's names it.
+    ARTIFACT_RELEASED = "artifact_released"  # The reader's own superseded state, released.
     FACILITATOR_MISMATCH = "facilitator_mismatch"  # The x402 facilitator is not the launched one.
     TICK_OVERRIDE_REFUSED = "tick_override_refused"
     NO_LIVE_VENUE = "no_live_venue"
@@ -68,6 +69,11 @@ class Reason(StrEnum):
     ARGUMENTS_INCOMPLETE = "arguments_incomplete"
     # A world whose treasury rail signs with the mainnet reserve key needs --ledger.
     MAINNET_RAIL_REQUIRES_A_LEDGER = "mainnet_rail_requires_a_ledger"
+    # A live Polymarket reader: another holds this host's IP; a world that reads live
+    # needs --ledger; and it runs only on the wall clock (runtime/polymarket.py, arm).
+    POLYMARKET_IP_IN_USE = "polymarket_ip_in_use"
+    POLYMARKET_LIVE_REQUIRES_A_LEDGER = "polymarket_live_requires_a_ledger"
+    POLYMARKET_LIVE_REQUIRES_THE_WALL_CLOCK = "polymarket_live_requires_the_wall_clock"
 
 
 class CredentialMissing(RuntimeError):

@@ -151,8 +151,8 @@ class BudgetBook:
     def unallocated(self) -> Money:
         """Return the unlocked money no seat is entitled to: ``unlocked - entitlements - holds``.
 
-        Shared spending that no seat authored (rent, fees, trading losses booked to
-        the wallet) is absorbed here, so the value is signed: a negative pool means
+        Shared spending that no seat authored (fees, bills booked to the shared
+        meter) is absorbed here, so the value is signed: a negative pool means
         the entitlements overstate the wallet, and the wallet's own check bounds
         every reservation until a credit or release restores it.
         """

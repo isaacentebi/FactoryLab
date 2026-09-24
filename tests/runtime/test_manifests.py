@@ -130,13 +130,30 @@ def test_a_manifest_hashes_what_it_says_and_a_default_is_no_exception():
     came to be priced and immune.decay_step left (versioning audit C2), and again when
     novelty.seat_share capped one seat's share of the niche (ruling R5), and again when
     each model came to state how its route carries the contract (models.contract,
-    §II.b); each time it is a new v0."""
+    §II.b), and again when the prices that paid no one left (Wave 11: [storage]
+    micro_per_byte_day, connectors.call_price_usd, web.call_price_micro,
+    polymarket.read_price_usd, tools.population_tool_micro_per_call and
+    prices.program_micro_per_call; the wallet moves only when money moves, §II.b,
+    §IV.a), and again when the public venue reads gained their per-minute weight
+    budget ([venue] public_read_weight_per_minute), and again when that budget came to
+    be divided over venue read slots ([venue] max_readers; the population itself has no
+    size cap), and again when Polymarket reads gained their published-rate-limit budget
+    and kernel reserve ([polymarket] read_requests_per_minute,
+    kernel_reserve_per_minute), and again when retained private state gained its
+    hard cap on the finite disk ([storage] retained_private_bytes; a retired id keeps
+    its state until capacity is needed), and again when the Polymarket budget's
+    defaults rose to half the tightest published limit on a dedicated IP
+    (read_requests_per_minute 900, kernel_reserve_per_minute 300), and again when that
+    budget came to be counted over Polymarket's own sliding 10 s
+    (read_requests_per_10s 200, kernel_reserve_per_10s 100) and watcher work gained its
+    hard limit ([subscriptions] max_watcher_evaluations_per_sweep); each time it is a
+    new v0."""
     scripted = load_manifest("scripted")
     assert '"forecast_horizon_events":10' in scripted.canonical_json()
     assert '"chaos":{"connector_timeout":0.0' in scripted.canonical_json()
     assert '"contract":"json_object"' in scripted.canonical_json()
     assert scripted.manifest_hash() == (
-        "4928b3aed6db8b4fca6560855b41153d8f1e609ce78fc2aba3d0b348de4a7883"
+        "2d88ce5a0d65a7039e2f52079e4a534e39f2d8177c73ab215290e866b3738e1a"
     )
 
     implicit = manifest_from_dict(_base())

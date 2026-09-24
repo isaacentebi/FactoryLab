@@ -61,6 +61,11 @@ class LiveClock:
     deadline_ns: int | None = None
     gaps: deque[int] = field(default_factory=lambda: deque(maxlen=MEASURED_SAMPLE))
 
+    #: The pacing protocol (``wall_paced``): this clock's ticks are paced against the
+    #: wall, and ``now_ns`` reads it. A wrapper that delegates to a live clock says so
+    #: itself (``scripts/edition4_rehearsal.py``, ``AdmissionClock``).
+    wall_paced = True
+
     def set_interval(self, interval_ns: int) -> None:
         """Adopt positive integer nanoseconds and discard gaps delivered at the old interval.
 
@@ -129,15 +134,23 @@ class LiveClock:
         return cls(**state, gaps=deque(gaps, maxlen=MEASURED_SAMPLE), now_ns=now_ns, sleep=sleep)
 
 
+def wall_paced(clock: Any) -> bool:
+    """Whether a tick clock's ticks are paced against the wall clock, whose ``now_ns``
+    then reads it: a ``LiveClock``, or any wrapper that declares ``wall_paced`` (and
+    delegates ``now_ns``) to one. A declaration, never an ``isinstance`` test, so a
+    wrapper is never mistaken for a simulated clock."""
+    return getattr(clock, "wall_paced", False) is True
+
+
 @dataclass
 class WallClock:
     """The wall clock the safety path reads between model calls (time audit T8).
 
     Read through the journal, so a replay reads the instant the run read and makes
     the same safety decisions. It is the wall clock the world's ticks are paced
-    against (``LiveClock.now_ns``, injectable); a world whose ticks are not paced
-    against wall time does not move inside an event, so it reads the event's
-    simulated instant.
+    against (``now_ns`` of a ``wall_paced`` clock: a ``LiveClock``, injectable, or a
+    wrapper around one); a world whose ticks are not paced against wall time does not
+    move inside an event, so it reads the event's simulated instant.
     """
 
     tick_clock: Callable[[], Any]
@@ -147,7 +160,7 @@ class WallClock:
     def now_ns(self) -> int:
         """Nanoseconds now on the clock the world's ticks are paced against."""
         clock = self.tick_clock()
-        if isinstance(clock, LiveClock):
+        if wall_paced(clock):
             return int(clock.now_ns())
         return int(self.sim.now_ns)
 
@@ -243,6 +256,8 @@ class LiveVenue:
         try:
             funding = self.exchange.funding()
         except (RuntimeError, OSError, ValueError, ArithmeticError):
+            # VenueUnavailable is a RuntimeError: an unanswered funding read emits no
+            # funding event this tick, which is true, and says nothing about rates.
             funding = []
         for f in funding:
             if traded is not None and f.coin not in traded:
