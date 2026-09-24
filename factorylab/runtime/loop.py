@@ -1125,8 +1125,14 @@ class Runtime(
         if self.queue.get(handle).channel == CH_EXPOSURE:
             self.pending_exposure[handle] = self.ticks_consumed
         else:
+            # A refusal is still published and may be judged like any return (II.III.b);
+            # only if no judge grades it does it settle as the abstention it is.
+            declined = ((str(ret.outputs.get("reason", ""))[:500] or "declined")
+                        if ret.status == "refused" and ret.outputs.get("status") == "cannot"
+                        else None)
             self.pending[handle] = PendingJudgement(handle, CH_VERDICT, self.n,
-                                                    opened_at_tick=self.ticks_consumed)
+                                                    opened_at_tick=self.ticks_consumed,
+                                                    declined=declined)
         self.stats.producer_returns += 1
         emitted = self.return_kinds.get(handle, "ProducerReturn" if sample.chosen == NOOP
                                         else self.assemblies[sample.chosen].spec.emits[0])

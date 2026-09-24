@@ -1786,7 +1786,10 @@ class SchematicsMixin:
                 "ProducerReturn and custom return kinds settle on the verdict channel: the "
                 "score is the mean of the verdicts (0 to 1) the judges that read it gave, "
                 f"less the card penalty; a return no judge read within {ev.verdict_timeout_ticks} "
-                "ticks is censored (no score, no learning)"
+                "ticks is censored (no score, no learning), except a return that answered "
+                "status: cannot, which then settles as declined: the router that drew the "
+                "seat and the seat's own learner are credited as for an abstention, less the "
+                "card penalty its role bears"
             ),
             "verdict_is_a_prediction": (
                 "a verdict q is also scored against the judged return's measured outcome y: "
