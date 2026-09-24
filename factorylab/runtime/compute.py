@@ -1506,8 +1506,15 @@ class ComputeMixin:
         # The bytes of the prompt this call renders, counted on the very request the
         # assembly is handed: its ``YOU`` states this ceiling, so a count taken before
         # the cap, or after the caller has since changed the request, is of a prompt
-        # nobody was sent (edition 3, C4).
-        sections = replace(req, inputs={**req.inputs, "you": action_id}).section_bytes()
+        # nobody was sent (edition 3, C4). The count renders exactly what the assembly
+        # renders, so a request that cannot be rendered fails here as it fails there.
+        # A measurement never fails a call: the call keeps its own failure path (the
+        # assembly returns it failed) and the prompt is simply unmeasured, as the
+        # ceiling probe above is.
+        try:
+            sections = replace(req, inputs={**req.inputs, "you": action_id}).section_bytes()
+        except Exception:
+            sections = None
         try:
             ret = replace(asm.invoke(req), prompt_sections=sections)
         finally:
@@ -2018,6 +2025,7 @@ class ComputeMixin:
         # context size: facts, with no target attached (the seed observations
         # ``prompt_bytes``, ``you_bytes`` and ``inputs_bytes`` read them).
         if sections is not None:
+            self.window.prompts += 1
             self.window.prompt_bytes += sections["total"]
             self.window.you_bytes += sections.get("you", 0)
             self.window.inputs_bytes += sections.get("inputs", 0)

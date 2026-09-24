@@ -102,6 +102,10 @@ class MeasureWindow:
     # UTF-8 bytes of the opening prompts the window's invocations were rendered, summed
     # whole and for the YOU and INPUTS sections: the ledgered ``sections`` counts (essay
     # II.IV.a, the ceded metrics layer; the context-size observations read these).
+    # How many of the window's invocations had their opening prompt rendered and
+    # measured: the denominator of the three prompt means. A request that could not
+    # be rendered is an invocation (it failed) but no prompt.
+    prompts: int = 0
     prompt_bytes: int = 0
     you_bytes: int = 0
     inputs_bytes: int = 0

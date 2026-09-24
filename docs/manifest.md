@@ -650,9 +650,9 @@ the reported `usage` covers only an invocation's final provider call.
 
 | Observation | Units | Unit range | Per return scope | Global closed windows |
 |---|---|---|---|---|
-| `prompt_bytes` | bytes per invocation | [0, 100,000] | mean `sections.total` of the selected responses | summed `prompt_bytes` over invocations |
-| `you_bytes` | bytes per invocation | [0, 100,000] | mean `sections.you` | summed `you_bytes` over invocations |
-| `inputs_bytes` | bytes per invocation | [0, 100,000] | mean `sections.inputs` | summed `inputs_bytes` over invocations |
+| `prompt_bytes` | bytes per invocation | [0, 100,000] | mean `sections.total` of the selected responses | summed `prompt_bytes` over `prompts` |
+| `you_bytes` | bytes per invocation | [0, 100,000] | mean `sections.you` | summed `you_bytes` over `prompts` |
+| `inputs_bytes` | bytes per invocation | [0, 100,000] | mean `sections.inputs` | summed `inputs_bytes` over `prompts` |
 | `downstream_read_bytes` | bytes per return | [0, 1,000,000] | reading bytes filed under the scope in its selected responses' windows, over those responses | summed `downstream_read_bytes` over invocations |
 
 The byte counts are of the invocation's opening prompt, the one its ledger row
@@ -661,8 +661,14 @@ no prompt for (a ballot whose assembly was unavailable) is not a zero-byte sampl
 none of the four selects it, so it is not new evidence for a card's price, never
 takes a horizon slot from a measured response, and is not among the responses
 `downstream_read_bytes` divides by, exactly as a global window divides by its
-invocations. A whole window with no invocation (only rent, or only such a ballot)
-is no new sample for them either. All four are measurable over `returns` and
+invocations. A request that cannot be rendered (an input no prompt section can
+serialise) fails as the assembly fails it: it is an invocation, counted in
+`invocations`, but no prompt. Its ledger row's `sections` is null and the window's
+`prompts` (the invocations whose opening prompt was rendered, the three prompt
+means' denominator) does not count it. Measuring a prompt never fails a call. A
+whole window with no measured prompt (only rent, such a ballot or such a request)
+is no new sample for the three prompt means, and one with no invocation none for
+`downstream_read_bytes`. All four are measurable over `returns` and
 over `windows`, per role, per assembly or globally, and none over `forecasts`;
 none is `per_window`, since each is a ratio of summable numerators and
 denominators.
@@ -687,8 +693,9 @@ observation measured per scope reads the scope's summed `prompt_bytes`,
 scope whose only row in the selected windows is a reading is measured too. The
 scope's `invocations` fact counts its invocations as `window.invocations` counts the
 window's: an assembly-unavailable ballot is a response but no invocation, so it is
-in neither, and summed prompt bytes over `invocations` is a mean per rendered prompt
-in a scope exactly as it is globally. Its violations are attributed by the generic `1/n` share described below.
+in neither. Its `prompts` fact counts its responses with a rendered prompt, as the
+window's `prompts` does, so summed prompt bytes over `prompts` is a mean per
+rendered prompt in a scope exactly as it is globally. Its violations are attributed by the generic `1/n` share described below.
 
 `forecasts` selects the latest `n` resolved forecast records in each scope.
 `forecast_skill` uses paired Brier skill against the baseline as it stood before

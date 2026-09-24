@@ -62,10 +62,13 @@ def fresh_sample(card: MetricCard, samples: CardSamples, window) -> bool:
     observation = card.observation.strip().lower()
     kind = card.window.kind
     if kind == "windows" and card.window.per is None and observation not in FORECAST_ROWS:
-        if observation in PROMPT_OBSERVATIONS or observation == READ_OBSERVATION:
-            # Measured over the window's invocations: a window with none (only rent,
-            # or only a ballot no assembly answered) rendered no prompt to measure.
-            return window.invocations > 0
+        if observation in PROMPT_OBSERVATIONS:
+            # Measured over the window's rendered prompts: a window with none (only
+            # rent, a ballot no assembly answered, a request that could not be
+            # rendered) has no prompt to measure.
+            return getattr(window, "prompts", window.invocations) > 0
+        if observation == READ_OBSERVATION:
+            return window.invocations > 0  # measured over the window's invocations
         if observation in RETURN_OBSERVATIONS:
             return window.invocations > 0 or bool(window.decisions)
         support = _WINDOW_SUPPORT.get(observation)
@@ -158,13 +161,14 @@ def measurement_catalogue(observations=None) -> list[dict]:
         "prompt_bytes": "Mean UTF-8 bytes of the opening prompt rendered for each selected "
         "invocation, every section included: the total of the sections its ledger row "
         "records. Tool-round continuations are not counted. Global closed windows divide "
-        "the window's summed prompt bytes by its invocations.",
+        "the window's summed prompt bytes by its prompts: the invocations whose prompt "
+        "was rendered.",
         "you_bytes": "Mean UTF-8 bytes of the YOU section of the opening prompt rendered for "
         "each selected invocation, as its ledger row records them. Global closed windows "
-        "divide the window's summed YOU bytes by its invocations.",
+        "divide the window's summed YOU bytes by its prompts.",
         "inputs_bytes": "Mean UTF-8 bytes of the INPUTS section of the opening prompt rendered "
         "for each selected invocation, as its ledger row records them. Global closed windows "
-        "divide the window's summed INPUTS bytes by its invocations.",
+        "divide the window's summed INPUTS bytes by its prompts.",
         "downstream_read_bytes": "INPUTS bytes of the invocations commissioned on a published "
         "return, filed under that return's author in the window each reading was metered, "
         "over the author scope's selected responses. Readings metered in the same windows as "
@@ -243,6 +247,8 @@ def scope_facts(windows: list[dict], returns: list[dict], forecasts: list[dict],
         # that was none (a ballot no assembly was there to answer). A row sampled
         # before the marker existed was a real invocation.
         "invocations": sum(bool(row.get("invoked", True)) for row in responses),
+        # The prompt means' denominator, as the window's ``prompts`` is.
+        "prompts": sum(row.get("prompt_bytes") is not None for row in responses),
         "ok": sum(bool(row["ok"]) for row in responses),
         "costs": [row["cost"] for row in responses if row["ok"]],
         "tool_calls": sum(row["tool_calls"] for row in responses),
@@ -573,7 +579,7 @@ def preflight_measurement(card: MetricCard, observations=None, *,
                            consequences_settled=1, exposures_settled=1, outcomes=1,
                            meta_verdicts=[0.0], max_position_notional_micro=0,
                            verdicts={"sample": {"a": [0.0], "b": [0.0]}},
-                           prompt_bytes=1, you_bytes=1, inputs_bytes=1,
+                           prompts=1, prompt_bytes=1, you_bytes=1, inputs_bytes=1,
                            downstream_read_bytes=1)
     if unit.id not in measure_cards((unit,), samples, window, observations=observations):
         raise ValueError(f"card {card.id} window: measurement preflight produced no value")
@@ -596,9 +602,10 @@ def _selected(observation: str, rows: list[dict]) -> list[dict]:
     if observation in COST_OBSERVATIONS:
         return [row for row in rows if not row.get("reading")]
     if observation == READ_OBSERVATION:
-        # Its responses are the rendered invocations, as the global window's are.
+        # Its responses are the invocations, as the global window's are: a ballot no
+        # assembly answered is none (a request that failed to render still is one).
         return [row for row in rows if not row.get("storage") and (
-            row.get("reading") or row.get("prompt_bytes") is not None)]
+            row.get("reading") or row.get("invoked", True))]
     if observation in PROMPT_OBSERVATIONS:
         key = PROMPT_OBSERVATIONS[observation]
         return [row for row in rows if not row.get("storage") and not row.get("reading")

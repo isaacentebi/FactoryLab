@@ -94,6 +94,19 @@ def _concentration(counts: Mapping[str, int] | None) -> float | None:
     return max(counts.values()) / total if total else None
 
 
+def _prompt_mean(w: MeasureWindow, key: str) -> float | None:
+    """A prompt byte count per measured prompt; a window with none measured has no mean.
+
+    The denominator is ``prompts``, the invocations whose opening prompt was rendered
+    and measured, not ``invocations``: a request that could not be rendered is an
+    invocation (it failed) but no prompt, and averaging it in as zero bytes would be
+    a byte count nobody sent. A record closed before ``prompts`` existed counted
+    every invocation's prompt, so its invocations stand in.
+    """
+    prompts = getattr(w, "prompts", None)
+    return _ratio(getattr(w, key, 0), w.invocations if prompts is None else prompts)
+
+
 def _cost_per_return(w: MeasureWindow) -> float | None:
     """Mean cost of the window's well-formed producer returns, rent included.
 
@@ -406,26 +419,28 @@ CATALOGUE: tuple[Observation, ...] = (
     Observation(
         "prompt_bytes",
         "Mean UTF-8 bytes of the opening prompt rendered for each invocation, every "
-        "section included (the total its ledger row records); tool-round continuations "
-        "are not counted.",
+        "section included (the total its ledger row records), over the invocations whose "
+        "prompt was rendered; tool-round continuations are not counted.",
         "bytes per invocation",
-        lambda w: _ratio(getattr(w, "prompt_bytes", 0), w.invocations),
+        lambda w: _prompt_mean(w, "prompt_bytes"),
         (0.0, 100_000.0),
     ),
     Observation(
         "you_bytes",
         "Mean UTF-8 bytes of the YOU section of the opening prompt rendered for each "
-        "invocation, as its ledger row records them.",
+        "invocation, as its ledger row records them, over the invocations whose prompt was "
+        "rendered.",
         "bytes per invocation",
-        lambda w: _ratio(getattr(w, "you_bytes", 0), w.invocations),
+        lambda w: _prompt_mean(w, "you_bytes"),
         (0.0, 100_000.0),
     ),
     Observation(
         "inputs_bytes",
         "Mean UTF-8 bytes of the INPUTS section of the opening prompt rendered for each "
-        "invocation, as its ledger row records them.",
+        "invocation, as its ledger row records them, over the invocations whose prompt was "
+        "rendered.",
         "bytes per invocation",
-        lambda w: _ratio(getattr(w, "inputs_bytes", 0), w.invocations),
+        lambda w: _prompt_mean(w, "inputs_bytes"),
         (0.0, 100_000.0),
     ),
     Observation(

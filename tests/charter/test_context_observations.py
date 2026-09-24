@@ -131,9 +131,9 @@ def test_a_reading_outside_the_horizons_windows_is_not_selected():
 
 
 def _closed(samples):
-    samples.closed(MeasureWindow(1, 1, invocations=1, ok=1, prompt_bytes=1_000, you_bytes=100,
-                                 inputs_bytes=300, downstream_read_bytes=0))
-    samples.closed(MeasureWindow(2, 1, invocations=3, ok=2, prompt_bytes=10_000,
+    samples.closed(MeasureWindow(1, 1, invocations=1, ok=1, prompts=1, prompt_bytes=1_000,
+                                 you_bytes=100, inputs_bytes=300, downstream_read_bytes=0))
+    samples.closed(MeasureWindow(2, 1, invocations=3, ok=2, prompts=3, prompt_bytes=10_000,
                                  you_bytes=1_000, inputs_bytes=5_700,
                                  downstream_read_bytes=4_000))
     return samples
@@ -157,8 +157,8 @@ def test_global_windows_divide_summed_bytes_by_summed_invocations(observation, e
 def test_seed_measure_of_one_window_and_its_empty_window(observation):
     seed = observation_for(observation)
     assert seed is not None and not seed.per_window and seed.units.startswith("bytes per")
-    window = MeasureWindow(1, 1, invocations=4, prompt_bytes=8, you_bytes=4, inputs_bytes=12,
-                           downstream_read_bytes=20)
+    window = MeasureWindow(1, 1, invocations=4, prompts=4, prompt_bytes=8, you_bytes=4,
+                           inputs_bytes=12, downstream_read_bytes=20)
     assert seed.measure(window) == {"prompt_bytes": 2.0, "you_bytes": 1.0,
                                     "inputs_bytes": 3.0,
                                     "downstream_read_bytes": 5.0}[observation]
@@ -340,7 +340,7 @@ def test_a_row_no_prompt_was_rendered_for_neither_reprices_nor_evicts(observatio
     whole = _card(observation, kind="windows", n=1, per=None, answers_for="all")
     idle = MeasureWindow(3, 1, decisions={"rent-h": {"role": "producer", "cost": 5}})
     assert not fresh_sample(whole, samples, idle)
-    assert fresh_sample(whole, samples, MeasureWindow(4, 1, invocations=1))
+    assert fresh_sample(whole, samples, MeasureWindow(4, 1, invocations=1, prompts=1))
     # A rendered response in the window is new evidence.
     samples.returned(handle="p3", assembly="p", role="producer", window=5,
                      ret=_ret("p3", total=500, you=50, inputs=250))
@@ -424,7 +424,7 @@ def test_scoped_invocations_count_what_the_window_counts_so_prompt_means_agree()
                      ret=Return("v2", {"reason": "assembly unavailable"}, 0, "failed"),
                      invoked=False)
     # The window the runtime closed: one invocation, the ballot never counted.
-    samples.closed(MeasureWindow(1, 1, invocations=1, ok=1, prompt_bytes=1_000,
+    samples.closed(MeasureWindow(1, 1, invocations=1, ok=1, prompts=1, prompt_bytes=1_000,
                                  you_bytes=100, inputs_bytes=400))
     facts = scope_facts(samples.windows, samples.returns, [])
     assert (facts["invocations"], facts["prompt_bytes"]) == (1, 1_000)

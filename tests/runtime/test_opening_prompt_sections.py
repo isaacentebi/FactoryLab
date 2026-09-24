@@ -62,6 +62,40 @@ def drive(rt, monkeypatch, replies):
     return handed, sent
 
 
+def test_a_request_that_cannot_be_rendered_fails_as_the_assembly_fails_it(monkeypatch):
+    # PR #143 review: the byte count rendered the request outside the invocation's
+    # failure boundary, so a request no rendering could serialise raised out of
+    # _invoke_compute and killed the runtime. (Before wave 7 the ledger row's own
+    # section count raised the same way.) The call must fail as the assembly fails
+    # it, and the prompt must be unmeasured, never counted as zero bytes.
+    from factorylab.charter.charter import MetricCard
+    from factorylab.charter.measurement import fresh_sample
+    from factorylab.charter.windows import MetricWindow
+    from factorylab.runtime.observations import observation_for
+
+    rt = runtime()
+    called = []
+    monkeypatch.setattr(rt.provider.target, "complete", lambda request: called.append(1))
+    req = request(rt, 1_000_000)
+    # Mixed key types serialise unsorted, so the request accepts them, but not with
+    # sorted keys, which is how every prompt section is rendered.
+    req = replace(req, inputs={**req.inputs, "payload": {"a": 1, 2: 3}})
+    ret = rt._invoke(SEAT, req, "producer")
+    assert (ret.status, ret.outputs, ret.cost) == ("failed", {"reason": "TypeError"}, 0)
+    assert ret.prompt_sections is None and not called
+    row = next(r for r in rt.ledger._recovery_items()
+               if r["kind"] == "invocation" and r["handle"] == req.handle)
+    assert row["status"] == "failed" and row["sections"] is None
+    # An invocation, failed, but no prompt: counted as the one and not the other.
+    assert (rt.window.invocations, rt.window.prompts, rt.window.prompt_bytes) == (1, 0, 0)
+    sample = rt.card_samples.returns[-1]
+    assert sample["invoked"] and sample["prompt_bytes"] is None
+    card = MetricCard("card", "n", "d", "u", MetricWindow("returns", 1, None),
+                      "at most 50000", "prompt_bytes", "all")
+    assert not fresh_sample(card, rt.card_samples, rt.window)
+    assert observation_for("prompt_bytes").measure(rt.window) is None
+
+
 def test_a_ballot_no_assembly_answered_is_no_invocation_in_its_scope_facts(monkeypatch):
     # PR #143 review: the window never counts an assembly-unavailable ballot among its
     # invocations; the scope facts published to population code must not either, or
