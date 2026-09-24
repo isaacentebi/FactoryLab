@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import random
 from collections import deque
+from math import ceil
 from types import SimpleNamespace
 
 import pytest
@@ -26,6 +27,8 @@ from tests.runtime.test_loop import (
     _consequence_decision,
     _consequence_produce,
     _consequence_runtime,
+    _pending_meta,
+    _recursive_runtime,
 )
 
 
@@ -305,6 +308,79 @@ def test_a_meta_that_names_its_own_handle_is_judged_on_the_delivered_verdict():
     emitted = [e for e in rt.internal if e.kind is EventKind.META_VERDICT
                and e.payload["by"] == meta]
     assert emitted and emitted[0].payload["about"] == judge
+
+
+# --- the grade window is the read above it (essay II.IV.c, II.III.b) ------------------
+
+
+def _held_metas(count, *, inner=21):
+    """Tier-two meta decisions and their MetaVerdicts, the judges' loop measured at ``inner``."""
+    runtime = _recursive_runtime(events=0)
+    runtime.clockwork.record("scored:evaluator", inner)
+    handles = [_pending_meta(runtime) for _ in range(count)]
+    events = [Event(f"meta-{i}", EventKind.META_VERDICT, 0,
+                    {"by": h, "about": "lower", "tier": 2, "score": 0.5}, "runtime")
+              for i, h in enumerate(handles)]
+    return runtime, handles, events
+
+
+def _grade_from_above(runtime, handle, score=0.25):
+    runtime._deliver_meta_verdict(Event("top", EventKind.META_VERDICT, 0,
+                                        {"by": "top-1", "about": handle, "tier": 3,
+                                         "score": score}, "runtime"))
+
+
+def _censored_grades(runtime, handle):
+    return [i for i in runtime.ledger._recovery_items()
+            if i["kind"] == "evaluator.grade_censored" and i["handle"] == handle]
+
+
+def test_a_grade_window_stays_open_until_the_window_above_reads_it():
+    """II.IV.c: the tier-two window is at least min_ratio times the judges' loop, longer
+    than verdict_timeout_ticks; the meta held in it is still gradable when it releases,
+    and closes the tick after, with the one it passed over ledgered, not dropped."""
+    runtime, (passed, read), (first, second) = _held_metas(2)
+    assert runtime._cascade_arrival(first) is None
+    window = runtime.cascade[2].window
+    assert window >= runtime.m.timing.min_ratio * 21 > runtime.ev.verdict_timeout_ticks
+    runtime.ticks_consumed = ceil(window)
+    runtime.pending[read].opened_at_tick = runtime.ticks_consumed  # it arrives now
+    runtime._settle_evaluations()
+    assert not runtime.pending[passed].grade_closed  # held past verdict_timeout_ticks
+    released = runtime._cascade_arrival(second)
+    assert released.payload["by"] == read
+    _grade_from_above(runtime, read)
+    assert runtime.pending[read].grades == [0.25]
+    runtime.ticks_consumed += 1
+    runtime._settle_evaluations()
+    assert runtime.pending[read].grade_closed and not _censored_grades(runtime, read)
+    (unread,) = _censored_grades(runtime, passed)
+    assert unread["reason"] == "unread: its window released 1 of 2 completed judgements"
+    # A grade that reaches a closed window does not count, and is ledgered with its reason.
+    _grade_from_above(runtime, read, 0.9)
+    assert runtime.pending[read].grades == [0.25]
+    (late,) = _censored_grades(runtime, read)
+    assert late["by"] == "top-1" and late["reason"] == "its grade window had closed"
+
+
+def test_a_window_that_never_releases_closes_its_grade_windows_at_the_backstop():
+    runtime, (held,), (arrival,) = _held_metas(1)
+    runtime._cascade_arrival(arrival)
+    backstop = (runtime.ev.consequence_backstop_ticks + runtime.ev.verdict_timeout_ticks
+                + ceil(runtime.cascade[2].window))
+    runtime.ticks_consumed = backstop
+    runtime._settle_evaluations()
+    assert not runtime.pending[held].grade_closed
+    runtime.ticks_consumed = backstop + 1
+    runtime._settle_evaluations()
+    (censored,) = _censored_grades(runtime, held)
+    assert censored["reason"] == f"backstop: its window did not release it within {backstop} ticks"
+    # A judgement no window took waits verdict_timeout_ticks for a judge that chose it.
+    runtime, (unrouted,), _events = _held_metas(1)
+    runtime.ticks_consumed = runtime.ev.verdict_timeout_ticks + 1
+    runtime._settle_evaluations()
+    (censored,) = _censored_grades(runtime, unrouted)
+    assert censored["reason"].startswith("no read: no cascade window took it")
 
 
 # --- the antagonist -----------------------------------------------------------------------

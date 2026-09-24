@@ -217,24 +217,44 @@ def test_metas_are_graded_by_a_tier_above_and_the_tiers_read_a_share_of_each_win
     manifest.validate()
     # The tier-two window is min_ratio times the judges' scored loop (time audit T10):
     # a judge settles on its world outcome, about a backstop, so metas' grades reach the
-    # tier above after a few of those loops, not in the first eighty ticks. A tier-three
-    # grade counts only inside the meta's own grade window, and few land there: on
-    # 200 events a seed delivers 11 to 17 of them and counts 0 to 4 (seeds 1-5, once
-    # every bare return names its declined trade; seed 1 counted 1 of 12 before). The
-    # path is asserted over seeds, never on a chosen one.
-    for seed in (1, 2, 3):
-        rt = Runtime(manifest, events=200, seed=seed, initial_balance_micro=None,
-                     ledger_path=None, router_gamma=0.1)
-        rt.run()
-        items = rt.ledger._recovery_items()
-        grades = [i for i in items if i["kind"] == "evaluator.meta_grade"]
-        if any(i["tier"] >= 3 for i in grades):
-            break
+    # tier above after a few of those loops, not in the first eighty ticks.
+    rt = Runtime(manifest, events=200, seed=1, initial_balance_micro=None, ledger_path=None,
+                 router_gamma=0.1)
+    rt.run()
+    items = rt.ledger._recovery_items()
+    grades = [i for i in items if i["kind"] == "evaluator.meta_grade"]
     assert any(i["tier"] >= 3 for i in grades), "no meta was graded from above"
     # A window releases its representative and companions beside it.
     assert any("companion_of" in i for i in items if i["kind"] == "cascade.release")
     settled = [i for i in items if i["kind"] == "evaluator.settled" and i["tier"] == 2]
     assert any(i["graded_by"] is not None for i in settled)
+
+
+@pytest.mark.gate
+@pytest.mark.parametrize("seed", [1, 2, 3, 4, 5])
+def test_the_grades_a_tier_above_delivers_count_and_none_vanishes(seed):
+    """Essay II.III.b: evaluators are graded from above, tier upon tier; II.IV.c: a
+    verdict rises a tier only after settling, through a window at least min_ratio times
+    the loop beneath. A meta's judge settles no sooner than its own grade window, so a
+    grade window of a fixed verdict_timeout_ticks closed before the tier above could
+    read the meta: on these seeds 11 to 17 tier-three grades were delivered and 0 to 4
+    counted. The grade window is now the read itself."""
+    from factorylab.runtime.loop import Runtime
+
+    rt = Runtime(_recursive(load_manifest("scripted")), events=200, seed=seed,
+                 initial_balance_micro=None, ledger_path=None, router_gamma=0.1)
+    rt.run()
+    items = rt.ledger._recovery_items()
+    delivered = rt.stats.meta_verdicts
+    assert delivered.get(3, 0) >= 5
+    for tier, count in delivered.items():
+        counted = [i for i in items if i["kind"] == "evaluator.meta_grade" and i["tier"] == tier]
+        refused = [i for i in items if i["kind"] == "evaluator.grade_censored"
+                   and i["tier"] == tier and "by" in i]
+        # No delivered grade vanishes: it counts or is ledgered with its reason.
+        assert len(counted) + len(refused) == count, tier
+        # A clear majority of what the tier above delivers counts.
+        assert 3 * len(counted) >= 2 * count, (tier, len(counted), count)
 
 
 # --- the adversarial layer (M1, P5) --------------------------------------------------

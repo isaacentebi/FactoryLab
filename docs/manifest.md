@@ -515,12 +515,30 @@ tier above is that verdict's only grader.
 
 **The judge's reward is both signals.** A judge's decision settles
 (`evaluation-v1`, `evaluator.settled`) on the equal mean of its grade from the
-tier above (the mean of the grades metas gave it within `verdict_timeout_ticks`,
-`evaluator.meta_grade`) and its consequence score, whichever exist, less its
+tier above (the mean of the grades metas gave it while its grade window was
+open, `evaluator.meta_grade`) and its consequence score, whichever exist, less its
 card penalty; with neither it settles censored (`evaluation-unscored-v1`).
 Neither channel is weighted by the charter. The argument is in
 `runtime/feedback.py: evaluation_reward`. The router that drew the judge learns
 the same reward, so a judge decision's deadline covers the return's backstop.
+
+**The grade window is the read above it.** At every tier, an evaluator decision's
+grade window closes on the tick after the cascade window holding its judgement
+released it to the tier above or passed it over (`FeedbackMixin._grade_window_over`).
+A cascade window lasts `timing.min_ratio` times the measured period in which the
+decisions its tier judges reach a score, and a meta's judge settles no sooner than
+its own grade window, so a grade window of a fixed `verdict_timeout_ticks` closed
+before the tier above could read the metas (essay II.IV.c: the queue withholds a
+verdict until it settles, at a 3:1 ratio or more; II.III.b: evaluators are graded
+tier upon tier). Before this, 0 to 4 of the 11 to 17 tier-three grades delivered in
+200 events counted on seeds 1 to 5 of the recursive scripted world; every one now
+counts. A judgement held in a window closes at the latest after
+`consequence_backstop_ticks + verdict_timeout_ticks` plus that window's drawn
+duration; one no window took (a judgement a judge chose rather than a routed one)
+waits `verdict_timeout_ticks`. A delivered grade that cannot count, and a grade
+window that closes with no grade, are ledgered as `evaluator.grade_censored` with
+the reason (passed over, unsettled at release, no grade returned, no read, or
+backstop); nothing is dropped unseen.
 
 **Metas are graded by the world too.** A meta's conformity `k` is a prediction of
 the consequence score `s` of the decision it graded, scored the same way against
@@ -1076,7 +1094,7 @@ parameters; the observer never substitutes a second set of thresholds.
 | `timing.jitter_fraction` | finite nonnegative number | `0.2` | Yes: how far each derived loop's own continuous jitter may lengthen its period. |
 | `timing.world_repricing` | Absent, or a positive duration | Absent | Yes: the world's own repricing period, a fact about the venue (Hyperliquid funding settles hourly; edition 6 states `"1h"`). Governance is viable only while `timing.min_ratio` times the slowest loop fits inside it and inside the run's remaining ticks (`governance.nonviable`); `max_tick` is derived from it. |
 | `evaluation.consequence_backstop_events` (or `consequence_backstop_ticks`) | positive integer, in world ticks | `200`; scripted worlds `20`; testnet `60` | Yes: consequence horizon and conservative governance period floor. |
-| `evaluation.verdict_timeout_events` (or `verdict_timeout_ticks`) | positive integer, in world ticks | `20` | Yes: how long a judgement waits for its judge (a verdict for a producer return, a meta verdict for a verdict) before it is censored. |
+| `evaluation.verdict_timeout_events` (or `verdict_timeout_ticks`) | positive integer, in world ticks | `20` | Yes: how long a producer return waits for its judges' verdicts before it is censored, and how long an evaluator decision whose judgement no cascade window took waits for a grade. A routed evaluator decision's grade window is its cascade window's read, not this constant (see "The grade window is the read above it"). |
 | `prices.penalty_cap` | finite number strictly between 0 and 1 | `0.5` | Yes: maximum penalty before attribution. |
 | `prices.min_blame_share` | finite number in [0, 1] | `0.1` | Yes: floor on one decision's share of a generic (non-attributable) violation. |
 | `prices.kp` | finite nonnegative number | `0.0` | Yes: the PID's proportional gain. The PID is the only price law (charter audit U3): `lambda = kp*v + I + D`, where `I` accumulates `eta*v` while violating and leaks `decay` once compliant, held in `[0, lambda_max]` and not integrated only while `P + I` already reaches `lambda_max` and the violation is growing (anti-windup); `D = kd * max(0, d(measurement))/scale`, on the measurement rather than the error, signed toward violation, applied only while violating and only its positive part (Stooke et al. 2020), so a card still out of its region is never priced below `P + I`. With `kp = kd = 0` the law is the integral alone. `prices.controller` and `prices.kappa` are refused. |

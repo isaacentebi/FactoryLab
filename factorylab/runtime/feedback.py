@@ -266,6 +266,13 @@ class PendingJudgement:
     grades: list = field(default_factory=list)
     graded_by: str | None = None
     grade_closed: bool = False
+    # The upward read (essay II.IV.c) that closes the grade window: the drawn duration
+    # of the cascade window its judgement entered, the tick that window released it
+    # to the tier above or passed it over, and why no grade can land when that is
+    # known. A judgement checkpointed before these fields restores unread.
+    rise_window: float | None = None
+    risen_at_tick: int | None = None
+    ungraded: str | None = None
     # The second signal: the world's score of ``q`` (``consequence_score``), or
     # None once it is known the world will not produce one.
     consequence: float | None = None
@@ -374,6 +381,9 @@ class FeedbackMixin:
             gate = CascadeGate(window, opened=now)
         next_gate, released = gate.add(ev, now=now, complete=self._cascade_evidence_complete,
                                        priority=self._cascade_priority)
+        arriving = self._arrival_judgement(ev)
+        if arriving is not None:
+            arriving.rise_window = gate.window
         self.ledger.append(
             {
                 "kind": "cascade.arrival",
@@ -407,7 +417,41 @@ class FeedbackMixin:
         # borrow no grade (evaluations U2): each settles on its own signals.
         if released is None:
             return []
-        return [released, *self._cascade_companions(gate, ev, released)]
+        rising = [released, *self._cascade_companions(gate, ev, released)]
+        self._mark_risen(gate, ev, rising, now)
+        return rising
+
+    def _arrival_judgement(self, ev: Event) -> PendingJudgement | None:
+        """The evaluator decision a cascade arrival is the judgement of, while it waits."""
+        key = "evaluator_handle" if ev.kind is EventKind.VERDICT else "by"
+        rec = self.pending.get(ev.payload.get(key))
+        return rec if rec is not None and rec.evaluation else None
+
+    def _mark_risen(self, gate: CascadeGate, ev: Event, rising: list[Event], now: int) -> None:
+        """Every judgement a released window held learns, at release, whether it rose.
+
+        Guarantees each waiting evaluator decision whose judgement sat in the window
+        is marked released at ``now``, and the ones the tier above was not handed are
+        given the reason no grade can reach them: the window's read share passed them
+        over, or what they judged had not settled when the window released (essay
+        II.IV.c: verdicts rise a tier only after settling). A grade window then closes
+        on the first later tick (``_grade_window_over``), once the tier above's reads
+        of this release, which all land in this tick, have landed.
+        """
+        read = {e.id for e in rising}
+        arrivals = [*gate.arrivals, ev]
+        finished = sum(1 for a in arrivals if self._cascade_evidence_complete(a))
+        for arrival in arrivals:
+            rec = self._arrival_judgement(arrival)
+            if rec is None or rec.risen_at_tick is not None:
+                continue
+            rec.risen_at_tick = now
+            if arrival.id in read:
+                continue
+            rec.ungraded = (
+                f"unread: its window released {len(read)} of {finished} completed judgements"
+                if self._cascade_evidence_complete(arrival) else
+                "unsettled: what it judged had not settled when its window released")
 
     def _cascade_companions(self, gate: CascadeGate, ev: Event, released: Event) -> list[Event]:
         """The completed arrivals released beside a window's representative, best first.
@@ -574,11 +618,20 @@ class FeedbackMixin:
         Essay II.III.b: evaluators are "graded from above, tier upon tier ... on how
         compliant [their] scoring was with the factory's input document". A grade
         counts only for an evaluator decision still waiting on it, from a tier above
-        it, inside its grade window.
+        it, inside its grade window (``_grade_window_over``); any other is ledgered
+        as ``evaluator.grade_censored`` with its reason.
         """
         rec = self.pending.get(about)
-        if (rec is None or not rec.evaluation or rec.grade_closed or tier <= rec.tier
-                or self._tick_age(rec) > self.ev.verdict_timeout_ticks):
+        reason = (
+            "not an evaluator decision waiting on a grade"
+            if rec is None or not rec.evaluation else
+            f"not from a tier above {rec.tier}" if tier <= rec.tier else
+            "its grade window had closed" if rec.grade_closed or self._grade_window_over(rec)
+            else None)
+        if reason is not None:
+            # A delivered grade that cannot count is recorded, never dropped unseen.
+            self.ledger.append({"kind": "evaluator.grade_censored", "handle": about, "by": by,
+                                "tier": tier, "reason": reason, "ts": self.clock.now_ns})
             return False
         rec.grades.append(float(score))
         rec.graded_by = rec.graded_by or by
@@ -1482,8 +1535,8 @@ class FeedbackMixin:
 
         A judge's consequence closes when its return's outcome is measured or known
         to be absent; a meta's when the decision it graded closes. Either closes
-        empty past the consequence backstop. The grade window closes after
-        ``verdict_timeout_ticks``. A decision with both closed settles on
+        empty past the consequence backstop. The grade window closes once the tier
+        above has read it (``_grade_window_over``). A decision with both closed settles on
         ``evaluation_reward``, less its card penalty, or censored with neither.
         """
         backstop = self.ev.consequence_backstop_ticks
@@ -1507,8 +1560,8 @@ class FeedbackMixin:
         self._settle_exposures()
         self._settle_counters()
         for rec in records:
-            if not rec.grade_closed and self._tick_age(rec) > timeout:
-                rec.grade_closed = True
+            if not rec.grade_closed and self._grade_window_over(rec):
+                self._close_grade_window(rec)
             if not (rec.grade_closed and rec.consequence_closed):
                 continue
             del self.pending[rec.handle]
@@ -1522,6 +1575,59 @@ class FeedbackMixin:
             for handle in [h for h, v in kept.items()
                            if (v[1] if isinstance(v, tuple) else v["tick"]) < horizon]:
                 del kept[handle]
+
+    def _grade_window_over(self, rec: PendingJudgement) -> bool:
+        """Whether no grade from the tier above can still reach this evaluator decision.
+
+        Essay II.IV.c: the queue holds a verdict back until it settles and returns it
+        to the next tier only after a window at least ``timing.min_ratio`` times the
+        loop beneath (``_cascade_releases``); II.III.b: evaluators are graded from
+        above, tier upon tier. A grade window shorter than that read cuts the tier
+        above off by construction (a meta's judge settles no sooner than its own
+        grade window, so the window the meta's grade rises through is at least
+        ``min_ratio`` of those), so the grade window is not a constant: it is the
+        read itself. Guarantees the window is open
+
+        * until the tick after the cascade window holding this decision's judgement
+          released it or passed it over, since every read of a release lands in its
+          tick;
+        * while it waits in a window, at most its own consequence horizon
+          (``consequence_backstop_ticks + verdict_timeout_ticks``, by which what it
+          judged has settled) plus the drawn duration of that window;
+        * for a judgement no cascade window took, ``verdict_timeout_ticks``, the
+          wait for a judge that chose it.
+        """
+        if rec.risen_at_tick is not None:
+            return self.ticks_consumed > rec.risen_at_tick
+        if rec.rise_window is None:
+            return self._tick_age(rec) > self.ev.verdict_timeout_ticks
+        return self._tick_age(rec) > self._rise_backstop(rec)
+
+    def _rise_backstop(self, rec: PendingJudgement) -> int:
+        """Ticks a judgement held in a cascade window waits for its release."""
+        return (self.ev.consequence_backstop_ticks + self.ev.verdict_timeout_ticks
+                + ceil(rec.rise_window or 0))
+
+    def _close_grade_window(self, rec: PendingJudgement) -> None:
+        """Close one grade window; one that closes with no grade is ledgered with its reason.
+
+        Guarantees a decision the tier above could have graded and did not is never
+        dropped unseen: ``evaluator.grade_censored`` names why (the tier above passed
+        it over, it had not settled when its window released, the tier above
+        returned no grade, no window took it, or its window did not release it
+        within its backstop). It then settles on its consequence alone, or censored.
+        """
+        rec.grade_closed = True
+        if rec.grades:
+            return
+        reason = rec.ungraded or (
+            "released: the tier above returned no grade" if rec.risen_at_tick is not None
+            else f"no read: no cascade window took it within {self.ev.verdict_timeout_ticks} "
+                 "ticks" if rec.rise_window is None
+            else f"backstop: its window did not release it within {self._rise_backstop(rec)} "
+                 "ticks")
+        self.ledger.append({"kind": "evaluator.grade_censored", "handle": rec.handle,
+                            "tier": rec.tier, "reason": reason, "ts": self.clock.now_ns})
 
     def _settle_evaluation(self, rec: PendingJudgement) -> None:
         """Settle one evaluator decision on both its signals (``evaluation_reward``)."""
