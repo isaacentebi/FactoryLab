@@ -25,7 +25,13 @@ from factorylab.kernel.queue import PropensityRecord
 from factorylab.learners.router import Sample
 from factorylab.runtime.feedback import PendingJudgement
 from factorylab.runtime.reasons import Reason
-from factorylab.runtime.shared import CH_EXPOSURE, CH_VERDICT, _to_plain, declined_reason
+from factorylab.runtime.shared import (
+    CH_EXPOSURE,
+    CH_VERDICT,
+    _to_plain,
+    assembly_rewards,
+    declined_reason,
+)
 from factorylab.runtime.summary import _price_str
 from factorylab.settlement import SEED_VOCABULARY
 from factorylab.settlement.consequence import ReturnConsequences
@@ -671,16 +677,24 @@ class ComputeMixin:
             emits = parsed.get("emits", spec.emits[0] if len(spec.emits) == 1 else None)
             if emits not in spec.emits:
                 raise ValueError("select a declared emits kind")
+            producing = self._return_shape(spec, emits) in self.PRODUCING_SHAPES
             if emits in spec.schemas:
                 # The caller's outcome schema cannot weaken a custom event's declaration.
+                # A producing kind's counterfactual is the kernel's field, not the
+                # declaration's, so a closed declaration still carries it.
                 validate_schema(
                     {k: v for k, v in parsed.items()
                      if k not in ("emits", "register", "requests", "tool_calls", "about_handle",
-                                  "status", "reason", "working_state", "ack_through")},
+                                  "status", "reason", "working_state", "ack_through")
+                     and not (producing and k == "counterfactual")},
                     spec.schemas[emits],
                     partial=bool(parsed.get("requests") or parsed.get("tool_calls")
                                  or parsed.get("status") == "cannot"),
                 )
+            if producing and not (parsed.get("requests") or parsed.get("tool_calls")):
+                # A final answer of a kind the world's first-tier verdicts are about.
+                if (reason := self._counterfactual_refusal(req.handle, parsed, emits)):
+                    raise ValueError(reason)
         refused = next((i for i, c in enumerate(calls)
                         if isinstance(c, dict) and c.get("invalid")), None)
         if writes and refused is not None:
@@ -1552,6 +1566,44 @@ class ComputeMixin:
             if not self.consequences.account_open(ancestor):
                 return False
         return True
+
+    #: The reward shapes whose returns the world's first-tier verdicts are about: a
+    #: judged return settles on its judges' verdicts, an exposure on how those
+    #: verdicts scored against its measured outcome (``FeedbackMixin._final_outcome``).
+    PRODUCING_SHAPES = frozenset({"judged", "exposure"})
+
+    def _return_shape(self, spec: AssemblySpec, kind: str | None) -> str | None:
+        """The reward shape ``kind`` settles on: the world's meaning of it, else its author's."""
+        shapes = getattr(self, "kind_reward_shapes", {}) or {}
+        return shapes.get(kind) or assembly_rewards(spec).get(kind)
+
+    def _counterfactual_refusal(self, handle: str, parsed: dict, kind: str | None) -> str | None:
+        """Why a producing kind's final answer fails its counterfactual contract, or None.
+
+        Essay II.III.b (evaluations graded by realized consequence, the priced road
+        not taken included): a producing return that executes no venue operation
+        names the trade it declined (``runtime.grounded.counterfactual_refusal``).
+        Guarantees None for a decision that already wrote to the venue or holds lots
+        or earnings (``_acted``: ``return_paid_off`` measures it), and for an answer
+        order this decision may place (``_execute_outputs``); otherwise the answer is
+        held to the contract against the coins the world lists now (``latest_mids``,
+        the mids a declined trade is frozen from).
+        """
+        from factorylab.cortex.assembly import ANSWER_ORDER_KINDS
+        from factorylab.runtime.grounded import counterfactual_refusal, latest_mids
+
+        if self._acted(handle):
+            return None
+        try:
+            if self.executed_operations(handle):
+                return None
+        except (AttributeError, KeyError):
+            pass
+        if (kind in ANSWER_ORDER_KINDS and parsed.get("action") == "order"
+                and all(k in parsed for k in ("coin", "side", "size"))
+                and self._may_write(handle)):
+            return None
+        return counterfactual_refusal(parsed, dict(latest_mids(self)))
 
     def _allowed_tools(self, action_id: str) -> set[str]:
         """Every registered tool is a public primitive; schematics are public.

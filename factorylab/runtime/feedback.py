@@ -1245,9 +1245,12 @@ class FeedbackMixin:
           consequence book fixes it (at its backstop at the latest);
         * a return that executed nothing and named the trade it declined is measured
           by that trade's gross move at the consequence backstop (ruling R2,
-          ``opportunity_cost``), from the mids frozen when the return was made;
-        * anything else (a bare hold) has no world outcome, and only the tier above
-          grades a verdict about it.
+          ``opportunity_cost``), from the mids frozen when the return was made; the
+          contract of a producing kind requires the name whenever the world lists a
+          coin (``ComputeMixin._counterfactual_refusal``);
+        * anything else (a return made while the world listed no coin, a declined
+          commission, or a named coin whose prices are missing at the horizon) has
+          no world outcome, and only the tier above grades a verdict about it.
 
         A measurement is taken once and kept, so every verdict about one return reads
         the same fact.
@@ -1347,8 +1350,10 @@ class FeedbackMixin:
         Guarantees the benchmark is fixed ex ante, from the mids the world had
         already broadcast when the return was made (ruling R2).
         """
-        declined = declined_trade(outputs if isinstance(outputs, dict) else {})
         mids = latest_mids(self)
+        # The coin in the world's own spelling, the one its mids are keyed by.
+        declined = declined_trade(outputs if isinstance(outputs, dict) else {},
+                                  [coin for coin, _ in mids])
         if declined is None or not mids:
             return
         self.reference_mids[handle] = {"declined": declined, "mids": [list(m) for m in mids],

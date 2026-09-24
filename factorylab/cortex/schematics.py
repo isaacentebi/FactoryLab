@@ -318,6 +318,18 @@ class SchematicsMixin:
             "close, leverage and cancel are tool_calls on the venue.* tools"
         ),
         "order_example": '{"action": "order", "coin": "ETH", "side": "buy", "size": "0.004"}',
+        # A contract fact, published as the kernel enforces it (II.I.b: "the structures
+        # of requests and rewards" are public; II.III.b: the priced road not taken).
+        "counterfactual": (
+            'ProducerReturn, Exposure and a declared kind whose reward shape is judged or '
+            'exposure: {"coin", "side": "buy" | "sell"}, a trade the return declined; coin '
+            "is a key of public_observations.recent_mids when the return is made. It is "
+            "required on a final answer of those kinds from a decision that executed no "
+            "venue operation (no venue write through a tool, and no answer order with coin, "
+            "side and size that the decision may place), and "
+            "optional otherwise. Without it, or with a coin recent_mids does not list, the "
+            "return is malformed. It is not required while recent_mids is empty"
+        ),
         "verdict": (
             "evaluator returns (required): the judged return against the charter, 0 to 1; "
             "the judged return settles on its judges' mean verdict, and the verdict is "

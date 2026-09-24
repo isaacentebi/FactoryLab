@@ -73,6 +73,7 @@ class ScriptedProvider:
             reply = {"assessment": "scripted testimony"}
         else:
             reply = self._produce(desc, inputs)
+        reply = names_declined_trade(reply, text, inputs, self._producer_calls)
         return ModelResponse(
             req.model_id, json.dumps(reply), self.input_tokens, self.output_tokens, "end_turn"
         )
@@ -336,6 +337,45 @@ class ScriptedProvider:
         ok = isinstance(v.get("verdict"), int | float) and bool(v.get("rationale"))
         return {"conformity": 0.8 if ok else 0.1, "rationale": "scripted meta"}
 
+
+
+def listed_coin(inputs: dict[str, Any]) -> str | None:
+    """A coin the prompt shows the world listing: BTC when shown, else the first shown.
+
+    Guarantees the coin is read from the listing the seat was shown (the world's
+    ``recent_mids``, the record a declined trade is priced from), never assumed,
+    and None when the prompt shows none.
+    """
+    world = inputs.get("world")
+    mids = world.get("recent_mids") if isinstance(world, dict) else None
+    shown = {str(coin) for coin in mids} if isinstance(mids, dict) else set()
+    return "BTC" if "BTC" in shown else (min(shown) if shown else None)
+
+
+def names_declined_trade(reply: dict[str, Any], text: str, inputs: dict[str, Any],
+                         n: int) -> dict[str, Any]:
+    """``reply`` naming a declined trade when it is a final answer that orders nothing.
+
+    The return contract of a producing kind (``runtime.grounded``): a final answer
+    that executes no venue operation carries ``counterfactual {coin, side}``, and the
+    request's outcome schema publishes the field. The side alternates with ``n``, so
+    the scripted population names both. A reply to a schema that does not publish
+    the field, and one that already names a trade, places an answer order, declines,
+    or continues through tools or children, is unchanged. An ``order`` that only
+    reports a tool's write names one too: the write may have been refused.
+    """
+    schema = text.split("OUTCOME SCHEMA\n", 1)
+    if (len(schema) < 2 or '"counterfactual"' not in schema[1].split("\n", 1)[0]
+            or not isinstance(reply, dict) or "counterfactual" in reply
+            or (reply.get("action") == "order"
+                and all(k in reply for k in ("coin", "side", "size")))
+            or reply.get("tool_calls") or reply.get("requests")
+            or reply.get("status") == "cannot"):
+        return reply
+    coin = listed_coin(inputs)
+    if coin is None:
+        return reply
+    return {**reply, "counterfactual": {"coin": coin, "side": "buy" if n % 2 else "sell"}}
 
 
 def _description_from_prompt(text: str) -> str:

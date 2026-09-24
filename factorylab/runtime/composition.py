@@ -19,6 +19,7 @@ import math
 from statistics import fmean
 from typing import Any
 
+from factorylab.cortex.assembly import with_counterfactual
 from factorylab.cortex.registration import ToolProposal
 from factorylab.cortex.request import ChildRequest, Request, public_return
 from factorylab.kernel.queue import PropensityRecord, SettleStatus
@@ -247,8 +248,15 @@ class CompositionMixin:
             "forwarded_chosen": forwarded.chosen if forwarded else None})
         self.stats.decisions += 1
         self.consequences.start(handle, self.n)
+        # The executor's contract, not only the requester's schema, binds its answer:
+        # a producing kind's carries the declined trade (II.III.b), so the request
+        # publishes the field even where the requester's schema is closed.
+        spec = self.assemblies[target].spec
+        schema = (with_counterfactual(item.outcome_schema)
+                  if any(self._return_shape(spec, k) in self.PRODUCING_SHAPES
+                         for k in spec.emits) else item.outcome_schema)
         req = Request(handle, item.description, {**item.inputs, "world": self._world_block()},
-                      {}, item.outcome_schema, parent.deadline_ns, ceiling, parent.handle,
+                      {}, schema, parent.deadline_ns, ceiling, parent.handle,
                       "a JSON object satisfying the outcome schema", channel, parent.handle,
                       propensity=dict(item.propensity) if forwarded else None,
                       propensity_chosen=item.chosen if forwarded else None)

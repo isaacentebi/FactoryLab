@@ -7,6 +7,12 @@ priced ex ante on the named trade", so it is a legitimate realized-consequence
 measurement (essay II.III.b: "a judgment of whether a given verdict predicted
 real downstream outcomes"). It grades the verdicts on that decision. It never
 replaces a verdict as the producer's own score (R2).
+
+Naming it is part of the I/O contract of every return the world's first-tier
+verdicts are about (the judged and exposure kinds) whenever that return executes no
+venue operation (``counterfactual_refusal``). Essay II.III.b: the signal that
+grades an evaluator must sit outside the loop it judges, and a return with no world
+outcome leaves its judges graded by other models' readings alone.
 """
 
 from __future__ import annotations
@@ -31,11 +37,15 @@ def latest_mids(runtime: Any) -> tuple[tuple[str, str], ...]:
     return tuple(sorted((str(coin), str(dq[-1]["mid"])) for coin, dq in rows.items() if dq))
 
 
-def declined_trade(outputs: Mapping) -> dict[str, str] | None:
+def declined_trade(outputs: Mapping,
+                   listed: Iterable[str] | None = None) -> dict[str, str] | None:
     """The trade a decision says it declined, as ``{coin, side}``, or None.
 
     Accepts ``counterfactual: {"coin": "BTC", "side": "buy"}`` or the action-label
-    form ``"buy:BTC"``. Anything else names no trade: nothing is inferred.
+    form ``"buy:BTC"``. Anything else names no trade: nothing is inferred. With
+    ``listed`` (the coins the world lists), guarantees the coin is returned in the
+    world's own spelling, matched without regard to case, and None for a coin the
+    world does not list.
     """
     raw = outputs.get("counterfactual") if isinstance(outputs, Mapping) else None
     if isinstance(raw, str) and raw.count(":") >= 1:
@@ -45,7 +55,48 @@ def declined_trade(outputs: Mapping) -> dict[str, str] | None:
         return None
     side = str(raw.get("side", "")).strip().lower()
     coin = str(raw.get("coin", "")).strip().upper()
-    return {"coin": coin, "side": side} if side in ("buy", "sell") and coin else None
+    if side not in ("buy", "sell") or not coin:
+        return None
+    if listed is not None:
+        listed = tuple(listed)
+        named = str(raw.get("coin", "")).strip()
+        # The world's own spelling: an exact match first, else the one coin that
+        # matches without regard to case (a venue may list mixed-case names).
+        spelled = [named] if named in listed else [c for c in listed if c.upper() == coin]
+        if len(spelled) != 1:
+            return None
+        coin = spelled[0]
+    return {"coin": coin, "side": side}
+
+
+#: Why a return's ``counterfactual`` does not satisfy its contract (``counterfactual_refusal``).
+COUNTERFACTUAL_ABSENT = "counterfactual {coin, side} is absent from a return that executed no " \
+    "venue operation"
+COUNTERFACTUAL_SHAPE = "counterfactual is not {coin, side} with side buy or sell"
+COUNTERFACTUAL_UNLISTED = "counterfactual names a coin the world does not list"
+
+
+def counterfactual_refusal(outputs: Mapping, listed: Iterable[str]) -> str | None:
+    """Why a return that executed no venue operation fails its contract, or None.
+
+    Essay II.III.b: an evaluator is graded by realized consequence, which includes
+    the priced road not taken, benchmarked ex ante; ``opportunity_cost`` prices it
+    from the trade the return names. Guarantees None exactly when the return names a
+    side and a coin in ``listed`` (the coins the world lists when the return is made,
+    ``latest_mids``), or when the field is absent and the world lists no coin at all,
+    where no trade can be named. The field is the published object form alone. A
+    named coin the world does not list is refused whether or not any is listed. The
+    reason is a fact about the return, never advice.
+    """
+    listed = tuple(listed)
+    raw = outputs.get("counterfactual") if isinstance(outputs, Mapping) else None
+    if raw is None:
+        return COUNTERFACTUAL_ABSENT if listed else None
+    if not isinstance(raw, Mapping) or declined_trade({"counterfactual": raw}) is None:
+        return COUNTERFACTUAL_SHAPE
+    if declined_trade({"counterfactual": raw}, listed) is None:
+        return COUNTERFACTUAL_UNLISTED
+    return None
 
 
 def opportunity_cost(open_mids: Iterable[tuple[str, str]],

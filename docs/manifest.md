@@ -119,8 +119,13 @@ is the intersection of what the kernel checks a reply against: the universal
 envelope, the fields the answer's kind owns, and the contract. A form the kernel
 cannot accept is not sent. For example, a closed contract that does not name
 `tool_calls` has no continuation through it. Every object the contract leaves
-open is marked open. What a schema cannot state (an answer order's semantics, a
-child request's checks, the runtime's validator) stays the kernel's alone.
+open is marked open. A final answer whose contract publishes `counterfactual`
+(a judged or exposure kind; see "A verdict is also a prediction") is sent as two
+forms: one that requires `counterfactual`, and, for ProducerReturn and Exposure, one
+whose `action` is `"order"`. The decoder cannot see the venue writes of a
+decision's earlier rounds, so it is given the stricter side. What a schema cannot
+state (an answer order's semantics, a child request's checks, the runtime's
+validator, including whether the named coin is listed) stays the kernel's alone.
 Hosts enforce the schema on a best-effort basis: the 23 September 2026 probes
 saw json_schema routes still return replies outside it. On OpenRouter, `provider.require_parameters` is set
 unless `extra_body` names it, as it is for `json_object`. The key is accepted only
@@ -462,7 +467,29 @@ proved right, and one that only repeats the base rate earns 0.5. `y` is:
   move in bp, signed by its side and excluding fees, from the mids the world had
   broadcast when the return was made (ruling R2). It is symmetric and monotone,
   so a hold without directional skill earns 0.5 whatever trade it names;
-- for anything else (a bare hold): nothing. Only the tier above grades it.
+- for anything else (a return made while the world listed no coin, a declined
+  commission, or a named coin with no mid at the horizon): nothing. Only the tier
+  above grades it.
+
+**The declined trade is part of the return contract** (§III.b: evaluators are
+graded by realized consequence, the priced road not taken included). A final
+answer of ProducerReturn, Exposure or a declared kind whose reward shape is
+`judged` or `exposure`, from a decision that executed no venue operation (no venue
+write through a tool and no answer order it may place), carries `counterfactual
+{coin, side}`: `side` is `buy` or `sell`, and `coin` is a key of `recent_mids` (the
+world's broadcast mids, the record the trade is priced from) when the return is
+made. Without it the return is `malformed`
+(`counterfactual {coin, side} is absent from a return that executed no venue
+operation`), as it is with a coin the world does not list (`counterfactual names a
+coin the world does not list`) or any other shape; the seat's inbox and
+`return.validation_failed` carry the reason. Nothing is required while
+`recent_mids` is empty. A return that executed venue operations needs none. The
+field is published in the request's outcome schema (a requested child's too, even
+under a closed requester schema) and in `world.read {"section":
+"a_return_may_include"}`. Policy ballots, judgements, forecasts, metas and counters
+are not returns a first-tier verdict judges and carry no such requirement; neither does a
+declined commission (`status: "cannot"`), which is not a contract return. The
+scoring above is unchanged.
 
 **Anticipatory settlement** (§IV.b: an explorer is compensated sooner than the
 lifetime of what it found). A verdict's reward is scored as soon as its return's

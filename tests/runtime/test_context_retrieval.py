@@ -228,7 +228,8 @@ def test_routing_growth_uses_the_same_compact_world_before_and_after_invocation(
     assert compact_world_chars < raw_world_chars
     prompts = []
     scripted(rt, monkeypatch, [
-        {"action": "hold", "rationale": "No action from unchanged history."},
+        {"action": "hold", "rationale": "No action from unchanged history.",
+         "counterfactual": {"coin": "BTC", "side": "buy"}},
     ], prompts)
 
     ret = rt._invoke("seed-decider", req, "producer")
@@ -279,7 +280,8 @@ def test_first_call_can_read_transient_world_history_through_its_own_handle(monk
     prompts = []
     scripted(rt, monkeypatch, [
         {"tool_calls": calls},
-        {"action": "hold", "rationale": "The exact history was read."},
+        {"action": "hold", "rationale": "The exact history was read.",
+         "counterfactual": {"coin": "BTC", "side": "sell"}},
     ], prompts)
 
     ret = rt._invoke("seed-decider", req, "producer")

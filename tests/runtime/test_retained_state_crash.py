@@ -329,8 +329,13 @@ def test_retirement_keeps_the_seat_s_state_in_a_world_run(tmp_path, monkeypatch)
     rt.run()
     assert "seed-observer" in rt.retired_assemblies
     assert rt.working_state.head("seed-observer") is not None
-    assert not [i for i in _items(tmp_path / "world.jsonl")
-                if i["kind"] == "artifact.released" and i.get("owner") == "seed-observer"]
+    # A head the seat replaced while it served is released as any seat's is; from its
+    # retirement on, nothing of it is.
+    items = _items(tmp_path / "world.jsonl")
+    (retired,) = [i["seq"] for i in items if i["kind"] == "assembly.retired"
+                  and i.get("assembly_id") == "seed-observer"]
+    assert not [i for i in items if i["kind"] == "artifact.released"
+                and i.get("owner") == "seed-observer" and i["seq"] > retired]
 
 
 def test_a_crash_between_an_eviction_s_ledger_line_and_its_index_change_resumes(
