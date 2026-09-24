@@ -362,18 +362,15 @@ def droplet_uuid(rows: list, droplet_id: int) -> str | None:
 def _uncertain(raw: Any, droplet_id: int) -> bool:
     """Whether a line cannot be classified while the droplet's uuid is unknown.
 
-    A line that names a uuid and is not the droplet's by id and product, yet could be
-    (it names no id, or the droplet's id under another product), might be a charge
-    billed against the droplet by its uuid alone.
+    Any line that names a canonical uuid and is not the droplet's by id and product
+    might be a charge billed against the droplet by its uuid, whatever id it names:
+    once the uuid is known, classification is by uuid first.
     """
     if not isinstance(raw, dict):
         return False
     if uuid_of(raw.get("resource_uuid")) is None:
         return False
-    if _is_mine(raw, droplet_id, None):
-        return False
-    resource = raw.get("resource_id")
-    return resource in (None, "") or _by_id(raw, droplet_id)
+    return not _is_mine(raw, droplet_id, None)
 
 
 def _is_mine(raw: Any, droplet_id: int, uuid: str | None) -> bool:
@@ -676,7 +673,12 @@ class DigitalOceanClient:
             raw = self._get(f"/v2/customers/my/billing_history?per_page={PER_PAGE}&page=1",
                             _deadline(min(deadline.remaining(), budget_s / 4)))
             history = raw.get("billing_history") if isinstance(raw, dict) else None
-            entries = [e for e in (_entry(row) for row in history or []) if e is not None]
+            # The payload's shape is checked, not assumed: anything but a list of
+            # objects is this auxiliary read failing, never an empty history.
+            if not isinstance(history, list) or not all(isinstance(r, dict)
+                                                        for r in history):
+                raise DigitalOceanError(None, "billing history is not a list of entries")
+            entries = [e for e in (_entry(row) for row in history) if e is not None]
         except (DigitalOceanError, TimeoutError, ValueError):
             entries, auxiliary = [], [*auxiliary, "billing history"]
         # Then the closed invoices of this turn, each on its own share of what the

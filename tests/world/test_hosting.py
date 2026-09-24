@@ -36,7 +36,7 @@ def micro(usd) -> int:
     return int(Decimal(usd) * 1_000_000)
 
 
-def world(fake=None, **fake_args):
+def world(fake=None, *, launch_price=True, **fake_args):
     ledger = Ledger(clock_ns=lambda: 0)
     records = []
     append = ledger.append
@@ -51,9 +51,12 @@ def world(fake=None, **fake_args):
     wallet.bind_pots(treasury.pots)
     fake = fake or FakeDigitalOcean(**fake_args)
     client = DigitalOceanClient(http=fake)
-    treasury.hosting = HostingAccount(client, droplet_id=fake.droplet_id,
-                                      bound=verify(client, fake.droplet_id, 10),
-                                      launch_ns=ns(fake.now), budget_s=10)
+    from factorylab.world.hosting import verify_launch
+
+    bound, price = verify_launch(client, fake.droplet_id, 10)
+    treasury.hosting = HostingAccount(client, droplet_id=fake.droplet_id, bound=bound,
+                                      launch_ns=ns(fake.now), budget_s=10,
+                                      launch_price=price if launch_price else None)
     w = SimpleNamespace(ledger=ledger, wallet=wallet, treasury=treasury, fake=fake,
                         records=records, hosting=treasury.hosting,
                         droplet=str(fake.droplet_id), launch=fake.now)
@@ -624,7 +627,7 @@ def test_the_bound_is_priced_at_the_launch_months_rate_not_after_a_price_change(
 
 
 def test_without_a_launch_price_the_bound_is_the_whole_post_launch_allocation():
-    w = world()
+    w = world(launch_price=False)            # launch verification read no price
     w.fake.down = True
     windows(w, 9)
     w.fake.down = False
@@ -872,19 +875,19 @@ def test_the_size_catalogue_failing_never_stops_booking_and_is_never_served_stal
     assert w.hosting.snapshot["sizes"]
 
 
-def test_the_catalogue_failing_before_any_launch_price_leaves_the_bound_conservative():
-    w = world()
-    w.fake.failing.update({"/v2/sizes", f"/v2/droplets/{w.fake.droplet_id}"})
-    windows(w, 1)
-    assert w.hosting.unread is not None       # no droplet: no identity, nothing booked
-    w.fake.failing.discard(f"/v2/droplets/{w.fake.droplet_id}")
-    w.fake.down = True
-    windows(w, 8)                             # the launch month passes unread
-    w.fake.down = False
+def test_the_catalogue_failing_without_a_launch_price_leaves_the_bound_conservative():
+    """The catalogue never feeds the launch price; without a launch-verified one, the bound
+    is the conservative one whatever the catalogue does, and booking goes on."""
+    w = world(launch_price=False)
+    w.fake.failing.add("/v2/sizes")
+    windows(w, 3)
+    assert w.hosting.unread is None
+    w.fake.advance(24 * 6)
     w.fake.post_invoice("2026-09")
     windows(w, 2)
     assert not items(w, "treasury.hosting_launch_price")
     assert launch_bound(w) == w.hosting.burn_by_month()["2026-09"] > 0   # conservative
+    assert_months(w, ["2026-09"])
 
 
 def test_the_billing_history_failing_never_affects_booking():
@@ -904,3 +907,73 @@ def test_the_billing_history_failing_never_affects_booking():
     w.fake.failing.clear()
     windows(w, 1)
     assert items(w, "treasury.hosting_account_entry")        # read again once it answers
+
+
+# --- Codex on 84c6816 --------------------------------------------------------------------------
+
+def test_a_foreign_id_line_naming_the_droplets_uuid_is_held_then_booked():
+    """While the uuid is unknown, a line with another id but a canonical uuid could still be
+    the droplet's: its invoice is held, and booked once a later invoice names the uuid."""
+    import uuid as uuidlib
+
+    w = world()
+    w.fake.add("fip-1", "Floating IPs", "0.00600", "attached", billed_as="424242",
+               since=month_start("2026-09"))
+    w.fake.uuid_of["fip-1"] = str(uuidlib.uuid5(uuidlib.NAMESPACE_URL, w.droplet))
+    w.fake.down = True
+    windows(w, 9)
+    first, second, third = (f"00000000-0000-4000-8000-00000000020{n}" for n in (1, 2, 3))
+    w.fake.uuid_only_in = {third}
+    w.fake.post_supplement("2026-09", {"fip-1": "1.50"}, uuid=first)
+    w.fake.post_supplement("2026-09", {"fip-1": "2.50"}, uuid=second)
+    w.fake.post_invoice("2026-09", uuid=third, only={w.droplet})
+    w.fake.down = False
+    windows(w, 1, hours=1)
+    assert w.hosting.held == {first: "uuid unknown", second: "uuid unknown"}
+    windows(w, 3, hours=1)
+    assert {first, second, third} <= set(w.hosting.reconciled)
+    assert sum(w.hosting.lines["2026-09"].values()) == (
+        micro(w.fake.billed(w.droplet, "2026-09")) + 4_000_000)
+
+
+@pytest.mark.parametrize("payload", [7, "a string", "missing", [1, "x"]])
+def test_a_billing_history_of_the_wrong_shape_is_an_auxiliary_outage(payload):
+    w = world()
+    windows(w, 1)
+    w.fake.history_payload = payload
+    windows(w, 2)
+    assert w.hosting.unread is None
+    assert [u["reads"] for u in items(w, "treasury.hosting_auxiliary_unread")] == [
+        ["billing history"]]
+    w.fake.advance(24 * 8)
+    w.fake.post_invoice("2026-09")
+    windows(w, 1)
+    assert_months(w, ["2026-09"])
+
+
+def test_the_launch_price_is_the_one_verified_at_launch_never_a_later_rate():
+    """Billing is unavailable from launch through a resize: the first successful read, in
+    the launch month, sees the new rate; the launch price stays the launch-verified one."""
+    w = world()
+    w.fake.down = True
+    windows(w, 2)
+    w.fake.size = "s-1vcpu-1gb"              # resized while no billing read succeeded
+    windows(w, 1)
+    w.fake.down = False
+    windows(w, 1)
+    price = items(w, "treasury.hosting_launch_price")
+    assert [p["price_hourly_micro"] for p in price] == [17_860]   # verified at launch
+    w.fake.advance(24 * 6)
+    w.fake.post_invoice("2026-09")
+    windows(w, 1)
+    assert_months(w, ["2026-09"])
+
+
+def test_without_a_launch_verified_price_the_bound_is_fully_conservative():
+    w = world(launch_price=False)
+    windows(w, 2)
+    assert not items(w, "treasury.hosting_launch_price")
+    w.fake.advance(24 * 8)
+    w.fake.post_invoice("2026-09")
+    windows(w, 1)
+    assert launch_bound(w) == w.hosting.burn_by_month()["2026-09"] > 0

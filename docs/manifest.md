@@ -1755,9 +1755,11 @@ docs.digitalocean.com/reference/api/reference/billing/):
 - the account, the droplet, the metadata id, the published sizes, and the billing
   history's first page. The last two are auxiliary, each scoped to what it feeds and
   each on at most a quarter of the read's budget. The size catalogue feeds only the
-  population's `hosting.sizes` list (the launch-month price behind the overshoot bound is
-  the droplet's own, read with the droplet); the billing history feeds only the private
-  diary's account entries, and no line is attributed or booked from it. A failure of
+  population's `hosting.sizes` list (the launch price behind the overshoot bound is the
+  droplet's own, verified at launch); the billing history feeds only the private diary's
+  account entries, and no line is attributed or booked from it. A history that is not a
+  list of objects (missing, a string, a number) is this read failing, never an empty
+  history. A failure of
   either is logged once per change as `treasury.hosting_auxiliary_unread` and changes
   nothing else; a catalogue that could not be read is not replaced by an older one, and
   `hosting.sizes` then says so.
@@ -1775,9 +1777,9 @@ uuid and compared lowercased; anything else, such as `deadbeef`, is no uuid); un
 is unknown, nothing else is
 ever recorded in its place, and every read looks for it again (on the preview, and on every
 invoice read with it) before any line of that read is classified. While it is unknown, the
-id-and-product match still books what it matches with certainty, and a line that names a uuid
-and could be the droplet's (it names no id, or the droplet's id under another product) cannot
-be classified: an invoice holding one is held (`treasury.hosting_invoice_pending`, reason
+id-and-product match still books what it matches with certainty, and any other line that
+names a canonical uuid, whatever id it names, might be billed against the droplet by its uuid
+and cannot be classified: an invoice holding one is held (`treasury.hosting_invoice_pending`, reason
 `uuid unknown`), never called reconciled, and read again in its turn. An invoice is reconciled
 only when every line in it is classified with certainty. A snapshot or volume whose numeric id happens to equal the droplet's has
 neither that uuid nor a droplet product, and is not matched. Only this droplet's lines are
@@ -1839,10 +1841,11 @@ is never below zero; no line reduces it. A line wholly before or wholly after th
 certain and adds nothing (a line with no span is a charge at its instant, dated there). For
 a positive line of the droplet's own, it is the pre-launch part of the line's discount
 against the droplet's hourly price for the hours in its span (the true pre-launch charge is
-at most that price for those hours), priced at the rate the droplet listed when first read
-in the launch month (`treasury.hosting_launch_price`, with its monthly cap), never at a rate
-it was resized or repriced to later. For any other line, a credit included (its size, not its
-sign), or when no launch-month price was read, it is that line's whole post-launch part.
+at most that price for those hours), priced at the rate launch verification read from the
+droplet (`treasury.hosting_launch_price`, with its monthly cap, written with the first
+booked read), never at a rate a later read sees after a resize or a repricing. For any other
+line, a credit included (its size, not its sign), or when launch verification read no price,
+it is that line's whole post-launch part.
 Every other month is DigitalOcean's figure, `estimated: false`.
 
 A month whose lines include none of this droplet's while other lines exist is flagged

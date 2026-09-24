@@ -118,6 +118,7 @@ class FakeDigitalOcean:
         # Invoices that answer 404, by uuid: how many more times (float("inf"): always).
         self.broken: dict[str, float] = {}
         self.failing: set[str] = set()             # routes that answer 500, always
+        self.history_payload = None                # a billing_history value to send instead
 
     # ---- the account's own model -------------------------------------------------------
 
@@ -270,8 +271,12 @@ class FakeDigitalOcean:
                      **({"invoice_uuid": e["invoice_uuid"], "invoice_id": "1"}
                         if e["invoice_uuid"] else {})}
                     for e in self.history]
+            if self.history_payload == "missing":
+                return 200, json.dumps({"links": {}, "meta": {"total": 0}}).encode()
+            if self.history_payload is not None:
+                rows = self.history_payload
             return 200, json.dumps({"billing_history": rows, "links": {},
-                                    "meta": {"total": len(rows)}}).encode()
+                                    "meta": {"total": 0}}).encode()
         return 404, b'{"id": "not_found", "message": "The resource was not found."}'
 
     def _page(self, key, rows, page, per_page, raw=False, **extra) -> bytes:

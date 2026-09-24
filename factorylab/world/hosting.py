@@ -63,6 +63,12 @@ class HostingRefused(RuntimeError):
 
 
 def verify(client: Any, droplet_id: int, budget_s: float) -> dict[str, Any]:
+    """``verify_launch``'s account binding alone."""
+    return verify_launch(client, droplet_id, budget_s)[0]
+
+
+def verify_launch(client: Any, droplet_id: int,
+                  budget_s: float) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """Establish that this process runs on ``droplet_id`` and return the account to bind.
 
     Guarantees, or raises ``HostingRefused`` with a named reason: the metadata
@@ -82,7 +88,13 @@ def verify(client: Any, droplet_id: int, budget_s: float) -> dict[str, Any]:
         raise HostingRefused(HostingRefused.UNVERIFIED, type(exc).__name__) from None
     if not identity["droplet_held"]:
         raise HostingRefused(HostingRefused.DROPLET_NOT_HELD)
-    return bound_of(identity)
+    # The launch price: the droplet's hourly rate and monthly cap as verified at launch,
+    # the only rate the launch month's bound is ever priced at.
+    droplet = identity.get("droplet") or {}
+    price = ({"price_hourly_micro": droplet["price_hourly_micro"],
+              "price_monthly_micro": droplet.get("price_monthly_micro")}
+             if type(droplet.get("price_hourly_micro")) is int else None)
+    return bound_of(identity), price
 
 
 def bound_of(identity: dict[str, Any]) -> dict[str, Any]:
@@ -119,10 +131,12 @@ class HostingAccount:
     FIELDS = ("bound", "launch_ns", "lines", "baseline", "reconciled", "invoiced",
               "unmatched", "booked", "negative", "unread", "history", "snapshot",
               "pending_baseline", "pending_noted", "droplet_uuid", "spans",
-              "estimate_final", "launch_price", "cursor", "held", "auxiliary_unread")
+              "estimate_final", "launch_price", "cursor", "held", "auxiliary_unread",
+              "launch_price_logged")
 
     def __init__(self, client: Any, *, droplet_id: int, bound: dict[str, Any] | None,
-                 launch_ns: int | None, budget_s: float) -> None:
+                 launch_ns: int | None, budget_s: float,
+                 launch_price: dict[str, Any] | None = None) -> None:
         if type(droplet_id) is not int or droplet_id <= 0:
             raise ValueError("hosting droplet_id must be a positive integer")
         self.client = client
@@ -148,9 +162,12 @@ class HostingAccount:
         self.spans: dict[str, list] = {}
         # Whether the launch month has closed and every invoice known for it is read.
         self.estimate_final = False
-        # The droplet's hourly rate and monthly cap as first read in the launch month:
-        # the prices its launch-month lines were billed at, whatever it is resized to.
-        self.launch_price: dict[str, int] | None = None
+        # The droplet's hourly rate and monthly cap as verified at launch: the prices
+        # its launch-month lines were billed at, whatever it is resized to later. None
+        # when launch verification did not read them: the bound is then conservative.
+        self.launch_price: dict[str, int] | None = (None if launch_price is None
+                                                    else dict(launch_price))
+        self.launch_price_logged = False
         # Where the next read of the waiting invoices starts: the last one read.
         self.cursor: list | None = None
         # Invoices read and held, by uuid, with the reason they could not be classified.
@@ -314,15 +331,12 @@ class HostingAccount:
         """
         self.unread = None
         self.snapshot = {"droplet": reading["droplet"], "sizes": reading["sizes"]}
-        droplet = reading["droplet"] or {}
-        if (self.launch_price is None and reading["period"] == self.since
-                and type(droplet.get("price_hourly_micro")) is int):
-            # The launch month's prices, first read in it, and journaled with the read.
-            self.launch_price = {"price_hourly_micro": droplet["price_hourly_micro"],
-                                 "price_monthly_micro": droplet.get("price_monthly_micro")}
+        # The launch-verified price goes into the diary with the first read, once; a
+        # later observation's rate is never taken for it.
+        result_price = None
+        if self.launch_price is not None and not self.launch_price_logged:
+            self.launch_price_logged = True
             result_price = dict(self.launch_price)
-        else:
-            result_price = None
         if not self.droplet_uuid and reading.get("droplet_uuid"):
             # Only a valid uuid, actually seen, is ever kept: unknown is the only other
             # state, and every read looks again.

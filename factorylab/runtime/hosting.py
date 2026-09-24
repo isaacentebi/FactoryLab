@@ -24,7 +24,7 @@ import os
 import time
 from typing import Any
 
-from factorylab.world.hosting import HostingAccount, HostingRefused, verify
+from factorylab.world.hosting import HostingAccount, HostingRefused, verify_launch
 
 KIND = "hosting"
 READS = ("hosting.droplet", "hosting.sizes")
@@ -94,15 +94,15 @@ def install(rt: Any, client: Any | None = None, *, resuming: bool = False) -> No
         if not lookup_available():
             raise HostingRefused(HostingRefused.NO_LOOKUP)
         client = DigitalOceanClient()
-    bound = launch_ns = None
+    bound = launch_ns = price = None
     if not resuming:
-        bound = verify(client, spec.droplet_id, budget_s(rt))
+        bound, price = verify_launch(client, spec.droplet_id, budget_s(rt))
         # The launch clock: a live world's clock is the wall clock; a scripted world's
         # starts at zero, and its host bills in real time.
         launch_ns = rt.clock.now_ns if rt.live else time.time_ns()
     account = HostingAccount(JournalProxy(client, rt.ledger, "hosting"),
                              droplet_id=spec.droplet_id, bound=bound, launch_ns=launch_ns,
-                             budget_s=budget_s(rt))
+                             budget_s=budget_s(rt), launch_price=price)
     rt.treasury.hosting = account
     rt.hosting = account
     rt.tool_specs.update(tool_specs())
