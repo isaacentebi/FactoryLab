@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass, is_dataclass
 from decimal import Decimal
 from typing import Any
 
-from factorylab.world.exchange import Exchange, Order, OrderKind
+from factorylab.world.exchange import Exchange, Order, OrderKind, VenueUnavailable
 from factorylab.world.vaults import (
     ADDRESS_PATTERN,
     CREATE_FEE_USD,
@@ -432,6 +432,11 @@ class VenueTools:
             return {"open_orders": ex.open_orders()}
         if tool_id == "venue.positions":
             account = ex.account()
+            if getattr(account, "stale", False):
+                # The adapter fell back to its last complete snapshot because the venue
+                # did not answer: the kernel reads that as stale, and a seat is told
+                # the venue did not answer, never shown old positions as this read's.
+                raise VenueUnavailable("account: the venue did not answer this read")
             return {"positions": account.positions, **({"spot_balances": account.spot_balances}
                     if getattr(ex, "spot_pairs", ()) else {})}
         if tool_id in ("venue.place_market", "venue.place_limit"):

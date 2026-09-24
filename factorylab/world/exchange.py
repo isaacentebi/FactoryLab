@@ -1264,12 +1264,15 @@ class HyperliquidExchange:
         return dict(self._last_mids)
 
     def funding(self) -> list[FundingEvent]:
+        """The venue's current funding rates; raises VenueUnavailable when it did not answer.
+
+        An unanswered read is never an empty one: ``[]`` would say the venue reports
+        no funding. A caller for whom absence is a fact (the tick's events,
+        ``runtime/live.py``) catches the error and emits nothing.
+        """
         import time
 
-        try:
-            raw = self._guarded("meta_and_asset_ctxs", self._info.meta_and_asset_ctxs)
-        except VenueUnavailable:
-            return []
+        raw = self._guarded("meta_and_asset_ctxs", self._info.meta_and_asset_ctxs)
         if not isinstance(raw, (list, tuple)) or len(raw) != 2:
             raise VenueUnavailable("invalid funding response")
         meta, ctxs = raw

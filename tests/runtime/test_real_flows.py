@@ -229,8 +229,10 @@ def test_a_seat_read_under_a_429_sends_one_attempt_and_the_kernel_keeps_its_retr
 
     rt, venue, requests = _rate_limited_runtime(monkeypatch)
     funding = _read(rt, "seed-decider", "venue.funding")
-    # The adapter reads an unanswered funding request as no funding (its own rule).
-    assert funding == {"funding": []} and requests == ["meta_and_asset_ctxs"]
+    # The venue did not answer: an error, never an empty list that would say it
+    # reports no funding.
+    assert "funding" not in funding and "VenueUnavailable" in funding["error"]
+    assert "429" in funding["error"] and requests == ["meta_and_asset_ctxs"]
     assert rt._venue_read_used("seed-decider") == 20
     mids = _read(rt, "seed-decider", "venue.mids")
     assert "VenueUnavailable" in mids["error"] and "429" in mids["error"]
@@ -240,6 +242,43 @@ def test_a_seat_read_under_a_429_sends_one_attempt_and_the_kernel_keeps_its_retr
     with pytest.raises(VenueUnavailable):
         rt.exchange.mids()  # the kernel's own read
     assert requests[2:] == ["all_mids"] * 3
+
+
+def test_an_unanswered_account_read_is_an_error_to_a_seat_never_old_positions(
+        monkeypatch):
+    """The adapter falls back to its last complete account snapshot when the venue
+    does not answer, and marks it stale for the kernel. A seat's venue.positions is
+    told the venue did not answer; the old positions are never shown as this read's."""
+    from factorylab.world.exchange import AccountState
+
+    rt, venue, requests = _rate_limited_runtime(monkeypatch)
+    venue._address = "0x" + "1" * 40
+    venue._last_account = AccountState(equity_usd="100", cash_usd="100", positions=(),
+                                       margin_used_usd="0",
+                                       observed_at_ns=1)
+    positions = _read(rt, "seed-decider", "venue.positions")
+    assert "positions" not in positions and "VenueUnavailable" in positions["error"]
+    assert "did not answer" in positions["error"] and requests == ["user_state"]
+    assert rt.exchange.account().stale is True  # the kernel still reads it as stale
+
+
+def test_an_unanswered_funding_read_emits_no_funding_event():
+    """The tick's events: an unanswered funding read is no event this tick, which is
+    true, never a zero rate."""
+    from factorylab.runtime.live import LiveVenue
+    from factorylab.world.exchange import VenueUnavailable
+
+    class Silent:
+        name = "stub"
+
+        def mids(self):
+            return {}
+
+        def funding(self):
+            raise VenueUnavailable("meta_and_asset_ctxs: ClientError 429")
+
+    events = LiveVenue(Silent(), last_fill_ns=0).on_tick(1, include_fills=False)
+    assert not [e for e in events if e.kind.name == "FUNDING"]
 
 
 def test_the_single_attempt_flag_never_outlives_the_seat_read(monkeypatch):

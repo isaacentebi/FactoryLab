@@ -243,6 +243,8 @@ class LiveVenue:
         try:
             funding = self.exchange.funding()
         except (RuntimeError, OSError, ValueError, ArithmeticError):
+            # VenueUnavailable is a RuntimeError: an unanswered funding read emits no
+            # funding event this tick, which is true, and says nothing about rates.
             funding = []
         for f in funding:
             if traded is not None and f.coin not in traded:

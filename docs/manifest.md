@@ -2655,11 +2655,15 @@ needs the base coin (`spot sell exceeds venue base balance`). Unknown collateral
 collateral is stale: venue account older than one tick`, which is how
 Hyperliquid's fallback to its last complete snapshot reads) block new risk, and
 neither ever blocks a cancellation or a `reduce_only` reduction. A failed
-Hyperliquid mids read raises `VenueUnavailable` and is never answered with the last
-prices; an account fallback to the last complete snapshot is returned with
-`stale = true` and its original `observed_at_ns`, and the prompts (`StaleAccount`),
-the watchers, a window's opening equity and the wind-down's final reconciliation
-(`unknown`, never `flat`) all refuse it.
+Hyperliquid mids or funding read raises `VenueUnavailable` and is never answered
+with the last prices or with an empty list (which would say the venue reports no
+funding); a seat's `venue.mids` or `venue.funding` gets that error, and the tick's
+events emit no mid or funding event for it. An account fallback to the last
+complete snapshot is returned with `stale = true` and its original
+`observed_at_ns`, and the prompts (`StaleAccount`), the watchers, a window's opening
+equity and the wind-down's final reconciliation (`unknown`, never `flat`) all
+refuse it; a seat's `venue.positions` gets `VenueUnavailable` rather than the old
+positions.
 
 `[drip]`, `[termination] max_events` and `[venue] collateral_headroom_usd` are
 removed (smuggling D-6): no world set them and nothing enforced them. A manifest
