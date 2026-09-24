@@ -241,6 +241,42 @@ class PolymarketSpec:
 
 
 @dataclass(frozen=True)
+class HostingSpec:
+    """``[hosting]``: the host's prepaid credit as a pot, and its droplet as a surface.
+
+    Off unless enabled. ``enabled = false`` builds no client, reads nothing,
+    opens no pot and publishes no tool, whatever else the block names. Enabled,
+    the world reads its DigitalOcean balance each tick and books what
+    DigitalOcean reports as used (world/hosting.py), and publishes
+    ``hosting.droplet``, ``hosting.sizes`` and ``hosting.resize``. Fixed for the
+    world's life: the droplet, the most a month the droplet may be resized to
+    cost (``max_monthly_micro``), and whether a resize may grow the disk, which
+    DigitalOcean cannot undo (``allow_disk_resize``, default false).
+    """
+
+    enabled: bool = False
+    provider: str = "digitalocean"
+    droplet_id: int | None = None
+    max_monthly_micro: int = 0
+    allow_disk_resize: bool = False
+
+    def __post_init__(self):
+        if type(self.enabled) is not bool:
+            raise ValueError("hosting.enabled must be true or false")
+        if self.provider != "digitalocean":
+            raise ValueError("hosting.provider must be digitalocean")
+        if self.droplet_id is not None and (
+                type(self.droplet_id) is not int or self.droplet_id <= 0):
+            raise ValueError("hosting.droplet_id must be a positive integer")
+        if self.enabled and self.droplet_id is None:
+            raise ValueError("hosting.enabled needs hosting.droplet_id")
+        if type(self.max_monthly_micro) is not int or self.max_monthly_micro < 0:
+            raise ValueError("hosting.max_monthly_usd must be nonnegative")
+        if type(self.allow_disk_resize) is not bool:
+            raise ValueError("hosting.allow_disk_resize must be true or false")
+
+
+@dataclass(frozen=True)
 class TreasurySpec:
     """Compute insolvency and the public discovery index are fixed at launch."""
 
@@ -559,6 +595,7 @@ class WorldManifest:
     connectors: ConnectorsSpec = ConnectorsSpec()
     web: WebSpec = WebSpec()
     polymarket: PolymarketSpec = PolymarketSpec()
+    hosting: HostingSpec = HostingSpec()
     storage: StorageSpec = StorageSpec()
     prices: PricesSpec = PricesSpec()
     treasury: TreasurySpec = TreasurySpec()
@@ -1501,6 +1538,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         connectors=connectors,
         web=web,
         polymarket=_manifest_polymarket(d.get("polymarket")),
+        hosting=_manifest_hosting(d.get("hosting")),
         storage=storage,
         tools=ToolsSpec(
             int((d.get("tools") or {}).get("population_tool_micro_per_call", 50)),
@@ -1673,6 +1711,27 @@ def _manifest_polymarket(raw: Any) -> PolymarketSpec:
         max_orders_per_window=raw.get("max_orders_per_window",
                                       default.max_orders_per_window),
         seed=raw.get("seed", default.seed),
+    )
+
+
+def _manifest_hosting(raw: Any) -> HostingSpec:
+    """``[hosting]``: an absent block is the disabled default; an unknown key is refused.
+
+    ``max_monthly_usd`` is exact USD text or an integer, like every price.
+    """
+    if raw is None:
+        return HostingSpec()
+    keys = {"enabled", "provider", "droplet_id", "max_monthly_usd", "allow_disk_resize"}
+    if not isinstance(raw, dict) or set(raw) - keys:
+        raise ValueError("unknown hosting manifest key")
+    cap = raw.get("max_monthly_usd", 0)
+    if isinstance(cap, bool) or type(cap) not in (str, int):
+        raise ValueError("hosting.max_monthly_usd must be exact USD text or integer")
+    return HostingSpec(
+        enabled=raw.get("enabled", False), provider=raw.get("provider", "digitalocean"),
+        droplet_id=raw.get("droplet_id"),
+        max_monthly_micro=usd_to_micro(cap, rounding="exact"),
+        allow_disk_resize=raw.get("allow_disk_resize", False),
     )
 
 

@@ -344,6 +344,10 @@ class Runtime(
                 from factorylab.runtime import polymarket
 
                 polymarket.tick(self)  # its own intents, fills and resolutions
+            if getattr(self, "hosting", None) is not None:
+                from factorylab.runtime import hosting
+
+                hosting.tick(self)  # the host's billing, read; an open resize, followed
             self._collect_income()  # C10: each receipt credits its owning seat before the tick
             self._tick_treasury()
             self._classify_financing()  # a conversion confirmed this tick is spendable now

@@ -1653,6 +1653,101 @@ with no midpoint loses its mark (`polymarket.mark_unavailable`) and its decision
 any unobserved consequence does. Outcome labels are third-party text: outside the jailed reads
 every surface carries ids and a normalised `YES`, `NO` or `outcome <n>`.
 
+## The host: `[hosting]`
+
+The factory runs on a DigitalOcean droplet paid from prepaid account credit. That credit
+is part of the one first move (essay II.II, the Stackelberg move; II.IV, "a continuous,
+reciprocal flow of capital is an objective requirement"), exactly as OpenRouter credit
+is, so it is a pot on the books. DigitalOcean takes no crypto, so the factory cannot
+refill it: it is a finite prepaid endowment.
+
+`[hosting]` is off by default. A disabled block builds no client, reads nothing, opens no
+pot and publishes no tool, but its keys are part of the manifest and are hashed like any
+other. No world under `worlds/` enables it. The keys, all fixed for the world's life:
+
+| key | default | meaning |
+|---|---|---|
+| `enabled` | `false` | read the host's balance each tick, open the `hosting` pot, publish the hosting tools |
+| `provider` | `"digitalocean"` | the only provider built (`world/digitalocean.py`) |
+| `droplet_id` | none | the droplet this world runs on and may resize; a positive integer, required when enabled |
+| `max_monthly_usd` | `"0"` | the highest `price_monthly` a resize may target, exact USD text or an integer |
+| `allow_disk_resize` | `false` | whether `hosting.resize` may send `disk: true`. A disk resize is permanent: DigitalOcean cannot shrink a disk |
+
+The token is `DIGITALOCEAN_TOKEN`, loaded by the CLI from `digitalocean.key` in the working
+directory (owned, mode 0400 or 0600, gitignored by `*.key`) and never printed; an enabled
+world without it does not start (`CredentialMissing`). It is redacted from every error, and
+nothing the adapter returns carries it.
+
+**What DigitalOcean reports, and what is read from it.** `GET /v2/customers/my/balance`
+returns `month_to_date_balance`, `account_balance` and `month_to_date_usage` as decimal
+strings and `generated_at` as an ISO 8601 time; `month_to_date_balance` "includes the
+`account_balance` and `month_to_date_usage`" (docs.digitalocean.com/reference/api/reference/billing/).
+A negative balance is credit and a positive one is owed (DigitalOcean's own statement,
+digitalocean.com/community/questions/where-can-i-see-my-account-balance; the API
+reference itself states no sign). Each string is parsed exactly to micro-USD; one that is
+not an exact micro-USD amount, or not a string, is refused. The pot is
+`-month_to_date_balance`: credit remaining, negative when the account owes.
+
+**Burn is observed, never computed.** `Treasury.observe_hosting` reads the balance once a
+tick (journaled as `hosting.balance`). The first reading is the endowment,
+`treasury.hosting_endowment`, and moves nothing: like the seed credit, it is backing the
+operator puts behind `initial_balance_usd`. After that, a rise in `month_to_date_balance`
+is money DigitalOcean took. It is ledgered first as `treasury.hosting_burn` (counterparty
+`digitalocean`, the two readings' `generated_at`, and the balance, usage and account
+figures before and after), then settled on the wallet as a `hosting` debit
+(`wallet.settle`, handle `hosting:digitalocean`). The monthly invoice moves usage into the
+account balance without changing `month_to_date_balance`, so a rollover is not a burn. A
+fall is credit that arrived from outside (a prepayment, a promotion, a refund):
+`treasury.hosting_credited`, and the wallet does not move, because the operator's side
+payment is not authority the population was given. A reading older than the last is
+`treasury.hosting_stale` and changes nothing; a failed one is `treasury.hosting_unread`
+(once per reason) and leaves the pot unknown, never zero. A charge and a payment that land
+between the same two readings net: the reading cannot tell them apart. Nothing is debited
+on a timer, by the hourly price, or when a resize is submitted.
+
+**Where a hosting charge lands.** It is overhead: no seat decided it, so it is booked to
+no seat. The `hosting` settlement lowers the wallet's unlocked balance, and the budget
+book's unallocated pool absorbs it, as it absorbs every shared cost
+(`BudgetBook.unallocated`); no entitlement moves. It is not in any seat's cost, so it is
+not in `cost_per_return`, `cost_per_attempt` or `burn_per_window`, which measure what
+decisions spent. The wake counts it in `money.out_by_class.hosting`. The pot is in
+`Treasury.pots()` (`hosting`, and `hosting_detail` with DigitalOcean's figures and the
+endowment, burned and credited totals), in its total and completeness, in the
+reconciliation's sum, and in `custody_view` as `hosting_credit`. A charge that reaches the
+balance floor kills the world like any other settled loss.
+
+**The droplet surface.** Three tools, all free:
+
+- `hosting.droplet {}`: the droplet (size slug, vCPUs, memory, disk, status, region,
+  monthly and hourly price), the pot, the limits and every resize this world submitted.
+- `hosting.sizes {}`: DigitalOcean's published sizes (`GET /v2/sizes`, every page) that are
+  available in the droplet's region, with their prices as DigitalOcean wrote them (JSON
+  numbers decoded from their own text), and the limits: `max_monthly_usd` and whether disk
+  growth is allowed.
+- `hosting.resize {size, disk?}`: `POST /v2/droplets/{id}/actions`
+  `{"type": "resize", "size": size, "disk": disk}`. `disk` defaults to `false`.
+
+`hosting.resize` is a consequence write: only a producing decision with an open consequence
+account may make it. `HostingAccount.resize` (`world/hosting.py`) refuses before any intent,
+with `hosting.refused`, a size not on the published list, a size not available in the
+droplet's region, a size whose monthly price (rounded up to the micro-USD) exceeds
+`max_monthly_usd`, `disk: true` without `allow_disk_resize`, the droplet's current size, and
+any resize while another is open. Otherwise it ledgers `hosting.intent` (client id
+`<handle>:<slot>`, from and to size and price) before the call, submits once, and records
+`hosting.acknowledged` with DigitalOcean's action id. Each tick follows the action
+(`GET /v2/actions/{id}`) to `hosting.resized` or `hosting.errored`. A repeat of the same
+client id reconciles and never resubmits. An answer that did not arrive
+(`hosting.uncertain`) is resolved by reading the droplet: at the target size it is
+`hosting.resized`; locked or not active, the action is still running; idle at another size
+for `UNCERTAIN_POLLS` (5) readings, it is released as `hosting.unresolved`. DigitalOcean
+powers the droplet off to resize it, so the process may die between the call and its
+answer: the journal then completes the interrupted `hosting.resize` as uncertain on
+resume (`RecoveryJournal.call`) and never sends it again. A resize's price reaches the
+books only through the billing that follows it.
+
+The pot's readings, its totals and every intent survive a checkpoint inside the treasury
+snapshot (`hosting`); a world without the block writes no such key.
+
 ## New kinds of work: reward shapes and predicates
 
 A registration declares which one of the four reward shapes — `judged`,
@@ -2440,7 +2535,8 @@ tick's hundred prompts ask an unreachable venue once.
 ### What moves the compute wallet
 
 Model, tool and program charges; rent, as authority; releases; transfers between
-seats; verified income; and confirmed conversions into provider credit. That is
+seats; verified income; confirmed conversions into provider credit; and, in a world
+with `[hosting]`, the host's charges as DigitalOcean's billing reports them. That is
 the whole list.
 
 Venue P&L, fees and funding are not on it. They settle on the venue accounts,

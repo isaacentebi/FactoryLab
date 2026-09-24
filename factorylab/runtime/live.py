@@ -328,6 +328,9 @@ class Reconciler:
             pots_view = dict(pots_view)
         values = [pots_view.get(k) for k in ("venue", "reserve", "seed")]
         values.extend(pots_view["sellers"].values())
+        if "hosting" in pots_view:
+            # The host's prepaid credit is a pot of this world ([hosting]).
+            values.append(pots_view["hosting"])
         complete = not pots_view.get("pending", False) and all(type(v) is int for v in values)
         pots = sum(values) if complete else None
         discrepancy = wallet_balance_micro - pots if pots is not None else None

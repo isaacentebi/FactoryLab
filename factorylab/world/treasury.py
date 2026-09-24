@@ -206,6 +206,9 @@ class Treasury:
         # perps account's, so a rail that does not report it has it read here, or
         # the venue pot would lose every deposit. Off: no read, no pot, no change.
         self.vault_custody = False
+        # The host's prepaid credit ([hosting]; world/hosting.py): a pot whose balance
+        # and outflow are what DigitalOcean reports. None: no read, no pot, no change.
+        self.hosting = None
 
     def _write(self, kind: str, **fields) -> None:
         self.ledger.append({"kind": "treasury." + kind, **fields})
@@ -247,6 +250,12 @@ class Treasury:
             for entry in self.stranded]
         values = [result[k] for k in ("venue", "reserve", "seed")]
         values.extend(result["sellers"].values())
+        if self.hosting is not None:
+            # A pot like the provider credits: counted in the total, so the books
+            # the wallet keeps are compared with what DigitalOcean reports.
+            result["hosting"] = self.hosting.credit_micro()
+            result["hosting_detail"] = self.hosting.view()
+            values.append(result["hosting"])
         result["complete"] = not pending and all(type(v) is int for v in values)
         result["total_micro"] = sum(values) if result["complete"] else None
         result.update({k: self.income[k] for k in INCOME_CLASSES})
@@ -464,6 +473,55 @@ class Treasury:
             )
         self.income = {**self.income, "spool_offset": observed["offset"]}
         return booked
+
+    def observe_hosting(self) -> dict | None:
+        """Read the host's balance once and book exactly what DigitalOcean reports moved.
+
+        Guarantees the wallet moves only on a reading that shows money left the
+        hosting pot: the rise in ``month_to_date_balance`` since the last reading,
+        ledgered first as ``treasury.hosting_burn`` with DigitalOcean named as the
+        counterparty and its ``generated_at`` as the evidence, then settled as a
+        ``hosting`` debit. No seat authored it, so no seat's entitlement pays it:
+        the budget book's unallocated pool absorbs it, as it absorbs every shared
+        cost (``BudgetBook.unallocated``). The first reading is the endowment and
+        moves nothing (the operator's backing, like the seed credit, is already in
+        the launch balance). Credit that arrives from outside is ledgered and moves
+        nothing either: the wallet's authority is not raised by the operator's side
+        payments, and the reconciliation shows the pot rising beside it. A failed
+        read changes nothing and leaves the pot unknown, never zero.
+        """
+        hosting = self.hosting
+        if hosting is None:
+            return None
+        try:
+            read = hosting.client.balance()
+        except Exception:  # noqa: BLE001 - an unread custodian is unknown, not empty
+            # A fixed reason, never the exception's class: a replay raises the recorded
+            # failure under another class, and the diary must read the same.
+            reason = "balance read failed"
+            if hosting.unread != reason:
+                self._write("hosting_unread", reason=reason)
+            hosting.unread = reason
+            return None
+        effect = hosting.observe(read)
+        kind = effect["effect"]
+        if kind == "endowment":
+            self._write("hosting_endowment", micro=effect["micro"],
+                        counterparty="digitalocean", droplet_id=hosting.droplet_id,
+                        generated_at=read["generated_at"])
+        elif kind == "burn":
+            self._write("hosting_burn", counterparty="digitalocean", **effect)
+            try:
+                self.wallet.settle(-effect["micro"], "hosting:digitalocean", "hosting")
+            except ValueError:
+                # A dead wallet books nothing; the burn stays observed in the pot.
+                self._write("hosting_unbooked", micro=effect["micro"],
+                            generated_at=read["generated_at"], reason="wallet is dead")
+        elif kind == "credited":
+            self._write("hosting_credited", counterparty="digitalocean", **effect)
+        elif kind == "stale":
+            self._write("hosting_stale", generated_at=read["generated_at"])
+        return effect
 
     def _gas_view(self) -> dict:
         """The exit route's gas position: never money, so it cannot change completeness."""
@@ -1191,6 +1249,10 @@ class Treasury:
                 "income": self.income,
             }
         )
+        if self.hosting is not None:
+            # Only a world with a hosting pot carries this key; every other
+            # checkpoint keeps its shape.
+            saved["hosting"] = self.hosting.state()
         if self.rail.name == FakeHybridRail.name:
             # The scripted mainnet reserve and sink sit outside every observed pot, so
             # only the checkpoint carries them; a world without the mode never has them.
@@ -1236,6 +1298,8 @@ class Treasury:
             self.rail.venice = saved["fake_venice"]
         if saved.get("fake_hybrid") is not None:
             self.rail.hybrid_books = saved["fake_hybrid"]
+        if saved.get("hosting") is not None and self.hosting is not None:
+            self.hosting.restore(saved["hosting"])
 
 
 class FakeRail:
@@ -1575,12 +1639,15 @@ class FakeTreasury(Treasury):
         if not result["pending"]:
             # The scripted rail's custodians are read whenever they could have
             # changed (see ``_observed_balances``), so this view holds now.
+            total = observed["venue"] + self.rail.reserve + self.rail.venice
+            # A hosting pot counts like any pot; unread, it leaves the total unknown.
+            hosting = result.get("hosting", 0)
             result.update(
                 {k: v for k, v in observed.items() if k != "venice"},
                 seed=0,
                 sellers={"venice": self.rail.venice},
-                complete=True,
-                total_micro=observed["venue"] + self.rail.reserve + self.rail.venice,
+                complete=hosting is not None,
+                total_micro=None if hosting is None else total + hosting,
                 observed_at_ns=self.clock_ns(),
             )
         return result

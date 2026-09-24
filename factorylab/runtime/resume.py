@@ -417,6 +417,13 @@ class RecoveryJournal:
                           else {"status": "uncertain"})
                 self.append({"kind": "io.result", "call": seq, "result": encode(result)})
                 return result
+            if name == "hosting.resize":
+                # A droplet resize whose answer died with the process (DigitalOcean
+                # powers the droplet down to resize it) is never sent again: the
+                # intent owner resolves it by reading the droplet (world/hosting.py).
+                result = {"status": "uncertain"}
+                self.append({"kind": "io.result", "call": seq, "result": encode(result)})
+                return result
             if name in ("market.complete", "connector.paid_fetch"):
                 error = "PaymentOutcomeUnknown" if payment_submitted else "UnbilledFailure"
                 self.append({"kind": "io.result", "call": seq, "error": error})
@@ -494,6 +501,9 @@ def _read_only(name: str) -> bool:
     if name.startswith("polymarket.") and name.rsplit(".", 1)[-1] in (
             "search_markets", "market", "market_of_token", "midpoint"):
         return True  # the public Polymarket reads (world/polymarket.py)
+    if name.startswith("hosting.") and name.rsplit(".", 1)[-1] in (
+            "balance", "droplet", "sizes", "action"):
+        return True  # DigitalOcean's billing and droplet reads (world/digitalocean.py)
     return name.rsplit(".", 1)[-1] in (
         # The safety path's wall-clock and delivered-tick reads (time audit T8).
         "now_ns", "tick_ns",

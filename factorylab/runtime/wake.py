@@ -69,7 +69,7 @@ INCOME_CLASSES = ("earned_micro", "subsidy_micro", "converted_from_principal_mic
 IN_CLASSES = ("initial", "drip", "release", "subsidy", "earned", "converted_from_principal",
               "exchange_pnl", "funding")
 OUT_CLASSES = ("model", "tool", "connector", "treasury", "registration", "exchange_pnl",
-               "funding", "transfer_fees", "other")
+               "funding", "transfer_fees", "hosting", "other")
 #: Which custodian each class moves money at. Venue P&L and funding are reported
 #: here as they always were, but under the venue's custody: they are not, and
 #: never were, movements of the compute wallet, which is authority (edition 3, C5).
@@ -389,6 +389,10 @@ class _Observatory:
         # money in by its ``income.earned`` item. Venue effects no longer arrive
         # here at all: they are ``venue.settled`` items, below.
         reason, amount = str(item.get("reason", "")), item.get("amount")
+        if reason == "hosting" and type(amount) is int:
+            # The host's observed charge ([hosting]): money out, to DigitalOcean.
+            self.money_out["hosting"] += -amount
+            return
         if reason not in ("exchange_pnl", "funding") or type(amount) is not int:
             return
         if amount >= 0:

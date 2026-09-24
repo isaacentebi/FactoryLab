@@ -130,13 +130,14 @@ def test_a_manifest_hashes_what_it_says_and_a_default_is_no_exception():
     came to be priced and immune.decay_step left (versioning audit C2), and again when
     novelty.seat_share capped one seat's share of the niche (ruling R5), and again when
     each model came to state how its route carries the contract (models.contract,
-    §II.b); each time it is a new v0."""
+    §II.b), and again when the host's credit became a pot ([hosting], off by
+    default); each time it is a new v0."""
     scripted = load_manifest("scripted")
     assert '"forecast_horizon_events":10' in scripted.canonical_json()
     assert '"chaos":{"connector_timeout":0.0' in scripted.canonical_json()
     assert '"contract":"json_object"' in scripted.canonical_json()
     assert scripted.manifest_hash() == (
-        "4928b3aed6db8b4fca6560855b41153d8f1e609ce78fc2aba3d0b348de4a7883"
+        "674a917abe3da22489095140eed98a3ffc4f19d68ee633082e334338cb369837"
     )
 
     implicit = manifest_from_dict(_base())

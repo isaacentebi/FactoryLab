@@ -183,6 +183,15 @@ def custody_view(rt: Any) -> dict[str, Any]:
         view["venue_vaults"] = (observed(pots_ns, balance_micro=pots["vaults"])
                                 if _micro(pots.get("vaults")) is not None
                                 else unavailable("vault equity unavailable", pots_ns))
+    if "hosting" in pots:
+        # Only a world with a hosting pot ([hosting]) has this account: prepaid
+        # credit at DigitalOcean, as DigitalOcean last reported it.
+        detail = pots.get("hosting_detail") or {}
+        view["hosting_credit"] = (
+            observed(pots_ns, balance_micro=pots["hosting"],
+                     generated_at=detail.get("generated_at"))
+            if _micro(pots.get("hosting")) is not None
+            else unavailable("hosting balance unavailable", pots_ns))
     from factorylab.runtime.polymarket import custody as polymarket_custody
 
     polymarket = polymarket_custody(rt)
