@@ -904,6 +904,15 @@ class GovernanceMixin:
             self.retired_assemblies.discard(prop.id)
             if prop.id in self.retirement_order:
                 self.retirement_order.remove(prop.id)
+            for sha, kind in self.artifacts.private_holdings(prop.id):
+                if kind == "program.state":
+                    # A next version is new code, which cannot be assumed to read the
+                    # old code's state: it starts with none, and the old version's is
+                    # superseded, released through the journaled release (ledger
+                    # before index) so it neither lingers unreachable nor holds
+                    # capacity. The working-state head is the id's memory and stays.
+                    self.artifacts.release(sha, owner=prop.id, kind=kind,
+                                           cause="superseded")
             if not self._assign_reader_slot(prop.id):
                 # Every venue read slot is held: the seat is admitted all the same,
                 # without the venue reads, and its proposer's receipt says so.

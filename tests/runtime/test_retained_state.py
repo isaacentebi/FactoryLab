@@ -14,7 +14,7 @@ state, oldest retirement first, before it refuses a write.
 """
 
 import hashlib
-import json
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -24,8 +24,14 @@ from factorylab.kernel.artifacts import ArtifactCapacityError, ArtifactStore, ar
 from factorylab.kernel.ledger import Ledger
 from factorylab.runtime import worlds
 from factorylab.runtime.continuity import HARD_STATE_BYTES, canonical
+from factorylab.runtime.loop import Runtime
 from factorylab.runtime.resume import _check_artifacts
-from factorylab.runtime.worlds import DEFAULT_RETAINED_PRIVATE_BYTES, manifest_from_dict
+from factorylab.runtime.worlds import (
+    DEFAULT_RETAINED_PRIVATE_BYTES,
+    StorageSpec,
+    load_manifest,
+    manifest_from_dict,
+)
 from tests.conftest import make_runtime
 from tests.runtime.test_connectors import decision, ledger_items
 from tests.runtime.test_real_flows import _world
@@ -400,10 +406,11 @@ def _private_bytes(rt):
                       for k in ref.get("kinds", [ref["kind"]])))
 
 
-def test_a_retired_id_registered_again_inherits_its_head_and_program_state():
-    """Retirement is final for a version, not for an id: the next version of a retired
-    id starts from the head and the program state the id kept, and nothing of them
-    was released."""
+def test_a_retired_program_registered_again_keeps_its_head_and_supersedes_its_state():
+    """Retirement is final for a version, not for an id: the next version keeps the id's
+    head (its memory), and starts with no program state, since new code cannot be
+    assumed to read the old code's; the old version's state is released at the
+    re-registration, journaled with cause ``superseded``, and holds no capacity."""
     rt = make_runtime()
     rt._manage_reserve_window()
     _register_program(rt, "prog-a")
@@ -414,13 +421,21 @@ def test_a_retired_id_registered_again_inherits_its_head_and_program_state():
     rt._retire_assembly("prog-a", "vote-1")
     for _ in range(2):
         _boundary(rt)
+    # Retirement released nothing: the id keeps both until it takes a next version.
+    assert not [i for i in ledger_items(rt, "artifact.released") if i["owner"] == "prog-a"]
+    kept = rt.artifacts.private_bytes()
     _register_program(rt, "prog-a")
     second = rt.assemblies["prog-a"]
     assert second is not first and second.spec.version == first.spec.version + 1
     assert rt.working_state.head("prog-a") == head
-    assert second.state_sha == state
-    assert json.loads(rt.artifacts.get(second.state_sha)) == {"program": {"lesson": "keep"}}
-    assert not [i for i in ledger_items(rt, "artifact.released") if i["owner"] == "prog-a"]
+    assert second.state_sha is None
+    released = [i for i in ledger_items(rt, "artifact.released") if i["owner"] == "prog-a"]
+    assert [(i["sha"], i["artifact_kind"], i["cause"]) for i in released] == [
+        (state, "program.state", "superseded")]
+    assert rt.artifacts.private_holdings("prog-a") == [(head["sha"], "working.state")]
+    assert rt.artifacts.private_bytes() == kept - len(canonical({"program": {"lesson": "keep"}}))
+    assert rt.artifacts.read(state, reader="prog-a") == {"sha": state,
+                                                         "error": "artifact_released"}
     assert "prog-a" not in rt.retirement_order
 
 
@@ -461,10 +476,13 @@ def test_retired_state_is_released_oldest_first_and_retained_stays_under_the_cap
         assert rt.working_state.head(seat) == head
         assert (head["sha"], "working.state") in rt.artifacts.private_holdings(seat)
     assert rt.working_state.head("seed-decider") == live_head
-    # What is still kept is inherited; what was released for room is not.
+    # A head still kept is inherited; what was released for room is not, and a
+    # program's next version starts with no program state either way.
     _register_program(rt, "prog-7")
     assert rt.working_state.head("prog-7") is not None
-    assert rt.assemblies["prog-7"].state_sha is not None
+    assert rt.assemblies["prog-7"].state_sha is None
+    assert [i["cause"] for i in ledger_items(rt, "artifact.released")
+            if i["owner"] == "prog-7"] == ["superseded"]
     _register_program(rt, "prog-0")
     assert rt.working_state.head("prog-0") is None
     assert rt.assemblies["prog-0"].state_sha is None
@@ -566,13 +584,24 @@ def test_a_cap_that_is_not_a_positive_integer_is_refused(bad):
         manifest_from_dict(_world(storage={"retained_private_bytes": bad}))
 
 
-def test_a_cap_over_half_the_free_disk_is_refused(monkeypatch):
+def test_a_cap_over_half_the_free_disk_is_refused_at_genesis(monkeypatch):
+    """The free disk is a genesis admission: a manifest loads whatever the host's disk,
+    and a new world is refused before anything is written."""
     free = 100 << 20
     monkeypatch.setattr(worlds.shutil, "disk_usage",
                         lambda path: SimpleNamespace(total=free, used=0, free=free))
+    big = manifest_from_dict(_world(storage={"retained_private_bytes": (50 << 20) + 1}))
+    assert big.host_disk_problem().startswith(
+        f"storage.retained_private_bytes = {(50 << 20) + 1} exceeds 1/2 of the host's free disk")
+    fits = manifest_from_dict(_world(storage={"retained_private_bytes": 50 << 20}))
+    assert fits.host_disk_problem() is None
+    scripted = load_manifest("scripted")  # 64 MiB, over half of this host's 100 MiB
     with pytest.raises(ValueError, match=r"exceeds 1/2 of the host's free disk"):
-        manifest_from_dict(_world(storage={"retained_private_bytes": (50 << 20) + 1}))
-    assert manifest_from_dict(_world(storage={"retained_private_bytes": 50 << 20}))
+        Runtime(scripted, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
+                router_gamma=.1)
+    admitted = replace(scripted, storage=StorageSpec(50 << 20))
+    assert Runtime(admitted, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
+                   router_gamma=.1).artifacts.private_cap == 50 << 20
 
 
 def test_a_storage_price_or_an_unknown_storage_key_is_refused():

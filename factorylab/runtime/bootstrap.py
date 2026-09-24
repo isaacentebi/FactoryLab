@@ -103,6 +103,11 @@ class BootstrapMixin:
         # The venue read share is a load-time invariant, checked before anything is
         # written, for a manifest built in code as for one read from a file.
         problem = manifest.read_share_problem()
+        if problem is None and _journal is None:
+            # Genesis admits the retained private state cap against the host's free
+            # disk once; the cap is fixed for the world's life, so a resume (which
+            # arrives with its journal) is never refused for the host's disk since.
+            problem = manifest.host_disk_problem(ledger_path)
         if problem is not None:
             raise ValueError(problem)
         self._ledger_lock = _lock or LedgerLock(ledger_path)

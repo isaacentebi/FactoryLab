@@ -54,8 +54,10 @@ the charter's λ on reward, II.IV.a). The hard limit above is the cast, and it b
 the whole of what a seat retains, not each version: a new head releases the
 superseded one's reference, whose bytes are collected once no durable checkpoint
 names them (``ArtifactStore.release``). Retirement is final for a version, not for
-an id: a retired id's head (and a program's private state) is kept, so the id
-registered again as its next version inherits it. The disk is finite, so the
+an id: a retired id's head is kept, so the id registered again as its next version
+inherits it. A program's next version is new code and starts with no private
+state: the old version's is superseded, and released, at that registration. The
+disk is finite, so the
 whole of retained private state has its own hard limit, fixed for the world's
 life (``[storage] retained_private_bytes``): **retained private state is at most
 ``retained_private_bytes``, always.** A retired id's state is kept until capacity

@@ -1920,9 +1920,13 @@ outcome body and archived rationale, retained for the world's life and growing
 with decisions, on the order of 0.5 KiB per outcome addressed to a seat (an inbox
 body with its evidence pointer and what the seat said). Retirement is final for a
 version, not for an id: a retired id's head and a retired program's private state
-are kept, and the id registered again as its next version inherits them (a program
-version inherits the private state the id still holds). The disk is finite, so the
-whole of retained private state has its own hard limit:
+are kept, and the id registered again as its next version inherits its head, which
+is its memory. A program's private state is not inherited: a next version is new
+code, which cannot be assumed to read the old code's state, so it starts with none,
+and the old version's is superseded at the re-registration and released through the
+journaled release (`artifact.released` with `cause: "superseded"`, ledgered before
+the index changes). The disk is finite, so the whole of retained private state has
+its own hard limit:
 
 | key | default | meaning |
 |---|---|---|
@@ -1937,10 +1941,13 @@ a write that still does not fit, with no retired state left, is refused with a
 no-space error, as on a full disk (a head is ledgered `state.refused` and left as it
 was; a program's call is malformed and its state unchanged). A live seat's state is
 never released to make room. A write replacing a seat's own head or state is
-measured with the one it replaces gone. The key is validated at load: at least the
-seeded seats times the per-seat cap (128 KiB: a head and a private state), and at
-most half the free disk of the filesystem the world is loaded from (the working
-directory, where `runs/` sits), read with `shutil.disk_usage`. The world block's
+measured with the one it replaces gone. The key is validated at every load, a
+resume's included: a positive integer, at least the seeded seats times the per-seat
+cap (128 KiB: a head and a private state). At genesis only, it must also be at most
+half the free disk of the filesystem the ledger will live on (the working directory
+for a world without one), read with `shutil.disk_usage`: an admission about the host
+at that moment. The cap is fixed for the world's life, so a resume is never refused
+because the host's free space has changed since. The world block's
 `storage` section publishes it with the rule above. A retired seat's outcome
 bodies and archived rationales are the world's record and stay. Writing a new head
 releases the superseded one's reference (`artifact.released`), and `artifact.get`

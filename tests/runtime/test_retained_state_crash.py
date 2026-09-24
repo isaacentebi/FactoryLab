@@ -15,10 +15,12 @@ import json
 import pathlib
 from dataclasses import replace
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 
 from factorylab.kernel.ledger import Ledger
+from factorylab.runtime import worlds
 from factorylab.runtime.loop import Runtime
 from factorylab.runtime.resume import resume_world
 from factorylab.runtime.worlds import StorageSpec, load_manifest
@@ -337,4 +339,30 @@ def test_a_crash_between_an_eviction_s_ledger_line_and_its_index_change_resumes(
     assert after[:len(before)] == before
     assert _trail(after) == _trail(expected)
     assert _capacity(after) == evicted
+    assert _summary(summary) == expected_summary
+
+
+def test_a_resume_is_never_refused_for_the_host_s_free_disk(uninterrupted, tmp_path,
+                                                             monkeypatch):
+    """The free-disk bound is a genesis admission: a world whose recorded cap now exceeds
+    half the host's free disk resumes, and runs to the uninterrupted result; a new world
+    on that host is refused."""
+    path = tmp_path / "world.jsonl"
+    rt = _runtime(path)
+    _kill_after_event(rt, 50)
+    with pytest.raises(Crash):
+        rt.run()
+    cap = load_manifest("scripted").storage.retained_private_bytes
+    free = cap  # half of it is below the recorded cap
+    monkeypatch.setattr(worlds.shutil, "disk_usage",
+                        lambda where: SimpleNamespace(total=free, used=0, free=free))
+    assert "exceeds 1/2 of the host's free disk" in load_manifest("scripted").host_disk_problem()
+    with pytest.raises(ValueError, match="exceeds 1/2 of the host's free disk"):
+        _runtime(tmp_path / "new.jsonl")
+    before = _items(path)
+    summary = resume_world(load_manifest("scripted"), str(path), provider=Writer())
+    after = _items(path)
+    assert after[:len(before)] == before
+    expected_summary, expected_trail = uninterrupted
+    assert _trail(after) == expected_trail
     assert _summary(summary) == expected_summary

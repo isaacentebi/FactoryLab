@@ -215,7 +215,7 @@ class WebSpec:
 
 #: The default cap on retained private state: 64 MiB.
 DEFAULT_RETAINED_PRIVATE_BYTES = 64 * 1024 * 1024
-#: The cap may take at most this share of the host's free disk at load, as a
+#: At genesis the cap may take at most this share of the host's free disk, as a
 #: (numerator, denominator) pair: half, so the diary and the world's record keep room.
 MAX_FREE_DISK_SHARE = (1, 2)
 
@@ -1014,15 +1014,14 @@ class WorldManifest:
                         f"cannot cover one read of {SEAT_READ_REQUESTS} request")
         return None
 
-    def storage_problem(self, *, free_bytes: int | None = None) -> str | None:
+    def storage_problem(self) -> str | None:
         """Why this world's retained private state cap cannot hold, or None.
 
         Guarantees a world is refused whose ``[storage] retained_private_bytes`` is
-        not a positive integer, cannot hold every seeded seat at its per-seat cap (a
-        working-state head and a program private state), or exceeds
-        ``MAX_FREE_DISK_SHARE`` of the free disk of the filesystem it is loaded from
-        (the working directory, where ``runs/`` sits), read with ``shutil.disk_usage``
-        unless ``free_bytes`` is given.
+        not a positive integer or cannot hold every seeded seat at its per-seat cap (a
+        working-state head and a program private state). These are the cap's fixed
+        invariants, checked at every load, a resume's included; the host's free disk
+        is a genesis admission (``host_disk_problem``).
         """
         from factorylab.cortex.assembly import MAX_PROGRAM_STATE_BYTES
         from factorylab.runtime.continuity import HARD_STATE_BYTES
@@ -1036,8 +1035,25 @@ class WorldManifest:
             return (f"storage.retained_private_bytes = {cap} cannot hold the "
                     f"{len(self.assemblies)} seeded seats at {per_seat} bytes each "
                     f"(a working-state head and a program private state): at least {floor}")
+        return None
+
+    def host_disk_problem(self, ledger_path: str | None = None, *,
+                          free_bytes: int | None = None) -> str | None:
+        """Why this host cannot admit this world's retained private state cap, or None.
+
+        Guarantees a world is refused at genesis whose ``[storage]
+        retained_private_bytes`` exceeds ``MAX_FREE_DISK_SHARE`` of the free disk of
+        the filesystem its ledger (and archive) will live on, the working directory
+        when it has none, read with ``shutil.disk_usage`` unless ``free_bytes`` is
+        given. It is an admission about the host at that moment: the cap is fixed for
+        the world's life, and a resume never asks it again.
+        """
+        cap = self.storage.retained_private_bytes
         if free_bytes is None:
-            free_bytes = shutil.disk_usage(Path.cwd()).free
+            where = Path(ledger_path).resolve().parent if ledger_path else Path.cwd()
+            while not where.exists() and where != where.parent:
+                where = where.parent
+            free_bytes = shutil.disk_usage(where).free
         num, den = MAX_FREE_DISK_SHARE
         ceiling = free_bytes * num // den
         if cap > ceiling:
