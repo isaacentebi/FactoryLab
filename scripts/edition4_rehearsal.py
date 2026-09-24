@@ -734,17 +734,78 @@ def _safe_exception(exc: BaseException) -> dict[str, str]:
     }
 
 
+class RunStopped(BaseException):
+    """An operator's SIGINT, SIGTERM or SIGHUP, turned into an orderly stop of a run.
+
+    A BaseException, like ``KeyboardInterrupt``, so the world's own ``except Exception``
+    handlers (a treasury send, a provider call) cannot swallow the stop.
+    """
+
+
+class _StopOnSignal:
+    """Guarantees SIGINT, SIGTERM and SIGHUP end a run through its own ``finally``.
+
+    While armed, the first of them raises ``RunStopped`` in the main thread, wherever
+    the run is; every later one, and every one after ``disarm``, is only recorded, so
+    the report is written and announced undisturbed. ``restore`` puts back the handlers
+    it replaced. No thread is started: Python runs signal handlers in the main thread,
+    and off the main thread nothing is installed (``KeyboardInterrupt`` still stops).
+    """
+
+    NAMES = ("SIGINT", "SIGTERM", "SIGHUP")
+
+    def __init__(self) -> None:
+        self.previous: dict[int, Any] = {}
+        self.armed = False
+        self.received: list[str] = []
+
+    def arm(self) -> None:
+        import signal
+        import threading
+
+        if threading.current_thread() is not threading.main_thread():
+            return
+        for name in self.NAMES:
+            number = getattr(signal, name, None)
+            if number is not None:
+                self.previous[number] = signal.signal(number, self._stop)
+        self.armed = True
+
+    def _stop(self, number: int, _frame: Any) -> None:
+        import signal
+
+        name = signal.Signals(number).name
+        self.received.append(name)
+        if self.armed:
+            self.armed = False
+            raise RunStopped(name)
+
+    def disarm(self) -> None:
+        self.armed = False
+
+    def restore(self) -> None:
+        import signal
+
+        self.armed = False
+        for number, handler in self.previous.items():
+            signal.signal(number, handler)
+        self.previous = {}
+
+
 def run_rehearsal(world: str | Path = DEFAULT_WORLD, **kwargs: Any) -> dict[str, Any]:
     """Run a fresh bounded testnet rehearsal and persist a sanitized evidence report.
 
     Keywords are ``_rehearse``'s. Guarantees a capital-loop run's reserve lock is
     released when this returns or raises, whatever the path, so a library caller can
-    never keep a reserve locked in a living process by an exception it caught.
+    never keep a reserve locked in a living process by an exception it caught; and the
+    signal handlers a capital-loop run installs are restored before it returns.
     """
     held: list = []
+    stops = _StopOnSignal()
     try:
-        return _rehearse(world, held=held, **kwargs)
+        return _rehearse(world, held=held, stops=stops, **kwargs)
     finally:
+        stops.restore()
         for lock in held:
             lock.close()
 
@@ -753,6 +814,7 @@ def _rehearse(
     world: str | Path = DEFAULT_WORLD,
     *,
     held: list,
+    stops: _StopOnSignal | None = None,
     out: str | Path | None = None,
     duration_ns: int = DEFAULT_DURATION_NS,
     target_ticks: int | None = None,
@@ -850,9 +912,9 @@ def _rehearse(
             # The reserve's last holder is read wherever it ran, not only beside --out:
             # it is the one earlier run whose authorization can still be live.
             last = lock.last_run()
-            runs = tuple(previous_runs) + _sibling_runs(output_dir) + (
-                (last,) if last is not None else ())
-            launch = launch_check(manifest, previous_runs=runs, transport=transport)
+            runs = tuple(previous_runs) + _sibling_runs(output_dir)
+            launch = launch_check(manifest, previous_runs=runs, recorded_run=last,
+                                  transport=transport)
             launch = {**launch, "settlement": settlement, "reserve_lock": str(lock.path),
                       "last_run": None if last is None else str(last)}
             print(json.dumps({"capital_loop_launch_check": {
@@ -969,6 +1031,12 @@ def _rehearse(
         }
     runtime = None
     observer = None
+    stops = stops if stops is not None else _StopOnSignal()
+    if capital_loop:
+        # From the world's construction on, SIGINT, SIGTERM or SIGHUP stop it through
+        # the finally below: the report, the outstanding warning and the exit code are
+        # written whatever stopped it (a default SIGTERM would write none of them).
+        stops.arm()
     try:
         try:
             if provider is None:
@@ -1051,21 +1119,32 @@ def _rehearse(
             (output_dir / "events.json").write_text(
                 json.dumps(selected, indent=2, default=str) + "\n"
             )
+    except (RunStopped, KeyboardInterrupt) as stop:
+        # An operator's stop is an orderly end: the world is not resumed, and what it
+        # left outstanding is reported below like any other end.
+        report["status"] = "stopped"
+        report["stopped_by"] = str(stop) if isinstance(stop, RunStopped) else "SIGINT"
     except Exception as exc:
+        stops.disarm()
         report["status"] = "failed"
         report["error"] = _safe_exception(exc)
     finally:
+        stops.disarm()  # a second signal must not interrupt the report
+        if stops.received:
+            report["signals_received"] = list(stops.received)
         if observer is not None:
             observer.detach()
         if capital_loop and runtime is not None:
             _report_outstanding(report, runtime, output_dir)
         report["cost"] = admission.report()
-        if report_path is not None:
-            report_path.write_text(json.dumps(report, indent=2, default=str) + "\n")
-        # Printed only once it is on disk: a failed print must not lose the warning.
-        _announce_outstanding(report)
-        if lock is not None:
-            lock.close()
+        try:
+            if report_path is not None:
+                report_path.write_text(json.dumps(report, indent=2, default=str) + "\n")
+        finally:
+            # Written first, then printed; and printed even when the write failed.
+            _announce_outstanding(report)
+            if lock is not None:
+                lock.close()
     return report
 
 
@@ -1115,9 +1194,15 @@ def _announce_outstanding(report: dict) -> None:
     outstanding = report.get("capital_loop_outstanding")
     if outstanding is None:
         return
-    print(json.dumps({"capital_loop_outstanding": outstanding}, default=str), flush=True)
-    print(f"CAPITAL LOOP OUTSTANDING: {outstanding['warning']}. Before touching the reserve "
-          f"or relaunching, run: {outstanding['next_step']}", file=sys.stderr, flush=True)
+    # stderr first, and each print alone: a closed stdout must not silence stderr.
+    for line, stream in (
+            (f"CAPITAL LOOP OUTSTANDING: {outstanding['warning']}. Before touching the "
+             f"reserve or relaunching, run: {outstanding['next_step']}", sys.stderr),
+            (json.dumps({"capital_loop_outstanding": outstanding}, default=str), sys.stdout)):
+        try:
+            print(line, file=stream, flush=True)
+        except (OSError, ValueError):
+            pass
 
 
 def exit_code(report: dict) -> int:

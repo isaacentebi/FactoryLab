@@ -160,10 +160,19 @@ covered every block up to it. The runtime clock is never consulted.
    `VENICE_API_KEY` must be unset (top-ups credit the reserve wallet). The venue and the
    reserve must be different keys. Never send exactly $5 to the sink by hand: a shadow
    send's ledger row without a nonce is matched on sender, sink and amount.
-7. **Launch** (the `--capital-loop` flag is the runtime opt-in `factorylab run` never
-   passes; it admits `to_venice` only; every other treasury route and every x402
-   purchase stays denied, and the reserve key is cleared from the environment once the
-   rail has captured its signer):
+7. **Launch only from a checkout that contains this runbook's code, and never while
+   any other checkout, worktree or agent session on this host could launch one.** The
+   guards below (the reserve lock, the last-run record, the settlement bound, the
+   strict diary read) live in the runner itself. An older checkout's runner takes no
+   lock and writes no record: it would run beside a guarded run on the same reserve,
+   each authorizing against a floor that cannot see the other's unsettled
+   authorizations, and the next guarded launch would not know it had run. The lock
+   excludes only runs that take it.
+
+   (The `--capital-loop` flag is the runtime opt-in `factorylab run` never passes; it
+   admits `to_venice` only; every other treasury route and every x402 purchase stays
+   denied, and the reserve key is cleared from the environment once the rail has
+   captured its signer):
 
        uv run python scripts/edition4_rehearsal.py --world worlds/edition6-capital-loop.toml \
          --capital-loop --source-root "$PWD" --out work/capital-loop/<run> \
@@ -190,9 +199,12 @@ covered every block up to it. The runtime clock is never consulted.
       corrupted, removed or reordered line), is refused too, since what cannot be read
       may be a live authorization. A last line missing its newline still counts when
       it decrypts and chains; only one that does not (a crash mid-append) is skipped.
-      A diary cut exactly at a line boundary cannot be told from a shorter one by its
-      file alone: the lock's last-run record, which makes every launch read the last
-      run, and the chain reads of every authorization found are the defence there.
+      The reserve's recorded last run must not read empty (header only, or torn at its
+      first record): a run records itself only after its launch items exist, so an
+      empty diary there is truncation (`recorded_run_ledger_empty`). Any other diary cut
+      exactly at a line boundary cannot be told from a shorter one by its file alone;
+      the last-run record, which makes every launch read the last run, and the chain
+      reads of every authorization found are the defence there.
 
 ### How long a run must be
 
@@ -204,21 +216,25 @@ authorization. So one conversion's settlement horizon, in Base's own time, is:
 - **600 s**, the validity cap the signer always applies. Never the quote read at
   launch: the signer obeys whatever quote it is handed later, so a launch-time quote
   would bound nothing.
-- **plus the host clock's lead over Base's latest block**, when it leads (read at
-  launch): a `validBefore` stamped by a fast clock lies that much later in chain time.
-  A clock behind Base earns no credit.
-- **plus twice the finality lag** sampled at launch (the latest block's timestamp less
-  the finalized block's). One sample must also cover the lag growing during the run;
-  doubling it is the allowance (16 minutes measured, 32 allowed). A lag that cannot be
-  read, or reads zero or less, refuses the launch (`finality_lag_unreadable`).
+- **plus twice how far the finalized block is behind this host's clock**: the host's
+  time now, less the timestamp of the one finalized block read at launch. That single
+  difference already holds Base's finality lag, any lead of the host clock over the
+  chain (a `validBefore` stamped by a fast clock lies that much later in chain time),
+  and any staleness of the node that answered (an old finalized block only lengthens
+  it). It deliberately reads no `latest` block: a "latest less finalized" lag pairs two
+  reads that a load balancer can send to two nodes, and a stale `latest` would shrink
+  the lag toward zero and the bound with it. Doubling is the allowance for the lag
+  growing during the run (16 minutes measured, 32 allowed). A finalized block that
+  cannot be read, or that is not behind the host's clock, refuses the launch
+  (`finality_lag_unreadable`).
 - **plus one tick** for the rail to look.
 
 The run commands the conversion, and AGENTS.md rule 12 (essay II, IV.c) asks an inner
 loop to settle at least 3× faster than the outer loop that commands it, so the runner
 refuses a run *planned* shorter than **three** horizons. The planned length is
 `--duration`, or `--ticks` × the tick when that is shorter; the admission cap, a
-failure or a kill can still end a run sooner, and the bound says nothing of those.
-With the numbers of 23 September 2026 (no clock lead, a lag of about 16 minutes, the
+failure, a signal or a kill can still end a run sooner, and the bound says nothing of
+those. With the numbers of 23 September 2026 (no clock lead, a lag of about 16 minutes, the
 rehearsal's 10 s tick) the bound is 3 × (600 + 1,920 + 10) s = 7,590 s, about 127
 minutes; `--duration 150m` leaves room. The numbers are printed in
 `capital_loop_launch_check.settlement` and kept in the report.
@@ -245,12 +261,20 @@ it returns:
   finds the same lock and record.
 - Beside it, `<reserve>.last-run.json` names the one run that last held the reserve. A
   run records itself once its checks passed and its diary exists, before anything can
-  sign (the directory is synced after the rename, so the record survives a power
-  loss); the next launch reads that run wherever its directory is. The first launch
-  that ever creates a reserve's lock file writes a record naming no run, before it
-  takes the lock. From then on a lock file with no record beside it refuses every
-  launch (`capital_loop_last_run_missing`): deleting the record cannot switch the
-  last-run check off.
+  sign (the record and then its directory are flushed with `F_FULLFSYNC` on macOS,
+  `fsync` elsewhere, so the record survives a power loss); the next launch reads that
+  run wherever its directory is. The first launch that ever creates a reserve's lock
+  file writes a record naming no run, before it takes the lock. From then on a lock
+  file with no record beside it refuses every launch (`capital_loop_last_run_missing`):
+  deleting the record cannot switch the last-run check off. A record with no lock file
+  beside it refuses too (`capital_loop_lock_file_missing`), and the launch does not
+  recreate the lock file.
+- A lock is only the lock while its file is the one the path names: after `flock`
+  succeeds the launch compares the descriptor's inode and device with the path's, and
+  refuses on a mismatch (`capital_loop_lock_replaced`). An `flock` belongs to an inode,
+  not a name. If the lock file were removed while a run held it, a new launch would
+  create and lock a fresh file at the same path, and the two runs would each hold "the"
+  lock.
 
 Reading only the sibling directories of `--out` is **not enough** on its own, even
 with the lock: the lock ends with its run, and a run can end (or die) with an
@@ -268,18 +292,24 @@ those. Do not delete `~/.factorylab/capital-loop`: the record is what finds the 
 run.
 
 **The deliberate manual reset.** If the recorded run's directory is gone (every launch
-refuses `run_ledger_missing`, naming it), or the record was removed
-(`capital_loop_last_run_missing`) or damaged (`capital_loop_last_run_unreadable`), the
-check can only be reset by hand, and only this way:
+refuses `run_ledger_missing`, naming it), its diary reads empty
+(`recorded_run_ledger_empty`), or the record or lock file was removed or damaged
+(`capital_loop_last_run_missing`, `capital_loop_lock_file_missing`,
+`capital_loop_last_run_unreadable`), the check can only be reset by hand, and only
+this way:
 
-1. make sure no capital-loop run is running on this host;
+1. make sure **no capital-loop run is alive on this host** (no runner process, in any
+   checkout or session). This is the one thing the files cannot check for you: a run
+   still alive holds its lock on the file you are about to remove, and removing it lets
+   the next launch create and lock a fresh file beside the live run, so two runs would
+   authorize against one reserve at once;
 2. wait until at least 600 s plus twice the finality lag have passed since the last run
    died (its authorizations are then settled or dead), and read the reserve's balance
    (step 3 of "Before a live run");
 3. remove **both** `<reserve>.lock` and `<reserve>.last-run.json`. The next launch
    creates them afresh with a record naming no run.
 
-Removing only the record refuses; removing only the lock file keeps the record.
+Removing only one of the two refuses every launch until both are gone.
 
 ## After the run
 
@@ -290,8 +320,13 @@ Removing only the record refuses; removing only the lock file keeps the record.
   still pending. Its `top_ups_submitted` names each transfer, nonce and `validBefore`.
   The runner exits 3 when a top-up was left submitted or the diary could not be read
   (1 for any other failure, 0 otherwise; a pending shadow send alone is testnet money
-  and exits 0). `report.json` is written before the warning is printed. Do not touch
-  the reserve or relaunch; run its `next_step`,
+  and exits 0). From the world's construction on, SIGINT (Ctrl-C), SIGTERM and SIGHUP
+  stop the run in order (`status: stopped`, `stopped_by`): the report is written, the
+  warning printed and the exit code chosen exactly as at a normal end. `report.json` is
+  written before the warning is printed, and the warning is printed even when that
+  write fails. **Treat exit 130, a kill (137), any other unexpected status, or a missing
+  report as possibly outstanding**, and run the script below before anything else.
+  Do not touch the reserve or relaunch; run its `next_step`,
 
       uv run python scripts/capital_loop_outstanding.py work/capital-loop/<run>
 
@@ -359,7 +394,12 @@ only where bytes leave the process (the HTTP/JSON-RPC transport and the SDK's HT
 post). The fake Base is honest (logs only for the asked contract, topics and blocks;
 finality trailing the head) and the fake Venice and venue check every signature they
 receive; a debit to another payee, of another amount or from another account is never
-booked, and ours is booked once. Those fakes are ours, not Venice's or Hyperliquid's.
+booked, and ours is booked once. `tests/scripts/test_capital_loop_live_run.py` runs the
+runner itself on the same wires: the real `run_rehearsal` and `runtime.run()`, a seat's
+own `treasury.transfer to_venice`, both legs signed, the run ending with the top-up
+submitted (exit 3, or stopped by SIGINT, SIGTERM or SIGHUP with the same report), and
+the next launch refused until the fake chain shows the authorization settled or dead.
+Those fakes are ours, not Venice's or Hyperliquid's.
 
 The testnet `usdSend` signing and its ledger-row shape were exercised only against
 fakes: the signature recovers the venue address through the SDK's own

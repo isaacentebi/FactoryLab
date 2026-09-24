@@ -409,12 +409,66 @@ def test_a_removed_last_run_record_refuses_until_the_deliberate_reset(tmp_path):
     (locks / f"{reserve.lower()}.lock").unlink()
     with ReserveLock(reserve, lock_dir=locks) as lock:
         assert lock.last_run() is None
-    # Removing only the lock file keeps a record that names a run: it still stands.
+    # Removing only the lock file, as a run still holding it would never notice, refuses
+    # and recreates nothing: a fresh lock file would be a second, free lock.
     with ReserveLock(reserve, lock_dir=locks) as lock:
         lock.record_run(tmp_path / "elsewhere" / "earlier")
     (locks / f"{reserve.lower()}.lock").unlink()
-    with ReserveLock(reserve, lock_dir=locks) as lock:
-        assert lock.last_run() == (tmp_path / "elsewhere" / "earlier").resolve()
+    for _ in range(2):
+        with pytest.raises(CapitalLoopRefused, match="capital_loop_lock_file_missing"):
+            ReserveLock(reserve, lock_dir=locks)
+    assert not (locks / f"{reserve.lower()}.lock").exists()
+
+
+def test_a_lock_file_replaced_under_a_waiting_launch_is_not_the_lock(tmp_path, monkeypatch):
+    from factorylab.runtime import capital_loop
+    from factorylab.runtime.capital_loop import ReserveLock
+
+    ReserveLock(RESERVE, lock_dir=tmp_path).close()  # the files exist, no run holds them
+    path = tmp_path / f"{RESERVE.lower()}.lock"
+    flock = capital_loop.fcntl.flock
+
+    def replaced_first(fd, operation):
+        # Between this launch's open and its flock, the path is removed and recreated:
+        # the descriptor now names an unlinked inode anyone else could lock afresh.
+        path.unlink()
+        path.touch()
+        return flock(fd, operation)
+
+    monkeypatch.setattr(capital_loop.fcntl, "flock", replaced_first)
+    with pytest.raises(CapitalLoopRefused, match="capital_loop_lock_replaced"):
+        ReserveLock(RESERVE, lock_dir=tmp_path)
+
+    def removed_first(fd, operation):
+        path.unlink()
+        return flock(fd, operation)
+
+    monkeypatch.setattr(capital_loop.fcntl, "flock", removed_first)
+    with pytest.raises(CapitalLoopRefused, match="capital_loop_lock_replaced"):
+        ReserveLock(RESERVE, lock_dir=tmp_path)
+
+
+def test_a_recorded_run_whose_diary_is_empty_refuses(tmp_path):
+    from factorylab.runtime.capital_loop import ReserveLock
+
+    rpc = Rpc()
+    reserve = capital_loop_world().treasury.reserve_address
+    recorded = write_run(tmp_path / "elsewhere" / "recorded", crash=False)
+    with ReserveLock(reserve, lock_dir=tmp_path / "locks") as lock:
+        lock.record_run(recorded)
+    rpc.final_ts = 3_001  # nothing it holds is live any more: only its length matters
+    lines = diary_lines(recorded)
+    for truncated in ([lines[0]], [lines[0], lines[1][:-30]], [lines[0][:-1]]):
+        rewrite(recorded, truncated)  # header only; torn at its first record; torn header
+        report = rehearse(tmp_path / "runs" / f"after-{len(b''.join(truncated))}", rpc,
+                          tmp_path)
+        assert report["refusal"]["reason"] == "recorded_run_ledger_empty"
+    # The same emptiness in a run that is merely a sibling is still read, as before: only
+    # the recorded run is known to have written its launch items.
+    assert read_items(recorded) == []
+    rewrite(recorded, lines)
+    assert rehearse(tmp_path / "runs" / "whole", rpc, tmp_path)["refusal"]["reason"] == (
+        "source_root_mismatch")
 
 
 def test_the_lock_directory_is_the_accounts_not_home(monkeypatch, tmp_path, operator_lock_dir):
@@ -434,18 +488,47 @@ def test_a_recorded_run_is_durable_with_its_rename(monkeypatch, tmp_path):
     from factorylab.runtime import capital_loop
     from factorylab.runtime.capital_loop import ReserveLock
 
-    synced, fsync = [], os.fsync
+    synced, durable = [], capital_loop._durable
 
     def spy(fd):
         synced.append(stat.S_ISDIR(os.fstat(fd).st_mode))
-        fsync(fd)
+        durable(fd)
 
+    monkeypatch.setattr(capital_loop, "_durable", spy)
     with ReserveLock(RESERVE, lock_dir=tmp_path) as lock:
-        monkeypatch.setattr(capital_loop.os, "fsync", spy)
+        # The first lock writes its record naming no run: its bytes, then its directory.
+        assert synced == [False, True]
         lock.record_run(tmp_path / "run")
         # The record's bytes, then the directory holding its new name.
-        assert synced == [False, True]
+        assert synced == [False, True, False, True]
         assert lock.last_run() == (tmp_path / "run").resolve()
+
+
+def test_durable_asks_the_drive_to_flush_where_the_os_can(monkeypatch, tmp_path):
+    import os
+
+    from factorylab.runtime import capital_loop
+
+    asked, fsynced = [], []
+    monkeypatch.setattr(capital_loop.fcntl, "F_FULLFSYNC", 51, raising=False)
+    monkeypatch.setattr(capital_loop.fcntl, "fcntl", lambda fd, op: asked.append(op))
+    monkeypatch.setattr(capital_loop.os, "fsync", lambda fd: fsynced.append(fd))
+    fd = os.open(tmp_path, os.O_RDONLY)
+    try:
+        capital_loop._durable(fd)
+        assert asked == [51] and fsynced == []  # F_FULLFSYNC, not a plain fsync
+
+        def refused(fd, op):
+            raise OSError("not supported here")
+
+        monkeypatch.setattr(capital_loop.fcntl, "fcntl", refused)
+        capital_loop._durable(fd)
+        assert fsynced == [fd]  # a filesystem that refuses it still gets fsync
+        monkeypatch.delattr(capital_loop.fcntl, "F_FULLFSYNC")
+        capital_loop._durable(fd)
+        assert fsynced == [fd, fd]
+    finally:
+        os.close(fd)
 
 
 def test_the_reserves_last_run_is_checked_wherever_its_directory_is(tmp_path):
@@ -484,31 +567,44 @@ def test_a_run_shorter_than_three_settlement_horizons_is_refused():
     from factorylab.runtime.capital_loop import settlement_bound
 
     rpc, tick = Rpc(), 10 * S
+    host = rpc.final_ts + 960  # this host's clock: Base's real head, 16 minutes past final
 
     def bound(run_ns, lead_s=0):
-        return settlement_bound(run_ns, tick, transport=rpc,
-                                now_s=lambda: rpc.latest_ts + lead_s)
+        return settlement_bound(run_ns, tick, transport=rpc, now_s=lambda: host + lead_s)
 
-    # The 600 s cap the signer obeys, whatever a quote says; twice the sampled lag; a tick.
+    # The 600 s cap the signer obeys, whatever a quote says; twice how far finalized Base
+    # is behind this host's clock (the 960 s lag, no lead); a tick.
     horizon = (600 + 2 * 960) * S + tick
     numbers = bound(3 * horizon)
-    assert (numbers["validity_window_s"], numbers["finality_lag_s"],
-            numbers["host_clock_lead_s"], numbers["minimum_run_ns"]) == (600, 960, 0,
-                                                                         3 * horizon)
-    assert {r["method"] for r in rpc.requests} <= {"eth_chainId", "eth_getBlockByNumber"}
+    assert (numbers["validity_window_s"], numbers["finalized_behind_host_s"],
+            numbers["minimum_run_ns"]) == (600, 960, 3 * horizon)
+    # One block is read, the finalized one: no "latest" from another node to pair with.
+    blocks = [r["params"][0] for r in rpc.requests if r["method"] == "eth_getBlockByNumber"]
+    assert blocks == ["finalized"]
     with pytest.raises(CapitalLoopRefused,
                        match="capital_loop_duration_below_settlement_bound") as refused:
         bound(3 * horizon - 1)
     assert refused.value.detail["minimum_run_ns"] == 3 * horizon
-    # A host clock ahead of Base stamps validBefore that much later in chain time.
+    # A stale "latest" answer (a node 959 s behind the head, reporting a 1 s lag) cannot
+    # shorten it; latest-less-finalized would have allowed a run of 3 x 612 s.
+    rpc.lag_s = 1
+    assert bound(3 * horizon)["minimum_run_ns"] == 3 * horizon
+    with pytest.raises(CapitalLoopRefused, match="below_settlement_bound"):
+        bound(3 * (600 + 2 * 1 + 10) * S)
+    rpc.lag_s = 960
+    # A host clock ahead of Base stamps validBefore later in chain time: it lengthens it.
     with pytest.raises(CapitalLoopRefused, match="below_settlement_bound") as refused:
         bound(3 * horizon, lead_s=120)
-    assert refused.value.detail["minimum_run_ns"] == 3 * (horizon + 120 * S)
-    assert bound(3 * horizon, lead_s=-120)["host_clock_lead_s"] == 0  # behind: no credit
-    for lag in (0, -1):  # Base's finalized head always trails: no lag is no measurement
-        rpc.lag_s = lag
+    assert refused.value.detail["minimum_run_ns"] == 3 * (horizon + 2 * 120 * S)
+    # A stale finalized block only lengthens it.
+    rpc.final_ts -= 600
+    with pytest.raises(CapitalLoopRefused, match="below_settlement_bound") as refused:
+        bound(3 * horizon)
+    assert refused.value.detail["finalized_behind_host_s"] == 1_560
+    rpc.final_ts += 600
+    for lead in (-960, -961):  # finalized at or ahead of this host's clock: no measurement
         with pytest.raises(CapitalLoopRefused, match="finality_lag_unreadable"):
-            bound(10**15)
+            bound(10**15, lead_s=lead)
 
     def base_down(method, url, payload, headers):
         raise TimeoutError
@@ -623,12 +719,15 @@ def test_an_exception_a_library_caller_catches_still_releases_the_reserve(tmp_pa
 
 
 @pytest.mark.gate
+@pytest.mark.parametrize("write_fails", [False, True])
 def test_a_real_launch_records_itself_before_its_world_runs_and_reports_its_end(
-        tmp_path, monkeypatch, capsys):
+        tmp_path, monkeypatch, capsys, write_fails):
     """run_rehearsal itself, as the operator launches it, up to the world's first move:
     the real manifest loading, lock, checks, Runtime and HybridRail, faked only where
     bytes leave the process (Base's JSON-RPC, the SDK's HTTP post, and an offline
-    urllib for everything else)."""
+    urllib for everything else). The move itself is a stand-in: it journals a top-up the
+    way the treasury does and is stopped by Ctrl-C, so the runner's own end is what is
+    under test (the treasury's real top-up is in the next test)."""
     from pathlib import Path
     from urllib import error
 
@@ -671,19 +770,32 @@ def test_a_real_launch_records_itself_before_its_world_runs_and_reports_its_end(
         runtime.ledger.append({"kind": "treasury.step_submitted", "state": {
             "id": "treasury-0", "steps": steps, "index": 1, "status": "submitted",
             "reference": reference(LIVE_NONCE, 3_000), "route_data": {}}})
+        if write_fails:
+            out.chmod(0o500)  # report.json can no longer be written
         raise KeyboardInterrupt  # the operator's Ctrl-C, mid-run
 
     monkeypatch.setattr(rehearsal.Runtime, "run", first_move)
     provider = StubProvider(ModelResponse("openai/gpt-6-luna", "{}", 1, 1, "stop",
                                           cost_micro=1))  # the roster's catalogue, no network
     rpc = Rpc()
-    try:
-        ended = rehearse(out, rpc, tmp_path, world=str(world), source_root=repo_root(),
-                         provider=provider,
-                         exchange=HyperliquidExchange(mainnet=False))
-    except KeyboardInterrupt:
-        ended = None
-    assert ended is None, (ended["error"], ended.get("refusal"))  # the world moved
+
+    def launch():
+        return rehearse(out, rpc, tmp_path, world=str(world), source_root=repo_root(),
+                        provider=provider, exchange=HyperliquidExchange(mainnet=False))
+
+    if write_fails:
+        try:
+            with pytest.raises(PermissionError):
+                launch()
+        finally:
+            out.chmod(0o700)
+        assert not (out / "report.json").exists()
+        # The write failed, and the warning was printed anyway.
+        assert "CAPITAL LOOP OUTSTANDING" in capsys.readouterr().err
+        ReserveLock(reserve.address, lock_dir=locks).close()
+        return
+    ended = launch()
+    assert ended["status"] == "stopped" and ended["stopped_by"] == "SIGINT", ended
     assert seen["record"] == {"reserve_address": reserve.address,
                               "run_dir": str(out.resolve())}
     assert seen["rail"] == "hypercore-testnet-venice-base-mainnet-hybrid"

@@ -66,8 +66,12 @@ class CapitalLoopRefused(RuntimeError):
         self.reason, self.detail = reason, detail or {}
 
 
-def read_items(run_dir: str | Path) -> list[dict]:
+def read_items(run_dir: str | Path, *, recorded: bool = False) -> list[dict]:
     """Every diary item of a run, decrypted with the run's own ledger key file.
+
+    ``recorded`` marks the reserve's recorded last run. A run records itself only after
+    its launch items exist, so its diary reading empty (header-only, or torn at its
+    first record) is truncation, and is refused (``recorded_run_ledger_empty``).
 
     Guarantees no item that is in the file is silently dropped. Every line but the last
     must be a complete sealed record that this run's key decrypts, and the records must
@@ -104,16 +108,16 @@ def read_items(run_dir: str | Path) -> list[dict]:
         return CapitalLoopRefused("run_ledger_unreadable", {"run_dir": str(run_dir),
                                                             "line": line})
 
-    items = []
+    items: list[dict] = []
     with path.open("rb") as stream:
         header = stream.readline()
-        if not header.endswith(b"\n"):
-            return []  # torn while the diary was being created: nothing was journaled
+        # A header torn while the diary was created: nothing was journaled after it.
+        torn_header = not header.endswith(b"\n")
         try:
-            previous = json.loads(header)["genesis_hash"]
+            previous = None if torn_header else json.loads(header)["genesis_hash"]
         except (ValueError, KeyError, TypeError):
             raise unreadable(1) from None
-        for seq, line in enumerate(stream):
+        for seq, line in enumerate(() if torn_header else stream):
             # Only the last line can lack its newline. It counts if it reads; if not,
             # it is the torn final append and nothing after it exists.
             torn = not line.endswith(b"\n")
@@ -132,6 +136,8 @@ def read_items(run_dir: str | Path) -> list[dict]:
                 raise unreadable(seq + 2) from None  # 1-based, counting the header
             previous = item["hash"]
             items.append(item)
+    if recorded and not items:
+        raise CapitalLoopRefused("recorded_run_ledger_empty", {"run_dir": str(run_dir)})
     return items
 
 
@@ -177,11 +183,15 @@ def keyless_base(*, transport: Transport = http_request, rpc: str | None = None)
     return EVM(BASE, None, transport=transport, rpc=rpc)
 
 
-def outstanding(run_dir: str | Path, *, reserve_address: str, base: EVM) -> dict[str, Any]:
-    """Each journaled top-up's on-chain standing, and the run's pending shadow sends."""
+def outstanding(run_dir: str | Path, *, reserve_address: str, base: EVM,
+                recorded: bool = False) -> dict[str, Any]:
+    """Each journaled top-up's on-chain standing, and the run's pending shadow sends.
+
+    ``recorded`` is ``read_items``'s: the reserve's recorded last run may not be empty.
+    """
     from factorylab.world.treasury_rails import authorization_status
 
-    top_ups, shadows = journaled_references(read_items(run_dir))
+    top_ups, shadows = journaled_references(read_items(run_dir, recorded=recorded))
     rows = []
     for reference in top_ups:
         row = {"transfer_id": reference.get("transfer_id"),
@@ -201,6 +211,7 @@ def _unsettled(row: dict) -> bool:
 
 
 def launch_check(manifest: Any, *, previous_runs: tuple = (),
+                 recorded_run: str | Path | None = None,
                  transport: Transport = http_request, rpc: str = BASE_RPC) -> dict:
     """Refuse a capital-loop launch the chain says could overspend; return the numbers.
 
@@ -209,7 +220,9 @@ def launch_check(manifest: Any, *, previous_runs: tuple = (),
     ``balance - floor <= max_venice_total_usd`` is required, read keylessly now. And
     no earlier run's authorization may still be able to settle, since a crashed
     world's last authorization stays valid on chain for up to its quote's timeout.
-    Each earlier run is read once, however many ways it was named.
+    ``recorded_run``, the reserve lock's last holder, is read first and must not be
+    empty (``read_items``). Each earlier run is read once, however many ways it was
+    named.
     """
     treasury = manifest.treasury
     reserve = treasury.reserve_address
@@ -222,11 +235,13 @@ def launch_check(manifest: Any, *, previous_runs: tuple = (),
         raise CapitalLoopRefused("reserve_floor_leaves_more_than_the_total_cap", numbers)
     base = keyless_base(transport=transport, rpc=rpc)
     previous, seen = [], set()
-    for run_dir in previous_runs:
+    runs = ((recorded_run,) if recorded_run is not None else ()) + tuple(previous_runs)
+    for position, run_dir in enumerate(runs):
         if Path(run_dir).resolve() in seen:
             continue
         seen.add(Path(run_dir).resolve())
-        report = outstanding(run_dir, reserve_address=reserve, base=base)
+        report = outstanding(run_dir, reserve_address=reserve, base=base,
+                             recorded=recorded_run is not None and position == 0)
         previous.append(report)
         live = [row for row in report["top_ups"] if _unsettled(row)]
         if live:
@@ -247,11 +262,28 @@ def default_lock_dir() -> Path:
     return Path(pwd.getpwuid(os.getuid()).pw_dir) / ".factorylab" / "capital-loop"
 
 
+def _durable(fd: int) -> None:
+    """Flush ``fd`` to stable storage, not only to the drive's cache, where the OS can.
+
+    On macOS ``fsync`` hands data to the drive, which may still hold it in a volatile
+    cache; ``F_FULLFSYNC`` asks the drive to flush it. Elsewhere, or where a filesystem
+    refuses it, ``fsync`` is the strongest request there is.
+    """
+    full = getattr(fcntl, "F_FULLFSYNC", None)
+    if full is not None:
+        try:
+            fcntl.fcntl(fd, full)
+            return
+        except OSError:
+            pass
+    os.fsync(fd)
+
+
 def _fsync_directory(directory: Path) -> None:
     """Make a rename or a creation inside ``directory`` durable before returning."""
     fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
     try:
-        os.fsync(fd)
+        _durable(fd)
     finally:
         os.close(fd)
 
@@ -278,8 +310,14 @@ class ReserveLock:
     The record cannot be switched off by removing it. The process that creates a
     reserve's lock file also creates its record, naming no run, before it takes the
     lock; from then on a lock file without a record refuses every launch
-    (``capital_loop_last_run_missing``). The one way back is the deliberate manual
-    reset in the runbook: remove both files while no run holds the reserve.
+    (``capital_loop_last_run_missing``), and a record without its lock file refuses
+    too (``capital_loop_lock_file_missing``), without recreating the lock file: a
+    lock file removed while a run held it would otherwise let the next launch lock a
+    fresh inode beside the running one. After ``flock`` succeeds, the descriptor's inode
+    must still be the one the path names (``capital_loop_lock_replaced`` otherwise), so a
+    descriptor opened on a file since removed or replaced never counts as the lock. The
+    one way back is the deliberate manual reset in the runbook: remove both files, and
+    only while no capital-loop run is alive on this host.
     """
 
     _FLAGS = os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC
@@ -294,6 +332,10 @@ class ReserveLock:
         self.path = directory / f"{name}.lock"
         self.record_path = directory / f"{name}.last-run.json"
         self.reserve_address = reserve_address
+        where = {"reserve_address": reserve_address, "lock": str(self.path),
+                 "record": str(self.record_path)}
+        if not os.path.lexists(self.path) and os.path.lexists(self.record_path):
+            raise CapitalLoopRefused("capital_loop_lock_file_missing", where)
         try:
             fd = os.open(self.path, self._FLAGS | os.O_CREAT | os.O_EXCL, 0o600)
         except FileExistsError:
@@ -309,6 +351,13 @@ class ReserveLock:
         try:
             os.set_inheritable(fd, False)  # explicit, and a no-op where O_CLOEXEC held
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            held = os.fstat(fd)
+            try:
+                named = os.stat(self.path, follow_symlinks=False)
+            except FileNotFoundError:
+                named = None
+            if named is None or (named.st_ino, named.st_dev) != (held.st_ino, held.st_dev):
+                raise CapitalLoopRefused("capital_loop_lock_replaced", where)
         except BlockingIOError:
             os.close(fd)
             raise CapitalLoopRefused("capital_loop_reserve_locked", {
@@ -353,7 +402,7 @@ class ReserveLock:
         with os.fdopen(fd, "wb") as stream:
             stream.write(self._record(run_dir))
             stream.flush()
-            os.fsync(stream.fileno())
+            _durable(stream.fileno())
         _fsync_directory(self.record_path.parent)
 
     def record_run(self, run_dir: str | Path) -> None:
@@ -370,7 +419,7 @@ class ReserveLock:
             with os.fdopen(fd, "wb") as stream:
                 stream.write(self._record(run_dir))
                 stream.flush()
-                os.fsync(stream.fileno())
+                _durable(stream.fileno())
             os.replace(temporary, self.record_path)
             _fsync_directory(self.record_path.parent)
         finally:
@@ -405,38 +454,39 @@ def settlement_bound(run_ns: int, tick_interval_ns: int, *,
 
     * the validity window, always the ``MAX_AUTHORIZATION_S`` cap: the signer obeys
       whatever quote it is handed later, so a quote read now bounds nothing;
-    * plus the host clock's lead over the latest Base block, when it leads: a
-      ``validBefore`` stamped by a fast clock lies that much further in chain time;
-    * plus twice the finality lag sampled now (latest block's timestamp less the
-      finalized block's): one sample at launch must also cover the lag growing during
-      the run, and doubling it is the allowance (16 minutes measured, 32 allowed);
+    * plus twice the host's lead over finalized Base: this host's clock now, less the
+      finalized block's timestamp, read in one call. That one difference already holds
+      Base's finality lag, any lead of the host clock over the chain (a ``validBefore``
+      stamped by a fast clock lies that much later in chain time), and any staleness of
+      the node that answered (an old finalized block only lengthens it). A separate
+      ``latest`` read cannot shorten it: there is none, so two nodes behind one URL
+      cannot pair a stale ``latest`` with a fresh ``finalized``. Doubling is the
+      allowance for the lag growing during the run (16 minutes measured, 32 allowed);
     * plus one tick for the rail to look.
 
-    Every read is keyless. A lag that cannot be read, or reads zero or less (Base's
-    finalized head always trails its latest), is unavailable and refuses
+    Every read is keyless. A finalized block that cannot be read, or whose timestamp is
+    not behind this host's clock (finality always trails real time, so a host clock
+    that far behind the chain cannot be reasoned from), is unavailable and refuses
     (``finality_lag_unreadable``): no typed constant stands in for Base's own delay.
     ``run_ns`` is the run's planned length; the bound says nothing of a run the
-    admission cap, a failure or a kill ends early. A run planned shorter than
+    admission cap, a failure, a signal or a kill ends early. A run planned shorter than
     ``SETTLEMENT_RATIO`` horizons is refused
     (``capital_loop_duration_below_settlement_bound``).
     """
     base = keyless_base(transport=transport, rpc=rpc)
     try:
         base.check_chain()
-        latest = base.call("eth_getBlockByNumber", ["latest", False])
         final = base.call("eth_getBlockByNumber", ["finalized", False])
-        latest_ts = int(latest["timestamp"], 16)
-        lag = latest_ts - int(final["timestamp"], 16)
-        if lag <= 0:
+        host_s = now_s() if now_s is not None else time.time_ns() // 1_000_000_000
+        behind = host_s - int(final["timestamp"], 16)
+        if behind <= 0:
             raise ValueError
     except Exception:  # noqa: BLE001 - an unread lag bounds nothing
         raise CapitalLoopRefused("finality_lag_unreadable", {"rpc": base.rpc}) from None
-    host_s = now_s() if now_s is not None else time.time_ns() // 1_000_000_000
-    skew = max(0, host_s - latest_ts)
     window = MAX_AUTHORIZATION_S
-    horizon_ns = (window + skew + LAG_ALLOWANCE * lag) * 1_000_000_000 + tick_interval_ns
-    numbers = {"validity_window_s": window, "host_clock_lead_s": skew,
-               "finality_lag_s": lag, "finality_lag_allowance": LAG_ALLOWANCE,
+    horizon_ns = (window + LAG_ALLOWANCE * behind) * 1_000_000_000 + tick_interval_ns
+    numbers = {"validity_window_s": window, "finalized_behind_host_s": behind,
+               "finality_lag_allowance": LAG_ALLOWANCE,
                "tick_interval_ns": tick_interval_ns,
                "settlement_horizon_ns": horizon_ns, "settlement_ratio": SETTLEMENT_RATIO,
                "minimum_run_ns": SETTLEMENT_RATIO * horizon_ns, "run_ns": run_ns}
