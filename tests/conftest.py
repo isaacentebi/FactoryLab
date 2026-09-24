@@ -397,3 +397,112 @@ def operator_lock_dir():
     """The real ``default_lock_dir`` the autouse fixture above replaces: call it only to
     compute a path, never to lock anything there."""
     return operator_default_lock_dir
+
+
+# ---- No test touches the network
+
+
+class NetworkForbidden(RuntimeError):
+    """A test tried to reach a non-local host; it must use a fake (or be marked
+    ``network``, which keeps it out of the check and gate tiers)."""
+
+
+#: Hosts a test may reach: this machine only (a jail or a local server may use them).
+_LOCAL_HOSTS = {"localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback"}
+
+
+def _local_host(host) -> bool:
+    import ipaddress
+
+    if host in (None, "", b""):
+        return True
+    if isinstance(host, bytes):
+        host = host.decode(errors="replace")
+    host = str(host).strip("[]").lower()
+    if host in _LOCAL_HOSTS:
+        return True
+    try:
+        return ipaddress.ip_address(host.split("%", 1)[0]).is_loopback
+    except ValueError:
+        return False  # a name that is not this machine's is resolved over the network
+
+
+def _url_host(url) -> str | None:
+    from urllib.parse import urlsplit
+
+    return urlsplit(getattr(url, "full_url", url)).hostname
+
+
+@pytest.fixture(autouse=True)
+def _no_network(request, monkeypatch):
+    """Every outbound network path raises ``NetworkForbidden``, naming what it reached.
+
+    Covers ``socket.getaddrinfo`` (a DNS lookup is already traffic),
+    ``socket.socket.connect``/``connect_ex`` and ``socket.create_connection`` (loopback
+    and unix sockets allowed), ``urllib.request.urlopen`` and every
+    ``OpenerDirector.open``, which the project's own seams ``x402.http_request`` and
+    ``polymarket.http_get_json`` both open through (a test that fakes the opener beneath
+    a seam reaches nothing, and is not stopped). Each attempt is also remembered and
+    fails the test at
+    teardown, so code that catches the error (a rail that turns any transport failure
+    into a retry) cannot hide it. A test marked ``network`` is left alone; such tests
+    are never in the check or gate tiers.
+    """
+    if request.node.get_closest_marker("network"):
+        yield
+        return
+    import socket
+    import urllib.request
+
+    attempts: list[str] = []
+
+    def forbid(what: str):
+        attempts.append(what)
+        raise NetworkForbidden(f"tests may not touch the network: {what} "
+                               "(use a fake, or mark the test @pytest.mark.network)")
+
+    real_getaddrinfo = socket.getaddrinfo
+
+    def getaddrinfo(host, *args, **kwargs):
+        if not _local_host(host):
+            forbid(f"DNS lookup of {host!r}")
+        return real_getaddrinfo(host, *args, **kwargs)
+
+    def guarded(real):
+        def connect(self, address):
+            if self.family in (socket.AF_INET, socket.AF_INET6) and not _local_host(
+                    address[0] if isinstance(address, tuple) else address):
+                forbid(f"socket connect to {address!r}")
+            return real(self, address)
+        return connect
+
+    real_create_connection = socket.create_connection
+
+    def create_connection(address, *args, **kwargs):
+        if not _local_host(address[0]):
+            forbid(f"socket connection to {address!r}")
+        return real_create_connection(address, *args, **kwargs)
+
+    real_open = urllib.request.OpenerDirector.open
+
+    def opener_open(self, fullurl, *args, **kwargs):
+        if not _local_host(_url_host(fullurl)):
+            forbid(f"urllib open of {getattr(fullurl, 'full_url', fullurl)}")
+        return real_open(self, fullurl, *args, **kwargs)
+
+    real_urlopen = urllib.request.urlopen
+
+    def urlopen(url, *args, **kwargs):
+        if not _local_host(_url_host(url)):
+            forbid(f"urlopen of {getattr(url, 'full_url', url)}")
+        return real_urlopen(url, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
+    monkeypatch.setattr(socket.socket, "connect", guarded(socket.socket.connect))
+    monkeypatch.setattr(socket.socket, "connect_ex", guarded(socket.socket.connect_ex))
+    monkeypatch.setattr(socket, "create_connection", create_connection)
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", opener_open)
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    yield attempts  # the guard's own tests read (and clear) what it stopped
+    if attempts:
+        pytest.fail("the test touched the network: " + "; ".join(attempts), pytrace=False)
