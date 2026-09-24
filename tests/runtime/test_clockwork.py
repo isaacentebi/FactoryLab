@@ -541,6 +541,59 @@ def test_the_safety_pass_runs_between_calls_only_once_a_delivered_tick_has_passe
     assert not _items(simulated, "safety.pass")  # a simulated clock never moves mid-event
 
 
+def test_the_wall_clock_sees_through_a_wrapper_around_the_live_clock():
+    """The capital-loop and rehearsal runs wrap their LiveClock in the rehearsal's
+    ``AdmissionClock``. The safety path's wall clock reads the live clock through it,
+    advancing within an event, never the event's simulated instant; a wrapper is paced
+    by the wall exactly when what it wraps is, by declaration (``wall_paced``)."""
+    from factorylab.runtime.live import LiveClock, WallClock, wall_paced
+    from factorylab.runtime.shared import SimClock
+    from factorylab.world.clock import ClockSource
+    from scripts.edition4_rehearsal import Admission, AdmissionClock
+
+    ft = _FakeTime()
+    live = LiveClock(interval_ns=10**9, count=5, now_ns=ft.now_ns, sleep=lambda s: None)
+    wrapped = AdmissionClock(live, Admission(cap_micro=1, max_calls=1))
+    simulated = ClockSource(0, 10**9, 5)
+    assert wall_paced(live) and wall_paced(wrapped)
+    assert not wall_paced(simulated)
+    assert not wall_paced(AdmissionClock(simulated, Admission(cap_micro=1, max_calls=1)))
+    sim = SimClock(7)
+    wall = WallClock(lambda: wrapped, sim)
+    assert wall.now_ns() == ft.t
+    ft.t += 3 * 10**9  # a model call took three seconds of wall time, mid-event
+    assert wall.now_ns() == ft.t and sim.now_ns == 7
+    assert wall.tick_ns() == WallClock(lambda: live, sim).tick_ns() == 10**9
+    assert WallClock(lambda: simulated, sim).now_ns() == 7
+
+
+def test_a_capital_loop_shaped_world_s_safety_path_reads_wall_time_mid_event():
+    """A live venue and a LiveClock behind the rehearsal's ``AdmissionClock``, as the
+    capital-loop run builds them: once a delivered tick of wall time passes inside an
+    event, the safety pass runs at the wall's instant (before the fix it read the
+    event's simulated instant, which never moves inside an event, and never ran)."""
+    from factorylab.runtime.live import LiveClock
+    from scripts.edition4_rehearsal import Admission, AdmissionClock
+
+    ft = _FakeTime()
+    live = LiveClock(interval_ns=10**9, count=5, now_ns=ft.now_ns, sleep=lambda s: None)
+    rt = make_runtime(live=True, clock_source=AdmissionClock(
+        live, Admission(cap_micro=10**9, max_calls=100)))
+    assert isinstance(rt.tick_clock, AdmissionClock)
+    calls = []
+    rt._reconcile_orders = lambda **_: calls.append("reconcile")
+    rt._evaluate_watchers = lambda **kw: calls.append(kw.get("sweep"))
+    rt._settle_exchange_effects = lambda fills, **_: calls.append(("fills", len(fills)))
+    rt.consequence_fills.poll = lambda _exchange: []
+    event_instant = rt.clock.now_ns
+    rt._safety_ns = event_instant
+    ft.t = event_instant + 10**9  # a tick of wall time passes while a model thinks
+    rt._safety_pass()
+    assert calls == [("fills", 0), "reconcile", f"safety-{ft.t}"]
+    [safety] = _items(rt, "safety.pass")
+    assert safety["ts"] == ft.t > event_instant and rt.clock.now_ns == ft.t
+
+
 def test_a_fill_the_venue_makes_while_a_model_thinks_settles_between_tool_rounds_once():
     """Tool writes an order, the market fills it during the next call's wait, the safety
     pass settles the fill before that call, and the model answers. The decision acts

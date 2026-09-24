@@ -962,7 +962,7 @@ def restore_runtime(rt, state: dict) -> None:
     therefore leaves the runtime exactly as it was, rather than half a dead
     world's memory inside a live one.
     """
-    from factorylab.runtime.live import LiveClock
+    from factorylab.runtime.live import LiveClock, wall_paced
     from factorylab.runtime.routing import RouterState
     from factorylab.world.clock import ClockSource
 
@@ -1059,7 +1059,7 @@ def restore_runtime(rt, state: dict) -> None:
         rt.tick_clock = ClockSource.restore(saved_clock)
     else:
         callbacks = ({"now_ns": rt.tick_clock.now_ns, "sleep": rt.tick_clock.sleep}
-                     if isinstance(rt.tick_clock, LiveClock) else {})
+                     if wall_paced(rt.tick_clock) else {})
         rt.tick_clock = LiveClock.restore(saved_clock, **callbacks)
     if rt.clock_source is not None:
         rt.clock_source = rt.tick_clock

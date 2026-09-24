@@ -31,7 +31,14 @@ from factorylab.runtime.cascade import CascadeGate
 from factorylab.runtime.compute import ContractConsequences
 from factorylab.runtime.feedback import PendingJudgement
 from factorylab.runtime.immune import thrash_controller
-from factorylab.runtime.live import LiveClock, LiveVenue, Reconciler, WallClock, build_provider
+from factorylab.runtime.live import (
+    LiveClock,
+    LiveVenue,
+    Reconciler,
+    WallClock,
+    build_provider,
+    wall_paced,
+)
 from factorylab.runtime.observations import seed_book
 from factorylab.runtime.pricing import MeasureWindow
 from factorylab.runtime.resume import JournalProxy, RecoveryJournal
@@ -182,7 +189,7 @@ class BootstrapMixin:
         self.clock = SimClock(0) if _journal is None else _journal.clock
         if self.live and _journal is None:
             self.clock.now_ns = (
-                self.tick_clock.now_ns() if isinstance(self.tick_clock, LiveClock)
+                self.tick_clock.now_ns() if wall_paced(self.tick_clock)
                 else self.tick_clock.start_ns
             )
         self.stats = RunStats()

@@ -398,6 +398,14 @@ class AdmissionClock:
         self.admission = admission
 
     @property
+    def wall_paced(self) -> bool:
+        """The pacing protocol (``factorylab.runtime.live.wall_paced``): paced against the
+        wall exactly when the clock it wraps is, and ``now_ns`` then reads that clock."""
+        from factorylab.runtime.live import wall_paced
+
+        return wall_paced(self.base)
+
+    @property
     def interval_ns(self):
         return self.base.interval_ns
 
@@ -1181,10 +1189,11 @@ def _rehearse(
                 # target before launch so every treasury direction is refused pre-signing.
                 runtime.treasury.rail.target = DeniedTransferRail(runtime.treasury.rail.target)
             from factorylab.runtime import polymarket
+            from factorylab.runtime.live import wall_paced
 
             surface = getattr(runtime, "polymarket", None)
             if (surface is not None and not surface.writes
-                    and not polymarket.wall_paced(runtime.tick_clock)):
+                    and not wall_paced(runtime.tick_clock)):
                 # A rehearsal on a supplied simulated clock is offline: Polymarket counts
                 # wall time, and a live reader runs only on the wall clock (``arm``), so
                 # its reads are answered by the seeded simulated venue, as fastloop's are.

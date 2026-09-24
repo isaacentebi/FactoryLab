@@ -349,6 +349,7 @@ def arm(rt: Any) -> None:
     by the simulated venue (``simulate_reads``) or any other stand-in, is admitted with
     no lock. Idempotent; ``disarm`` releases what it took.
     """
+    from factorylab.runtime.live import wall_paced
     from factorylab.world.polymarket import PolymarketReader
 
     surface = getattr(rt, "polymarket", None)
@@ -357,23 +358,9 @@ def arm(rt: Any) -> None:
         return
     if not getattr(rt, "ledger_path", None):
         raise LiveReaderRefused(LIVE_REQUIRES_A_LEDGER)
-    if not wall_paced(rt.tick_clock):
+    if not wall_paced(rt.tick_clock):  # a LiveClock, or a wrapper declaring one
         raise LiveReaderRefused(LIVE_REQUIRES_THE_WALL_CLOCK)
     rt._polymarket_ip_lock = ip_lock()
-
-
-def wall_paced(clock: Any) -> bool:
-    """Whether a world's ticks are paced against the wall clock: a ``LiveClock``, or a
-    wrapper that names one as its ``base`` (the rehearsal's ``AdmissionClock``)."""
-    from factorylab.runtime.live import LiveClock
-
-    for _ in range(8):
-        if isinstance(clock, LiveClock):
-            return True
-        clock = getattr(clock, "base", None)
-        if clock is None:
-            return False
-    return False
 
 
 def disarm(rt: Any) -> None:
