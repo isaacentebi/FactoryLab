@@ -20,7 +20,7 @@ round-three fixes to the existing contracts.
 | `tools.max_depth` | Integer ≥ 0, never boolean or float | `4` | Yes: root depth is 0; zero disables children |
 | `tools.max_children` | Integer ≥ 0, never boolean or float | `3` | Yes: per-request fan-out; zero disables children |
 | `tools.max_tool_calls` | Integer ≥ 0, never boolean or float | `4` (the existing limit, now a manifest key) | Yes: per request; zero disables tool calls |
-| `venue.max_readers` | Integer ≥ 1 | `7` | Yes: the venue read slots. Seeds take slots in manifest order; a registration takes a free one; a retirement frees one; a seat without one registers all the same, without the venue read tools. The venue read share divides by it (see "Seeing the world"). The population itself has no size cap: `tools.max_seats` was removed and is refused |
+| `venue.max_readers` | Integer ≥ 1 | `16` | Yes: the venue read slots. Seeds take slots in manifest order; a registration takes a free one; a retirement frees one; a seat without one registers all the same, without the venue read tools. The venue read share divides by it (see "Seeing the world"). The population itself has no size cap: `tools.max_seats` was removed and is refused |
 
 The assembly proposal uses the same accepts/emits/schemas contract. A custom
 schema validates the returned payload, excluding the protocol fields `emits`,
@@ -1786,7 +1786,7 @@ more per 20; the added weight per interval is not stated and is counted as 1).
 `[venue] public_read_weight_per_minute` (default `480`, an integer below `1200`,
 fixed for the world's life) is what the population's reads may use. **The limit is
 on who reads the venue, not on how many seats exist.** `[venue] max_readers`
-(default `7`) is the number of venue read slots: the seeds take slots in manifest
+(default `16`) is the number of venue read slots: the seeds take slots in manifest
 order, a newly registered seat takes a free one if there is one, and a retirement
 frees its seat's slot for the next registration. A seat with no slot registers all
 the same, with every tool but the venue reads, which it is refused as an unknown
@@ -1801,9 +1801,9 @@ another seat does (reading, registering, retiring) changes a reader's share or i
 refusals. A first-come shared budget would let one seat starve the others and
 signal them through refusals, and a share over the live seats would let
 registering seats shrink everyone's share: both are a third channel between seats
-(AGENTS.md rule 4). A read is admitted when the most it can send fits in what the
-seat's own reads left of its share, and refused before it is sent otherwise
-(`tool.refused`, naming the seat's own use, its share and that worst case).
+(AGENTS.md rule 4). A read is admitted when the weight its first attempt sends
+fits in what the seat's own reads left of its share, and refused before it is sent
+otherwise (`tool.refused`, naming the seat's own use and share).
 
 **A read answered earlier in the tick is not sent again.** Within one world tick,
 until a venue or treasury write that can change what the venue answers (an order,
@@ -1824,37 +1824,29 @@ the listing it loaded and sends no request), `venue.mids` and `venue.order_book`
 `venue.funding`, `venue.open_orders` and `venue.vault_details` 20,
 `venue.vault_positions` 40 (vault equities and leading vaults), `venue.candles` 20
 plus 1 per 60 candles and `venue.funding_history` 20 plus 1 per 20 rates, an
-out-of-range count taken at its maximum. **A read is admitted on its worst
-case.** The adapter's `_guarded` makes up to `REQUEST_ATTEMPTS` (3) attempts of
-each request, a retry after a failure or a 429: that is the adapter's physics, not
-a seat's choice, and a seat read gets the same retries as the kernel's. So a read
-is admitted only when all of them fit (`public_read_worst`: three attempts of each
-request's weight, plus the item weight the answered attempt carries): 60 for
-`venue.funding`, `venue.open_orders` and `venue.vault_details`, 6 for
-`venue.mids` and `venue.order_book`, 18 for `venue.positions`, 120 for
-`venue.vault_positions`, 64 for `venue.candles` at 200 candles and 65 for
-`venue.funding_history` at 100 rates. A read whose worst case does not fit is
-refused; it is never sent with fewer retries. The seat is charged what the live
-adapter reports it sent
+out-of-range count taken at its maximum. **A seat's read is sent once**: the
+adapter's `_guarded` makes three attempts for the kernel's own calls, but one for
+a seat's (`single_attempt`), so no retry can take a seat past the share its read
+was admitted on, and the retry reserve in the arithmetic below is zero. A seat
+read that meets a 429 or a transient failure fails and the seat is told. The
+seat is charged what the live adapter reports it sent
 (`HyperliquidExchange.request_weight_sent`, a journaled read-only call, replayed
 from the journal and never counted as a venue write): every attempt `_guarded`
 makes, and the item weight of what came back. A simulated venue sends nothing and
 is charged the first-attempt weight, so the limit binds the same way in a
 scripted world; a counter that cannot be read is charged the same, and no failure
-of it escapes the tool call. Because what is charged never exceeds the worst case
-a read was admitted on, no reader's reads over any 60 s pass its share, and the sum
-of all readers' reads is at most `max_readers × share ≤
-public_read_weight_per_minute`, and the rest of
+of it escapes the tool call. The sum of all seats' reads over any 60 s is therefore
+at most `max_readers × share ≤ public_read_weight_per_minute`, and the rest of
 the 1200 is the kernel's: 720 at the default. That headroom rests on an estimate,
 not a measurement: at 10-second ticks the kernel's own reads (mids, account and
 spot state, asset contexts, open orders, fills and funding pages) come to roughly
 90 weight a tick, about 540 a minute. **Load-time invariant:** a world is refused
-whose share cannot cover the worst case of the heaviest venue read it publishes
-(`venue.funding_history` at 65 without the vault surface, `venue.vault_positions`
-at 120 with it), checked when a manifest is read and again when a runtime is built
+whose share cannot cover the first attempt of the heaviest venue read it publishes
+(`venue.funding_history` at 25 without the vault surface, `venue.vault_positions`
+at 40 with it), checked when a manifest is read and again when a runtime is built
 from one: a published read no reader could ever be admitted to would be a tool in
-name only. The default, 480 over 7 slots, is 68 a slot; a world publishing the
-vault surface needs a share of 120, for example `max_readers = 4` at the default
+name only. The default, 480 over 16 slots, is 30 a slot; a world publishing the
+vault surface needs a share of 40, for example `max_readers = 12` at the default
 budget. The sliding minute's use and the slot holders are checkpointed. Each
 tool's description states the slot and share rules, its weight and the tick rule.
 The

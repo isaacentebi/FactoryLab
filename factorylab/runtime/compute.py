@@ -1267,30 +1267,27 @@ class ComputeMixin:
     def _venue_read_refusal(self, seat: str, tool_id: str, args: Any) -> str | None:
         """Refuse a seat's venue read its share cannot cover, before anything is sent.
 
-        Guarantees: a read is admitted only when the most it can send, every attempt
-        the adapter may make included (``public_read_worst``), fits in what the
-        seat's own reads left of its share over the sliding minute, so what is then
-        charged (what was actually sent) never takes the seat past its share; the
-        retry count is the adapter's, never the seat's. Another seat's reads never
-        enter it. Any other tool passes untouched.
+        Guarantees: a read is admitted only when the weight its first attempt sends
+        fits in what the seat's own reads left of its share over the sliding minute;
+        another seat's reads never enter it. Any other tool passes untouched.
         """
-        from factorylab.world.venue_tools import public_read_worst
+        from factorylab.world.venue_tools import public_read_weight
 
-        worst = public_read_worst(tool_id, args)
-        if worst is None or worst == 0:
+        weight = public_read_weight(tool_id, args)
+        if weight is None or weight == 0:
             return None
         share, used = self.venue_read_share(), self._venue_read_used(seat)
-        if used + worst > share:
+        if used + weight > share:
             return (f"{self.PUBLIC_READ_REFUSAL}: {used} of {share} venue request weight "
-                    f"in the last 60 s; this read may send up to {worst}")
+                    f"in the last 60 s; this read sends {weight}")
         return None
 
     def _venue_weight_sent(self) -> int | None:
         """The live adapter's count of venue weight sent, or None.
 
         None for a simulated venue, which sends nothing, and for a counter that could
-        not be read: the caller then charges the read's first-attempt weight. A
-        journaled read-only call
+        not be read: the caller then charges the read's first-attempt weight, which
+        is what a seat read sends (it is never retried). A journaled read-only call
         (``runtime/resume.py``, ``_read_only``), so a replay returns what was recorded
         and it moves no memo keyed on venue writes.
         """
@@ -1302,14 +1299,19 @@ class ComputeMixin:
             return None
         return sent if type(sent) is int else None
 
+    def _seat_read_attempts(self, single: bool) -> None:
+        """A seat's read goes to the venue once: no retry can overshoot the seat's share."""
+        if hasattr(self.exchange, "request_weight_sent"):
+            self.exchange.single_attempt = single
+
     def _charge_venue_read(self, seat: str, tool_id: str, args: Any,
                            before: int | None) -> None:
-        """Charge a seat's read what the adapter reports it sent for it, every attempt.
+        """Charge a seat's read what the adapter reports it sent for it.
 
-        What is charged is at most the worst case the read was admitted on. A
-        simulated venue sends nothing and reports nothing; it is charged the
-        first-attempt weight, so the limit binds the same way in a scripted world.
-        Never raises.
+        A seat read is sent once (``_seat_read_attempts``), so what is charged is at
+        most the first-attempt weight it was admitted on. A simulated venue sends
+        nothing and reports nothing; it is charged the first-attempt weight, so the
+        limit binds the same way in a scripted world. Never raises.
         """
         from factorylab.world.venue_tools import public_read_weight
 
@@ -1714,6 +1716,11 @@ class ComputeMixin:
             return self.tool_runner.run(tool, args)
 
         try:
+            if venue_read:
+                # Set inside the try whose ``finally`` clears it: nothing between
+                # setting and clearing can leave the kernel's own reads without
+                # their retries.
+                self._seat_read_attempts(True)
             metered = self._seat_meter(action_id).run(
                 handle=handle,
                 reason=f"tool:{tool_id}",
@@ -1727,7 +1734,10 @@ class ComputeMixin:
             return {"error": f"{type(exc).__name__}: {exc}"[:200]}, 0
         finally:
             if venue_read:
-                self._charge_venue_read(action_id, tool_id, args, weight_before)
+                try:
+                    self._seat_read_attempts(False)
+                finally:
+                    self._charge_venue_read(action_id, tool_id, args, weight_before)
         if spec["kind"] == "venue":
             if tool_id in self.venue_tools.PUBLIC_READS:
                 from factorylab.runtime.observations import record_venue_facts

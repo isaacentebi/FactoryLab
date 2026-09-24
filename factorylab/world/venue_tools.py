@@ -213,23 +213,6 @@ def public_read_weight(tool_id: str, args: Any) -> int | None:
     return base + -(-n // per)
 
 
-def public_read_worst(tool_id: str, args: Any) -> int | None:
-    """The most venue weight one seat read can send, or None for any other tool.
-
-    Guarantees an upper bound on what the live adapter sends for the read: each of
-    its requests may be attempted ``REQUEST_ATTEMPTS`` times (the adapter's
-    physics, a retry after a failure or a 429), and only the answered attempt
-    carries the weight of the items it returns.
-    """
-    from factorylab.world.exchange import REQUEST_ATTEMPTS
-
-    weight = public_read_weight(tool_id, args)
-    if weight is None:
-        return None
-    base = _BASE_WEIGHT[tool_id]
-    return REQUEST_ATTEMPTS * base + (weight - base)
-
-
 class VenueTools:
     """Only schema-valid requests reach the exchange; every attempt has an audit entry."""
 

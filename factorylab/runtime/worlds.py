@@ -78,9 +78,8 @@ class ExchangeSpec:
     # reads the venue, not how many seats exist: seeds take slots in manifest order,
     # a registration takes a free one, a retirement frees one, and a seat with none
     # registers all the same, without the venue read tools. Each slot's share is the
-    # read budget over this count; 480 // 7 = 68 covers the heaviest read's worst case
-    # without the vault surface (venue.funding_history: 3 attempts x 20 + 5 = 65).
-    max_readers: int = 7
+    # read budget over this count.
+    max_readers: int = 16
 
 
 @dataclass(frozen=True)
@@ -948,15 +947,14 @@ class WorldManifest:
         """Why this world's venue read share cannot hold, or None.
 
         Guarantees a world is refused whose per-slot share (``[venue]
-        public_read_weight_per_minute // max_readers``) cannot cover the most the
-        heaviest venue read it publishes can send, every attempt the adapter may
-        make included: a read is admitted only on that worst case, so a published
-        read no reader could ever be admitted to would be a tool in name only. The
-        shares of all ``max_readers`` slots sum to at most the budget, and no
-        admitted read takes a slot past its share: the rest of the venue's per-IP
-        limit is the kernel's.
+        public_read_weight_per_minute // max_readers``) cannot cover the first attempt
+        of the heaviest venue read it publishes: a published read no reader could
+        ever be admitted to would be a tool in name only. A seat read is sent once,
+        so its first attempt is all it can spend, and the shares of all
+        ``max_readers`` slots sum to at most the budget: the rest of the venue's
+        per-IP limit is the kernel's.
         """
-        from factorylab.world.venue_tools import _BASE_WEIGHT, VAULT_READS, public_read_worst
+        from factorylab.world.venue_tools import _BASE_WEIGHT, VAULT_READS, public_read_weight
 
         readers = self.exchange.max_readers
         if type(readers) is not int or readers < 1:
@@ -964,8 +962,8 @@ class WorldManifest:
         share = self.exchange.public_read_weight_per_minute // readers
         published = [tool for tool in _BASE_WEIGHT
                      if tool not in VAULT_READS or self.exchange.vault_tools]
-        heaviest = max(published, key=lambda tool: public_read_worst(tool, {}))
-        weight = public_read_worst(heaviest, {})
+        heaviest = max(published, key=lambda tool: public_read_weight(tool, {}))
+        weight = public_read_weight(heaviest, {})
         if share < weight:
             return (f"each reader's venue read share, venue.public_read_weight_per_minute // "
                     f"venue.max_readers = {share}, cannot cover {heaviest} at {weight}")
@@ -1424,7 +1422,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
     if "max_seats" in (d.get("tools") or {}):
         raise ValueError("tools.max_seats was removed: the population has no size cap; the "
                          "venue's IP limit bounds who reads the venue ([venue] max_readers)")
-    max_readers = venue.get("max_readers", 7)
+    max_readers = venue.get("max_readers", 16)
     read_weight = venue.get("public_read_weight_per_minute",
                             DEFAULT_PUBLIC_READ_WEIGHT_PER_MINUTE)
     if type(read_weight) is not int or not 1 <= read_weight < VENUE_WEIGHT_PER_MINUTE:
