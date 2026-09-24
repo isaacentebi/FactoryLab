@@ -209,6 +209,31 @@ def parse_search(raw: Any, limit: int) -> list[dict[str, Any]]:
     return found
 
 
+#: What a resolved binary market's outcome prices can be: one winner, or a 50-50 answer.
+_PAYOUT_VECTORS = ({Decimal(0), Decimal(1)}, {Decimal("0.5")})
+
+
+def payout(market: dict[str, Any], token_id: str) -> Decimal | None:
+    """What one token of a parsed market redeems for, or None while that is not settled.
+
+    Guarantees a value only for a closed market whose outcome prices are a
+    redemption (1 and 0, or 0.5 each) and whose UMA status, when stated, is
+    ``resolved``: a closed market still in its challenge window or in dispute has
+    no payout yet (concepts/resolution). Gamma publishes a resolved market's
+    ``outcomePrices`` as its redemption values, and the simulated venue does too.
+    """
+    if not market.get("closed"):
+        return None
+    status = market.get("uma_resolution_status")
+    if status is not None and status != "resolved":
+        return None
+    prices = [_decimal(o.get("price")) for o in market.get("outcomes") or ()]
+    if None in prices or len(prices) != 2 or set(prices) not in _PAYOUT_VECTORS:
+        return None
+    return next((p for o, p in zip(market["outcomes"], prices, strict=True)
+                 if o.get("token_id") == token_id), None)
+
+
 def _levels(rows: Any, *, best_first_descending: bool, depth: int) -> list[dict[str, str]]:
     levels = []
     for row in rows if isinstance(rows, list) else []:
@@ -321,13 +346,20 @@ class PolymarketReader:
         return detail
 
     def market_of_token(self, token_id: str) -> dict[str, Any] | None:
-        """The market listing ``token_id`` among its outcomes, or None."""
-        raw = self._gamma("/markets", clob_token_ids=token_id)
-        rows = raw if isinstance(raw, list) else []
-        for row in rows:
-            detail = market_detail(row)
-            if detail and any(o["token_id"] == token_id for o in detail["outcomes"]):
-                return detail
+        """The market listing ``token_id`` among its outcomes, closed or open, or None.
+
+        Gamma's ``/markets`` lists open markets unless asked for closed ones, and its
+        open listing can lag a resolution (read 2026-09-23: a market resolved minutes
+        earlier still answered ``closed: false``, UMA ``proposed``, without
+        ``closed=true``, and ``[]`` for another). Closing is final, so the closed
+        listing is asked first and the open one only for a token it does not hold.
+        """
+        for closed in ("true", None):
+            raw = self._gamma("/markets", clob_token_ids=token_id, closed=closed)
+            for row in raw if isinstance(raw, list) else []:
+                detail = market_detail(row)
+                if detail and any(o["token_id"] == token_id for o in detail["outcomes"]):
+                    return detail
         return None
 
     def order_book(self, token_id: str, depth: int) -> dict[str, Any]:

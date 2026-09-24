@@ -24,6 +24,7 @@ from factorylab.world.polymarket import (
     http_get_json,
     parse_book,
     parse_market,
+    payout,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures" / "polymarket"
@@ -90,6 +91,63 @@ def test_fee_free_market_and_resolved_market_parse_honestly():
     assert resolved["uma_resolution_status"] == "resolved"
     assert [(o["outcome"], o["price"]) for o in resolved["outcomes"]] == [
         ("Over", "1"), ("Under", "0")]
+
+
+CLOSED_OVER = "55277242749159958514265240140241311155293095895205911209777418570254035077633"
+
+
+def test_a_resolved_markets_token_is_found_among_the_closed_and_redeems_at_its_price():
+    """Gamma's /markets lists open markets unless asked for closed ones, and its open
+    listing lags a resolution (read 2026-09-23), so the closed listing is asked first."""
+    urls = []
+
+    def get(url):
+        urls.append(url)
+        query = parse_qs(urlsplit(url).query)
+        return fixture("gamma_market_closed.json") if query.get("closed") == ["true"] else []
+
+    market = PolymarketReader(get=get).market_of_token(CLOSED_OVER)
+    assert market["market_id"] == "4283025" and market["closed"] is True
+    assert [parse_qs(urlsplit(u).query).get("closed") for u in urls] == [["true"]]
+    assert payout(market, CLOSED_OVER) == Decimal(1)
+    assert payout(market, market["outcomes"][1]["token_id"]) == Decimal(0)
+    assert payout(market, "1") is None
+    assert PolymarketReader(get=lambda url: []).market_of_token(CLOSED_OVER) is None
+    # A token the closed listing does not hold is looked up among the open markets.
+    urls.clear()
+    reader = PolymarketReader(get=lambda url: urls.append(url) or (
+        [] if "closed=true" in url else fixture("gamma_markets.json")))
+    listed = parse_market(fixture("gamma_markets.json")[0])["outcomes"][0]["token_id"]
+    assert reader.market_of_token(listed)["market_id"] == "665374"
+    assert [parse_qs(urlsplit(u).query).get("closed") for u in urls] == [["true"], None]
+
+
+def test_only_a_final_redemption_is_a_payout():
+    closed = parse_market(fixture("gamma_market_closed.json")[0])
+    assert payout(parse_market(fixture("gamma_market.json")), FED_YES) is None  # open
+
+    def variant(prices, status="resolved"):
+        return {**closed, "uma_resolution_status": status, "outcomes": [
+            {**o, "price": p} for o, p in zip(closed["outcomes"], prices, strict=True)]}
+
+    assert payout(variant(("0.5", "0.5")), CLOSED_OVER) == Decimal("0.5")
+    # In its challenge window or in dispute, a closed market has not paid anything yet.
+    assert payout(variant(("1", "0"), status="proposed"), CLOSED_OVER) is None
+    assert payout(variant(("1", "0"), status=None), CLOSED_OVER) == Decimal(1)
+    # Closed without a redemption vector (an old market reads ["0", "0"]).
+    for prices in (("0", "0"), ("0.9", "0.1"), ("1", "1"), (None, "1")):
+        assert payout(variant(prices), CLOSED_OVER) is None
+    assert payout({**closed, "closed": False}, CLOSED_OVER) is None
+
+
+def test_the_simulated_venue_publishes_its_resolution_as_a_payout():
+    fake = FakePolymarket(resolutions={"fake-1": (5, 1)})
+    yes, no = (o["token_id"] for o in fake.market("fake-1")["outcomes"])
+    assert payout(fake.market_of_token(yes), yes) is None
+    fake.advance(1)
+    fake.advance(10)
+    assert (payout(fake.market_of_token(yes), yes), payout(fake.market_of_token(no), no)) == (
+        Decimal(0), Decimal(1))
 
 
 def test_a_market_whose_outcomes_and_tokens_do_not_pair_is_dropped():

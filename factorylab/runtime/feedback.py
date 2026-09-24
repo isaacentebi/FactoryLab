@@ -45,7 +45,9 @@ from factorylab.settlement import (
 from factorylab.settlement.settle import PredicateForecast
 from factorylab.settlement.vocabulary import (
     DECLINED_DEFINITION,
+    EVENT_PREDICATE_IDS,
     RETURN_PAID_OFF,
+    UNOBSERVABLE,
 )
 
 
@@ -614,6 +616,15 @@ class FeedbackMixin:
                                     "predicate": f.predicate_id, "window": self.window.index,
                                     "ts": self.clock.now_ns})
             public = {"public_window": since}
+        if f.predicate_id in EVENT_PREDICATE_IDS:
+            from factorylab.runtime.polymarket import event_facts
+
+            # A Polymarket claim settles on the world's own read of its token now,
+            # at settlement (essay II.III.b): the market's resolution or its price.
+            event = event_facts(self, f.predicate_id, f.params["token_id"])
+            if event is UNOBSERVABLE:
+                return UNOBSERVABLE
+            public["event"] = event
         events = tuple(self.events_log[start + 1 : self.n + 1])
         if f.predicate_id == "failure_within":
             public["independent_failures"] = self._independent_failures(f.evaluator_id, events)
