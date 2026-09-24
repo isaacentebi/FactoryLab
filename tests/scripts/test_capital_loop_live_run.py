@@ -385,3 +385,30 @@ def test_the_wires_speak_venices_header_names():
                           headers={"X-402-Payment": base64.b64encode(b"{}").decode()})
     wires.open(req)
     assert "X-402-Payment" in captured
+
+
+def test_the_world_binds_its_rail_a_guard_for_every_reserve_key_signer(tmp_path, monkeypatch):
+    # The review of 0b5b487 (a surviving mutant): bootstrap must bind the rail's guard,
+    # not only the market's, and to every chain the rail signs a plain transaction on.
+    from factorylab.runtime.capital_loop import ReserveGuard
+    from factorylab.runtime.loop import Runtime
+    from factorylab.runtime.worlds import load_manifest
+    from factorylab.world.treasury_rails import HybridRail
+
+    w = wired(tmp_path, monkeypatch)
+    kwargs = launch_kwargs(w)
+    run = tmp_path / "runs" / "bound"
+    run.mkdir(parents=True)
+    runtime = Runtime(load_manifest(str(w["world"])), events=TICKS, seed=1,
+                      initial_balance_micro=None, router_gamma=0.1,
+                      ledger_path=str(run / "ledger.jsonl"),
+                      provider=kwargs["provider"], exchange=kwargs["exchange"],
+                      clock_source=kwargs["clock_source"], capital_loop=True)
+    rail = runtime.treasury.rail.target
+    assert isinstance(rail, HybridRail)
+    guard = rail.authorization_log
+    assert isinstance(guard, ReserveGuard) and guard.origin == "treasury"
+    assert guard.run_dir == run.resolve()
+    signers = [getattr(rail, name) for name in ("hyper", "base", "venice_base")
+               if getattr(rail, name, None) is not None]
+    assert signers and all(chain.transaction_guard is guard for chain in signers)

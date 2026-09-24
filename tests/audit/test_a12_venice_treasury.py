@@ -73,7 +73,7 @@ def test_a12_retries_use_the_journaled_unsigned_authorization():
 
     client = SimpleNamespace(address=account.address, _account=account, _request=request,
                              usdc_balance=lambda: 10_000_000, venice_balance=lambda: 1_000_000,
-                             guard=ReserveGuard("test"))
+                             guard=ReserveGuard("test"), chain_head=lambda: 1)
     reference = prepare_top_up(client, now_s=100, nonce=bytes(32))
     saved = deepcopy(reference)
     assert not submissions and "signature" not in json.dumps(reference)

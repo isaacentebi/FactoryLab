@@ -385,6 +385,10 @@ def write_ahead(monkeypatch):
             _original(self, *args, guard=guard if guard is not None else default, **kwargs)
 
         monkeypatch.setattr(cls, "__init__", init)
+    # These tests' fake wires answer only the calls they were written for; the chain
+    # head the chokepoint records as start_block is a fixed block here. The head read
+    # itself is tested where it matters (tests/world/test_signing_chokepoint.py).
+    monkeypatch.setattr(x402.X402Client, "chain_head", lambda self: 1)
     return default
 
 

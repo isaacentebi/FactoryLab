@@ -55,17 +55,18 @@ def typed():
 
 def test_the_chokepoint_signs_nothing_without_a_guard_that_recorded_it():
     with pytest.raises(AuthorizationNotRecorded, match="no write-ahead guard"):
-        sign_transfer_authorization(ACCOUNT, typed(), guard=None)
+        sign_transfer_authorization(ACCOUNT, typed(), guard=None, head=lambda: 1)
 
-    def refusing(message):
+    def refusing(message, start_block):
         raise CapitalLoopRefused("capital_loop_reserve_locked")
 
     with pytest.raises(AuthorizationNotRecorded, match="capital_loop_reserve_locked"):
-        sign_transfer_authorization(ACCOUNT, typed(), guard=refusing)
+        sign_transfer_authorization(ACCOUNT, typed(), guard=refusing, head=lambda: 1)
     other = deepcopy(typed())
     other["message"]["from"] = Account.create().address
     with pytest.raises(AuthorizationNotRecorded, match="payer"):
-        sign_transfer_authorization(ACCOUNT, other, guard=ReserveGuard("test"))
+        sign_transfer_authorization(ACCOUNT, other, guard=ReserveGuard("test"),
+                                    head=lambda: 1)
     assert record_nonces() == []  # nothing refused was recorded, nothing was signed
     selected = parse_quote(HTTPResponse(402, quote_fixture.__wrapped__()))
     with pytest.raises(AuthorizationNotRecorded):
@@ -79,6 +80,11 @@ def test_an_x402_purchase_refuses_while_the_reserve_is_held_and_records_first():
 
     class Watching(SellerHTTP):
         def __call__(self, method, url, payload, headers):
+            # The Base head the record takes as start_block, read through the same wire.
+            if payload and payload.get("method") == "eth_chainId":
+                return HTTPResponse(200, {"id": 1, "result": hex(8453)})
+            if payload and payload.get("method") == "eth_blockNumber":
+                return HTTPResponse(200, {"id": 1, "result": hex(4_242)})
             if "PAYMENT-SIGNATURE" in headers:
                 # The moment the payment leaves, its nonce is already in the record.
                 payment = json.loads(base64.b64decode(headers["PAYMENT-SIGNATURE"]))
@@ -100,6 +106,10 @@ def test_an_x402_purchase_refuses_while_the_reserve_is_held_and_records_first():
     provider.complete(ModelRequest(MODEL, "", ()))
     [(nonce, recorded)] = seen
     assert recorded == [(nonce, "x402_purchase")]
+    from factorylab.runtime import capital_loop
+
+    path = capital_loop.default_lock_dir() / f"{ACCOUNT.address.lower()}.authorizations.jsonl"
+    assert [e["start_block"] for e in read_authorizations(path)] == [4_242]
 
 
 def test_the_world_binds_a_guard_to_its_market_and_its_rail():

@@ -16,6 +16,7 @@ class RPC:
         self.final = {"number": "0x10", "hash": "0xabc"}
         self.logs = []
         self.sent = []
+        self.head = "0x10"
 
     def __call__(self, method, url, body, headers):
         name, args = body["method"], body["params"]
@@ -29,6 +30,7 @@ class RPC:
             "eth_getTransactionReceipt": self.receipt,
             "eth_getBlockByNumber": self.final,
             "eth_getLogs": self.logs,
+            "eth_blockNumber": self.head,
         }.get(name)
         if name == "eth_sendRawTransaction":
             from eth_utils import keccak
@@ -41,6 +43,9 @@ class RPC:
 def setup():
     rpc = RPC()
     chain = EVM(HYPEREVM_TESTNET, Account.create(), transport=rpc, gas_budget_wei=10**15)
+    from factorylab.runtime.capital_loop import ReserveGuard
+
+    chain.transaction_guard = ReserveGuard("test")  # written ahead, in the test's lock dir
     ref = chain.transfer(chain.chain.usdc, Account.create().address, 5_000_000, 10**15)
     return rpc, chain, ref
 
@@ -218,3 +223,69 @@ def test_scan_pages_from_a_cursor_with_a_page_cap_and_reports_the_last_block_rea
     # Nothing finalized past the cursor: no page is requested and the cursor holds.
     assert chain.scan(chain.chain.usdc, [], 1_118, max_pages=2) == ([], 1_117)
     assert pages == []
+
+
+# ---- Wave 10, the reviews of 0b5b487: plain reserve-key transactions on the record
+
+
+def transactions(chain):
+    from factorylab.runtime import capital_loop
+
+    path = (capital_loop.default_lock_dir()
+            / f"{chain.account.address.lower()}.authorizations.jsonl")
+    if not path.exists():
+        return []
+    return [e for e in capital_loop.read_authorizations(path) if e["kind"] == "transaction"]
+
+
+def test_a_reserve_transaction_is_written_ahead_before_it_is_returned():
+    rpc, chain, ref = setup()
+    [written] = transactions(chain)
+    assert written == {
+        "kind": "transaction", "tx_hash": ref["tx_hash"].lower(), "chain_id": 998,
+        "from": chain.account.address, "to": ref["tx"]["to"], "tx_nonce": 3,
+        "start_block": 16, "origin": "test", "run_dir": None}
+    replaced = chain.replace(ref, gas_remaining_wei=10**15)
+    assert [t["tx_hash"] for t in transactions(chain)] == [
+        ref["tx_hash"].lower(), replaced["tx_hash"].lower()]
+
+
+def test_no_reserve_transaction_is_prepared_or_sent_unrecorded():
+    from factorylab.runtime.capital_loop import ReserveLock
+
+    rpc, chain, ref = setup()
+    to = Account.create().address
+    guard, chain.transaction_guard = chain.transaction_guard, None
+    for attempt in (lambda: chain.transfer(chain.chain.usdc, to, 1, 10**15),
+                    lambda: chain.approve(chain.chain.usdc, to, 1, 10**15),
+                    lambda: chain.replace(ref, gas_remaining_wei=10**15),
+                    lambda: chain.broadcast(ref)):
+        with pytest.raises(RailError, match="no write-ahead transaction record"):
+            attempt()
+    chain.transaction_guard = guard
+    rpc.head = None  # the chain head cannot be read: nothing to record, nothing prepared
+    with pytest.raises(RailError, match="record refused"):
+        chain.transfer(chain.chain.usdc, to, 1, 10**15)
+    rpc.head = "0x10"
+    # A capital-loop run holds the reserve: nothing is prepared, replaced or broadcast.
+    with ReserveLock(chain.account.address):
+        for attempt in (lambda: chain.transfer(chain.chain.usdc, to, 1, 10**15),
+                        lambda: chain.replace(ref, gas_remaining_wei=10**15)):
+            with pytest.raises(RailError, match="capital_loop_reserve_locked"):
+                attempt()
+        with pytest.raises(RailError, match="capital_loop_reserve_locked"):
+            chain.broadcast(ref)
+    assert rpc.sent == [] and len(transactions(chain)) == 1  # only setup's own
+    chain.broadcast(ref)
+    assert len(rpc.sent) == 1
+
+
+def test_a_live_rail_binds_its_guard_to_every_chain_it_signs_on():
+    from factorylab.world.treasury_rails import LiveRail
+
+    rail = LiveRail.__new__(LiveRail)
+    rail.hyper, rail.base = SimpleNamespace(), SimpleNamespace()
+    guard = object()
+    rail.bind_guard(guard)
+    assert rail.authorization_log is guard
+    assert rail.hyper.transaction_guard is guard and rail.base.transaction_guard is guard

@@ -60,6 +60,10 @@ class FakeHTTP:
         assert "Authorization" not in headers
         if payload and payload.get("method") == "eth_call":
             return HTTPResponse(200, {"id": 1, "result": hex(self.usdc)})
+        if payload and payload.get("method") == "eth_chainId":
+            return HTTPResponse(200, {"id": 1, "result": hex(8453)})
+        if payload and payload.get("method") == "eth_blockNumber":
+            return HTTPResponse(200, {"id": 1, "result": hex(1_000)})
         if "/x402/balance/" in url:
             assert "X-Sign-In-With-X" in headers
             if self.fail == "balance_after" and self.credit:
@@ -128,14 +132,14 @@ def test_full_proof_guards_before_signing_and_report_shape(tmp_path, monkeypatch
     fake = FakeHTTP(tmp_path)
     original = x402.payment_header
 
-    def guarded_sign(account, quote, *, guard=None):
+    def guarded_sign(account, quote, *, guard=None, head=None):
         step = "topup" if quote.amount_micro == 5_000_000 else (
             "farouter" if len(fake.payments) == 1 else "aispace"
         )
         assert (tmp_path / "runs" / "proof" / (step + ".attempt")).exists()
         # Every proof payment is written ahead of its signature, under its own name.
         assert guard is not None and guard.origin == "compute_proof"
-        return original(account, quote, guard=guard)
+        return original(account, quote, guard=guard, head=head)
 
     monkeypatch.setattr(x402, "payment_header", guarded_sign)
     assert proof(tmp_path, fake).run() == 0

@@ -63,7 +63,8 @@ class AuthorizationNotRecorded(X402Error):
 UINT_FIELDS = ("value", "validAfter", "validBefore")
 
 
-def sign_transfer_authorization(account: Any, typed: dict, *, guard: Any) -> Any:
+def sign_transfer_authorization(account: Any, typed: dict, *, guard: Any,
+                                head: Any = None) -> Any:
     """The one place this code base signs an EIP-3009 authorization with a reserve key.
 
     Guarantees nothing is signed unless ``guard`` first returned for this exact message:
@@ -74,6 +75,9 @@ def sign_transfer_authorization(account: Any, typed: dict, *, guard: Any) -> Any
     ``AuthorizationNotRecorded`` and signs nothing. Every signer of an EIP-3009
     ``TransferWithAuthorization`` (x402 purchases, Venice top-ups from the CLI, the
     compute proof and both treasury rails) reaches the signature only through here.
+    ``head`` reads the Base chain head just before the record is written; the guard
+    records it as the authorization's ``start_block`` (the signature does not exist
+    before it, so it cannot be used before it). An unreadable head signs nothing.
     """
     if typed.get("primaryType") != "TransferWithAuthorization":
         raise AuthorizationNotRecorded("only a TransferWithAuthorization is signed here")
@@ -84,8 +88,15 @@ def sign_transfer_authorization(account: Any, typed: dict, *, guard: Any) -> Any
         raise AuthorizationNotRecorded(
             "no write-ahead guard: an authorization is signed only after it is recorded "
             "under the reserve lock; nothing was signed")
+    if head is None:
+        raise AuthorizationNotRecorded("no chain head reader; nothing was signed")
     try:
-        guard({k: str(v) if k in UINT_FIELDS else v for k, v in message.items()})
+        start_block = int(head())
+    except Exception:  # noqa: BLE001 - no head, no start block, no signature
+        raise AuthorizationNotRecorded("chain head unreadable; nothing was signed") from None
+    try:
+        guard({k: str(v) if k in UINT_FIELDS else v for k, v in message.items()},
+              start_block)
     except Exception as exc:  # noqa: BLE001 - an unrecorded authorization is never signed
         raise AuthorizationNotRecorded(
             f"write-ahead refused ({getattr(exc, 'reason', type(exc).__name__)}); "
@@ -365,7 +376,8 @@ def authorization_typed_data(
     }
 
 
-def payment_header(account: Any, quote: PaymentQuote, *, guard: Any = None) -> str:
+def payment_header(account: Any, quote: PaymentQuote, *, guard: Any = None,
+                   head: Any = None) -> str:
     """Standard base64 of UTF-8 v2 JSON retains accepted requirements and signed payload.
 
     Specification files read from https://github.com/coinbase/x402 (2026-09-11):
@@ -377,7 +389,7 @@ def payment_header(account: Any, quote: PaymentQuote, *, guard: Any = None) -> s
     The signature is made only through ``sign_transfer_authorization`` with ``guard``.
     """
     typed = authorization_typed_data(quote.accepted, account.address)
-    signed = sign_transfer_authorization(account, typed, guard=guard)
+    signed = sign_transfer_authorization(account, typed, guard=guard, head=head)
     authorization = {
         k: str(v) if k in {"value", "validAfter", "validBefore"} else v
         for k, v in typed["message"].items()
@@ -453,6 +465,12 @@ class X402Client:
         self._transport = transport or http_request
         self._secrets = (private_key or os.environ.get("RESERVE_PRIVATE_KEY", ""),)
 
+    def chain_head(self) -> int:
+        """The latest Base block number, read keylessly through this client's transport."""
+        from factorylab.world.evm import BASE, EVM
+
+        return EVM(BASE, None, transport=self._transport, rpc=self.rpc).block()
+
     def auth_headers(self, path: str) -> dict[str, str]:
         """The request gets a fresh signed SIWE header for its own URI."""
         return {"X-Sign-In-With-X": siwe_header(self._account, self.base_url + path)}
@@ -485,7 +503,7 @@ class X402Client:
             raise X402Error("Quote exceeds registered per-request ceiling")
         if self.usdc_balance() < quote.amount_micro:
             raise InsufficientReserve("Reserve cannot cover the quoted Base USDC payment")
-        return payment_header(self._account, quote, guard=self.guard)
+        return payment_header(self._account, quote, guard=self.guard, head=self.chain_head)
 
     def venice_balance(self, address: str | None = None) -> int:
         """A SIWE-authenticated wallet balance is rounded down to integer micro-USD."""
@@ -514,7 +532,8 @@ class X402Client:
             raise X402Error("Insufficient Base USDC for a $5 top-up")
         path = "/x402/top-up"
         quote = parse_quote(self._request("POST", path, {}), amount_micro=amount_micro)
-        encoded = payment_header(self._account, quote, guard=self.guard)
+        encoded = payment_header(self._account, quote, guard=self.guard,
+                                 head=self.chain_head)
         response = self._request("POST", path, {}, **{"X-402-Payment": encoded})
         if not 200 <= response.status < 300:
             raise X402Error(

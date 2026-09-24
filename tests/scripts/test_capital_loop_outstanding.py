@@ -34,54 +34,88 @@ SETTLED_NONCE = "0x" + "33" * 32
 class Rpc:
     """Base mainnet as its public JSON-RPC answers it: per block tag and per authorizer.
 
-    Blocks are two seconds apart. The finalized block is ``final_number`` at
-    ``final_ts``; the latest is ``lag_s // 2`` blocks later. ``use`` makes one
-    authorizer's nonce used at a moment, and every answer comes from that one fact at
-    the block asked for: ``authorizationState`` is true only for that authorizer and
-    only at a block at or after it (so a read at ``latest`` sees what finalized Base does
-    not yet), and ``eth_getLogs`` returns its ``AuthorizationUsed`` and ``Transfer`` only
-    for matching topics inside the asked range. Every request is recorded.
+    Block ``n`` has timestamp ``stamp(n)``: one second apart by default, or at the
+    irregular ``gaps`` a test sets. The finalized block is the last at or before
+    ``final_ts``; the latest is ``lag_s`` seconds later. ``use`` makes one authorizer's
+    nonce used at a moment, and every answer comes from that one fact at the block asked
+    for: ``authorizationState`` is true only for that authorizer and only at a block at or
+    after it (so a read at ``latest`` sees what finalized Base does not yet), and
+    ``eth_getLogs`` returns its ``AuthorizationUsed`` and ``Transfer`` only for matching
+    topics inside the asked range. ``drift`` moves the finalized tag forward that many
+    blocks after each time it is read, as a provider's does between two calls. Every
+    request is recorded.
     """
 
-    def __init__(self):
+    def __init__(self, *, gaps=(1,)):
         self.balance = 10_000_000
-        self.final_number, self.final_ts = 3_000, 12_000
+        self.gaps = tuple(gaps)
         self.lag_s = 960  # latest less finalized, as measured on Base mainnet
+        self.drift = 0
+        self.extra_logs = []
         self.used: dict[str, tuple[str, int, str]] = {}
         self.requests = []
+        self._final_number = 0
+        self.final_ts = 12_000
         self.use(SETTLED_NONCE, at_ts=8_600)  # settled well before the cooling-off window
 
-    def use(self, nonce, *, at_ts, authorizer=RESERVE, payee="0x" + "9" * 40):
-        self.used[nonce.lower()] = (authorizer.lower(), at_ts, payee.lower())
+    def stamp(self, number):
+        cycle, rest = divmod(number, len(self.gaps))
+        return cycle * sum(self.gaps) + sum(self.gaps[:rest])
+
+    def number_at(self, timestamp):
+        """The last block at or before ``timestamp``."""
+        low, high = 0, max(1, timestamp) * 4
+        while low < high:
+            middle = (low + high + 1) // 2
+            if self.stamp(middle) <= timestamp:
+                low = middle
+            else:
+                high = middle - 1
+        return low
+
+    @property
+    def final_ts(self):
+        return self.stamp(self._final_number)
+
+    @final_ts.setter
+    def final_ts(self, timestamp):
+        self._final_number = self.number_at(timestamp)
+
+    @property
+    def final_number(self):
+        return self._final_number
 
     @property
     def latest_number(self):
-        return self.final_number + self.lag_s // 2
+        return self.number_at(self.final_ts + self.lag_s)
 
     @property
     def latest_ts(self):
         return self.final_ts + self.lag_s
 
-    def number_at(self, timestamp):
-        return self.final_number - (self.final_ts - timestamp) // 2
+    def use(self, nonce, *, at_ts, authorizer=RESERVE, payee="0x" + "9" * 40):
+        self.used[nonce.lower()] = (authorizer.lower(), at_ts, payee.lower())
 
     def block(self, number):
         if not 0 <= number <= self.latest_number:
             return None
         return {"number": hex(number), "hash": "0x" + number.to_bytes(32).hex(),
-                "timestamp": hex(self.final_ts - 2 * (self.final_number - number))}
+                "timestamp": hex(self.stamp(number))}
 
     def at(self, tag):
-        return {"finalized": self.final_number, "latest": self.latest_number}.get(tag) or (
-            int(tag, 16))
+        if tag == "finalized":
+            number = self._final_number
+            self._final_number += self.drift
+            return number
+        return self.latest_number if tag == "latest" else int(tag, 16)
 
     def logs(self, query):
         low, high = int(query["fromBlock"], 16), int(query["toBlock"], 16)
-        rows = []
+        rows = list(self.extra_logs)
         for nonce, (authorizer, at_ts, payee) in self.used.items():
             number = self.number_at(at_ts)
             where = {"address": BASE.usdc, "blockNumber": hex(number),
-                     "blockHash": self.block(number)["hash"] if self.block(number) else "0x",
+                     "blockHash": "0x" + number.to_bytes(32).hex(),
                      "transactionHash": "0x" + nonce[2:][::-1]}
             word = "0x" + "0" * 24 + authorizer[2:]
             rows += [{**where, "topics": [event_topic(AUTHORIZATION_USED), word, nonce],
@@ -101,6 +135,8 @@ class Rpc:
         name, params = payload["method"], payload["params"]
         if name == "eth_chainId":
             result = hex(BASE.id)
+        elif name == "eth_blockNumber":
+            result = hex(self.latest_number)
         elif name == "eth_getBlockByNumber":
             result = self.block(self.at(params[0]))
         elif name == "eth_call":
@@ -978,7 +1014,7 @@ def test_a_diary_cut_at_a_line_boundary_cannot_hide_a_recorded_authorization(tmp
     run = write_run(tmp_path / "elsewhere" / "cut", crash=False)
     with ReserveLock(RESERVE, lock_dir=locks) as lock:
         lock.record_run(run)
-        lock.authorization_log(run)(signed(LIVE_NONCE, 13_000))  # before its signature
+        lock.authorization_log(run)(signed(LIVE_NONCE, 13_000), 13_000 - 700)  # before signing
     # Cut the diary at a complete-line boundary just before the live step_submitted:
     # what is left is a valid, readable, non-empty prefix that shows nothing live.
     rewrite(run, diary_lines(run)[:3])
@@ -1003,7 +1039,7 @@ def test_a_deleted_diary_cannot_hide_a_recorded_authorization(tmp_path, capsys):
     locks = tmp_path / "locks"
     run = write_run(tmp_path / "elsewhere" / "deleted", crash=False)
     with ReserveLock(RESERVE, lock_dir=locks) as lock:
-        lock.authorization_log(run)(signed(LIVE_NONCE, 13_000))
+        lock.authorization_log(run)(signed(LIVE_NONCE, 13_000), 13_000 - 700)
     shutil.rmtree(run)  # the diary is gone; the last-run record never named it
     report = rehearse(tmp_path / "runs" / "live", rpc, tmp_path)
     assert report["refusal"]["reason"] == "recorded_authorization_may_still_settle"
@@ -1043,7 +1079,7 @@ def test_a_recorded_authorization_the_diary_booked_resolves_once(tmp_path):
     ledger.append({"kind": "treasury.confirmed", "state": state})
     ledger.append({"kind": "treasury.financing", "transfer_id": "treasury-0"})
     with ReserveLock(RESERVE, lock_dir=tmp_path) as lock:
-        lock.authorization_log(run)(signed(SETTLED_NONCE, 9_000))
+        lock.authorization_log(run)(signed(SETTLED_NONCE, 9_000), 9_000 - 700)
         summary = check_authorization_record(lock, transport=rpc)
         assert [(r["nonce"], r["how"]) for r in summary["resolved_now"]] == [
             (SETTLED_NONCE, "financed")]
@@ -1060,10 +1096,11 @@ def test_the_authorization_record_refuses_damage_and_a_torn_last_line(tmp_path):
 
     with ReserveLock(RESERVE, lock_dir=tmp_path) as lock:
         log = lock.authorization_log(tmp_path / "run")
-        log(signed(LIVE_NONCE, 13_000))
+        log(signed(LIVE_NONCE, 13_000), 13_000 - 700)
         with pytest.raises(ValueError, match="payer"):
             log({**signed(OLD_NONCE, 13_000), "authorization": {
-                **signed(OLD_NONCE, 13_000)["authorization"], "from": "0x" + "12" * 20}})
+                **signed(OLD_NONCE, 13_000)["authorization"], "from": "0x" + "12" * 20}},
+                12_300)
     path = tmp_path / f"{RESERVE.lower()}.authorizations.jsonl"
     whole = path.read_bytes()
     path.write_bytes(whole + b'{"kind": "authoriz')  # a crash mid-append
@@ -1083,16 +1120,16 @@ def test_an_append_never_lands_on_a_torn_fragment(tmp_path):
     path = tmp_path / f"{RESERVE.lower()}.authorizations.jsonl"
     with ReserveLock(RESERVE, lock_dir=tmp_path) as lock:
         log = lock.authorization_log(tmp_path / "run")
-        log(signed(LIVE_NONCE, 13_000))
+        log(signed(LIVE_NONCE, 13_000), 13_000 - 700)
         whole = path.read_bytes()
         path.write_bytes(whole + b'{"kind": "authorization", "nonce": "0x' + b"ab" * 20)
         with pytest.raises(CapitalLoopRefused, match="authorization_record_torn"):
-            log(signed(OLD_NONCE, 13_000))
+            log(signed(OLD_NONCE, 13_000), 13_000 - 700)
         assert path.read_bytes().endswith(b"ab" * 20)  # nothing was appended onto it
         # A whole entry that lost only its newline counts, and is completed first.
         path.write_bytes(whole[:-1])
         assert [e["nonce"] for e in read_authorizations(path)] == [LIVE_NONCE]
-        log(signed(OLD_NONCE, 13_000))
+        log(signed(OLD_NONCE, 13_000), 13_000 - 700)
     assert path.read_bytes().count(b"\n") == 2
     assert [e["nonce"] for e in read_authorizations(path)] == [LIVE_NONCE, OLD_NONCE]
 
@@ -1109,7 +1146,7 @@ def test_a_torn_fragment_is_set_aside_and_its_nonce_resolved_like_any_other(
     rpc = Rpc()
     path = tmp_path / f"{RESERVE.lower()}.authorizations.jsonl"
     with ReserveLock(RESERVE, lock_dir=tmp_path) as lock:
-        lock.authorization_log(tmp_path / "run")(signed(OLD_NONCE, 11_500))
+        lock.authorization_log(tmp_path / "run")(signed(OLD_NONCE, 11_500), 11_500 - 700)
     fragment = (b'{"kind": "authorization", "nonce": "' + LIVE_NONCE.encode()
                 + b'", "validBefore": "13000", "va')
     path.write_bytes(path.read_bytes() + fragment)
@@ -1130,7 +1167,7 @@ def test_a_torn_fragment_is_set_aside_and_its_nonce_resolved_like_any_other(
         # (the expired one was resolved by the refused check already; now the other)
         assert {(r["nonce"], r["how"]) for r in resolved["resolved_now"]} == {
             (LIVE_NONCE, "expired")}
-        lock.authorization_log(tmp_path / "run")(signed("0x" + "55" * 32, 14_000))
+        lock.authorization_log(tmp_path / "run")(signed("0x" + "55" * 32, 14_000), 14_000 - 700)
     assert capital_loop_outstanding.main(argv, transport=rpc) == 0  # nothing torn: a no-op
     assert json.loads(capsys.readouterr().out)["repaired"] is False
 
@@ -1141,7 +1178,7 @@ def test_the_script_acknowledges_only_what_finalized_base_shows_used(tmp_path, c
 
     rpc = Rpc()
     with ReserveLock(RESERVE, lock_dir=tmp_path) as lock:
-        lock.authorization_log(tmp_path / "run")(signed(LIVE_NONCE, 13_000))
+        lock.authorization_log(tmp_path / "run")(signed(LIVE_NONCE, 13_000), 13_000 - 700)
     argv = ["--acknowledge", LIVE_NONCE, "--lock-dir", str(tmp_path)]
     assert capital_loop_outstanding.main(argv, transport=rpc) == 2  # unused: refused
     assert "acknowledge_refused" in capsys.readouterr().err
@@ -1172,7 +1209,7 @@ def test_a_rolled_back_record_cannot_hide_a_settled_authorization(tmp_path):
     assert rehearsal.exit_code(report) == 3  # real money moved and nothing knows it
     with ReserveLock(RESERVE, lock_dir=tmp_path / "locks") as lock:
         # Recorded, the same chain is clean; and a window that has passed is too.
-        lock.authorization_log(tmp_path / "run")(signed(LIVE_NONCE, 12_000))
+        lock.authorization_log(tmp_path / "run")(signed(LIVE_NONCE, 12_000), 12_000 - 700)
         assert cooling_off_check(lock, window_s=2_520, transport=rpc)[
             "authorizations_seen"] == 1
     rpc.final_ts = 16_000  # the settlement is now far older than any window
@@ -1186,22 +1223,12 @@ def test_money_leaving_the_reserve_without_a_recorded_authorization_is_refused(t
     from factorylab.runtime.capital_loop import ReserveLock, cooling_off_check
 
     rpc = Rpc()
-    stray = rpc.logs  # a plain Transfer out of the reserve, not an EIP-3009 authorization
-
-    def logs_with_a_transfer(query):
-        rows = stray(query)
-        word = "0x" + "0" * 24 + RESERVE.lower()[2:]
-        extra = {"address": BASE.usdc, "blockNumber": hex(2_950), "blockHash": rpc.block(
-            2_950)["hash"], "transactionHash": "0x" + "ee" * 32, "data": hex(1),
-            "topics": [event_topic(TRANSFER), word, "0x" + "0" * 24 + "12" * 20]}
-        wanted = query["topics"]
-        if (int(query["fromBlock"], 16) <= 2_950 <= int(query["toBlock"], 16)
-                and all(w is None or w.lower() == g.lower()
-                        for w, g in zip(wanted, extra["topics"], strict=False))):
-            rows.append(extra)
-        return rows
-
-    rpc.logs = logs_with_a_transfer
+    # A plain Transfer out of the reserve, not an EIP-3009 authorization.
+    rpc.extra_logs.append({
+        "address": BASE.usdc, "blockNumber": hex(11_950),
+        "blockHash": "0x" + (11_950).to_bytes(32).hex(), "transactionHash": "0x" + "ee" * 32,
+        "data": hex(1), "topics": [event_topic(TRANSFER), "0x" + "0" * 24 + RESERVE.lower()[2:],
+                                   "0x" + "0" * 24 + "12" * 20]})
     with ReserveLock(RESERVE, lock_dir=tmp_path) as lock:
         with pytest.raises(CapitalLoopRefused, match="unrecorded_reserve_transfer") as refused:
             cooling_off_check(lock, window_s=2_520, transport=rpc)
@@ -1241,7 +1268,7 @@ def test_nothing_is_resolved_from_one_read_or_from_the_wrong_block_or_address(tm
 
     rpc = Rpc()
     with ReserveLock(RESERVE, lock_dir=tmp_path) as lock:
-        lock.authorization_log(tmp_path / "run")(signed(LIVE_NONCE, 13_000))
+        lock.authorization_log(tmp_path / "run")(signed(LIVE_NONCE, 13_000), 13_000 - 700)
         # Used after the finalized head: a read at "latest" would call it used.
         rpc.use(LIVE_NONCE, at_ts=12_400)
         with pytest.raises(CapitalLoopRefused, match="recorded_authorization_may_still_settle"):
@@ -1251,7 +1278,7 @@ def test_nothing_is_resolved_from_one_read_or_from_the_wrong_block_or_address(tm
         rpc.final_ts = 13_001
         assert [r["how"] for r in check_authorization_record(lock, transport=rpc)[
             "resolved_now"]] == ["expired"]
-        lock.authorization_log(tmp_path / "run")(signed(OLD_NONCE, 13_000))
+        lock.authorization_log(tmp_path / "run")(signed(OLD_NONCE, 13_000), 13_000 - 700)
         rpc.use(OLD_NONCE, at_ts=12_700)
         # The two reads disagree: the state says used, the logs say nothing.
         honest = rpc.logs
@@ -1286,3 +1313,413 @@ def test_a_lock_that_predates_the_record_names_the_three_file_reset(tmp_path):
     for name in (".lock", ".last-run.json", ".authorizations.jsonl"):
         assert f"{RESERVE.lower()}{name}" in reset
     assert "copy" in reset and "aside" in reset
+# ---- Wave 10, the reviews of 0b5b487
+
+
+def record(tmp_path, *entries):
+    """A reserve's write-ahead record holding exactly ``entries``, as raw JSON lines (a
+    legacy entry is written as an older signer wrote it, without the newer fields)."""
+    from factorylab.runtime.capital_loop import ReserveLock
+
+    ReserveLock(RESERVE, lock_dir=tmp_path).close()  # creates the lock's three files
+    path = tmp_path / f"{RESERVE.lower()}.authorizations.jsonl"
+    path.write_bytes(b"".join(json.dumps(e, sort_keys=True).encode() + b"\n"
+                              for e in entries))
+    return path
+
+
+def entry(nonce, valid_before, **fields):
+    """A recorded authorization; ``fields`` adds (or, set to None, drops) a field."""
+    row = {"kind": "authorization", "nonce": nonce, "from": RESERVE, "to": "0x" + "9" * 40,
+           "value": "5000000", "validAfter": "0", "validBefore": str(valid_before)}
+    row.update(fields)
+    return {k: v for k, v in row.items() if v is not None}
+
+
+def get_logs(rpc):
+    return [(int(r["params"][0]["fromBlock"], 16), int(r["params"][0]["toBlock"], 16))
+            for r in rpc.requests if r["method"] == "eth_getLogs"]
+
+
+def resolve(tmp_path, rpc, **kwargs):
+    from factorylab.runtime.capital_loop import ReserveLock, check_authorization_record
+
+    with ReserveLock(RESERVE, lock_dir=tmp_path) as lock:
+        return check_authorization_record(lock, transport=rpc, **kwargs)
+
+
+def test_a_recorded_start_block_finds_a_use_a_corrected_host_clock_would_miss(tmp_path):
+    # Item 1: the host clock led Base by an hour when it signed (validBefore is the
+    # host's now + 600) and has been corrected since. Only the recorded head finds it.
+    rpc = Rpc()
+    signed_at = 11_000  # chain time of the head read just before the record was written
+    valid_before = signed_at + 3_600 + 600
+    rpc.use(LIVE_NONCE, at_ts=11_100)
+    record(tmp_path, entry(LIVE_NONCE, valid_before, origin="reserve_topup",
+                           start_block=rpc.number_at(signed_at)))
+    summary = resolve(tmp_path, rpc, now_s=lambda: rpc.latest_ts)  # no lead now
+    assert [(r["nonce"], r["how"]) for r in summary["resolved_now"]] == [(LIVE_NONCE, "spent")]
+    assert get_logs(rpc)[0][0] == rpc.number_at(signed_at)
+
+
+def test_a_legacy_entry_scans_from_validbefore_less_the_stated_margin(tmp_path):
+    # Item 1, legacy: no start_block. The scan starts at the block at validBefore - 600
+    # - the host's lead now - LEGACY_SKEW_CUSHION_S (300) - the finality lag.
+    from factorylab.runtime.capital_loop import LEGACY_SKEW_CUSHION_S, MAX_AUTHORIZATION_S
+
+    assert (MAX_AUTHORIZATION_S, LEGACY_SKEW_CUSHION_S) == (600, 300)
+    rpc = Rpc()
+    lead = 120
+    valid_before = 11_500
+    # Signed with a host clock 250 s ahead of the chain: used 830 s before validBefore.
+    rpc.use(LIVE_NONCE, at_ts=valid_before - 600 - 250 + 20)
+    record(tmp_path, entry(LIVE_NONCE, valid_before, origin="reserve_topup"))
+    summary = resolve(tmp_path, rpc, now_s=lambda: rpc.latest_ts + lead)
+    assert [r["how"] for r in summary["resolved_now"]] == ["spent"]
+    scans = get_logs(rpc)
+    first, last = scans[0][0], scans[-1][1]
+    assert first == rpc.number_at(valid_before - 600 - lead - 300 - rpc.lag_s) > 0
+    assert rpc.stamp(last) > valid_before >= rpc.stamp(last - 1)
+
+
+def test_nothing_is_signed_when_the_chain_head_cannot_be_read(tmp_path):
+    # Item 1: the head is read before the record is written; unread, nothing is signed.
+    from factorylab.runtime.capital_loop import ReserveGuard, read_authorizations
+    from factorylab.world.x402 import AuthorizationNotRecorded, sign_transfer_authorization
+    from tests.world.test_signing_chokepoint import ACCOUNT, typed
+
+    guard = ReserveGuard("test", lock_dir=tmp_path)
+
+    def unreadable():
+        raise OSError("rpc down")
+
+    for head in (unreadable, None, lambda: -1):
+        with pytest.raises(AuthorizationNotRecorded):
+            sign_transfer_authorization(ACCOUNT, typed(), guard=guard, head=head)
+    path = tmp_path / f"{ACCOUNT.address.lower()}.authorizations.jsonl"
+    assert not path.exists() or read_authorizations(path) == []
+    sign_transfer_authorization(ACCOUNT, typed(), guard=guard, head=lambda: 77)
+    assert [e["start_block"] for e in read_authorizations(path)] == [77]
+
+
+def test_an_old_entrys_scan_ends_at_the_first_block_past_validbefore(tmp_path):
+    # Item 2: an entry signed long ago costs the same as a fresh one: the scan stops at
+    # the first block past validBefore, not at the finalized head a million blocks on.
+    from factorylab.world.evm import LOG_PAGE_BLOCKS
+
+    rpc = Rpc()
+    rpc.final_ts = 1_000_000
+    record(tmp_path, entry(LIVE_NONCE, 1_600, origin="reserve_topup", start_block=1_000))
+    summary = resolve(tmp_path, rpc, now_s=lambda: rpc.latest_ts)
+    assert [r["how"] for r in summary["resolved_now"]] == ["expired"]
+    scans = get_logs(rpc)
+    assert scans[0][0] == 1_000 and scans[-1][1] == rpc.number_at(1_600) + 1
+    assert len(scans) <= -(-(601 + 1) // LOG_PAGE_BLOCKS)
+    assert len(rpc.requests) < 60  # a binary search, not a walk
+
+
+def test_an_entry_is_not_resolvable_until_finalized_base_passes_its_end(tmp_path):
+    # Item 2: finalized Base at validBefore (not past it): the end block is not final.
+    rpc = Rpc()
+    rpc.final_ts = 11_500
+    record(tmp_path, entry(LIVE_NONCE, 11_500, origin="reserve_topup", start_block=10_900))
+    with pytest.raises(CapitalLoopRefused, match="recorded_authorization_may_still_settle"):
+        resolve(tmp_path, rpc, now_s=lambda: rpc.latest_ts)
+    rpc.final_ts = 11_501
+    assert [r["how"] for r in resolve(tmp_path, rpc, now_s=lambda: rpc.latest_ts)[
+        "resolved_now"]] == ["expired"]
+
+
+@pytest.mark.parametrize("gaps", [(1, 3, 2), (2,), (1, 1, 1, 9)])
+def test_irregular_block_times_bound_the_scan_by_the_blocks_own_timestamps(tmp_path, gaps):
+    # Item 9: the scan's first and last blocks come from block timestamps, not an
+    # assumed block rate.
+    rpc = Rpc(gaps=gaps)
+    rpc.use(LIVE_NONCE, at_ts=11_000)
+    record(tmp_path, entry(LIVE_NONCE, 11_400, origin="reserve_topup"))
+    now = rpc.latest_ts + 45  # and a host clock that leads the chain
+    assert [r["how"] for r in resolve(tmp_path, rpc, now_s=lambda: now)[
+        "resolved_now"]] == ["spent"]
+    scans = get_logs(rpc)
+    first, last = scans[0][0], scans[-1][1]
+    # validBefore - 600 - 300 less the host's lead over latest and latest's over final.
+    anchor = 11_400 - 600 - 300 - (now - rpc.final_ts)
+    assert anchor - 60 < rpc.stamp(first) <= anchor  # never later, and not much earlier
+    assert rpc.stamp(last) > 11_400 >= rpc.stamp(last - 1)
+
+
+def test_the_finalized_tag_moving_between_calls_cannot_split_the_two_reads(tmp_path):
+    # Item 6: the provider's finalized tag moves on after it is read. The state and the
+    # scan are both read at the one block read first; the tag is never read twice.
+    rpc = Rpc()
+    rpc.drift = 50
+    rpc.use(LIVE_NONCE, at_ts=12_010)  # final when the scan would re-read the tag
+    record(tmp_path, entry(LIVE_NONCE, 13_000, origin="reserve_topup", start_block=11_000))
+    with pytest.raises(CapitalLoopRefused, match="recorded_authorization_may_still_settle"):
+        resolve(tmp_path, rpc, now_s=lambda: rpc.latest_ts)
+    finalized = [r for r in rpc.requests if r["method"] == "eth_getBlockByNumber"
+                 and r["params"][0] == "finalized"]
+    assert len(finalized) == 1 and max(last for _, last in get_logs(rpc)) == 12_000
+
+
+def torn_record(tmp_path, fragment, *, old=True):
+    from factorylab.runtime.capital_loop import ReserveLock
+
+    with ReserveLock(RESERVE, lock_dir=tmp_path) as lock:
+        if old:  # an earlier whole entry, expired by the finalized head
+            lock.authorization_log(tmp_path / "run")(signed(OLD_NONCE, 11_500), 11_000)
+    path = tmp_path / f"{RESERVE.lower()}.authorizations.jsonl"
+    path.write_bytes(path.read_bytes() + fragment)
+    return path
+
+
+def repair(tmp_path, now):
+    from factorylab.runtime.capital_loop import ReserveLock, repair_torn
+
+    with ReserveLock(RESERVE, lock_dir=tmp_path) as lock:
+        return repair_torn(lock, now_s=lambda: now)
+
+
+@pytest.mark.parametrize(("tail", "expected"), [
+    (b'"validBefore": "13', "12600"),  # cut mid-digits: unknown, never 13
+    (b'"validBefore": 13', "12600"),  # a bare number with no delimiter after it
+    (b'"validBefore": "99999999", "va', "12600"),  # capped at repair + 600
+    (b'"validBefore": "12400", "va', "12400"),  # terminated and in range: its own
+])
+def test_a_torn_validbefore_counts_only_when_terminated_and_is_capped(
+        tmp_path, tail, expected):
+    # Items 3 and 9 (repair_torn without the min(..., bound) cap).
+    from factorylab.runtime.capital_loop import read_authorizations
+
+    path = torn_record(tmp_path, b'{"kind": "authorization", "nonce": "' + LIVE_NONCE.encode()
+                       + b'", ' + tail)
+    assert repair(tmp_path, 12_000)["repaired"]
+    torn = read_authorizations(path)[-1]
+    assert torn["validBefore"] == expected and torn["nonces"] == [LIVE_NONCE]
+
+
+def test_a_torn_nonce_scans_from_the_repair_anchor_never_genesis(tmp_path):
+    # Item 3: a torn nonce with no legible start_block scans from the legacy anchor on
+    # the repair-time bound; with a terminated start_block, from that.
+    rpc = Rpc()
+    torn_record(tmp_path, b'{"kind": "authorization", "nonce": "' + LIVE_NONCE.encode()
+                + b'", "validBefore": "1', old=False)
+    repair(tmp_path, 12_000)
+    with pytest.raises(CapitalLoopRefused, match="recorded_authorization_may_still_settle"):
+        resolve(tmp_path, rpc, now_s=lambda: rpc.latest_ts)
+    starts = {first for first, _ in get_logs(rpc)}
+    assert min(starts) == rpc.number_at(12_600 - 600 - 0 - 300 - rpc.lag_s) > 0
+    other = tmp_path / "other"
+    other.mkdir()
+    torn_record(other, b'{"kind": "authorization", "nonce": "' + LIVE_NONCE.encode()
+                + b'", "start_block": 11900, "validBefore": "12', old=False)
+    repair(other, 12_000)
+    rpc.requests.clear()
+    with pytest.raises(CapitalLoopRefused, match="recorded_authorization_may_still_settle"):
+        resolve(other, rpc, now_s=lambda: rpc.latest_ts)
+    assert min(first for first, _ in get_logs(rpc)) == 11_900
+
+
+def test_a_used_torn_nonce_is_a_recovery_not_spent(tmp_path):
+    # Item 9: a torn fragment shows no origin and no diary: used, it is a recovery.
+    from factorylab.runtime.capital_loop import RECOVERY_REASONS
+
+    rpc = Rpc()
+    torn_record(tmp_path, b'{"kind": "authorization", "nonce": "' + LIVE_NONCE.encode()
+                + b'", "origin": "reserve_topup", "validBefore": "12')
+    repair(tmp_path, 12_000)
+    rpc.use(LIVE_NONCE, at_ts=11_900)
+    with pytest.raises(CapitalLoopRefused,
+                       match="recorded_authorization_settled_unbooked") as refused:
+        resolve(tmp_path, rpc, now_s=lambda: rpc.latest_ts)
+    assert [a["nonce"] for a in refused.value.detail["authorizations"]] == [LIVE_NONCE]
+    assert refused.value.reason in RECOVERY_REASONS
+
+
+STEPS = ("sidecar", "temporary", "flush", "replace", "directory")
+
+
+@pytest.mark.parametrize("step", STEPS)
+def test_a_crash_at_any_repair_step_leaves_the_old_record_or_the_new(
+        tmp_path, monkeypatch, step):
+    # Item 4: the repair is a write of a sidecar, a temporary file flushed, a rename and
+    # a directory flush; a crash between any two leaves one whole record, never neither.
+    import os
+    import tempfile
+
+    from factorylab.runtime import capital_loop
+    from factorylab.runtime.capital_loop import read_authorizations
+
+    fragment = (b'{"kind": "authorization", "nonce": "' + LIVE_NONCE.encode()
+                + b'", "validBefore": "12400", "va')
+    path = torn_record(tmp_path, fragment)
+    before = path.read_bytes()
+
+    class Crash(BaseException):
+        pass
+
+    armed = {"sidecar": False, "renamed": False}
+    real = {"create": capital_loop._create_durably, "durable": capital_loop._durable,
+            "replace": os.replace, "mkstemp": tempfile.mkstemp,
+            "directory": capital_loop._fsync_directory}
+
+    def create(target, data):
+        if step == "sidecar":
+            raise Crash
+        real["create"](target, data)
+        armed["sidecar"] = True
+
+    def mkstemp(*args, **kwargs):
+        if step == "temporary":
+            raise Crash
+        return real["mkstemp"](*args, **kwargs)
+
+    def durable(fd):
+        if step == "flush" and armed["sidecar"]:
+            raise Crash
+        real["durable"](fd)
+
+    def rename(source, target):
+        if step == "replace":
+            raise Crash
+        real["replace"](source, target)
+        armed["renamed"] = True
+
+    def directory(where):
+        if step == "directory" and armed["renamed"]:
+            raise Crash
+        real["directory"](where)
+
+    monkeypatch.setattr(capital_loop, "_create_durably", create)
+    monkeypatch.setattr(capital_loop.tempfile, "mkstemp", mkstemp)
+    monkeypatch.setattr(capital_loop, "_durable", durable)
+    monkeypatch.setattr(capital_loop.os, "replace", rename)
+    monkeypatch.setattr(capital_loop, "_fsync_directory", directory)
+    lock = capital_loop.ReserveLock(RESERVE, lock_dir=tmp_path)  # taken before any crash
+    try:
+        with pytest.raises(Crash):
+            capital_loop.repair_torn(lock, now_s=lambda: 12_000)
+    finally:
+        monkeypatch.undo()
+        lock.close()
+    after = path.read_bytes()
+    assert after == before or read_authorizations(path)[-1]["kind"] == "torn"
+    assert (after == before) == (step != "directory")
+    assert list(tmp_path.glob(".authorizations-*")) == []  # no temporary left behind
+    for sidecar in tmp_path.glob("*.torn-*"):
+        assert sidecar.read_bytes() == fragment
+    # The operator runs the repair again: exactly one torn entry, nothing lost.
+    repair(tmp_path, 12_001)
+    entries = read_authorizations(path)
+    assert [e["kind"] for e in entries] == ["authorization", "torn"]
+    assert bytes.fromhex(entries[-1]["fragment_hex"]) == fragment
+
+
+def test_an_unfinalized_settlement_nothing_recorded_refuses_the_cooling_off(tmp_path):
+    # Item 5: the cooling-off scan reaches the latest block (detection, not resolution).
+    from factorylab.runtime.capital_loop import ReserveLock, cooling_off_check
+
+    rpc = Rpc()
+    rpc.use(LIVE_NONCE, at_ts=12_500)  # after the finalized head, before the latest
+    with ReserveLock(RESERVE, lock_dir=tmp_path) as lock:
+        with pytest.raises(CapitalLoopRefused, match="unrecorded_reserve_authorization"):
+            cooling_off_check(lock, window_s=2_520, transport=rpc)
+    assert max(last for _, last in get_logs(rpc)) == rpc.latest_number
+
+
+def test_the_cooling_off_knows_a_torn_fragments_nonces(tmp_path):
+    # Item 9: a nonce known only from a torn fragment is still the record's.
+    from factorylab.runtime.capital_loop import ReserveLock, cooling_off_check
+
+    rpc = Rpc()
+    torn_record(tmp_path, b'{"kind": "authorization", "nonce": "' + LIVE_NONCE.encode()
+                + b'", "validBefore": "12')
+    repair(tmp_path, 12_000)
+    rpc.use(LIVE_NONCE, at_ts=11_900)
+    with ReserveLock(RESERVE, lock_dir=tmp_path) as lock:
+        assert cooling_off_check(lock, window_s=2_520, transport=rpc)[
+            "authorizations_seen"] == 1
+
+
+def test_a_recorded_reserve_transaction_explains_its_transfer(tmp_path):
+    # Item 7: a plain reserve-key transaction written ahead is the record's; one made by
+    # hand is not, and refuses until it leaves the window.
+    from factorylab.runtime.capital_loop import ReserveLock, cooling_off_check
+
+    rpc = Rpc()
+    rpc.extra_logs.append({
+        "address": BASE.usdc, "blockNumber": hex(11_950),
+        "blockHash": "0x" + (11_950).to_bytes(32).hex(), "transactionHash": "0x" + "ee" * 32,
+        "data": hex(1), "topics": [event_topic(TRANSFER), "0x" + "0" * 24 + RESERVE.lower()[2:],
+                                   "0x" + "0" * 24 + "12" * 20]})
+    with ReserveLock(RESERVE, lock_dir=tmp_path) as lock:
+        with pytest.raises(CapitalLoopRefused, match="unrecorded_reserve_transfer"):
+            cooling_off_check(lock, window_s=2_520, transport=rpc)
+        lock.authorization_log(None, origin="treasury_cli").record_transaction({
+            "tx_hash": "0x" + "EE" * 32, "chain_id": 8453, "from": RESERVE,
+            "to": BASE.usdc, "nonce": 7, "start_block": 11_940})
+        assert cooling_off_check(lock, window_s=2_520, transport=rpc)["transfers_seen"] == 1
+    # A hand transfer refuses until finalized Base is a window (2520 s) past it: then it
+    # clears by itself.
+    fresh = tmp_path / "fresh"
+    rpc.final_ts = 11_950 + 2_520 + 1
+    with ReserveLock(RESERVE, lock_dir=fresh) as lock:
+        assert cooling_off_check(lock, window_s=2_520, transport=rpc)["transfers_seen"] == 0
+
+
+@pytest.mark.parametrize(("origin", "how"), [
+    ("treasury", None), ("capital_loop", None), (None, None),  # a legacy entry: strict
+    ("reserve_topup", "spent"), ("x402_purchase", "spent"), ("compute_proof", "spent"),
+])
+def test_a_used_entry_resolves_by_its_origins_booking(tmp_path, origin, how):
+    # Item 8 and item 9 (a legacy entry's origin defaults to the strict capital_loop).
+    rpc = Rpc()
+    run = write_run(tmp_path / "run", crash=False)  # a diary that booked nothing
+    record(tmp_path, entry(LIVE_NONCE, 12_400, origin=origin, run_dir=str(run.resolve()),
+                           start_block=11_000))
+    rpc.use(LIVE_NONCE, at_ts=11_800)
+    if how is None:
+        with pytest.raises(CapitalLoopRefused, match="recorded_authorization_settled_unbooked"):
+            resolve(tmp_path, rpc, now_s=lambda: rpc.latest_ts)
+    else:
+        assert [r["how"] for r in resolve(tmp_path, rpc, now_s=lambda: rpc.latest_ts)[
+            "resolved_now"]] == [how]
+
+
+def test_a_treasury_entry_booked_in_its_worlds_diary_resolves_as_financed(tmp_path):
+    rpc = Rpc()
+    run = tmp_path / "booked"
+    run.mkdir()
+    path = run / "ledger.jsonl"
+    ledger = Ledger(str(path), manifest={"name": "edition6-capital-loop"},
+                    clock_ns=lambda: 0, key_path=str(path) + ".key")
+    state = {"id": "treasury-0", "steps": ["shadow_send", "venice_top_up"], "index": 1,
+             "status": "confirmed", "reference": signed(LIVE_NONCE, 12_400),
+             "receipts": [{"nonce": 1_700_000_000_000}, {"nonce": LIVE_NONCE}]}
+    ledger.append({"kind": "treasury.confirmed", "state": state})
+    ledger.append({"kind": "treasury.financing", "transfer_id": "treasury-0"})
+    record(tmp_path, entry(LIVE_NONCE, 12_400, origin="treasury", run_dir=str(run.resolve()),
+                           start_block=11_000))
+    rpc.use(LIVE_NONCE, at_ts=11_800)
+    assert [r["how"] for r in resolve(tmp_path, rpc, now_s=lambda: rpc.latest_ts)[
+        "resolved_now"]] == ["financed"]
+
+
+def test_the_record_is_never_written_without_its_lock_held(tmp_path):
+    # Item 9: an AuthorizationLog whose lock was released writes nothing.
+    from factorylab.runtime.capital_loop import ReserveLock
+
+    lock = ReserveLock(RESERVE, lock_dir=tmp_path)
+    log = lock.authorization_log(tmp_path / "run")
+    lock.close()
+    path = tmp_path / f"{RESERVE.lower()}.authorizations.jsonl"
+    before = path.read_bytes()
+    with pytest.raises(CapitalLoopRefused, match="capital_loop_reserve_lock_not_held"):
+        log(signed(LIVE_NONCE, 13_000), 12_000)
+    with pytest.raises(CapitalLoopRefused, match="capital_loop_reserve_lock_not_held"):
+        log.record_transaction({"tx_hash": "0x" + "ee" * 32, "chain_id": 8453,
+                                "from": RESERVE, "to": BASE.usdc, "nonce": 1,
+                                "start_block": 12_000})
+    with pytest.raises(CapitalLoopRefused, match="capital_loop_reserve_lock_not_held"):
+        log.permit(RESERVE)
+    assert path.read_bytes() == before

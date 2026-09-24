@@ -156,6 +156,9 @@ def topup_responses():
             {},
             BytesIO(json.dumps(quote).encode()),
         ),
+        # The chain head the write-ahead record takes as the authorization's start_block.
+        Response({"jsonrpc": "2.0", "id": 1, "result": hex(8453)}),
+        Response({"jsonrpc": "2.0", "id": 1, "result": hex(1_000)}),
         Response(settlement),
         Response({"balanceUsd": "5"}),
     ]
@@ -184,8 +187,9 @@ def test_topup_cli_prints_settlement_then_rereads_balance(keyfile, wire, capsys)
     assert first["settlement"]["transaction"] == "0x" + "ab" * 32
     assert second["venice_balance_micro"] == 5_000_000
     assert calls[0].full_url == "http://rpc.fake"
-    assert len(calls) == 4 and calls[-1].full_url.endswith("/" + first["address"])
-    headers = [{k.lower(): v for k, v in r.header_items()} for r in calls[1:]]
+    assert len(calls) == 6 and calls[-1].full_url.endswith("/" + first["address"])
+    assert [c.full_url for c in calls[2:4]] == ["http://rpc.fake", "http://rpc.fake"]
+    headers = [{k.lower(): v for k, v in r.header_items()} for r in calls[1:2] + calls[4:]]
     assert len({h["x-sign-in-with-x"] for h in headers}) == 3
     assert "x-402-payment" not in headers[0] and "x-402-payment" in headers[1]
     payment = json.loads(base64.b64decode(headers[1]["x-402-payment"]))
@@ -199,7 +203,7 @@ def test_topup_keeps_transaction_reference_if_balance_refresh_fails(keyfile, wir
     assert main(["reserve", "topup", "--usd", "5"]) == 1
     captured = capsys.readouterr()
     assert json.loads(captured.out)["settlement"]["transaction"] == "0x" + "ab" * 32
-    assert len(calls) == 4 and TEST_KEY[2:] not in captured.out + captured.err
+    assert len(calls) == 6 and TEST_KEY[2:] not in captured.out + captured.err
 
 
 @pytest.mark.parametrize("amount", ["4.999999", "5.000001", "10", "-5", "nan", "inf", "bad"])
@@ -356,7 +360,7 @@ def test_topup_is_written_ahead_under_the_reserve_lock_or_refused(keyfile, wire,
     finally:
         request.OpenerDirector.open = original
     payment = json.loads(base64.b64decode(
-        {k.lower(): v for k, v in calls[2].header_items()}["x-402-payment"]))
+        {k.lower(): v for k, v in calls[4].header_items()}["x-402-payment"]))
     nonce = payment["payload"]["authorization"]["nonce"]
     assert seen == [[nonce]]  # recorded before it left
     assert [(e["nonce"], e["origin"]) for e in capital_loop.read_authorizations(record)] == [

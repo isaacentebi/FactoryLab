@@ -61,7 +61,7 @@ def prepare_top_up(client: X402Client, *, now_s: int, nonce: bytes,
 
 
 def top_up(client: X402Client, reference: dict, *, pay_to: str | None = None,
-           guard: Any = None) -> dict:
+           guard: Any = None, head: Any = None) -> dict:
     """The existing x402 transport signs and submits only the journal's exact authorization.
 
     The CLI client's one-shot method generates a new nonce per call. Treasury retries
@@ -94,7 +94,9 @@ def top_up(client: X402Client, reference: dict, *, pay_to: str | None = None,
     if typed["message"] != reference["authorization"]:
         raise X402Error("Venice authorization differs from the journal")
     signature = sign_transfer_authorization(
-        client._account, typed, guard=guard if guard is not None else client.guard)
+        client._account, typed,
+        guard=guard if guard is not None else getattr(client, "guard", None),
+        head=head if head is not None else getattr(client, "chain_head", None))
     authorization = {k: str(v) if k in ("value", "validAfter", "validBefore") else v
                      for k, v in typed["message"].items()}
     envelope = {"x402Version": 2, "accepted": quote.accepted,

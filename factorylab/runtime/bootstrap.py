@@ -248,7 +248,7 @@ class BootstrapMixin:
                 # advisory balance so a lost acknowledgment stays explainable (C5).
                 rail.metered_usage_since = self._venice_usage_since
                 # The capital-loop runner replaces this with its held lock's record.
-                rail.authorization_log = ReserveGuard("treasury", run_dir=run_dir)
+                rail.bind_guard(ReserveGuard("treasury", run_dir=run_dir))
             else:
                 rail = UnconfiguredRail(self.exchange)
 

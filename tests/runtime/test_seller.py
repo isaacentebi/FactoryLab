@@ -101,7 +101,8 @@ def paid_header(service, pay_to=RESERVE):
     quote = parse_quote(HTTPResponse(402, body, {}))
     from factorylab.runtime.capital_loop import ReserveGuard
 
-    return payment_header(Account.from_key(TEST_KEY), quote, guard=ReserveGuard("test"))
+    return payment_header(Account.from_key(TEST_KEY), quote, guard=ReserveGuard("test"),
+                          head=lambda: 1)
 
 
 def fixture_service(price=2500):

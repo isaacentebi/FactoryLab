@@ -202,7 +202,7 @@ def test_payment_header_v2_envelope_signature_and_fresh_nonce(quote, monkeypatch
     monkeypatch.setattr("factorylab.world.x402.time.time_ns", lambda: 1_750_000_000_000_000_000)
     account = Account.from_key(TEST_KEY)
     selected = parse_quote(HTTPResponse(402, quote))
-    payment = decoded(payment_header(account, selected, guard=write_ahead))
+    payment = decoded(payment_header(account, selected, guard=write_ahead, head=lambda: 1))
     assert set(payment) == {"x402Version", "accepted", "payload", "resource", "extensions"}
     assert payment["x402Version"] == 2
     assert payment["accepted"] == selected.accepted
@@ -228,7 +228,7 @@ def test_payment_header_v2_envelope_signature_and_fresh_nonce(quote, monkeypatch
         )
         == account.address
     )
-    second = decoded(payment_header(account, selected, guard=write_ahead))
+    second = decoded(payment_header(account, selected, guard=write_ahead, head=lambda: 1))
     assert auth["nonce"] != second["payload"]["authorization"]["nonce"]
     assert TEST_KEY[2:] not in json.dumps(payment)
 
@@ -452,7 +452,7 @@ def test_general_quote_signs_exact_arbitrary_amount(quote, amount, write_ahead):
     account = Account.from_key(TEST_KEY)
     typed = authorization_typed_data(selected.accepted, account.address)
     assert typed["message"]["value"] == amount
-    header = decoded(payment_header(account, selected, guard=write_ahead))
+    header = decoded(payment_header(account, selected, guard=write_ahead, head=lambda: 1))
     assert header["payload"]["authorization"]["value"] == str(amount)
 
 
@@ -492,7 +492,7 @@ def test_payment_header_survives_decimal_extensions(quote, write_ahead):
     body = dict(quote)
     body["extensions"] = {"bazaar": {"faroutQuote": {"info": {"usd": Decimal("0.001")}}}}
     selected = parse_quote(HTTPResponse(402, body))
-    payment = decoded(payment_header(account, selected, guard=write_ahead))
+    payment = decoded(payment_header(account, selected, guard=write_ahead, head=lambda: 1))
     assert payment["extensions"]["bazaar"]["faroutQuote"]["info"]["usd"] == "0.001"
 
 

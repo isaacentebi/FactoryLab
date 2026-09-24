@@ -119,7 +119,9 @@ def authorization_status(base: EVM, authorizer: str, reference: dict) -> dict:
     state = base.call("eth_call", [{"to": address(base.chain.usdc), "data": data}, hex(number)])
     used = int(state, 16) != 0
     topics = [event_topic(AUTHORIZATION_USED), "0x" + word_address(authorizer).hex(), nonce]
-    logs, scanned_to = base.scan(base.chain.usdc, topics, int(reference["start_block"]))
+    # The scan ends at the very block the state was read at, not a re-read tag.
+    logs, scanned_to = base.scan(base.chain.usdc, topics, int(reference["start_block"]),
+                                 end=number)
     valid_before = int(auth["validBefore"])
     return {"nonce": nonce, "valid_before": valid_before, "finalized_block": number,
             "finalized_timestamp": timestamp, "authorization_used": used,
@@ -135,7 +137,7 @@ def hype_text(wei: int) -> str:
     return str(amount.quantize(Decimal(1)) if whole else amount.normalize())
 
 
-def _guarded_top_up(client: Any, reference: dict, *, guard: Any,
+def _guarded_top_up(client: Any, reference: dict, *, guard: Any, head: Any,
                     pay_to: str | None = None) -> dict:
     """Sign and submit a journaled top-up only once ``guard`` recorded it ahead.
 
@@ -146,7 +148,7 @@ def _guarded_top_up(client: Any, reference: dict, *, guard: Any,
     from factorylab.world.x402 import AuthorizationNotRecorded
 
     try:
-        return top_up(client, reference, pay_to=pay_to, guard=guard)
+        return top_up(client, reference, pay_to=pay_to, guard=guard, head=head)
     except AuthorizationNotRecorded as exc:
         raise RailError(str(exc)) from None
 
@@ -162,7 +164,16 @@ class LiveRail(ClassTransferRail):
     #: (``factorylab.world.x402.sign_transfer_authorization``). The runtime binds it: a
     #: ``ReserveGuard``, or a capital-loop run's ``AuthorizationLog`` under its held lock.
     #: Unbound, the rail signs nothing.
-    authorization_log: Callable[[dict], None] | None = None
+    authorization_log: Any = None
+
+    def bind_guard(self, guard: Any) -> None:
+        """Bind one write-ahead guard to every signer this rail holds the reserve key in:
+        its top-up authorizations and every plain transaction of its EVM chains."""
+        self.authorization_log = guard
+        for name in ("hyper", "base", "venice_base"):
+            chain = getattr(self, name, None)
+            if chain is not None:
+                chain.transaction_guard = guard
 
     @staticmethod
     def now_s() -> int:
@@ -716,7 +727,7 @@ class LiveRail(ClassTransferRail):
             if self.authorization_log is None:
                 raise RailError("no write-ahead authorization record; nothing was signed")
             return _guarded_top_up(self._venice_client(), reference,
-                                   guard=self.authorization_log)
+                                   guard=self.authorization_log, head=self.base.block)
         if step != "withdraw_burn":
             if reference.get("forwarded"):
                 return None  # Circle's forwarder sends this transaction, never the reserve
@@ -1351,7 +1362,7 @@ class HybridRail(LiveRail):
             if self.authorization_log is None:
                 raise RailError("no write-ahead authorization record; nothing was signed")
             return _guarded_top_up(self._x402, reference, pay_to=self.pay_to,
-                                   guard=self.authorization_log)
+                                   guard=self.authorization_log, head=self.venice_base.block)
         if step != "shadow_send":
             return super().send(step, reference)
         from hyperliquid.utils.signing import sign_usd_transfer_action

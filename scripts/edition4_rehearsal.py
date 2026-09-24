@@ -970,7 +970,8 @@ def _rehearse(
                                   transport=transport)
             # Every authorization ever written ahead of signing, whatever any diary now
             # holds, is resolved against finalized Base before this run may sign.
-            recorded = check_authorization_record(lock, transport=transport)
+            recorded = check_authorization_record(
+                lock, transport=transport, now_s=lambda: now_ns() // 1_000_000_000)
             # And the chain itself, for a record rolled back with its directory: no
             # authorization the reserve made within one settlement window of finalized
             # blocks may be missing from the record.
@@ -1139,7 +1140,7 @@ def _rehearse(
                 # Every authorization is written ahead, outside the diary, before it is
                 # signed; and its validBefore is stamped by the one clock the settlement
                 # bound was measured against, so the two cannot disagree.
-                hybrid.authorization_log = lock.authorization_log(output_dir)
+                hybrid.bind_guard(lock.authorization_log(output_dir))
                 hybrid.now_s = lambda: now_ns() // 1_000_000_000
                 # Only the conversion is admitted; the CCTP exits and class moves are
                 # refused before signing, exactly as the denied rail refuses them.

@@ -409,9 +409,10 @@ class Final(Chain):
         self.state_reads = []
         self.receipts = {}
 
-    def scan(self, contract, topics, start, *, max_pages=None):
+    def scan(self, contract, topics, start, *, max_pages=None, end=None):
         self.scans.append((start, max_pages))
-        end = min(int(self.final["number"], 16), self.scanned_to)
+        final = int(self.final["number"], 16) if end is None else end
+        end = min(final, self.scanned_to)
         return [log for log in self.log_rows
                 if log["address"].lower() == contract.lower()
                 and start <= int(log["blockNumber"], 16) <= end
@@ -1281,7 +1282,7 @@ def test_an_authorization_is_recorded_before_it_is_signed_or_not_signed(monkeypa
     with pytest.raises(RailError, match="no write-ahead authorization record"):
         rail.send("venice_top_up", state["reference"])
 
-    def full_disk(reference):
+    def full_disk(reference, start_block):
         raise OSError("No space left on device")
 
     rail.authorization_log = full_disk
@@ -1322,8 +1323,8 @@ def test_a_crash_between_the_record_and_the_signature_resolves_once_it_expires(
     lock = ReserveLock(rail.reserve_address, lock_dir=tmp_path)
     log = lock.authorization_log(tmp_path / "run")
 
-    def record_then_die(reference):
-        log(reference)
+    def record_then_die(reference, start_block):
+        log(reference, start_block)
         raise Crash
 
     rail.authorization_log = record_then_die
