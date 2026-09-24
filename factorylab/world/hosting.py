@@ -24,8 +24,13 @@ never booked. So the part of the account's credit that is available to this
 droplet is not something DigitalOcean reports, and the pot's balance is published
 as unknown rather than invented.
 
-Burn counts from the first successful reading: what the droplet had accrued that
-month before it is the month's baseline, not this world's burn.
+Burn counts from the world's launch. In the launch month, what the droplet accrued
+before the launch is not this world's: it is each of this droplet's lines' amount
+shared by the line's own span, and only a reading whose line reaches past the launch
+can say it. Until one does, the launch month books nothing and says so.
+
+Tax is on DigitalOcean's invoices, not on their lines, so this droplet's burn
+excludes it: on a taxed account the credit drains faster than the burn shows.
 """
 
 from __future__ import annotations
@@ -34,9 +39,6 @@ from copy import deepcopy
 from typing import Any
 
 COUNTERPARTY = "digitalocean"
-#: What a seat may ask DigitalOcean for, a reserve window: a limit, so the population
-#: cannot spend the account's API rate limit (5,000 requests an hour).
-SEAT_READS_PER_WINDOW = 2
 BALANCE_UNKNOWN = ("DigitalOcean credit is account-wide and its billing history names no "
                    "resource, so the part available to this droplet is not reported")
 
@@ -53,6 +55,7 @@ class HostingRefused(RuntimeError):
     DROPLET_NOT_HELD = "the billing account does not hold [hosting] droplet_id"
     ACCOUNT_MISMATCH = "the billing account differs from the one this world is bound to"
     UNVERIFIED = "the billing account could not be read"
+    NO_LOOKUP = "no bounded name lookup on this host (getent)"
 
     def __init__(self, reason: str, detail: str = "") -> None:
         self.reason = reason
@@ -102,31 +105,47 @@ class HostingAccount:
 
     Guarantees ``state`` restores every figure a later reading is measured against,
     so a resume books from where the checkpoint was. ``bound`` is the account this
-    world was bound to at launch; a resume takes it from the checkpoint and the next
-    reading checks it live.
+    world was bound to at launch and ``launch_ns`` the world's launch time; a resume
+    takes both from the checkpoint.
+
+    The books hold, per month, a level per line: preview lines under ``p:`` keys,
+    each closed invoice's lines under its uuid. A month's level is the sum of its
+    invoices' lines once one of them has this droplet's lines (a month can have
+    several invoices), else its preview's. Its booked burn is the level less the
+    launch month's pre-launch share, never below zero; each reading books, per
+    month, the change in that figure, so re-reading or replaying books nothing.
     """
 
-    FIELDS = ("bound", "since", "lines", "baseline", "finalized", "unread", "history",
-              "history_totals", "reads", "unmatched", "last_period")
+    FIELDS = ("bound", "launch_ns", "lines", "baseline", "reconciled", "invoiced",
+              "unmatched", "booked", "negative", "unread", "history", "snapshot",
+              "pending_baseline", "pending_noted")
 
     def __init__(self, client: Any, *, droplet_id: int, bound: dict[str, Any] | None,
-                 budget_s: float) -> None:
+                 launch_ns: int | None, budget_s: float) -> None:
         if type(droplet_id) is not int or droplet_id <= 0:
             raise ValueError("hosting droplet_id must be a positive integer")
         self.client = client
         self.droplet_id = droplet_id
         self.budget_s = budget_s
         self.bound = None if bound is None else dict(bound)
-        self.since: str | None = None                  # the month of the first reading
-        self.lines: dict[str, dict[str, int]] = {}     # month -> line key -> booked micro
-        self.baseline: dict[str, int] = {}             # month -> accrued before launch
-        self.finalized: list[str] = []                 # months read from their invoice
+        self.launch_ns = launch_ns
+        self.lines: dict[str, dict[str, int]] = {}     # month -> line key -> level micro
+        self.baseline: dict[str, dict] = {}            # launch month -> pre-launch share
+        self.reconciled: list[str] = []                # closed invoices read, by uuid
+        self.invoiced: list[str] = []                  # months with a matching invoice
+        self.unmatched: list[str] = []                 # months whose lines named no droplet
+        self.booked: dict[str, int] = {}               # month -> booked burn, never < 0
+        self.negative: list[str] = []                  # months DigitalOcean showed < 0
         self.unread: str | None = None                 # why the last reading booked nothing
-        self.history: list[str] = []                   # billing history entries seen
-        self.history_totals: dict[str, int] = {}       # account entries by type
-        self.reads: dict[str, Any] = {"window": None, "by_seat": {}}
-        self.unmatched: list[str] = []                 # months whose lines name no droplet
-        self.last_period: str | None = None
+        self.history: list[str] = []                   # history entries seen (keys)
+        self.snapshot: dict[str, Any] = {}             # the droplet and sizes last read
+        self.pending_baseline = True                   # launch month's share not yet known
+        self.pending_noted = False                     # and the diary has said so
+
+    @property
+    def since(self) -> str | None:
+        """The launch month, from the world's launch clock (None until a resume restores it)."""
+        return None if self.launch_ns is None else _month_of_ns(self.launch_ns)
 
     # ---- state
 
@@ -142,105 +161,155 @@ class HostingAccount:
     # ---- the books
 
     def burn_by_month(self) -> dict[str, int]:
-        """Each month's booked burn: DigitalOcean's figure for this droplet, less baseline."""
-        return {month: sum(lines.values()) - self.baseline.get(month, 0)
-                for month, lines in sorted(self.lines.items())}
+        """Each month's booked burn."""
+        return dict(sorted(self.booked.items()))
 
     def burned_micro(self) -> int:
-        return sum(self.burn_by_month().values())
+        return sum(self.booked.values())
 
     def view(self) -> dict[str, Any]:
-        """The pot's public facts: burn by month, and why its balance is unknown."""
+        """What is published: this droplet's burn and its status, and nothing of the account."""
         months = self.burn_by_month()
         return {
             "custodian": COUNTERPARTY, "droplet_id": self.droplet_id,
             "balance_micro": None, "balance": "unknown", "balance_reason": BALANCE_UNKNOWN,
             "burned_micro": sum(months.values()),
             "burn_by_month": [{"month": m, "micro": v,
-                               "source": "invoice" if m in self.finalized else "preview"}
+                               "source": "invoice" if m in self.invoiced else "preview"}
                               for m, v in list(months.items())[-12:]],
-            "since": self.since, "prelaunch_micro": dict(self.baseline),
-            "account_entries_micro": dict(sorted(self.history_totals.items())),
+            "launch_month": self.since,
+            "launch_share": ("pending" if self.pending_baseline
+                             else self.baseline.get(self.since, {}).get("method")),
             "unmatched_months": list(self.unmatched), "unread": self.unread,
         }
 
-    def _level(self, month: str, lines: list[dict[str, Any]], source: str) -> list[dict]:
-        """Set a month's booked lines to DigitalOcean's; return each change, once."""
-        now: dict[str, int] = {}
-        about: dict[str, dict] = {}
-        for line in lines:
-            now[line["key"]] = now.get(line["key"], 0) + line["amount_micro"]
-            about[line["key"]] = line
-        booked = self.lines.get(month, {})
-        changes = []
-        for key in sorted(set(now) | set(booked)):
-            delta = now.get(key, 0) - booked.get(key, 0)
-            if delta:
-                line = about.get(key, {})
-                changes.append({"month": month, "line": key, "source": source,
-                                "product": line.get("product"),
-                                "start_time": line.get("start_time"),
-                                "delta_micro": delta, "level_micro": now.get(key, 0)})
-        self.lines[month] = now
-        return changes
+    def _prelaunch(self, month: str, lines: list[dict]) -> dict | None:
+        """The launch month's pre-launch share, from lines whose span covers the launch.
+
+        Each line's amount is shared by DigitalOcean's own span for it, start to end;
+        what falls before the launch is not this world's. Only a reading in which one of
+        this droplet's lines reaches past the launch can say it; until then it is
+        pending, and the month books nothing.
+        """
+        from datetime import datetime
+
+        def ns(stamp: str) -> int:
+            return int(datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+                       * 1_000_000_000)
+
+        spans = [(ns(x["start_time"]), ns(x["end_time"]), x["amount_micro"]) for x in lines]
+        if month != self.since or not any(end > self.launch_ns for _, end, _ in spans):
+            return None
+        share = 0
+        for start, end, amount in spans:
+            if end <= self.launch_ns:
+                share += amount
+            elif start < self.launch_ns:
+                share += amount * (self.launch_ns - start) // (end - start)
+        return {"micro": share, "method": "within each line's own span"}
+
+    def _book(self, month: str, source: str, result: dict) -> None:
+        """Book the change in one month's figure; never below zero."""
+        level = sum(self.lines.get(month, {}).values())
+        if month == self.since:
+            if self.pending_baseline:
+                return
+            level -= self.baseline[month]["micro"]
+        if level < 0:
+            if month not in self.negative:
+                self.negative.append(month)
+                result["negative"].append({"month": month, "level_micro": level,
+                                           "lines": dict(self.lines.get(month, {}))})
+            level = 0
+        delta = level - self.booked.get(month, 0)
+        self.booked[month] = level
+        if delta:
+            result["changes"].append({"month": month, "delta_micro": delta,
+                                      "booked_micro": level, "source": source,
+                                      "lines": len(self.lines.get(month, {}))})
+
+    def _match(self, month: str, result: dict) -> None:
+        if month in self.unmatched:
+            self.unmatched.remove(month)
+            result["cleared"].append(month)
+
+    def _unmatch(self, month: str, result: dict) -> None:
+        if month not in self.unmatched:
+            self.unmatched.append(month)
+            result["unmatched"].append(month)
 
     def observe(self, reading: dict[str, Any]) -> dict[str, Any]:
         """Book one accepted reading; guarantees each month's burn is DigitalOcean's figure.
 
-        Returns what changed: the launch baseline (first reading only), every line
-        whose booked amount moved (``delta_micro``, either sign), the month an
-        invoice closed, the months whose lines named no droplet, and the billing
+        Returns what changed, per month; the launch month's share once it is known;
+        the months whose lines named no droplet, and those that later did; months
+        DigitalOcean showed below zero; the invoices reconciled; and the billing
         history entries not seen before.
         """
         self.unread = None
+        self.snapshot = {"droplet": reading["droplet"], "sizes": reading["sizes"]}
+        result: dict[str, Any] = {"changes": [], "baseline": None, "unmatched": [],
+                                  "cleared": [], "negative": [], "reconciled": [],
+                                  "entries": []}
+        for invoice in reading["closed"]:
+            if invoice["uuid"] in self.reconciled:
+                continue
+            self.reconciled.append(invoice["uuid"])
+            month = invoice["period"]
+            result["reconciled"].append({"uuid": invoice["uuid"], "month": month,
+                                         "lines": len(invoice["mine"]),
+                                         "other_lines": invoice["others"]})
+            if month < self.since:
+                continue
+            if not invoice["mine"]:
+                if invoice["others"] and month not in self.invoiced:
+                    self._unmatch(month, result)
+                continue
+            self._match(month, result)
+            booked = self.lines.get(month, {})
+            if month not in self.invoiced:
+                # The first invoice with this droplet's lines replaces the preview.
+                booked = {k: v for k, v in booked.items() if not k.startswith("p:")}
+                self.invoiced.append(month)
+            booked.update({f"{invoice['uuid']}:{x['key']}": x["amount_micro"]
+                           for x in invoice["mine"]})
+            self.lines[month] = booked
+            if month == self.since and self.pending_baseline:
+                self._settle_baseline(month, invoice["mine"], "invoice", result)
+            self._book(month, "invoice", result)
         month = reading["period"]
-        self.last_period = month
-        result: dict[str, Any] = {"baseline": None, "changes": [], "closed": None,
-                                  "unmatched": [], "entries": []}
-        first = self.since is None
-        if first:
-            self.since = month
-            self._level(month, reading["lines"], "preview")
-            self.baseline[month] = sum(self.lines[month].values())
-            result["baseline"] = {"month": month, "micro": self.baseline[month]}
-        # An invoice with lines, none of them this droplet's, is not evidence that the
-        # droplet cost nothing: DigitalOcean did not tell its lines apart. The month keeps
-        # what is booked, and is flagged, never levelled down to zero.
-        closed = reading.get("closed")
-        if closed is not None and closed["period"] not in self.finalized:
-            if closed["all_lines"] and not closed["lines"]:
-                result["unmatched"].append(closed["period"])
-            else:
-                result["changes"] += self._level(closed["period"], closed["lines"],
-                                                 "invoice")
-            self.finalized.append(closed["period"])
-            result["closed"] = closed["period"]
-        if month not in self.finalized:
-            if reading["all_lines"] and not reading["lines"]:
-                result["unmatched"].append(month)
-            else:
-                result["changes"] += self._level(month, reading["lines"], "preview")
-        result["unmatched"] = [m for m in result["unmatched"] if m not in self.unmatched]
-        self.unmatched.extend(result["unmatched"])
+        if month >= self.since and month not in self.invoiced:
+            if reading["lines"]:
+                self._match(month, result)
+                self.lines[month] = {f"p:{x['key']}": x["amount_micro"]
+                                     for x in reading["lines"]}
+                if month == self.since and self.pending_baseline:
+                    self._settle_baseline(month, reading["lines"], "preview", result)
+                self._book(month, "preview", result)
+            elif reading["others"]:
+                self._unmatch(month, result)
+        result["pending"] = self.pending_baseline and not self.pending_noted
+        self.pending_noted = self.pending_noted or self.pending_baseline
         for entry in reading["history"]:
             if entry["key"] in self.history:
                 continue
-            self.history.append(entry["key"])
-            if first:
-                continue  # an entry already on the account at launch is not this world's
-            self.history_totals[entry["type"]] = (self.history_totals.get(entry["type"], 0)
-                                                  + entry["amount_micro"])
+            self.history = (self.history + [entry["key"]])[-500:]
             result["entries"].append(entry)
         return result
 
-    # ---- the seats' reads
+    def _settle_baseline(self, month: str, lines: list[dict], source: str,
+                         result: dict) -> None:
+        share = self._prelaunch(month, lines)
+        if share is None:
+            return
+        self.baseline[month] = {**share, "source": source}
+        self.pending_baseline = False
+        result["baseline"] = {"month": month, "source": source, **share}
 
-    def admit_read(self, seat: str, window: int) -> bool:
-        """Whether a seat may ask DigitalOcean once more this reserve window; counts it."""
-        if self.reads["window"] != window:
-            self.reads = {"window": window, "by_seat": {}}
-        used = self.reads["by_seat"].get(seat, 0)
-        if used >= SEAT_READS_PER_WINDOW:
-            return False
-        self.reads["by_seat"][seat] = used + 1
-        return True
+
+def _month_of_ns(ns: int | None) -> str:
+    from datetime import UTC, datetime
+
+    if ns is None:
+        raise ValueError("a hosting account needs its world's launch time")
+    return datetime.fromtimestamp(ns / 1_000_000_000, UTC).strftime("%Y-%m")

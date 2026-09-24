@@ -476,7 +476,7 @@ class Treasury:
         return booked
 
     def observe_hosting(self) -> dict | None:
-        """Read this droplet's billing once and book exactly its invoice lines.
+        """Read this droplet's billing once and book exactly its invoice lines, by month.
 
         Guarantees no wallet moves: a hosting charge lowers the hosting pot and no
         other (the wallet moves only when money moves, and this money never passes
@@ -486,7 +486,7 @@ class Treasury:
         named reason, and books nothing. A failed or late read books nothing and is
         ledgered once as ``treasury.hosting_unread``. Every booked change is one
         ``treasury.hosting_burn`` (or ``hosting_burn_reversed`` when DigitalOcean's
-        figure for a line went down), naming DigitalOcean, the month and the line.
+        figure for the month went down), naming DigitalOcean and the month.
         """
         hosting = self.hosting
         if hosting is None:
@@ -500,7 +500,7 @@ class Treasury:
 
         try:
             reading = hosting.client.billing(
-                hosting.droplet_id, since=hosting.since, done=list(hosting.finalized),
+                hosting.droplet_id, since=hosting.since, done=list(hosting.reconciled),
                 budget_s=hosting.budget_s)
         except Exception:  # noqa: BLE001 - an unread custodian is unknown, not empty
             # A fixed reason, never the exception's class: a replay raises the recorded
@@ -512,22 +512,32 @@ class Treasury:
             unread("hosting_refused", reason)
             return None
         result = hosting.observe(reading)
+        common = {"counterparty": "digitalocean", "droplet_id": hosting.droplet_id}
+        for invoice in result["reconciled"]:
+            self._write("hosting_invoice", **invoice)
         if result["baseline"] is not None:
-            self._write("hosting_baseline", counterparty="digitalocean",
-                        droplet_id=hosting.droplet_id, **result["baseline"])
+            self._write("hosting_launch_share", **common, **result["baseline"])
+        if result["pending"]:
+            # No line of this droplet reaching past the launch has been read yet: the
+            # launch month's pre-launch share is unknown, so the month books nothing
+            # until one is, and no accrual is booked as burn or dropped meanwhile.
+            self._write("hosting_launch_share_pending", **common, month=hosting.since,
+                        launch_ns=hosting.launch_ns)
         for change in result["changes"]:
             kind = "hosting_burn" if change["delta_micro"] > 0 else "hosting_burn_reversed"
-            self._write(kind, counterparty="digitalocean", droplet_id=hosting.droplet_id,
-                        micro=abs(change["delta_micro"]),
+            self._write(kind, **common, micro=abs(change["delta_micro"]),
                         **{k: v for k, v in change.items() if k != "delta_micro"})
-        if result["closed"] is not None:
-            self._write("hosting_invoice", month=result["closed"],
-                        burn_micro=hosting.burn_by_month().get(result["closed"], 0))
+        for negative in result["negative"]:
+            self._write("hosting_negative_month", **common, **negative)
         for month in result["unmatched"]:
-            # The droplet's own lines could not be told apart that month: the burn is
-            # not known, and the diary says so rather than book the account's.
-            self._write("hosting_unmatched", month=month, droplet_id=hosting.droplet_id)
+            # The droplet's own lines could not be told apart that month: nothing is
+            # booked for it, and the diary says so rather than book the account's.
+            self._write("hosting_unmatched", **common, month=month)
+        for month in result["cleared"]:
+            self._write("hosting_matched", **common, month=month)
         for entry in result["entries"]:
+            # The account's own entries name no resource: kept in the private diary,
+            # never booked and never published.
             self._write("hosting_account_entry", counterparty="digitalocean",
                         attributed=False, entry_type=entry["type"],
                         micro=entry["amount_micro"], date=entry["date"],

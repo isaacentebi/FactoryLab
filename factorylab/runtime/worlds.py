@@ -246,13 +246,13 @@ class HostingSpec:
 
     Off unless enabled, and off wherever the world does not run on a DigitalOcean
     droplet (a test, a laptop): ``enabled = false`` builds no client, reads
-    nothing, opens no pot and publishes no tool. Enabled, the world refuses to
-    start unless the droplet's own metadata service names ``droplet_id``, the
-    token's account holds that droplet and nothing else billable, and (on a
-    resume) the account is the one the world was bound to at launch. It then
-    reads the account once a reserve window and books what DigitalOcean reports it
-    took (world/hosting.py), on the hosting pot alone, and publishes
-    ``hosting.droplet`` and ``hosting.sizes``. Fixed for the world's life.
+    nothing, opens no pot and publishes no tool. Enabled, a launch refuses to start
+    unless the droplet's own metadata service names ``droplet_id`` and the token's
+    account holds that droplet; the account may hold anything else. Once a reserve
+    window the world books DigitalOcean's invoice lines for this droplet alone
+    (world/hosting.py), on the hosting pot, refusing any reading from another
+    account, and publishes ``hosting.droplet`` and ``hosting.sizes``. Fixed for the
+    world's life.
     """
 
     enabled: bool = False

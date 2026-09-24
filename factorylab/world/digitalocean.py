@@ -19,14 +19,18 @@ What the parsing relies on (docs.digitalocean.com/reference/api/reference/):
   ``group_description``, ``description``, ``amount`` (decimal string, USD),
   ``duration``, ``duration_unit``, ``start_time``, ``end_time`` and
   ``project_name``; paginated the same way. A line is this droplet's when its
-  ``resource_id`` is the droplet's id.
+  ``resource_id`` is the droplet's id and its ``product`` is ``Droplets``; only such
+  lines are parsed, strictly, and every other line is only counted, so a line of
+  another resource can never make a read fail. Tax is on the invoice, not on the
+  lines, so this droplet's lines exclude it.
 * ``GET /v2/customers/my/billing_history`` (billing/): ``billing_history[]`` with
   ``description``, ``amount`` (signed decimal string: an invoice positive, a payment
   negative), ``invoice_id``, ``invoice_uuid``, ``date`` and ``type``, one of
   ``ACHFailure``, ``Adjustment``, ``AttemptFailed``, ``Chargeback``, ``Credit``,
   ``CreditExpiration``, ``Invoice``, ``Payment``, ``Refund``, ``Reversal``
   (github.com/digitalocean/openapi, specification/resources/billing/models/
-  billing_history.yml). An entry names no resource.
+  billing_history.yml). An entry names no resource; it is read leniently, off the burn
+  path, and a type outside that list is recorded as ``unknown``.
 * ``GET /v2/account`` (account/): ``account.uuid`` is "the unique universal
   identifier for the current user"; ``account.team.uuid``, present "when
   authorized in a team context", identifies the team, and billing is the team's
@@ -37,14 +41,17 @@ What the parsing relies on (docs.digitalocean.com/reference/api/reference/):
 * ``GET http://169.254.169.254/metadata/v1/id`` (metadata/droplet-properties/): the
   droplet's own id as plain text, reachable only from inside it, sent no token.
 
-Only structured facts leave this module: slugs, product names and statuses must
-look like names, times must parse as ISO 8601, and an invoice line's free-text
-description is used only inside a digest that identifies the line. JSON numbers
+Only structured facts leave this module: slugs and statuses must look like slugs,
+times must parse as ISO 8601, and an invoice line's free-text description is never
+read. JSON numbers
 are decoded as ``Decimal`` from their own text.
 
 Every call runs under one monotonic deadline (``Deadline``) that covers the name
 lookup, the connection, the TLS handshake and every read, so a slow DigitalOcean
-costs at most the budget its caller gave, and never a retry.
+costs at most the budget its caller gave, and never a retry. The name is looked up
+with the system resolver through ``getent ahostsv4`` under that deadline (a
+subprocess with a timeout: no thread, and ``getaddrinfo`` has no timeout of its
+own); the connection goes to that address and TLS still validates the host name.
 """
 
 from __future__ import annotations
@@ -55,7 +62,6 @@ import os
 import re
 import socket
 import ssl
-import struct
 import time
 from collections.abc import Callable
 from decimal import Decimal
@@ -69,7 +75,12 @@ METADATA_URL = "http://169.254.169.254/metadata/v1/id"
 TOKEN_ENV = "DIGITALOCEAN_TOKEN"
 #: The most a page may hold (billing/, sizes/), and the most pages one list follows.
 PER_PAGE = 200
-MAX_PAGES = 5
+#: A safety bound only: a list is paged until an empty page, within the deadline.
+MAX_PAGES = 100
+#: The product DigitalOcean bills a droplet under.
+DROPLET_PRODUCT = "Droplets"
+#: Closed invoices reconciled a read, oldest first; the rest wait for the next window.
+INVOICES_PER_READ = 2
 #: A response larger than this is not a billing answer.
 MAX_BODY_BYTES = 8 * 1024 * 1024
 HISTORY_TYPES = ("ACHFailure", "Adjustment", "AttemptFailed", "Chargeback", "Credit",
@@ -107,75 +118,41 @@ class Deadline:
 
 # --- the transport ------------------------------------------------------------------------
 
-def _nameservers() -> list[str]:
-    try:
-        with open("/etc/resolv.conf") as handle:
-            lines = handle.read().splitlines()
-    except OSError:
-        return []
-    found = [line.split()[1] for line in lines
-             if line.startswith("nameserver") and len(line.split()) > 1]
-    return [ip for ip in found if re.fullmatch(r"[0-9.]+", ip)][:3]
+def lookup_available() -> bool:
+    """Whether this host has the bounded name lookup the transport needs (``getent``)."""
+    import shutil
 
-
-def dns_query(host: str, ident: int) -> bytes:
-    """One recursive A query for ``host``."""
-    header = struct.pack(">HHHHHH", ident, 0x0100, 1, 0, 0, 0)
-    name = b"".join(bytes([len(p)]) + p.encode("ascii") for p in host.split(".")) + b"\0"
-    return header + name + struct.pack(">HH", 1, 1)
-
-
-def _skip_name(data: bytes, at: int) -> int:
-    while True:
-        length = data[at]
-        if length & 0xC0 == 0xC0:
-            return at + 2
-        if length == 0:
-            return at + 1
-        at += length + 1
-
-
-def dns_answers(data: bytes, ident: int) -> list[str]:
-    """The IPv4 addresses in an answer to ``dns_query``; raises on anything else."""
-    got, flags, questions, answers = struct.unpack(">HHHH", data[:8])
-    if got != ident or not flags & 0x8000 or flags & 0x000F:
-        raise OSError("DNS answer refused or mismatched")
-    at = 12
-    for _ in range(questions):
-        at = _skip_name(data, at) + 4
-    found = []
-    for _ in range(answers):
-        at = _skip_name(data, at)
-        kind, _cls, _ttl, length = struct.unpack(">HHIH", data[at:at + 10])
-        at += 10
-        if kind == 1 and length == 4:
-            found.append(socket.inet_ntoa(data[at:at + 4]))
-        at += length
-    if not found:
-        raise OSError("DNS answer holds no address")
-    return found
+    return shutil.which("getent") is not None
 
 
 def _resolve(host: str, deadline: Deadline) -> str:
-    """An address for ``host`` within the deadline; the system resolver is never waited on.
+    """An IPv4 address for ``host`` from the system resolver, within the deadline.
 
-    ``getaddrinfo`` has no timeout, so the name is asked of the configured
-    nameservers directly over UDP, each wait bounded by what the deadline leaves.
+    ``getent ahostsv4`` asks the same resolver ``getaddrinfo`` would, in a child
+    process that ``subprocess.run`` kills when the deadline's remainder runs out;
+    nothing here waits on an unbounded call, and no thread is started.
     """
-    if re.fullmatch(r"[0-9.]+", host):
+    import ipaddress
+    import subprocess
+
+    try:
+        ipaddress.IPv4Address(host)
         return host
-    ident = int.from_bytes(os.urandom(2), "big")
-    for server in _nameservers():
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-            try:
-                sock.settimeout(deadline.remaining())
-                sock.sendto(dns_query(host, ident), (server, 53))
-                data, _ = sock.recvfrom(4096)
-                return dns_answers(data, ident)[0]
-            except TimeoutError:
-                raise
-            except (OSError, struct.error, IndexError):
-                continue
+    except ValueError:
+        pass
+    try:
+        done = subprocess.run(["getent", "ahostsv4", host], capture_output=True,
+                              timeout=deadline.remaining(), check=False)
+    except subprocess.TimeoutExpired:
+        raise TimeoutError("name lookup passed the deadline") from None
+    except FileNotFoundError:
+        raise OSError("no bounded name lookup on this host (getent)") from None
+    for line in done.stdout.decode("ascii", errors="replace").splitlines():
+        field = line.split()[0] if line.split() else ""
+        try:
+            return str(ipaddress.IPv4Address(field))
+        except ValueError:
+            continue
     raise OSError("name not resolved")
 
 
@@ -241,7 +218,6 @@ def deadline_http(method: str, url: str, headers: dict[str, str], body: bytes | 
 # --- parsing ------------------------------------------------------------------------------
 
 _SLUG = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
-_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._()/-]{0,63}")
 _UUID = re.compile(r"[0-9a-fA-F-]{8,64}")
 _PERIOD = re.compile(r"[0-9]{4}-(0[1-9]|1[0-2])")
 
@@ -250,13 +226,6 @@ def _slug(value: Any, field: str) -> str:
     """A DigitalOcean identifier (a size, a region, a status), never free text."""
     if not isinstance(value, str) or _SLUG.fullmatch(value) is None:
         raise DigitalOceanError(None, f"{field} is not a slug")
-    return value
-
-
-def _name(value: Any, field: str) -> str:
-    """A product name: a short name, never a sentence."""
-    if not isinstance(value, str) or _NAME.fullmatch(value) is None:
-        raise DigitalOceanError(None, f"{field} is not a product name")
     return value
 
 
@@ -327,47 +296,65 @@ def _size(raw: Any) -> dict[str, Any]:
     }
 
 
-def _invoice(raw: Any) -> dict[str, Any]:
+def _invoice(raw: Any) -> dict[str, Any] | None:
+    """An invoice's uuid and period, or None for a row that names neither clearly."""
     if not isinstance(raw, dict):
-        raise DigitalOceanError(None, "invoice is not an object")
-    uuid = raw.get("invoice_uuid")
+        return None
+    uuid, period = raw.get("invoice_uuid"), raw.get("invoice_period")
     if not isinstance(uuid, str) or _UUID.fullmatch(uuid) is None:
-        raise DigitalOceanError(None, "invoice without a uuid")
-    return {"uuid": uuid, "period": _period(raw.get("invoice_period"), "invoice_period"),
-            "amount_micro": _money(raw.get("amount"), "invoice amount")}
+        return None
+    if not isinstance(period, str) or _PERIOD.fullmatch(period) is None:
+        return None
+    return {"uuid": uuid, "period": period}
 
 
-def _line(raw: Any, period: str) -> dict[str, Any]:
-    """One invoice line: its identity digest, product, times and exact amount."""
+def _is_mine(raw: Any, droplet_id: int) -> bool:
+    """Whether a raw invoice line is this droplet's: its id and the droplet product.
+
+    Reads two fields and parses nothing else, so no other resource's line, whatever
+    it holds, can make a read fail.
+    """
     if not isinstance(raw, dict):
-        raise DigitalOceanError(None, "invoice item is not an object")
+        return False
     resource = raw.get("resource_id")
-    resource = str(resource) if isinstance(resource, (str, int)) and resource != "" else None
-    product = _name(raw.get("product"), "product")
-    start = raw.get("start_time")
-    start = None if start in (None, "") else _time(start, "start_time")
-    # The line's identity within its period. The description is DigitalOcean's text,
-    # so it enters only this digest; the end time and the amount grow while a month
-    # accrues, so they are not part of it.
-    key = hashlib.sha256(json.dumps(
-        [period, resource, product, str(raw.get("description") or ""), start],
-        separators=(",", ":")).encode()).hexdigest()[:24]
-    return {"key": key, "resource_id": resource, "product": product, "start_time": start,
+    return (isinstance(resource, (str, int)) and not isinstance(resource, bool)
+            and str(resource) == str(int(droplet_id))
+            and raw.get("product") == DROPLET_PRODUCT)
+
+
+def _line(raw: dict, period: str, source: str) -> dict[str, Any]:
+    """One of this droplet's lines, strictly: exact amount, its own span, an identity.
+
+    The identity within the month is a digest of the month, the source (the preview
+    or an invoice's uuid), the product and the start time; the amount and the end
+    time grow while a month accrues, and the description (DigitalOcean's text, a
+    rename changes it) is not part of it.
+    """
+    start = _time(raw.get("start_time"), "start_time")
+    end = _time(raw.get("end_time"), "end_time")
+    key = hashlib.sha256(json.dumps([period, source, DROPLET_PRODUCT, start],
+                                    separators=(",", ":")).encode()).hexdigest()[:24]
+    return {"key": key, "source": source, "start_time": start, "end_time": end,
             "amount_micro": _money(raw.get("amount"), "invoice item amount")}
 
 
-def _entry(raw: Any) -> dict[str, Any]:
-    """One billing history entry, without its description."""
-    if not isinstance(raw, dict) or raw.get("type") not in HISTORY_TYPES:
-        raise DigitalOceanError(None, "billing history entry of no documented type")
+def _entry(raw: Any) -> dict[str, Any] | None:
+    """One billing history entry, leniently: an unknown type is ``unknown``, and an
+    entry with no readable amount or date is skipped, never an error."""
+    if not isinstance(raw, dict):
+        return None
+    kind = raw.get("type") if raw.get("type") in HISTORY_TYPES else "unknown"
+    try:
+        amount = _money(raw.get("amount"), "entry amount")
+        date = _time(raw.get("date"), "date")
+    except DigitalOceanError:
+        return None
     uuid = raw.get("invoice_uuid")
-    entry = {"type": raw["type"], "amount_micro": _money(raw.get("amount"), "entry amount"),
-             "date": _time(raw.get("date"), "date"),
-             "invoice_uuid": uuid if isinstance(uuid, str) and _UUID.fullmatch(uuid) else None}
-    entry["key"] = hashlib.sha256(json.dumps(
-        [entry["type"], entry["amount_micro"], entry["date"], entry["invoice_uuid"]],
-        separators=(",", ":")).encode()).hexdigest()[:24]
-    return entry
+    uuid = uuid if isinstance(uuid, str) and _UUID.fullmatch(uuid) else None
+    key = hashlib.sha256(json.dumps([kind, amount, date, uuid],
+                                    separators=(",", ":")).encode()).hexdigest()[:24]
+    return {"type": kind, "amount_micro": amount, "date": date, "invoice_uuid": uuid,
+            "key": key}
 
 
 # --- the client ---------------------------------------------------------------------------
@@ -419,7 +406,11 @@ class DigitalOceanClient:
             raise DigitalOceanError(status, "response is not JSON") from None
 
     def _pages(self, path: str, key: str, deadline: Deadline) -> tuple[list, dict]:
-        """Every page of one list, and the first page's whole answer."""
+        """Every page of one list, and the first page's whole answer.
+
+        Pages until an empty page, or until ``meta.total`` rows when it is stated; a
+        missing total never stops it early. The deadline bounds it.
+        """
         rows: list = []
         first: dict = {}
         joiner = "&" if "?" in path else "?"
@@ -430,8 +421,9 @@ class DigitalOceanClient:
                 raise DigitalOceanError(None, f"{key} list missing")
             first = first or raw
             rows.extend(found)
-            total = (raw.get("meta") or {}).get("total")
-            if not found or type(total) is not int or len(rows) >= total:
+            meta = raw.get("meta") if isinstance(raw.get("meta"), dict) else {}
+            total = meta.get("total")
+            if not found or (type(total) is int and len(rows) >= total):
                 return rows, first
         raise DigitalOceanError(None, f"{key} list longer than {MAX_PAGES} pages")
 
@@ -480,11 +472,6 @@ class DigitalOceanClient:
         rows, _ = self._pages("/v2/sizes", "sizes", deadline)
         return sorted((_size(row) for row in rows), key=lambda s: s["slug"])
 
-    def catalogue(self, droplet_id: int, budget_s: float) -> dict[str, Any]:
-        """The droplet and the published size list, together under one deadline."""
-        deadline = Deadline(budget_s)
-        return {"droplet": self.droplet(droplet_id, deadline), "sizes": self.sizes(deadline)}
-
     def identity(self, droplet_id: int, deadline: Deadline | float) -> dict[str, Any]:
         """Which billing account the token reads, where this process runs, and the droplet.
 
@@ -502,61 +489,63 @@ class DigitalOceanClient:
         if not isinstance(owner, str) or _UUID.fullmatch(owner) is None:
             raise DigitalOceanError(None, "account without a uuid")
         try:
-            held = self.droplet(droplet_id, deadline)["id"] == int(droplet_id)
+            droplet = self.droplet(droplet_id, deadline)
         except DigitalOceanError as exc:
             if exc.status != 404:
                 raise
-            held = False
+            droplet = None
         return {"billing_uuid": owner.lower(), "billing_kind": "team" if team else "user",
-                "droplet_id": int(droplet_id), "droplet_held": held,
-                "metadata_id": self.metadata_droplet_id(deadline)}
+                "droplet_id": int(droplet_id),
+                "droplet_held": droplet is not None and droplet["id"] == int(droplet_id),
+                "metadata_id": self.metadata_droplet_id(deadline), "droplet": droplet}
 
-    def lines(self, invoice: str, period: str,
-              deadline: Deadline | float) -> list[dict[str, Any]]:
-        """Every line of one invoice (``preview`` for the month so far), parsed."""
+    def lines(self, invoice: str, period: str, droplet_id: int,
+              deadline: Deadline | float) -> dict[str, Any]:
+        """One invoice's lines (``preview`` for the month so far): this droplet's, parsed
+        strictly, and how many other lines it had, unparsed."""
         deadline = _deadline(deadline)
         target = "preview" if invoice == "preview" else invoice
         if target != "preview" and _UUID.fullmatch(target) is None:
             raise DigitalOceanError(None, "invoice uuid is malformed")
         rows, _ = self._pages(f"/v2/customers/my/invoices/{target}", "invoice_items",
                               deadline)
-        return [_line(row, period) for row in rows]
+        mine = [_line(row, period, target) for row in rows if _is_mine(row, droplet_id)]
+        return {"mine": mine, "others": len(rows) - len(mine)}
 
-    def billing(self, droplet_id: int, *, since: str | None, done: list[str],
+    def billing(self, droplet_id: int, *, since: str, done: list[str],
                 budget_s: float) -> dict[str, Any]:
         """One window's billing observation, whole or not at all, within ``budget_s``.
 
-        Returns the identity (account, droplet, metadata), the preview's period and
-        its lines for this droplet, at most one closed invoice that has not been
-        reconciled (the oldest with a period at or after ``since`` and not in
-        ``done``) with its lines for this droplet, how many lines each invoice had in
-        all, and the first page of the billing history. One call, so a journal
-        records and replays it as one read.
+        Returns the identity (account, droplet, metadata), the droplet itself, the
+        published sizes, the preview's period and this droplet's preview lines, up to
+        ``INVOICES_PER_READ`` closed invoices not yet reconciled (every one with a
+        period at or after ``since`` and a uuid not in ``done``, oldest first, each
+        with this droplet's lines), how many invoices are still waiting, and the
+        billing history's first page, read leniently. One call, so a journal records
+        and replays it as one read.
         """
         deadline = Deadline(budget_s)
         identity = self.identity(droplet_id, deadline)
-        _, listing = self._pages("/v2/customers/my/invoices", "invoices", deadline)
-        preview = _invoice(listing.get("invoice_preview"))
-        finalized = [_invoice(row) for row in listing.get("invoices", [])]
-        mine = str(int(droplet_id))
-        preview_lines = self.lines("preview", preview["period"], deadline)
-        closed = None
-        if since is not None:
-            waiting = sorted((inv for inv in finalized
-                              if inv["period"] >= since and inv["period"] not in done),
-                             key=lambda inv: inv["period"])
-            if waiting:
-                invoice = waiting[0]
-                every = self.lines(invoice["uuid"], invoice["period"], deadline)
-                closed = {"uuid": invoice["uuid"], "period": invoice["period"],
-                          "lines": [x for x in every if x["resource_id"] == mine],
-                          "all_lines": len(every)}
+        droplet = identity.pop("droplet")
+        rows, listing = self._pages("/v2/customers/my/invoices", "invoices", deadline)
+        preview = listing.get("invoice_preview")
+        period = _period(preview.get("invoice_period") if isinstance(preview, dict) else None,
+                         "invoice_period")
+        invoices = [inv for inv in (_invoice(row) for row in rows) if inv is not None]
+        waiting = sorted((inv for inv in invoices
+                          if inv["period"] >= since and inv["uuid"] not in done),
+                         key=lambda inv: (inv["period"], inv["uuid"]))
+        closed = []
+        for invoice in waiting[:INVOICES_PER_READ]:
+            found = self.lines(invoice["uuid"], invoice["period"], droplet_id, deadline)
+            closed.append({**invoice, **found})
+        current = self.lines("preview", period, droplet_id, deadline)
+        sizes = self.sizes(deadline)
         raw = self._get(f"/v2/customers/my/billing_history?per_page={PER_PAGE}&page=1",
                         deadline)
         history = raw.get("billing_history") if isinstance(raw, dict) else None
-        if not isinstance(history, list):
-            raise DigitalOceanError(None, "billing history missing")
-        return {"identity": identity, "period": preview["period"],
-                "lines": [x for x in preview_lines if x["resource_id"] == mine],
-                "all_lines": len(preview_lines), "closed": closed,
-                "history": [_entry(row) for row in history]}
+        entries = [e for e in (_entry(row) for row in history or []) if e is not None]
+        return {"identity": identity, "droplet": droplet, "sizes": sizes,
+                "period": period, "lines": current["mine"], "others": current["others"],
+                "closed": closed, "waiting": len(waiting) - len(closed),
+                "unreadable_invoices": len(rows) - len(invoices), "history": entries}
