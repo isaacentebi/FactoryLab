@@ -607,7 +607,8 @@ class BootstrapMixin:
             specs, vault_examples = vault_specs()
             self.tool_specs.update(specs)
             self.treasury.vault_custody = True
-        from factorylab.world.venue_tools import _BASE_WEIGHT, TICK_ANSWER_FACT
+        from factorylab.world.exchange import REQUEST_ATTEMPTS
+        from factorylab.world.venue_tools import _BASE_WEIGHT, TICK_ANSWER_FACT, public_read_worst
 
         budget = manifest.exchange.public_read_weight_per_minute
         seats = manifest.exchange.max_readers
@@ -624,12 +625,15 @@ class BootstrapMixin:
             self.tool_specs[tool_id]["description"] += (
                 f" Held by seats with a venue read slot (at most {seats}). Each slot has "
                 f"a fixed share of {budget // seats} venue request weight ({budget} over "
-                f"{seats} slots) in any sliding 60 s of world time. This read is sent once "
-                f"and sends {weight}"
+                f"{seats} slots) in any sliding 60 s of world time. One attempt of this "
+                f"read sends {weight}"
                 + (" plus 1 per 60 candles" if tool_id == "venue.candles" else
                    " plus 1 per 20 rates" if tool_id == "venue.funding_history" else "")
-                + ", charged to your share as the venue weighs it. A read your remaining "
-                "share cannot cover is refused and not sent. " + TICK_ANSWER_FACT)
+                + f"; the venue adapter makes up to {REQUEST_ATTEMPTS} attempts of each "
+                "request (a retry after a failure or a 429), so it may send up to "
+                f"{public_read_worst(tool_id, {})}. It is admitted only when that fits in "
+                "your remaining share, refused and not sent otherwise, and charged what "
+                "was actually sent. " + TICK_ANSWER_FACT)
         # seat -> [[world ns, venue weight sent]] of its reads in the sliding minute.
         self.venue_read_use: dict[str, list[list[int]]] = {}
         # The seats holding a venue read slot: the seeds, in manifest order, up to

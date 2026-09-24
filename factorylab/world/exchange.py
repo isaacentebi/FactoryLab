@@ -28,6 +28,9 @@ class VenueUnavailable(RuntimeError):
 
 
 NS_PER_MS = 1_000_000
+#: How many attempts ``HyperliquidExchange._guarded`` may send for one request: the
+#: adapter's physics, not a caller's choice. A seat read is admitted against it.
+REQUEST_ATTEMPTS = 3
 NS_PER_HOUR = 3_600 * 1_000_000_000
 
 # Hyperliquid refuses any perp or spot order worth less than this, on both networks.
@@ -1192,7 +1195,7 @@ class HyperliquidExchange:
                 for market, coins in (("perp", getattr(self, "_listed_coins", self.coins)),
                                       ("spot", tuple(getattr(self, "_spot_names", {}))))}
 
-    def _guarded(self, what: str, call: Any, attempts: int = 3) -> Any:
+    def _guarded(self, what: str, call: Any, attempts: int = REQUEST_ATTEMPTS) -> Any:
         """Call the API with retries on transient failures; raise VenueUnavailable after.
 
         Timeouts, connection errors and 5xx answers are the venue's weather, not
@@ -1206,10 +1209,6 @@ class HyperliquidExchange:
 
         from factorylab.world.venue_tools import request_weight
 
-        if getattr(self, "single_attempt", False):
-            # A seat's read: sent once, so its weight never exceeds what its share
-            # admitted (runtime/compute.py, ``_seat_read_attempts``).
-            attempts = 1
         delay = 0.5
         for attempt in range(attempts):
             # Every attempt is a request the venue weighs against the IP limit, a

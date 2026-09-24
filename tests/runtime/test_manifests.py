@@ -137,13 +137,15 @@ def test_a_manifest_hashes_what_it_says_and_a_default_is_no_exception():
     §IV.a), and again when the public venue reads gained their per-minute weight
     budget ([venue] public_read_weight_per_minute), and again when that budget came to
     be divided over venue read slots ([venue] max_readers; the population itself has no
-    size cap); each time it is a new v0."""
+    size cap), and again when a read came to be admitted on its worst case, every attempt
+    the adapter may send, and the default slots fell to 7 to cover it; each time it is a
+    new v0."""
     scripted = load_manifest("scripted")
     assert '"forecast_horizon_events":10' in scripted.canonical_json()
     assert '"chaos":{"connector_timeout":0.0' in scripted.canonical_json()
     assert '"contract":"json_object"' in scripted.canonical_json()
     assert scripted.manifest_hash() == (
-        "73195f9247fe2b2f00488d84d49d71cb5f86d4ee35f20ba620f63ec7645230c0"
+        "05fbc8a47c3806208187426be5d25adb93ce4bf01ef9a021f4386dc11caa053a"
     )
 
     implicit = manifest_from_dict(_base())

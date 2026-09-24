@@ -1152,16 +1152,23 @@ class ComputeMixin:
         return read_share(self.m)
 
     def _tick_key(self) -> tuple[int, int, int] | None:
-        """The tick and the journal's venue and treasury write counts, or None.
+        """The tick and the counts of venue and treasury writes that can move an answer.
 
-        An answer is good for the tick it was read in and only until a venue or a
-        treasury write, which may move what a read would answer. A ledger with no
-        journal keeps no answers.
+        An answer is good for the tick it was read in and only until an operation
+        that can change what the venue answers: an order, a cancel, a leverage or
+        vault write, a transfer. ``drain_events`` hands over the simulated venue's
+        local event queue and changes nothing the venue answers, so the journal's
+        venue write count is taken net of the drains the venue answered
+        (``_observe_venue_answer`` counts them). The journal's own classification is
+        untouched: replay still reads a drain as a write. A ledger with no journal
+        keeps no answers.
         """
         writes = getattr(self.ledger, "writes", None)
         if type(writes) is not dict:
             return None
-        return (self.ticks_consumed, writes.get("exchange", 0), writes.get("treasury", 0))
+        drains = getattr(self, "_venue_drains", 0)
+        return (self.ticks_consumed, writes.get("exchange", 0) - drains,
+                writes.get("treasury", 0))
 
     @staticmethod
     def _answer_key(method: str, args: tuple, kwargs: dict) -> str:
@@ -1179,6 +1186,12 @@ class ComputeMixin:
 
         from factorylab.world.venue_tools import TICK_ANSWERED
 
+        if method == "drain_events":
+            # Counted so the answers' key can take the journal's write count net of
+            # it; a drain the venue did not answer stays counted, which only ever
+            # drops answers, never keeps a stale one.
+            self._venue_drains = getattr(self, "_venue_drains", 0) + 1
+            return
         if method not in {name for name, _ in TICK_ANSWERED.values()}:
             return
         key = self._tick_key()
@@ -1254,27 +1267,30 @@ class ComputeMixin:
     def _venue_read_refusal(self, seat: str, tool_id: str, args: Any) -> str | None:
         """Refuse a seat's venue read its share cannot cover, before anything is sent.
 
-        Guarantees: a read is admitted only when the weight its first attempt sends
-        fits in what the seat's own reads left of its share over the sliding minute;
-        another seat's reads never enter it. Any other tool passes untouched.
+        Guarantees: a read is admitted only when the most it can send, every attempt
+        the adapter may make included (``public_read_worst``), fits in what the
+        seat's own reads left of its share over the sliding minute, so what is then
+        charged (what was actually sent) never takes the seat past its share; the
+        retry count is the adapter's, never the seat's. Another seat's reads never
+        enter it. Any other tool passes untouched.
         """
-        from factorylab.world.venue_tools import public_read_weight
+        from factorylab.world.venue_tools import public_read_worst
 
-        weight = public_read_weight(tool_id, args)
-        if weight is None or weight == 0:
+        worst = public_read_worst(tool_id, args)
+        if worst is None or worst == 0:
             return None
         share, used = self.venue_read_share(), self._venue_read_used(seat)
-        if used + weight > share:
+        if used + worst > share:
             return (f"{self.PUBLIC_READ_REFUSAL}: {used} of {share} venue request weight "
-                    f"in the last 60 s; this read sends {weight}")
+                    f"in the last 60 s; this read may send up to {worst}")
         return None
 
     def _venue_weight_sent(self) -> int | None:
         """The live adapter's count of venue weight sent, or None.
 
         None for a simulated venue, which sends nothing, and for a counter that could
-        not be read: the caller then charges the read's first-attempt weight, which
-        is what a seat read sends (it is never retried). A journaled read-only call
+        not be read: the caller then charges the read's first-attempt weight. A
+        journaled read-only call
         (``runtime/resume.py``, ``_read_only``), so a replay returns what was recorded
         and it moves no memo keyed on venue writes.
         """
@@ -1286,19 +1302,14 @@ class ComputeMixin:
             return None
         return sent if type(sent) is int else None
 
-    def _seat_read_attempts(self, single: bool) -> None:
-        """A seat's read goes to the venue once: no retry can overshoot the seat's share."""
-        if hasattr(self.exchange, "request_weight_sent"):
-            self.exchange.single_attempt = single
-
     def _charge_venue_read(self, seat: str, tool_id: str, args: Any,
                            before: int | None) -> None:
-        """Charge a seat's read what the adapter reports it sent for it.
+        """Charge a seat's read what the adapter reports it sent for it, every attempt.
 
-        A seat read is sent once (``_seat_read_attempts``), so what is charged is at
-        most the first-attempt weight it was admitted on. A simulated venue sends
-        nothing and reports nothing; it is charged the first-attempt weight, so the
-        limit binds the same way in a scripted world. Never raises.
+        What is charged is at most the worst case the read was admitted on. A
+        simulated venue sends nothing and reports nothing; it is charged the
+        first-attempt weight, so the limit binds the same way in a scripted world.
+        Never raises.
         """
         from factorylab.world.venue_tools import public_read_weight
 
@@ -1608,7 +1619,6 @@ class ComputeMixin:
                                     "reason": refusal, "ts": self.clock.now_ns})
                 return {"error": refusal}, 0
             weight_before = self._venue_weight_sent()
-            self._seat_read_attempts(True)
         price = int(spec["price_micro_per_call"])
 
         def execute() -> dict:
@@ -1717,7 +1727,6 @@ class ComputeMixin:
             return {"error": f"{type(exc).__name__}: {exc}"[:200]}, 0
         finally:
             if venue_read:
-                self._seat_read_attempts(False)
                 self._charge_venue_read(action_id, tool_id, args, weight_before)
         if spec["kind"] == "venue":
             if tool_id in self.venue_tools.PUBLIC_READS:

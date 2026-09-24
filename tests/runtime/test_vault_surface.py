@@ -81,10 +81,10 @@ class LiveLike(FakeExchange):
 
 def _manifest(on=True):
     manifest = load_manifest("scripted")
-    # venue.vault_positions sends 40 venue weight: a world publishing it has at most
-    # 480 // 40 = 12 venue read slots, so every reader's share can cover it.
+    # venue.vault_positions may send 120 venue weight (two requests, three attempts
+    # each): a world publishing it has at most 480 // 120 = 4 venue read slots.
     return replace(manifest, exchange=replace(manifest.exchange, vault_tools=on,
-                                              max_readers=12 if on else 16))
+                                              max_readers=4 if on else 7))
 
 
 def _exchange(cls=FakeExchange, cash="20000"):
@@ -146,9 +146,9 @@ def test_the_manifest_key_is_hashed_off_and_names_a_new_world_on():
     assert on.manifest_hash() != off.manifest_hash()
     raw = tomllib.loads((WORLDS_DIR / "scripted.toml").read_text())
     raw["venue"]["vault_tools"] = True
-    with pytest.raises(ValueError, match="cannot cover venue.vault_positions at 40"):
-        manifest_from_dict(raw)  # sixteen readers' shares of 480 are 30 each
-    raw["venue"]["max_readers"] = 12
+    with pytest.raises(ValueError, match="cannot cover venue.vault_positions at 120"):
+        manifest_from_dict(raw)  # seven readers' shares of 480 are 68 each
+    raw["venue"]["max_readers"] = 4
     assert manifest_from_dict(raw).manifest_hash() == on.manifest_hash()
     raw["venue"]["vault_tools"] = False
     del raw["venue"]["max_readers"]
