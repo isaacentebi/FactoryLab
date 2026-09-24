@@ -597,7 +597,8 @@ def open_limit(spec: Any) -> int:
 
     **Wall time.** Polymarket counts its limits in wall time, so every window here is
     wall time (``wall_now``): the live reader stamps each request with
-    ``time.time_ns()`` as it sends it (``PolymarketReader.drain_sends``), the stamps
+    ``time.time_ns()`` just before it sends it, so a request counts from that stamp
+    on, in flight or failed (``PolymarketReader.drain_sends``), the stamps
     are journaled, so a replay charges what the run charged, and a seat's admission
     and an open read's countdown are read against the same clock, never the world's.
     A live reader runs only on the wall clock (``arm``). A world's ticks can take any
@@ -645,8 +646,10 @@ def open_limit(spec: Any) -> int:
     (200 - 100) // 16 = 6 requests per 10 s, one return's two claim lookups. In any
     10 s of wall time the kernel sends at most 2 × 50 = 100 and the seats at most
     16 × 6 = 96: 196 of the 300 Polymarket publishes for ``/markets``, its tightest
-    limit. The 104 left cover only what the world cannot see: the difference between
-    this host's clock and Polymarket's, and a request's time in flight. One live
+    limit. These counts are of stamps; Polymarket counts a request when it arrives,
+    after its stamp. The 104 left cover only what the world cannot see: the difference
+    between this host's clock and Polymarket's, and a request's time in flight from its
+    stamp to its arrival. One live
     Polymarket world runs a host (``ip_lock``).
     """
     return spec.kernel_reserve_per_10s // KERNEL_READS_PER_OPEN

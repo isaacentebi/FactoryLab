@@ -353,3 +353,85 @@ def test_a_transaction_whose_line_was_damaged_and_repaired_is_still_sendable():
         assert repaired["open_transactions"] == [ref["tx_hash"].lower()]
     chain.broadcast(ref)
     assert len(rpc.sent) == 1
+
+
+# ---- A public RPC's rate limit: a paged scan is a burst, answered after a backoff
+
+
+class Throttled:
+    """An RPC that refuses the first ``refusals`` requests of each method in
+    ``throttled`` with ``refusal`` and answers every other request like ``RPC``."""
+
+    def __init__(self, rpc, refusals, refusal, throttled=("eth_getLogs",)):
+        self.rpc, self.refusals, self.refusal, self.throttled = rpc, refusals, refusal, throttled
+        self.sent = {}
+
+    def __call__(self, method, url, body, headers):
+        name = body["method"]
+        self.sent[name] = self.sent.get(name, 0) + 1
+        if name in self.throttled and self.sent[name] <= self.refusals:
+            return self.refusal
+        return self.rpc(method, url, body, headers)
+
+
+HTTP_429 = HTTPResponse(429, {}, {})
+RPC_OVER_LIMIT = HTTPResponse(
+    200, {"jsonrpc": "2.0", "id": 1, "error": {"code": -32016, "message": "over rate limit"}}, {})
+RPC_TOO_MANY = HTTPResponse(200, {"error": {"code": -32000, "message": "Too Many Requests"}}, {})
+
+
+@pytest.mark.parametrize("refusal", [HTTP_429, RPC_OVER_LIMIT, RPC_TOO_MANY])
+def test_a_scan_refused_twice_for_rate_limit_is_answered_after_a_bounded_backoff(refusal):
+    rpc, chain, _ = setup()
+    rpc.final = {"number": hex(40), "hash": "0xabc"}
+    chain.transport = Throttled(rpc, 2, refusal)
+    pauses = []
+    chain.sleep = pauses.append
+    assert chain.scan(chain.chain.usdc, [], 1) == ([], 40)
+    assert chain.transport.sent["eth_getLogs"] == 3
+    assert pauses == [0.5, 1.0]
+
+
+def test_a_scan_the_rpc_keeps_refusing_stays_pending_and_skips_no_page():
+    from factorylab.world.evm import RATE_LIMIT_ATTEMPTS, RATE_LIMIT_MAX_PAUSE_S
+
+    rpc, chain, _ = setup()
+    chain.transport = Throttled(rpc, 10**9, HTTP_429)
+    pauses = []
+    chain.sleep = pauses.append
+    with pytest.raises(Pending):
+        chain.scan(chain.chain.usdc, [], 1)
+    assert chain.transport.sent["eth_getLogs"] == RATE_LIMIT_ATTEMPTS == 5
+    assert pauses == [0.5, 1.0, 2.0, 4.0]
+    assert max(pauses) <= RATE_LIMIT_MAX_PAUSE_S
+
+
+def test_any_answer_but_a_rate_limit_is_final_on_the_first_attempt():
+    rpc, chain, _ = setup()
+    pauses = []
+    chain.sleep = pauses.append
+    for refusal in (HTTPResponse(503, {}, {}),
+                    HTTPResponse(200, {"error": {"code": -32005, "message": "limit exceeded"}},
+                                 {}),
+                    HTTPResponse(200, {"error": {"code": -32602, "message": "invalid params"}},
+                                 {})):
+        chain.transport = Throttled(rpc, 10**9, refusal)
+        with pytest.raises(Pending):
+            chain.scan(chain.chain.usdc, [], 1)
+        assert chain.transport.sent["eth_getLogs"] == 1
+    assert pauses == []
+
+
+def test_a_rate_limited_send_is_never_sent_again():
+    rpc, chain, ref = setup()
+    chain.transport = Throttled(rpc, 10**9, HTTP_429, throttled=("eth_sendRawTransaction",))
+    pauses = []
+    chain.sleep = pauses.append
+    with pytest.raises(Pending):
+        chain.broadcast(ref)
+    assert chain.transport.sent["eth_sendRawTransaction"] == 1 and pauses == []
+    # Refused once, then it would answer: still one send per broadcast, never a retry.
+    chain.transport = Throttled(rpc, 1, RPC_OVER_LIMIT, throttled=("eth_sendRawTransaction",))
+    with pytest.raises(Pending):
+        chain.broadcast(ref)
+    assert chain.transport.sent["eth_sendRawTransaction"] == 1 and rpc.sent == []

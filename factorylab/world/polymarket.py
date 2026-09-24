@@ -329,11 +329,11 @@ PUBLISHED_REQUESTS_PER_10S = 300
 #: seats 3 requests per 10 s, one claim's token lookup, but a judge's one return may
 #: carry ``max_forecasts_per_verdict`` (2) claims, 6 requests, so the default is the
 #: least budget that fits a whole return: (200 - 100) // 16 = 6. The world counts
-#: every request at the wall-clock instant it was sent (``PolymarketReader.
+#: every request at a wall-clock stamp taken just before it is sent (``PolymarketReader.
 #: drain_sends``), in the window Polymarket counts, so its bound (196 of 300,
 #: ``runtime/polymarket.py``, ``open_limit``) holds in wall time; what remains of the
 #: 300 covers only the difference between this host's clock and Polymarket's, and a
-#: request's time in flight.
+#: request's time in flight between its stamp and its arrival.
 DEFAULT_READ_REQUESTS_PER_10S = 200
 #: Of that, held back for the kernel's own settlement reads, which no seat can spend:
 #: N = 100 // 2 = 50 open reads, 3 a seat at 16 slots.
@@ -366,7 +366,8 @@ class PolymarketReader:
     deterministic: bool = False
     #: A value no earlier Gamma read carried, for ``CACHE_KEY``.
     nonce: Any = time.time_ns
-    #: The wall clock every request is stamped with as it is sent (``drain_sends``).
+    #: The wall clock every request is stamped with just before it is sent
+    #: (``drain_sends``).
     wall: Any = time.time_ns
     #: The stamps of the requests sent since the last ``drain_sends``.
     sends: list = field(default_factory=list)
@@ -392,8 +393,11 @@ class PolymarketReader:
         return self.get(f"{self.clob_url}{path}?{parse.urlencode(params)}")
 
     def _stamp(self) -> None:
-        # Counted and stamped before it is sent: a request that fails in flight may
-        # still have reached Polymarket, so it counts.
+        """Guarantees the request about to be sent is counted and stamped with the wall
+        clock now, before it is sent: it counts from this stamp on, while it is in
+        flight, and whether it then fails, times out or is answered."""
+        # Before, not after: a request that fails in flight may still have reached
+        # Polymarket, so it counts.
         self.sent = getattr(self, "sent", 0) + 1
         self.sends.append(int(self.wall()))
 
@@ -403,12 +407,14 @@ class PolymarketReader:
         return getattr(self, "sent", 0)
 
     def drain_sends(self) -> list[int]:
-        """Guarantees the wall-clock stamp (``time.time_ns`` at send) of every request
-        sent since the last drain, one per request, in send order, each returned once.
+        """Guarantees the wall-clock stamp (``wall``, read just before the request was
+        sent) of every request this reader began to send since the last drain, one per
+        request, in send order, each returned once. A request in flight is included,
+        as is one that failed or timed out: each counts from its stamp on.
 
         Polymarket counts its limits in wall time, so the world charges each request at
-        the instant it was sent. Read through the journal, so a replay charges the
-        stamps the run read.
+        its stamp, which is no later than the instant it left this host. Read through
+        the journal, so a replay charges the stamps the run read.
         """
         sends, self.sends = self.sends, []
         return sends

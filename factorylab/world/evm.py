@@ -6,6 +6,8 @@ eth_abi/eth_account dependencies. Private keys never enter a transaction referen
 
 from __future__ import annotations
 
+import re
+import time
 from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Any
@@ -91,6 +93,35 @@ CORE_USDC_SYSTEM = "0x2000000000000000000000000000000000000000"
 # Blocks per eth_getLogs page: Hyperliquid's official RPC documents a 50-block range
 # limit, and a page is a fixed code constant rather than a manifest setting.
 LOG_PAGE_BLOCKS = 50
+# A rate-limited read is asked again, at most this many attempts in all, after pauses
+# doubling from the first and capped at the last. A paged log scan is a burst a public
+# RPC refuses as a whole although it answers each page alone; the bound means a node
+# that keeps refusing still leaves the reference ``Pending``.
+RATE_LIMIT_ATTEMPTS = 5
+RATE_LIMIT_FIRST_PAUSE_S = 0.5
+RATE_LIMIT_MAX_PAUSE_S = 8.0
+#: The only methods a rate-limit answer is retried for: reads, which change nothing.
+#: No write (``eth_sendRawTransaction``) is in this set, so a write is sent exactly once
+#: per ``call`` whatever answers; its only retry is the journaled reference's rebroadcast.
+RATE_LIMITED_READS = frozenset({
+    "eth_chainId", "eth_blockNumber", "eth_getBalance", "eth_call", "eth_estimateGas",
+    "eth_gasPrice", "eth_getTransactionCount", "eth_getTransactionReceipt",
+    "eth_getBlockByNumber", "eth_getLogs", "eth_getSystemTxsByBlockHash",
+})
+_RATE_LIMIT_TEXT = re.compile(r"rate[\s_-]?limit|too many requests", re.IGNORECASE)
+
+
+def rate_limited(status: int, body: Any) -> bool:
+    """True only for HTTP 429, or a JSON-RPC error whose code is 429 or whose message
+    names a rate limit or too many requests; False for every other answer."""
+    if status == 429:
+        return True
+    error = body.get("error") if isinstance(body, dict) else None
+    if not isinstance(error, dict):
+        return False
+    message = error.get("message")
+    return error.get("code") == 429 or (
+        isinstance(message, str) and _RATE_LIMIT_TEXT.search(message) is not None)
 
 
 def address(value: str) -> str:
@@ -175,6 +206,8 @@ class EVM:
         if type(gas_budget_wei) is not int or gas_budget_wei < 0:
             raise RailError("gas budget must be nonnegative integer wei")
         self.gas_budget_wei = gas_budget_wei
+        # The rate-limit backoff's pause; a test substitutes one that records instead.
+        self.sleep = time.sleep
         # The write-ahead guard every transaction this signer prepares, replaces or
         # broadcasts passes (``capital_loop.AuthorizationLog`` or ``ReserveGuard``): the
         # runtime binds it. Unbound, this EVM reads the chain and signs nothing.
@@ -225,23 +258,38 @@ class EVM:
         return hold
 
     def call(self, method: str, params: list) -> Any:
-        try:
-            result = self.transport(
-                "POST",
-                self.rpc,
-                {
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": method,
-                    "params": params,
-                },
-                {"User-Agent": "FactoryLab/0.4"},
-            )
-        except Exception:
-            raise Pending("RPC transport failed; reference remains pending") from None
-        if result.status != 200 or "error" in result.body or "result" not in result.body:
-            raise Pending("RPC call rejected or unavailable")
-        return result.body["result"]
+        """The RPC's result for one JSON-RPC request, or ``Pending``.
+
+        Guarantees a method in ``RATE_LIMITED_READS`` answered with a rate limit
+        (``rate_limited``) is sent at most ``RATE_LIMIT_ATTEMPTS`` times and raises
+        ``Pending`` if the last attempt is refused too. Any other failure, and every
+        answer to a method outside that set (a write), is final on its first attempt.
+        """
+        attempts = RATE_LIMIT_ATTEMPTS if method in RATE_LIMITED_READS else 1
+        pause = RATE_LIMIT_FIRST_PAUSE_S
+        for attempt in range(attempts):
+            try:
+                result = self.transport(
+                    "POST",
+                    self.rpc,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": method,
+                        "params": params,
+                    },
+                    {"User-Agent": "FactoryLab/0.4"},
+                )
+            except Exception:
+                raise Pending("RPC transport failed; reference remains pending") from None
+            if attempt + 1 < attempts and rate_limited(result.status, result.body):
+                self.sleep(pause)
+                pause = min(pause * 2, RATE_LIMIT_MAX_PAUSE_S)
+                continue
+            if result.status != 200 or "error" in result.body or "result" not in result.body:
+                raise Pending("RPC call rejected or unavailable")
+            return result.body["result"]
+        raise AssertionError("unreachable")
 
     def check_chain(self) -> None:
         if int(self.call("eth_chainId", []), 16) != self.chain.id:
