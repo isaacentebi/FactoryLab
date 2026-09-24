@@ -24,6 +24,8 @@ from typing import Any
 
 #: The definition an opportunity price is recorded under.
 OPPORTUNITY_DEFINITION = "opportunity-cost-v2"
+#: The definition a refused answer order's own named trade is priced under.
+ATTEMPTED_DEFINITION = "attempted-trade-v1"
 
 
 def latest_mids(runtime: Any) -> tuple[tuple[str, str], ...]:
@@ -138,3 +140,43 @@ def opportunity_cost(open_mids: Iterable[tuple[str, str]],
             "declined": dict(declined), "gross_bps": str(gross), "scale_bps": scale,
             "score": round(0.5 - 0.5 * math.tanh(float(gross) / scale), 6),
             "basis": "the named declined trade's gross move, marked to the horizon"}
+
+
+def attempted_trade(outputs: Mapping, listed: Iterable[str]) -> dict[str, str] | None:
+    """The trade an answer order named, as ``{coin, side}`` in the world's spelling, or None.
+
+    Guarantees a trade only for an answer ``{"action": "order", "coin", "side", ...}``
+    whose side is buy or sell and whose coin the world lists (``listed``, the coins
+    of ``latest_mids``); the caller says whether the answer's kind owns the answer
+    order. Nothing is inferred: the coin and side are the seat's own.
+    """
+    if not isinstance(outputs, Mapping) or outputs.get("action") != "order":
+        return None
+    return declined_trade({"counterfactual": {"coin": outputs.get("coin"),
+                                              "side": outputs.get("side")}}, listed)
+
+
+def attempted_cost(open_mids: Iterable[tuple[str, str]],
+                   due_mids: Iterable[tuple[str, str]],
+                   scale_bps: Decimal | int | float,
+                   attempted: Mapping[str, str] | None) -> dict[str, Any] | None:
+    """Price the road a refused order tried to take: the trade it named, for its side.
+
+    ``attempted-trade-v1`` (the architect's ruling on wave 13). An answer order names
+    its trade ex ante; when nothing the decision wrote executed, the world measures
+    that trade over the same horizon, from the same frozen mids, as
+    ``opportunity_cost``. Guarantees ``y = 0.5 + 0.5 * tanh(gross_bps / scale_bps)``,
+    ``gross_bps`` the named trade's gross move signed by the ordered side, excluding
+    fees: the mirror of the declined form, 0.5 at no move, toward 1 as the market
+    moves for the ordered side. It is symmetric and monotone, so without directional
+    skill it is 0.5 in expectation. Returns None when no trade is named or its prices
+    are missing.
+    """
+    priced = opportunity_cost(open_mids, due_mids, scale_bps, attempted)
+    if priced is None:
+        return None
+    return {"moves": priced["moves"], "attempted": priced["declined"],
+            "gross_bps": priced["gross_bps"], "scale_bps": priced["scale_bps"],
+            "score": round(0.5 + 0.5 * math.tanh(float(priced["gross_bps"])
+                                                 / priced["scale_bps"]), 6),
+            "basis": "the refused order's named trade's gross move, marked to the horizon"}

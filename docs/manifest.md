@@ -469,6 +469,15 @@ proved right, and one that only repeats the base rate earns 0.5. `y` is:
   move in bp, signed by its side and excluding fees, from the mids the world had
   broadcast when the return was made (ruling R2). It is symmetric and monotone,
   so a hold without directional skill earns 0.5 whatever trade it names;
+- for a return whose answer order (`{"action": "order", coin, side, size}`) was
+  refused (by the collateral check, the venue, or a terminal error) and that
+  executed nothing else: `attempted-trade-v1`,
+  `y = 0.5 + 0.5 * tanh(g / opportunity_scale_bps)` with `g` the ordered coin's
+  gross move in bp, signed by the ordered side and excluding fees, from the same
+  frozen mids and horizons as the declined form, of which it is the mirror: 0.5 at
+  no move, toward 1 as the market moves for the ordered side. It is ledgered as
+  `consequence.attempted_mark` and `consequence.attempted`. An order left
+  `uncertain` is acting, and is measured by `return_paid_off`;
 - for anything else (a return made while the world listed no coin, a declined
   commission, or a named coin with no mid at the horizon): nothing. Only the tier
   above grades it.
