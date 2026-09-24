@@ -117,7 +117,7 @@ def test_a_free_read_is_published_free_and_debits_nothing():
     rt = world(venue="live")
     for tool_id in polymarket.READS:
         assert rt.tool_specs[tool_id]["price_micro_per_call"] == 0
-        assert rt.tool_specs[tool_id]["description"].endswith("Free.")
+        assert "Free." in rt.tool_specs[tool_id]["description"]
         assert "$" not in rt.tool_specs[tool_id]["description"]
     handle = collateral_decision(rt)
     result, cost = rt._run_tool("seed-decider", handle,
@@ -585,7 +585,9 @@ def test_the_market_tool_serves_the_markets_current_state_never_a_cached_copy():
     market = result["market"]
     assert market["closed"] is True and market["uma_resolution_status"] == "resolved"
     assert [o["price"] for o in market["outcomes"]] == ["1", "0"]
-    # Every Gamma read asks a URL no earlier read asked.
+    # Every Gamma read asks a URL no earlier read asked (in the next tick: within one,
+    # an identical read is answered from the tick's answer and sends nothing).
+    rt.ticks_consumed += 1
     rt._run_tool("seed-decider", handle, {
         "tool": "polymarket.market", "args": {"market_id": "2589812"}})
     assert len(urls) == 2 and urls[0] != urls[1]
@@ -615,3 +617,68 @@ def test_a_token_with_no_two_sided_book_is_not_marked_at_an_invented_price():
                                                "midpoint": None}
     polymarket.mark(rt)
     assert coin not in rt.consequences.mids
+
+
+# --- the read limit: Polymarket's published rate limits, a share per reader slot ---------
+
+
+def _search(rt, seat, query):
+    handle = collateral_decision(rt, seat)
+    return rt._run_tool(seat, handle, {"tool": "polymarket.search",
+                                        "args": {"query": query}})[0]
+
+
+def test_a_seat_s_polymarket_reads_are_refused_once_its_share_is_spent():
+    """(76 - 60) // 16 slots = 1 request a sliding minute: the second read is refused
+    before it is sent, with the share it ran out of; another seat's share is its own."""
+    rt = world(read_requests_per_minute=76, kernel_reserve_per_minute=60)
+    sent = []
+    search = rt.polymarket.venue.target.search_markets
+    rt.polymarket.venue.target.search_markets = lambda *a: sent.append(a) or search(*a)
+    assert "markets" in _search(rt, "seed-decider", "event A")
+    refused = _search(rt, "seed-decider", "event B")
+    assert refused == {"error": "polymarket read share spent: 1 of 1 requests in the "
+                                "last 60 s; this read sends 1"}
+    assert len(sent) == 1
+    assert "markets" in _search(rt, "seed-observer", "event B")
+    rt.clock.now_ns += 61_000_000_000
+    assert "markets" in _search(rt, "seed-decider", "event C")
+    text = rt.tool_specs["polymarket.search"]["description"]
+    assert "76 requests a minute, of which 60 are held back for the kernel" in text
+
+
+def test_an_identical_read_in_the_tick_is_answered_and_charges_nothing():
+    rt = world(read_requests_per_minute=76, kernel_reserve_per_minute=60)
+    assert "markets" in _search(rt, "seed-decider", "event A")
+    again = _search(rt, "seed-decider", "event A")  # share spent, answered anyway
+    assert "markets" in again
+    assert [i["kind"] for i in _consequence_diary(rt)
+            if i["kind"] == "polymarket.read_answered"] == ["polymarket.read_answered"]
+
+
+def test_the_kernel_s_settlement_read_succeeds_when_every_seat_is_spent():
+    from factorylab.settlement.vocabulary import UNOBSERVABLE
+
+    rt = world(read_requests_per_minute=76, kernel_reserve_per_minute=60)
+    for seat in rt.venue_readers:
+        _search(rt, seat, f"spend {seat}")
+        assert "error" in _search(rt, seat, f"again {seat}")
+    facts = polymarket.event_facts(rt, "event_price_above", token(rt))
+    assert facts is not UNOBSERVABLE and facts["listed"] is True
+
+
+def test_the_polymarket_budget_is_validated_at_load_against_the_published_limit():
+    import tomllib
+    from pathlib import Path
+
+    raw = tomllib.loads(Path(__file__).parents[2].joinpath("worlds/scripted.toml").read_text())
+    for block, match in (
+            ({"read_requests_per_minute": 1801}, "tightest published limit"),
+            ({"read_requests_per_minute": 100, "kernel_reserve_per_minute": 100},
+             "kernel_reserve_per_minute"),
+            ({"read_requests_per_minute": 70, "kernel_reserve_per_minute": 60},
+             "cannot cover one read")):
+        with pytest.raises(ValueError, match=match):
+            manifest_from_dict({**raw, "polymarket": {"enabled": True, **block}})
+    assert manifest_from_dict({**raw, "polymarket": {
+        "enabled": True, "read_requests_per_minute": 1800}}).polymarket.enabled

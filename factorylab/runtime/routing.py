@@ -1515,6 +1515,15 @@ class RoutingMixin:
         if assembly_id in getattr(self, "venue_readers", ()):
             # A retirement frees its venue read slot for the next registration.
             self.venue_readers.remove(assembly_id)
+        # Retirement is final: nothing revives a retired seat, so its private state
+        # (its working-state head and a program's private state) is reachable by no
+        # one and is released, as a superseded head is. What it addressed to others
+        # (inbox bodies, archived rationales) is the world's record and stays.
+        self.working_state.retire(assembly_id)
+        retired = self.assemblies[assembly_id]
+        if getattr(retired, "state_sha", None) is not None:
+            self.artifacts.release(retired.state_sha, owner=assembly_id, kind="program.state")
+            retired.state_sha = None
         book = getattr(self, "subscription_book", None)
         if book is not None:
             # A retired watcher stops being evaluated, and stops being charged for it.

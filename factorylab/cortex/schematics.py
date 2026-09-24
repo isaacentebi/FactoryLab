@@ -504,7 +504,8 @@ class SchematicsMixin:
                         "most working_state_max_bytes. A program seat retains its current "
                         "private state, at most program_state_max_bytes, written when a "
                         "call prints one; seats of its lineage read it while it is current. "
-                        "Writing a successor releases the superseded head or state: "
+                        "Writing a successor releases the superseded head or state, and a "
+                        "seat's retirement releases its head and private state: "
                         "artifact.get answers artifact_released to the seat that released "
                         f"it, for its last {RELEASED_MEMORY} releases, and answers every other "
                         "reader as it "
@@ -513,7 +514,8 @@ class SchematicsMixin:
                         "names them, otherwise at the first boundary after a later "
                         "checkpoint. Outcome bodies and archived rationales are retained for "
                         "the world's life and grow with decisions, on the order of 0.5 KiB "
-                        "per outcome addressed to a seat."},
+                        "per outcome addressed to a seat. Retained private state is "
+                        "therefore at most the live seats times these two caps."},
             "tools": self._published_tool_specs(),
             "reserve": {"protected": self.reserve.remaining(), "units": "micro-USD",
                         "trials": self.m.novelty.trials,

@@ -632,6 +632,10 @@ class BootstrapMixin:
                 "share cannot cover is refused and not sent. " + TICK_ANSWER_FACT)
         # seat -> [[world ns, venue weight sent]] of its reads in the sliding minute.
         self.venue_read_use: dict[str, list[list[int]]] = {}
+        # The same for Polymarket reads (``runtime/polymarket.py``); empty, and never
+        # spent, in a world without the block.
+        self.polymarket_read_use: dict[str, list[list[int]]] = {}
+        self._polymarket_tick_reads = None
         # The seats holding a venue read slot: the seeds, in manifest order, up to
         # ``[venue] max_readers``; then registrations while one is free.
         self.venue_readers: list[str] = [

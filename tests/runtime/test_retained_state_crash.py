@@ -258,3 +258,54 @@ def test_a_kill_between_the_weight_counter_call_and_its_result_resumes(tmp_path)
     assert restored._venue_weight_sent() == venue.sent
     assert restored.ledger.writes == writes
     restored._ledger_lock.close()
+
+
+RETIRE_AT = 60
+
+
+def _retiring(monkeypatch):
+    """Every runtime this test builds, a resumed one included, retires seed-observer
+    right after event ``RETIRE_AT``: a retirement recorded in the diary like any other,
+    so the replay applies it at the same point."""
+    process = Runtime._process_event
+
+    def process_then_retire(self, event):
+        result = process(self, event)
+        if self.n == RETIRE_AT and "seed-observer" not in self.retired_assemblies:
+            self._retire_assembly("seed-observer", "vote-retire")
+        return result
+
+    monkeypatch.setattr(Runtime, "_process_event", process_then_retire)
+
+
+def test_a_crash_between_retirement_and_release_resumes_to_the_uninterrupted_run(
+        tmp_path, monkeypatch):
+    _retiring(monkeypatch)
+    base = tmp_path / "base" / "world.jsonl"
+    base.parent.mkdir()
+    expected_summary = _summary(_runtime(base).run())
+    expected = _items(base)
+    released = [i for i in expected if i["kind"] == "artifact.released"
+                and i.get("owner") == "seed-observer"]
+    assert released, "the retired seat held private state to release"
+    path = tmp_path / "crash" / "world.jsonl"
+    path.parent.mkdir()
+    rt = _runtime(path)
+    append = rt.ledger.append
+
+    def die_after_retirement(item):
+        seq = append(item)
+        if item.get("kind") == "assembly.retired":
+            raise Crash  # the retirement is ledgered, its release is not
+        return seq
+
+    rt.ledger.append = die_after_retirement
+    with pytest.raises(Crash):
+        rt.run()
+    before = _items(path)
+    assert before[-1]["kind"] == "assembly.retired"
+    summary = resume_world(load_manifest("scripted"), str(path), provider=Writer())
+    after = _items(path)
+    assert after[:len(before)] == before
+    assert _trail(after) == _trail(expected)
+    assert _summary(summary) == expected_summary

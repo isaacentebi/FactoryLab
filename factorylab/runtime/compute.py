@@ -1457,11 +1457,12 @@ class ComputeMixin:
         IP limit bounds who reads it (``[venue] max_readers``), never how many
         seats exist.
         """
+        from factorylab.runtime.polymarket import READS as POLYMARKET_READS
         from factorylab.world.venue_tools import _BASE_WEIGHT
 
         tools = set(self.tool_specs)
         if action_id not in getattr(self, "venue_readers", (action_id,)):
-            tools -= set(_BASE_WEIGHT)
+            tools -= set(_BASE_WEIGHT) | set(POLYMARKET_READS)
         return tools
 
     def _weigh_venue_batch(self, action_id: str, handle: str, ret: Return,

@@ -492,7 +492,8 @@ def _read_only(name: str) -> bool:
     ):
         return True
     if name.startswith("polymarket.") and name.rsplit(".", 1)[-1] in (
-            "search_markets", "market", "market_of_token", "midpoint"):
+            "search_markets", "market", "market_of_token", "midpoint", "order_book",
+            "requests_sent"):
         return True  # the public Polymarket reads (world/polymarket.py)
     return name.rsplit(".", 1)[-1] in (
         # The safety path's wall-clock and delivered-tick reads (time audit T8).
@@ -679,6 +680,9 @@ _RUNTIME_FIELDS = (
     "venue_read_use",
     # The seats holding a venue read slot. An older checkpoint gives the seeds theirs.
     "venue_readers",
+    # Each seat's Polymarket read requests in the sliding minute. An older checkpoint
+    # (or a world without the block) starts every share unspent.
+    "polymarket_read_use",
     # The pause between releases: None while awake, else the entry record (C2).
     "dormancy",
     # C10: each seat's last rendered call ceiling and the world size it was priced at.

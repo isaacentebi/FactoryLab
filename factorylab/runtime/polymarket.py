@@ -59,6 +59,7 @@ What the kernel enforces, and where:
 
 from __future__ import annotations
 
+import json
 from decimal import Decimal, InvalidOperation
 from fractions import Fraction
 from typing import Any
@@ -234,8 +235,28 @@ def install(rt: Any) -> None:
                              start_usdc=Decimal(spec.collateral_micro) / 1_000_000)
               if writes else PolymarketReader())
     venue = JournalProxy(target, rt.ledger, "polymarket", deterministic=writes)
+    venue.observer = lambda method, args, kwargs, result: observe_answer(
+        rt, method, args, kwargs, result)
     rt.polymarket = PolymarketSurface(spec, venue, writes=writes)
-    rt.tool_specs.update(tool_specs(spec, writes=writes))
+    # seat -> [[world ns, requests sent]] of its reads in the sliding minute.
+    rt.polymarket_read_use = {}
+    rt._polymarket_tick_reads = None
+    specs = tool_specs(spec, writes=writes)
+    share = read_share(spec, rt.m.exchange.max_readers)
+    for tool_id in READS:
+        # A limit is a published fact (essay II.I.b), never advice.
+        specs[tool_id]["description"] += (
+            f" Held by seats with a venue read slot. Polymarket reads are bounded by "
+            f"Polymarket's published rate limits: this world uses "
+            f"{spec.read_requests_per_minute} requests a minute, of which "
+            f"{spec.kernel_reserve_per_minute} are held back for the kernel's own "
+            f"settlement and marking reads, and each slot has a fixed share of {share} "
+            "requests in any sliding 60 s of world time. This read sends one request; "
+            "a read your remaining share cannot cover is refused and not sent. Within "
+            "one world tick, a read identical to one already answered in that tick is "
+            "answered from that answer: no request is sent and none of your share is "
+            "spent.")
+    rt.tool_specs.update(specs)
 
 
 def simulate_reads(rt: Any) -> None:
@@ -255,6 +276,10 @@ def simulate_reads(rt: Any) -> None:
         raise ValueError("simulate_reads replaces a live reader only")
     surface.venue = JournalProxy(FakePolymarket(seed=surface.spec.seed), rt.ledger,
                                  "polymarket", deterministic=True)
+    # The same limits bind a rehearsal: the tick's answers and the charge per
+    # dispatched read work on the simulated venue as on the live reader.
+    surface.venue.observer = lambda method, args, kwargs, result: observe_answer(
+        rt, method, args, kwargs, result)
 
 
 # --- world-settled forecasts ----------------------------------------------------------------
@@ -383,22 +408,156 @@ def execute(rt: Any, action_id: str, handle: str, tool_id: str, args: dict,
         return _write(rt, surface, action_id, handle, tool_id, args, slot)
     if tool_id == ACCOUNT:
         return {**account_view(sanitized(surface.account())), "as_of_ns": rt.clock.now_ns}
-    try:
-        if tool_id == "polymarket.search":
-            limit = args.get("limit", 5)
-            result = {"markets": surface.venue.search_markets(args["query"].strip(), limit)}
-        elif tool_id == "polymarket.market":
-            result = {"market": surface.venue.market(args["market_id"])}
-        else:
-            result = {"book": surface.venue.order_book(args["token_id"],
-                                                        args.get("depth", 10))}
-    except Exception:  # noqa: BLE001 - a read failure is a fact, not a crash
-        return _refused(rt, action_id, handle, tool_id, "polymarket read unavailable")
+    method, call = _read_call(tool_id, args)
+    cached = _tick_answer(rt, method, call)
+    if cached is not None:
+        # No request: the tick already holds the answer to this very request.
+        result = _read_result(tool_id, cached)
+        rt.ledger.append({"kind": "polymarket.read_answered", "handle": handle,
+                          "assembly_id": action_id, "tool": tool_id, "ts": rt.clock.now_ns})
+    else:
+        refusal = _read_refusal(rt, action_id)
+        if refusal is not None:
+            return _refused(rt, action_id, handle, tool_id, refusal)
+        before = _requests_sent(surface)
+        dispatched = surface.venue.dispatched
+        try:
+            result = _read_result(tool_id, getattr(surface.venue, method)(*call))
+        except Exception:  # noqa: BLE001 - a read failure is a fact, not a crash
+            return _refused(rt, action_id, handle, tool_id, "polymarket read unavailable")
+        finally:
+            _charge_read(rt, surface, action_id, before, dispatched)
     protect(rt, result)
     result["as_of_ns"] = rt.clock.now_ns
     rt.ledger.append({"kind": "polymarket.read", "handle": handle, "assembly_id": action_id,
                       "tool": tool_id, "ts": rt.clock.now_ns})
     return result
+
+
+# --- the read limit: Polymarket's published rate limits, shared by slot -------------------
+
+READ_REFUSAL = "polymarket read share spent"
+#: The span a seat's Polymarket read share is counted over: any sliding minute.
+READ_WINDOW_NS = 60_000_000_000
+
+
+def read_share(spec: Any, readers: int) -> int:
+    """A reader slot's Polymarket requests per sliding minute: the budget less the
+    kernel's reserve, over the reader slots. A manifest constant."""
+    return (spec.read_requests_per_minute - spec.kernel_reserve_per_minute) // max(1, readers)
+
+
+def _read_call(tool_id: str, args: dict) -> tuple[str, tuple]:
+    if tool_id == "polymarket.search":
+        return "search_markets", (args["query"].strip(), args.get("limit", 5))
+    if tool_id == "polymarket.market":
+        return "market", (args["market_id"],)
+    return "order_book", (args["token_id"], args.get("depth", 10))
+
+
+def _read_result(tool_id: str, value: Any) -> dict[str, Any]:
+    from copy import deepcopy
+
+    key = {"polymarket.search": "markets", "polymarket.market": "market"}.get(tool_id, "book")
+    return {key: deepcopy(value)}
+
+
+def _read_used(rt: Any, seat: str) -> int:
+    """The Polymarket requests this seat's reads sent in the sliding minute ending now."""
+    since = rt.clock.now_ns - READ_WINDOW_NS
+    uses = rt.polymarket_read_use
+    kept = [row for row in uses.get(seat, ()) if row[0] > since]
+    if kept:
+        uses[seat] = kept
+    else:
+        uses.pop(seat, None)
+    return sum(requests for _ts, requests in kept)
+
+
+def _read_refusal(rt: Any, seat: str) -> str | None:
+    """Refuse a read the seat's own share cannot cover, before anything is sent.
+
+    Guarantees: the share is a manifest constant, the seat's own reads alone count
+    against it (AGENTS.md rule 4), and the kernel's reserve is never a seat's.
+    """
+    from factorylab.world.polymarket import SEAT_READ_REQUESTS
+
+    share = read_share(rt.m.polymarket, rt.m.exchange.max_readers)
+    used = _read_used(rt, seat)
+    if used + SEAT_READ_REQUESTS > share:
+        return (f"{READ_REFUSAL}: {used} of {share} requests in the last 60 s; "
+                f"this read sends {SEAT_READ_REQUESTS}")
+    return None
+
+
+def _requests_sent(surface: Any) -> int | None:
+    """The live reader's journaled count of requests sent, or None for the simulation."""
+    if not hasattr(surface.venue, "requests_sent"):
+        return None
+    try:
+        sent = surface.venue.requests_sent()
+    except Exception:  # noqa: BLE001 - a counter read never fails the seat's call
+        return None
+    return sent if type(sent) is int else None
+
+
+def _charge_read(rt: Any, surface: Any, seat: str, before: int | None,
+                 dispatched: int) -> None:
+    """Charge every request the read sent; the simulation, one when it was dispatched."""
+    from factorylab.world.polymarket import SEAT_READ_REQUESTS
+
+    after = _requests_sent(surface)
+    if before is not None and after is not None and after >= before:
+        sent = after - before
+    elif surface.venue.dispatched == dispatched:
+        sent = 0
+    else:
+        sent = SEAT_READ_REQUESTS
+    if sent:
+        _read_used(rt, seat)
+        rt.polymarket_read_use.setdefault(seat, []).append([rt.clock.now_ns, sent])
+
+
+def _tick_key(rt: Any) -> tuple | None:
+    """The tick and the Polymarket writes that can move an answer (net of drains)."""
+    writes = getattr(rt.ledger, "writes", None)
+    if type(writes) is not dict:
+        return None
+    drains = getattr(rt, "_polymarket_drains", 0)
+    return (rt.ticks_consumed, writes.get("polymarket", 0) - drains)
+
+
+def _answer_key(method: str, call: tuple) -> str:
+    return json.dumps([method, list(call)], sort_keys=True, default=str)
+
+
+def observe_answer(rt: Any, method: str, args: tuple, kwargs: dict, result: Any) -> None:
+    """Keep the tick's first answer to each Polymarket read, the kernel's own included.
+
+    Fed the journal's own result, so a replay keeps what the recording kept.
+    """
+    from copy import deepcopy
+
+    if method == "drain_events":
+        rt._polymarket_drains = getattr(rt, "_polymarket_drains", 0) + 1
+        return
+    if method not in ("search_markets", "market", "order_book") or kwargs:
+        return
+    key = _tick_key(rt)
+    if key is None:
+        return
+    cache = getattr(rt, "_polymarket_tick_reads", None)
+    if cache is None or cache["key"] != key:
+        cache = rt._polymarket_tick_reads = {"key": key, "answers": {}}
+    cache["answers"].setdefault(_answer_key(method, args), deepcopy(result))
+
+
+def _tick_answer(rt: Any, method: str, call: tuple) -> Any:
+    cache = getattr(rt, "_polymarket_tick_reads", None)
+    key = _tick_key(rt)
+    if cache is None or key is None or cache["key"] != key:
+        return None
+    return cache["answers"].get(_answer_key(method, call))
 
 
 def check_args(schema: dict, args: Any) -> str | None:

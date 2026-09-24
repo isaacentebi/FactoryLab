@@ -1613,13 +1613,39 @@ venue's writes. The keys, all fixed for the world's life:
 | `max_open_usd` | `"100"` | the most the pot may have committed: tokens held at cost plus resting buys |
 | `max_orders_per_window` | `20` | orders placed per reserve window |
 | `seed` | `0` | the simulated venue's seed |
+| `read_requests_per_minute` | `180` | the Polymarket requests the world's reads may send per sliding minute, all together; at most `1800`, Polymarket's tightest published limit a minute |
+| `kernel_reserve_per_minute` | `60` | of those, held back for the kernel's own settlement and marking reads; at least 1, below `read_requests_per_minute` |
 
 Tools: `polymarket.search {query, limit?}`, `polymarket.market {market_id}` and
 `polymarket.book {token_id, depth?}` are free reads (a public market read pays no one;
 `read_price_usd` was removed in Wave 11 and is refused). Gamma answers through a shared
 cache (`max-age=300`) that served a resolved market as still open (read 2026-09-23), so
 every Gamma read carries a fresh query value (`_`) and returns the origin's state at the
-read; the CLOB is not cached. Their answers
+read; the CLOB is not cached. **The reads are bounded by Polymarket's published rate
+limits**, a limit and never a price. Polymarket publishes ("Rate Limits",
+docs.polymarket.com, read 2026-09-24), over sliding 10 s windows and throttled when
+exceeded: Gamma general 4,000 requests, `/events` 500, `/markets` 300,
+`/public-search` 350; CLOB general 9,000, `/book` 1,500, `/books` 500, `/price` 1,500,
+`/midpoint` 1,500. The reads here reach `/public-search`, `/markets` and `/book`, so the
+tightest endpoint a request can land on is `/markets`: 1,800 a minute, the load-time
+ceiling on `read_requests_per_minute`. The default, 180, is 10% of it, since the IP may
+be shared; 60 of those are held back for the kernel's own settlement and marking
+reads (`event_facts`, `mark`), which no seat can spend. The rest is divided over the
+venue read slots (`[venue] max_readers`, the same slots the venue reads use): each
+slot has a fixed share of `(read_requests_per_minute - kernel_reserve_per_minute) //
+max_readers` requests, 7 at the defaults, over any sliding 60 s of world time. Every
+read tool sends one GET, once; a read the seat's remaining share cannot cover is
+refused before it is sent (`polymarket read share spent: <used> of <share> requests
+in the last 60 s; this read sends 1`), and every request the live reader actually
+sent is charged (`PolymarketReader.requests_sent`, journaled read-only). The
+simulated venue, in `fake` and in a rehearsal's `simulate_reads`, is charged one
+request per read that reached it, so a rehearsal binds the same way. A seat without
+a venue read slot does not hold the Polymarket reads. Within one world tick, until
+a Polymarket write, a read identical to one already answered in that tick (the
+kernel's own `order_book` read included) is answered from that answer and charges
+nothing (`polymarket.read_answered`). A world whose per-slot share cannot cover one
+read is refused at load. Each read tool's description states these limits. Their
+answers
 carry text third parties wrote (questions, rules, slugs, resolution sources), so they are
 outside text exactly as a `connector.fetch` body is: prose of at least
 `MIN_PROTECTED_BODY_CHARS` is protected, and a round that read them runs population,
@@ -1892,7 +1918,14 @@ when no checkpoint names it, otherwise at the first boundary after a later
 checkpoint, so at most one more per seat is held a window longer); and every
 outcome body and archived rationale, retained for the world's life and growing
 with decisions, on the order of 0.5 KiB per outcome addressed to a seat (an inbox
-body with its evidence pointer and what the seat said). Writing a new head
+body with its evidence pointer and what the seat said). A retirement releases the
+retired seat's head and a retired program's private state the same way, since
+retirement is final and nothing revives a retired seat, so **retained private state
+is bounded by the live seats times the per-seat cap** (a head and a private state,
+64 KiB each), and the live seats are bounded by the money, since every seat exists
+on an endowment; a retired seat's outcome bodies and archived rationales are the
+world's record and stay. A retired id registered again as its next version starts
+with no head. Writing a new head
 releases the superseded one's reference (`artifact.released`), and `artifact.get`
 answers `artifact_released` for it to the seat that released it (for its last
 eight releases) and `artifact_private` to every other reader. The world block's

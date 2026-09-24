@@ -53,7 +53,12 @@ moves; essay II.II.b casts a scarce resource as a hard limit or prices it throug
 the charter's λ on reward, II.IV.a). The hard limit above is the cast, and it bounds
 the whole of what a seat retains, not each version: a new head releases the
 superseded one's reference, whose bytes are collected once no durable checkpoint
-names them (``ArtifactStore.release``). The size of every head is ledgered on its
+names them (``ArtifactStore.release``), and a retirement releases the retired seat's
+head the same way (``WorkingState.retire``), since nothing revives a retired seat.
+Retained private state is therefore bounded by the live seats times the per-seat
+cap (a head and, for a program seat, a private state, 64 KiB each), and the live
+seats are bounded by the money: every seat exists on an endowment. The size of
+every head is ledgered on its
 ``state.put`` item, and the archive's size at every boundary on
 ``artifact.retained``, so the charter can price retained state if the population
 proposes to.
@@ -193,6 +198,19 @@ class WorkingState:
             # bytes are collected once no durable checkpoint names them.
             self.artifacts.release(previous["sha"], owner=seat, kind=kind)
         return successor
+
+    def retire(self, seat: str) -> None:
+        """Release a retired seat's head: retirement is final, so nobody can reach it.
+
+        Guarantees: the head's reference is released through the archive's journaled
+        release (ledgered before the index changes, and collected once no checkpoint
+        names it), then the seat holds no head. A seat with no head changes nothing.
+        """
+        head = self.heads.get(seat)
+        if head is None:
+            return
+        self.artifacts.release(head["sha"], owner=seat, kind="working.state")
+        del self.heads[seat]
 
     def render(self, seat: str) -> dict[str, Any] | None:
         """The head as the seat is shown it: ``{sha, bytes, loaded, state}``, verbatim.

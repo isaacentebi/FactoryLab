@@ -312,6 +312,23 @@ def http_get_json(url: str, *, timeout_s: int = HTTP_TIMEOUT_S) -> Any:
         raise PolymarketUnavailable("response is not JSON") from None
 
 
+#: Polymarket's published API rate limits ("Rate Limits", docs.polymarket.com,
+#: read 2026-09-24): Gamma general 4,000 requests / 10 s, /events 500, /markets 300,
+#: /public-search 350; CLOB general 9,000, /book 1,500, /books 500, /price 1,500,
+#: /midpoint 1,500, each over a sliding 10 s window, throttled when exceeded. The
+#: reads here reach /public-search, /markets and /book, so the tightest endpoint a
+#: request can land on is Gamma /markets: 300 per 10 s, 1,800 a minute.
+PUBLISHED_REQUESTS_PER_MINUTE = 1_800
+#: What the world's Polymarket reads may use by default, all together: 10% of the
+#: tightest published limit, a conservative fraction, since the IP may be shared.
+DEFAULT_READ_REQUESTS_PER_MINUTE = 180
+#: Of that, held back for the kernel's own settlement and marking reads, which no
+#: seat can spend.
+DEFAULT_KERNEL_RESERVE_PER_MINUTE = 60
+#: Requests one seat read sends: every Polymarket read tool is one GET, sent once.
+SEAT_READ_REQUESTS = 1
+
+
 @dataclass
 class PolymarketReader:
     """The public, credential-free read surface. Guarantees no call signs or moves funds.
@@ -341,10 +358,17 @@ class PolymarketReader:
     def _gamma(self, path: str, **params: Any) -> Any:
         fresh = {k: v for k, v in params.items() if v is not None}
         fresh[self.CACHE_KEY] = self.nonce()
+        self.sent = getattr(self, "sent", 0) + 1  # counted before it is sent
         return self.get(f"{self.gamma_url}{path}?{parse.urlencode(fresh)}")
 
     def _clob(self, path: str, **params: Any) -> Any:
+        self.sent = getattr(self, "sent", 0) + 1
         return self.get(f"{self.clob_url}{path}?{parse.urlencode(params)}")
+
+    def requests_sent(self) -> int:
+        """Guarantees the count of every request this reader has sent, monotone. A read
+        of its own counter, journaled read-only, so a replay charges what was sent."""
+        return getattr(self, "sent", 0)
 
     def search_markets(self, query: str, limit: int) -> list[dict[str, Any]]:
         """Markets matching ``query`` through Gamma's public search, best ranked first."""

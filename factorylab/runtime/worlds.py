@@ -239,10 +239,25 @@ class PolymarketSpec:
     max_open_micro: int = 100_000_000
     max_orders_per_window: int = 20
     seed: int = 0
+    # The world's Polymarket read requests per sliding minute, and the part of them
+    # held back for the kernel's own settlement and marking reads. A limit taken from
+    # Polymarket's published rate limits (world/polymarket.py), never a price.
+    read_requests_per_minute: int = 180
+    kernel_reserve_per_minute: int = 60
 
     def __post_init__(self):
+        from factorylab.world.polymarket import PUBLISHED_REQUESTS_PER_MINUTE
+
         if type(self.enabled) is not bool:
             raise ValueError("polymarket.enabled must be true or false")
+        budget, reserve = self.read_requests_per_minute, self.kernel_reserve_per_minute
+        if type(budget) is not int or not 1 <= budget <= PUBLISHED_REQUESTS_PER_MINUTE:
+            raise ValueError("polymarket.read_requests_per_minute must be an integer in "
+                             f"[1, {PUBLISHED_REQUESTS_PER_MINUTE}], Polymarket's "
+                             "tightest published limit a minute")
+        if type(reserve) is not int or not 1 <= reserve < budget:
+            raise ValueError("polymarket.kernel_reserve_per_minute must be an integer "
+                             "of at least 1 below polymarket.read_requests_per_minute")
         if self.venue not in ("fake", "live"):
             raise ValueError("polymarket.venue must be fake or live")
         for name in ("collateral_micro", "max_order_micro",
@@ -967,6 +982,15 @@ class WorldManifest:
         if share < weight:
             return (f"each reader's venue read share, venue.public_read_weight_per_minute // "
                     f"venue.max_readers = {share}, cannot cover {heaviest} at {weight}")
+        if self.polymarket.enabled:
+            from factorylab.world.polymarket import SEAT_READ_REQUESTS
+
+            pm = self.polymarket
+            pm_share = (pm.read_requests_per_minute - pm.kernel_reserve_per_minute) // readers
+            if pm_share < SEAT_READ_REQUESTS:
+                return (f"each reader's polymarket read share, (read_requests_per_minute - "
+                        f"kernel_reserve_per_minute) // venue.max_readers = {pm_share}, "
+                        f"cannot cover one read of {SEAT_READ_REQUESTS} request")
         return None
 
     def validate(self) -> None:
@@ -1707,6 +1731,7 @@ def _manifest_polymarket(raw: Any) -> PolymarketSpec:
     if raw is None:
         return PolymarketSpec()
     keys = {"enabled", "venue", "collateral_usd", "max_order_usd",
+            "read_requests_per_minute", "kernel_reserve_per_minute",
             "max_open_usd", "max_orders_per_window", "seed"}
     if not isinstance(raw, dict) or set(raw) - keys:
         raise ValueError("unknown polymarket manifest key")
@@ -1728,6 +1753,10 @@ def _manifest_polymarket(raw: Any) -> PolymarketSpec:
         max_orders_per_window=raw.get("max_orders_per_window",
                                       default.max_orders_per_window),
         seed=raw.get("seed", default.seed),
+        read_requests_per_minute=raw.get("read_requests_per_minute",
+                                         default.read_requests_per_minute),
+        kernel_reserve_per_minute=raw.get("kernel_reserve_per_minute",
+                                          default.kernel_reserve_per_minute),
     )
 
 

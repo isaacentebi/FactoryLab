@@ -559,6 +559,7 @@ class Runtime(
         # The tick's venue answers are not in the checkpoint either: the replayed tail
         # starts with none, and so does the run that wrote it.
         self._tick_reads = None
+        self._polymarket_tick_reads = None
         self._account_memo = None
         self._peak_observed = None
         forget = getattr(self.treasury, "forget_observations", None)

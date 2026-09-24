@@ -351,3 +351,63 @@ def test_a_resume_seals_what_the_recorded_run_sealed_and_skips_collected_bytes(t
     assert store.collect() == [old]  # replayed: ledgered again, exactly as recorded
     assert [i["sha"] for i in _kinds(ledger, "artifact.collected")] == [old, old]
     assert new in store.index and store.get(new)
+
+
+def _register_program(rt, seat_id):
+    from factorylab.cortex.request import Return
+
+    handle = decision(rt)
+    rt._apply_registrations(handle, Return(handle, {"register": [{
+        "kind": "assembly", "id": seat_id, "model_id": "program", "accepts": ["Tick"],
+        "code": "print('{}')", "state_policy": "private"}]}, 0, "ok"))
+    assert seat_id in rt.assemblies, ledger_items(rt, "registration.rejected")
+    return handle
+
+
+def _private_bytes(rt):
+    """What the archive holds as somebody's private state: heads and program states."""
+    return sum(record["bytes"] for sha, record in rt.artifacts.index.items()
+               if rt.artifacts.references(sha, record)
+               and {ref.get("kind") for ref in rt.artifacts.references(sha, record).values()}
+               & {"working.state", "program.state"})
+
+
+def test_retiring_seats_releases_their_private_state_so_it_stays_bounded():
+    """Retirement is final, so a retired seat's head and program state reach no one and
+    are released: register, write both, retire, N times, and the private bytes the
+    archive holds stay within the live seats times the per-seat cap."""
+    rt = make_runtime()
+    rt._manage_reserve_window()
+    rt._snapshot("reserve_window")
+    blob = "x" * (HARD_STATE_BYTES - 64)
+    for n in range(8):
+        seat = f"prog-{n}"
+        _register_program(rt, seat)
+        rt.working_state.put(seat, {"n": n, "pad": blob}, handle=decision(rt, seat))
+        rt.assemblies[seat].state_sha = rt.artifacts.put(
+            canonical({"n": n, "pad": blob}), owner=seat, kind="program.state")
+        rt._retire_assembly(seat, f"vote-{n}")
+        assert rt.working_state.head(seat) is None and rt.assemblies[seat].state_sha is None
+        _boundary(rt)
+    live = len(rt._live_seats())
+    assert _private_bytes(rt) <= live * 2 * HARD_STATE_BYTES
+    assert _private_bytes(rt) < 2 * HARD_STATE_BYTES  # nothing of the retired seats
+    released = [i for i in ledger_items(rt, "artifact.released") if i["owner"] == "prog-0"]
+    assert {i["artifact_kind"] for i in released} == {"working.state", "program.state"}
+
+
+def test_a_retired_seat_s_record_to_the_world_is_still_readable():
+    """What a retired seat was told (its inbox bodies) and what it said (archived
+    rationales) are the world's record and are not released."""
+    rt = make_runtime()
+    rt._manage_reserve_window()
+    handle = decision(rt, "seed-observer")
+    rt.working_state.put("seed-observer", {"v": 1}, handle=handle)
+    item = rt.outcomes.append("seed-observer", handle=handle, outcome={"kind": "fill"},
+                              evidence="e-retired")
+    rt._retire_assembly("seed-observer", "vote-1")
+    for _ in range(3):
+        _boundary(rt)
+    assert rt.artifacts.get(item["sha"])
+    assert rt.outcomes.body(item["sha"])["outcome"] == {"kind": "fill"}
+    assert rt.working_state.head("seed-observer") is None
