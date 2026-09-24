@@ -17,9 +17,12 @@ books read them so that each dollar DigitalOcean took is booked exactly once:
   (a revision) books nothing, and a rise back to the mark books nothing again;
   only increments above the highest U seen this cycle are burn.
 * **A genuine new cycle** is a reading whose ``generated_at`` is in a later month
-  than the cycle's and whose U fell below the mark: the reset has been seen. A
-  later month with U not yet reset is still the old cycle, so a rollover that
-  lands in either order is read the same way.
+  than the cycle's and whose U fell below the previous reading's U: the counter
+  itself reset. A later month whose counter still shows the old figure (an invoice
+  that landed first, a revised month) is still the old cycle, so a rollover that
+  lands in either order is read the same way. A revision of the closed month's
+  figure after the month ended and before either step would read as the reset;
+  what it books early is returned as the new month's usage re-accrues past it.
 * **A rise in A is an invoice.** It settles the oldest closed cycle's booked usage
   first: what it covers was burn already; what it charges beyond that (usage
   after the last reading, tax) is burn; what it falls short by is credit applied
@@ -30,6 +33,13 @@ books read them so that each dollar DigitalOcean took is booked exactly once:
 
 One invoice per cycle is assumed. A charge and a payment landing between the same
 two readings net: the readings cannot tell them apart.
+
+A reading is booked only from the bound account while it is dedicated to this
+droplet (``dedicated``, checked with every reading). After any refused reading,
+what accrued between the last booked reading and the next accepted one is
+**unattributable**: the account paid for something else, or could not be seen to
+be this world's, somewhere in that gap. It is ledgered and counted apart from
+burn, never as burn.
 """
 
 from __future__ import annotations
@@ -68,6 +78,12 @@ def _month(generated_at: str) -> str:
     return _stamp(generated_at).strftime("%Y-%m")
 
 
+def dedicated(resources: dict[str, Any], droplet_id: int) -> bool:
+    """Whether the account pays for this droplet and nothing else DigitalOcean lists."""
+    return (resources.get("droplets") == [droplet_id] and resources.get("volumes") == 0
+            and resources.get("snapshots") == 0)
+
+
 def verify(client: Any, droplet_id: int) -> dict[str, Any]:
     """Establish that this process runs on a dedicated droplet; return the account identity.
 
@@ -89,8 +105,7 @@ def verify(client: Any, droplet_id: int) -> dict[str, Any]:
         raise HostingRefused(HostingRefused.UNVERIFIED, type(exc).__name__) from None
     if not identity["droplet_held"]:
         raise HostingRefused(HostingRefused.DROPLET_NOT_HELD)
-    if (resources["droplets"] != [droplet_id] or resources["volumes"]
-            or resources["snapshots"]):
+    if not dedicated(resources, droplet_id):
         raise HostingRefused(HostingRefused.NOT_DEDICATED,
                              f"droplets={len(resources['droplets'])}, "
                              f"volumes={resources['volumes']}, "
@@ -108,7 +123,8 @@ class HostingAccount:
     """
 
     FIELDS = ("bound", "last", "cycle", "mark", "invoiced", "pending", "endowment_micro",
-              "burned_micro", "credited_micro", "last_burn_micro", "unread")
+              "burned_micro", "credited_micro", "last_burn_micro", "unread",
+              "unattributed_micro", "rebase")
 
     def __init__(self, client: Any, *, droplet_id: int, identity: dict[str, Any]) -> None:
         if type(droplet_id) is not int or droplet_id <= 0:
@@ -127,6 +143,10 @@ class HostingAccount:
         self.credited_micro = 0
         self.last_burn_micro = 0
         self.unread: str | None = None       # why the last reading was not booked
+        # A reading was refused since the last booked one: the next accepted reading's
+        # burn is unattributable, and is counted here instead of as burn.
+        self.rebase = False
+        self.unattributed_micro = 0
 
     # ---- state
 
@@ -154,7 +174,8 @@ class HostingAccount:
         """What the books say the pot holds: endowment, plus credit, less burn."""
         if self.endowment_micro is None:
             return None
-        return self.endowment_micro + self.credited_micro - self.burned_micro
+        return (self.endowment_micro + self.credited_micro - self.burned_micro
+                - self.unattributed_micro)
 
     def view(self) -> dict[str, Any]:
         """The pot's public facts, and its reconciliation against its own counterparty."""
@@ -169,6 +190,7 @@ class HostingAccount:
             "generated_at": last.get("generated_at"),
             "endowment_micro": self.endowment_micro, "burned_micro": self.burned_micro,
             "credited_micro": self.credited_micro, "last_burn_micro": self.last_burn_micro,
+            "unattributed_micro": self.unattributed_micro,
             "unread": self.unread,
         }
 
@@ -190,10 +212,15 @@ class HostingAccount:
         if _stamp(read["generated_at"]) < _stamp(previous["generated_at"]):
             return {"effect": "stale"}
         burn, invoice_credit, outside_credit, rolled = 0, 0, 0, False
-        if _month(read["generated_at"]) > self.cycle and usage < self.mark:
-            # The reset has been seen in a later month: the cycle closed. What of its
-            # booked usage no invoice has settled yet waits for one; an invoice that
-            # already landed and fell short applied credit.
+        reset = usage < previous["month_to_date_usage_micro"]
+        if _month(read["generated_at"]) > self.cycle and reset:
+            # The counter itself went down in a later month: the reset has been seen,
+            # and the cycle closed. Measured against the last reading, never the mark:
+            # a month revised below its mark and invoiced before its reset still shows
+            # its own, lower, stale figure, and that is not the new month's usage
+            # (Codex on #147). What of the closed cycle's booked usage no invoice has
+            # settled yet waits for one; an invoice that already landed and fell short
+            # applied credit.
             rolled = True
             unsettled = self.mark - self.invoiced
             if self.invoiced and unsettled:
@@ -217,10 +244,15 @@ class HostingAccount:
         elif delta < 0:
             outside_credit += -delta
         self.last = dict(read)
+        unattributed = burn if self.rebase else 0
+        burn -= unattributed
+        self.rebase = False
         self.burned_micro += burn
+        self.unattributed_micro += unattributed
         self.credited_micro += invoice_credit + outside_credit
         self.last_burn_micro = burn
-        return {"effect": "observed", "burn_micro": burn, "invoice_credit_micro": invoice_credit,
+        return {"effect": "observed", "burn_micro": burn, "unattributed_micro": unattributed,
+                "invoice_credit_micro": invoice_credit,
                 "outside_credit_micro": outside_credit, "rolled_over": rolled,
                 "generated_at": read["generated_at"],
                 "previous_generated_at": previous["generated_at"],

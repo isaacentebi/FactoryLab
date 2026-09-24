@@ -252,7 +252,12 @@ def test_a_reading_from_another_account_is_refused_loudly_and_never_booked():
     assert w.hosting.burned_micro == 0 and w.wallet.pots()["hosting"] is None
     w.fake.user_uuid = w.hosting.bound["billing_uuid"]
     w.observe()
-    assert w.hosting.burned_micro == micro("41")   # measured from the bound account's reading
+    # Back on the bound account, the gap is unattributable: it was not seen to be this
+    # world's while it accrued, so it is counted apart and never as burn.
+    assert w.hosting.burned_micro == 0 and w.hosting.unattributed_micro == micro("41")
+    w.fake.bill("0.30")
+    w.observe()
+    assert w.hosting.burned_micro == micro("0.3")
     w.fake.droplets = []
     assert w.observe() is None
     assert items(w, "treasury.hosting_refused")[-1]["reason"] == HostingRefused.DROPLET_NOT_HELD
@@ -297,3 +302,81 @@ def test_the_token_never_reaches_the_ledger_even_when_an_error_echoes_it(monkeyp
     assert items(w, "treasury.hosting_unread")
     assert "b" * 64 not in str(w.records) and TOKEN not in str(w.records)
     assert "b" * 64 not in str(w.treasury.snapshot())
+
+
+def test_a_revised_month_invoiced_before_its_reset_does_not_open_the_new_cycle_early():
+    """Codex P1 on fd36f86: usage revised $5 -> $3, the invoice lands in the new month
+    while the counter still shows $3, then the counter resets. The stale $3 is not the
+    new month's usage, so nothing is booked for it, and the new month's usage is burn
+    from its first cent."""
+    w = world()
+    w.observe()
+    start = w.fake.taken
+    w.fake.bill("5.00")
+    w.observe()
+    w.fake.revise("2.00")
+    w.observe()
+    w.fake.invoice_before_reset()        # a later month; the counter still says $3
+    w.observe()
+    assert w.hosting.burned_micro == micro("5")   # the stale $3 is not new usage
+    w.fake.reset_after_invoice()
+    w.fake.bill("1.00")
+    w.observe()
+    assert w.hosting.burned_micro == micro("6")   # the new month's $1, booked at once
+    assert_books_are_digitaloceans(w, start)
+    w.fake.bill("3.00")
+    w.observe()
+    assert_books_are_digitaloceans(w, start)
+
+
+def test_a_revised_month_whose_counter_resets_before_its_invoice():
+    w = world()
+    w.observe()
+    start = w.fake.taken
+    w.fake.bill("5.00")
+    w.observe()
+    w.fake.revise("2.00")
+    w.observe()
+    w.fake.reset_usage()
+    w.fake.bill("0.40")
+    w.observe()
+    assert w.hosting.burned_micro == micro("5.4")
+    w.fake.land_invoice(tax="0.10")
+    w.observe()
+    assert_books_are_digitaloceans(w, start)
+
+
+@pytest.mark.parametrize(("change", "undo"), [
+    (lambda f: setattr(f, "snapshots", 1), lambda f: setattr(f, "snapshots", 0)),
+    (lambda f: setattr(f, "volumes", 2), lambda f: setattr(f, "volumes", 0)),
+    (lambda f: f.droplets.append(4242), lambda f: f.droplets.remove(4242)),
+])
+def test_an_account_that_stops_being_dedicated_books_nothing_until_it_is_again(change, undo):
+    """Codex P1 on fd36f86: dedication is checked with every reading, not once at launch.
+    While the account pays for anything else its account-wide figures are not this
+    world's burn; and what accrued across the gap is unattributable, never burn."""
+    w = world()
+    w.observe()
+    start = w.fake.taken
+    w.fake.bill("1.00")
+    w.observe()
+    change(w.fake)
+    w.fake.bill("7.00")                  # the other resource's charges, and the host's
+    assert w.observe() is None and w.observe() is None
+    refused = items(w, "treasury.hosting_refused")
+    assert [r["reason"] for r in refused] == [HostingRefused.NOT_DEDICATED]
+    assert w.hosting.burned_micro == micro("1") and w.wallet.pots()["hosting"] is None
+    undo(w.fake)
+    w.fake.bill("0.50")
+    w.observe()
+    assert w.hosting.burned_micro == micro("1")          # the gap is not burn
+    gap = items(w, "treasury.hosting_unattributed")
+    assert [r["micro"] for r in gap] == [micro("7.5")]
+    w.fake.bill("0.25")
+    w.observe()
+    assert w.hosting.burned_micro == micro("1.25")       # dedicated again: burn again
+    booked = w.hosting.burned_micro + w.hosting.unattributed_micro
+    assert booked - invoice_credits(w) == micro(w.fake.taken - start)
+    view = w.hosting.view()
+    assert view["books_micro"] == view["credit_micro"] and view["discrepancy_micro"] == 0
+    assert_wallet_untouched(w)

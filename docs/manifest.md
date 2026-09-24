@@ -1699,10 +1699,15 @@ The account the token reads is then the world's **bound identity**: `GET /v2/acc
 with the droplet id as the second anchor (docs.digitalocean.com/reference/api/reference/account/).
 It is checkpointed with the pot. A resume whose token reads another account refuses
 (`the billing account differs from the one this world is bound to`) when it restores the
-checkpoint. Every billing reading carries the identity too; a reading from another account,
-or one whose account no longer holds the droplet, is refused, ledgered as
-`treasury.hosting_refused` with its reason, and never booked, and the pot is unknown until a
-reading from the bound account arrives.
+checkpoint. Every billing reading carries the identity and the account's billable resources
+too, so dedication is checked with each reading, not once at launch. A reading from another
+account, from an account that no longer holds the droplet, or from an account that now also
+pays for another droplet, a volume or a snapshot, is refused, ledgered as
+`treasury.hosting_refused` with its reason, and never booked, and the pot is unknown until an
+accepted reading arrives. What accrued between the last booked reading and that next accepted
+one is **unattributable**: somewhere in the gap the account was not seen to be this world's
+alone. It is ledgered as `treasury.hosting_unattributed`, counted in the pot's
+`unattributed_micro`, and never booked as burn.
 
 **What DigitalOcean reports.** `GET /v2/customers/my/balance` returns
 `month_to_date_balance`, `account_balance` and `month_to_date_usage` as decimal strings and
@@ -1715,8 +1720,10 @@ string, is refused, as is a `generated_at` that is not a time. The pot's balance
 `-month_to_date_balance`: credit remaining, negative when the account owes.
 
 **Burn is observed, never computed.** `Treasury.observe_hosting` reads the account once a
-reserve window (journaled as `hosting.billing`), off the tick path, with one attempt and a
-five-second timeout: a slow DigitalOcean costs one bounded wait a window and never a retry,
+reserve window (journaled as `hosting.billing`: the account, the droplet, the droplet,
+volume and snapshot lists and the balance), off the tick path, with one attempt and a
+five-second timeout per request: a slow DigitalOcean costs a bounded wait a window (at most
+six requests) and never a retry,
 and a failed read leaves the pot unknown (`treasury.hosting_unread`) until the next window.
 The first reading is the endowment, `treasury.hosting_endowment`. After it, each reading is
 booked by `HostingAccount.observe` so that every dollar DigitalOcean took is booked once:
@@ -1724,9 +1731,13 @@ booked by `HostingAccount.observe` so that every dollar DigitalOcean took is boo
 - usage above the highest `month_to_date_usage` seen in the current billing cycle (the
   high-water mark) is burn. A fall within a cycle (a revision) books nothing, and a rise
   back to the mark books nothing again;
-- a new cycle begins at a reading in a later month whose usage fell below the mark: the
-  reset has been seen. A later month whose usage has not reset is still the old cycle, so a
-  rollover is read the same way whichever of its two steps lands first;
+- a new cycle begins at a reading in a later month whose usage fell below the previous
+  reading's: the counter itself reset. A later month whose counter still shows the old
+  figure (an invoice that landed first, a month revised below its mark) is still the old
+  cycle, so a rollover is read the same way whichever of its two steps lands first. A
+  revision of the closed month's figure after the month ended and before either step would
+  read as the reset; what that books early is returned as the new month's usage re-accrues
+  past it;
 - a rise in `account_balance` is an invoice. It settles the oldest closed cycle's booked
   usage: what it covers was burn already; what it charges beyond that (usage after the last
   reading, tax) is burn; what it falls short by is credit applied at invoice, ledgered as
@@ -1744,7 +1755,7 @@ is booked on a timer or from a price.
 
 **The pot is published, and reconciled against its own counterparty.** `Treasury.pots()`
 carries `hosting` (the balance DigitalOcean reports) and `hosting_detail`: the balance, the
-books (`endowment + credited - burned`), their `discrepancy_micro`, month-to-date usage,
+books (`endowment + credited - burned - unattributed`), their `discrepancy_micro`, month-to-date usage,
 `generated_at`, the endowment, the burned and credited totals, and `last_burn_micro`, the
 burn booked at the last reading (one reading a reserve window, so the burn of that window).
 It is never in `total_micro` or `complete`, which reconcile the pots that back the compute

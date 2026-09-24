@@ -491,12 +491,15 @@ class Treasury:
         hosting = self.hosting
         if hosting is None:
             return None
-        from factorylab.world.hosting import HostingRefused
+        from factorylab.world.hosting import HostingRefused, dedicated
 
         def unread(kind: str, reason: str) -> None:
             if hosting.unread != reason:
                 self._write(kind, reason=reason)
             hosting.unread = reason
+            if kind == "hosting_refused":
+                # What accrues until the next accepted reading is not attributable.
+                hosting.rebase = True
 
         try:
             reading = hosting.client.billing(hosting.droplet_id)
@@ -511,6 +514,12 @@ class Treasury:
             return None
         if not identity.get("droplet_held"):
             unread("hosting_refused", HostingRefused.DROPLET_NOT_HELD)
+            return None
+        if not dedicated(reading["resources"], hosting.droplet_id):
+            # Checked with every reading, not once at launch (Codex on #147): an
+            # account that also pays for another droplet, a volume or a snapshot
+            # reports that spending in the same balance and usage.
+            unread("hosting_refused", HostingRefused.NOT_DEDICATED)
             return None
         read = reading["balance"]
         effect = hosting.observe(read)
@@ -527,6 +536,11 @@ class Treasury:
             if effect["burn_micro"]:
                 self._write("hosting_burn", counterparty="digitalocean",
                             micro=effect["burn_micro"], **evidence)
+            if effect["unattributed_micro"]:
+                self._write("hosting_unattributed", counterparty="digitalocean",
+                            micro=effect["unattributed_micro"],
+                            reason="readings were refused since the last booked one",
+                            **evidence)
             for cause in ("invoice", "outside"):
                 micro = effect[f"{cause}_credit_micro"]
                 if micro:

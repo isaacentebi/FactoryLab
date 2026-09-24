@@ -278,12 +278,13 @@ class DigitalOceanClient:
                 "droplet_id": int(droplet_id), "droplet_held": held}
 
     def billing(self, droplet_id: int) -> dict[str, Any]:
-        """The account's identity and its balance, read together as one observation.
+        """The account's identity, its billable resources and its balance, as one read.
 
-        One call, so a journal records and replays the pair as one read: whether
-        a reading may be booked depends on both.
+        One call, so a journal records and replays them together: whether a
+        balance may be booked depends on the other two, read beside it.
         """
-        return {"identity": self.identity(droplet_id), "balance": self.balance()}
+        return {"identity": self.identity(droplet_id), "resources": self.resources(),
+                "balance": self.balance()}
 
     def droplet(self, droplet_id: int) -> dict[str, Any]:
         """One droplet's size, state and price as DigitalOcean reports them."""
