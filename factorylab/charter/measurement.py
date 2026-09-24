@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from statistics import fmean, median, pstdev
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 
 from factorylab.charter.charter import MetricCard
 
@@ -16,8 +17,9 @@ RETURN_OBSERVATIONS = frozenset({
 })
 #: The context-size observations (essay II.IV.a): each a mean, per invocation, of one
 #: ledgered prompt byte count carried on the invocation's own sample row.
-PROMPT_OBSERVATIONS = {"prompt_bytes": "prompt_bytes", "you_bytes": "you_bytes",
-                       "inputs_bytes": "inputs_bytes"}
+#: Read-only: no global mutable state (AGENTS.md).
+PROMPT_OBSERVATIONS: Mapping[str, str] = MappingProxyType({
+    "prompt_bytes": "prompt_bytes", "you_bytes": "you_bytes", "inputs_bytes": "inputs_bytes"})
 #: What a return's readers were rendered: reading rows filed under the return's author
 #: in the window the reading was metered, over that scope's responses there.
 READ_OBSERVATION = "downstream_read_bytes"
@@ -76,30 +78,37 @@ def fresh_sample(card: MetricCard, samples: CardSamples, window) -> bool:
         rows = samples.forecasts
     else:
         return True
-    if observation == READ_OBSERVATION:
-        return _fresh_reading(card, samples, _selected(observation, rows), window)
+    if observation in PROMPT_OBSERVATIONS or observation == READ_OBSERVATION:
+        return _fresh_context(card, samples, observation, _selected(observation, rows),
+                              window)
     rows = [row for row in _selected(observation, rows) if row["window"] == window.index]
     return bool(_groups(card, rows))
 
 
-def _fresh_reading(card: MetricCard, samples: CardSamples, rows: list[dict], window) -> bool:
-    """Whether the closed window added a row the card's current selection actually reads.
+def _fresh_context(card: MetricCard, samples: CardSamples, observation: str,
+                   rows: list[dict], window) -> bool:
+    """Whether the closed window added a row that ``measure_card`` now measures.
 
-    A reading metered after its author's latest response is retained (a later
-    horizon may span it) but no current horizon selects it, so the measurement
-    has not moved and counting it as evidence would integrate the same value
-    twice (time audit T2). It becomes new evidence when a selection reads it:
-    inside a full returns horizon, or, over closed windows, beside a response of
-    its scope in the selected windows.
+    Guarantees freshness admits exactly the rows measurement does (time audit
+    T2): the same ``_selected`` rows (a prompt-size row only if it carries that
+    observation's byte field), grouped by the same scope, cut to the same full
+    returns horizon or to the same selected closed windows, in a scope that is
+    measured at all. A row outside that selection moves no measurement, and
+    calling it new evidence would let the controller integrate the unchanged
+    value twice. So a reading metered after its author's latest response is
+    retained (a later horizon may span it) but is not fresh until a horizon
+    selects it.
     """
+    if card.window.kind == "windows" and len(samples.windows) < card.window.n:
+        return False  # the card measures nothing until its windows are closed
     selected = {record["index"] for record in samples.windows[-card.window.n:]}
     for group in _groups(card, rows).values():
         if card.window.kind == "returns":
-            group = _horizon(READ_OBSERVATION, group, card.window.n) or []
+            group = _horizon(observation, group, card.window.n) or []
         else:
             group = [row for row in group if row["window"] in selected]
             if all(row.get("reading") for row in group):
-                continue  # no response to divide by: the scope is not measured
+                continue  # no response to measure over: the scope has no value
         if any(row["window"] == window.index for row in group):
             return True
     return False
@@ -386,7 +395,21 @@ class CardSamples:
             self.windows.append(record)
 
     def prune(self, cards, *, pending_handles=frozenset()) -> None:
-        """Retain only the sample horizons still required by cards or outstanding policy votes."""
+        """Retain only the sample horizons still required by cards or outstanding policy votes.
+
+        Guarantees a reading row survives exactly as long as some returns horizon,
+        present or future, can still select it, and no longer. The bound follows
+        from the horizon's definition: a card's horizon is its scope's latest ``n``
+        responses, so its first response only ever moves forward, and it selects
+        the readings metered from that first response's window on. A reading metered
+        at or after the window of the current horizon's first response is kept:
+        it lies in today's horizon, or after the latest response and so inside the
+        next horizon if the scope responds again. One metered before that window
+        can never be selected again, and is dropped. What is kept per scope is
+        therefore at most the readings metered since its ``n``-th latest response;
+        a scope with no response retained keeps only what the retained-window floor
+        keeps of every row.
+        """
         cards = tuple(cards)
         windows_n = max((c.window.n for c in cards if c.window.kind == "windows"), default=1)
         self.windows[:] = self.windows[-windows_n:] if windows_n else []
@@ -408,16 +431,7 @@ class CardSamples:
                 row["handle"] in pending_handles or id(row) in keep
                 or (first_window is not None and row["window"] >= first_window)
             )]
-        # A reading row is kept while any horizon, present or future, can still select
-        # it. A returns horizon is a scope's latest n responses, so it only moves
-        # forward, and it selects the readings metered from its first response's
-        # window on. A reading metered after the scope's latest response is outside
-        # today's horizon but inside the next one if the scope responds again, so
-        # it is kept; one metered before the current horizon's first response can
-        # never be selected again, so it goes. That bounds what is kept per scope:
-        # the readings metered since its n-th latest response. A scope with no
-        # response retained is held by the retained-window floor alone, like
-        # every other row.
+        # Readings: kept from the window of each horizon's first response on (above).
         keep = set()
         rows = _selected(READ_OBSERVATION, _rows(self, "returns", READ_OBSERVATION))
         for card in cards:

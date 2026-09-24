@@ -379,6 +379,36 @@ def test_a_reading_no_current_horizon_selects_is_not_new_evidence_until_one_does
     assert fresh_sample(whole, samples, MeasureWindow(6, 1))
 
 
+def test_the_prompt_field_map_is_not_global_mutable_state():
+    # PR #143 review (P1): AGENTS.md forbids global mutable state.
+    from factorylab.charter import measurement
+
+    with pytest.raises(TypeError):
+        measurement.PROMPT_OBSERVATIONS["prompt_bytes"] = "you_bytes"
+    assert measurement.PROMPT_OBSERVATIONS["prompt_bytes"] == "prompt_bytes"
+
+
+@pytest.mark.parametrize("observation", CONTEXT)
+def test_freshness_admits_exactly_the_rows_measurement_measures(observation):
+    # PR #143 review: a row is new evidence for a context card only if measure_card
+    # now measures it. A horizon of two that holds one measured response measures
+    # nothing, so that response moves no price yet; the second one does.
+    samples = CardSamples()
+    card = _card(observation, n=2, per="assembly")
+    samples.returned(handle="a1", assembly="a", role="producer", window=1,
+                     ret=_ret("a1", total=10, you=1, inputs=1))
+    assert measure_card(card, samples) == {}
+    assert not fresh_sample(card, samples, MeasureWindow(1, 1))
+    samples.returned(handle="a2", assembly="a", role="producer", window=2,
+                     ret=_ret("a2", total=10, you=1, inputs=1))
+    assert measure_card(card, samples) and fresh_sample(card, samples, MeasureWindow(2, 1))
+    # Over closed windows: nothing is measured until n windows have closed.
+    whole = _card(observation, kind="windows", n=2, per="assembly")
+    samples.closed(MeasureWindow(2, 1))
+    assert measure_card(whole, samples) == {}
+    assert not fresh_sample(whole, samples, MeasureWindow(2, 1))
+
+
 def test_a_registered_observation_measures_a_scope_whose_only_row_is_a_reading():
     # PR #143 review: a scoped registered observation over windows iterated only the
     # scopes with returns or forecasts, so an author read in the selected windows
