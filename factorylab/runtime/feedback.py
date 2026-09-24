@@ -570,6 +570,19 @@ class FeedbackMixin:
         self._deliver_verdict_to_inbox(about, score, judge_handle=by)
         return True
 
+    def _carried_decline(self, handle: str) -> str | None:
+        """The reason a still-open decision's seat declined it, or None.
+
+        Guarantees every open decision that answered ``status: cannot`` and waits on
+        a grade is found, whichever channel it waits on: a verdict-channel return
+        (routed or requested) in ``pending``, an Exposure in ``declined_exposures``.
+        Every other decline settles when it is answered and is never open.
+        """
+        pend = self.pending.get(handle)
+        if pend is not None and pend.declined is not None:
+            return pend.declined
+        return self.declined_exposures.get(handle)
+
     def _settle_declined(self, handle: str, channel: str, reason: str) -> bool:
         """Close one declined commission with no score, no price and no standing.
 

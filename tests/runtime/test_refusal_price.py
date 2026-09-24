@@ -270,6 +270,46 @@ def test_an_ungraded_refusal_on_any_producing_channel_settles_declined_at_the_pr
     assert priced["reward"] <= noop_reward
 
 
+@pytest.mark.parametrize(("seat", "channel"), [("seed-decider", "verdict"),
+                                             ("antagonist-a", "exposure")])
+def test_a_refusal_cut_off_before_its_settlement_check_still_settles_declined(
+        monkeypatch, seat, channel):
+    """The cutoff is the other door: a refusal the queue cuts off before any settlement
+    check reads it settles declined there, never timed out at the unpriced neutral."""
+    rt = _priced_runtime(monkeypatch)
+    _commitments(rt, "eval-a", censored=4)
+    rt._close_price_window()
+    state, handle = _drawn(rt, seat, channel)
+    rt.n += 1
+    rt._producer_step(
+        Event(f"tick-{rt.n}", EventKind.TICK, rt.clock.now_ns, {"index": 0}, "test"),
+        handle, SimpleNamespace(chosen=seat), rt.queue.get(handle).deadline_ns)
+    assert _rows(rt, "invocation", handle=handle)[0]["status"] == "refused"
+    # Force the cutoff one tick out, well before the verdict timeout any settlement
+    # check waits for, and reach it.
+    rt.decision_ticks[handle] = [rt.ticks_consumed, rt.ticks_consumed + 1]
+    rt.ticks_consumed += 1
+    assert rt.ticks_consumed <= rt.ev.verdict_timeout_ticks
+    rt._settle_exposures()
+    rt._censor_stale_judgements()
+    assert rt.queue.get(handle).status is SettleStatus.PENDING  # no check has read it
+    assert handle not in rt.queue.expire_due()
+    (settled,) = rt.queue.history(handle)
+    assert settled.status is SettleStatus.INAPPLICABLE
+    assert settled.definition_version == DECLINED_DEFINITION
+    rt._deliver_returns()
+    (priced,) = _rows(rt, "router.decline_priced", handle=handle)
+    assert priced["penalty"] > 0
+    assert priced["reward"] == pytest.approx(state.neutral() - priced["penalty"])
+    # The settlement checks that come later find it closed and change nothing.
+    rt.ticks_consumed += rt.ev.verdict_timeout_ticks + 1
+    rt._settle_exposures()
+    rt._censor_stale_judgements()
+    rt._deliver_returns()
+    assert len(rt.queue.history(handle)) == 1
+    assert len(_rows(rt, "router.decline_priced", handle=handle)) == 1
+
+
 # --- a judge, a meta and a counter-judge decline their commissions ---------------------
 
 
