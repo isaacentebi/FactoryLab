@@ -278,6 +278,10 @@ class PendingJudgement:
     verdicts: list = field(default_factory=list)
     credit: float | None = None
     credit_closed: bool = False
+    # A producer decision whose seat answered ``{"status": "cannot", "reason": ...}``:
+    # the reason it gave. A judgement checkpointed before this field restores as an
+    # ordinary one.
+    declined: str | None = None
 
     @property
     def evaluation(self) -> bool:
@@ -568,19 +572,41 @@ class FeedbackMixin:
         self._deliver_verdict_to_inbox(about, score, judge_handle=by)
         return True
 
-    def _settle_declined(self, handle: str, channel: str, reason: str) -> bool:
+    def _carried_decline(self, handle: str) -> str | None:
+        """The reason a still-open decision's seat declined it, or None.
+
+        Guarantees every open decision that answered ``status: cannot`` and waits on
+        a grade is found, whichever channel it waits on: a verdict-channel return
+        (routed or requested) in ``pending``, an Exposure in ``declined_exposures``.
+        Every other decline settles when it is answered and is never open.
+        """
+        pend = self.pending.get(handle)
+        if pend is not None and pend.declined is not None:
+            return pend.declined
+        return self.declined_exposures.get(handle)
+
+    def _settle_declined(self, handle: str, reason: str) -> bool:
         """Close one declined commission with no score, no price and no standing.
 
-        A seat may decline paid judging work (§6.B): the call it made is its only
-        cost. Declining is the seat's own choice, never a list the kernel keeps of
-        what may be judged (evaluations S1). Nothing enters a standing, nothing
+        A seat may decline paid judging work (§6.B), and a producer may decline the
+        event it was woken for when no judge grades its refusal: the call it made is
+        its only money cost, and its learners price the decline as an abstention
+        (``_learn_router_return``, ``_close_assembly_round``). Declining is the
+        seat's own choice, never a list the kernel keeps of what may be judged
+        (evaluations S1). Nothing enters a standing, nothing
         enters a base rate, no card is blamed, and no money moves.
+
+        Guarantees the settlement addresses the decision's own channel as the
+        contract queue reports it: the kind a polymorphic decision selected (in a
+        tool round, before it declined) when it selected one, so no caller can name
+        a channel the queue refuses and abort the world.
         """
         definition = DECLINED_DEFINITION
         try:
-            status = self.queue.get(handle).status
+            decision = self.queue.get(handle)
         except KeyError:
             return False
+        status, channel = decision.status, decision.channel
         if status not in (SettleStatus.PENDING, SettleStatus.TIMED_OUT):
             return False
         self.ledger.append({"kind": "evaluation.declined", "handle": handle,
@@ -1515,7 +1541,7 @@ class FeedbackMixin:
         miss elsewhere (II.III.b: the adversarial layer farms realized consequence;
         evaluations S4 removed the fixed endorsement threshold). A return no judge
         was scored on settles censored once no judge is still waiting on it and its
-        verdict window has passed.
+        verdict window has passed, or declined when its seat answered ``cannot``.
         """
         timeout = self.ev.verdict_timeout_ticks
         for handle, opened in list(self.pending_exposure.items()):
@@ -1526,8 +1552,16 @@ class FeedbackMixin:
                 continue
             del self.pending_exposure[handle]
             self.exposure_scores.pop(handle, None)
+            declined = self.declined_exposures.pop(handle, None)
             if self.queue.get(handle).status not in (SettleStatus.PENDING,
                                                      SettleStatus.TIMED_OUT):
+                continue
+            if not scores and declined is not None:
+                # A refusal no judge was scored on is an abstention, priced as one
+                # (ruling R9), never censored at a free neutral.
+                self.ledger.append({"kind": "exposure.settled", "handle": handle,
+                                    "score": None, "declined": True, "ts": self.clock.now_ns})
+                self._settle_declined(handle, declined)
                 continue
             if not scores:
                 self.ledger.append({"kind": "exposure.settled", "handle": handle,
@@ -1710,7 +1744,9 @@ class FeedbackMixin:
     def _censor_stale_judgements(self) -> None:
         """A decision nobody judged within the verdict timeout settles censored.
 
-        Evaluator decisions are not here: they close on their own two signals
+        A refusal nobody judged settles declined instead (``_settle_declined``), so
+        its learners credit it as an abstention, less its role's price. Evaluator
+        decisions are not here: they close on their own two signals
         (``_settle_evaluations``).
         """
         # A requested child is not stale while it waits for its requester: it
@@ -1722,7 +1758,16 @@ class FeedbackMixin:
             and self._tick_age(p) > self.ev.verdict_timeout_ticks
         ]
         for p in stale:
-            if self.queue.get(p.handle).status is SettleStatus.PENDING:
+            if p.declined is not None:
+                # A refusal no judge graded is a seat choosing to do nothing with the
+                # work it was woken for: it settles as a declined commission, so its
+                # learners are credited as an abstention is, at the zero-consequence
+                # reward less the charter price of its role (ruling R9). Censored, it
+                # was credited that reward unpriced, and declining escaped the price
+                # a NOOP draw and a judged hold both bear (essay II.I.a: selection
+                # moves share only where abstaining is not free).
+                self._settle_declined(p.handle, p.declined)
+            elif self.queue.get(p.handle).status is SettleStatus.PENDING:
                 self.queue.settle(
                     p.handle,
                     channel=p.channel,
@@ -1763,7 +1808,7 @@ class FeedbackMixin:
         the actor declared. A decision with no observed score (censored,
         inapplicable, or past its cutoff) is credited zero consequence, never the
         action's own long-run mean (time audit T4), less the price its settlement
-        carries, as the router's are.
+        carries, as the router's are; a declined one is credited as an abstention.
         """
         assembly_id = self.assembly_rounds.pop(handle, None)
         if assembly_id is None:
@@ -1773,7 +1818,12 @@ class FeedbackMixin:
             return
         declared = self.queue.declared_propensity(handle)
         imputed = reward is None
-        if declared is not None and reward is None:
+        if (declared is not None and reward is None and priced is not None
+                and priced.definition_version == DECLINED_DEFINITION):
+            # Declining is priced for the seat's own learner as for its router
+            # (``_learn_router_return``): an abstention's credit, never a free neutral.
+            reward, _penalty = self._priced_abstention(handle, NEUTRAL_REWARD)
+        elif declared is not None and reward is None:
             reward = _priced(NEUTRAL_REWARD, priced)
         if reward is None or declared is None:
             try:

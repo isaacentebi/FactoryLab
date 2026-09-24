@@ -442,6 +442,9 @@ class BootstrapMixin:
         for kind in self._routable_kinds():
             self._build_router(kind, self._seed_learner_kind(kind), router_gamma)
         self.pending_exposure: dict[str, int] = {}  # antagonist decision handle -> opened tick
+        # Exposure decisions whose seat answered status: cannot -> the reason it gave:
+        # left ungraded, they settle declined, priced as an abstention (ruling R9).
+        self.declined_exposures: dict[str, str] = {}
         # The reward chain (ruling R1). Antagonist handle -> the consequence scores of
         # the judges scored on its return, until its exposure settles.
         self.exposure_scores: dict[str, list] = {}
