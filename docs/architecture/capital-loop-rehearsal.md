@@ -530,6 +530,11 @@ existence does not rest on any diary:
   nonce instead. It is refused for:
   - a mint;
   - a transaction whose call was not recorded, which may be a mint;
+  - a world's entry (origin `capital_loop` or `treasury`, or none) that names no diary:
+    nothing can show that world has ended. Its exit is `--speed-up`, or waiting. A
+    world whose rail signs with the mainnet reserve key cannot run without a ledger at
+    all (`mainnet_rail_requires_a_ledger`), so on mainnet only an older record holds such an
+    entry;
   - a nonce whose world is still running (its diary's writer lock is held). Every entry
     at that nonce is checked, the original and each replacement alike, so a
     replacement's hash is no way around it.
@@ -600,7 +605,8 @@ exits 1.
 | `recorded_authorization_settled_unbooked` (exit 3) | Settle the books by hand, then `--acknowledge 0x<nonce>`. |
 | `recorded_transaction_may_still_execute` | Wait for it to be mined (and on Base finalized), or `--speed-up 0x<hash>`. For a CCTP mint (`step: mint`) that is the only exit. For any other step, once its world has ended, there is also `--cancel-transaction 0x<hash> --i-understand-the-world-step-is-abandoned`: that world's treasury step will not complete and must be recovered by hand. A torn one with no legible nonce clears after one cooling-off window. |
 | `transaction_not_on_record` | A broadcast refused its unrecorded hash; nothing was sent. Prepare the transaction again: it is recorded as it is prepared. |
-| `cancel_refused` | Its reason says which: not open (nothing to cancel); no chain or nonce known (it clears by waiting); wrong key (put the reserve's in `reserve.key`); a mint (`--speed-up` instead); its call not recorded (wait); its world still running (stop it, then cancel); or the consequence not accepted (add `--i-understand-the-world-step-is-abandoned`). |
+| `cancel_refused` | Its reason says which: not open (nothing to cancel); no chain or nonce known (it clears by waiting); wrong key (put the reserve's in `reserve.key`); a mint (`--speed-up` instead); its call not recorded (wait); a world's entry that names no diary, so the world cannot be shown to have ended (`--speed-up`, or wait); its world still running (stop it, then cancel); or the consequence not accepted (add `--i-understand-the-world-step-is-abandoned`). |
+| `mainnet_rail_requires_a_ledger` | `factorylab run` (or any Runtime) refused a world whose treasury rail signs with the mainnet reserve key and was given no ledger; nothing started. Run it again with `--ledger <path>`: its reserve-key entries then name that diary, where their bookings are read and whose writer lock shows whether the world has ended. |
 | `speed_up_refused` | Its reason says which: not open, no chain or nonce known, or its call not recorded (it clears by waiting); or wrong key (put the reserve's in `reserve.key`). |
 | `replacement_needs_native_gas` | Fund the reserve's native gas (ETH on Base, HYPE on HyperEVM) on the chain it names, with at least the `needed_wei` it names, then speed up or cancel again. |
 | `cancel_failed`, `speed_up_failed` | Nothing may have been sent. Its `why` is the chain's answer. A gas budget that is too low: raise `--max-gas-wei`. A node that refused the replacement ("nonce too low", "underpriced"): the nonce was consumed (the next launch resolves it) or needs a higher fee (run it again, which prices 12.5% above every recorded attempt). An RPC that failed: retry, or pass that chain's `--rpc-*` flag. |

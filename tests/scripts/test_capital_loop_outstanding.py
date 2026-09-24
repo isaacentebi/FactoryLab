@@ -1862,8 +1862,9 @@ def reserve_world(tmp_path, reserve):
 
 
 def hyper_signer(tmp_path, monkeypatch, *, nonce=5):
-    """A throwaway reserve on a HyperEVM fake, its guard writing to the test's lock dir,
-    run from an empty working directory (so no key file of the repo is ever read)."""
+    """A throwaway reserve on a HyperEVM fake, its guard writing to the test's lock dir as
+    a world's whose diary is ``diary`` (not running), run from an empty working directory
+    (so no key file of the repo is ever read)."""
     from eth_account import Account
 
     from factorylab.runtime.capital_loop import ReserveGuard
@@ -1875,10 +1876,14 @@ def hyper_signer(tmp_path, monkeypatch, *, nonce=5):
     rpc, hyper = Rpc(), Hyper(nonce=nonce)
     rpc.others[HYPEREVM.rpc] = hyper
     locks = tmp_path / "locks"
+    diary = tmp_path / "runs" / "world.jsonl"
+    diary.parent.mkdir()
+    diary.write_bytes(b"")
     chain = EVM(HYPEREVM, reserve, transport=rpc, gas_budget_wei=10**15)
-    chain.transaction_guard = ReserveGuard("treasury", lock_dir=locks)
+    chain.transaction_guard = ReserveGuard("treasury", run_dir=diary.parent, ledger=diary,
+                                           lock_dir=locks)
     return {"reserve": reserve, "rpc": rpc, "hyper": hyper, "locks": locks, "chain": chain,
-            "world": world}
+            "world": world, "diary": diary}
 
 
 def launch_on(s):
@@ -1991,14 +1996,10 @@ def test_a_cctp_mint_is_never_cancelled_and_is_sped_up_identically(
 
 def test_a_cancel_waits_for_the_world_that_recorded_it_to_end(tmp_path, monkeypatch, capsys):
     from factorylab.kernel.ledger import LedgerLock
-    from factorylab.runtime.capital_loop import ReserveGuard
     from factorylab.world.evm import HYPEREVM
 
     s = hyper_signer(tmp_path, monkeypatch)
-    diary = tmp_path / "runs" / "world.jsonl"
-    diary.parent.mkdir()
-    diary.write_bytes(b"")
-    s["chain"].transaction_guard = ReserveGuard("treasury", ledger=diary, lock_dir=s["locks"])
+    diary = s["diary"]
     stuck = s["chain"].approve(HYPEREVM.usdc, HYPEREVM.messenger, 1, 10**15)
     monkeypatch.setenv("RESERVE_PRIVATE_KEY", s["reserve"].key.hex())
     argv = ("--cancel-transaction", stuck["tx_hash"], "--i-understand-the-world-step-is-abandoned")
@@ -2323,15 +2324,11 @@ def test_a_running_worlds_step_cannot_be_cancelled_through_its_replacement(
     # P2: a sped-up replacement is the world's own, and a cancel checks every entry at
     # the nonce, so the replacement's hash is no way around the running world.
     from factorylab.kernel.ledger import LedgerLock
-    from factorylab.runtime.capital_loop import ReserveGuard, read_authorizations
+    from factorylab.runtime.capital_loop import read_authorizations
     from factorylab.world.evm import HYPEREVM, calldata
 
     s = hyper_signer(tmp_path, monkeypatch)
-    diary = tmp_path / "runs" / "world.jsonl"
-    diary.parent.mkdir()
-    diary.write_bytes(b"")
-    s["chain"].transaction_guard = ReserveGuard("treasury", run_dir=diary.parent,
-                                                ledger=diary, lock_dir=s["locks"])
+    diary = s["diary"]
     data = calldata(
         "depositForBurn(uint256,uint32,bytes32,address,bytes32,uint256,uint32)",
         ["uint256", "uint32", "bytes32", "address", "bytes32", "uint256", "uint32"],
@@ -2352,3 +2349,25 @@ def test_a_running_worlds_step_cannot_be_cancelled_through_its_replacement(
     assert (recorded["ledger"], recorded["run_dir"]) == (
         str(diary.resolve()), str(diary.parent.resolve()))
     assert len(s["hyper"].sent) == 1  # the speed-up only
+
+
+# ---- Wave 10, Codex on fd1424e
+
+
+def test_a_worlds_entry_that_names_no_diary_is_never_cancelled(tmp_path, monkeypatch, capsys):
+    # A world run without --ledger could never be shown to have ended.
+    from factorylab.runtime.capital_loop import ReserveGuard
+    from factorylab.world.evm import HYPEREVM
+
+    s = hyper_signer(tmp_path, monkeypatch)
+    monkeypatch.setenv("RESERVE_PRIVATE_KEY", s["reserve"].key.hex())
+    for origin, code in (("treasury", 2), ("capital_loop", 2), ("treasury_cli", 0)):
+        s["chain"].transaction_guard = ReserveGuard(origin, lock_dir=s["locks"])
+        stuck = s["chain"].transfer(HYPEREVM.usdc, "0x" + "12" * 20, 1, 10**15)
+        s["hyper"].pending += 1  # the next one takes the next nonce
+        assert tool(s, "--cancel-transaction", stuck["tx_hash"],
+                    "--i-understand-the-world-step-is-abandoned") == code
+        printed = capsys.readouterr()
+        if code:
+            assert "without naming its diary" in json.loads(printed.err)["why"]
+    assert len(s["hyper"].sent) == 1  # only the diary-less CLI's own transaction

@@ -365,3 +365,32 @@ def test_topup_is_written_ahead_under_the_reserve_lock_or_refused(keyfile, wire,
     assert seen == [[nonce]]  # recorded before it left
     assert [(e["nonce"], e["origin"]) for e in capital_loop.read_authorizations(record)] == [
         (nonce, "reserve_topup")]
+
+
+def test_a_mainnet_treasury_world_is_never_run_without_a_ledger(tmp_path, monkeypatch, capsys):
+    # Codex on fd1424e: a world whose rail signs with the mainnet reserve key must name
+    # its diary to the reserve's record, or no used authorization of it could be shown
+    # booked and no cancel could tell whether it ended.
+    from dataclasses import replace
+
+    from factorylab.runtime import cli
+    from factorylab.runtime.bootstrap import MainnetRailRequiresALedger
+    from factorylab.runtime.loop import Runtime
+    from factorylab.runtime.worlds import load_manifest
+
+    base = load_manifest("scripted")
+    mainnet = replace(base, exchange=replace(base.exchange, kind="hyperliquid", mainnet=True),
+                      treasury=replace(base.treasury,
+                                       reserve_address="0x" + "12" * 20))
+    monkeypatch.chdir(tmp_path)  # no key file of the repo is read
+    monkeypatch.setattr(cli, "load_manifest", lambda world: mainnet)
+    assert cli.main(["run", "--world", "mainnet-treasury", "--events", "1"]) == cli.ARGUMENT_EXIT
+    assert "mainnet_rail_requires_a_ledger" in capsys.readouterr().err
+    assert list(tmp_path.iterdir()) == []  # nothing was created
+    with pytest.raises(MainnetRailRequiresALedger):
+        Runtime(mainnet, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
+                router_gamma=.1)
+    testnet = replace(mainnet, exchange=replace(mainnet.exchange, mainnet=False))
+    from factorylab.runtime.bootstrap import mainnet_rail
+
+    assert mainnet_rail(mainnet) and not mainnet_rail(testnet)

@@ -68,6 +68,27 @@ CAPITAL_LOOP_REFUSED = (
     "(docs/architecture/capital-loop-rehearsal.md)")
 
 
+#: Why a world whose treasury rail signs with the mainnet reserve key will not start
+#: without a diary on disk.
+MAINNET_RAIL_REFUSED = (
+    "mainnet_rail_requires_a_ledger: this world's treasury rail signs with the mainnet "
+    "reserve key; run it with --ledger, so the reserve's record can name the diary its "
+    "transfers are booked in and a cancel can tell whether it has ended")
+
+
+def mainnet_rail(manifest: WorldManifest) -> bool:
+    """Whether a live world's treasury rail signs with the mainnet reserve key: a
+    reserve on a mainnet venue, or a hybrid rail's Venice leg on Base mainnet."""
+    treasury = manifest.treasury
+    return treasury.reserve_address is not None and (
+        manifest.exchange.mainnet
+        or getattr(treasury, "venice_network", None) == "base-mainnet")
+
+
+class MainnetRailRequiresALedger(ValueError):
+    """A live world with a mainnet treasury rail was given no ledger: nothing started."""
+
+
 class BootstrapMixin:
     """Preserve runtime state and behavior for bootstrap operations."""
 
@@ -100,6 +121,12 @@ class BootstrapMixin:
             from factorylab.world.evm import RailError
 
             raise RailError(CAPITAL_LOOP_REFUSED)
+        if self.live and not ledger_path and _journal is None and mainnet_rail(manifest):
+            # Every reserve-key entry of a world names its diary: without one, a used
+            # authorization could never be shown booked (a false recovery), and a
+            # cancel could never tell whether the world has ended. Refused before any
+            # venue, key or file is touched.
+            raise MainnetRailRequiresALedger(MAINNET_RAIL_REFUSED)
         self._ledger_lock = _lock or LedgerLock(ledger_path)
         self.m = manifest
         self.kill_at_end = kill_at_end

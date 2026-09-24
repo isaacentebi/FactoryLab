@@ -64,6 +64,7 @@ if str(ROOT) not in sys.path:
 
 from factorylab.runtime.capital_loop import (  # noqa: E402
     CANCEL_CONSEQUENCE,
+    WORLD_ORIGINS,
     CapitalLoopRefused,
     ReserveLock,
     _chains,
@@ -186,6 +187,11 @@ def cancel_transaction(lock: ReserveLock, tx_hash: str, *, account, transport,
     if any(e.get("step") is None or e.get("data") is None for e in same):
         raise refused("its call was not recorded, so it may be a CCTP mint: it is never "
                       "cancelled; it resolves by waiting")
+    if any((e.get("origin") or "capital_loop") in WORLD_ORIGINS and not e.get("ledger")
+           for e in same):
+        raise refused("a world recorded it without naming its diary, so it cannot be shown "
+                      "to have ended: it is never cancelled. Its exit is --speed-up, or "
+                      "waiting")
     from factorylab.kernel.ledger import LedgerBusyError, LedgerLock
 
     for ledger in {e.get("ledger") for e in same if e.get("ledger")}:

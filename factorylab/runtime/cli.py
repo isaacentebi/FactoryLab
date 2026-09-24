@@ -1058,10 +1058,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "run":
         from factorylab.cortex.sandbox import NoJail
         from factorylab.kernel.ledger import LedgerBusyError
+        from factorylab.runtime.bootstrap import MainnetRailRequiresALedger
 
         try:
             _load_dotenv()
             return int(args.func(args))
+        except MainnetRailRequiresALedger:
+            refuse("run", Reason.MAINNET_RAIL_REQUIRES_A_LEDGER)
+            return ARGUMENT_EXIT
         except LedgerBusyError:
             refuse("run", Reason.LEDGER_BUSY)
             return LEDGER_BUSY_EXIT
