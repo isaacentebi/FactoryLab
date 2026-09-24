@@ -30,8 +30,10 @@ from __future__ import annotations
 
 import json
 from collections import deque
+from copy import deepcopy
 from typing import Any
 
+from factorylab.cortex.assembly import COUNTERFACTUAL_FIELD
 from factorylab.cortex.registration import BUILTIN_RETURNS, measured_role
 from factorylab.cortex.request import Return, public_return
 from factorylab.cortex.sandbox import NoJail, jail_probe
@@ -696,9 +698,13 @@ class Runtime(
                 if kind not in self.event_schemas:
                     raise ValueError("population event has no declared schema")
                 if payload.get("status") == "ok":
+                    # A producing kind's counterfactual is the kernel's field, not the
+                    # declaration's (``_contract_schema``).
+                    producing = self._kind_rewards().get(kind) in self.PRODUCING_SHAPES
                     validate_schema({k: v for k, v in payload["outputs"].items()
                                       if k not in ("emits", "register", "about_handle",
-                                                   "status", "reason")},
+                                                   "status", "reason")
+                                      and not (producing and k == "counterfactual")},
                                      self.event_schemas[kind])
             event_type = PopulationEvent
         else:
@@ -885,12 +891,16 @@ class Runtime(
                           if kind == "CounterVerdict" else
                           {"action": {"type": "string"}})
                 schema = {"type": "object", "properties": fields, "required": list(fields)}
+            # A producing kind's contract carries the declined trade (II.III.b). The
+            # field is the kernel's, so it stands over a declaration's own.
+            producing = ({"counterfactual": deepcopy(COUNTERFACTUAL_FIELD)}
+                         if self._return_shape(spec, kind) in self.PRODUCING_SHAPES else {})
             schemas.append({**schema, "properties": {
                 **{k: v for k, v in reserved_return_fields(
                     max_children=self.m.tools.max_children,
                     max_tool_calls=self.m.tools.max_tool_calls).items()
                    if k in ("requests", "tool_calls", "status", "reason")},
-                **schema.get("properties", {}), "emits": {"enum": [kind]},
+                **schema.get("properties", {}), **producing, "emits": {"enum": [kind]},
                 "about_handle": {"type": "string"}, "register": self._register_schema(),
             }, "required": [*schema.get("required", []),
                             *(["emits"] if len(spec.emits) > 1 else [])]})
@@ -1096,13 +1106,9 @@ class Runtime(
                     "propensity": {"type": "object"},
                     "subscribe": {"type": "object"},
                     "defer": {"type": "integer", "minimum": 0},
-                    "counterfactual": {
-                        "type": "object",
-                        "description": "a declined trade, coin and side",
-                        "properties": {"coin": {"type": "string"},
-                                       "side": {"enum": ["buy", "sell"]}},
-                        "required": ["coin", "side"],
-                    },
+                    # A contract field (II.III.b, the priced road not taken): the
+                    # kernel requires it on an answer that executes nothing.
+                    "counterfactual": deepcopy(COUNTERFACTUAL_FIELD),
                     "register": self._register_schema(),
                 },
                 "required": ["action"],

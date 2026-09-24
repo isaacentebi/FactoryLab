@@ -232,6 +232,30 @@ class WeighedVenue(FakeExchange):
         self.sent += 2
         return super().mids()
 
+    def order_book(self, coin, depth):
+        self.sent += 2
+        return super().order_book(coin, depth)
+
+
+class SeatReader(Writer):
+    """Every producing answer makes one seat venue read, and nothing else.
+
+    A two-weight order book read that the kernel never makes on a tick: the first
+    one a seat asks for in a tick is sent, so the weight counter is called around
+    it, whatever the scripted answers would otherwise have read or spent.
+    """
+
+    def complete(self, request):
+        response = super().complete(request)
+        try:
+            body = json.loads(response.text)
+        except ValueError:
+            return response
+        if isinstance(body, dict) and "action" in body:
+            body["tool_calls"] = [{"tool": "venue.order_book",
+                                   "args": {"coin": "BTC", "depth": 5}}]
+        return replace(response, text=json.dumps(body))
+
 
 def test_a_kill_between_the_weight_counter_call_and_its_result_resumes(tmp_path):
     """The counter is a read: an unanswered call to it is not an unacknowledged write,
@@ -245,17 +269,23 @@ def test_a_kill_between_the_weight_counter_call_and_its_result_resumes(tmp_path)
     m = replace(base, exchange=replace(base.exchange, kind="hyperliquid", coins=("BTC",)))
     path = tmp_path / "live.jsonl"
     venue = WeighedVenue()
-    run_world(m, events=30, seed=1, ledger_path=str(path), provider=Writer(),
+    run_world(m, events=30, seed=1, ledger_path=str(path), provider=SeatReader(),
               exchange=venue, clock_source=ClockSource(1_000_000_000, 1_000_000_000, 30).events())
     diary = [i for i in Ledger.reopen(str(path), manifest=json.loads(m.canonical_json()))
              ._recovery_items()]
     snapshot = next(i["seq"] for i in diary if i["kind"] == "snapshot")
     call = next(i for i in diary if i["kind"] == "io.call"
                 and i["name"] == "exchange.request_weight_sent" and i["seq"] > snapshot)
+    # The kill falls inside a seat's own sent read, between the counter's call and its
+    # result: the read is recorded after it, and no result of the counter precedes it.
+    after = [i for i in diary if i["seq"] > call["seq"]]
+    assert after[0]["kind"] == "io.result"
+    assert next(i for i in after if i["kind"] == "tool.call")["tool"] == "venue.order_book"
     prefix = b"".join(path.read_bytes().splitlines(keepends=True)[: call["seq"] + 2])
     path.write_bytes(prefix)
     path.with_suffix(path.suffix + ".head").unlink()
-    restored = resume_runtime(m, str(path), provider=Writer(), exchange=venue, now_ns=10**15)
+    restored = resume_runtime(m, str(path), provider=SeatReader(), exchange=venue,
+                              now_ns=10**15)
     assert path.read_bytes().startswith(prefix)
     # A read of the counter is no venue write: the treasury's balance memo, keyed on
     # the journal's venue write count, stays valid across it.
@@ -329,8 +359,13 @@ def test_retirement_keeps_the_seat_s_state_in_a_world_run(tmp_path, monkeypatch)
     rt.run()
     assert "seed-observer" in rt.retired_assemblies
     assert rt.working_state.head("seed-observer") is not None
-    assert not [i for i in _items(tmp_path / "world.jsonl")
-                if i["kind"] == "artifact.released" and i.get("owner") == "seed-observer"]
+    # A head the seat replaced while it served is released as any seat's is; from its
+    # retirement on, nothing of it is.
+    items = _items(tmp_path / "world.jsonl")
+    (retired,) = [i["seq"] for i in items if i["kind"] == "assembly.retired"
+                  and i.get("assembly_id") == "seed-observer"]
+    assert not [i for i in items if i["kind"] == "artifact.released"
+                and i.get("owner") == "seed-observer" and i["seq"] > retired]
 
 
 def test_a_crash_between_an_eviction_s_ledger_line_and_its_index_change_resumes(

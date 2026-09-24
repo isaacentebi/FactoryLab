@@ -119,8 +119,13 @@ is the intersection of what the kernel checks a reply against: the universal
 envelope, the fields the answer's kind owns, and the contract. A form the kernel
 cannot accept is not sent. For example, a closed contract that does not name
 `tool_calls` has no continuation through it. Every object the contract leaves
-open is marked open. What a schema cannot state (an answer order's semantics, a
-child request's checks, the runtime's validator) stays the kernel's alone.
+open is marked open. A final answer whose contract publishes `counterfactual`
+(a judged or exposure kind; see "A verdict is also a prediction") is sent as two
+forms: one that requires `counterfactual`, and, for ProducerReturn and Exposure, one
+whose `action` is `"order"`. The decoder cannot see the venue writes of a
+decision's earlier rounds, so it is given the stricter side. What a schema cannot
+state (an answer order's semantics, a child request's checks, the runtime's
+validator, including whether the named coin is listed) stays the kernel's alone.
 Hosts enforce the schema on a best-effort basis: the 23 September 2026 probes
 saw json_schema routes still return replies outside it. On OpenRouter, `provider.require_parameters` is set
 unless `extra_body` names it, as it is for `json_object`. The key is accepted only
@@ -455,14 +460,48 @@ proved right, and one that only repeats the base rate earns 0.5. `y` is:
 
 - for a return that executed venue operations (or earned service income):
   `return_paid_off`, 0 or 1, fixed when its lots close or marked at the
-  consequence backstop;
+  consequence backstop. A venue write counts once the venue accepted it or may
+  have (`uncertain`); a return whose every write the venue rejected executed
+  nothing;
 - for a return that executed nothing and named a declined trade
   (`counterfactual {coin, side}`): `opportunity-cost-v2`,
   `y = 0.5 - 0.5 * tanh(g / opportunity_scale_bps)` with `g` the trade's gross
   move in bp, signed by its side and excluding fees, from the mids the world had
   broadcast when the return was made (ruling R2). It is symmetric and monotone,
   so a hold without directional skill earns 0.5 whatever trade it names;
-- for anything else (a bare hold): nothing. Only the tier above grades it.
+- for a return whose answer order (`{"action": "order", coin, side, size}`) was
+  refused (by the collateral check, the venue, or a terminal error) and that
+  executed nothing else: `attempted-trade-v1`,
+  `y = 0.5 + 0.5 * tanh(g / opportunity_scale_bps)` with `g` the ordered coin's
+  gross move in bp, signed by the ordered side and excluding fees, from the same
+  frozen mids and horizons as the declined form, of which it is the mirror: 0.5 at
+  no move, toward 1 as the market moves for the ordered side. It is ledgered as
+  `consequence.attempted_mark` and `consequence.attempted`. An order left
+  `uncertain` is acting, and is measured by `return_paid_off`;
+- for anything else (a return made while the world listed no coin, a declined
+  commission, or a named coin with no mid at the horizon): nothing. Only the tier
+  above grades it.
+
+**The declined trade is part of the return contract** (§III.b: evaluators are
+graded by realized consequence, the priced road not taken included). A final
+answer of ProducerReturn, Exposure or a declared kind whose reward shape is
+`judged` or `exposure`, from a decision that executed no venue operation (no venue
+write the venue accepted or left `uncertain`, and no answer order it may place),
+carries `counterfactual
+{coin, side}`: `side` is `buy` or `sell`, and `coin` is a key of `recent_mids` (the
+world's broadcast mids, the record the trade is priced from) when the return is
+made. Without it the return is `malformed`
+(`counterfactual {coin, side} is absent from a return that executed no venue
+operation`), as it is with a coin the world does not list (`counterfactual names a
+coin the world does not list`) or any other shape; the seat's inbox and
+`return.validation_failed` carry the reason. Nothing is required while
+`recent_mids` is empty. A return that executed venue operations needs none. The
+field is published in the request's outcome schema (a requested child's too, even
+under a closed requester schema) and in `world.read {"section":
+"a_return_may_include"}`. Policy ballots, judgements, forecasts, metas and counters
+are not returns a first-tier verdict judges and carry no such requirement; neither does a
+declined commission (`status: "cannot"`), which is not a contract return. The
+scoring above is unchanged.
 
 **Anticipatory settlement** (§IV.b: an explorer is compensated sooner than the
 lifetime of what it found). A verdict's reward is scored as soon as its return's
@@ -488,12 +527,38 @@ tier above is that verdict's only grader.
 
 **The judge's reward is both signals.** A judge's decision settles
 (`evaluation-v1`, `evaluator.settled`) on the equal mean of its grade from the
-tier above (the mean of the grades metas gave it within `verdict_timeout_ticks`,
-`evaluator.meta_grade`) and its consequence score, whichever exist, less its
+tier above (the mean of the grades metas gave it while its grade window was
+open, `evaluator.meta_grade`) and its consequence score, whichever exist, less its
 card penalty; with neither it settles censored (`evaluation-unscored-v1`).
 Neither channel is weighted by the charter. The argument is in
 `runtime/feedback.py: evaluation_reward`. The router that drew the judge learns
 the same reward, so a judge decision's deadline covers the return's backstop.
+
+**The grade window is the read above it.** At every tier, an evaluator decision's
+grade window closes on the tick after the cascade window holding its judgement
+released it to the tier above or passed it over (`FeedbackMixin._grade_window_over`).
+A cascade window lasts `timing.min_ratio` times the measured period in which the
+decisions its tier judges reach a score, and a meta's judge settles no sooner than
+its own grade window, so a grade window of a fixed `verdict_timeout_ticks` closed
+before the tier above could read the metas (essay II.IV.c: the queue withholds a
+verdict until it settles, at a 3:1 ratio or more; II.III.b: evaluators are graded
+tier upon tier). Before this, 0 to 4 of the 11 to 17 tier-three grades delivered in
+200 events counted on seeds 1 to 5 of the recursive scripted world; every one now
+counts. A judgement held in a window closes at the latest after
+`consequence_backstop_ticks + verdict_timeout_ticks` plus that window's drawn
+duration; one no window took (a judgement a judge chose rather than a routed one)
+waits `verdict_timeout_ticks`. A judgement whose decision has not settled when its
+window releases is withheld, not dropped (II.IV.c: "withheld ... until it
+settles"): it is carried into the tier's next window, which opens at the release
+with a duration drawn by the same law (`CascadeGate.carried`, `cascade.carry`),
+keeps its own open time and open grade window, and is read in the first release
+after its decision settles, ahead of that window's own arrivals of equal priority,
+within `meta_read_share`. It is carried until `consequence_backstop_ticks +
+verdict_timeout_ticks` after it was made; past that it is listed under `backstop`
+in `cascade.carry` and its grade window closes. A delivered grade that cannot
+count, and a grade window that closes with no grade, are ledgered as
+`evaluator.grade_censored` with the reason (passed over, no grade returned, no
+read, or backstop); nothing is dropped unseen.
 
 **Metas are graded by the world too.** A meta's conformity `k` is a prediction of
 the consequence score `s` of the decision it graded, scored the same way against
@@ -609,7 +674,9 @@ opens and never redrawn inside it (`cascade.arrival` carries `window_ns`,
 elapsed and some of the evidence inside it has completed — for a verdict, that
 the return it judged has an outcome. Every arrival is named in the released
 report, only its representative is graded, and only completed evidence is
-averaged. Three judgements arriving in the same nanosecond are three arrivals
+averaged. An arrival whose evidence has not completed at the release is carried
+into the tier's next window (see "The grade window is the read above it"). Three
+judgements arriving in the same nanosecond are three arrivals
 in an empty window and trigger nothing. Execution facts and safety actions never
 enter the cascade and are never slowed by it.
 
@@ -1049,7 +1116,7 @@ parameters; the observer never substitutes a second set of thresholds.
 | `timing.jitter_fraction` | finite nonnegative number | `0.2` | Yes: how far each derived loop's own continuous jitter may lengthen its period. |
 | `timing.world_repricing` | Absent, or a positive duration | Absent | Yes: the world's own repricing period, a fact about the venue (Hyperliquid funding settles hourly; edition 6 states `"1h"`). Governance is viable only while `timing.min_ratio` times the slowest loop fits inside it and inside the run's remaining ticks (`governance.nonviable`); `max_tick` is derived from it. |
 | `evaluation.consequence_backstop_events` (or `consequence_backstop_ticks`) | positive integer, in world ticks | `200`; scripted worlds `20`; testnet `60` | Yes: consequence horizon and conservative governance period floor. |
-| `evaluation.verdict_timeout_events` (or `verdict_timeout_ticks`) | positive integer, in world ticks | `20` | Yes: how long a judgement waits for its judge (a verdict for a producer return, a meta verdict for a verdict) before it is censored. |
+| `evaluation.verdict_timeout_events` (or `verdict_timeout_ticks`) | positive integer, in world ticks | `20` | Yes: how long a producer return waits for its judges' verdicts before it is censored, and how long an evaluator decision whose judgement no cascade window took waits for a grade. A routed evaluator decision's grade window is its cascade window's read, not this constant (see "The grade window is the read above it"). |
 | `prices.penalty_cap` | finite number strictly between 0 and 1 | `0.5` | Yes: maximum penalty before attribution. |
 | `prices.min_blame_share` | finite number in [0, 1] | `0.1` | Yes: floor on one decision's share of a generic (non-attributable) violation. |
 | `prices.kp` | finite nonnegative number | `0.0` | Yes: the PID's proportional gain. The PID is the only price law (charter audit U3): `lambda = kp*v + I + D`, where `I` accumulates `eta*v` while violating and leaks `decay` once compliant, held in `[0, lambda_max]` and not integrated only while `P + I` already reaches `lambda_max` and the violation is growing (anti-windup); `D = kd * max(0, d(measurement))/scale`, on the measurement rather than the error, signed toward violation, applied only while violating and only its positive part (Stooke et al. 2020), so a card still out of its region is never priced below `P + I`. With `kp = kd = 0` the law is the integral alone. `prices.controller` and `prices.kappa` are refused. |
@@ -2424,8 +2491,15 @@ money: the archive is the world's own disk.
 `entries()` returns one row per reference, with that reference's owner.
 `artifact.list {cursor?}` is free and returns only the caller's own rows (sha,
 kind, bytes, when), newest first, 50 a page with `next_cursor` and the caller's
-`count`. `next_cursor` is a position in that order (`<ns>:<sha>`), so a row
-released or collected between two pages never ends the paging; a cursor naming
+`count`. Rows sharing a timestamp are ordered by when their hash entered the
+archive, never by hash: an outcome item's bytes name its evidence's ledger
+sequence, which a resume shifts, and the archive index keeps its insertion order
+through a checkpoint and a replay. `next_cursor` is a position in that order
+(`<ns>:<sha>`), so a row released or collected between two pages never ends the
+paging. It names the row by hash, not by its place: places are derived and a
+rebuild renumbers them, while the hash names the same row after a resume. A
+cursor naming a hash the listing never held resumes at the first row with its
+timestamp, so a page may repeat a row but never skips one; a cursor naming
 neither a position nor a row the caller holds returns no rows and
 `cursor_unknown: true`; the seat's `YOU` `directory` previews the same rows. No list names
 another seat's artifacts (information audit C4).

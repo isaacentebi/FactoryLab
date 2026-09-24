@@ -72,12 +72,16 @@ class CascadeGate:
     ``window`` is the drawn duration in ticks (continuous), ``opened`` the tick
     the window opened at. A gate saved before the tick clock carries neither
     and restores as a one-tick window open since tick zero: due at its next
-    completed arrival.
+    completed arrival. ``carried`` counts the first arrivals that an earlier
+    window of the tier released before their subjects settled and carried into
+    this one (essay II.IV.c: withheld "until it settles"); a gate saved before
+    carrying restores with none.
     """
 
     window: float = 1.0
     opened: int = 0
     arrivals: tuple[Event, ...] = ()
+    carried: int = 0
 
     def __post_init__(self) -> None:
         if (type(self.window) not in (int, float) or not isfinite(self.window)
@@ -86,8 +90,22 @@ class CascadeGate:
         if type(self.opened) is not int or self.opened < 0:
             raise ValueError("opened must be a nonnegative tick")
         object.__setattr__(self, "arrivals", tuple(self.arrivals))
+        if type(self.carried) is not int or not 0 <= self.carried <= len(self.arrivals):
+            raise ValueError("carried must count some of the gate's first arrivals")
         if len({event_tier(e) for e in self.arrivals}) > 1:
             raise ValueError("a gate cannot mix tiers")
+
+    def rank(self, priority: Callable[[Event], int] | None = None) -> Callable[[Event], tuple]:
+        """The order in which a window's completed arrivals are read, highest first.
+
+        Guarantees ``priority`` first, then an arrival carried in before one that
+        arrived in this window: a carried judgement was withheld only until its
+        subject settled, so it is read before the window's own arrivals of equal
+        priority. Among equals, the caller's order decides (the latest first).
+        """
+        carried = {e.id for e in self.arrivals[:self.carried]}
+        first = priority or (lambda _e: 0)
+        return lambda e: (first(e), e.id in carried)
 
     def elapsed(self, now: int) -> int:
         """How many ticks of this window's duration have passed."""
@@ -104,7 +122,7 @@ class CascadeGate:
         completed evidence in it has nothing to report upward however long it
         has been open, and an arrival count of any size reports nothing at all
         before the duration is up. The representative is the completed arrival
-        with the highest ``priority`` (the latest among equals).
+        ranked first by ``rank``.
         """
         tier = event_tier(event)
         if self.arrivals and event_tier(self.arrivals[0]) != tier:
@@ -120,8 +138,7 @@ class CascadeGate:
             # The duration is up and nothing in it has settled. The window stays
             # open rather than reporting an average of unfinished work upward.
             return replace(self, arrivals=arrivals), None
-        rank = priority or (lambda _e: 0)
-        representative = max(reversed(finished), key=rank)
+        representative = max(reversed(finished), key=self.rank(priority))
         scores = [e.payload[key] for e in finished]
         # Every arrival is named, so no verdict is judged behind its back; only the
         # representative is graded, and only completed evidence is averaged.

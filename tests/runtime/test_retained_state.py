@@ -778,3 +778,74 @@ def test_a_program_state_refusal_is_ledgered_with_its_time():
     rt._record_program({"kind": "state.refused", "assembly_id": "p", "handle": "h",
                         "state_kind": "program.state", "reason": "retired"})
     assert ledger_items(rt, "state.refused")[-1]["ts"] == rt.clock.now_ns
+
+
+HEAD = canonical({"head": "tied"})
+PREVIEW = 10  # the YOU block's directory preview (``schematics.DIRECTORY_PREVIEW``)
+
+
+def _directory_at_a_tied_cutoff(outcome: bytes, *, resume: bool):
+    """The seat's newest ``PREVIEW`` rows when a working state and an outcome item share
+    the timestamp at the preview's cutoff: nine newer rows, then the tied pair, then
+    one older row. With ``resume`` the world is checkpointed after the pair and
+    restored, as a crash would have it, before the rest is put."""
+    from factorylab.runtime.resume import restore_runtime, runtime_state
+
+    rt = make_runtime()
+    rt._manage_reserve_window()
+    rt.clock.now_ns = 1_000
+    rt.artifacts.put(HEAD, owner="seed-decider", kind="working.state")
+    rt.artifacts.put(outcome, owner="seed-decider", kind="outcome.item")
+    rt._artifacts_owned_by("seed-decider", PREVIEW)  # the live listing syncs here
+    if resume:
+        state = runtime_state(rt)
+        rt = make_runtime()
+        restore_runtime(rt, state)
+    for n in range(PREVIEW - 1):
+        rt.clock.now_ns = 2_000 + n
+        rt.artifacts.put(canonical({"newer": n}), owner="seed-decider", kind="outcome.item")
+    rt.clock.now_ns = 500
+    rt.artifacts.put(canonical({"older": 0}), owner="seed-decider", kind="outcome.item")
+    count, rows = rt._artifacts_owned_by("seed-decider", PREVIEW)
+    return count, [(row["kind"], row["bytes"]) for row in rows]
+
+
+def test_a_resumed_seat_sees_the_same_newest_rows_at_a_tied_cutoff():
+    """An outcome item's bytes name its evidence's ledger sequence, which a resume
+    shifts, so the same row can carry a different hash after a resume. Ties at one
+    timestamp are broken by the order rows entered the archive, never by hash: two
+    bodies whose hashes fall on opposite sides of the working state's show the seat
+    the same rows, live or restored."""
+    head = hashlib.sha256(HEAD).hexdigest()
+    bodies = [canonical({"evidence": seq}) for seq in range(100, 200)]
+    below = next(b for b in bodies if hashlib.sha256(b).hexdigest() < head)
+    above = next(b for b in bodies if hashlib.sha256(b).hexdigest() > head)
+    live = _directory_at_a_tied_cutoff(below, resume=False)
+    assert live[0] == PREVIEW + 2
+    assert live[1][-1] == ("working.state", len(HEAD))  # the tie's first-put row
+    assert _directory_at_a_tied_cutoff(above, resume=False) == live
+    assert _directory_at_a_tied_cutoff(above, resume=True) == live
+    assert _directory_at_a_tied_cutoff(below, resume=True) == live
+
+
+def test_an_artifact_list_cursor_pages_the_same_after_a_resume():
+    """The cursor names a row by hash, and the listing places it by archive order: a
+    page taken before a checkpoint continues after the restore exactly as it would
+    have, and a cursor naming a hash the restored listing never saw resumes from the
+    first row at its timestamp, repeating rather than skipping."""
+    from factorylab.runtime.resume import restore_runtime, runtime_state
+
+    rt = make_runtime()
+    rt._manage_reserve_window()
+    rt.DIRECTORY_PAGE = 2
+    rt.clock.now_ns = 1_000
+    for n in range(5):
+        rt.artifacts.put(canonical({"tied": n}), owner="seed-decider", kind="outcome.item")
+    first = rt._artifact_page("seed-decider", {})
+    live = rt._artifact_page("seed-decider", {"cursor": first["next_cursor"]})
+    twin = make_runtime()
+    twin.DIRECTORY_PAGE = 2
+    restore_runtime(twin, runtime_state(rt))
+    assert twin._artifact_page("seed-decider", {"cursor": first["next_cursor"]}) == live
+    unseen = twin._artifact_page("seed-decider", {"cursor": "1000:" + "0" * 64})
+    assert unseen["items"] == first["items"] and "cursor_unknown" not in unseen

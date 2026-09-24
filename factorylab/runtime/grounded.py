@@ -7,6 +7,12 @@ priced ex ante on the named trade", so it is a legitimate realized-consequence
 measurement (essay II.III.b: "a judgment of whether a given verdict predicted
 real downstream outcomes"). It grades the verdicts on that decision. It never
 replaces a verdict as the producer's own score (R2).
+
+Naming it is part of the I/O contract of every return the world's first-tier
+verdicts are about (the judged and exposure kinds) whenever that return executes no
+venue operation (``counterfactual_refusal``). Essay II.III.b: the signal that
+grades an evaluator must sit outside the loop it judges, and a return with no world
+outcome leaves its judges graded by other models' readings alone.
 """
 
 from __future__ import annotations
@@ -18,6 +24,8 @@ from typing import Any
 
 #: The definition an opportunity price is recorded under.
 OPPORTUNITY_DEFINITION = "opportunity-cost-v2"
+#: The definition a refused answer order's own named trade is priced under.
+ATTEMPTED_DEFINITION = "attempted-trade-v1"
 
 
 def latest_mids(runtime: Any) -> tuple[tuple[str, str], ...]:
@@ -31,11 +39,15 @@ def latest_mids(runtime: Any) -> tuple[tuple[str, str], ...]:
     return tuple(sorted((str(coin), str(dq[-1]["mid"])) for coin, dq in rows.items() if dq))
 
 
-def declined_trade(outputs: Mapping) -> dict[str, str] | None:
+def declined_trade(outputs: Mapping,
+                   listed: Iterable[str] | None = None) -> dict[str, str] | None:
     """The trade a decision says it declined, as ``{coin, side}``, or None.
 
     Accepts ``counterfactual: {"coin": "BTC", "side": "buy"}`` or the action-label
-    form ``"buy:BTC"``. Anything else names no trade: nothing is inferred.
+    form ``"buy:BTC"``. Anything else names no trade: nothing is inferred. With
+    ``listed`` (the coins the world lists), guarantees the coin is returned in the
+    world's own spelling, matched without regard to case, and None for a coin the
+    world does not list.
     """
     raw = outputs.get("counterfactual") if isinstance(outputs, Mapping) else None
     if isinstance(raw, str) and raw.count(":") >= 1:
@@ -45,7 +57,48 @@ def declined_trade(outputs: Mapping) -> dict[str, str] | None:
         return None
     side = str(raw.get("side", "")).strip().lower()
     coin = str(raw.get("coin", "")).strip().upper()
-    return {"coin": coin, "side": side} if side in ("buy", "sell") and coin else None
+    if side not in ("buy", "sell") or not coin:
+        return None
+    if listed is not None:
+        listed = tuple(listed)
+        named = str(raw.get("coin", "")).strip()
+        # The world's own spelling: an exact match first, else the one coin that
+        # matches without regard to case (a venue may list mixed-case names).
+        spelled = [named] if named in listed else [c for c in listed if c.upper() == coin]
+        if len(spelled) != 1:
+            return None
+        coin = spelled[0]
+    return {"coin": coin, "side": side}
+
+
+#: Why a return's ``counterfactual`` does not satisfy its contract (``counterfactual_refusal``).
+COUNTERFACTUAL_ABSENT = "counterfactual {coin, side} is absent from a return that executed no " \
+    "venue operation"
+COUNTERFACTUAL_SHAPE = "counterfactual is not {coin, side} with side buy or sell"
+COUNTERFACTUAL_UNLISTED = "counterfactual names a coin the world does not list"
+
+
+def counterfactual_refusal(outputs: Mapping, listed: Iterable[str]) -> str | None:
+    """Why a return that executed no venue operation fails its contract, or None.
+
+    Essay II.III.b: an evaluator is graded by realized consequence, which includes
+    the priced road not taken, benchmarked ex ante; ``opportunity_cost`` prices it
+    from the trade the return names. Guarantees None exactly when the return names a
+    side and a coin in ``listed`` (the coins the world lists when the return is made,
+    ``latest_mids``), or when the field is absent and the world lists no coin at all,
+    where no trade can be named. The field is the published object form alone. A
+    named coin the world does not list is refused whether or not any is listed. The
+    reason is a fact about the return, never advice.
+    """
+    listed = tuple(listed)
+    raw = outputs.get("counterfactual") if isinstance(outputs, Mapping) else None
+    if raw is None:
+        return COUNTERFACTUAL_ABSENT if listed else None
+    if not isinstance(raw, Mapping) or declined_trade({"counterfactual": raw}) is None:
+        return COUNTERFACTUAL_SHAPE
+    if declined_trade({"counterfactual": raw}, listed) is None:
+        return COUNTERFACTUAL_UNLISTED
+    return None
 
 
 def opportunity_cost(open_mids: Iterable[tuple[str, str]],
@@ -87,3 +140,43 @@ def opportunity_cost(open_mids: Iterable[tuple[str, str]],
             "declined": dict(declined), "gross_bps": str(gross), "scale_bps": scale,
             "score": round(0.5 - 0.5 * math.tanh(float(gross) / scale), 6),
             "basis": "the named declined trade's gross move, marked to the horizon"}
+
+
+def attempted_trade(outputs: Mapping, listed: Iterable[str]) -> dict[str, str] | None:
+    """The trade an answer order named, as ``{coin, side}`` in the world's spelling, or None.
+
+    Guarantees a trade only for an answer ``{"action": "order", "coin", "side", ...}``
+    whose side is buy or sell and whose coin the world lists (``listed``, the coins
+    of ``latest_mids``); the caller says whether the answer's kind owns the answer
+    order. Nothing is inferred: the coin and side are the seat's own.
+    """
+    if not isinstance(outputs, Mapping) or outputs.get("action") != "order":
+        return None
+    return declined_trade({"counterfactual": {"coin": outputs.get("coin"),
+                                              "side": outputs.get("side")}}, listed)
+
+
+def attempted_cost(open_mids: Iterable[tuple[str, str]],
+                   due_mids: Iterable[tuple[str, str]],
+                   scale_bps: Decimal | int | float,
+                   attempted: Mapping[str, str] | None) -> dict[str, Any] | None:
+    """Price the road a refused order tried to take: the trade it named, for its side.
+
+    ``attempted-trade-v1`` (the architect's ruling on wave 13). An answer order names
+    its trade ex ante; when nothing the decision wrote executed, the world measures
+    that trade over the same horizon, from the same frozen mids, as
+    ``opportunity_cost``. Guarantees ``y = 0.5 + 0.5 * tanh(gross_bps / scale_bps)``,
+    ``gross_bps`` the named trade's gross move signed by the ordered side, excluding
+    fees: the mirror of the declined form, 0.5 at no move, toward 1 as the market
+    moves for the ordered side. It is symmetric and monotone, so without directional
+    skill it is 0.5 in expectation. Returns None when no trade is named or its prices
+    are missing.
+    """
+    priced = opportunity_cost(open_mids, due_mids, scale_bps, attempted)
+    if priced is None:
+        return None
+    return {"moves": priced["moves"], "attempted": priced["declined"],
+            "gross_bps": priced["gross_bps"], "scale_bps": priced["scale_bps"],
+            "score": round(0.5 + 0.5 * math.tanh(float(priced["gross_bps"])
+                                                 / priced["scale_bps"]), 6),
+            "basis": "the refused order's named trade's gross move, marked to the horizon"}

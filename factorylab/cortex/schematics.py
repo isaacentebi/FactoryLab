@@ -318,6 +318,19 @@ class SchematicsMixin:
             "close, leverage and cancel are tool_calls on the venue.* tools"
         ),
         "order_example": '{"action": "order", "coin": "ETH", "side": "buy", "size": "0.004"}',
+        # A contract fact, published as the kernel enforces it (II.I.b: "the structures
+        # of requests and rewards" are public; II.III.b: the priced road not taken).
+        "counterfactual": (
+            'ProducerReturn, Exposure and a declared kind whose reward shape is judged or '
+            'exposure: {"coin", "side": "buy" | "sell"}, a trade the return declined; coin '
+            "is a key of public_observations.recent_mids when the return is made. It is "
+            "required on a final answer of those kinds from a decision that executed no "
+            "venue operation (no venue write the venue accepted or left uncertain, a "
+            "rejected write executing nothing, and no answer order with coin, side and "
+            "size that the decision may place), and "
+            "optional otherwise. Without it, or with a coin recent_mids does not list, the "
+            "return is malformed. It is not required while recent_mids is empty"
+        ),
         "verdict": (
             "evaluator returns (required): the judged return against the charter, 0 to 1; "
             "the judged return settles on its judges' mean verdict, and the verdict is "
@@ -1883,12 +1896,18 @@ class SchematicsMixin:
             ),
             "verdict_is_a_prediction": (
                 "a verdict q is also scored against the judged return's measured outcome y: "
-                "for a return that executed venue operations (or earned service income), "
+                "for a return that executed venue operations (or earned service income; a "
+                "write the venue rejected executed nothing, one left uncertain counts), "
                 "y = return_paid_off, 1 when its realised or marked P&L exceeds its own "
                 "compute and tool cost; for a return that executed nothing and named a "
                 "counterfactual {coin, side}, y = 0.5 - 0.5 * tanh(g / "
                 f"{ev.opportunity_scale_bps}), g the declined trade's gross move in bp "
-                "(signed by its side, no fees); any other return has no y. The reward is "
+                "(signed by its side, no fees) (opportunity-cost-v2); for a return whose "
+                "answer order {coin, side} was refused (collateral check, venue rejection "
+                "or terminal error) and that executed nothing else, y = 0.5 + 0.5 * "
+                f"tanh(g / {ev.opportunity_scale_bps}), g that order's gross move in bp "
+                "(signed by the ordered side, no fees), from the same mids and horizons "
+                "(attempted-trade-v1); any other return has no y. The reward is "
                 "scored when the outcome is fixed, or at the latest "
                 f"{ev.consequence_horizon_ticks} ticks after the return, on its mark then "
                 "(lots and the declined trade marked to the mids then); the fixed outcome at "
@@ -1899,12 +1918,28 @@ class SchematicsMixin:
             ),
             "evaluator_return": (
                 "a judge's decision settles on the conformity channel on two signals: g, the "
-                f"mean grade the tier above gave it within {ev.verdict_timeout_ticks} ticks, "
-                "and c, its consequence score; score = mean of those that exist, less the "
-                "card penalty; censored when neither exists. A meta judges one verdict in "
-                f"every {self.m.timing.min_ratio} (with jitter), the window's representative, "
-                "a verdict on a return with no world outcome first; the others are not "
-                "graded by it"
+                "mean grade the tier above gave it while its grade window was open, and c, "
+                "its consequence score; score = mean of those that exist, less the card "
+                "penalty; censored when neither exists. Each tier's judgements wait in a "
+                "cascade window lasting timing.min_ratio times the measured period in which "
+                "the decisions that tier judges reach a score, lengthened by up to "
+                "timing.jitter_fraction of itself. The window releases at the first "
+                "judgement to arrive once that duration has passed and some judgement in it "
+                "is of a settled decision: the tier above is handed its representative (a "
+                "verdict on a return with no world outcome first, then one carried in, "
+                "then the latest) and, beside it, the next completed judgements by the same "
+                "order up to evaluation.meta_read_share of them; the other completed ones "
+                "are passed over. A judgement whose decision has not settled at the release "
+                "is carried into the tier's next window, which opens then, until "
+                f"{backstop + ev.verdict_timeout_ticks} ticks after the judgement was made; "
+                "past that it is not carried. A judgement's grade window closes on the tick "
+                "after a release that handed it up, passed it over or stopped carrying it; "
+                f"one held longer than {backstop + ev.verdict_timeout_ticks} ticks plus the "
+                f"duration of the window it is in, or taken by no window within "
+                f"{ev.verdict_timeout_ticks} ticks, closes then. A grade that reaches a "
+                "closed grade window, and a grade "
+                "window that closes with no grade, are ledgered as evaluator.grade_censored "
+                "with the reason"
             ),
             "meta_return": (
                 "a meta's conformity k is also a prediction of the consequence score s of the "

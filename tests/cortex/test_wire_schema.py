@@ -273,6 +273,9 @@ MUTATIONS = [
     {"forecasts": [{"predicate": "nope", "params": {}, "q": 0.1}]},
     {"forecasts": [{"predicate": "wallet_up", "params": {"horizon_events": 5}, "q": 2}]},
     {"forecasts": []},
+    {"counterfactual": {"coin": "BTC", "side": "buy"}},
+    {"counterfactual": {"coin": "BTC", "side": "hold"}}, {"counterfactual": "buy:BTC"},
+    {"action": "order"},
 ]
 DROPS = [None, "verdict", "payoff", "rationale", "forecasts", "conformity", "action",
          "emits", "body"]
@@ -288,6 +291,25 @@ def _replies(kinds):
                 yield {**trimmed, **first}
                 for second in MUTATIONS[i + 1::11]:
                     yield {**trimmed, **first, **second}
+
+
+def _names_no_declined_trade(reply, contract, emits):
+    """A final answer, to a shape publishing the counterfactual, that names none and orders
+    nothing: the runtime refuses it when the decision executed nothing, and the wire,
+    which cannot see the decision's earlier writes, refuses it always. Stricter, never
+    looser."""
+    from factorylab.cortex.assembly import COUNTERFACTUAL_FIELD
+
+    kind = answer_kind(emits, reply)
+    shapes = contract.get("anyOf", [contract]) if isinstance(contract, dict) else []
+    published = any(
+        (s.get("properties") or {}).get("counterfactual") == COUNTERFACTUAL_FIELD
+        and (kind is None or (s["properties"].get("emits") or {}).get("enum", [kind]) == [kind])
+        for s in shapes if isinstance(s, dict))
+    final = not (reply.get("tool_calls") or reply.get("requests")
+                 or (reply.get("status") == "cannot" and isinstance(reply.get("reason"), str)))
+    return (published and final and "counterfactual" not in reply
+            and reply.get("action") != "order")
 
 
 def _kernel(reply, contract, emits):
@@ -325,7 +347,8 @@ def test_wire_valid_replies_are_kernel_valid_and_plain_kernel_valid_ones_are_wir
     exactly as written (no null dropped, no reason read as rationale, no invalid
     optional section dropped) is admitted by the wire. The samples stay clear of
     what the wire cannot state: an answer order, a child's semantic checks, and the
-    runtime's validator (see ``wire_schema``).
+    runtime's validator (see ``wire_schema``); the one part of that validator the
+    wire does state, the counterfactual of a producing kind, it states more strictly.
     """
     checked = admitted = 0
     for contract, emits in [*_edition6_contracts(), *SYNTHETIC]:
@@ -343,8 +366,56 @@ def test_wire_valid_replies_are_kernel_valid_and_plain_kernel_valid_ones_are_wir
                 # them without naming one: the wire holds it to all of their fields,
                 # the kernel to none. Stricter, never looser.
                 plain = False
+            if _names_no_declined_trade(reply, contract, emits):
+                plain = False
             assert accepted or not on_wire, (emits, reply)
             assert on_wire or not plain, (emits, reply)
             checked += 1
             admitted += on_wire
     assert checked > 10_000 and admitted > 1_000, (checked, admitted)
+
+
+# --- the counterfactual of a producing kind (essay II.III.b, the priced road not taken)
+
+
+def _producing(kind_fields):
+    from factorylab.cortex.assembly import COUNTERFACTUAL_FIELD
+
+    return {"type": "object", "properties": {
+        **ENVELOPE, **kind_fields, "counterfactual": copy.deepcopy(COUNTERFACTUAL_FIELD)},
+        "required": list(kind_fields)}
+
+
+def test_a_producing_final_answer_names_its_declined_trade_or_orders_on_the_wire():
+    """A json_schema host is handed the contract the kernel enforces: a final answer of
+    a producing kind names a counterfactual, or (a kind that owns the answer order) is
+    an order. Continuing and declining need neither."""
+    contract = _producing({"action": {"type": "string"}})
+    wire = wire_schema(contract, ("ProducerReturn",))
+    named = {"action": "hold", "counterfactual": {"coin": "BTC", "side": "sell"}}
+    for reply in (named, {"action": "order", "coin": "BTC", "side": "buy", "size": "0.1"},
+                  {"action": "order"}, {"tool_calls": [CALL]},
+                  {"status": "cannot", "reason": "no"}):
+        validate_schema(reply, wire)
+        _validate_return(reply, contract, "ProducerReturn")
+    for reply in ({"action": "hold"}, {"action": "defer"},
+                  {"action": "hold", "counterfactual": {"coin": "BTC", "side": "hold"}},
+                  {"action": "hold", "counterfactual": {"coin": "BTC"}}):
+        with pytest.raises(ValueError):
+            validate_schema(reply, wire)
+
+
+def test_a_declared_producing_kind_has_no_order_form_on_the_wire():
+    """A declared kind's action is its own word, never an order, so only naming stands."""
+    contract = _producing({"body": {"type": "string"}})
+    wire = wire_schema(contract, ("Finding",))
+    validate_schema({"body": "b", "counterfactual": {"coin": "ETH", "side": "buy"}}, wire)
+    for reply in ({"body": "b"}, {"body": "b", "action": "order"}):
+        with pytest.raises(ValueError):
+            validate_schema(reply, wire)
+
+
+def test_a_contract_that_does_not_publish_the_counterfactual_is_unchanged_on_the_wire():
+    contract = {"type": "object", "properties": {"action": {"type": "string"}},
+                "required": ["action"]}
+    validate_schema({"action": "hold"}, wire_schema(contract, ("ProducerReturn",)))

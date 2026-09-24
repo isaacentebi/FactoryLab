@@ -755,6 +755,41 @@ KIND_RETURN_FIELDS: dict[str, dict[str, dict]] = {
 }
 
 
+#: The trade a return declined, as the contracts of the judged and exposure kinds
+#: publish it (essay II.III.b: an evaluator is graded by realized consequence, which
+#: includes the priced road not taken). The runtime says when it is required
+#: (``runtime.grounded.counterfactual_refusal``); this is only its published shape.
+COUNTERFACTUAL_FIELD: dict[str, Any] = {
+    "type": "object",
+    "description": "a declined trade, coin and side",
+    "properties": {"coin": {"type": "string"}, "side": {"enum": ["buy", "sell"]}},
+    "required": ["coin", "side"],
+}
+
+
+def with_counterfactual(schema: Any) -> Any:
+    """``schema`` with ``COUNTERFACTUAL_FIELD`` published on every object answer shape.
+
+    Guarantees a copy (``schema`` is never mutated) in which each answer shape
+    (``_answer_shapes``) that is an object schema and does not already name
+    ``counterfactual`` names it, so a closed contract can still carry it; any other
+    schema is returned as a copy, unchanged.
+    """
+    schema = deepcopy(schema)
+    if not isinstance(schema, dict):
+        return schema
+    alternatives = schema.get("anyOf")
+    if (set(schema) == {"anyOf"} and isinstance(alternatives, list)
+            and all(isinstance(a, dict) for a in alternatives)):
+        return {"anyOf": [with_counterfactual(a) for a in alternatives]}
+    properties = schema.get("properties")
+    if schema.get("type") != "object" and not isinstance(properties, dict):
+        return schema
+    properties = dict(properties) if isinstance(properties, dict) else {}
+    properties.setdefault("counterfactual", deepcopy(COUNTERFACTUAL_FIELD))
+    return {**schema, "properties": properties}
+
+
 def kind_return_fields(kind: str | None) -> dict:
     """The reserved fields ``kind`` owns beside the universal envelope; {} for any other."""
     return {name: dict(shape) for name, shape in KIND_RETURN_FIELDS.get(kind or "", {}).items()}
@@ -1076,11 +1111,17 @@ def wire_schema(schema: Any, emits: Any = None, *, policy: bool = False) -> dict
       (the route then asks for JSON alone);
     - every object left open is marked open (``additionalProperties: true``, the
       JSON-schema default), so a decoder whose default is closed cannot forbid a
-      field the kernel accepts, such as ``working_state``.
+      field the kernel accepts, such as ``working_state``;
+    - a final answer whose contract publishes ``COUNTERFACTUAL_FIELD`` is sent as a
+      form that requires it and, for a kind that owns the answer order, a form whose
+      action is ``order`` (``_counterfactual_forms``): the decoder cannot see the
+      venue writes of the decision's earlier rounds, so it gets the stricter side.
 
     What the wire cannot state stays the kernel's alone, and a wire-valid reply may
     still fail it there: the answer-order rules of the producer kinds, a child
-    request's semantic checks (``_check_child``), and the runtime's own validator.
+    request's semantic checks (``_check_child``), and the runtime's own validator
+    (among its checks, that a counterfactual names a coin the world lists, and that
+    an ``order`` answer that names no trade reports one a venue tool made).
     The kernel also accepts a few habits the wire does not produce: a null optional
     field, ``reason`` read as a missing ``rationale``, and an invalid optional
     section it drops. The kernel's validation stays the authority over what a reply
@@ -1124,7 +1165,7 @@ def wire_schema(schema: Any, emits: Any = None, *, policy: bool = False) -> dict
                 if final is not None:
                     final = _intersect(final, {"type": "object", "properties": fields})
         if final is not None:
-            forms.append(final)
+            forms.extend(_counterfactual_forms(final, _shape_kinds(shape, kinds, policy)))
         properties = merged.get("properties", {})
         for key in ("tool_calls", "requests"):
             if key not in properties:
@@ -1150,6 +1191,28 @@ def wire_schema(schema: Any, emits: Any = None, *, policy: bool = False) -> dict
         return None
     # Every reply is an object (``_validate_return``'s envelope), so the root says so.
     return deepcopy(_open({"type": "object", "anyOf": forms}))
+
+
+def _counterfactual_forms(final: dict, kinds: tuple[str, ...]) -> list[dict]:
+    """The final-answer forms of a shape that publishes ``COUNTERFACTUAL_FIELD``.
+
+    The kernel requires the field on a final answer that executes no venue
+    operation, and the decoder cannot see whether an earlier round of the same
+    decision wrote to the venue. So the wire states the stricter side it can: a
+    final answer names its counterfactual or, for a kind that owns the answer order
+    (``ANSWER_ORDER_KINDS``), is an ``order``. Guarantees every form returned is
+    ``final`` or narrower, and ``[final]`` for a shape that does not publish the
+    field exactly as ``COUNTERFACTUAL_FIELD``.
+    """
+    if (final.get("properties") or {}).get("counterfactual") != COUNTERFACTUAL_FIELD:
+        return [final]
+    forms = [f for f in (_intersect(final, {"required": ["counterfactual"]}),) if f]
+    if kinds and all(k in ANSWER_ORDER_KINDS for k in kinds):
+        order = _intersect(final, {"properties": {"action": {"enum": ["order"]}},
+                                   "required": ["action"]})
+        if order is not None:
+            forms.append(order)
+    return forms
 
 
 def _shape_kinds(shape: dict, kinds: tuple[str, ...], policy: bool) -> tuple[str, ...]:

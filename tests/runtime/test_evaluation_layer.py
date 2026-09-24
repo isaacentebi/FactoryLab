@@ -230,6 +230,39 @@ def test_metas_are_graded_by_a_tier_above_and_the_tiers_read_a_share_of_each_win
     assert any(i["graded_by"] is not None for i in settled)
 
 
+@pytest.mark.gate
+@pytest.mark.parametrize("seed", [1, 2, 3, 4, 5])
+def test_the_grades_a_tier_above_delivers_count_and_none_vanishes(seed):
+    """Essay II.III.b: evaluators are graded from above, tier upon tier; II.IV.c: a
+    verdict rises a tier only after settling, through a window at least min_ratio times
+    the loop beneath. A meta's judge settles no sooner than its own grade window, so a
+    grade window of a fixed verdict_timeout_ticks closed before the tier above could
+    read the meta: on these seeds 11 to 17 tier-three grades were delivered and 0 to 4
+    counted. The grade window is now the read itself."""
+    from factorylab.runtime.loop import Runtime
+
+    rt = Runtime(_recursive(load_manifest("scripted")), events=200, seed=seed,
+                 initial_balance_micro=None, ledger_path=None, router_gamma=0.1)
+    rt.run()
+    items = rt.ledger._recovery_items()
+    delivered = rt.stats.meta_verdicts
+    assert delivered.get(3, 0) >= 5
+    for tier, count in delivered.items():
+        counted = [i for i in items if i["kind"] == "evaluator.meta_grade" and i["tier"] == tier]
+        refused = [i for i in items if i["kind"] == "evaluator.grade_censored"
+                   and i["tier"] == tier and "by" in i]
+        # No delivered grade vanishes: it counts or is ledgered with its reason.
+        assert len(counted) + len(refused) == count, tier
+        # A clear majority of what the tier above delivers counts.
+        assert 3 * len(counted) >= 2 * count, (tier, len(counted), count)
+    # II.IV.c: a judgement unsettled at its window's release is withheld, not dropped.
+    closed = [i["reason"] for i in items if i["kind"] == "evaluator.grade_censored"]
+    assert not [r for r in closed if r.startswith("unsettled")]
+    carried = {e for i in items if i["kind"] == "cascade.carry" for e in i["carried"]}
+    risen = carried & {i["event_id"] for i in items if i["kind"] == "cascade.release"}
+    assert carried and 2 * len(risen) >= len(carried), (len(risen), len(carried))
+
+
 # --- the adversarial layer (M1, P5) --------------------------------------------------
 
 

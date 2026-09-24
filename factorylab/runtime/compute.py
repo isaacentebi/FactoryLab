@@ -25,7 +25,13 @@ from factorylab.kernel.queue import PropensityRecord
 from factorylab.learners.router import Sample
 from factorylab.runtime.feedback import PendingJudgement
 from factorylab.runtime.reasons import Reason
-from factorylab.runtime.shared import CH_EXPOSURE, CH_VERDICT, _to_plain, declined_reason
+from factorylab.runtime.shared import (
+    CH_EXPOSURE,
+    CH_VERDICT,
+    _to_plain,
+    assembly_rewards,
+    declined_reason,
+)
 from factorylab.runtime.summary import _price_str
 from factorylab.settlement import SEED_VOCABULARY
 from factorylab.settlement.consequence import ReturnConsequences
@@ -188,21 +194,29 @@ def read_share(manifest: Any) -> int:
 
 
 def _cursor_position(cursor: str) -> tuple[int, str] | None:
-    """The listing-order key an ``artifact.list`` cursor ``<ns>:<sha>`` names, or None."""
+    """The ``(ns, sha)`` an ``artifact.list`` cursor ``<ns>:<sha>`` names, or None."""
     ns, _, sha = cursor.partition(":")
     if not ns.isdigit() or len(sha) != 64 or any(c not in "0123456789abcdef" for c in sha):
         return None
-    return (-int(ns), sha)
+    return (int(ns), sha)
 
 
 class ArtifactListing:
     """Each owner's directory rows in listing order, kept sorted as the archive changes.
 
-    Listing order is newest reference first, then by hash, then by the order the
-    references were made. Rows are indexed by owner only: a seat lists what it
-    owns and nothing else (essay II.I.b: "the local state of a given agent ...
-    should be absolutely private"). Rows are shared with the listing; the runtime
-    hands out copies.
+    Listing order is newest reference first, then the order the hashes entered the
+    archive index, then the order the references were made. Rows are indexed by
+    owner only: a seat lists what it owns and nothing else (essay II.I.b: "the
+    local state of a given agent ... should be absolutely private"). Rows are
+    shared with the listing; the runtime hands out copies.
+
+    Ties are never broken by hash. An outcome item's bytes name its evidence's
+    ledger sequence, and a resume adds its own ledger items, so the same row can
+    carry a different hash after a resume; ordered by hash, rows sharing a
+    timestamp could swap and a seat would be shown a different newest page than
+    the uninterrupted world. The archive index is checkpointed with its insertion
+    order and a replay repeats every put and collection in order, so its order is
+    the same in both (``order``).
     """
 
     def __init__(self, store: Any) -> None:
@@ -211,6 +225,13 @@ class ArtifactListing:
         self.row: dict[tuple, dict[str, Any]] = {}  # sort key -> row
         self.by_sha: dict[str, list[tuple]] = {}
         self.by_owner: dict[str, list[tuple]] = {}  # each sorted
+        # sha -> its place in the archive index's insertion order: relative order only,
+        # identical between a live run and a rebuild from the checkpointed index. A
+        # collected hash keeps its number (``gone``) so a cursor naming it still has a
+        # place; put again, it enters at the end of the index and is numbered anew.
+        self.order: dict[str, int] = {}
+        self.gone: set[str] = set()
+        self.next_order = 0
 
     def sync(self) -> None:
         """Fold every change the store reports into the listing."""
@@ -221,20 +242,59 @@ class ArtifactListing:
         epoch, changed = store.drain_changes()
         if epoch != self.epoch:
             self.epoch = epoch
+            self.order = {sha: n for n, sha in enumerate(store.index)}
+            self.gone, self.next_order = set(), len(self.order)
             self._rebuild(row for sha in list(store.index) for row in self._rows_for_sha(sha))
             return
+        self._number(changed)
         for sha in sorted(changed):
             for key in self.by_sha.pop(sha, ()):
                 self._remove(key)
             for key, row in self._rows_for_sha(sha):
                 self._insert(key, row)
 
+    def _number(self, changed: set[str]) -> None:
+        """Number the hashes that entered the index since the last sync, in index order.
+
+        Guarantees each is numbered after every hash already numbered, in the order
+        the index holds them: a hash enters the index only at its end, so they are
+        its last entries.
+        """
+        index = self.store.index
+        for sha in changed:
+            if sha not in index and sha in self.order:
+                self.gone.add(sha)
+        entered = {sha for sha in changed
+                   if sha in index and (sha not in self.order or sha in self.gone)}
+        tail = []
+        for sha in reversed(index):
+            if len(tail) == len(entered):
+                break
+            if sha in entered:
+                tail.append(sha)
+        for sha in reversed(tail):
+            self.order[sha] = self.next_order
+            self.gone.discard(sha)
+            self.next_order += 1
+
     def rows_for(self, owner: str) -> list[dict[str, Any]]:
         return [self.row[key] for key in self.by_owner.get(owner, ())]
 
-    @staticmethod
-    def _key(row: dict[str, Any], position: int) -> tuple:
-        return (-(row["updated_ns"] or 0), str(row["sha"]), position)
+    def rows_after(self, owner: str, ns: int, sha: str) -> list[dict[str, Any]]:
+        """``owner``'s rows after the listing position of the row ``(ns, sha)``.
+
+        Guarantees the same answer whether or not that row is still listed: a hash
+        the listing has numbered keeps its place, and a hash it never numbered (one
+        collected before a resume) resumes from the first row at ``ns``, so paging
+        may repeat a row it already returned but never skips one.
+        """
+        place = self.order.get(sha)
+        cut = (-ns, place, float("inf")) if place is not None else (-ns, -1)
+        keys = self.by_owner.get(owner, ())
+        return [self.row[key] for key in keys[bisect.bisect_right(keys, cut):]]
+
+    def _key(self, row: dict[str, Any], position: int) -> tuple:
+        return (-(row["updated_ns"] or 0), self.order.get(row["sha"], position), position)
 
     @staticmethod
     def _row(sha: str, owner: str, kind: Any, size: int, ts: int) -> dict[str, Any]:
@@ -671,16 +731,24 @@ class ComputeMixin:
             emits = parsed.get("emits", spec.emits[0] if len(spec.emits) == 1 else None)
             if emits not in spec.emits:
                 raise ValueError("select a declared emits kind")
+            producing = self._return_shape(spec, emits) in self.PRODUCING_SHAPES
             if emits in spec.schemas:
                 # The caller's outcome schema cannot weaken a custom event's declaration.
+                # A producing kind's counterfactual is the kernel's field, not the
+                # declaration's, so a closed declaration still carries it.
                 validate_schema(
                     {k: v for k, v in parsed.items()
                      if k not in ("emits", "register", "requests", "tool_calls", "about_handle",
-                                  "status", "reason", "working_state", "ack_through")},
+                                  "status", "reason", "working_state", "ack_through")
+                     and not (producing and k == "counterfactual")},
                     spec.schemas[emits],
                     partial=bool(parsed.get("requests") or parsed.get("tool_calls")
                                  or parsed.get("status") == "cannot"),
                 )
+            if producing and not (parsed.get("requests") or parsed.get("tool_calls")):
+                # A final answer of a kind the world's first-tier verdicts are about.
+                if (reason := self._counterfactual_refusal(req.handle, parsed, emits)):
+                    raise ValueError(reason)
         refused = next((i for i, c in enumerate(calls)
                         if isinstance(c, dict) and c.get("invalid")), None)
         if writes and refused is not None:
@@ -990,14 +1058,17 @@ class ComputeMixin:
         Guarantees no row another seat owns is returned: the index is keyed by
         owner and there is no unscoped read (information audit C4).
         """
-        rows = self._artifact_listing().rows_for(owner)
+        listing = self._artifact_listing()
+        rows = listing.rows_for(owner)
         if cursor:
             position = _cursor_position(cursor)
             if position is not None:
                 # A position, not a row: paging continues past a row that was since
-                # released or collected instead of ending at it.
-                rows = [row for row in rows
-                        if (-(row["updated_ns"] or 0), str(row["sha"])) > position]
+                # released or collected instead of ending at it. The cursor names the
+                # row by hash, never by its listing number: numbers are derived and a
+                # rebuild renumbers them, while a hash names the same row after a
+                # resume as before it.
+                rows = listing.rows_after(owner, *position)
             else:
                 shas = [row["sha"] for row in rows]
                 rows = rows[shas.index(cursor) + 1:] if cursor in shas else []
@@ -1552,6 +1623,40 @@ class ComputeMixin:
             if not self.consequences.account_open(ancestor):
                 return False
         return True
+
+    #: The reward shapes whose returns the world's first-tier verdicts are about: a
+    #: judged return settles on its judges' verdicts, an exposure on how those
+    #: verdicts scored against its measured outcome (``FeedbackMixin._final_outcome``).
+    PRODUCING_SHAPES = frozenset({"judged", "exposure"})
+
+    def _return_shape(self, spec: AssemblySpec, kind: str | None) -> str | None:
+        """The reward shape ``kind`` settles on: the world's meaning of it, else its author's."""
+        shapes = getattr(self, "kind_reward_shapes", {}) or {}
+        return shapes.get(kind) or assembly_rewards(spec).get(kind)
+
+    def _counterfactual_refusal(self, handle: str, parsed: dict, kind: str | None) -> str | None:
+        """Why a producing kind's final answer fails its counterfactual contract, or None.
+
+        Essay II.III.b (evaluations graded by realized consequence, the priced road
+        not taken included): a producing return that executes no venue operation
+        names the trade it declined (``runtime.grounded.counterfactual_refusal``).
+        Guarantees None for a decision that acted (``_acted``, the one definition the
+        world's measurement also reads: a venue write accepted or possibly accepted,
+        lots or earnings; a write the venue refused is not acting), and for an answer
+        order this decision may place (``_execute_outputs``); otherwise the answer is
+        held to the contract against the coins the world lists now (``latest_mids``,
+        the mids a declined trade is frozen from).
+        """
+        from factorylab.cortex.assembly import ANSWER_ORDER_KINDS
+        from factorylab.runtime.grounded import counterfactual_refusal, latest_mids
+
+        if self._acted(handle):
+            return None
+        if (kind in ANSWER_ORDER_KINDS and parsed.get("action") == "order"
+                and all(k in parsed for k in ("coin", "side", "size"))
+                and self._may_write(handle)):
+            return None
+        return counterfactual_refusal(parsed, dict(latest_mids(self)))
 
     def _allowed_tools(self, action_id: str) -> set[str]:
         """Every registered tool is a public primitive; schematics are public.

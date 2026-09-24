@@ -54,6 +54,7 @@ from factorylab.world.scripted import (  # noqa: E402
     ScriptedProvider,
     _description_from_prompt,
     _inputs_from_prompt,
+    names_declined_trade,
 )
 from scripts import edition4_rehearsal as rehearsal  # noqa: E402
 
@@ -144,6 +145,9 @@ class PolicyProvider(ScriptedProvider):
             # Whether the world already lists the scripted tool, read off this prompt.
             self.tool_listed = f'"{HALF_SPREAD["id"]}"' in text
             reply = self._decide(inputs)
+        # The return contract, not a behaviour: a producing final answer that executes
+        # nothing names the trade it declined (factorylab.runtime.grounded).
+        reply = names_declined_trade(reply, text, inputs, self.decisions)
         return ModelResponse(req.model_id, json.dumps(reply), len(text) // 4, 60, "stop",
                              cost_micro=1)
 
@@ -216,11 +220,8 @@ class PolicyProvider(ScriptedProvider):
         if n % 5 == 0:
             return {"action": "investigate", "tool_calls": [
                 {"tool": "venue.positions", "args": {}}]}
-        hold = {"action": "hold", "rationale": "no mechanism worth trading yet",
+        return {"action": "hold", "rationale": "no mechanism worth trading yet",
                 "propensity": {"hold": 0.7, "investigate": 0.2, "order": 0.1}}
-        if n % 2:
-            hold["counterfactual"] = {"coin": "BTC", "side": "buy" if n % 4 == 1 else "sell"}
-        return hold
 
     @staticmethod
     def _judge(inputs: dict[str, Any], model_id: str = "") -> dict[str, Any]:
