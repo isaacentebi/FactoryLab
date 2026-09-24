@@ -55,6 +55,44 @@ class InsufficientReserve(X402Error):
     """A validated payment cannot be covered; no authorization was signed."""
 
 
+class AuthorizationNotRecorded(X402Error):
+    """The write-ahead guard refused or failed: no authorization was signed."""
+
+
+#: The ``authorization_typed_data`` message fields written as decimal strings.
+UINT_FIELDS = ("value", "validAfter", "validBefore")
+
+
+def sign_transfer_authorization(account: Any, typed: dict, *, guard: Any) -> Any:
+    """The one place this code base signs an EIP-3009 authorization with a reserve key.
+
+    Guarantees nothing is signed unless ``guard`` first returned for this exact message:
+    the guard (``factorylab.runtime.capital_loop``'s ``AuthorizationLog`` under a held
+    ``ReserveLock``, or ``ReserveGuard``, which takes that lock for the one write) has
+    written the authorization, durably, to the reserve's write-ahead record beside the
+    lock. No guard, a guard that raises, or a message for another payer raises
+    ``AuthorizationNotRecorded`` and signs nothing. Every signer of an EIP-3009
+    ``TransferWithAuthorization`` (x402 purchases, Venice top-ups from the CLI, the
+    compute proof and both treasury rails) reaches the signature only through here.
+    """
+    if typed.get("primaryType") != "TransferWithAuthorization":
+        raise AuthorizationNotRecorded("only a TransferWithAuthorization is signed here")
+    message = typed["message"]
+    if str(message.get("from", "")).lower() != account.address.lower():
+        raise AuthorizationNotRecorded("authorization payer is not the signing reserve")
+    if guard is None:
+        raise AuthorizationNotRecorded(
+            "no write-ahead guard: an authorization is signed only after it is recorded "
+            "under the reserve lock; nothing was signed")
+    try:
+        guard({k: str(v) if k in UINT_FIELDS else v for k, v in message.items()})
+    except Exception as exc:  # noqa: BLE001 - an unrecorded authorization is never signed
+        raise AuthorizationNotRecorded(
+            f"write-ahead refused ({getattr(exc, 'reason', type(exc).__name__)}); "
+            "nothing was signed") from None
+    return account.sign_message(encode_typed_data(full_message=typed))
+
+
 @dataclass(frozen=True)
 class HTTPResponse:
     """Status and headers remain available even for a payment-required response."""
@@ -327,7 +365,7 @@ def authorization_typed_data(
     }
 
 
-def payment_header(account: Any, quote: PaymentQuote) -> str:
+def payment_header(account: Any, quote: PaymentQuote, *, guard: Any = None) -> str:
     """Standard base64 of UTF-8 v2 JSON retains accepted requirements and signed payload.
 
     Specification files read from https://github.com/coinbase/x402 (2026-09-11):
@@ -336,9 +374,10 @@ def payment_header(account: Any, quote: PaymentQuote) -> str:
     ``specs/transports-v2/http.md`` (base64 JSON transport).
     Venice uses ``X-402-Payment`` for the v2 envelope that the standard sends in
     ``PAYMENT-SIGNATURE``. The uint256 authorization values are decimal strings.
+    The signature is made only through ``sign_transfer_authorization`` with ``guard``.
     """
     typed = authorization_typed_data(quote.accepted, account.address)
-    signed = account.sign_message(encode_typed_data(full_message=typed))
+    signed = sign_transfer_authorization(account, typed, guard=guard)
     authorization = {
         k: str(v) if k in {"value", "validAfter", "validBefore"} else v
         for k, v in typed["message"].items()
@@ -402,8 +441,12 @@ class X402Client:
         base_url: str = VENICE_URL,
         rpc: str = BASE_RPC,
         transport: Transport | None = None,
+        guard: Any = None,
     ) -> None:
         self._account = _account(private_key)
+        # The write-ahead guard every authorization this client signs passes through
+        # (``sign_transfer_authorization``); without one it signs nothing.
+        self.guard = guard
         self.address = self._account.address
         self.base_url = base_url.rstrip("/")
         self.rpc = rpc
@@ -442,7 +485,7 @@ class X402Client:
             raise X402Error("Quote exceeds registered per-request ceiling")
         if self.usdc_balance() < quote.amount_micro:
             raise InsufficientReserve("Reserve cannot cover the quoted Base USDC payment")
-        return payment_header(self._account, quote)
+        return payment_header(self._account, quote, guard=self.guard)
 
     def venice_balance(self, address: str | None = None) -> int:
         """A SIWE-authenticated wallet balance is rounded down to integer micro-USD."""
@@ -471,7 +514,7 @@ class X402Client:
             raise X402Error("Insufficient Base USDC for a $5 top-up")
         path = "/x402/top-up"
         quote = parse_quote(self._request("POST", path, {}), amount_micro=amount_micro)
-        encoded = payment_header(self._account, quote)
+        encoded = payment_header(self._account, quote, guard=self.guard)
         response = self._request("POST", path, {}, **{"X-402-Payment": encoded})
         if not 200 <= response.status < 300:
             raise X402Error(

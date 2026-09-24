@@ -222,7 +222,18 @@ class BootstrapMixin:
             )
         )
         self.market.max_request_micro = manifest.treasury.max_request_micro
+        from pathlib import Path as _Path
+
+        from factorylab.runtime.capital_loop import ReserveGuard
         from factorylab.world.treasury import UnconfiguredRail
+
+        # Every EIP-3009 authorization this world signs with the reserve key is written
+        # ahead to the reserve's record, under its lock, or never signed
+        # (x402.sign_transfer_authorization): a capital-loop run on the same reserve can
+        # then neither overlap it nor miss what it authorized.
+        run_dir = _Path(ledger_path).resolve().parent if ledger_path else None
+        if isinstance(self.market, X402Provider) and self.market.guard is None:
+            self.market.guard = ReserveGuard("x402_purchase", run_dir=run_dir)
 
         if self.live:
             if manifest.treasury.reserve_address is not None:
@@ -236,6 +247,8 @@ class BootstrapMixin:
                 # metered spend since the purchase started is recorded beside the
                 # advisory balance so a lost acknowledgment stays explainable (C5).
                 rail.metered_usage_since = self._venice_usage_since
+                # The capital-loop runner replaces this with its held lock's record.
+                rail.authorization_log = ReserveGuard("treasury", run_dir=run_dir)
             else:
                 rail = UnconfiguredRail(self.exchange)
 

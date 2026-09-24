@@ -367,6 +367,28 @@ def _capital_loop_locks_stay_in_tmp(monkeypatch, tmp_path_factory):
 
 
 @pytest.fixture
+def write_ahead(monkeypatch):
+    """A real write-ahead guard made the default of every X402Client and X402Provider.
+
+    Production signs an EIP-3009 authorization only through
+    ``x402.sign_transfer_authorization`` with a guard, and every signer is handed one
+    (``ReserveGuard``). A test that signs asks for this fixture: its clients get a real
+    ``ReserveGuard``, whose lock and record live in the test's temporary lock directory
+    (``_capital_loop_locks_stay_in_tmp``), so the test exercises the same chokepoint.
+    """
+    from factorylab.runtime.capital_loop import ReserveGuard
+    from factorylab.world import market, x402
+
+    default = ReserveGuard("test")
+    for cls in (x402.X402Client, market.X402Provider):
+        def init(self, *args, _original=cls.__init__, guard=None, **kwargs):
+            _original(self, *args, guard=guard if guard is not None else default, **kwargs)
+
+        monkeypatch.setattr(cls, "__init__", init)
+    return default
+
+
+@pytest.fixture
 def operator_lock_dir():
     """The real ``default_lock_dir`` the autouse fixture above replaces: call it only to
     compute a path, never to lock anything there."""

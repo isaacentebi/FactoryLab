@@ -212,7 +212,10 @@ covered every block up to it. The runtime clock is never consulted.
    5. resolves every authorization in the reserve's write-ahead authorization record
       against finalized Base, whatever any diary now holds (see "The write-ahead
       authorization record"), and refuses while one may still settle, or while one
-      settled that no diary booked (a recovery: exit 3).
+      settled that no diary booked (a recovery: exit 3);
+   6. scans the last settlement window of finalized blocks for the reserve's own
+      authorizations and transfers, and refuses on any the record does not know (the
+      cooling-off scan, same section).
 
 ### How long a run must be
 
@@ -241,11 +244,14 @@ authorization. So one conversion's settlement horizon, in Base's own time, is:
 
 The run commands the conversion, and AGENTS.md rule 12 (essay II, IV.c) asks an inner
 loop to settle at least 3× faster than the outer loop that commands it, so the runner
-refuses a run *planned* shorter than **three** horizons. The planned length is
-`--duration`, or (`--ticks` − 1) × the tick when that is shorter: the clock's first tick
-comes at once, so N ticks span N − 1 intervals. The signer stamps `validBefore` with the
-run's own clock, the same one the bound's host time was read from, so the two cannot
-disagree. The admission cap, a
+refuses a run *planned* shorter than **three** horizons. The clock delivers
+floor(`--duration` / tick) ticks, or `--ticks` when that is fewer, and its first tick
+comes at once: N ticks span N − 1 intervals, and that is the planned length credited
+(a 7,599 s duration at a 10 s tick is 759 ticks, credited 7,580 s). The signer stamps
+`validBefore` with the wall clock, the same clock the bound's host time is read from, so
+the two cannot disagree; a capital-loop launch refuses an injected clock
+(`capital_loop_requires_the_wall_clock`), since a virtual clock would stamp a real
+authorization. Injected clocks remain for testnet-only runs. The admission cap, a
 failure, a signal or a kill can still end a run sooner, and the bound says nothing of
 those. With the numbers of 23 September 2026 (no clock lead, a lag of about 16 minutes, the
 rehearsal's 10 s tick) the bound is 3 × (600 + 1,920 + 10) s = 7,590 s, about 127
@@ -302,11 +308,27 @@ was proven settled or dead by the launch after it (a dead EIP-3009 authorization
 revives), so the last holder is the only earlier run that can still be live, and it is
 always read. Siblings and `--previous-run` are still read too.
 
+Every EIP-3009 signer in this code base takes the same lock. The one function that
+signs a `TransferWithAuthorization` with a reserve key
+(`x402.sign_transfer_authorization`) signs only after its guard wrote the authorization
+to the reserve's write-ahead record under the reserve's lock (next section). The signers
+are the capital-loop rail, the ordinary treasury rail, x402 purchases (a world's market
+and `factorylab probe`), `factorylab reserve topup` and `scripts/compute_proof.py`. While
+a capital-loop run is alive every one of them refuses (`capital_loop_reserve_locked`);
+otherwise each takes the lock for its one write and records its authorization, which
+the next capital-loop launch resolves like its own. A signer with no guard signs
+nothing.
+
 What the lock does not cover: another machine, or another operator account (another
-home directory), on the same reserve; `factorylab reserve` top-ups made by hand; and
-runs launched before this lock existed. The on-chain floor is the only bound across
-those. Do not delete `~/.factorylab/capital-loop`: the record is what finds the last
-run.
+home directory), on the same reserve; and code older than this runbook. The on-chain
+floor and the cooling-off scan (next section) are the only bounds across those.
+
+**Never restore, copy or migrate `~/.factorylab/capital-loop`.** A restored or copied
+record has forgotten every authorization written since the copy, and no file beside it
+can tell. The cooling-off scan catches one that already settled; one still unsettled
+could settle after the next run's floor check. Deleting the directory is the manual
+reset below, and it requires every recorded authorization to be settled and booked, or
+dead.
 
 **The deliberate manual reset.** If the recorded run's directory is gone (every launch
 refuses `run_ledger_missing`, naming it), its diary reads empty
@@ -323,11 +345,14 @@ this way:
 2. wait until at least 600 s plus twice the finality lag have passed since the last run
    died (its authorizations are then settled or dead), and read the reserve's balance
    (step 3 of "Before a live run");
-3. remove **all three**: `<reserve>.lock`, `<reserve>.last-run.json` and
-   `<reserve>.authorizations.jsonl`. The next launch creates them afresh, with a record
-   naming no run and an empty authorization record. The authorization record is the
-   one file whose loss can hide real money: remove it only once every authorization in
-   it is settled and booked, or dead (step 2, and `--acknowledge` below).
+3. copy `<reserve>.last-run.json` aside (it names the last run, which you may still
+   need to read), then remove **all three**: `<reserve>.lock`, `<reserve>.last-run.json`
+   and `<reserve>.authorizations.jsonl`. The next launch creates them afresh, with a
+   record naming no run and an empty authorization record. The authorization record is
+   the one file whose loss can hide real money: remove it only once every authorization
+   in it is settled and booked, or dead (step 2, and `--acknowledge` below). A lock
+   directory made before the authorization record existed refuses with
+   `capital_loop_authorization_record_missing`, and the refusal names these exact files.
 
 Removing some of them and not the others refuses every launch until all are gone.
 
@@ -337,17 +362,34 @@ A diary can be truncated at a line boundary, restored from an older copy, or del
 and a file alone cannot tell a cut diary from a shorter one. So an authorization's
 existence does not rest on any diary:
 
-- **Before the rail signs** an EIP-3009 authorization it appends one line (nonce,
-  value, payer, payee, `validAfter`, `validBefore`, run directory) to
-  `<reserve>.authorizations.jsonl` beside the lock and flushes it to stable storage
-  (`F_FULLFSYNC` on macOS). If that write fails, nothing is signed; a rail with no
-  record bound refuses to sign at all. A crash between the append and the signature
+- **Before any signer signs** an EIP-3009 authorization (see "One run per reserve") one
+  line (nonce, value, payer, payee, `validAfter`, `validBefore`, origin, run directory)
+  is appended to `<reserve>.authorizations.jsonl` beside the lock and flushed to stable
+  storage (`F_FULLFSYNC` on macOS). If that write fails, nothing is signed; a signer
+  with no guard refuses to sign at all. A crash between the append and the signature
   leaves an authorization recorded and never signed: it can never be used, and it
   resolves as soon as it expires.
-- **At every launch**, every recorded authorization not yet resolved is read against
-  USDC's `authorizationState` at the finalized block:
+- **An append never lands on a torn line.** The writer checks the record ends in a
+  newline first. A last line that is a whole entry missing only its newline is counted,
+  and the newline is written (and flushed) before anything else. A torn fragment is not
+  appended to: every launch refuses `authorization_record_torn` until it is repaired:
+
+      uv run python scripts/capital_loop_outstanding.py --repair-torn
+
+  which takes the lock, moves the fragment to `<record>.torn-<seconds>` (nothing is
+  deleted), and records a `torn` entry carrying its bytes. Any nonce-like value in the
+  fragment becomes an open authorization, resolved against the chain like any other
+  (a torn append was never signed, but the record does not assume it).
+- **At every launch**, every recorded authorization not yet resolved is read twice,
+  and the two reads must agree: USDC's `authorizationState` at the finalized block, and
+  a scan of the finalized blocks it could have been used in for its `AuthorizationUsed`.
+  They must agree, or the launch refuses (`recorded_authorization_reads_disagree`); a
+  finalized tag that is not behind `latest` refuses too
+  (`finalized_tag_not_behind_latest`). Nothing is resolved from one read, and nothing is
+  read at `latest`. Then:
   - used, and its run's diary holds the `treasury.financing` of the transfer whose
-    confirmed receipt carries that nonce: resolved;
+    confirmed receipt carries that nonce: resolved. Used by any other signer (a CLI
+    top-up, an x402 purchase): spent in the open, resolved;
   - used, and no diary shows it booked: **recovery**. The launch is refused
     (`recorded_authorization_settled_unbooked`), `CAPITAL LOOP RECOVERY` is printed and
     the runner exits 3. Real USDC left the reserve and bought Venice credit no world
@@ -361,8 +403,17 @@ existence does not rest on any diary:
   - unused and not yet past it: the launch is refused
     (`recorded_authorization_may_still_settle`) until it settles or expires.
 - A resolution is appended to the record too, so a diary deleted after its financing
-  was proven is never needed again. A torn last line (a crash mid-append, never signed)
-  is skipped; any other unreadable line refuses (`authorization_record_unreadable`).
+  was proven is never needed again. Any unreadable line other than a torn last one
+  refuses (`authorization_record_unreadable`).
+- **The cooling-off scan.** A record rolled back with its directory cannot be caught by
+  any local file. So each launch also scans the finalized blocks of the last
+  600 s + 2 × the finality lag for the reserve's own `AuthorizationUsed` and `Transfer`
+  events. An authorization used there that the record does not know refuses the launch
+  as a recovery (`unrecorded_reserve_authorization`, exit 3), and USDC leaving the
+  reserve there outside such an authorization refuses too
+  (`unrecorded_reserve_transfer`). Both pass once the window has moved past them. This
+  catches a rollback whose authorization already settled; one not yet settled is not
+  on chain to find, which is why the directory is never restored or copied.
 
 ## After the run
 

@@ -320,3 +320,44 @@ def test_owner_only_openrouter_key_still_loads(tmp_path, monkeypatch):
     _load_dotenv()
     assert os.environ["OPENROUTER_API_KEY"] == "sk-fixture"
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+
+def test_topup_is_written_ahead_under_the_reserve_lock_or_refused(keyfile, wire, capsys):
+    # Every EIP-3009 signature passes x402.sign_transfer_authorization: the CLI's top-up
+    # too. While a capital-loop run holds the reserve it signs and sends nothing; free,
+    # its nonce is in the reserve's write-ahead record before the payment leaves.
+    from factorylab.runtime import capital_loop
+
+    reserve = Account.from_key(TEST_KEY).address
+    record = capital_loop.default_lock_dir() / f"{reserve.lower()}.authorizations.jsonl"
+    responses, calls = wire
+    responses.extend(topup_responses())
+    with capital_loop.ReserveLock(reserve):
+        assert main(["reserve", "topup", "--usd", "5"]) != 0
+    sent = [{k.lower(): v for k, v in r.header_items()} for r in calls]
+    assert not any("x-402-payment" in h for h in sent)
+    assert capital_loop.read_authorizations(record) == []
+    capsys.readouterr()
+    responses.clear()
+    calls.clear()
+    responses.extend(topup_responses())
+    seen = []
+    original = request.OpenerDirector.open
+
+    def watching(self, req, timeout):
+        headers = {k.lower(): v for k, v in req.header_items()}
+        if "x-402-payment" in headers:
+            seen.append([e["nonce"] for e in capital_loop.read_authorizations(record)])
+        return original(self, req, timeout)
+
+    request.OpenerDirector.open = watching
+    try:
+        assert main(["reserve", "topup", "--usd", "5"]) == 0
+    finally:
+        request.OpenerDirector.open = original
+    payment = json.loads(base64.b64decode(
+        {k.lower(): v for k, v in calls[2].header_items()}["x-402-payment"]))
+    nonce = payment["payload"]["authorization"]["nonce"]
+    assert seen == [[nonce]]  # recorded before it left
+    assert [(e["nonce"], e["origin"]) for e in capital_loop.read_authorizations(record)] == [
+        (nonce, "reserve_topup")]

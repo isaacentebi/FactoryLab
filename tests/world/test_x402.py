@@ -29,6 +29,11 @@ from factorylab.world.x402 import (
     venice_balance,
 )
 
+# Every signature here goes through the production chokepoint, with a real
+# ReserveGuard in this test's temporary lock directory (tests/conftest.py).
+pytestmark = pytest.mark.usefixtures("write_ahead")
+
+
 # Public test fixture only. Never loaded from a real key file or environment.
 TEST_KEY = "0x" + "11" * 32
 
@@ -192,11 +197,12 @@ def test_eip3009_hash_matches_independently_encoded_known_vector(quote):
         assert encode_typed_data(full_message=changed).body != struct
 
 
-def test_payment_header_v2_envelope_signature_and_fresh_nonce(quote, monkeypatch):
+def test_payment_header_v2_envelope_signature_and_fresh_nonce(quote, monkeypatch,
+                                                              write_ahead):
     monkeypatch.setattr("factorylab.world.x402.time.time_ns", lambda: 1_750_000_000_000_000_000)
     account = Account.from_key(TEST_KEY)
     selected = parse_quote(HTTPResponse(402, quote))
-    payment = decoded(payment_header(account, selected))
+    payment = decoded(payment_header(account, selected, guard=write_ahead))
     assert set(payment) == {"x402Version", "accepted", "payload", "resource", "extensions"}
     assert payment["x402Version"] == 2
     assert payment["accepted"] == selected.accepted
@@ -222,7 +228,7 @@ def test_payment_header_v2_envelope_signature_and_fresh_nonce(quote, monkeypatch
         )
         == account.address
     )
-    second = decoded(payment_header(account, selected))
+    second = decoded(payment_header(account, selected, guard=write_ahead))
     assert auth["nonce"] != second["payload"]["authorization"]["nonce"]
     assert TEST_KEY[2:] not in json.dumps(payment)
 
@@ -439,14 +445,14 @@ def test_topup_preserves_venice_data_envelope(quote):
 
 
 @pytest.mark.parametrize("amount", [0, 1, 1734, 5_000_001, 10**30])
-def test_general_quote_signs_exact_arbitrary_amount(quote, amount):
+def test_general_quote_signs_exact_arbitrary_amount(quote, amount, write_ahead):
     quote["accepts"][0]["amount"] = str(amount)
     selected = parse_quote(HTTPResponse(402, quote))
     assert selected.amount_micro == amount and type(selected.amount_micro) is int
     account = Account.from_key(TEST_KEY)
     typed = authorization_typed_data(selected.accepted, account.address)
     assert typed["message"]["value"] == amount
-    header = decoded(payment_header(account, selected))
+    header = decoded(payment_header(account, selected, guard=write_ahead))
     assert header["payload"]["authorization"]["value"] == str(amount)
 
 
@@ -477,7 +483,7 @@ def test_generic_authorize_ceiling_and_reserve_precede_signature(quote, monkeypa
     assert len(fake.calls) == 1
 
 
-def test_payment_header_survives_decimal_extensions(quote):
+def test_payment_header_survives_decimal_extensions(quote, write_ahead):
     """A seller's extension blob decoded with Decimal floats (FarOuter's price info) must not
     break the envelope: the proof of 12 September failed here before any payment was sent."""
     from decimal import Decimal
@@ -486,7 +492,7 @@ def test_payment_header_survives_decimal_extensions(quote):
     body = dict(quote)
     body["extensions"] = {"bazaar": {"faroutQuote": {"info": {"usd": Decimal("0.001")}}}}
     selected = parse_quote(HTTPResponse(402, body))
-    payment = decoded(payment_header(account, selected))
+    payment = decoded(payment_header(account, selected, guard=write_ahead))
     assert payment["extensions"]["bazaar"]["faroutQuote"]["info"]["usd"] == "0.001"
 
 

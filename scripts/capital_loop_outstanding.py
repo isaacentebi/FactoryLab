@@ -1,5 +1,5 @@
 """Print what a capital-loop run left outstanding on chain: keyless, and read-only
-unless ``--acknowledge`` is given.
+unless ``--acknowledge`` or ``--repair-torn`` is given.
 
 Guarantees nothing is signed and no signing key is read. The run's diary is decrypted
 with its own ledger key file (``<run>/ledger.jsonl.key``), exactly as
@@ -21,6 +21,11 @@ authorization record. It takes the reserve's lock, reads the chain keylessly, an
 refuses unless finalized Base shows that recorded authorization used; it signs nothing.
 
     uv run python scripts/capital_loop_outstanding.py --acknowledge 0x<nonce>
+
+``--repair-torn`` is the other: when a launch refuses ``authorization_record_torn`` (a
+crash left a fragment at the end of the record), it takes the lock, moves the fragment
+to a ``.torn-<seconds>`` sidecar (nothing is deleted) and records it as a ``torn`` entry
+whose nonce-like values stay open until the chain resolves them.
 """
 
 from __future__ import annotations
@@ -40,6 +45,7 @@ from factorylab.runtime.capital_loop import (  # noqa: E402
     acknowledge,
     keyless_base,
     outstanding,
+    repair_torn,
 )
 from factorylab.runtime.worlds import load_manifest  # noqa: E402
 from factorylab.world.x402 import BASE_RPC, http_request  # noqa: E402
@@ -70,12 +76,25 @@ def main(argv: list[str] | None = None, *, transport=http_request) -> int:
                         help="after settling its books by hand: mark a recorded "
                         "authorization finalized Base shows used as resolved (takes the "
                         "reserve's lock, so no capital-loop run may be alive)")
+    parser.add_argument("--repair-torn", action="store_true",
+                        help="set a torn last line of the write-ahead authorization record "
+                        "aside to a .torn-<seconds> sidecar and record its nonces as open "
+                        "(takes the reserve's lock; deletes nothing)")
     parser.add_argument("--lock-dir", type=Path, default=None, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     reserve = load_manifest(str(args.world)).treasury.reserve_address
     if reserve is None:
         print("the world declares no treasury.reserve_address", file=sys.stderr)
         return 2
+    if args.repair_torn:
+        try:
+            with ReserveLock(reserve, lock_dir=args.lock_dir) as lock:
+                done = repair_torn(lock)
+        except CapitalLoopRefused as exc:
+            print(json.dumps({"error": exc.reason, **exc.detail}), file=sys.stderr)
+            return 2
+        print(json.dumps(done))
+        return 0
     if args.acknowledge:
         try:
             with ReserveLock(reserve, lock_dir=args.lock_dir) as lock:

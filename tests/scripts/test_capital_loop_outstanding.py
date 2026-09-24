@@ -12,6 +12,8 @@ import pytest
 
 from factorylab.kernel.ledger import Ledger
 from factorylab.runtime.capital_loop import (
+    AUTHORIZATION_USED,
+    TRANSFER,
     CapitalLoopRefused,
     journaled_references,
     keyless_base,
@@ -20,7 +22,7 @@ from factorylab.runtime.capital_loop import (
     read_items,
 )
 from factorylab.runtime.worlds import load_manifest
-from factorylab.world.evm import BASE
+from factorylab.world.evm import BASE, event_topic
 from factorylab.world.x402 import HTTPResponse
 
 RESERVE = "0x1228e5620944a79D268Afc7522E00891526EdEBb"
@@ -30,18 +32,68 @@ SETTLED_NONCE = "0x" + "33" * 32
 
 
 class Rpc:
-    """Base mainnet as the public JSON-RPC answers it, and a record of every request."""
+    """Base mainnet as its public JSON-RPC answers it: per block tag and per authorizer.
+
+    Blocks are two seconds apart. The finalized block is ``final_number`` at
+    ``final_ts``; the latest is ``lag_s // 2`` blocks later. ``use`` makes one
+    authorizer's nonce used at a moment, and every answer comes from that one fact at
+    the block asked for: ``authorizationState`` is true only for that authorizer and
+    only at a block at or after it (so a read at ``latest`` sees what finalized Base does
+    not yet), and ``eth_getLogs`` returns its ``AuthorizationUsed`` and ``Transfer`` only
+    for matching topics inside the asked range. Every request is recorded.
+    """
 
     def __init__(self):
         self.balance = 10_000_000
-        self.final_number, self.final_ts = 900, 2_000
+        self.final_number, self.final_ts = 3_000, 12_000
         self.lag_s = 960  # latest less finalized, as measured on Base mainnet
-        self.used = {SETTLED_NONCE}
+        self.used: dict[str, tuple[str, int, str]] = {}
         self.requests = []
+        self.use(SETTLED_NONCE, at_ts=8_600)  # settled well before the cooling-off window
+
+    def use(self, nonce, *, at_ts, authorizer=RESERVE, payee="0x" + "9" * 40):
+        self.used[nonce.lower()] = (authorizer.lower(), at_ts, payee.lower())
+
+    @property
+    def latest_number(self):
+        return self.final_number + self.lag_s // 2
 
     @property
     def latest_ts(self):
         return self.final_ts + self.lag_s
+
+    def number_at(self, timestamp):
+        return self.final_number - (self.final_ts - timestamp) // 2
+
+    def block(self, number):
+        if not 0 <= number <= self.latest_number:
+            return None
+        return {"number": hex(number), "hash": "0x" + number.to_bytes(32).hex(),
+                "timestamp": hex(self.final_ts - 2 * (self.final_number - number))}
+
+    def at(self, tag):
+        return {"finalized": self.final_number, "latest": self.latest_number}.get(tag) or (
+            int(tag, 16))
+
+    def logs(self, query):
+        low, high = int(query["fromBlock"], 16), int(query["toBlock"], 16)
+        rows = []
+        for nonce, (authorizer, at_ts, payee) in self.used.items():
+            number = self.number_at(at_ts)
+            where = {"address": BASE.usdc, "blockNumber": hex(number),
+                     "blockHash": self.block(number)["hash"] if self.block(number) else "0x",
+                     "transactionHash": "0x" + nonce[2:][::-1]}
+            word = "0x" + "0" * 24 + authorizer[2:]
+            rows += [{**where, "topics": [event_topic(AUTHORIZATION_USED), word, nonce],
+                      "data": "0x"},
+                     {**where, "topics": [event_topic(TRANSFER), word,
+                                          "0x" + "0" * 24 + payee[2:]],
+                      "data": hex(5_000_000)}]
+        wanted = query["topics"]
+        return [r for r in rows if low <= int(r["blockNumber"], 16) <= high
+                and query["address"].lower() == r["address"].lower()
+                and all(w is None or w.lower() == g.lower()
+                        for w, g in zip(wanted, r["topics"], strict=False))]
 
     def __call__(self, method, url, payload, headers):
         assert url == BASE.rpc, url  # nothing else is asked, Venice's quote included
@@ -50,23 +102,18 @@ class Rpc:
         if name == "eth_chainId":
             result = hex(BASE.id)
         elif name == "eth_getBlockByNumber":
-            result = ({"number": hex(self.final_number), "timestamp": hex(self.final_ts)}
-                      if params[0] == "finalized" else
-                      {"number": hex(self.final_number + self.lag_s // 2),
-                       "timestamp": hex(self.final_ts + self.lag_s)}
-                      if params[0] == "latest" else {"hash": "0x" + "ab" * 32})
+            result = self.block(self.at(params[0]))
         elif name == "eth_call":
-            data = params[0]["data"]
+            data, tag = params[0]["data"], params[1]
             if data.startswith("0x70a08231"):  # balanceOf(address)
                 result = hex(self.balance)
-            else:  # authorizationState(address,bytes32)
-                result = hex(int("0x" + data[-64:] in self.used))
+            else:  # authorizationState(address,bytes32), as of the asked block
+                authorizer, nonce = "0x" + data[34:74].lower(), "0x" + data[74:138].lower()
+                fact = self.used.get(nonce)
+                result = hex(int(fact is not None and fact[0] == authorizer
+                                 and self.number_at(fact[1]) <= self.at(tag)))
         elif name == "eth_getLogs":
-            nonce = params[0]["topics"][2]
-            result = ([{"address": BASE.usdc, "topics": params[0]["topics"],
-                        "transactionHash": "0x" + "cd" * 32, "blockNumber": hex(850),
-                        "blockHash": "0x" + "ab" * 32}]
-                      if nonce in self.used else [])
+            result = self.logs(params[0])
         else:
             raise AssertionError(f"unexpected RPC {name}")
         return HTTPResponse(200, {"jsonrpc": "2.0", "id": 1, "result": result})
@@ -86,14 +133,14 @@ def write_run(run_dir, *, crash=True):
                     clock_ns=lambda: 0, key_path=str(path) + ".key")
     steps = ["shadow_send", "venice_top_up"]
     settled = {"id": "treasury-0", "steps": steps, "index": 1, "status": "submitted",
-               "reference": reference(SETTLED_NONCE, 1_000), "route_data": {}}
+               "reference": reference(SETTLED_NONCE, 9_000), "route_data": {}}
     ledger.append({"kind": "treasury.step_submitted", "state": settled})
     ledger.append({"kind": "treasury.confirmed", "state": {**settled, "status": "confirmed"}})
     current = {"id": "treasury-1", "steps": steps, "index": 1, "status": "submitted",
-               "reference": reference(LIVE_NONCE, 3_000),
-               "route_data": {"superseded_references": [reference(OLD_NONCE, 1_500)]}}
+               "reference": reference(LIVE_NONCE, 13_000),
+               "route_data": {"superseded_references": [reference(OLD_NONCE, 11_500)]}}
     ledger.append({"kind": "treasury.step_submitted", "state": current})
-    prepared_only = reference("0x" + "44" * 32, 3_000)  # never journaled toward a signature
+    prepared_only = reference("0x" + "44" * 32, 13_000)  # never journaled toward a signature
     ledger.append({"kind": "io.result", "call": 1, "result": json.dumps(prepared_only)})
     shadow = {"id": "treasury-2", "steps": steps, "index": 0, "status": "submitted",
               "amount_micro": 5_000_000,
@@ -124,7 +171,7 @@ def test_outstanding_reports_each_authorization_from_the_chain(tmp_path):
     rows = {row["nonce"]: row for row in report["top_ups"]}
     assert rows[SETTLED_NONCE]["authorization_used"] and rows[SETTLED_NONCE]["debits"]
     assert rows[LIVE_NONCE]["live"] and not rows[LIVE_NONCE]["expired"]
-    assert rows[LIVE_NONCE]["finalized_timestamp"] == 2_000
+    assert rows[LIVE_NONCE]["finalized_timestamp"] == 12_000
     assert rows[OLD_NONCE]["expired"] and not rows[OLD_NONCE]["live"]
     assert len(report["shadow_sends"]) == 1
     methods = {r["method"] for r in rpc.requests}
@@ -141,7 +188,7 @@ def test_the_script_prints_every_authorization_and_flags_what_may_still_settle(
     assert f"nonce {LIVE_NONCE}" in out and "LIVE: may still settle" in out
     assert "authorizationState True" in out and "settled (debited)" in out
     assert "expired unused" in out and "shadow send pending treasury-2" in out
-    assert "validBefore 3000" in out and "finalized_ts 2000" in out
+    assert "validBefore 13000" in out and "finalized_ts 12000" in out
 
 
 def capital_loop_world():
@@ -174,7 +221,7 @@ def test_the_launch_check_refuses_while_an_earlier_run_can_still_settle(tmp_path
     with pytest.raises(CapitalLoopRefused, match="previous_run_authorization") as refused:
         launch_check(world, previous_runs=(run,), transport=rpc)
     assert [row["nonce"] for row in refused.value.detail["authorizations"]] == [LIVE_NONCE]
-    rpc.final_ts = 3_001  # finalized Base is now past its validBefore, still unused
+    rpc.final_ts = 13_001  # finalized Base is now past its validBefore, still unused
     assert launch_check(world, previous_runs=(run,), transport=rpc)["previous_runs"]
 
 
@@ -187,10 +234,15 @@ def rehearse(out, rpc, tmp_path, **kwargs):
     kwargs.setdefault("source_root", tmp_path)
     kwargs.setdefault("provider", object())
     kwargs.setdefault("world", "worlds/edition6-capital-loop.toml")
-    # The host clock reads Base's latest block: no lead to add to the bound.
-    kwargs.setdefault("now_ns", lambda: rpc.latest_ts * 1_000_000_000)
-    return rehearsal.run_rehearsal(out=out, capital_loop=True, capital_loop_transport=rpc,
-                                   capital_loop_lock_dir=tmp_path / "locks", **kwargs)
+    # A capital-loop run reads only the wall clock; here the wall reads Base's latest
+    # block (no lead to add to the bound). Swapped in for this launch and put back.
+    wall = rehearsal._wall_ns
+    rehearsal._wall_ns = lambda: rpc.latest_ts * 1_000_000_000
+    try:
+        return rehearsal.run_rehearsal(out=out, capital_loop=True, capital_loop_transport=rpc,
+                                       capital_loop_lock_dir=tmp_path / "locks", **kwargs)
+    finally:
+        rehearsal._wall_ns = wall
 
 
 def test_the_rehearsal_runner_runs_the_launch_check_before_anything_is_built(
@@ -200,7 +252,7 @@ def test_the_rehearsal_runner_runs_the_launch_check_before_anything_is_built(
     report = rehearse(tmp_path / "runs" / "now", rpc, tmp_path)
     assert report["status"] == "failed"
     assert report["refusal"]["reason"] == "previous_run_authorization_may_still_settle"
-    rpc.final_ts = 3_001
+    rpc.final_ts = 13_001
     report = rehearse(tmp_path / "runs" / "later", rpc, tmp_path)
     # The chain checks passed; the next refusal is the frozen-source check's.
     assert report["refusal"]["reason"] == "source_root_mismatch"
@@ -467,7 +519,7 @@ def test_a_recorded_run_whose_diary_is_empty_refuses(tmp_path):
     recorded = write_run(tmp_path / "elsewhere" / "recorded", crash=False)
     with ReserveLock(reserve, lock_dir=tmp_path / "locks") as lock:
         lock.record_run(recorded)
-    rpc.final_ts = 3_001  # nothing it holds is live any more: only its length matters
+    rpc.final_ts = 13_001  # nothing it holds is live any more: only its length matters
     lines = diary_lines(recorded)
     for truncated in ([lines[0]], [lines[0], lines[1][:-30]], [lines[0][:-1]]):
         rewrite(recorded, truncated)  # header only; torn at its first record; torn header
@@ -565,7 +617,7 @@ def test_the_reserves_last_run_is_checked_wherever_its_directory_is(tmp_path):
     assert report["refusal"]["run_dir"] == str(earlier.resolve())
     with ReserveLock(reserve, lock_dir=tmp_path / "locks") as lock:
         assert lock.last_run() == earlier.resolve()  # a refused launch recorded nothing
-    rpc.final_ts = 3_001  # finalized Base is past the live authorization's validBefore
+    rpc.final_ts = 13_001  # finalized Base is past the live authorization's validBefore
     assert rehearse(tmp_path / "runs" / "later", rpc, tmp_path)["refusal"]["reason"] == (
         "source_root_mismatch")
     shutil.rmtree(earlier)  # a recorded run that vanished may have left anything live
@@ -926,7 +978,7 @@ def test_a_diary_cut_at_a_line_boundary_cannot_hide_a_recorded_authorization(tmp
     run = write_run(tmp_path / "elsewhere" / "cut", crash=False)
     with ReserveLock(RESERVE, lock_dir=locks) as lock:
         lock.record_run(run)
-        lock.authorization_log(run)(signed(LIVE_NONCE, 3_000))  # before its signature
+        lock.authorization_log(run)(signed(LIVE_NONCE, 13_000))  # before its signature
     # Cut the diary at a complete-line boundary just before the live step_submitted:
     # what is left is a valid, readable, non-empty prefix that shows nothing live.
     rewrite(run, diary_lines(run)[:3])
@@ -934,7 +986,7 @@ def test_a_diary_cut_at_a_line_boundary_cannot_hide_a_recorded_authorization(tmp
     report = rehearse(tmp_path / "runs" / "after-cut", rpc, tmp_path)
     assert report["refusal"]["reason"] == "recorded_authorization_may_still_settle"
     assert [a["nonce"] for a in report["refusal"]["authorizations"]] == [LIVE_NONCE]
-    rpc.final_ts = 3_001  # finalized Base is past its validBefore, and it is unused
+    rpc.final_ts = 13_001  # finalized Base is past its validBefore, and it is unused
     report = rehearse(tmp_path / "runs" / "after-expiry", rpc, tmp_path)
     assert report["refusal"]["reason"] == "source_root_mismatch"  # every check passed
     assert {"kind": "resolved", "nonce": LIVE_NONCE, "how": "expired"} in (
@@ -951,12 +1003,13 @@ def test_a_deleted_diary_cannot_hide_a_recorded_authorization(tmp_path, capsys):
     locks = tmp_path / "locks"
     run = write_run(tmp_path / "elsewhere" / "deleted", crash=False)
     with ReserveLock(RESERVE, lock_dir=locks) as lock:
-        lock.authorization_log(run)(signed(LIVE_NONCE, 3_000))
+        lock.authorization_log(run)(signed(LIVE_NONCE, 13_000))
     shutil.rmtree(run)  # the diary is gone; the last-run record never named it
     report = rehearse(tmp_path / "runs" / "live", rpc, tmp_path)
     assert report["refusal"]["reason"] == "recorded_authorization_may_still_settle"
     # It settled after all, and no diary can show it was booked: a recovery.
-    rpc.used.add(LIVE_NONCE)
+    rpc.use(LIVE_NONCE, at_ts=12_700)
+    rpc.final_ts = 13_001
     report = rehearse(tmp_path / "runs" / "settled", rpc, tmp_path)
     assert report["refusal"]["reason"] == "recorded_authorization_settled_unbooked"
     assert rehearsal.exit_code(report) == 3
@@ -985,12 +1038,12 @@ def test_a_recorded_authorization_the_diary_booked_resolves_once(tmp_path):
     ledger = Ledger(str(path), manifest={"name": "edition6-capital-loop"},
                     clock_ns=lambda: 0, key_path=str(path) + ".key")
     state = {"id": "treasury-0", "steps": ["shadow_send", "venice_top_up"], "index": 1,
-             "status": "confirmed", "reference": signed(SETTLED_NONCE, 1_000),
+             "status": "confirmed", "reference": signed(SETTLED_NONCE, 9_000),
              "receipts": [{"nonce": 1_700_000_000_000}, {"nonce": SETTLED_NONCE}]}
     ledger.append({"kind": "treasury.confirmed", "state": state})
     ledger.append({"kind": "treasury.financing", "transfer_id": "treasury-0"})
     with ReserveLock(RESERVE, lock_dir=tmp_path) as lock:
-        lock.authorization_log(run)(signed(SETTLED_NONCE, 1_000))
+        lock.authorization_log(run)(signed(SETTLED_NONCE, 9_000))
         summary = check_authorization_record(lock, transport=rpc)
         assert [(r["nonce"], r["how"]) for r in summary["resolved_now"]] == [
             (SETTLED_NONCE, "financed")]
@@ -999,25 +1052,87 @@ def test_a_recorded_authorization_the_diary_booked_resolves_once(tmp_path):
         assert check_authorization_record(lock, transport=rpc)["open"] == 0
     entries = read_authorizations(tmp_path / f"{RESERVE.lower()}.authorizations.jsonl")
     assert [e["kind"] for e in entries] == ["authorization", "resolved"]
-    assert entries[0]["run_dir"] == str(run.resolve()) and entries[0]["validBefore"] == "1000"
+    assert entries[0]["run_dir"] == str(run.resolve()) and entries[0]["validBefore"] == "9000"
 
 
-def test_the_authorization_record_refuses_damage_and_tolerates_only_a_torn_append(tmp_path):
+def test_the_authorization_record_refuses_damage_and_a_torn_last_line(tmp_path):
     from factorylab.runtime.capital_loop import ReserveLock, read_authorizations
 
     with ReserveLock(RESERVE, lock_dir=tmp_path) as lock:
         log = lock.authorization_log(tmp_path / "run")
-        log(signed(LIVE_NONCE, 3_000))
+        log(signed(LIVE_NONCE, 13_000))
         with pytest.raises(ValueError, match="payer"):
-            log({**signed(OLD_NONCE, 3_000), "authorization": {
-                **signed(OLD_NONCE, 3_000)["authorization"], "from": "0x" + "12" * 20}})
+            log({**signed(OLD_NONCE, 13_000), "authorization": {
+                **signed(OLD_NONCE, 13_000)["authorization"], "from": "0x" + "12" * 20}})
     path = tmp_path / f"{RESERVE.lower()}.authorizations.jsonl"
     whole = path.read_bytes()
-    path.write_bytes(whole + b'{"kind": "authoriz')  # a crash mid-append: never signed
-    assert len(read_authorizations(path)) == 1
+    path.write_bytes(whole + b'{"kind": "authoriz')  # a crash mid-append
+    with pytest.raises(CapitalLoopRefused, match="authorization_record_torn") as refused:
+        read_authorizations(path)
+    assert "--repair-torn" in refused.value.detail["repair"]
     path.write_bytes(b"not json\n" + whole)
     with pytest.raises(CapitalLoopRefused, match="authorization_record_unreadable"):
         read_authorizations(path)
+
+
+def test_an_append_never_lands_on_a_torn_fragment(tmp_path):
+    # The cold review: after a crash mid-append the next append wrote onto the fragment,
+    # "{frag}{new}\n", and every launch after refused the record forever.
+    from factorylab.runtime.capital_loop import ReserveLock, read_authorizations
+
+    path = tmp_path / f"{RESERVE.lower()}.authorizations.jsonl"
+    with ReserveLock(RESERVE, lock_dir=tmp_path) as lock:
+        log = lock.authorization_log(tmp_path / "run")
+        log(signed(LIVE_NONCE, 13_000))
+        whole = path.read_bytes()
+        path.write_bytes(whole + b'{"kind": "authorization", "nonce": "0x' + b"ab" * 20)
+        with pytest.raises(CapitalLoopRefused, match="authorization_record_torn"):
+            log(signed(OLD_NONCE, 13_000))
+        assert path.read_bytes().endswith(b"ab" * 20)  # nothing was appended onto it
+        # A whole entry that lost only its newline counts, and is completed first.
+        path.write_bytes(whole[:-1])
+        assert [e["nonce"] for e in read_authorizations(path)] == [LIVE_NONCE]
+        log(signed(OLD_NONCE, 13_000))
+    assert path.read_bytes().count(b"\n") == 2
+    assert [e["nonce"] for e in read_authorizations(path)] == [LIVE_NONCE, OLD_NONCE]
+
+
+def test_a_torn_fragment_is_set_aside_and_its_nonce_resolved_like_any_other(
+        tmp_path, capsys):
+    from factorylab.runtime.capital_loop import (
+        ReserveLock,
+        check_authorization_record,
+        read_authorizations,
+    )
+    from scripts import capital_loop_outstanding
+
+    rpc = Rpc()
+    path = tmp_path / f"{RESERVE.lower()}.authorizations.jsonl"
+    with ReserveLock(RESERVE, lock_dir=tmp_path) as lock:
+        lock.authorization_log(tmp_path / "run")(signed(OLD_NONCE, 11_500))
+    fragment = (b'{"kind": "authorization", "nonce": "' + LIVE_NONCE.encode()
+                + b'", "validBefore": "13000", "va')
+    path.write_bytes(path.read_bytes() + fragment)
+    argv = ["--repair-torn", "--lock-dir", str(tmp_path)]
+    assert capital_loop_outstanding.main(argv, transport=rpc) == 0
+    repaired = json.loads(capsys.readouterr().out)
+    sidecar = tmp_path / repaired["sidecar"].rsplit("/", 1)[1]
+    assert sidecar.read_bytes() == fragment  # nothing deleted, only moved aside
+    torn = read_authorizations(path)[-1]
+    assert torn["kind"] == "torn" and torn["nonces"] == [LIVE_NONCE]
+    assert bytes.fromhex(torn["fragment_hex"]) == fragment and torn["validBefore"] == "13000"
+    with ReserveLock(RESERVE, lock_dir=tmp_path) as lock:
+        # The fragment's nonce is open, and resolved against the chain like any other.
+        with pytest.raises(CapitalLoopRefused, match="recorded_authorization_may_still_settle"):
+            check_authorization_record(lock, transport=rpc)
+        rpc.final_ts = 13_001
+        resolved = check_authorization_record(lock, transport=rpc)
+        # (the expired one was resolved by the refused check already; now the other)
+        assert {(r["nonce"], r["how"]) for r in resolved["resolved_now"]} == {
+            (LIVE_NONCE, "expired")}
+        lock.authorization_log(tmp_path / "run")(signed("0x" + "55" * 32, 14_000))
+    assert capital_loop_outstanding.main(argv, transport=rpc) == 0  # nothing torn: a no-op
+    assert json.loads(capsys.readouterr().out)["repaired"] is False
 
 
 def test_the_script_acknowledges_only_what_finalized_base_shows_used(tmp_path, capsys):
@@ -1026,14 +1141,148 @@ def test_the_script_acknowledges_only_what_finalized_base_shows_used(tmp_path, c
 
     rpc = Rpc()
     with ReserveLock(RESERVE, lock_dir=tmp_path) as lock:
-        lock.authorization_log(tmp_path / "run")(signed(LIVE_NONCE, 3_000))
+        lock.authorization_log(tmp_path / "run")(signed(LIVE_NONCE, 13_000))
     argv = ["--acknowledge", LIVE_NONCE, "--lock-dir", str(tmp_path)]
     assert capital_loop_outstanding.main(argv, transport=rpc) == 2  # unused: refused
     assert "acknowledge_refused" in capsys.readouterr().err
-    rpc.used.add(LIVE_NONCE)
+    rpc.use(LIVE_NONCE, at_ts=12_700)
+    rpc.final_ts = 13_001
     with ReserveLock(RESERVE, lock_dir=tmp_path):  # a run is alive: it waits for it
         assert capital_loop_outstanding.main(argv, transport=rpc) == 2
     assert "capital_loop_reserve_locked" in capsys.readouterr().err
     assert capital_loop_outstanding.main(argv, transport=rpc) == 0
     entries = read_authorizations(tmp_path / f"{RESERVE.lower()}.authorizations.jsonl")
     assert entries[-1] == {"kind": "resolved", "nonce": LIVE_NONCE, "how": "acknowledged"}
+
+
+# ---- Wave 10, the cold review of 634d29a
+
+
+def test_a_rolled_back_record_cannot_hide_a_settled_authorization(tmp_path):
+    # A backup restored with its directory: the record forgets an authorization that
+    # already settled. Finalized Base remembers it, inside one settlement window.
+    from factorylab.runtime.capital_loop import ReserveLock, cooling_off_check
+    from scripts import edition4_rehearsal as rehearsal
+
+    rpc = Rpc()
+    rpc.use(LIVE_NONCE, at_ts=11_700)  # settled five minutes before the finalized head
+    report = rehearse(tmp_path / "runs" / "rolled-back", rpc, tmp_path)
+    assert report["refusal"]["reason"] == "unrecorded_reserve_authorization"
+    assert report["refusal"]["nonces"] == [LIVE_NONCE]
+    assert rehearsal.exit_code(report) == 3  # real money moved and nothing knows it
+    with ReserveLock(RESERVE, lock_dir=tmp_path / "locks") as lock:
+        # Recorded, the same chain is clean; and a window that has passed is too.
+        lock.authorization_log(tmp_path / "run")(signed(LIVE_NONCE, 12_000))
+        assert cooling_off_check(lock, window_s=2_520, transport=rpc)[
+            "authorizations_seen"] == 1
+    rpc.final_ts = 16_000  # the settlement is now far older than any window
+    fresh = tmp_path / "fresh-locks"
+    with ReserveLock(RESERVE, lock_dir=fresh) as lock:
+        assert cooling_off_check(lock, window_s=2_520, transport=rpc)[
+            "authorizations_seen"] == 0
+
+
+def test_money_leaving_the_reserve_without_a_recorded_authorization_is_refused(tmp_path):
+    from factorylab.runtime.capital_loop import ReserveLock, cooling_off_check
+
+    rpc = Rpc()
+    stray = rpc.logs  # a plain Transfer out of the reserve, not an EIP-3009 authorization
+
+    def logs_with_a_transfer(query):
+        rows = stray(query)
+        word = "0x" + "0" * 24 + RESERVE.lower()[2:]
+        extra = {"address": BASE.usdc, "blockNumber": hex(2_950), "blockHash": rpc.block(
+            2_950)["hash"], "transactionHash": "0x" + "ee" * 32, "data": hex(1),
+            "topics": [event_topic(TRANSFER), word, "0x" + "0" * 24 + "12" * 20]}
+        wanted = query["topics"]
+        if (int(query["fromBlock"], 16) <= 2_950 <= int(query["toBlock"], 16)
+                and all(w is None or w.lower() == g.lower()
+                        for w, g in zip(wanted, extra["topics"], strict=False))):
+            rows.append(extra)
+        return rows
+
+    rpc.logs = logs_with_a_transfer
+    with ReserveLock(RESERVE, lock_dir=tmp_path) as lock:
+        with pytest.raises(CapitalLoopRefused, match="unrecorded_reserve_transfer") as refused:
+            cooling_off_check(lock, window_s=2_520, transport=rpc)
+    assert refused.value.detail["transactions"] == ["0x" + "ee" * 32]
+
+
+def test_a_7599_second_duration_is_credited_7580_seconds_and_refused(tmp_path):
+    # The clock delivers floor(7599 / 10) = 759 ticks, which span 758 intervals.
+    rpc = Rpc()
+    report = rehearse(tmp_path / "runs" / "7599", rpc, tmp_path, duration_ns=7_599 * S)
+    assert report["refusal"]["reason"] == "capital_loop_duration_below_settlement_bound"
+    assert (report["refusal"]["run_ns"], report["refusal"]["minimum_run_ns"]) == (
+        7_580 * S, 7_590 * S)
+    assert rehearse(tmp_path / "runs" / "7600", rpc, tmp_path, duration_ns=7_600 * S)[
+        "refusal"]["reason"] == "source_root_mismatch"
+    # --ticks with a shorter deadline is credited the lesser of the two.
+    report = rehearse(tmp_path / "runs" / "both", rpc, tmp_path, duration_ns=7_599 * S,
+                      target_ticks=10_000)
+    assert report["refusal"]["run_ns"] == 7_580 * S
+
+
+def test_the_capital_loop_refuses_an_injected_clock(tmp_path):
+    from scripts import edition4_rehearsal as rehearsal
+
+    with pytest.raises(rehearsal.RehearsalRefused, match="capital_loop_requires_the_wall_clock"):
+        rehearsal.run_rehearsal("worlds/edition6-capital-loop.toml",
+                                out=tmp_path / "runs" / "virtual", capital_loop=True,
+                                provider=object(), now_ns=lambda: 1_000_000_000)
+
+
+def test_nothing_is_resolved_from_one_read_or_from_the_wrong_block_or_address(tmp_path):
+    from factorylab.runtime.capital_loop import (
+        ReserveLock,
+        acknowledge,
+        check_authorization_record,
+    )
+
+    rpc = Rpc()
+    with ReserveLock(RESERVE, lock_dir=tmp_path) as lock:
+        lock.authorization_log(tmp_path / "run")(signed(LIVE_NONCE, 13_000))
+        # Used after the finalized head: a read at "latest" would call it used.
+        rpc.use(LIVE_NONCE, at_ts=12_400)
+        with pytest.raises(CapitalLoopRefused, match="recorded_authorization_may_still_settle"):
+            check_authorization_record(lock, transport=rpc)
+        # Used, but by another authorizer with the same nonce: not ours.
+        rpc.use(LIVE_NONCE, at_ts=12_400, authorizer="0x" + "12" * 20)
+        rpc.final_ts = 13_001
+        assert [r["how"] for r in check_authorization_record(lock, transport=rpc)[
+            "resolved_now"]] == ["expired"]
+        lock.authorization_log(tmp_path / "run")(signed(OLD_NONCE, 13_000))
+        rpc.use(OLD_NONCE, at_ts=12_700)
+        # The two reads disagree: the state says used, the logs say nothing.
+        honest = rpc.logs
+        rpc.logs = lambda query: []
+        for resolve in (lambda: check_authorization_record(lock, transport=rpc),
+                        lambda: acknowledge(lock, OLD_NONCE, transport=rpc)):
+            with pytest.raises(CapitalLoopRefused) as refused:
+                resolve()
+            assert "recorded_authorization_reads_disagree" in (
+                refused.value.reason, refused.value.detail.get("why"))
+        rpc.logs = honest
+        # A finalized tag aliased to latest refuses before anything is read or written.
+        rpc.lag_s = 0
+        with pytest.raises(CapitalLoopRefused, match="finalized_tag_not_behind_latest"):
+            check_authorization_record(lock, transport=rpc)
+        rpc.lag_s = 960
+        entries = lock.authorizations()
+        assert [e["nonce"] for e in entries if e["kind"] == "resolved"] == [LIVE_NONCE]
+    requests = [r for r in rpc.requests if r["method"] == "eth_call"]
+    assert all(r["params"][1] != "latest" for r in requests)  # never read at latest
+
+
+def test_a_lock_that_predates_the_record_names_the_three_file_reset(tmp_path):
+    from factorylab.runtime.capital_loop import ReserveLock
+
+    with ReserveLock(RESERVE, lock_dir=tmp_path) as lock:
+        lock.authorizations_path.unlink()  # as a lock made before the record existed
+        with pytest.raises(CapitalLoopRefused,
+                           match="capital_loop_authorization_record_missing") as refused:
+            lock.authorizations()
+    reset = refused.value.detail["reset"]
+    for name in (".lock", ".last-run.json", ".authorizations.jsonl"):
+        assert f"{RESERVE.lower()}{name}" in reset
+    assert "copy" in reset and "aside" in reset

@@ -37,6 +37,11 @@ from factorylab.world.x402 import (
 )
 from tests.world.test_x402 import TEST_KEY, FakeHTTP
 
+# Every signature here goes through the production chokepoint, with a real
+# ReserveGuard in this test's temporary lock directory (tests/conftest.py).
+pytestmark = pytest.mark.usefixtures("write_ahead")
+
+
 # Public fixtures only: the buyer's test key and a reserve address that is never a key.
 RESERVE = "0x2670b922ef37c7df47158725c0cc407b5382293f"
 PAYER = Account.from_key(TEST_KEY).address
@@ -94,7 +99,9 @@ def paid_header(service, pay_to=RESERVE):
         "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", "payTo": pay_to,
         "maxTimeoutSeconds": 300, "extra": {"name": "USD Coin", "version": "2"}}]}
     quote = parse_quote(HTTPResponse(402, body, {}))
-    return payment_header(Account.from_key(TEST_KEY), quote)
+    from factorylab.runtime.capital_loop import ReserveGuard
+
+    return payment_header(Account.from_key(TEST_KEY), quote, guard=ReserveGuard("test"))
 
 
 def fixture_service(price=2500):

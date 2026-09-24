@@ -31,6 +31,7 @@ import fcntl
 import json
 import os
 import pwd
+import re
 import tempfile
 import time
 from collections.abc import Callable
@@ -303,18 +304,62 @@ def _create_durably(path: Path, data: bytes) -> None:
     _fsync_directory(path.parent)
 
 
+def _write_all(fd: int, data: bytes) -> None:
+    view = memoryview(data)
+    while view:
+        view = view[os.write(fd, view):]
+
+
+#: The record's entry kinds: an authorization written ahead of its signature, a
+#: resolution, and a torn fragment set aside by ``repair_torn``.
+ENTRY_KINDS = ("authorization", "resolved", "torn")
+
+
+def _entry(line: bytes) -> dict | None:
+    """One well-formed record entry, or None."""
+    try:
+        entry = json.loads(line)
+    except (ValueError, UnicodeError):
+        return None
+    if not isinstance(entry, dict) or entry.get("kind") not in ENTRY_KINDS:
+        return None
+    if entry["kind"] == "torn":
+        nonces = entry.get("nonces")
+        ok = isinstance(nonces, list) and all(isinstance(n, str) for n in nonces)
+        return entry if ok and isinstance(entry.get("validBefore"), str) else None
+    return entry if isinstance(entry.get("nonce"), str) else None
+
+
+def _torn(path: Path, fragment: bytes) -> CapitalLoopRefused:
+    return CapitalLoopRefused("authorization_record_torn", {
+        "record": str(path), "fragment_bytes": len(fragment),
+        "repair": "uv run python scripts/capital_loop_outstanding.py --repair-torn"})
+
+
 def _append_durably(path: Path, entry: dict) -> None:
-    """Append one JSON line to an existing ``path`` and flush it to stable storage.
+    """Append one JSON line to an existing record and flush it to stable storage.
 
     Guarantees the line is on disk before this returns, and raises otherwise. The file
-    must already exist (it is created with the reserve's lock), so an append can never
-    silently start a fresh, empty record beside a removed one.
+    must already exist (it is created with the reserve's lock), so an append never
+    starts a fresh record beside a removed one. It must also end in a newline: a last
+    line that is a whole entry missing only its newline is completed first (the newline
+    written and flushed); a torn fragment refuses (``authorization_record_torn``) and
+    nothing is appended, since a line written onto it would merge with it and make the
+    record unreadable for every launch after.
     """
-    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW | os.O_CLOEXEC)
+    if not path.exists():
+        raise CapitalLoopRefused("capital_loop_authorization_record_missing",
+                                 {"record": str(path)})
+    fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_NOFOLLOW | os.O_CLOEXEC)
     try:
-        data = memoryview(json.dumps(entry, sort_keys=True).encode() + b"\n")
-        while data:
-            data = data[os.write(fd, data):]
+        data = os.pread(fd, os.fstat(fd).st_size, 0)
+        tail = data[data.rfind(b"\n") + 1:]
+        if tail:
+            if _entry(tail) is None:
+                raise _torn(path, tail)
+            _write_all(fd, b"\n")
+            _durable(fd)
+        _write_all(fd, json.dumps(entry, sort_keys=True).encode() + b"\n")
         _durable(fd)
     finally:
         os.close(fd)
@@ -323,20 +368,27 @@ def _append_durably(path: Path, entry: dict) -> None:
 class AuthorizationLog:
     """Guarantees an EIP-3009 authorization is on stable storage before it is signed.
 
-    The rail calls this with the journal's reference just before it signs. One JSON
-    line (nonce, value, payer, payee, validAfter, validBefore, run directory) is
-    appended to ``<reserve>.authorizations.jsonl`` beside the reserve's lock, outside
-    every diary, and flushed (``F_FULLFSYNC`` where the OS has it) before this returns;
-    if it cannot be, this raises and the rail signs nothing. A diary can be truncated,
-    restored or deleted; this record is read by every launch whatever the diaries say.
+    ``x402.sign_transfer_authorization`` calls this with the authorization's message
+    just before it signs. One JSON line (nonce, value, payer, payee, validAfter,
+    validBefore, origin, run directory) is appended to ``<reserve>.authorizations.jsonl``
+    beside the reserve's lock, outside every diary, and flushed (``F_FULLFSYNC`` where
+    the OS has it) before this returns. It writes only while its ``ReserveLock`` is held;
+    otherwise, or if the write fails, it raises and nothing is signed. A diary can be
+    truncated, restored or deleted; this record is read by every launch whatever the
+    diaries say.
     """
 
-    def __init__(self, path: Path, run_dir: str | Path, reserve_address: str):
-        self.path, self.run_dir = Path(path), str(Path(run_dir).resolve())
-        self.reserve_address = reserve_address
+    def __init__(self, lock: ReserveLock, run_dir: str | Path | None, origin: str):
+        self.lock, self.origin = lock, origin
+        self.path, self.reserve_address = lock.authorizations_path, lock.reserve_address
+        self.run_dir = None if run_dir is None else str(Path(run_dir).resolve())
 
-    def __call__(self, reference: dict) -> None:
-        auth = reference["authorization"]
+    def __call__(self, authorization: dict) -> None:
+        # A journal reference carries its message under "authorization".
+        auth = authorization.get("authorization", authorization)
+        if self.lock.fd is None:
+            raise CapitalLoopRefused("capital_loop_reserve_lock_not_held",
+                                     {"lock": str(self.lock.path)})
         nonce = str(auth["nonce"]).lower()
         if (len(nonce) != 66 or not nonce.startswith("0x")
                 or any(c not in "0123456789abcdef" for c in nonce[2:])):
@@ -347,32 +399,106 @@ class AuthorizationLog:
             "kind": "authorization", "nonce": nonce, "from": str(auth["from"]),
             "to": str(auth["to"]), "value": str(auth["value"]),
             "validAfter": str(auth["validAfter"]), "validBefore": str(auth["validBefore"]),
-            "run_dir": self.run_dir})
+            "origin": self.origin, "run_dir": self.run_dir})
+
+
+class ReserveGuard:
+    """The write-ahead guard for a signer that holds no capital-loop run's lock.
+
+    Guarantees each authorization is written ahead exactly as a capital-loop run writes
+    it: for the one write, it takes the payer's ``ReserveLock`` (refusing,
+    ``capital_loop_reserve_locked``, while any capital-loop run or other signer holds it)
+    and appends through ``AuthorizationLog``. The lock is released before the signature
+    is made; that is safe, because the next launch reads the record, and an
+    authorization it finds live refuses that launch. ``origin`` names the signer
+    (``reserve_topup``, ``x402_purchase``, ``treasury``, ``compute_proof``).
+    """
+
+    def __init__(self, origin: str, *, run_dir: str | Path | None = None,
+                 lock_dir: str | Path | None = None):
+        self.origin, self.run_dir, self.lock_dir = origin, run_dir, lock_dir
+
+    def __call__(self, authorization: dict) -> None:
+        auth = authorization.get("authorization", authorization)
+        with ReserveLock(str(auth["from"]), lock_dir=self.lock_dir) as lock:
+            lock.authorization_log(self.run_dir, origin=self.origin)(auth)
 
 
 def read_authorizations(path: str | Path) -> list[dict]:
     """Every entry of a write-ahead authorization record, in order.
 
-    A last line without its newline counts when it parses and is skipped when it does
-    not (an append torn by a crash, whose authorization was then never signed); any
-    other line that does not parse refuses (``authorization_record_unreadable``).
+    A last line missing only its newline counts when it is a whole entry (the next
+    append completes it). A torn fragment refuses (``authorization_record_torn``,
+    repaired with ``--repair-torn``), and so does any other line that is not a whole
+    entry (``authorization_record_unreadable``): nothing in the record is skipped.
     """
+    data = Path(path).read_bytes()
+    lines = data.split(b"\n")
+    last = lines.pop()
     entries = []
-    with Path(path).open("rb") as stream:
-        for number, line in enumerate(stream, start=1):
-            try:
-                entry = json.loads(line)
-                if (not isinstance(entry, dict)
-                        or entry.get("kind") not in ("authorization", "resolved")
-                        or not isinstance(entry.get("nonce"), str)):
-                    raise ValueError
-            except (ValueError, UnicodeError):
-                if not line.endswith(b"\n"):
-                    break
-                raise CapitalLoopRefused("authorization_record_unreadable", {
-                    "record": str(path), "line": number}) from None
-            entries.append(entry)
+    for number, line in enumerate(lines, start=1):
+        entry = _entry(line)
+        if entry is None:
+            raise CapitalLoopRefused("authorization_record_unreadable", {
+                "record": str(path), "line": number})
+        entries.append(entry)
+    if last:
+        entry = _entry(last)
+        if entry is None:
+            raise _torn(Path(path), last)
+        entries.append(entry)
     return entries
+
+
+_NONCE = re.compile(rb"0x[0-9a-fA-F]{64}")
+_VALID_BEFORE = re.compile(rb'"validBefore"\s*:\s*"?(\d{1,20})')
+
+
+def repair_torn(lock: ReserveLock, *, now_s: Callable[[], int] | None = None) -> dict:
+    """Set a torn last fragment aside, losing nothing, so the record reads and appends.
+
+    Guarantees the fragment's bytes are first written durably to a sidecar
+    (``<record>.torn-<seconds>``), then cut from the record, then recorded in it as a
+    ``torn`` entry carrying the bytes as hex. Every nonce-like ``0x`` + 64 hex in the
+    fragment becomes an open authorization, resolved against the chain like any other:
+    its ``validBefore`` is the one the fragment names, or, when none is legible, the
+    latest any authorization could carry (the repair time plus ``MAX_AUTHORIZATION_S``:
+    whatever the fragment was, it was written before now by a signer capped at that).
+    Only the lock's holder repairs; a record that is not torn is left as it is.
+    """
+    if lock.fd is None:
+        raise RuntimeError("the reserve lock is not held")
+    path = lock.authorizations_path
+    data = path.read_bytes()
+    cut = data.rfind(b"\n") + 1
+    fragment = data[cut:]
+    if not fragment or _entry(fragment) is not None:
+        return {"record": str(path), "repaired": False}
+    now = now_s() if now_s is not None else time.time_ns() // 1_000_000_000
+    bound = now + MAX_AUTHORIZATION_S
+    found = _VALID_BEFORE.search(fragment)
+    valid_before = min(int(found.group(1)), bound) if found else bound
+    sidecar = path.with_name(f"{path.name}.torn-{now}")
+    _create_durably(sidecar, fragment)
+    if sidecar.read_bytes() != fragment:
+        raise CapitalLoopRefused("authorization_record_repair_refused",
+                                 {"sidecar": str(sidecar), "why": "sidecar exists"})
+    fd = os.open(path, os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        os.ftruncate(fd, cut)
+        _durable(fd)
+    finally:
+        os.close(fd)
+    nonces = sorted({n.decode().lower() for n in _NONCE.findall(fragment)})
+    _append_durably(path, {"kind": "torn", "nonces": nonces, "from": lock.reserve_address,
+                           "validBefore": str(valid_before), "fragment_hex": fragment.hex(),
+                           "sidecar": str(sidecar), "repaired_s": now})
+    return {"record": str(path), "repaired": True, "sidecar": str(sidecar),
+            "open_nonces": nonces, "valid_before": valid_before}
+
+
+AUTHORIZATION_USED = "AuthorizationUsed(address,bytes32)"
+TRANSFER = "Transfer(address,address,uint256)"
 
 
 def _authorization_used(base: EVM, authorizer: str, nonce: str, block: int) -> bool:
@@ -385,9 +511,104 @@ def _authorization_used(base: EVM, authorizer: str, nonce: str, block: int) -> b
     return int(state, 16) != 0
 
 
+def _finalized(base: EVM) -> tuple[int, int]:
+    """The finalized block's number and timestamp, only when a later latest block exists.
+
+    A provider that answers the ``finalized`` tag with its latest block would make every
+    finalized read here a read of an unfinal chain (``finalized_tag_not_behind_latest``).
+    """
+    base.check_chain()
+    final = base.call("eth_getBlockByNumber", ["finalized", False])
+    latest = base.call("eth_getBlockByNumber", ["latest", False])
+    number, timestamp = int(final["number"], 16), int(final["timestamp"], 16)
+    if int(latest["number"], 16) <= number:
+        raise CapitalLoopRefused("finalized_tag_not_behind_latest", {
+            "rpc": base.rpc, "finalized_block": number,
+            "latest_block": int(latest["number"], 16)})
+    return number, timestamp
+
+
+def _block_at_or_before(base: EVM, timestamp: int, final_number: int,
+                        final_timestamp: int) -> int:
+    """A finalized block at or before ``timestamp``, verified by its own timestamp.
+
+    Blocks are at least a second apart, so the block that many blocks back from the
+    finalized one is no later than ``timestamp``; its own timestamp is read to check it.
+    That bound is then tightened once, at the block rate measured between the two, and
+    the tighter block is used only when its own timestamp is still at or before
+    ``timestamp``: the answer is never later than asked, and rarely much earlier.
+    """
+    if timestamp >= final_timestamp:
+        return final_number
+    candidate = max(0, final_number - (final_timestamp - timestamp))
+    stamp = int(base.call("eth_getBlockByNumber", [hex(candidate), False])["timestamp"], 16)
+    if candidate and stamp > timestamp:
+        raise CapitalLoopRefused("block_times_unreadable", {"block": candidate})
+    if candidate == final_number or stamp == final_timestamp:
+        return candidate
+    span = final_timestamp - stamp
+    back = -(-(final_timestamp - timestamp) * (final_number - candidate) // span)
+    tighter = max(candidate, final_number - back)
+    if tighter > candidate:
+        block = base.call("eth_getBlockByNumber", [hex(tighter), False])
+        if block and int(block["timestamp"], 16) <= timestamp:
+            return tighter
+    return candidate
+
+
+def _authorization_fate(base: EVM, entry: dict, final_number: int,
+                        final_timestamp: int) -> str:
+    """``used``, ``expired`` or ``live``, from two independent reads that must agree.
+
+    USDC's ``authorizationState`` at the finalized block, and a scan of every finalized
+    block in which the authorization could have been used (from ``MAX_AUTHORIZATION_S``
+    before its ``validBefore``) for its ``AuthorizationUsed``. A state and a scan that
+    disagree, or a scan that fell short of the finalized block, refuse
+    (``recorded_authorization_reads_disagree``); nothing is resolved from one read.
+    ``expired`` needs the state unused, no log, and the finalized block past
+    ``validBefore``.
+    """
+    from factorylab.world.evm import event_topic, word_address
+
+    nonce, authorizer = entry["nonce"].lower(), entry["from"]
+    valid_before = int(entry["validBefore"])
+    state = _authorization_used(base, authorizer, nonce, final_number)
+    start = _block_at_or_before(base, valid_before - MAX_AUTHORIZATION_S - 60,
+                                final_number, final_timestamp)
+    topics = [event_topic(AUTHORIZATION_USED), "0x" + word_address(authorizer).hex(), nonce]
+    logs, scanned_to = base.scan(base.chain.usdc, topics, start)
+    if scanned_to < final_number or state != bool(logs):
+        raise CapitalLoopRefused("recorded_authorization_reads_disagree", {
+            "nonce": nonce, "authorization_state_used": state, "logs": len(logs),
+            "scanned_to": scanned_to, "finalized_block": final_number})
+    if state:
+        return "used"
+    return "expired" if final_timestamp > valid_before else "live"
+
+
+def _open_authorizations(entries: list[dict]) -> dict[str, dict]:
+    """Every recorded or torn nonce not yet resolved, with what is known of it."""
+    resolved = {e["nonce"].lower() for e in entries if e["kind"] == "resolved"}
+    pending: dict[str, dict] = {}
+    for entry in entries:
+        if entry["kind"] == "authorization":
+            nonce = entry["nonce"].lower()
+            if nonce not in resolved:
+                pending.setdefault(nonce, entry)
+        elif entry["kind"] == "torn":
+            for nonce in entry["nonces"]:
+                if nonce.lower() not in resolved:
+                    pending.setdefault(nonce.lower(), {
+                        "kind": "torn", "nonce": nonce.lower(), "from": entry["from"],
+                        "validBefore": entry["validBefore"], "origin": "torn",
+                        "run_dir": None})
+    return pending
+
+
 #: Launch refusals that mean real money may have moved without being booked: the
 #: runner exits 3 on them, as at the end of a run that left a top-up unresolved.
-RECOVERY_REASONS = ("recorded_authorization_settled_unbooked",)
+RECOVERY_REASONS = ("recorded_authorization_settled_unbooked",
+                    "unrecorded_reserve_authorization")
 
 
 def check_authorization_record(lock: ReserveLock, *, transport: Transport = http_request,
@@ -395,62 +616,60 @@ def check_authorization_record(lock: ReserveLock, *, transport: Transport = http
     """Resolve every recorded authorization against finalized Base, or refuse the launch.
 
     Guarantees no authorization this reserve ever wrote ahead of signing is ignored,
-    whatever its diary now holds. For each one not yet resolved, USDC's
-    ``authorizationState`` at the finalized block decides:
+    whatever its diary now holds. For each one not yet resolved (a torn fragment's
+    nonces included), ``_authorization_fate`` decides from two reads that must agree:
 
-    * used, and its run's diary booked it as financing: resolved (and marked so);
-    * used, with no such financing (the diary was cut, deleted, or stopped before it
-      booked): refused, ``recorded_authorization_settled_unbooked``, a recovery the
-      operator settles by hand and then acknowledges
-      (``scripts/capital_loop_outstanding.py --acknowledge``);
-    * unused, and the finalized block is past its ``validBefore``: it can never be used
-      (EIP-3009), so resolved (and marked so). An authorization recorded but never
-      signed, before a crash, ends here;
-    * unused and not yet past it: refused, ``recorded_authorization_may_still_settle``.
+    * used: a capital-loop authorization whose run's diary booked it as financing is
+      resolved; one with no such booking (the diary was cut, deleted, or stopped before
+      it booked), or a torn fragment's, refuses as a recovery,
+      ``recorded_authorization_settled_unbooked``, settled by hand and then
+      acknowledged (``scripts/capital_loop_outstanding.py --acknowledge``); any other
+      signer's (a CLI top-up, an x402 purchase) was spent in the open and is resolved;
+    * expired: it can never be used (EIP-3009), so resolved;
+    * live: refused, ``recorded_authorization_may_still_settle``.
 
-    A chain that cannot be read refuses (``recorded_authorization_unreadable``). Only
-    the lock's holder resolves, and every resolution is a permanent fact on chain.
+    Each resolution is appended to the record. A chain that cannot be read refuses
+    (``recorded_authorization_unreadable``). Only the lock's holder resolves.
     """
-    entries = lock.authorizations()
-    resolved = {e["nonce"].lower() for e in entries if e["kind"] == "resolved"}
-    pending: dict[str, dict] = {}
-    for entry in entries:
-        nonce = entry["nonce"].lower()
-        if entry["kind"] == "authorization" and nonce not in resolved:
-            pending.setdefault(nonce, entry)
-    summary = {"recorded": sum(e["kind"] == "authorization" for e in entries),
-               "open": len(pending), "resolved_now": []}
+    pending = _open_authorizations(lock.authorizations())
+    summary = {"open": len(pending), "resolved_now": []}
     if not pending:
         return summary
     base = keyless_base(transport=transport, rpc=rpc)
     try:
-        base.check_chain()
-        final = base.call("eth_getBlockByNumber", ["finalized", False])
-        number, timestamp = int(final["number"], 16), int(final["timestamp"], 16)
-        used = {nonce: _authorization_used(base, entry["from"], nonce, number)
-                for nonce, entry in pending.items()}
+        final_number, final_timestamp = _finalized(base)
+        fates = {nonce: _authorization_fate(base, entry, final_number, final_timestamp)
+                 for nonce, entry in pending.items()}
+    except CapitalLoopRefused:
+        raise
     except Exception:  # noqa: BLE001 - an unread chain resolves nothing
         raise CapitalLoopRefused("recorded_authorization_unreadable", {
             "record": str(lock.authorizations_path), "rpc": base.rpc}) from None
     financed_by_run: dict[Any, set] = {}
     live, unbooked = [], []
     for nonce, entry in pending.items():
+        fate = fates[nonce]
         row = {"nonce": nonce, "valid_before": int(entry["validBefore"]),
-               "run_dir": entry.get("run_dir"), "finalized_block": number,
-               "finalized_timestamp": timestamp, "authorization_used": used[nonce]}
-        if used[nonce]:
-            run_dir = entry.get("run_dir")
-            if run_dir not in financed_by_run:
-                try:
-                    financed_by_run[run_dir] = financed_nonces(read_items(run_dir))
-                except CapitalLoopRefused:
-                    financed_by_run[run_dir] = set()  # an unread diary proves no booking
-            if nonce in financed_by_run[run_dir]:
-                lock.resolve(nonce, "financed")
-                summary["resolved_now"].append({**row, "how": "financed"})
+               "origin": entry.get("origin"), "run_dir": entry.get("run_dir"),
+               "finalized_block": final_number, "finalized_timestamp": final_timestamp,
+               "fate": fate}
+        if fate == "used":
+            origin, run_dir = entry.get("origin", "capital_loop"), entry.get("run_dir")
+            if origin == "capital_loop":
+                if run_dir not in financed_by_run:
+                    try:
+                        financed_by_run[run_dir] = financed_nonces(read_items(run_dir))
+                    except (CapitalLoopRefused, TypeError):
+                        financed_by_run[run_dir] = set()  # an unread diary proves nothing
+                how = "financed" if nonce in financed_by_run[run_dir] else None
             else:
+                how = None if origin == "torn" else "spent"
+            if how is None:
                 unbooked.append(row)
-        elif timestamp > int(entry["validBefore"]):
+                continue
+            lock.resolve(nonce, how)
+            summary["resolved_now"].append({**row, "how": how})
+        elif fate == "expired":
             lock.resolve(nonce, "expired")
             summary["resolved_now"].append({**row, "how": "expired"})
         else:
@@ -465,33 +684,85 @@ def check_authorization_record(lock: ReserveLock, *, transport: Transport = http
     return summary
 
 
+def cooling_off_check(lock: ReserveLock, *, window_s: int,
+                      transport: Transport = http_request, rpc: str = BASE_RPC) -> dict:
+    """Refuse while finalized Base shows the reserve spent through an unrecorded authorization.
+
+    Guarantees a record rolled back with its directory (a backup restored, a migration)
+    cannot hide an authorization that settled within the last ``window_s`` seconds of
+    finalized blocks: every ``AuthorizationUsed`` the reserve authorized there must name a
+    nonce the record knows (``unrecorded_reserve_authorization`` otherwise), and every
+    USDC ``Transfer`` out of the reserve there must share its transaction with one of
+    them (``unrecorded_reserve_transfer``: money left some other way). Both are scanned
+    with the same finalized, canonical-block log reads as ``authorization_status``. An
+    authorization rolled back and not yet settled is not on chain to find: never
+    restoring or copying the lock directory is the defence there (the runbook).
+    """
+    from factorylab.world.evm import event_topic, word_address
+
+    entries = lock.authorizations()
+    known = {e["nonce"].lower() for e in entries if e["kind"] != "torn"}
+    known |= {n.lower() for e in entries if e["kind"] == "torn" for n in e["nonces"]}
+    reserve = "0x" + word_address(lock.reserve_address).hex()
+    base = keyless_base(transport=transport, rpc=rpc)
+    try:
+        final_number, final_timestamp = _finalized(base)
+        start = _block_at_or_before(base, final_timestamp - window_s, final_number,
+                                    final_timestamp)
+        used, used_to = base.scan(base.chain.usdc, [event_topic(AUTHORIZATION_USED), reserve],
+                                  start)
+        moved, moved_to = base.scan(base.chain.usdc, [event_topic(TRANSFER), reserve], start)
+    except CapitalLoopRefused:
+        raise
+    except Exception:  # noqa: BLE001 - an unread chain clears nothing
+        raise CapitalLoopRefused("cooling_off_unreadable", {"rpc": base.rpc}) from None
+    numbers = {"window_s": window_s, "from_block": start, "to_block": final_number,
+               "authorizations_seen": len(used), "transfers_seen": len(moved)}
+    if min(used_to, moved_to) < final_number:
+        raise CapitalLoopRefused("cooling_off_unreadable", numbers)
+    unknown = sorted({log["topics"][2].lower() for log in used
+                      if log["topics"][2].lower() not in known})
+    if unknown:
+        raise CapitalLoopRefused("unrecorded_reserve_authorization",
+                                 {**numbers, "nonces": unknown})
+    authorized = {log.get("transactionHash", "").lower() for log in used}
+    stray = sorted({log.get("transactionHash", "").lower() for log in moved
+                    if log.get("transactionHash", "").lower() not in authorized})
+    if stray:
+        raise CapitalLoopRefused("unrecorded_reserve_transfer",
+                                 {**numbers, "transactions": stray})
+    return numbers
+
+
 def acknowledge(lock: ReserveLock, nonce: str, *, transport: Transport = http_request,
                 rpc: str = BASE_RPC) -> dict:
     """Mark as settled by hand a recorded authorization finalized Base shows used.
 
-    Guarantees it resolves only an authorization in the record that the USDC contract
-    shows used at the finalized block; anything else refuses (``acknowledge_refused``).
-    Only the lock's holder acknowledges, so no run is alive while it does.
+    Guarantees it resolves only an open nonce of the record (a torn fragment's
+    included) that both reads (``_authorization_fate``) agree was used, after the same
+    finalized-behind-latest check as every launch; anything else refuses
+    (``acknowledge_refused``). Only the lock's holder acknowledges, so no run is alive.
     """
     nonce = nonce.lower()
-    entries = [e for e in lock.authorizations()
-               if e["kind"] == "authorization" and e["nonce"].lower() == nonce]
-    if not entries:
+    entry = _open_authorizations(lock.authorizations()).get(nonce)
+    if entry is None:
         raise CapitalLoopRefused("acknowledge_refused",
-                                 {"nonce": nonce, "why": "not in the record"})
+                                 {"nonce": nonce, "why": "not an open nonce of the record"})
     base = keyless_base(transport=transport, rpc=rpc)
     try:
-        base.check_chain()
-        number = int(base.call("eth_getBlockByNumber", ["finalized", False])["number"], 16)
-        used = _authorization_used(base, entries[0]["from"], nonce, number)
+        final_number, final_timestamp = _finalized(base)
+        fate = _authorization_fate(base, entry, final_number, final_timestamp)
+    except CapitalLoopRefused as exc:
+        raise CapitalLoopRefused("acknowledge_refused",
+                                 {"nonce": nonce, "why": exc.reason}) from None
     except Exception:  # noqa: BLE001 - an unread chain acknowledges nothing
         raise CapitalLoopRefused("acknowledge_refused",
                                  {"nonce": nonce, "why": "chain unreadable"}) from None
-    if not used:
+    if fate != "used":
         raise CapitalLoopRefused("acknowledge_refused", {
-            "nonce": nonce, "why": "finalized Base does not show it used"})
+            "nonce": nonce, "why": f"finalized Base shows it {fate}, not used"})
     lock.resolve(nonce, "acknowledged")
-    return {"nonce": nonce, "finalized_block": number, "acknowledged": True}
+    return {"nonce": nonce, "finalized_block": final_number, "acknowledged": True}
 
 
 class ReserveLock:
@@ -606,22 +877,32 @@ class ReserveLock:
         """Write the first record, durably, unless one is already there to keep."""
         _create_durably(self.record_path, self._record(run_dir))
 
-    def authorization_log(self, run_dir: str | Path) -> AuthorizationLog:
-        """The write-ahead authorization record, for the run holding this lock only."""
+    def authorization_log(self, run_dir: str | Path | None, *,
+                          origin: str = "capital_loop") -> AuthorizationLog:
+        """The write-ahead authorization record, written only while this lock is held."""
         if self.fd is None:
             raise RuntimeError("the reserve lock is not held")
-        return AuthorizationLog(self.authorizations_path, run_dir, self.reserve_address)
+        return AuthorizationLog(self, run_dir, origin)
+
+    def reset_instructions(self) -> str:
+        """The one manual reset, naming its three files and the pointer copy it keeps."""
+        return (f"only with no capital-loop run alive on this host and every recorded "
+                f"authorization settled and booked, or dead: copy {self.record_path} "
+                f"aside (it points at the last run), then remove all three of "
+                f"{self.path}, {self.record_path} and {self.authorizations_path}")
 
     def authorizations(self) -> list[dict]:
         """Every entry of this reserve's write-ahead authorization record.
 
         A missing record refuses (``capital_loop_authorization_record_missing``): the
-        lock file exists, so the record was created with it and has since been removed,
-        and it may have held an authorization no diary shows.
+        lock file exists, so the record was either removed since it was created with
+        the lock, or the lock predates it; either way it may have held an authorization
+        no diary shows. The refusal names the exact three-file reset.
         """
         if not self.authorizations_path.exists():
             raise CapitalLoopRefused("capital_loop_authorization_record_missing", {
-                "record": str(self.authorizations_path), "lock": str(self.path)})
+                "record": str(self.authorizations_path), "lock": str(self.path),
+                "reset": self.reset_instructions()})
         return read_authorizations(self.authorizations_path)
 
     def resolve(self, nonce: str, how: str) -> None:

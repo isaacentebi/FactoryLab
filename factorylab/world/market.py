@@ -277,11 +277,16 @@ class X402Provider:
         extra_body: Mapping[str, Any] | None = None,
         max_request_micro: int = 500_000,
         resolver: Callable[[str], list[str]] | None = None,
+        guard: Any = None,
     ) -> None:
         if type(max_request_micro) is not int or max_request_micro < 0:
             raise X402Error("Request cap must be nonnegative integer micro-USD")
         self.max_request_micro = max_request_micro
         self._private_key = private_key
+        # The write-ahead guard every purchase authorization passes before it is signed
+        # (``x402.sign_transfer_authorization``); the runtime binds a ``ReserveGuard``.
+        # Unbound, this provider quotes and reads but signs nothing.
+        self.guard = guard
         self._transport = transport or http_request
         # How a seller's host name is resolved for the registration-time address check.
         # The live default is the connector's bounded DNS helper; an injected transport
@@ -300,7 +305,8 @@ class X402Provider:
 
     def _client(self, *, record=None) -> X402Client:
         return _ObservedReserveClient(private_key=self._private_key, rpc=self.rpc,
-                                      transport=self._transport, record=record)
+                                      transport=self._transport, record=record,
+                                      guard=self.guard)
 
     def _clean(self, value: Any) -> Any:
         clean = redact(value, (self._private_key or os.environ.get("RESERVE_PRIVATE_KEY", ""),))

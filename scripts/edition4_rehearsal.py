@@ -684,6 +684,11 @@ def build_prepaid_provider(manifest: WorldManifest, *, keep_reserve_env: bool = 
     return MultiProvider(openrouter, venice, DeniedMarket())
 
 
+def _wall_ns() -> int:
+    """The wall clock: the only clock a capital-loop run stamps a real validBefore with."""
+    return time.time_ns()
+
+
 def _http_request():
     from factorylab.world.x402 import http_request
 
@@ -858,7 +863,7 @@ def _rehearse(
     exchange: Any | None = None,
     clock_source: Any | None = None,
     source_root: str | Path | None = None,
-    now_ns: Callable[[], int] = time.time_ns,
+    now_ns: Callable[[], int] | None = None,
     observe: bool = False,
     prompt_mode: str | None = None,
     reasoning: str = "preserve",
@@ -888,6 +893,13 @@ def _rehearse(
         # Real money needs a diary on disk: the next launch reads it to refuse while
         # anything this run authorized could still settle.
         raise ValueError("a capital-loop rehearsal requires an output directory")
+    if capital_loop and now_ns is not None:
+        # A capital-loop run signs real Base mainnet authorizations: their validBefore,
+        # and the settlement bound measured against it, both read the wall clock. An
+        # injected clock stays for testnet-only runs, where nothing real is stamped.
+        raise RehearsalRefused("capital_loop_requires_the_wall_clock")
+    if now_ns is None:
+        now_ns = _wall_ns
     if target_ticks is not None and (type(target_ticks) is not int or target_ticks <= 0):
         raise ValueError("target_ticks must be a positive integer")
     if type(cap_micro) is not int or cap_micro <= 0:
@@ -925,8 +937,10 @@ def _rehearse(
             # reaching it, and no earlier run may have left an authorization that can
             # still settle (a crashed world's last one stays valid for its timeout).
             from factorylab.runtime.capital_loop import (
+                MAX_AUTHORIZATION_S,
                 ReserveLock,
                 check_authorization_record,
+                cooling_off_check,
                 launch_check,
                 settlement_bound,
             )
@@ -938,9 +952,12 @@ def _rehearse(
                                lock_dir=capital_loop_lock_dir)
             held.append(lock)
             transport = capital_loop_transport or _http_request()
-            # The clock's first tick comes at once, so N ticks span N - 1 intervals.
-            run_ns = (duration_ns if target_ticks is None
-                      else min(duration_ns, (target_ticks - 1) * manifest.tick_interval_ns))
+            # The clock delivers floor(duration / tick) ticks, or --ticks when fewer,
+            # and its first tick comes at once: N ticks span N - 1 intervals.
+            ticks = duration_ns // manifest.tick_interval_ns
+            if target_ticks is not None:
+                ticks = min(ticks, target_ticks)
+            run_ns = max(0, ticks - 1) * manifest.tick_interval_ns
             # The host clock that will stamp validBefore is the runtime's own clock.
             settlement = settlement_bound(run_ns, manifest.tick_interval_ns,
                                           transport=transport,
@@ -954,9 +971,15 @@ def _rehearse(
             # Every authorization ever written ahead of signing, whatever any diary now
             # holds, is resolved against finalized Base before this run may sign.
             recorded = check_authorization_record(lock, transport=transport)
+            # And the chain itself, for a record rolled back with its directory: no
+            # authorization the reserve made within one settlement window of finalized
+            # blocks may be missing from the record.
+            cooling = cooling_off_check(
+                lock, transport=transport,
+                window_s=MAX_AUTHORIZATION_S + 2 * settlement["finalized_behind_s"])
             launch = {**launch, "settlement": settlement, "reserve_lock": str(lock.path),
                       "last_run": None if last is None else str(last),
-                      "authorization_record": recorded}
+                      "authorization_record": recorded, "cooling_off": cooling}
             print(json.dumps({"capital_loop_launch_check": {
                 k: v for k, v in launch.items() if k != "previous_runs"}}), flush=True)
         source_path, frozen_hash = source_hash(Path(source_root) if source_root else None)
@@ -1284,15 +1307,23 @@ def _announce_recovery(report: dict) -> None:
     refusal = report.get("refusal") or {}
     if refusal.get("reason") not in RECOVERY_REASONS:
         return
-    nonces = [row.get("nonce") for row in refusal.get("authorizations") or ()]
-    steps = [shlex.join(["uv", "run", "python", OUTSTANDING_SCRIPT, "--acknowledge", n])
-             for n in nonces]
+    if refusal["reason"] == "unrecorded_reserve_authorization":
+        message = (f"CAPITAL LOOP RECOVERY: finalized Base shows the reserve's "
+                   f"authorization(s) {refusal.get('nonces')} used within the last "
+                   "settlement window, and the write-ahead record does not know them (a "
+                   "restored or copied lock directory, or a signer outside this code). "
+                   "Settle the books by hand (docs/architecture/capital-loop-rehearsal.md, "
+                   "After a crash); launches refuse until they fall outside the window.")
+    else:
+        nonces = [row.get("nonce") for row in refusal.get("authorizations") or ()]
+        steps = [shlex.join(["uv", "run", "python", OUTSTANDING_SCRIPT, "--acknowledge", n])
+                 for n in nonces]
+        message = (f"CAPITAL LOOP RECOVERY: finalized Base shows {len(nonces)} recorded "
+                   f"authorization(s) used that no diary booked as financing: {nonces}. "
+                   "Settle the books by hand (docs/architecture/capital-loop-rehearsal.md, "
+                   f"After a crash), then acknowledge each: {'; '.join(steps)}")
     try:
-        print(f"CAPITAL LOOP RECOVERY: finalized Base shows {len(nonces)} recorded "
-              f"authorization(s) used that no diary booked as financing: {nonces}. Settle "
-              "the books by hand (docs/architecture/capital-loop-rehearsal.md, After a "
-              f"crash), then acknowledge each: {'; '.join(steps)}", file=sys.stderr,
-              flush=True)
+        print(message, file=sys.stderr, flush=True)
     except (OSError, ValueError):
         pass
 

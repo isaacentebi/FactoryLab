@@ -140,11 +140,16 @@ def relaunch(w, out, tmp_path):
 
     chain = w["chain"]
     # No key is needed: the launch stops after its capital checks, before any signer.
-    # Time has passed with the chain: this host's clock reads Base's newest block.
-    return rehearsal.run_rehearsal(
-        str(w["world"]), out=out, capital_loop=True, duration_ns=3_600 * 1_000_000_000,
-        source_root=tmp_path, provider=object(), capital_loop_lock_dir=w["locks"],
-        now_ns=lambda: int(chain.block(chain.head)["timestamp"], 16) * 1_000_000_000)
+    # Time has passed with the chain: the wall clock (the only one a capital-loop run
+    # reads) shows Base's newest block. Swapped in for this launch and put back.
+    wall = rehearsal._wall_ns
+    rehearsal._wall_ns = lambda: int(chain.block(chain.head)["timestamp"], 16) * 1_000_000_000
+    try:
+        return rehearsal.run_rehearsal(
+            str(w["world"]), out=out, capital_loop=True, duration_ns=3_600 * 1_000_000_000,
+            source_root=tmp_path, provider=object(), capital_loop_lock_dir=w["locks"])
+    finally:
+        rehearsal._wall_ns = wall
 
 
 @pytest.mark.parametrize("fate", ["settled", "dead"])
@@ -205,21 +210,23 @@ def test_a_run_ends_with_its_top_up_submitted_and_the_next_waits_for_the_chain(
 def test_the_rail_stamps_validbefore_with_the_clock_the_bound_measured(
         tmp_path, monkeypatch):
     # Codex on PR #144: the bound sampled the injected clock while the rail stamped
-    # validBefore with time.time_ns(). One clock now serves both.
+    # validBefore with time.time_ns(). One clock, the runner's wall clock, serves both
+    # (here a wall 100 s slow, to tell it from time.time_ns()).
     from scripts import edition4_rehearsal as rehearsal
 
     w = wired(tmp_path, monkeypatch)
-    lag_s = 100  # this run's clock runs 100 s behind the wall clock
+    lag_s = 100
+    monkeypatch.setattr(rehearsal, "_wall_ns",
+                        lambda: time.time_ns() - lag_s * 1_000_000_000)
     out = tmp_path / "runs" / "lagging"
     report = rehearsal.run_rehearsal(
         str(w["world"]), out=out, capital_loop=True, duration_ns=3_600 * 1_000_000_000,
-        source_root=repo_root(), now_ns=lambda: time.time_ns() - lag_s * 1_000_000_000,
-        **launch_kwargs(w))
+        source_root=repo_root(), **launch_kwargs(w))
     assert report["status"] == "completed", report.get("error")
     rows = json.loads((out / "events.json").read_text())
     [top_up] = [r for r in rows if r["kind"] == "treasury.step_submitted"]
     created = top_up["state"]["reference"]["created_s"]
-    assert abs(created - (time.time() - lag_s)) < 30  # the injected clock, not the wall's
+    assert abs(created - (time.time() - lag_s)) < 30  # the runner's clock, not time's
     assert int(top_up["state"]["reference"]["authorization"]["validBefore"]) == created + 300
 
 

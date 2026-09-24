@@ -10,6 +10,11 @@ from factorylab.world.market import X402Provider
 from factorylab.world.x402 import BASE_NETWORK, BASE_USDC, HTTPResponse, X402Error
 from scripts.compute_proof import Proof, ProofRefused
 
+# Every signature here goes through the production chokepoint, with a real
+# ReserveGuard in this test's temporary lock directory (tests/conftest.py).
+pytestmark = pytest.mark.usefixtures("write_ahead")
+
+
 TEST_KEY = "0x" + "11" * 32  # Public synthetic key; tests never open any key file.
 
 
@@ -123,12 +128,14 @@ def test_full_proof_guards_before_signing_and_report_shape(tmp_path, monkeypatch
     fake = FakeHTTP(tmp_path)
     original = x402.payment_header
 
-    def guarded_sign(account, quote):
+    def guarded_sign(account, quote, *, guard=None):
         step = "topup" if quote.amount_micro == 5_000_000 else (
             "farouter" if len(fake.payments) == 1 else "aispace"
         )
         assert (tmp_path / "runs" / "proof" / (step + ".attempt")).exists()
-        return original(account, quote)
+        # Every proof payment is written ahead of its signature, under its own name.
+        assert guard is not None and guard.origin == "compute_proof"
+        return original(account, quote, guard=guard)
 
     monkeypatch.setattr(x402, "payment_header", guarded_sign)
     assert proof(tmp_path, fake).run() == 0

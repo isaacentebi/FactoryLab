@@ -1285,7 +1285,7 @@ def test_an_authorization_is_recorded_before_it_is_signed_or_not_signed(monkeypa
         raise OSError("No space left on device")
 
     rail.authorization_log = full_disk
-    with pytest.raises(RailError, match="record failed; nothing was signed"):
+    with pytest.raises(RailError, match=r"write-ahead refused \(OSError\); nothing was signed"):
         rail.send("venice_top_up", state["reference"])
     assert paid_requests(rail) == []  # neither refusal signed or sent anything
     lock = ReserveLock(rail.reserve_address, lock_dir=tmp_path)
@@ -1317,7 +1317,8 @@ def test_a_crash_between_the_record_and_the_signature_resolves_once_it_expires(
         """The process dies right after the record is on disk."""
 
     rail = live(monkeypatch)
-    state = top_up_state(rail)  # validBefore = the rail's clock (1,000) + 300
+    rail.now_s = lambda: 12_000  # the fake chain's own era (tests/scripts Rpc)
+    state = top_up_state(rail)  # validBefore = the rail's clock (12,000) + 300
     lock = ReserveLock(rail.reserve_address, lock_dir=tmp_path)
     log = lock.authorization_log(tmp_path / "run")
 
@@ -1331,11 +1332,11 @@ def test_a_crash_between_the_record_and_the_signature_resolves_once_it_expires(
     assert paid_requests(rail) == []  # recorded, never signed
     lock.close()
     rpc = Rpc()
-    rpc.final_ts = 1_300  # finalized Base has not passed validBefore: it could still be
+    rpc.final_ts = 12_300  # finalized Base has not passed validBefore: it could still be
     with ReserveLock(rail.reserve_address, lock_dir=tmp_path) as relaunched:
         with pytest.raises(CapitalLoopRefused,
                            match="recorded_authorization_may_still_settle"):
             check_authorization_record(relaunched, transport=rpc)
-        rpc.final_ts = 1_301  # past it, and USDC shows it unused: it never can be
+        rpc.final_ts = 12_301  # past it, and USDC shows it unused: it never can be
         resolved = check_authorization_record(relaunched, transport=rpc)
         assert [r["how"] for r in resolved["resolved_now"]] == ["expired"]
