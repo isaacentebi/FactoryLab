@@ -6,6 +6,7 @@ eth_abi/eth_account dependencies. Private keys never enter a transaction referen
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
@@ -170,22 +171,31 @@ class EVM:
             guard.record_transaction({
                 "tx_hash": "0x" + bytes(signed.hash).hex(), "chain_id": self.chain.id,
                 "from": self.account.address, "to": unsigned["to"],
-                "nonce": unsigned["nonce"], "start_block": head})
+                "nonce": unsigned["nonce"], "gas_price": unsigned["gasPrice"],
+                "start_block": head})
         except Exception as exc:  # noqa: BLE001 - unrecorded means never used
             raise RailError(f"write-ahead transaction record refused "
                             f"({getattr(exc, 'reason', type(exc).__name__)}); "
                             "nothing was prepared") from None
 
-    def _permitted(self) -> None:
-        """Raise unless the guard lets this reserve's transaction leave now."""
+    def _sending(self, tx_hash: str) -> Any:
+        """The guard's hold on this reserve for one send, entered, or a refusal.
+
+        Guarantees the returned context is entered: the reserve's lock is held for this
+        signer and ``tx_hash`` is on its record until the caller exits it after the send
+        returns. With no guard, a held reserve, or an unrecorded hash, nothing is sent.
+        """
         guard = self.transaction_guard
         if guard is None:
             raise RailError("no write-ahead transaction record; nothing was broadcast")
+        hold = ExitStack()
         try:
-            guard.permit(self.account.address)
+            hold.enter_context(guard.sending(self.account.address, tx_hash))
         except Exception as exc:  # noqa: BLE001 - a held reserve sends nothing
+            hold.close()
             raise RailError(f"broadcast refused ({getattr(exc, 'reason', type(exc).__name__)})"
                             ) from None
+        return hold
 
     def call(self, method: str, params: list) -> Any:
         try:
@@ -227,8 +237,13 @@ class EVM:
         result = self.call("eth_call", [{"to": address(contract), "data": data}, "latest"])
         return bytes.fromhex(result.removeprefix("0x"))
 
-    def prepare(self, to: str, data: str, *, gas_remaining_wei: int) -> dict:
-        """A reference is computed before broadcast; signing it again yields the same tx hash."""
+    def prepare(self, to: str, data: str, *, gas_remaining_wei: int, nonce: int | None = None,
+                min_gas_price: int = 0) -> dict:
+        """A reference is computed before broadcast; signing it again yields the same tx hash.
+
+        ``nonce`` pins the account nonce (a cancellation takes the stuck one's), else the
+        pending count is used; ``min_gas_price`` floors the price (a replacement's 12.5%).
+        """
         self.check_chain()
         if type(gas_remaining_wei) is not int or gas_remaining_wei <= 0:
             raise RailError("gas budget exhausted")
@@ -241,11 +256,12 @@ class EVM:
         # Headroom over the node's quote: a legacy transaction priced at exactly the
         # current gas price stalls in the mempool at the first uptick, and its nonce
         # then blocks every later transfer from this signer.
-        price = _with_headroom(int(self.call("eth_gasPrice", []), 16))
+        price = max(_with_headroom(int(self.call("eth_gasPrice", []), 16)), min_gas_price)
         ceiling = gas * price
         if ceiling <= 0 or ceiling > gas_remaining_wei:
             raise RailError("transaction exceeds remaining gas budget")
-        nonce = int(self.call("eth_getTransactionCount", [sender, "pending"]), 16)
+        if nonce is None:
+            nonce = int(self.call("eth_getTransactionCount", [sender, "pending"]), 16)
         unsigned = {
             "chainId": self.chain.id,
             "nonce": nonce,
@@ -335,8 +351,11 @@ class EVM:
         expected = "0x" + bytes(signed.hash).hex()
         if expected != reference["tx_hash"]:
             raise RailError("transaction reference was modified")
-        self._permitted()
-        result = self.call("eth_sendRawTransaction", ["0x" + bytes(signed.raw_transaction).hex()])
+        # The reserve's lock is held from the record check until the send returns: no
+        # capital-loop launch can start between them.
+        with self._sending(expected):
+            result = self.call("eth_sendRawTransaction",
+                               ["0x" + bytes(signed.raw_transaction).hex()])
         if not isinstance(result, str) or result.lower() != expected.lower():
             raise Pending("RPC did not acknowledge the prepared transaction hash")
 
@@ -449,7 +468,11 @@ class EVM:
             if not start <= height <= end:
                 continue
             canonical = self.call("eth_getBlockByNumber", [log["blockNumber"], False])
-            if canonical and canonical["hash"].lower() == log["blockHash"].lower():
+            if not canonical:
+                # A block the node cannot show is not evidence the log was reorged away:
+                # the scan is unreadable and is retried, never silently shortened.
+                raise Pending("a log's block could not be read")
+            if canonical["hash"].lower() == log["blockHash"].lower():
                 verified.append(log)
         return verified, end
 

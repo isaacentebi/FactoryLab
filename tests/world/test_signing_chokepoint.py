@@ -155,3 +155,38 @@ def test_a_real_validbefore_is_stamped_by_the_wall_clock_not_the_worlds():
     reference = rail.prepare("venice_top_up", {"started_ns": 0, "received_micro": 5_000_000},
                              {})
     assert abs(reference["created_s"] - time.time()) < 5  # not 0, the virtual start
+
+
+def test_a_world_names_its_exact_diary_to_its_reserve_guards(tmp_path):
+    # The cold review of 98fa627 (#3): --ledger runs/foo.jsonl is booked there.
+    from factorylab.runtime.loop import Runtime
+    from factorylab.runtime.worlds import load_manifest
+
+    path = tmp_path / "runs" / "foo.jsonl"
+    path.parent.mkdir()
+    rt = Runtime(load_manifest("scripted"), events=0, seed=1, initial_balance_micro=None,
+                 ledger_path=str(path), router_gamma=.1)
+    guard = rt.market.target.guard
+    assert guard.ledger == path.resolve() and guard.run_dir == path.parent.resolve()
+
+
+@pytest.mark.gate
+def test_a_resumed_world_names_its_diary_to_its_reserve_guards(tmp_path):
+    # The cold review of 98fa627 (#3): resume passed ledger_path=None, so a resumed
+    # world's authorizations named no diary and every used one read as a recovery.
+    from factorylab.runtime.loop import Runtime
+    from factorylab.runtime.resume import resume_runtime
+    from factorylab.runtime.worlds import load_manifest
+    from tests.runtime.test_entitlement import stop_after
+
+    m = load_manifest("scripted")
+    path = tmp_path / "runs" / "foo.jsonl"
+    path.parent.mkdir()
+    rt = Runtime(m, events=140, seed=1, initial_balance_micro=None, ledger_path=str(path),
+                 router_gamma=.1)
+    rt.events_budget = 8
+    stop_after(rt, lambda r, e: r.ticks_consumed == 3 and str(e.kind) == "Tick")
+    restored = resume_runtime(m, str(path))
+    guard = restored.market.target.guard
+    assert isinstance(guard, ReserveGuard) and guard.origin == "x402_purchase"
+    assert guard.ledger == path.resolve() and guard.run_dir == path.parent.resolve()

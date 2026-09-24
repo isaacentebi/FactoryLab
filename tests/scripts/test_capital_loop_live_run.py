@@ -88,6 +88,28 @@ class Wires:
         raise error.URLError("offline")
 
 
+class Wall:
+    """The wall clock and its wait, as the runner reads them (``_wall_ns``, ``_sleep``).
+
+    It starts at ``start_ns`` and moves only by the runner's own sleeps, so the run's
+    live deadline clock paces itself exactly as it does against real time, without the
+    test waiting. The ``ticks``-th sleep also carries the wall past any deadline: the
+    run ends by its own deadline clock after that many ticks.
+    """
+
+    def __init__(self, start_ns, ticks=TICKS):
+        self.now, self.ticks, self.sleeps = start_ns, ticks, 0
+
+    def now_ns(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.sleeps += 1
+        self.now += int(seconds * 1_000_000_000)
+        if self.sleeps % self.ticks == 0:
+            self.now += 10 * 86_400 * 1_000_000_000  # the deadline passes
+
+
 def world(tmp_path, reserve):
     """The capital-loop world with a throwaway reserve; its manifest name is its stem."""
     path = tmp_path / "edition6-capital-loop.toml"
@@ -118,19 +140,29 @@ def wired(tmp_path, monkeypatch):
     monkeypatch.setattr(API, "post", lambda api, path, payload=None: venue.post(
         api, path, payload))
     monkeypatch.setattr(x402.request, "build_opener", lambda *handlers: Wires(chain, venice))
+    # A capital-loop run takes no supplied clock: its live deadline clock reads the wall.
+    wall = install_wall(monkeypatch, Wall(time.time_ns()))
     return {"chain": chain, "venice": venice, "venue": venue, "reserve": reserve,
-            "world": world(tmp_path, reserve.address), "locks": tmp_path / "locks"}
+            "world": world(tmp_path, reserve.address), "locks": tmp_path / "locks",
+            "wall": wall}
+
+
+def install_wall(monkeypatch, wall):
+    from scripts import edition4_rehearsal as rehearsal
+
+    monkeypatch.setattr(rehearsal, "_wall_ns", wall.now_ns)
+    monkeypatch.setattr(rehearsal, "_sleep", wall.sleep)
+    return wall
 
 
 def launch_kwargs(w):
-    """What the harness supplies beside the operator's flags: no key file, no network."""
-    from factorylab.world.clock import ClockSource
+    """What the harness supplies beside the operator's flags: no key file, no network,
+    and no clock (the run's own live deadline clock reads ``w["wall"]``)."""
     from factorylab.world.exchange import HyperliquidExchange
 
     return {"provider": Converting(ModelResponse("openai/gpt-6-luna", "{}", 1, 1, "stop",
                                                  cost_micro=1)),
             "exchange": HyperliquidExchange(mainnet=False),
-            "clock_source": ClockSource(time.time_ns(), TICK_NS, TICKS),
             "capital_loop_lock_dir": w["locks"]}
 
 
@@ -216,8 +248,7 @@ def test_the_rail_stamps_validbefore_with_the_clock_the_bound_measured(
 
     w = wired(tmp_path, monkeypatch)
     lag_s = 100
-    monkeypatch.setattr(rehearsal, "_wall_ns",
-                        lambda: time.time_ns() - lag_s * 1_000_000_000)
+    install_wall(monkeypatch, Wall(time.time_ns() - lag_s * 1_000_000_000))
     out = tmp_path / "runs" / "lagging"
     report = rehearsal.run_rehearsal(
         str(w["world"]), out=out, capital_loop=True, duration_ns=3_600 * 1_000_000_000,
@@ -393,10 +424,11 @@ def test_the_world_binds_its_rail_a_guard_for_every_reserve_key_signer(tmp_path,
     from factorylab.runtime.capital_loop import ReserveGuard
     from factorylab.runtime.loop import Runtime
     from factorylab.runtime.worlds import load_manifest
+    from factorylab.world.clock import ClockSource
     from factorylab.world.treasury_rails import HybridRail
 
     w = wired(tmp_path, monkeypatch)
-    kwargs = launch_kwargs(w)
+    kwargs = {**launch_kwargs(w), "clock_source": ClockSource(time.time_ns(), TICK_NS, TICKS)}
     run = tmp_path / "runs" / "bound"
     run.mkdir(parents=True)
     runtime = Runtime(load_manifest(str(w["world"])), events=TICKS, seed=1,
@@ -412,3 +444,19 @@ def test_the_world_binds_its_rail_a_guard_for_every_reserve_key_signer(tmp_path,
     signers = [getattr(rail, name) for name in ("hyper", "base", "venice_base")
                if getattr(rail, name, None) is not None]
     assert signers and all(chain.transaction_guard is guard for chain in signers)
+
+
+def test_a_capital_loop_run_refuses_a_supplied_clock(tmp_path, monkeypatch):
+    # Codex P2 on 98fa627: a harness clock that emits every tick at once would run the
+    # funded loop faster than the settlement bound it was admitted on.
+    from factorylab.world.clock import ClockSource
+    from scripts import edition4_rehearsal as rehearsal
+
+    w = wired(tmp_path, monkeypatch)
+    with pytest.raises(rehearsal.RehearsalRefused, match="capital_loop_requires_the_live_clock"):
+        rehearsal.run_rehearsal(
+            str(w["world"]), out=tmp_path / "runs" / "harness", capital_loop=True,
+            duration_ns=3_600 * 1_000_000_000, source_root=repo_root(),
+            clock_source=ClockSource(time.time_ns(), TICK_NS, 360), **launch_kwargs(w))
+    assert not (tmp_path / "runs" / "harness").exists()  # refused before anything
+    assert w["venue"].rows == [] and w["venice"].paid == []

@@ -209,15 +209,21 @@ covered every block up to it. The runtime clock is never consulted.
       empty diary there is truncation (`recorded_run_ledger_empty`). Any other diary cut
       exactly at a line boundary cannot be told from a shorter one by its file alone:
       the write-ahead authorization record (step 5) is the defence there;
-   5. resolves every authorization in the reserve's write-ahead authorization record
-      against finalized Base, whatever any diary now holds (see "The write-ahead
-      authorization record"), and refuses while one may still settle, or while one
-      settled that no diary booked (a recovery: exit 3);
+   5. resolves every authorization and plain transaction in the reserve's write-ahead
+      authorization record against the finalized chain, whatever any diary now holds
+      (see "The write-ahead authorization record"). It refuses while one may still
+      settle or execute, or while one settled that no diary booked (a recovery: exit 3);
    6. scans the last settlement window before the finalized head, and every block
       after it up to the latest, for the reserve's own authorizations and transfers,
       and refuses on any the record does not know (the cooling-off scan, same section).
 
 ### How long a run must be
+
+A funded run takes no supplied clock. It paces its ticks with its own live deadline
+clock against the wall clock. Any other `clock_source`
+refuses (`capital_loop_requires_the_live_clock`), and so does an injected `now_ns`
+(`capital_loop_requires_the_wall_clock`). A harness that emits every tick at once would
+otherwise run the loop faster than the bound below admitted it on.
 
 A conversion settles, or provably dies, only once a *finalized* Base block is past its
 debit or past its `validBefore`, and the rail sees that on its next tick. The signer
@@ -320,14 +326,21 @@ the next capital-loop launch resolves like its own. A signer with no guard signs
 nothing.
 
 Plain reserve-key transactions take the same guard. Every one this code base signs goes
-through `EVM.prepare` or `EVM.replace` (`factorylab/world/evm.py`), which records it
-(transaction hash, chain, nonce, destination, the chain head as `start_block`, origin,
-run directory) to the same record under the same lock before returning it, and
-`EVM.broadcast`, which asks the guard first: while a capital-loop run holds the reserve
-nothing is prepared, replaced or broadcast. They are the ordinary rail's approvals and
-HyperCore deposit, CCTP's `depositForBurn` and `receiveMessage`, and the acceptance CLI's
-withdrawal. A chain with no guard prepares and sends nothing. The hybrid rail's Base
-chain has a zero gas budget and never signs one.
+through `EVM.prepare` or `EVM.replace` (`factorylab/world/evm.py`). Each records it
+(transaction hash, chain, account nonce, gas price, destination, the chain head as
+`start_block`, origin, run directory, diary) to the same record under the same lock
+before returning it. `EVM.broadcast` sends only a transaction whose hash is on the
+record. It holds the reserve's lock from that check until `eth_sendRawTransaction`
+returns, so no capital-loop launch can start between the two. While a capital-loop run
+holds the reserve, nothing is prepared, replaced or broadcast. These transactions are:
+- the ordinary rail's approvals and HyperCore deposit;
+- CCTP's `depositForBurn` and `receiveMessage`;
+- the acceptance CLI's withdrawal;
+- `--cancel-transaction` (below).
+
+A chain with no guard prepares and sends nothing. The hybrid rail's Base chain has a
+zero gas budget and never signs one. Every launch resolves each recorded transaction
+before it may run ("The write-ahead authorization record").
 
 What the lock does not cover: another machine, or another operator account (another
 home directory), on the same reserve; and code older than this runbook. The on-chain
@@ -376,7 +389,9 @@ existence does not rest on any diary:
   reads Base's latest block number, then appends one line (nonce, value, payer, payee,
   `validAfter`, `validBefore`, that block as `start_block`, origin, run directory) to
   `<reserve>.authorizations.jsonl` beside the lock and flushes it to stable storage
-  (`F_FULLFSYNC` on macOS). If the head cannot be read or the write fails, nothing is
+  (`F_FULLFSYNC` on macOS). A world's line also names its exact diary file (a world
+  launched with `--ledger runs/foo.jsonl` names that file, and a resumed world names the
+  file it resumed). If the head cannot be read or the write fails, nothing is
   signed; a signer with no guard refuses to sign at all. The signature does not exist
   before the line, so it cannot be used before `start_block`. A crash between the
   append and the signature leaves an authorization recorded and never signed: it can
@@ -389,10 +404,16 @@ existence does not rest on any diary:
 
       uv run python scripts/capital_loop_outstanding.py --repair-torn
 
-  which takes the lock, moves the fragment to `<record>.torn-<seconds>` (nothing is
-  deleted), and records a `torn` entry carrying its bytes. Any nonce-like value in the
-  fragment becomes an open authorization, resolved against the chain like any other
-  (a torn append was never signed, but the record does not assume it). A torn nonce
+  which takes the lock, moves the fragment to a new `<record>.torn-<seconds>-<random>`
+  sidecar (nothing is deleted; the random suffix means two repairs never collide), and
+  records a `torn` entry carrying its bytes. A fragment of a **transaction** line (its
+  keys start with `"chain_id"`, or it names `"kind": "transaction"`, a `tx_hash` or a
+  `tx_nonce`) is kept as a torn transaction. Its legible hash, chain and account nonce
+  stay open under the transaction rule below, and no value in it is read as a nonce.
+  Its `start_block` is kept only when its chain is legibly Base mainnet. In any other
+  fragment every nonce-like value becomes an open authorization, resolved against the
+  chain like any other (a torn append was never signed, but the record does not assume
+  it). A torn nonce
   always resolves as a recovery if it was used: nothing shows where it was booked. Its
   `validBefore` is the fragment's own only when the value is terminated (a closing
   quote, or a delimiter after a bare number): `"validBefore": "13` cut mid-digits is
@@ -406,16 +427,33 @@ existence does not rest on any diary:
   that, swaps it in with `os.replace`, and flushes the directory (`F_FULLFSYNC`). A
   crash at any step leaves either the old record (still refused as torn: run the
   repair again) or the new one, never neither, and never a half-written record.
+- **A damaged middle line** refuses every launch (`authorization_record_unreadable`,
+  naming the line) until it is repaired:
+
+      uv run python scripts/capital_loop_outstanding.py --repair-damaged
+
+  This is the same atomic sidecar-and-replace. Each line that is not a whole entry gets
+  its own sidecar and is replaced in place by the `torn` entry made from it, under the
+  same rules, so every legible nonce and transaction hash stays open. Whole lines are
+  kept byte for byte.
 - **At every launch**, every recorded authorization not yet resolved is read twice,
   and the two reads must agree: USDC's `authorizationState` at the finalized block, and
   a scan of the finalized blocks it could have been used in for its `AuthorizationUsed`.
   The `finalized` tag is read once per check. Its block number is then passed
   explicitly to both reads (`EVM.scan` takes the end block), so a provider whose tag
-  moves between two calls cannot split them. The scan runs from the entry's
-  `start_block` to the first block whose timestamp is past its `validBefore`, or to the
-  finalized block while no finalized block is past it yet. It costs the same whatever
-  the entry's age: at most about 600 s of blocks, plus a binary search for the end
-  block. An entry written before `start_block` existed (legacy), or a torn one without
+  moves between two calls cannot split them. The scan runs from 300 blocks
+  (`START_BLOCK_MARGIN`) before the entry's `start_block` to the first block whose
+  timestamp is past its `validBefore`. While no finalized block is past it yet, the
+  scan runs to the finalized block. The margin covers a head read at signing that was
+  an unsafe block, which a reorg later replaced with a shorter branch. The scan filters
+  by the exact nonce, so the margin cannot match another authorization. The cost is
+  the same whatever the entry's age: about 600 s of blocks plus the margin, and a
+  binary search for the end block. Each scan looks for `AuthorizationUsed` and for
+  `AuthorizationCanceled`: an authorization cancelled from a wallet (EIP-3009
+  `cancelAuthorization`) is supported. Its state reads true with a cancel log and no
+  debit, so it resolves as `canceled`, dead like an expired one, with nothing to
+  acknowledge. The treasury rail treats it the same way: the conversion strands
+  recoverably, and nothing was paid. An entry written before `start_block` existed (legacy), or a torn one without
   it, starts at the block at `validBefore` − 600 s − the host clock's lead over the
   latest block now − 300 s (`LEGACY_SKEW_CUSHION_S`) − the finality lag. The 300 s
   covers a host clock that led the chain by up to 5 minutes more at signing than it
@@ -426,10 +464,11 @@ existence does not rest on any diary:
   (`finalized_tag_not_behind_latest`). Nothing is resolved from one read, and nothing
   is read at `latest`. Then, used entries resolve by **origin**:
   - used by a world (`capital_loop`, or `treasury` from the ordinary rail), and the
-    diary of the run directory it names holds the `treasury.financing` of the
-    transfer whose confirmed receipt carries that nonce: resolved. An entry with no
-    origin was written before origins existed, by a capital-loop run, and is held to
-    the same rule;
+    diary file it names holds the `treasury.financing` of the transfer whose confirmed
+    receipt carries that nonce: resolved. An entry older than the diary field is read
+    from the `ledger.jsonl` of the run directory it names. An entry with no origin was
+    written before origins existed, by a capital-loop run, and is held to the same
+    rule;
   - used by a signer with no diary (`reserve_topup`, `x402_purchase`, `x402_probe`,
     `compute_proof`, `treasury_cli`): spent in the open, resolved;
   - used by a world, a legacy entry or a torn fragment, and no diary shows it
@@ -445,9 +484,33 @@ existence does not rest on any diary:
   - unused, and the finalized block is past its `validBefore`: dead for good, resolved;
   - unused and not yet past it: the launch is refused
     (`recorded_authorization_may_still_settle`) until it settles or expires.
+- **Every recorded transaction** is open until the reserve's account nonce on its
+  own chain, read at that chain's finalized block, is past the transaction's nonce.
+  From then on neither it nor any replacement at that nonce can execute. If an
+  unrecorded transaction took the nonce, the cooling-off scan is the check that finds
+  it. Until then the launch is refused (`recorded_transaction_may_still_execute`),
+  naming each transaction. A broadcast transaction resolves once it is mined and
+  finalized. A dropped one never consumes its nonce, and anyone holding its bytes
+  could still send it. Its exit is:
+
+      RESERVE_PRIVATE_KEY=... uv run python scripts/capital_loop_outstanding.py \
+          --cancel-transaction 0x<hash>
+
+  This takes the reserve's lock. It refuses unless the hash is an open transaction of
+  the record, with its chain and nonce known, and that nonce is still unused at the
+  latest block. It then signs a 0-value transfer from the reserve to itself at the
+  same nonce, priced at least 12.5% above the stuck one, and records it like every
+  reserve-key transaction. It sends it under the lock (`--max-gas-wei` caps its gas,
+  default 10^15 wei). Once either transaction is finalized the nonce is consumed, and
+  the next launch resolves both.
+
+  A torn transaction line whose chain and nonce are illegible resolves differently. It
+  must wait out a whole cooling-off window (600 s + 2 × the finality lag) after its
+  repair, and every chain it could be on must answer `eth_getTransactionByHash` for its
+  legible hash with nothing, or with a finalized block.
 - A resolution is appended to the record too, so a diary deleted after its financing
   was proven is never needed again. Any unreadable line other than a torn last one
-  refuses (`authorization_record_unreadable`).
+  refuses (`authorization_record_unreadable`, repaired with `--repair-damaged`).
 - **The cooling-off scan.** A record rolled back with its directory cannot be caught by
   any local file. So each launch also scans for the reserve's own `AuthorizationUsed`
   and `Transfer` events. The scan covers every block from the block at the finalized
@@ -457,8 +520,10 @@ existence does not rest on any diary:
   record does not know (a torn fragment's nonces count as known) refuses the launch as
   a recovery (`unrecorded_reserve_authorization`, exit 3). USDC leaving the reserve
   there refuses too (`unrecorded_reserve_transfer`), unless it shares its transaction
-  with such an authorization or is a transaction the record holds. Both pass once the
-  window has moved past them. This catches a rollback whose authorization already
+  with such an authorization or is a transaction the record holds (a torn line's legible
+  hash included). Both pass once the window has moved past them. A log whose block the
+  node cannot show is never dropped. The scan is unreadable (`cooling_off_unreadable`)
+  and the launch is retried. This catches a rollback whose authorization already
   settled. One not yet settled is not on chain to find, which is why the directory is
   never restored or copied.
 - **A transfer made by hand is not on the record.** Sending USDC out of the reserve
@@ -468,6 +533,39 @@ existence does not rest on any diary:
   finalizes the refusal lasts about 42 minutes more, about 58 minutes after it was
   sent. It then clears by itself, with nothing to acknowledge. Do not move reserve
   USDC by hand within an hour before a launch.
+
+## Every refusal and its exit
+
+No refusal on the capital-loop path is permanent. Each has an exit, and none needs the
+lock directory edited by hand, except the deliberate reset where the table says so.
+Exit 3 marks a recovery (real money may have moved unbooked); every other refusal
+exits 1.
+
+| Refusal | Exit |
+|---|---|
+| `capital_loop_reserve_locked` | Wait for the run holding the reserve to end; the lock dies with its process. |
+| `capital_loop_reserve_lock_not_held` | A caller wrote without the lock: take the lock (every script and launch does) and retry. |
+| `capital_loop_lock_replaced` | Retry. Another launch replaced the file under this one; if it persists, the manual reset ("One run per reserve"). |
+| `capital_loop_lock_file_missing`, `capital_loop_last_run_missing`, `capital_loop_last_run_unreadable`, `capital_loop_authorization_record_missing` | The deliberate manual reset ("One run per reserve"), once every recorded authorization is settled and booked, or dead. |
+| `run_ledger_missing`, `run_ledger_key_missing`, `run_ledger_key_invalid`, `run_ledger_unreadable`, `recorded_run_ledger_empty` | Put the run's diary and key back where the record names them. If they are gone for good, wait out 600 s + 2 × the finality lag, read the reserve, then the manual reset. |
+| `capital_loop_duration_below_settlement_bound` | Launch with a longer `--duration`, and no `--ticks` that caps it shorter. |
+| `finality_lag_unreadable`, `finalized_tag_not_behind_latest`, `block_times_unreadable`, `recorded_authorization_unreadable`, `cooling_off_unreadable` | Retry, or use another Base RPC whose `finalized` tag trails `latest`. |
+| `reserve_floor_leaves_more_than_the_total_cap` | Move the excess out of the reserve (then wait out the cooling-off), or raise the floor in the manifest. |
+| `previous_run_authorization_may_still_settle`, `recorded_authorization_may_still_settle` | Wait: it settles or passes its `validBefore` (at most 600 s plus finality). Cancelling it from a wallet also clears it. |
+| `recorded_authorization_reads_disagree` | Retry: the node's state and logs did not match. If it persists, use another Base RPC. |
+| `recorded_authorization_settled_unbooked` (exit 3) | Settle the books by hand, then `--acknowledge 0x<nonce>`. |
+| `recorded_transaction_may_still_execute` | Wait for it to be mined and finalized, or `--cancel-transaction 0x<hash>`. A torn one with no legible nonce clears after one cooling-off window. |
+| `transaction_not_on_record` | A broadcast refused its unrecorded hash; nothing was sent. Prepare the transaction again: it is recorded as it is prepared. |
+| `cancel_refused` | Its reason says which: not open (nothing to cancel), no chain or nonce known (it clears by waiting), wrong key (use the reserve's), or the nonce already used (wait for finality). |
+| `unrecorded_reserve_authorization` (exit 3) | Book it by hand. It clears by itself when finalized Base is 600 s + 2 × the lag past it. |
+| `unrecorded_reserve_transfer` | Clears by itself when finalized Base is 600 s + 2 × the lag past it (about 58 minutes after a hand transfer). |
+| `authorization_record_torn` | `--repair-torn`. |
+| `authorization_record_unreadable` | `--repair-damaged`. |
+| `acknowledge_refused` | Its reason says which: not an open nonce (nothing to acknowledge), or finalized Base does not show it used yet (wait, then retry). |
+| `capital_loop_requires_the_wall_clock`, `capital_loop_requires_the_live_clock` | Launch without an injected clock (the operator's command never passes one). |
+| `capital_loop_requires_hybrid_venice_world`, `capital_loop_requires_the_hybrid_rail`, `testnet_hyperliquid_required`, `output_dir_reserved_for_witness`, `source_root_mismatch` | Fix the launch: the capital-loop world, a testnet venue, another `--out`, and `--source-root` naming the imported checkout. |
+| `provider_rail_denied`, `unsupported_provider_rail`, `unsupported_or_x402_model_rail`, `x402_denied`, `openrouter_credential_missing`, `venice_prepaid_credential_missing`, `reasoning_on_requires_declared_tier_support` | Fix the provider configuration or its credential. |
+
 
 ## After the run
 

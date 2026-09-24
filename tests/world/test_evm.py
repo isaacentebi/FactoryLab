@@ -17,6 +17,7 @@ class RPC:
         self.logs = []
         self.sent = []
         self.head = "0x10"
+        self.on_send = None
 
     def __call__(self, method, url, body, headers):
         name, args = body["method"], body["params"]
@@ -35,6 +36,8 @@ class RPC:
         if name == "eth_sendRawTransaction":
             from eth_utils import keccak
 
+            if self.on_send is not None:
+                self.on_send()
             self.sent.append(args[0])
             result = "0x" + keccak(bytes.fromhex(args[0][2:])).hex()
         return HTTPResponse(200, {"result": result}, {})
@@ -244,7 +247,7 @@ def test_a_reserve_transaction_is_written_ahead_before_it_is_returned():
     assert written == {
         "kind": "transaction", "tx_hash": ref["tx_hash"].lower(), "chain_id": 998,
         "from": chain.account.address, "to": ref["tx"]["to"], "tx_nonce": 3,
-        "start_block": 16, "origin": "test", "run_dir": None}
+        "gas_price": 125, "start_block": 16, "origin": "test", "run_dir": None, "ledger": None}
     replaced = chain.replace(ref, gas_remaining_wei=10**15)
     assert [t["tx_hash"] for t in transactions(chain)] == [
         ref["tx_hash"].lower(), replaced["tx_hash"].lower()]
@@ -289,3 +292,37 @@ def test_a_live_rail_binds_its_guard_to_every_chain_it_signs_on():
     rail.bind_guard(guard)
     assert rail.authorization_log is guard
     assert rail.hyper.transaction_guard is guard and rail.base.transaction_guard is guard
+
+
+# ---- Wave 10, the reviews of 98fa627
+
+
+def test_a_transaction_whose_hash_is_not_on_the_record_is_never_broadcast(tmp_path):
+    from factorylab.runtime.capital_loop import ReserveGuard
+
+    rpc, chain, ref = setup()
+    chain.transaction_guard = ReserveGuard("test", lock_dir=tmp_path / "elsewhere")
+    with pytest.raises(RailError, match="transaction_not_on_record"):
+        chain.broadcast(ref)
+    assert rpc.sent == []
+
+
+def test_the_reserve_is_held_from_the_record_check_until_the_send_returns():
+    # Codex P1: a capital-loop launch between the lock's release and the send could
+    # admit a run beside a transaction just leaving the reserve.
+    from factorylab.runtime.capital_loop import CapitalLoopRefused, ReserveLock
+
+    rpc, chain, ref = setup()
+    seen = []
+
+    def a_launch_during_the_send():
+        try:
+            ReserveLock(chain.account.address).close()
+            seen.append("launched")
+        except CapitalLoopRefused as exc:
+            seen.append(exc.reason)
+
+    rpc.on_send = a_launch_during_the_send
+    chain.broadcast(ref)
+    assert seen == ["capital_loop_reserve_locked"] and len(rpc.sent) == 1
+    ReserveLock(chain.account.address).close()  # released once the send returned

@@ -87,6 +87,7 @@ FORWARD_SCAN_PAGES = 40
 
 
 AUTHORIZATION_USED = "AuthorizationUsed(address,bytes32)"
+AUTHORIZATION_CANCELED = "AuthorizationCanceled(address,bytes32)"
 #: How far short of "tranche less metered spend" a hybrid top-up's observed Venice credit
 #: may fall before financing is held. The comparison is between three imperfect reads:
 #: the diary's metered spend is an estimate (a table price when Venice reports no cost),
@@ -109,6 +110,10 @@ def authorization_status(base: EVM, authorizer: str, reference: dict) -> dict:
     consulted and no grace is needed: finality lag delays the answer, never flips it.
     Every read is ``eth_getBlockByNumber``, ``eth_call`` or ``eth_getLogs``: nothing
     here signs, so an operator's script may call it with ``EVM(BASE, None)``.
+
+    A nonce whose state is true with no ``AuthorizationUsed`` log is looked up once more
+    for an ``AuthorizationCanceled`` (EIP-3009 ``cancelAuthorization``, which a wallet
+    may send): ``canceled`` is then true, and like ``expired`` it can never settle.
     """
     auth = reference["authorization"]
     nonce = auth["nonce"]
@@ -122,10 +127,16 @@ def authorization_status(base: EVM, authorizer: str, reference: dict) -> dict:
     # The scan ends at the very block the state was read at, not a re-read tag.
     logs, scanned_to = base.scan(base.chain.usdc, topics, int(reference["start_block"]),
                                  end=number)
+    canceled: list = []
+    if used and not logs:
+        canceled, _ = base.scan(
+            base.chain.usdc, [event_topic(AUTHORIZATION_CANCELED), *topics[1:]],
+            int(reference["start_block"]), end=number)
     valid_before = int(auth["validBefore"])
     return {"nonce": nonce, "valid_before": valid_before, "finalized_block": number,
             "finalized_timestamp": timestamp, "authorization_used": used,
             "debits": [log.get("transactionHash") for log in logs], "scanned_to": scanned_to,
+            "canceled": bool(canceled),
             "live": timestamp <= valid_before and not used and not logs,
             "expired": (timestamp > valid_before and not used and not logs
                         and scanned_to >= number)}
@@ -829,6 +840,8 @@ class LiveRail(ClassTransferRail):
                 or reference.get("start_block") is None):
             return None
         status = authorization_status(self._venice_base(), self.reserve_address, reference)
+        if status["canceled"]:
+            return "Venice authorization canceled on finalized Base"
         return "Venice authorization expired unused on finalized Base" if status[
             "expired"] else None
 

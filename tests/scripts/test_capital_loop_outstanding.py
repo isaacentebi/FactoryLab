@@ -7,11 +7,13 @@ way a rehearsal writes one and ``factorylab postmortem`` reads one.
 
 import json
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
 from factorylab.kernel.ledger import Ledger
 from factorylab.runtime.capital_loop import (
+    AUTHORIZATION_CANCELED,
     AUTHORIZATION_USED,
     TRANSFER,
     CapitalLoopRefused,
@@ -42,8 +44,12 @@ class Rpc:
     after it (so a read at ``latest`` sees what finalized Base does not yet), and
     ``eth_getLogs`` returns its ``AuthorizationUsed`` and ``Transfer`` only for matching
     topics inside the asked range. ``drift`` moves the finalized tag forward that many
-    blocks after each time it is read, as a provider's does between two calls. Every
-    request is recorded.
+    blocks after each time it is read, as a provider's does between two calls.
+    ``cancel`` makes a nonce canceled (``AuthorizationCanceled``, state true, no debit);
+    ``consume`` moves an account's nonce at a moment (``eth_getTransactionCount`` at the
+    asked block); ``by_hash`` answers ``eth_getTransactionByHash``; a block in ``missing``
+    cannot be read; a URL in ``others`` is another chain's node. Every request is
+    recorded.
     """
 
     def __init__(self, *, gaps=(1,)):
@@ -52,6 +58,11 @@ class Rpc:
         self.lag_s = 960  # latest less finalized, as measured on Base mainnet
         self.drift = 0
         self.extra_logs = []
+        self.canceled: dict[str, tuple[str, int]] = {}
+        self.nonces: dict[str, list[tuple[int, int]]] = {}
+        self.by_hash: dict[str, dict] = {}
+        self.missing: set[int] = set()
+        self.others = {}
         self.used: dict[str, tuple[str, int, str]] = {}
         self.requests = []
         self._final_number = 0
@@ -96,8 +107,18 @@ class Rpc:
     def use(self, nonce, *, at_ts, authorizer=RESERVE, payee="0x" + "9" * 40):
         self.used[nonce.lower()] = (authorizer.lower(), at_ts, payee.lower())
 
+    def cancel(self, nonce, *, at_ts, authorizer=RESERVE):
+        self.canceled[nonce.lower()] = (authorizer.lower(), at_ts)
+
+    def consume(self, account, count, *, at_ts):
+        self.nonces.setdefault(account.lower(), []).append((at_ts, count))
+
+    def account_nonce(self, account, number):
+        moves = self.nonces.get(account.lower(), [])
+        return max([c for ts, c in moves if ts <= self.stamp(number)] or [0])
+
     def block(self, number):
-        if not 0 <= number <= self.latest_number:
+        if not 0 <= number <= self.latest_number or number in self.missing:
             return None
         return {"number": hex(number), "hash": "0x" + number.to_bytes(32).hex(),
                 "timestamp": hex(self.stamp(number))}
@@ -123,6 +144,13 @@ class Rpc:
                      {**where, "topics": [event_topic(TRANSFER), word,
                                           "0x" + "0" * 24 + payee[2:]],
                       "data": hex(5_000_000)}]
+        for nonce, (authorizer, at_ts) in self.canceled.items():
+            number = self.number_at(at_ts)
+            rows.append({"address": BASE.usdc, "blockNumber": hex(number),
+                         "blockHash": "0x" + number.to_bytes(32).hex(),
+                         "transactionHash": "0x" + nonce[2:][::-1], "data": "0x",
+                         "topics": [event_topic(AUTHORIZATION_CANCELED),
+                                    "0x" + "0" * 24 + authorizer[2:], nonce]})
         wanted = query["topics"]
         return [r for r in rows if low <= int(r["blockNumber"], 16) <= high
                 and query["address"].lower() == r["address"].lower()
@@ -130,6 +158,8 @@ class Rpc:
                         for w, g in zip(wanted, r["topics"], strict=False))]
 
     def __call__(self, method, url, payload, headers):
+        if url in self.others:
+            return self.others[url](method, url, payload, headers)
         assert url == BASE.rpc, url  # nothing else is asked, Venice's quote included
         self.requests.append(payload)
         name, params = payload["method"], payload["params"]
@@ -145,11 +175,15 @@ class Rpc:
                 result = hex(self.balance)
             else:  # authorizationState(address,bytes32), as of the asked block
                 authorizer, nonce = "0x" + data[34:74].lower(), "0x" + data[74:138].lower()
-                fact = self.used.get(nonce)
+                fact = self.used.get(nonce) or self.canceled.get(nonce)
                 result = hex(int(fact is not None and fact[0] == authorizer
                                  and self.number_at(fact[1]) <= self.at(tag)))
         elif name == "eth_getLogs":
             result = self.logs(params[0])
+        elif name == "eth_getTransactionCount":
+            result = hex(self.account_nonce(params[0], self.at(params[1])))
+        elif name == "eth_getTransactionByHash":
+            result = self.by_hash.get(params[0].lower())
         else:
             raise AssertionError(f"unexpected RPC {name}")
         return HTTPResponse(200, {"jsonrpc": "2.0", "id": 1, "result": result})
@@ -1359,7 +1393,8 @@ def test_a_recorded_start_block_finds_a_use_a_corrected_host_clock_would_miss(tm
                            start_block=rpc.number_at(signed_at)))
     summary = resolve(tmp_path, rpc, now_s=lambda: rpc.latest_ts)  # no lead now
     assert [(r["nonce"], r["how"]) for r in summary["resolved_now"]] == [(LIVE_NONCE, "spent")]
-    assert get_logs(rpc)[0][0] == rpc.number_at(signed_at)
+    # START_BLOCK_MARGIN blocks before the recorded head: an unsafe head may reorg.
+    assert get_logs(rpc)[0][0] == rpc.number_at(signed_at) - 300
 
 
 def test_a_legacy_entry_scans_from_validbefore_less_the_stated_margin(tmp_path):
@@ -1413,9 +1448,10 @@ def test_an_old_entrys_scan_ends_at_the_first_block_past_validbefore(tmp_path):
     summary = resolve(tmp_path, rpc, now_s=lambda: rpc.latest_ts)
     assert [r["how"] for r in summary["resolved_now"]] == ["expired"]
     scans = get_logs(rpc)
-    assert scans[0][0] == 1_000 and scans[-1][1] == rpc.number_at(1_600) + 1
-    assert len(scans) <= -(-(601 + 1) // LOG_PAGE_BLOCKS)
-    assert len(rpc.requests) < 60  # a binary search, not a walk
+    assert scans[0][0] == 700 and scans[-1][1] == rpc.number_at(1_600) + 1
+    # Two scans (AuthorizationUsed, AuthorizationCanceled) of 300 + 601 + 1 blocks each.
+    assert len(scans) <= 2 * -(-(300 + 601 + 1) // LOG_PAGE_BLOCKS)
+    assert len(rpc.requests) < 80  # a binary search, not a walk
 
 
 def test_an_entry_is_not_resolvable_until_finalized_base_passes_its_end(tmp_path):
@@ -1517,7 +1553,7 @@ def test_a_torn_nonce_scans_from_the_repair_anchor_never_genesis(tmp_path):
     rpc.requests.clear()
     with pytest.raises(CapitalLoopRefused, match="recorded_authorization_may_still_settle"):
         resolve(other, rpc, now_s=lambda: rpc.latest_ts)
-    assert min(first for first, _ in get_logs(rpc)) == 11_900
+    assert min(first for first, _ in get_logs(rpc)) == 11_900 - 300
 
 
 def test_a_used_torn_nonce_is_a_recovery_not_spent(tmp_path):
@@ -1559,15 +1595,16 @@ def test_a_crash_at_any_repair_step_leaves_the_old_record_or_the_new(
         pass
 
     armed = {"sidecar": False, "renamed": False}
-    real = {"create": capital_loop._create_durably, "durable": capital_loop._durable,
+    real = {"create": capital_loop._create_sidecar, "durable": capital_loop._durable,
             "replace": os.replace, "mkstemp": tempfile.mkstemp,
             "directory": capital_loop._fsync_directory}
 
-    def create(target, data):
+    def create(target, now, data):
         if step == "sidecar":
             raise Crash
-        real["create"](target, data)
+        made = real["create"](target, now, data)
         armed["sidecar"] = True
+        return made
 
     def mkstemp(*args, **kwargs):
         if step == "temporary":
@@ -1590,7 +1627,7 @@ def test_a_crash_at_any_repair_step_leaves_the_old_record_or_the_new(
             raise Crash
         real["directory"](where)
 
-    monkeypatch.setattr(capital_loop, "_create_durably", create)
+    monkeypatch.setattr(capital_loop, "_create_sidecar", create)
     monkeypatch.setattr(capital_loop.tempfile, "mkstemp", mkstemp)
     monkeypatch.setattr(capital_loop, "_durable", durable)
     monkeypatch.setattr(capital_loop.os, "replace", rename)
@@ -1723,3 +1760,270 @@ def test_the_record_is_never_written_without_its_lock_held(tmp_path):
     with pytest.raises(CapitalLoopRefused, match="capital_loop_reserve_lock_not_held"):
         log.permit(RESERVE)
     assert path.read_bytes() == before
+# ---- Wave 10, the reviews of 98fa627
+
+
+class Hyper:
+    """HyperEVM mainnet's node for the reserve: its account nonce (``latest`` counts the
+    mempool's view of what is mined, ``final`` the finalized block's), the raw
+    transactions it was sent, and nothing it knows by hash."""
+
+    def __init__(self, *, nonce):
+        self.latest = self.final = nonce
+        self.sent, self.requests = [], []
+
+    def __call__(self, method, url, payload, headers):
+        name, params = payload["method"], payload["params"]
+        self.requests.append(name)
+        if name == "eth_chainId":
+            result = hex(999)
+        elif name == "eth_getBlockByNumber":
+            result = {"number": hex(500), "hash": "0x" + "ab" * 32, "timestamp": hex(12_000)}
+        elif name == "eth_blockNumber":
+            result = hex(500)
+        elif name == "eth_getTransactionCount":
+            result = hex(self.latest if params[1] in ("latest", "pending") else self.final)
+        elif name == "eth_gasPrice":
+            result = hex(100)
+        elif name == "eth_estimateGas":
+            result = hex(21_000)
+        elif name == "eth_getBalance":
+            result = hex(10**18)
+        elif name == "eth_getTransactionByHash":
+            result = None
+        elif name == "eth_sendRawTransaction":
+            from eth_utils import keccak
+
+            self.sent.append(params[0])
+            result = "0x" + keccak(bytes.fromhex(params[0][2:])).hex()
+        else:
+            raise AssertionError(f"unexpected RPC {name}")
+        return HTTPResponse(200, {"jsonrpc": "2.0", "id": 1, "result": result})
+
+
+def recorded_transaction(tmp_path, tx_hash, *, chain_id=8453, nonce=7, origin="treasury"):
+    from factorylab.runtime.capital_loop import ReserveLock
+
+    with ReserveLock(RESERVE, lock_dir=tmp_path) as lock:
+        lock.authorization_log(None, origin=origin).record_transaction({
+            "tx_hash": tx_hash, "chain_id": chain_id, "from": RESERVE, "to": BASE.usdc,
+            "nonce": nonce, "gas_price": 100, "start_block": 11_900})
+
+
+def test_a_recorded_reserve_transaction_blocks_the_launch_until_its_nonce_is_final(tmp_path):
+    # Item 1: a prepared depositForBurn, say, broadcast and not yet mined, must not land
+    # mid-run below the floor.
+    stuck = "0x" + "d1" * 32
+    rpc = Rpc()
+    rpc.consume(RESERVE, 7, at_ts=0)  # nonces 0..6 used long ago; 7 is the recorded one
+    recorded_transaction(tmp_path, stuck)
+    with pytest.raises(CapitalLoopRefused,
+                       match="recorded_transaction_may_still_execute") as refused:
+        resolve(tmp_path, rpc, now_s=lambda: rpc.latest_ts)
+    [row] = refused.value.detail["transactions"]
+    assert row["tx_hash"] == stuck and row["cancel"].endswith(f"--cancel-transaction {stuck}")
+    rpc.consume(RESERVE, 8, at_ts=12_300)  # mined after the finalized head: not yet final
+    with pytest.raises(CapitalLoopRefused, match="recorded_transaction_may_still_execute"):
+        resolve(tmp_path, rpc, now_s=lambda: rpc.latest_ts)
+    rpc.final_ts = 12_301
+    summary = resolve(tmp_path, rpc, now_s=lambda: rpc.latest_ts)
+    assert [(r["tx_hash"], r["how"]) for r in summary["resolved_now"]] == [
+        (stuck, "nonce_consumed")]
+    assert resolve(tmp_path, rpc)["open_transactions"] == 0
+
+
+def test_cancel_transaction_is_the_exit_for_a_dropped_reserve_transaction(
+        tmp_path, monkeypatch, capsys):
+    # Item 1: a transaction dropped unmined keeps its nonce unused for ever, and anyone
+    # holding its bytes could still send it: the exit consumes the nonce.
+    import rlp
+    from eth_account import Account
+
+    from factorylab.runtime.capital_loop import ReserveGuard
+    from factorylab.world.evm import EVM, HYPEREVM
+    from scripts import capital_loop_outstanding
+
+    reserve = Account.create()  # a throwaway key, never funded
+    world = tmp_path / "edition6-capital-loop.toml"  # a manifest is named by its stem
+    world.write_text(Path("worlds/edition6-capital-loop.toml").read_text().replace(
+        RESERVE, reserve.address))
+    locks = tmp_path / "locks"
+    rpc, hyper = Rpc(), Hyper(nonce=5)
+    rpc.others[HYPEREVM.rpc] = hyper
+    chain = EVM(HYPEREVM, reserve, transport=rpc, gas_budget_wei=10**15)
+    chain.transaction_guard = ReserveGuard("treasury", lock_dir=locks)
+    stuck = chain.transfer(HYPEREVM.usdc, "0x" + "12" * 20, 1, 10**15)  # never mined
+
+    def launch():
+        from factorylab.runtime.capital_loop import ReserveLock, check_authorization_record
+
+        with ReserveLock(reserve.address, lock_dir=locks) as lock:
+            return check_authorization_record(lock, transport=rpc,
+                                              now_s=lambda: rpc.latest_ts)
+
+    with pytest.raises(CapitalLoopRefused, match="recorded_transaction_may_still_execute"):
+        launch()
+    argv = ["--cancel-transaction", stuck["tx_hash"], "--world", str(world),
+            "--lock-dir", str(locks)]
+    assert capital_loop_outstanding.main(argv, transport=rpc) == 2  # no key: nothing signed
+    monkeypatch.setenv("RESERVE_PRIVATE_KEY", reserve.key.hex())
+    assert capital_loop_outstanding.main(argv, transport=rpc) == 0
+    printed = capsys.readouterr()
+    assert reserve.key.hex()[2:] not in printed.out + printed.err
+    done = json.loads(printed.out)
+    [raw] = hyper.sent
+    nonce, price, _gas, to, value, data, *_ = rlp.decode(bytes.fromhex(raw[2:]))
+    assert int.from_bytes(nonce) == stuck["tx"]["nonce"] == 5
+    assert to == bytes.fromhex(reserve.address[2:]) and value == b"" and data == b""
+    assert int.from_bytes(price) >= (stuck["tx"]["gasPrice"] * 9 + 7) // 8
+    # Recorded ahead like every reserve-key transaction, and refused once the nonce is used.
+    with pytest.raises(CapitalLoopRefused, match="recorded_transaction_may_still_execute"):
+        launch()
+    hyper.latest = 6
+    assert capital_loop_outstanding.main(argv, transport=rpc) == 2
+    assert "already used" in capsys.readouterr().err
+    hyper.final = 6  # finalized: the nonce is consumed, and both can never execute
+    summary = launch()
+    assert {(r["tx_hash"], r["how"]) for r in summary["resolved_now"]} == {
+        (stuck["tx_hash"], "nonce_consumed"), (done["cancel_tx_hash"], "nonce_consumed")}
+
+
+def test_a_cut_hyperevm_transaction_line_is_a_torn_transaction_not_an_authorization(
+        tmp_path):
+    # Item 2 (cold #1): the hash in a cut transaction line was read as a nonce.
+    from factorylab.runtime.capital_loop import read_authorizations
+    from factorylab.world.evm import HYPEREVM
+
+    tx_hash = "0x" + "ab" * 32
+    line = json.dumps({"chain_id": 999, "from": RESERVE, "gas_price": 125,
+                       "kind": "transaction", "ledger": None, "origin": "treasury",
+                       "run_dir": None, "start_block": 16, "to": HYPEREVM.usdc,
+                       "tx_hash": tx_hash, "tx_nonce": 12}, sort_keys=True).encode()
+    fragment = line[:line.index(b'"tx_nonce": ') + len(b'"tx_nonce": 1')]
+    path = record(tmp_path)
+    path.write_bytes(fragment)
+    assert repair(tmp_path, 12_000)["open_transactions"] == [tx_hash]
+    torn = read_authorizations(path)[-1]
+    assert (torn["torn_kind"], torn["nonces"], torn["tx_hashes"]) == (
+        "transaction", [], [tx_hash])
+    assert (torn["chain_id"], torn["tx_nonce"], torn["start_block"]) == (999, None, None)
+    rpc = Rpc()
+    rpc.others[HYPEREVM.rpc] = hyper = Hyper(nonce=12)
+    with pytest.raises(CapitalLoopRefused, match="recorded_transaction_may_still_execute"):
+        resolve(tmp_path, rpc, now_s=lambda: 12_100)  # the cooling-off window is open
+    assert get_logs(rpc) == []  # nothing of it was taken for an authorization's nonce
+    later = 12_000 + 600 + 2 * rpc.lag_s
+    summary = resolve(tmp_path, rpc, now_s=lambda: later)
+    assert [(r["tx_hash"], r["how"]) for r in summary["resolved_now"]] == [(tx_hash, "dropped")]
+    assert "eth_getTransactionByHash" in hyper.requests
+
+
+def test_a_canceled_authorization_is_dead_without_an_acknowledgement(tmp_path):
+    # Item 3 (cold #2): EIP-3009 cancelAuthorization sets the state with no debit.
+    from factorylab.world.treasury_rails import authorization_status
+
+    rpc = Rpc()
+    rpc.cancel(LIVE_NONCE, at_ts=11_500)
+    record(tmp_path, entry(LIVE_NONCE, 13_000, origin="treasury", start_block=11_000))
+    summary = resolve(tmp_path, rpc, now_s=lambda: rpc.latest_ts)
+    assert [(r["nonce"], r["how"]) for r in summary["resolved_now"]] == [
+        (LIVE_NONCE, "canceled")]
+    # The rail sees it dead too, and may strand the conversion recoverably.
+    status = authorization_status(keyless_base(transport=rpc), RESERVE,
+                                  {**signed(LIVE_NONCE, 13_000), "start_block": 10_000})
+    assert status["canceled"] and not status["live"] and status["debits"] == []
+
+
+def booked_diary(path, nonce):
+    """A world's diary at ``path`` (its key beside it) that booked ``nonce``'s debit."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ledger = Ledger(str(path), manifest={"name": "edition6-capital-loop"},
+                    clock_ns=lambda: 0, key_path=str(path) + ".key")
+    state = {"id": "treasury-0", "steps": ["shadow_send", "venice_top_up"], "index": 1,
+             "status": "confirmed", "reference": signed(nonce, 12_400),
+             "receipts": [{"nonce": 1_700_000_000_000}, {"nonce": nonce}]}
+    ledger.append({"kind": "treasury.confirmed", "state": state})
+    ledger.append({"kind": "treasury.financing", "transfer_id": "treasury-0"})
+    return path
+
+
+def test_a_world_diary_is_read_at_its_exact_ledger_path(tmp_path):
+    # Item 4 (cold #3): a world launched with --ledger runs/foo.jsonl books there, not in
+    # runs/ledger.jsonl.
+    rpc = Rpc()
+    diary = booked_diary(tmp_path / "runs" / "foo.jsonl", LIVE_NONCE)
+    record(tmp_path, entry(LIVE_NONCE, 12_400, origin="treasury",
+                           run_dir=str(diary.parent.resolve()),
+                           ledger=str(diary.resolve()), start_block=11_000))
+    rpc.use(LIVE_NONCE, at_ts=11_800)
+    assert [r["how"] for r in resolve(tmp_path, rpc, now_s=lambda: rpc.latest_ts)[
+        "resolved_now"]] == ["financed"]
+
+
+def test_a_use_below_an_unsafe_recorded_head_is_still_found(tmp_path):
+    # Item 5 (cold #4): the head read at signing was an unsafe block a reorg replaced by
+    # a shorter branch; the authorization was used below the recorded number.
+    rpc = Rpc()
+    rpc.use(LIVE_NONCE, at_ts=10_900)
+    record(tmp_path, entry(LIVE_NONCE, 11_500, origin="reserve_topup", start_block=11_000))
+    assert [r["how"] for r in resolve(tmp_path, rpc, now_s=lambda: rpc.latest_ts)[
+        "resolved_now"]] == ["spent"]
+
+
+def test_a_log_whose_block_cannot_be_read_makes_the_cooling_off_unreadable(tmp_path):
+    # Item 6 (cold #6): a log in the unfinalized tail was dropped when its block read null.
+    from factorylab.runtime.capital_loop import ReserveLock, cooling_off_check
+
+    rpc = Rpc()
+    rpc.use(LIVE_NONCE, at_ts=12_500)  # nothing records it
+    rpc.missing.add(rpc.number_at(12_500))
+    with ReserveLock(RESERVE, lock_dir=tmp_path) as lock:
+        with pytest.raises(CapitalLoopRefused, match="cooling_off_unreadable"):
+            cooling_off_check(lock, window_s=2_520, transport=rpc)
+        rpc.missing.clear()  # the next launch reads it, and refuses on what it shows
+        with pytest.raises(CapitalLoopRefused, match="unrecorded_reserve_authorization"):
+            cooling_off_check(lock, window_s=2_520, transport=rpc)
+
+
+def test_a_damaged_middle_line_has_an_exit_that_keeps_what_it_recorded_open(
+        tmp_path, capsys):
+    # Item 8: authorization_record_unreadable needs an exit too.
+    from factorylab.runtime.capital_loop import read_authorizations
+    from scripts import capital_loop_outstanding
+
+    path = record(tmp_path, entry(OLD_NONCE, 11_500, origin="reserve_topup",
+                                  start_block=11_000))
+    whole = path.read_bytes()
+    damaged = (b'{"from": "' + RESERVE.encode() + b'", "kind": "authorization", '
+               b'"nonce": "' + LIVE_NONCE.encode() + b'", "vali\xff')
+    after = json.dumps(entry("0x" + "55" * 32, 14_000, origin="reserve_topup",
+                             start_block=11_000), sort_keys=True).encode() + b"\n"
+    path.write_bytes(whole + damaged + b"\n" + after)
+    with pytest.raises(CapitalLoopRefused, match="authorization_record_unreadable") as refused:
+        read_authorizations(path)
+    assert "--repair-damaged" in refused.value.detail["repair"]
+    argv = ["--repair-damaged", "--lock-dir", str(tmp_path)]
+    assert capital_loop_outstanding.main(argv, transport=Rpc()) == 0
+    repaired = json.loads(capsys.readouterr().out)
+    assert repaired["open_nonces"] == [LIVE_NONCE]
+    entries = read_authorizations(path)
+    assert [e["kind"] for e in entries] == ["authorization", "torn", "authorization"]
+    assert entries[1]["nonces"] == [LIVE_NONCE]
+    assert path.read_bytes().startswith(whole) and path.read_bytes().endswith(after)
+    sidecar = tmp_path / repaired["sidecar"].rsplit("/", 1)[1]
+    assert sidecar.read_bytes() == damaged  # nothing deleted, only moved aside
+    assert capital_loop_outstanding.main(argv, transport=Rpc()) == 0  # whole now: a no-op
+    assert json.loads(capsys.readouterr().out)["repaired"] is False
+
+
+def test_two_repairs_in_one_second_each_keep_their_own_sidecar(tmp_path):
+    # Item 8: authorization_record_repair_refused is made impossible.
+    fragment = b'{"kind": "authorization", "nonce": "' + LIVE_NONCE.encode() + b'", "va'
+    path = torn_record(tmp_path, fragment, old=False)
+    first = repair(tmp_path, 12_000)
+    other = b'{"kind": "authorization", "nonce": "' + OLD_NONCE.encode() + b'", "va'
+    path.write_bytes(path.read_bytes() + other)
+    second = repair(tmp_path, 12_000)  # the same second
+    assert first["sidecar"] != second["sidecar"]
+    assert [(tmp_path / r["sidecar"].rsplit("/", 1)[1]).read_bytes()
+            for r in (first, second)] == [fragment, other]

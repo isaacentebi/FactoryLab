@@ -230,10 +230,13 @@ class BootstrapMixin:
         # Every EIP-3009 authorization this world signs with the reserve key is written
         # ahead to the reserve's record, under its lock, or never signed
         # (x402.sign_transfer_authorization): a capital-loop run on the same reserve can
-        # then neither overlap it nor miss what it authorized.
-        run_dir = _Path(ledger_path).resolve().parent if ledger_path else None
+        # then neither overlap it nor miss what it authorized. The entry names this
+        # world's exact diary (``--ledger runs/foo.jsonl`` included), where a used
+        # authorization of its must be booked.
+        ledger = _Path(ledger_path).resolve() if ledger_path else None
+        run_dir = ledger.parent if ledger is not None else None
         if isinstance(self.market, X402Provider) and self.market.guard is None:
-            self.market.guard = ReserveGuard("x402_purchase", run_dir=run_dir)
+            self.market.guard = ReserveGuard("x402_purchase", run_dir=run_dir, ledger=ledger)
 
         if self.live:
             if manifest.treasury.reserve_address is not None:
@@ -248,7 +251,7 @@ class BootstrapMixin:
                 # advisory balance so a lost acknowledgment stays explainable (C5).
                 rail.metered_usage_since = self._venice_usage_since
                 # The capital-loop runner replaces this with its held lock's record.
-                rail.bind_guard(ReserveGuard("treasury", run_dir=run_dir))
+                rail.bind_guard(ReserveGuard("treasury", run_dir=run_dir, ledger=ledger))
             else:
                 rail = UnconfiguredRail(self.exchange)
 

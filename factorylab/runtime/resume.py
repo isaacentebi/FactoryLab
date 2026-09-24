@@ -753,6 +753,9 @@ _TRANSIENT_STATE = {
     "NormInbox.ledger_path": "where this process finds the norm house's files beside the "
                              "ledger; what they said is journaled at the boundary that read it",
     "JournalProxy.call_metrics": "this process's wall-clock timing of its own adapter calls",
+    "ReserveGuard.ledger": "the diary file this process was launched or resumed on, named "
+                           "to the reserve's record so a used authorization is booked there",
+    "ReserveGuard.run_dir": "the directory of that same diary file",
 }
 # Unordered: mappings a checkpoint saves in sorted order because nothing reads
 # their order (lookups and order-free reductions only).
@@ -1253,8 +1256,11 @@ def _resume_runtime(manifest, ledger_path, *, provider, market, exchange, clock_
     journal.bootstrap = True
     # An older checkpoint's ``drip`` launch flag is read past: [drip] is gone (D-6).
     config = {k: v for k, v in state["config"].items() if k != "drip"}
-    rt = Runtime(manifest, **config, ledger_path=None, provider=provider, market=market,
-                 exchange=exchange, clock_source=clock_source, _journal=journal, _lock=lock)
+    # The path is passed although the journal carries the diary: the world's reserve
+    # guards name it, so a used authorization is booked against this very diary.
+    rt = Runtime(manifest, **config, ledger_path=str(ledger_path), provider=provider,
+                 market=market, exchange=exchange, clock_source=clock_source,
+                 _journal=journal, _lock=lock)
     # The journal carries no path; the archive's bytes live beside the ledger (C9).
     from factorylab.kernel.artifacts import artifact_root
 

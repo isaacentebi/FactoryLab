@@ -689,6 +689,11 @@ def _wall_ns() -> int:
     return time.time_ns()
 
 
+def _sleep(seconds: float) -> None:
+    """The wall clock's own wait, which paces a capital-loop run's live deadline clock."""
+    time.sleep(seconds)
+
+
 def _http_request():
     from factorylab.world.x402 import http_request
 
@@ -898,6 +903,11 @@ def _rehearse(
         # and the settlement bound measured against it, both read the wall clock. An
         # injected clock stays for testnet-only runs, where nothing real is stamped.
         raise RehearsalRefused("capital_loop_requires_the_wall_clock")
+    if capital_loop and clock_source is not None:
+        # Its ticks too: the settlement bound credits the run the wall-clock length its
+        # live deadline clock delivers. A supplied source (a harness that emits every
+        # tick at once) would run the loop faster than the bound it was admitted on.
+        raise RehearsalRefused("capital_loop_requires_the_live_clock")
     if now_ns is None:
         now_ns = _wall_ns
     if target_ticks is not None and (type(target_ticks) is not int or target_ticks <= 0):
@@ -1113,7 +1123,8 @@ def _rehearse(
                 events = planned_ticks
                 if clock_source is None and manifest.exchange.kind != "fake":
                     clock_source = LiveClock(manifest.tick_interval_ns, events,
-                                             now_ns=now_ns, deadline_ns=now_ns() + duration_ns)
+                                             now_ns=now_ns, sleep=_sleep,
+                                             deadline_ns=now_ns() + duration_ns)
                 clock_source = (AdmissionClock(clock_source, admission)
                                 if clock_source is not None else None)
                 runtime = Runtime(
@@ -1140,7 +1151,8 @@ def _rehearse(
                 # Every authorization is written ahead, outside the diary, before it is
                 # signed; and its validBefore is stamped by the one clock the settlement
                 # bound was measured against, so the two cannot disagree.
-                hybrid.bind_guard(lock.authorization_log(output_dir))
+                hybrid.bind_guard(lock.authorization_log(
+                    output_dir, ledger=output_dir / "ledger.jsonl"))
                 hybrid.now_s = lambda: now_ns() // 1_000_000_000
                 # Only the conversion is admitted; the CCTP exits and class moves are
                 # refused before signing, exactly as the denied rail refuses them.
