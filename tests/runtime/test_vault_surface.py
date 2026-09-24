@@ -167,6 +167,9 @@ def test_create_deposit_and_withdraw_move_money_between_custodians_and_book_its_
     assert pots["total_micro"] == pots_before - 10_000_000_000  # only the fee left
     positions = _call(rt, handle, "venue.vault_positions", slot="tool:1")
     assert positions["positions"][0]["equity_usd"] == "1500"
+    # Two vault reads (40 + 20 venue weight) exceed one seat's share of the default
+    # read budget inside one minute; the next minute renews it.
+    rt.clock.now_ns += 60_000_000_000
     detail = _call(rt, handle, "venue.vault_details", slot="tool:2", vault=vault)
     assert detail["is_leader"] and detail["own_equity_usd"] == "1500"
     rt.exchange.mark_vaults(Decimal(1000))  # the vault's own equity rises 10%

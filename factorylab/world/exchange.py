@@ -1204,10 +1204,15 @@ class HyperliquidExchange:
         import requests
         from hyperliquid.utils.error import ClientError, ServerError
 
+        from factorylab.world.venue_tools import request_weight
+
         delay = 0.5
         for attempt in range(attempts):
+            # Every attempt is a request the venue weighs against the IP limit, a
+            # retry after a 429 included: counted before it is sent, whatever answers.
+            self.request_weight = getattr(self, "request_weight", 0) + request_weight(what)
             try:
-                return call()
+                result = call()
             except ClientError as exc:
                 # A 4xx is the SDK's ClientError, which is not a RuntimeError and used
                 # to escape every catch site and kill the tick. A 429 is the venue
@@ -1226,7 +1231,17 @@ class HyperliquidExchange:
                     raise VenueUnavailable(f"{what}: {type(exc).__name__}: {exc}") from exc
                 time.sleep(delay)
                 delay *= 2
+            else:
+                # The weight that grows with what was returned is known only now.
+                self.request_weight += request_weight(what, result) - request_weight(what)
+                return result
         raise AssertionError("unreachable")
+
+    def request_weight_sent(self) -> int:
+        """Guarantees the documented venue weight of every request this adapter has sent,
+        every attempt counted, monotone. Journaled like any venue read, so a replay
+        charges exactly what the recording measured."""
+        return getattr(self, "request_weight", 0)
 
     # ---- reads
 

@@ -25,11 +25,14 @@ published: an artifact is its owners' private state (essay II.I.b), and ruling
 R11 deleted the publication path nothing ever used.
 
 **Nothing is deleted except an unreferenced blob.** ``collect()`` removes exactly
-those — durable bytes no reference names, which is what a crash between
-``_write`` and the ledger item leaves behind, and records whose every reference
-was released — and ledgers each removal as ``artifact.collected``. It is called
-by the runtime at a reserve-window boundary. A blob any reference names is never
-a candidate whatever its age.
+those — records whose every reference was released, each ledgered as
+``artifact.collected``, and durable bytes no record names, which is what a crash
+between ``_write`` and the ledger item leaves behind. Those leftovers are removed
+without an item, and never while the journal is recovering: the diary never named
+them, and a replay cannot know which leftovers a disk held, so ledgering them
+would make a live run and its replay disagree. It is called by the runtime at a
+reserve-window boundary. A blob any reference names is never a candidate
+whatever its age.
 
 **A reference can be released (Wave 11).** The disk is the world's own and pays
 no one, so retained bytes are a constraint with a hard limit, not a price
@@ -38,10 +41,16 @@ state, and ``release`` drops the (sha, owner, kind) reference a superseded one
 held. A reference remembers every kind its owner wrote the bytes under, so
 releasing one kind never drops bytes the same owner still holds as another (an
 inbox body, an archived rationale). A record whose last reference is released is
-kept until a checkpoint no longer needs it: it is ``pending`` until the next
-durable checkpoint, then ``sealed`` (``seal_released``), and only a sealed record
-is collected, so a resume from the latest checkpoint never names bytes that are
-gone.
+kept until no checkpoint a resume could start from names it. One the latest
+checkpoint named (it was in that checkpoint's index) is ``pending`` until the next
+durable checkpoint, then ``sealed`` (``seal_released``); one written and released
+since that checkpoint is named by none, a replay re-creates it, and it is
+``sealed`` at once. Only a sealed record is collected, so a resume never names
+bytes that are gone.
+
+A record whose every reference was released and that another seat then writes is
+that seat's alone: its owner of record and kind are reset to the new writer, so
+nothing shows it who wrote the bytes before (essay II.I.b, the author is private).
 """
 
 from __future__ import annotations
@@ -62,6 +71,9 @@ MAX_TOOL_READ_BYTES = 65_536
 # The one thing a scoped-out reader is told (``Reason.ARTIFACT_PRIVATE``); the kernel
 # keeps the literal so the archive never imports the runtime.
 PRIVATE_REFUSAL = "artifact_private"
+# What a reader is told of its own superseded state after it was released
+# (``Reason.ARTIFACT_RELEASED``): the archive no longer keeps it for the reader.
+RELEASED_REFUSAL = "artifact_released"
 
 
 class ArtifactError(ValueError):
@@ -93,6 +105,9 @@ class ArtifactStore:
         # writer, each with the kind it wrote under and when.
         self.index: dict[str, dict[str, Any]] = {}
         self._memory: dict[str, bytes] = {}
+        # The hashes the latest durable checkpoint's index held (``seal_released``):
+        # derived, never checkpointed, and set identically by a live run and a resume.
+        self.checkpointed: frozenset[str] = frozenset()
 
     # Change tracking, for views derived from the index (the runtime's directory
     # listing) that would otherwise re-read the whole archive on every request:
@@ -148,11 +163,20 @@ class ArtifactStore:
         self.index.setdefault(sha, {"owner": owner, "kind": kind, "bytes": len(data), "ts": ts})
         record = self.index[sha]
         refs = record.setdefault("refs", {})
-        if not record.pop("released", None):
+        if record.pop("released", None):
+            # Every reference was released: the bytes are the new writer's alone, and
+            # nothing about who wrote them before survives on the record.
+            record.update(owner=owner, kind=kind, ts=ts)
+        else:
             for existing in record.get("readers", [record["owner"]]):
                 # An index restored from a checkpoint written before references carries
                 # its readers; each becomes that reader's own reference, as it always was.
                 refs.setdefault(existing, {"kind": record["kind"], "ts": record["ts"]})
+        released_by = record.get("released_by")
+        if released_by is not None:
+            released_by.pop(owner, None)
+            if not released_by:
+                record.pop("released_by")
         reference = refs.setdefault(owner, {"kind": kind, "ts": ts})
         kinds = set(reference.get("kinds", [reference["kind"]]))
         if kind not in kinds:
@@ -171,7 +195,9 @@ class ArtifactStore:
         holds, stay owned; a record whose last reference goes is marked ``pending``
         and is collected only once sealed by a later checkpoint; an unknown hash or a
         reference that does not hold the kind changes nothing. The release is
-        ledgered as ``artifact.released``.
+        ledgered as ``artifact.released`` before the index changes, as a put is. The
+        reference's ``kind`` names only what the owner still holds, and a record
+        whose owner of record lets go names a remaining holder instead.
         """
         record = self.index.get(_valid_sha(sha))
         if record is None:
@@ -185,18 +211,28 @@ class ArtifactStore:
             return False
         kinds.discard(kind)
         if len(kinds) > 1:
-            refs[owner] = {**reference, "kinds": sorted(kinds)}
+            first = reference["kind"] if reference["kind"] in kinds else sorted(kinds)[0]
+            refs[owner] = {"kind": first, "ts": reference["ts"], "kinds": sorted(kinds)}
         elif kinds:
             refs[owner] = {"kind": kinds.pop(), "ts": reference["ts"]}
         else:
             refs.pop(owner)
-        record["refs"] = refs
-        record["readers"] = sorted(refs)
-        if not refs:
-            record["released"] = "pending"
-        self._changed_sha(sha)
         self.ledger.append({"kind": "artifact.released", "sha": sha, "owner": owner,
                             "artifact_kind": kind, "free": not refs, "ts": self.clock()})
+        record["refs"] = refs
+        record["readers"] = sorted(refs)
+        if owner not in refs:
+            record.setdefault("released_by", {})[owner] = reference["ts"]
+            if refs and record["owner"] == owner:
+                # The owner of record no longer holds the bytes: the earliest remaining
+                # holder is, with the kind it holds them under.
+                holder = min(refs, key=lambda seat: (refs[seat]["ts"], seat))
+                record.update(owner=holder, kind=refs[holder]["kind"])
+        if not refs:
+            # Named by the latest checkpoint: kept until a later one is durable. Written
+            # since it: no checkpoint names it and a replay re-creates it (``collect``).
+            record["released"] = "pending" if sha in self.checkpointed else "sealed"
+        self._changed_sha(sha)
         return not refs
 
     def seal_released(self) -> int:
@@ -211,6 +247,7 @@ class ArtifactStore:
             if record.get("released") == "pending":
                 record["released"] = "sealed"
                 sealed += 1
+        self.checkpointed = frozenset(self.index)
         return sealed
 
     def retained(self) -> dict[str, int]:
@@ -264,12 +301,14 @@ class ArtifactStore:
                 for owner, reference in self.references(sha, record).items()]
 
     def collect(self) -> list[str]:
-        """Remove durable blobs no reference names; ledger each (R3-F).
+        """Remove sealed released records, ledgering each, and unnamed leftovers (R3-F).
 
-        The only blobs this can reach are the ones a crash between ``_write`` and
-        the ledger item left behind, and records whose every reference was released.
-        An owned blob is never a candidate, so collection can never take a seat's
-        state or an inbox body.
+        The only blobs this can reach are records whose every reference was released
+        and sealed (returned, and each ledgered ``artifact.collected``), and bytes a
+        crash between ``_write`` and the ledger item left behind (removed without an
+        item, and only when the journal is not recovering; not returned). An owned
+        blob is never a candidate, so collection can never take a seat's state or an
+        inbox body. A live run and its replay therefore ledger the same removals.
 
         **A replay collects only what the diary knows (R4-C).** The archive
         directory is not replayed state. After a crash it still holds the bytes
@@ -283,7 +322,8 @@ class ArtifactStore:
         deterministic tail, and it is ledgered identically on replay. Untracked
         leftovers keep their bytes until the first boundary after the world is
         live again, by which time the replay has re-put everything still owned and
-        only the true leftovers remain.
+        only the true leftovers remain; their removal is never ledgered, live or
+        replayed, so the two diaries cannot disagree over it.
         """
         # A release not yet sealed by a durable checkpoint is still live: the latest
         # checkpoint may name it, and a resume from it must find the bytes.
@@ -292,32 +332,43 @@ class ArtifactStore:
         # A sealed record is a candidate whether or not its bytes are still on disk:
         # a replay reaches it after the recorded run removed them, and must collect
         # (and ledger) it exactly as the recording did.
-        sealed = {sha for sha, record in self.index.items()
-                  if record.get("released") == "sealed"}
+        sealed = sorted(sha for sha, record in self.index.items()
+                        if record.get("released") == "sealed")
         if self.root is None:
-            orphans = sorted({sha for sha in self._memory if sha not in live} | sealed)
+            leftovers = sorted(sha for sha in self._memory
+                               if sha not in live and sha not in self.index)
         else:
-            orphans = sorted({path.name for path in self.root.glob("*")
-                              if len(path.name) == SHA_HEX_CHARS
-                              and path.name not in live} | sealed)
-        if getattr(self.ledger, "recovering", False):
-            orphans = [sha for sha in orphans if sha in self.index]
+            leftovers = sorted(path.name for path in self.root.glob("*")
+                               if len(path.name) == SHA_HEX_CHARS and path.name not in live
+                               and path.name not in self.index)
+        if not getattr(self.ledger, "recovering", False):
+            # Bytes no ledger item ever named: removed, but not ledgered, since the
+            # diary never knew them and a replay cannot know which ones a disk held.
+            for sha in leftovers:
+                self._remove_bytes(sha)
+        orphans = sealed
         for sha in orphans:
-            if self.root is None:
-                self._memory.pop(sha, None)
-            else:
-                try:
-                    (self.root / sha).unlink()
-                except FileNotFoundError:
-                    # A replay collects a sealed record whose bytes the recorded run
-                    # already removed: it is ledgered again, exactly as recorded.
-                    pass
-                except OSError:
-                    continue
+            if not self._remove_bytes(sha):
+                continue
             self.index.pop(sha, None)
             self._changed_sha(sha)
             self.ledger.append({"kind": "artifact.collected", "sha": sha, "ts": self.clock()})
         return orphans
+
+    def _remove_bytes(self, sha: str) -> bool:
+        """Remove one blob's bytes; True when they are gone, already gone included."""
+        if self.root is None:
+            self._memory.pop(sha, None)
+            return True
+        try:
+            (self.root / sha).unlink()
+        except FileNotFoundError:
+            # A replay collects a sealed record whose bytes the recorded run already
+            # removed: it is ledgered again, exactly as recorded.
+            return True
+        except OSError:
+            return False
+        return True
 
     def visible_to(self, sha: str, reader: str | None,
                    lineage_of: Callable[[str], str] | None = None) -> bool:
@@ -364,6 +415,10 @@ class ArtifactStore:
                 self.get(sha)
                 return {"sha": sha, "error": PRIVATE_REFUSAL}
             if not self.visible_to(sha, reader, lineage_of):
+                record = self.index[sha]
+                if reader is not None and reader in record.get("released_by", {}):
+                    # The reader's own superseded state: released, not someone's secret.
+                    return {"sha": sha, "error": RELEASED_REFUSAL}
                 return {"sha": sha, "error": PRIVATE_REFUSAL}
             data = self.get(sha)
         except ArtifactError as exc:

@@ -134,25 +134,55 @@ def _json_value(value: Any) -> Any:
 #: Hyperliquid's documented REST limits ("Rate limits and user limits",
 #: hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/rate-limits-and-user-limits):
 #: "REST requests share an aggregated weight limit of 1200 per minute" per IP;
-#: l2Book and allMids weigh 2; every other documented info request weighs 20;
-#: candleSnapshot adds weight per 60 items returned and fundingHistory per 20. The
-#: added weight per interval is not stated, so it is counted as 1.
+#: l2Book, allMids, clearinghouseState and spotClearinghouseState weigh 2; every
+#: other documented info request weighs 20; candleSnapshot adds weight per 60 items
+#: returned, and fundingHistory, userFunding and userFills per 20. The added weight per
+#: interval is not stated, so it is counted as 1.
 VENUE_WEIGHT_PER_MINUTE = 1200
-#: The share of that budget the population's public reads may use by default: 40%,
+#: What the population's venue reads may use by default, all seats together: 40%,
 #: leaving 720 a minute for the kernel's own calls (account and spot state, mids,
 #: asset contexts, open orders, funding and fill pages each tick, and orders).
 DEFAULT_PUBLIC_READ_WEIGHT_PER_MINUTE = 480
-_BASE_WEIGHT = {"venue.mids": 2, "venue.order_book": 2, "venue.instruments": 20,
+#: The venue requests behind each ``HyperliquidExchange._guarded`` name, by weight.
+REQUEST_WEIGHT = {"all_mids": 2, "spot_mids": 2, "l2_snapshot": 2, "user_state": 2,
+                  "spot_user_state": 2}
+#: Requests whose weight grows with the items returned: one more per this many.
+REQUEST_ITEMS_PER_WEIGHT = {"candles": 60, "funding_history": 20, "user_funding": 20,
+                            "user_fills_by_time": 20, "non_funding_ledger": 20}
+
+
+def request_weight(what: str, result: Any = None) -> int:
+    """The documented weight of one venue request named ``what``; items counted when known."""
+    weight = REQUEST_WEIGHT.get(what, 20)
+    per = REQUEST_ITEMS_PER_WEIGHT.get(what)
+    if per is not None and isinstance(result, (list, tuple)):
+        weight += len(result) // per
+    return weight
+
+
+#: Every venue read a seat can call, and the weight of one attempt of it: the
+#: requests the live adapter sends for it, at their documented weights.
+#: ``venue.instruments`` sends none: the adapter answers from the listing it loaded.
+_BASE_WEIGHT = {"venue.instruments": 0, "venue.mids": 2, "venue.order_book": 2,
                 "venue.funding": 20, "venue.candles": 20, "venue.funding_history": 20,
-                "venue.vault_details": 20}
+                "venue.open_orders": 20,
+                # user state, spot user state and all mids (the last two with spot pairs)
+                "venue.positions": 6,
+                "venue.vault_details": 20,
+                # userVaultEquities and leadingVaults
+                "venue.vault_positions": 40}
 _ITEMS_PER_WEIGHT = {"venue.candles": ("n", 60, 200), "venue.funding_history": ("n", 20, 100)}
+#: The span a seat's venue read share is counted over: any sliding minute.
+READ_WINDOW_NS = 60_000_000_000
 
 
 def public_read_weight(tool_id: str, args: Any) -> int | None:
-    """The venue's documented request weight of one public read, or None for any other tool.
+    """The documented weight of one attempt of a seat's venue read, or None for any other tool.
 
-    Guarantees the weight never undercounts a well-formed call: an item count that is
-    missing or out of its schema's range is counted at the schema's maximum.
+    Guarantees the weight never undercounts a well-formed call's first attempt: an
+    item count that is missing or out of its schema's range is counted at the
+    schema's maximum. Retries are not in it; they are charged as the adapter sends
+    them.
     """
     base = _BASE_WEIGHT.get(tool_id)
     if base is None:

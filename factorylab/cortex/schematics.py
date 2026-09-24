@@ -499,12 +499,15 @@ class SchematicsMixin:
                         "pricing": "Retained working_state costs no money. A working_state "
                         "over working_state_max_bytes is refused and the head is left as "
                         "it was.",
-                        "retention": "One working_state head per seat and one private "
-                        "state per program seat are retained. A superseded one is released "
-                        "when its successor is written: artifact.get no longer returns it, "
-                        "and its bytes are removed at a reserve-window boundary after the "
-                        "next checkpoint. Inbox bodies and archived rationales are "
-                        "retained."},
+                        "retention": "Retained per seat: its current working_state head "
+                        "and, for a program seat, its current private state, each at most "
+                        "its max_bytes. Writing a successor releases the superseded one: "
+                        "artifact.get answers artifact_released for it, and its bytes are "
+                        "removed at the next reserve-window boundary if no checkpoint names "
+                        "it, otherwise at the first boundary after a later checkpoint. "
+                        "Outcome bodies and archived rationales are retained for the "
+                        "world's life and grow with decisions, on the order of 0.5 KiB per "
+                        "outcome addressed to a seat."},
             "tools": self._published_tool_specs(),
             "reserve": {"protected": self.reserve.remaining(), "units": "micro-USD",
                         "trials": self.m.novelty.trials,

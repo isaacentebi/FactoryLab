@@ -601,18 +601,26 @@ class BootstrapMixin:
         from factorylab.world.venue_tools import _BASE_WEIGHT
 
         budget = manifest.exchange.public_read_weight_per_minute
-        for tool_id in _BASE_WEIGHT:
-            if tool_id in self.tool_specs:
-                # A limit is a published fact (essay II.I.b), never advice.
+        for tool_id, weight in _BASE_WEIGHT.items():
+            if tool_id not in self.tool_specs:
+                continue
+            # A limit is a published fact (essay II.I.b), never advice.
+            if weight == 0:
                 self.tool_specs[tool_id]["description"] += (
-                    f" Public venue reads share a budget of {budget} venue request weight "
-                    "per minute of world time, world-wide; this read spends "
-                    f"{_BASE_WEIGHT[tool_id]}"
-                    + (" plus 1 per 60 candles" if tool_id == "venue.candles" else
-                       " plus 1 per 20 rates" if tool_id == "venue.funding_history" else "")
-                    + ". A read past the budget is refused and not sent.")
-        # Public venue read weight spent in the current minute of world time.
-        self.public_read_weight = {"minute": None, "used": 0}
+                    " Answered from the listing the venue adapter loaded: it sends no "
+                    "request and spends none of your venue read share.")
+                continue
+            self.tool_specs[tool_id]["description"] += (
+                f" Each live seat has an equal venue read share: {budget} venue request "
+                "weight divided by the live seats, over any sliding 60 s of world time. "
+                f"This read's first attempt sends {weight}"
+                + (" plus 1 per 60 candles" if tool_id == "venue.candles" else
+                   " plus 1 per 20 rates" if tool_id == "venue.funding_history" else "")
+                + "; every attempt the adapter sends, retries included, is charged to "
+                "your share. A read your remaining share cannot cover is refused and not "
+                "sent.")
+        # seat -> [[world ns, venue weight sent]] of its reads in the sliding minute.
+        self.venue_read_use: dict[str, list[list[int]]] = {}
         self.tool_specs["treasury.transfer"] = {
             "id": "treasury.transfer",
             "description": "Move USDC spot_to_perps or perps_to_spot, between venue and reserve, "

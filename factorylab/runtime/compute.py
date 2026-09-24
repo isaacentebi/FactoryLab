@@ -169,6 +169,14 @@ def _venue_aliases(call: dict) -> None:
     if "is_buy" in args and "side" not in args and isinstance(args["is_buy"], bool):
         args["side"] = "buy" if args.pop("is_buy") else "sell"
 
+def _cursor_position(cursor: str) -> tuple[int, str] | None:
+    """The listing-order key an ``artifact.list`` cursor ``<ns>:<sha>`` names, or None."""
+    ns, _, sha = cursor.partition(":")
+    if not ns.isdigit() or len(sha) != 64 or any(c not in "0123456789abcdef" for c in sha):
+        return None
+    return (-int(ns), sha)
+
+
 class ArtifactListing:
     """Each owner's directory rows in listing order, kept sorted as the archive changes.
 
@@ -222,8 +230,9 @@ class ArtifactListing:
             return
         references = store.references(sha, record)
         for position, (owner, reference) in enumerate(references.items()):
-            row = self._row(sha, owner, record.get("kind"), record["bytes"],
-                            reference.get("ts", record["ts"]))
+            # The kind this owner holds the bytes under, never another writer's.
+            row = self._row(sha, owner, reference.get("kind", record.get("kind")),
+                            record["bytes"], reference.get("ts", record["ts"]))
             yield self._key(row, position), row
 
     def _rows_from_list(self, store: Any):  # pragma: no cover - a store from before C1
@@ -959,9 +968,15 @@ class ComputeMixin:
         """
         rows = self._artifact_listing().rows_for(owner)
         if cursor:
-            shas = [row["sha"] for row in rows]
-            start = shas.index(cursor) + 1 if cursor in shas else len(rows)
-            rows = rows[start:]
+            position = _cursor_position(cursor)
+            if position is not None:
+                # A position, not a row: paging continues past a row that was since
+                # released or collected instead of ending at it.
+                rows = [row for row in rows
+                        if (-(row["updated_ns"] or 0), str(row["sha"])) > position]
+            else:
+                shas = [row["sha"] for row in rows]
+                rows = rows[shas.index(cursor) + 1:] if cursor in shas else []
         return [{k: v for k, v in row.items() if k != "owner"} for row in rows]
 
     def _artifacts_owned_by(self, seat: str, limit: int) -> tuple[int, list[dict[str, Any]]]:
@@ -973,15 +988,23 @@ class ComputeMixin:
         """One ``artifact.list`` page of the caller's own rows, the total, and the cursor.
 
         ``count`` is the caller's whole listing, not the remainder, so a reader
-        knows how much it has not seen; an unknown cursor ends the listing rather
-        than restarting it, so paging can never loop.
+        knows how much it has not seen. ``next_cursor`` names a position in the
+        listing order (``<ns>:<sha>``), so a row released or collected between two
+        pages never ends the paging; a cursor naming no position and no row ends
+        the listing and says so (``cursor_unknown``) rather than restarting it, so
+        paging can never loop.
         """
         cursor = args.get("cursor") if isinstance(args.get("cursor"), str) else None
-        total = len(self._artifact_index(owner))
+        rows = self._artifact_index(owner)
         remaining = self._artifact_index(owner, cursor)
         page = remaining[:self.DIRECTORY_PAGE]
-        return {"items": page, "count": total,
-                "next_cursor": page[-1]["sha"] if len(remaining) > len(page) else None}
+        last = page[-1] if page else None
+        unknown = (cursor is not None and _cursor_position(cursor) is None
+                   and cursor not in {row["sha"] for row in rows})
+        return {"items": page, "count": len(rows),
+                "next_cursor": (f"{last['updated_ns'] or 0}:{last['sha']}"
+                                if last is not None and len(remaining) > len(page) else None),
+                **({"cursor_unknown": True} if unknown else {})}
 
     def _connector_catalogue(self) -> list[dict]:
         """Public connector contracts expose latest versions, descriptions and origins."""
@@ -1097,29 +1120,70 @@ class ComputeMixin:
         meter = self._seat_meter(self.handle_to_assembly.get(handle))
         return metered_data(meter, handle, cap, execute, self._record_market)
 
-    PUBLIC_READ_REFUSAL = "venue public read budget for this minute is spent"
+    PUBLIC_READ_REFUSAL = "venue read share spent"
 
-    def _spend_public_read(self, tool_id: str, args: Any) -> str | None:
-        """Spend a public venue read's weight from this minute's budget, or refuse it.
+    def venue_read_share(self) -> int:
+        """Each live seat's venue read share: the world's read budget over the live seats.
 
-        Guarantees: a read the budget cannot cover is refused before it is sent, so
-        the population's reads never spend the venue IP limit the kernel's own order
-        and reconcile calls need (world/venue_tools.py); the minute is world-clock
-        time, journaled, so a replay refuses exactly what the recording refused.
-        Any other tool passes untouched.
+        Guarantees the shares together never exceed ``[venue]
+        public_read_weight_per_minute``, and that a seat's share depends only on that
+        manifest constant and the public count of live seats: never on what another
+        seat read (AGENTS.md rule 4: no channel between seats through refusals).
+        """
+        return self.m.exchange.public_read_weight_per_minute // max(1, len(self._live_seats()))
+
+    def _venue_read_used(self, seat: str) -> int:
+        """The venue weight this seat's reads sent in the sliding minute ending now."""
+        from factorylab.world.venue_tools import READ_WINDOW_NS
+
+        since = self.clock.now_ns - READ_WINDOW_NS
+        uses = getattr(self, "venue_read_use", {})
+        kept = [row for row in uses.get(seat, ()) if row[0] > since]
+        if kept:
+            uses[seat] = kept
+        else:
+            uses.pop(seat, None)
+        return sum(weight for _ts, weight in kept)
+
+    def _venue_read_refusal(self, seat: str, tool_id: str, args: Any) -> str | None:
+        """Refuse a seat's venue read its share cannot cover, before anything is sent.
+
+        Guarantees: a read is admitted only when the weight its first attempt sends
+        fits in what the seat's own reads left of its share over the sliding minute;
+        another seat's reads never enter it. Any other tool passes untouched.
         """
         from factorylab.world.venue_tools import public_read_weight
 
         weight = public_read_weight(tool_id, args)
-        if weight is None:
+        if weight is None or weight == 0:
             return None
-        minute = self.clock.now_ns // 60_000_000_000
-        spent = getattr(self, "public_read_weight", None) or {"minute": None, "used": 0}
-        used = spent["used"] if spent["minute"] == minute else 0
-        if used + weight > self.m.exchange.public_read_weight_per_minute:
-            return self.PUBLIC_READ_REFUSAL
-        self.public_read_weight = {"minute": minute, "used": used + weight}
+        share, used = self.venue_read_share(), self._venue_read_used(seat)
+        if used + weight > share:
+            return (f"{self.PUBLIC_READ_REFUSAL}: {used} of {share} venue request weight "
+                    f"in the last 60 s; this read sends {weight}")
         return None
+
+    def _venue_weight_sent(self) -> int | None:
+        """The live adapter's count of venue weight sent, journaled; None for a simulation."""
+        if hasattr(self.exchange, "request_weight_sent"):
+            return self.exchange.request_weight_sent()
+        return None
+
+    def _charge_venue_read(self, seat: str, tool_id: str, args: Any,
+                           before: int | None) -> None:
+        """Charge a seat's read what the adapter actually sent for it, retries included.
+
+        A simulated venue sends nothing and reports nothing; it is charged the weight
+        of one attempt, so the limit binds the same way in a scripted world.
+        """
+        from factorylab.world.venue_tools import public_read_weight
+
+        after = self._venue_weight_sent()
+        sent = (after - before if before is not None and after is not None
+                else public_read_weight(tool_id, args))
+        if sent:
+            self._venue_read_used(seat)
+            self.venue_read_use.setdefault(seat, []).append([self.clock.now_ns, sent])
 
     def _tool_price_bound(self, call: dict) -> int:
         """Variable tool prices fit the remaining request ceiling before dispatch."""
@@ -1337,7 +1401,10 @@ class ComputeMixin:
                                 "handle": handle, "assembly_id": action_id,
                                 "found": "error" not in result,
                                 **({"reason": Reason.ARTIFACT_PRIVATE.value}
-                                   if result.get("error") == PRIVATE_REFUSAL else {}),
+                                   if result.get("error") == PRIVATE_REFUSAL else
+                                   {"reason": Reason.ARTIFACT_RELEASED.value}
+                                   if result.get("error") == Reason.ARTIFACT_RELEASED.value
+                                   else {}),
                                 "ts": self.clock.now_ns})
             return result, 0
         if tool_id == "outcome.get":
@@ -1385,12 +1452,17 @@ class ComputeMixin:
         if fault is not None:
             # Decided before the meter reserves: a fault moves no money (runtime.chaos).
             return fault, 0
-        refusal = self._spend_public_read(tool_id, args)
-        if refusal is not None:
-            self.ledger.append({"kind": "tool.refused", "handle": handle,
-                                "assembly_id": action_id, "tool": tool_id,
-                                "reason": refusal, "ts": self.clock.now_ns})
-            return {"error": refusal}, 0
+        from factorylab.world.venue_tools import public_read_weight
+
+        venue_read = public_read_weight(tool_id, args) is not None
+        if venue_read:
+            refusal = self._venue_read_refusal(action_id, tool_id, args)
+            if refusal is not None:
+                self.ledger.append({"kind": "tool.refused", "handle": handle,
+                                    "assembly_id": action_id, "tool": tool_id,
+                                    "reason": refusal, "ts": self.clock.now_ns})
+                return {"error": refusal}, 0
+            weight_before = self._venue_weight_sent()
         price = int(spec["price_micro_per_call"])
 
         def execute() -> dict:
@@ -1497,6 +1569,9 @@ class ComputeMixin:
             return {"error": str(exc)}, exc.cost
         except Exception as exc:  # reservation refused or execution known unbilled
             return {"error": f"{type(exc).__name__}: {exc}"[:200]}, 0
+        finally:
+            if venue_read:
+                self._charge_venue_read(action_id, tool_id, args, weight_before)
         if spec["kind"] == "venue":
             if tool_id in self.venue_tools.PUBLIC_READS:
                 from factorylab.runtime.observations import record_venue_facts

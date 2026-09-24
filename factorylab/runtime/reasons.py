@@ -40,6 +40,7 @@ class Reason(StrEnum):
     WITNESS_MISMATCH = "witness_mismatch"  # The receiver set is not the one it launched under.
     ARTIFACT_MISSING = "artifact_missing"  # The archive index names bytes that are not there.
     ARTIFACT_PRIVATE = "artifact_private"  # The archive holds it; this reader is not scoped to it.
+    ARTIFACT_RELEASED = "artifact_released"  # The reader's own superseded state, released.
     FACILITATOR_MISMATCH = "facilitator_mismatch"  # The x402 facilitator is not the launched one.
     TICK_OVERRIDE_REFUSED = "tick_override_refused"
     NO_LIVE_VENUE = "no_live_venue"

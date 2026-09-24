@@ -658,9 +658,9 @@ _RUNTIME_FIELDS = (
     "facilitator_url",
     "registered_predicates", "kind_reward_shapes", "forecast_returns",
     "connector_calls", "connector_calls_day",
-    # The public venue reads' weight spent this minute. An older checkpoint starts it
-    # at zero.
-    "public_read_weight",
+    # Each seat's venue read weight in the sliding minute. An older checkpoint starts
+    # every share unspent.
+    "venue_read_use",
     # The pause between releases: None while awake, else the entry record (C2).
     "dormancy",
     # C10: each seat's last rendered call ceiling and the world size it was priced at.

@@ -105,49 +105,126 @@ def test_every_seeded_tool_is_free_and_a_free_call_moves_no_money():
     assert rt.wallet.balance == before
 
 
-def test_free_public_venue_reads_are_capped_by_a_per_minute_weight_budget():
-    """A free read still spends the venue's shared IP rate limit, a real constraint the
-    kernel's own order and reconcile calls need, so it is a limit (II.II.b): the
-    reads share a per-minute weight budget, a read past it is refused before it is
-    sent, the budget survives a checkpoint, and it renews with the next minute."""
+def _read_runtime(budget):
+    """A scripted runtime whose read budget gives each live seat ``budget`` weight."""
+    rt = make_runtime()
+    rt._manage_reserve_window()
+    seats = len(rt._live_seats())
+    rt.m = replace(rt.m, exchange=replace(rt.m.exchange,
+                                          public_read_weight_per_minute=budget * seats))
+    assert rt.venue_read_share() == budget
+    rt.clock.now_ns = 60_000_000_000 * 1_000
+    return rt
+
+
+def _read(rt, seat, tool, handle=None, **args):
+    handle = handle or decision(rt, seat)
+    return rt._run_tool(seat, handle, {"tool": tool, "args": args})[0]
+
+
+def test_a_seat_s_venue_reads_are_capped_by_its_own_share_over_a_sliding_minute():
+    """A free read still spends the venue's IP rate limit, which the kernel's own order
+    and reconcile calls need, so it is a limit (II.II.b): a read the seat's share
+    cannot cover is refused before it is sent, the share is counted over any sliding
+    60 s, and it survives a checkpoint."""
     from factorylab.runtime.resume import restore_runtime, runtime_state
     from factorylab.world.venue_tools import public_read_weight
 
-    rt = make_runtime()
-    rt._manage_reserve_window()
-    rt.m = replace(rt.m, exchange=replace(rt.m.exchange, public_read_weight_per_minute=50))
-    rt.clock.now_ns = 60_000_000_000 * 1_000  # the start of a minute
+    rt = _read_runtime(50)
     sent = []
     call = rt.venue_tools.call
     rt.venue_tools.call = lambda tool, args: sent.append(tool) or call(tool, args)
-    handle = decision(rt)
     assert public_read_weight("venue.funding", {}) == 20
     assert public_read_weight("venue.candles", {"n": 61}) == 22
     assert public_read_weight("venue.funding_history", {"n": 999}) == 25  # out of range
+    assert public_read_weight("venue.open_orders", {}) == 20
+    assert public_read_weight("venue.positions", {}) == 6
+    assert public_read_weight("venue.vault_positions", {}) == 40
+    assert public_read_weight("venue.place_market", {}) is None  # a write is not a read
     for _ in range(2):  # 20 + 20 of 50
-        result, cost = rt._run_tool("seed-decider", handle, {"tool": "venue.funding", "args": {}})
-        assert "error" not in result and cost == 0
-    result, _ = rt._run_tool("seed-decider", handle, {"tool": "venue.funding", "args": {}})
-    assert result == {"error": rt.PUBLIC_READ_REFUSAL} and sent == ["venue.funding"] * 2
-    assert ledger_items(rt, "tool.refused")[-1]["reason"] == rt.PUBLIC_READ_REFUSAL
-    for _ in range(5):  # the 10 left still buys the cheap reads
-        assert "error" not in rt._run_tool("seed-decider", handle,
-                                           {"tool": "venue.mids", "args": {}})[0]
-    assert "error" in rt._run_tool("seed-decider", handle, {"tool": "venue.mids", "args": {}})[0]
+        assert "error" not in _read(rt, "seed-decider", "venue.funding")
+    refused = _read(rt, "seed-decider", "venue.funding")
+    assert refused["error"].startswith(rt.PUBLIC_READ_REFUSAL)
+    assert "40 of 50" in refused["error"] and sent == ["venue.funding"] * 2
+    assert ledger_items(rt, "tool.refused")[-1]["reason"] == refused["error"]
+    rt.clock.now_ns += 30_000_000_000
+    for _ in range(3):  # the 10 left still buys a cheap read at 6 or 2
+        assert "error" not in _read(rt, "seed-decider", "venue.mids")
+    assert "error" in _read(rt, "seed-decider", "venue.positions")  # 46 + 6 > 50
     rt2 = make_runtime()
     rt2.m = rt.m
     restore_runtime(rt2, runtime_state(rt))
     rt2.clock.now_ns = rt.clock.now_ns
-    assert "error" in rt2._run_tool("seed-decider", handle, {"tool": "venue.mids", "args": {}})[0]
-    rt.clock.now_ns += 60_000_000_000
-    assert "error" not in rt._run_tool("seed-decider", handle,
-                                       {"tool": "venue.funding", "args": {}})[0]
-    # A write is not a public read and never spends the budget.
-    assert public_read_weight("venue.place_market", {}) is None
-    # The budget is published as a fact where the tool is (the launch manifest's value).
+    assert "error" in _read(rt2, "seed-decider", "venue.positions")
+    # Sliding, not bucketed: 31 s later the two funding reads (40) have left the
+    # minute but the mids read 30 s after them (6) has not.
+    rt.clock.now_ns += 31_000_000_000
+    assert rt._venue_read_used("seed-decider") == 6
+    assert "error" not in _read(rt, "seed-decider", "venue.funding")
+
+
+def test_one_seat_exhausting_its_share_never_changes_another_seat_s_refusals():
+    """AGENTS.md rule 4: no channel between seats. Each seat's refusals depend on its
+    own reads and on the public count of live seats, never on another seat's reads."""
+    def refusals(rt, seat):
+        return ["error" in _read(rt, seat, "venue.funding") for _ in range(4)]
+
+    quiet = _read_runtime(50)
+    alone = refusals(quiet, "seed-observer")
+    busy = _read_runtime(50)
+    for _ in range(6):
+        _read(busy, "seed-decider", "venue.funding")
+    assert busy._venue_read_used("seed-decider") == 40
+    assert refusals(busy, "seed-observer") == alone == [False, False, True, True]
+
+
+def test_venue_instruments_sends_nothing_and_spends_no_share():
+    rt = _read_runtime(1)
+    for _ in range(5):
+        assert "error" not in _read(rt, "seed-decider", "venue.instruments")
+    assert rt._venue_read_used("seed-decider") == 0
+    text = rt.tool_specs["venue.instruments"]["description"]
+    assert "sends no request and spends none of your venue read share" in text
+
+
+def test_a_live_read_is_charged_every_attempt_the_adapter_sent(monkeypatch):
+    """Each attempt ``_guarded`` sends is weighed, a retry after a 429 included, and the
+    items a request returned are counted once it answers."""
+    import time
+
+    from hyperliquid.utils.error import ClientError
+
+    from factorylab.world.exchange import HyperliquidExchange, VenueUnavailable
+
+    monkeypatch.setattr(time, "sleep", lambda _s: None)
+    venue = object.__new__(HyperliquidExchange)
+    answers = [ClientError(429, None, "slow down", {}), list(range(130))]
+
+    def candles():
+        answer = answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    assert venue._guarded("candles", candles) == list(range(130))
+    assert venue.request_weight_sent() == 20 + 20 + 130 // 60  # two attempts, 130 items
+    with pytest.raises(VenueUnavailable):
+        venue._guarded("l2_snapshot", lambda: (_ for _ in ()).throw(
+            ClientError(429, None, "slow down", {})))
+    assert venue.request_weight_sent() == 42 + 3 * 2  # three attempts at 2
+    # The runtime charges the seat exactly what the adapter reports it sent.
+    rt = _read_runtime(100)
+    reported = iter([0, 42])
+    monkeypatch.setattr(rt, "_venue_weight_sent", lambda: next(reported))
+    assert "error" not in _read(rt, "seed-decider", "venue.candles",
+                                coin="BTC", interval="1m", n=10)
+    assert rt._venue_read_used("seed-decider") == 42
+
+
+def test_the_read_share_is_published_where_the_tool_is():
     text = make_runtime().tool_specs["venue.candles"]["description"]
-    assert "budget of 480 venue request weight per minute" in text
-    assert "spends 20 plus 1 per 60 candles" in text
+    assert "480 venue request weight divided by the live seats" in text
+    assert "sends 20 plus 1 per 60 candles" in text and "retries included" in text
 
 
 def test_the_default_read_budget_leaves_the_kernel_most_of_the_venue_limit():

@@ -1746,21 +1746,46 @@ dispatch still checks the coin against the venue and refuses an unlisted one.
 or pair the venue lists, and `venue.funding_history` refuses a spot pair.
 `venue.place_market`, `venue.place_limit`, `venue.close`, `venue.cancel` and
 `venue.set_leverage` still refuse a market that is not registered for trading.
-These six public reads are free: the venue charges nothing for them. They
-still spend the venue's per-IP rate limit, which the kernel's own order,
-reconcile and account calls share, so they are capped: `[venue]
-public_read_weight_per_minute` (default `480`, an integer below `1200`, fixed for
-the world's life) is the venue request weight all public reads together may
-spend per minute of world time. Each read spends its documented weight
-(Hyperliquid, "Rate limits and user limits": 1200 per minute per IP; `l2Book` and
-`allMids` weigh 2, other info requests 20, `candleSnapshot` one more per 60 items
-and `fundingHistory` one more per 20): `venue.mids` and `venue.order_book` 2,
-`venue.instruments`, `venue.funding` and `venue.vault_details` 20, `venue.candles`
-20 plus 1 per 60 candles and `venue.funding_history` 20 plus 1 per 20 rates, an
-out-of-range count taken at its maximum. The default leaves 720 a minute to the
-kernel. A read the budget cannot cover is refused before it is sent
-(`tool.refused`); the minute's spend is checkpointed. Each tool's description
-states the budget and its weight. The
+These six public reads are free: the venue charges nothing for them. Every
+venue read a seat can call still spends the venue's per-IP rate limit, which the
+kernel's own order, reconcile and account calls share, so the reads are capped.
+Hyperliquid documents the limit ("Rate limits and user limits": 1200 weight per
+minute per IP; `l2Book`, `allMids`, `clearinghouseState` and
+`spotClearinghouseState` weigh 2, every other info request 20, `candleSnapshot`
+one more per 60 items returned, `fundingHistory`, `userFunding` and `userFills` one
+more per 20; the added weight per interval is not stated and is counted as 1).
+`[venue] public_read_weight_per_minute` (default `480`, an integer below `1200`,
+fixed for the world's life) is what the population's reads may use, and **each
+live seat has an equal share of it**: the budget divided by the live seats,
+rounded down, over any sliding 60 s of world time. The shares never sum past the
+budget, and a seat's refusals depend only on its own reads and on the public count
+of live seats, never on another seat's reads: a first-come shared budget would let
+one seat starve the others and signal them through refusals, a third channel
+between seats (AGENTS.md rule 4). A read is admitted when the weight its first
+attempt sends fits in what the seat's own reads left of its share, and refused
+before it is sent otherwise (`tool.refused`, naming the seat's use and share).
+The first-attempt weights are `venue.instruments` 0 (the adapter answers it from
+the listing it loaded and sends no request), `venue.mids` and `venue.order_book`
+2, `venue.positions` 6 (user state, spot user state and all mids),
+`venue.funding`, `venue.open_orders` and `venue.vault_details` 20,
+`venue.vault_positions` 40 (vault equities and leading vaults), `venue.candles` 20
+plus 1 per 60 candles and `venue.funding_history` 20 plus 1 per 20 rates, an
+out-of-range count taken at its maximum. The seat is then charged what the live
+adapter reports it sent (`HyperliquidExchange.request_weight_sent`, read through
+the journal): every attempt `_guarded` makes, a retry after a 429 or a transient
+failure included, and the item weight of what came back; a simulated venue sends
+nothing and is charged the first-attempt weight, so the limit binds the same way
+in a scripted world. A seat's use over any 60 s is therefore at most its share
+plus the retries of its last admitted read (at most two more attempts of it). The
+default leaves 720 a minute to the kernel. That headroom rests on an estimate, not
+a measurement: at 10-second ticks the kernel's own reads (mids, account and spot
+state, asset contexts, open orders, fills and funding pages) come to roughly 90
+weight a tick, about 540 a minute, which with the default budget is about 1020 of
+the 1200.
+A read whose first attempt weighs more than the seat's share (fourteen live seats
+leave 34 each, so `venue.vault_positions` at 40) is refused until fewer seats are
+live or the budget is raised. The sliding minute's use is checkpointed. Each tool's
+description states the share rule and its weight. The
 launch seed only ever adds to the adapter's own listing; on the deterministic
 venue a seeded market the adapter does not list is dropped, and on a live one an
 unlisted spot pair fails launch. An adapter that publishes no listing keeps the
@@ -1795,14 +1820,18 @@ a population-wide blackboard is neither. Its storage rent survived it until Wave
 11, which removed it: the bytes sit on the world's own fixed-price disk, so the
 rent paid no one, and a debit with no counterparty makes the books lie (the
 wallet moves only when money moves). Retained working state is a constraint, and
-the hard cast (§II.b) bounds the whole of it, not each version: a seat retains one
-working-state head of at most 64 KiB and a program seat one private state of at
-most 64 KiB. Writing a new one releases the superseded one's reference
-(`artifact.released`); `artifact.get` no longer returns it, and its bytes are
-removed at a reserve-window boundary once a durable checkpoint no longer names it
-(`artifact.collected`). Inbox bodies and archived rationales are never released.
-The world block's `storage` section states the limits and this retention as
-facts. The size of every head is ledgered on its `state.put` item, and the
+the hard cast (§II.b) bounds the whole of it, not each version. What the archive
+holds, exactly: each seat's current working-state head, at most 64 KiB, and each
+program seat's current private state, at most 64 KiB; every superseded head or
+state until it is collected (see "Collection": at the next reserve-window boundary
+when no checkpoint names it, otherwise at the first boundary after a later
+checkpoint, so at most one more per seat is held a window longer); and every
+outcome body and archived rationale, retained for the world's life and growing
+with decisions, on the order of 0.5 KiB per outcome addressed to a seat (an inbox
+body with its evidence pointer and what the seat said). Writing a new head
+releases the superseded one's reference (`artifact.released`), and `artifact.get`
+answers `artifact_released` for it to the seat that released it. The world
+block's `storage` section states the limits and this retention as facts. The size of every head is ledgered on its `state.put` item, and the
 archive's size after each boundary's collection on `artifact.retained {records,
 bytes, released_bytes, window}`, where a measurement could read them so the
 charter can price retained state through λ on reward (§II.b soft casts, §IV.a) if
@@ -1943,7 +1972,7 @@ watcher once per tick plus the safety sweeps); `tools.max_tool_calls` per reques
 and the five tool rounds a decision may buy; `tools.max_children`; the jail's wall
 timeout (`timeout_s`, 1–10 s) with its CPU rlimit and output cap; the 64 KiB
 private-state limit, with one state retained; `connectors.max_calls_per_window`
-and the public venue read budget (`[venue] public_read_weight_per_minute`) for
+and the seat's venue read share (`[venue] public_read_weight_per_minute`) for
 whatever it fetches; and governance, which retires it through a retirement
 proposal. Anything it buys from outside (a model call it subcontracts, a paid
 read, a search) is metered at its real price against its entitlement as before.
@@ -2052,20 +2081,32 @@ money: the archive is the world's own disk.
 `entries()` returns one row per reference, with that reference's owner.
 `artifact.list {cursor?}` is free and returns only the caller's own rows (sha,
 kind, bytes, when), newest first, 50 a page with `next_cursor` and the caller's
-`count`; the seat's `YOU` `directory` previews the same rows. No list names
+`count`. `next_cursor` is a position in that order (`<ns>:<sha>`), so a row
+released or collected between two pages never ends the paging; a cursor naming
+neither a position nor a row the caller holds returns no rows and
+`cursor_unknown: true`; the seat's `YOU` `directory` previews the same rows. No list names
 another seat's artifacts (information audit C4).
 
 **Collection.** `ArtifactStore.collect()` is the one thing that deletes, and it
 can only reach blobs **no reference names** — what a crash
 between the durable write and its ledger item leaves behind, and records whose
 last reference was released (a superseded working-state head or program state;
-`ArtifactStore.release`). A reference names every kind its owner wrote the bytes
-under, so releasing one kind never drops bytes the owner still holds as another.
-A released record is `pending` until the next durable checkpoint, then `sealed`
-(`seal_released`, also applied to the checkpoint a resume restores), and only a
-sealed record is collected, so a resume never needs bytes that are gone; the
-resume's archive check skips released records. Each removal is
-ledgered `artifact.collected {sha, ts}`. The runtime calls it at each
+`ArtifactStore.release`, ledgered `artifact.released` before the index changes).
+A reference names every kind its owner wrote the bytes under, so releasing one
+kind never drops bytes the owner still holds as another, and its `kind` names only
+what the owner still holds. A released record the latest checkpoint named (it was
+in that checkpoint's index) is `pending` until the next durable checkpoint, then
+`sealed` (`seal_released`, also applied to the checkpoint a resume restores); one
+written and released since the latest checkpoint is sealed at once, because no
+checkpoint a resume could start from names it and the replayed tail re-creates it,
+releases it and collects it exactly as the recording did. Only a sealed record is
+collected, so a resume never needs bytes that are gone; the resume's archive check
+skips released records. A record fully released and then written by another seat
+is re-owned: its owner of record and kind become the new writer's, so no reader is
+shown who wrote the bytes before, and the lineage check reads the new owner. Each
+removal of a record is ledgered `artifact.collected {sha, ts}`. Bytes no record
+names (a crash's leftover) are removed without an item, and never while the
+journal is recovering, so a live run and its replay ledger the same removals. The runtime calls it at each
 reserve-window boundary (`continuity.collect_window`). An owned blob is never a
 candidate, so collection can never take a seat's working state, an inbox body or
 an archived rationale.
