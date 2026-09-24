@@ -288,7 +288,7 @@ def test_only_the_capital_loop_world_names_the_hybrid_keys():
     assert all(getattr(TreasurySpec(), key) is None for key in HYBRID_VENICE_KEYS)
 
 
-def test_the_capital_loop_world_starts_on_openrouter_and_caps_two_conversions():
+def test_the_capital_loop_world_starts_on_openrouter_and_caps_one_conversion():
     # The first live rehearsal (23 September 2026) seeded seven seats on Venice with $0.098
     # of credit and none could think. Seats start where the operator funded them; Venice
     # routes of the seated families stay on the menu for credit the factory buys.
@@ -298,8 +298,9 @@ def test_the_capital_loop_world_starts_on_openrouter_and_caps_two_conversions():
     assert {"venice:openai-gpt-6-luna", "venice:deepseek-v4-1-flash",
             "venice:qwen-3-8-flash"} <= set(menu)
     assert world.treasury.venice_network == "base-mainnet"
-    assert world.treasury.max_venice_per_window == 2 * FIVE
-    assert world.treasury.max_venice_total_micro == 2 * FIVE
+    # The first real conversion (24 September 2026) is exactly one $5 tranche.
+    assert world.treasury.max_venice_per_window == FIVE
+    assert world.treasury.max_venice_total_micro == FIVE
     assert world.treasury.venice_pay_to == PAYEE
     assert int(world.treasury.venice_shadow_sink, 16) != 0
     assert (menu["venice:openai-gpt-6-luna"].input_usd_per_mtok,

@@ -134,8 +134,9 @@ def wired(tmp_path, monkeypatch):
     monkeypatch.delenv("VENICE_API_KEY", raising=False)
     monkeypatch.setenv("HL_PRIVATE_KEY", main.key.hex())
     monkeypatch.setenv("RESERVE_PRIVATE_KEY", reserve.key.hex())
-    # $15 on a $8.266 floor: $6.734 above it, within the $10 total, covering one $5.
-    chain = BaseWire(reserve.address, 15_000_000)
+    # The reserve the launch check admits: exactly the world's floor plus its total cap,
+    # read from the world file so the fixture follows the operator's settings.
+    chain = BaseWire(reserve.address, _admitted_reserve_micro())
     venice = VeniceWire(chain, {reserve.address.lower(): 1_000_000})
     venue = VenueWire(main.address, SINK)
     monkeypatch.setattr(API, "post", lambda api, path, payload=None: venue.post(
@@ -492,3 +493,25 @@ def test_a_capital_loop_run_refuses_a_supplied_clock(tmp_path, monkeypatch):
             clock_source=ClockSource(time.time_ns(), TICK_NS, 360), **launch_kwargs(w))
     assert not (tmp_path / "runs" / "harness").exists()  # refused before anything
     assert w["venue"].rows == [] and w["venice"].paid == []
+
+def _admitted_reserve_micro() -> int:
+    """The largest reserve the launch check admits: floor + total cap, in micro-USD."""
+    import tomllib
+    from decimal import Decimal
+
+    venice = tomllib.loads(Path("worlds/edition6-capital-loop.toml").read_text())
+    table = next(t for t in _tables(venice) if "venice_reserve_floor_usd" in t)
+    total = Decimal(table["venice_reserve_floor_usd"]) + Decimal(table["max_venice_total_usd"])
+    return int(total * 1_000_000)
+
+
+def _tables(node):
+    """Every table in a parsed TOML document, depth first."""
+    if isinstance(node, dict):
+        yield node
+        for value in node.values():
+            yield from _tables(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _tables(value)
+

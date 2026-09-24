@@ -267,7 +267,9 @@ def capital_loop_world():
 
 def test_the_launch_check_needs_the_chain_to_bound_what_a_fresh_run_can_spend():
     world = capital_loop_world()
-    world = replace(world, treasury=replace(world.treasury, venice_reserve_floor_micro=5_000_000))
+    # The test pins its own cap and floor; the operator's world file may change them.
+    world = replace(world, treasury=replace(world.treasury, venice_reserve_floor_micro=5_000_000,
+                                            max_venice_total_micro=10_000_000))
     rpc = Rpc()
     rpc.balance = 15_000_000  # $10 above a $5 floor: exactly the total cap
     numbers = launch_check(world, transport=rpc)
