@@ -25,7 +25,7 @@ from factorylab.kernel.queue import PropensityRecord
 from factorylab.learners.router import Sample
 from factorylab.runtime.feedback import PendingJudgement
 from factorylab.runtime.reasons import Reason
-from factorylab.runtime.shared import CH_EXPOSURE, CH_VERDICT, _to_plain
+from factorylab.runtime.shared import CH_EXPOSURE, CH_VERDICT, _to_plain, declined_reason
 from factorylab.runtime.summary import _price_str
 from factorylab.settlement import SEED_VOCABULARY
 from factorylab.settlement.consequence import ReturnConsequences
@@ -2364,8 +2364,12 @@ class ComputeMixin:
             if emitted == "Exposure":
                 self.pending_exposure[handle] = self.ticks_consumed
             else:
+                # A requested child's refusal is a decline like a routed one: unjudged,
+                # it settles declined and its request router prices it as an
+                # abstention (ruling R9), never at a free neutral.
                 self.pending[handle] = PendingJudgement(handle, CH_VERDICT, self.n,
-                                                        opened_at_tick=self.ticks_consumed)
+                                                        opened_at_tick=self.ticks_consumed,
+                                                        declined=declined_reason(ret))
             self.stats.producer_returns += 1
             payload = {"about_handle": handle, "description": item.description,
                        # A parent may hand its child the text of a message to send.

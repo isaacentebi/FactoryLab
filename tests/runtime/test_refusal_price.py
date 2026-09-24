@@ -127,8 +127,8 @@ def test_a_refusal_no_judge_graded_is_priced_as_an_abstention_never_credited_fre
     (priced,) = _rows(rt, "router.decline_priced", handle=refused)
     assert priced["penalty"] > 0
     assert priced["reward"] == pytest.approx(state.neutral() - priced["penalty"])
-    # It no longer pays: the refusal earns no more than a NOOP drawn in the same window,
-    # and strictly less than the unpriced neutral a censored refusal used to earn.
+    # Priced: never credited above a NOOP drawn in the same window, and below the
+    # unpriced neutral a censored refusal used to be credited.
     noop_reward, _noop_penalty = rt._priced_abstention(noop, state.neutral())
     assert priced["reward"] <= noop_reward
     assert priced["reward"] < state.neutral()
@@ -171,6 +171,50 @@ def test_the_refusing_seats_own_learner_is_priced_as_its_router_is(monkeypatch):
     assert handle == refused and fb.action == "declined"
     assert penalty > 0 and fb.reward == pytest.approx(expected)
     assert fb.reward < NEUTRAL_REWARD
+
+
+def test_a_requested_childs_refusal_is_priced_as_an_abstention_on_its_request_router(
+        monkeypatch):
+    """A producer drawn by ``request:ProducerReturn`` that answers ``cannot`` is not
+    consumed ok, so no requester holds it: unjudged, it settles declined, never free."""
+    from factorylab.cortex.request import ChildRequest
+    from factorylab.runtime.shared import request_router_key
+    from tests.runtime.test_child_requests import parent_request
+
+    rt = _priced_runtime(monkeypatch)
+    rt._instantiate(replace(rt.assemblies["seed-decider"].spec, id="helper-a"))
+    req = parent_request(rt)
+    rt.handle_to_assembly[req.handle] = "seed-decider"
+    task = ChildRequest("ProducerReturn", "helper task", {"q": 1}, {"type": "object"})
+    rt._invoke_child("seed-decider", req, task, req.cost_ceiling)
+    (child,) = _rows(rt, "request.child")
+    handle = child["handle"]
+    state = rt.routers[request_router_key("ProducerReturn")][0]
+    assert rt.queue.get(handle).actor == state.learner.id
+    (invocation,) = _rows(rt, "invocation", handle=handle)
+    assert invocation["status"] == "refused"
+    assert rt.pending[handle].declined == REASON and rt.pending[handle].requester is None
+    updates = []
+    rt.assembly_learners[child["target"]] = SimpleNamespace(
+        update_for=lambda h, fb: updates.append((h, fb)), discard_for=lambda h: None)
+    rt.assembly_rounds[handle] = child["target"]
+    _noop_state, noop = _drawn(rt, NOOP)
+    rt._contribution(noop, "producer")
+    _commitments(rt, "eval-a", censored=4)
+    rt._close_price_window()
+    _past_the_verdict_timeout(rt)
+    (settled,) = rt.queue.history(handle)
+    assert settled.status is SettleStatus.INAPPLICABLE
+    assert settled.definition_version == DECLINED_DEFINITION
+    rt._deliver_returns()
+    (priced,) = _rows(rt, "router.decline_priced", handle=handle)
+    assert priced["router"] == state.learner.id and priced["penalty"] > 0
+    assert priced["reward"] == pytest.approx(state.neutral() - priced["penalty"])
+    noop_reward, _noop_penalty = rt._priced_abstention(noop, state.neutral())
+    assert priced["reward"] <= noop_reward
+    ((learned, fb),) = updates
+    expected, penalty = rt._priced_abstention(handle, NEUTRAL_REWARD)
+    assert learned == handle and penalty > 0 and fb.reward == pytest.approx(expected)
 
 
 # --- a judge, a meta and a counter-judge decline their commissions ---------------------
@@ -343,17 +387,12 @@ def _standoff_manifest():
 
 
 @pytest.mark.gate
-def test_in_a_world_a_seat_that_always_refuses_earns_less_than_one_that_holds_or_a_noop():
-    rounds = []
-
-    class Recording(Runtime):
-        def _thrash_charged(self, state, handle, reward):
-            if state.kind == "Tick":
-                rounds.append((self.queue.get(handle).propensity.chosen, reward))
-            return super()._thrash_charged(state, handle, reward)
-
-    rt = Recording(_standoff_manifest(), events=300, seed=1, initial_balance_micro=None,
-                   ledger_path=None, router_gamma=0.1, provider=Standoff())
+def test_in_a_world_every_unjudged_refusal_and_decline_settles_at_the_abstention_price():
+    """Pricing physics only: what each refusal and decline settles as, and at what credit.
+    No assertion here says which action a seat should prefer, or where routing shares
+    should move (AGENTS.md rule 2); the harness only reads the ledger."""
+    rt = Runtime(_standoff_manifest(), events=300, seed=1, initial_balance_micro=None,
+                 ledger_path=None, router_gamma=0.1, provider=Standoff())
     rt.run()
     tick = {s.learner.id for s in rt._all_router_states() if s.kind == "Tick"}
     drawn = {i["handle"]: i["propensity"]["chosen"] for i in rt.ledger._recovery_items()
@@ -368,11 +407,6 @@ def test_in_a_world_a_seat_that_always_refuses_earns_less_than_one_that_holds_or
     assert priced and any(row["penalty"] > 0 for row in priced)
     for row in priced:
         assert row["reward"] == pytest.approx(max(0.0, row["neutral"] - row["penalty"]))
-    rewards: dict[str, list[float]] = {}
-    for seat, reward in rounds:
-        rewards.setdefault(seat, []).append(reward)
-    mean = {seat: sum(r) / len(r) for seat, r in rewards.items()}
-    assert mean[REFUSER] < mean[NOOP] and mean[REFUSER] < mean[HOLDER]
     # The judges who declined to grade a refusal ("no return to judge") declined too,
     # in the form ``_invoke`` hands on: none is censored at a free neutral, each is
     # priced on its router as an abstention, and some of those prices bite.

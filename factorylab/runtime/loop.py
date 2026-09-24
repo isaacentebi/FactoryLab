@@ -72,6 +72,7 @@ from factorylab.runtime.shared import (
     NOOP,
     _to_plain,
     assembly_rewards,
+    declined_reason,
 )
 from factorylab.runtime.subscriptions import SubscriptionBook, ThinkingMixin
 from factorylab.runtime.summary import SummaryMixin, _as_unit
@@ -93,22 +94,6 @@ UNJUDGED_OUTPUT_FIELDS = frozenset({"propensity"})
 #: The seed kinds a judge reads through the producer view (the machine view of
 #: essay II.I.b): the one kind a producer emits and the one an antagonist emits.
 PRODUCING_KINDS = frozenset({"ProducerReturn", "Exposure"})
-
-
-def declined_reason(ret: Return) -> str | None:
-    """The reason a return declined its commission, or None when it did not decline.
-
-    Guarantees a decline is recognised in the form it actually arrives in: ``_invoke``
-    rewrites an answer of ``{"status": "cannot", "reason": <str>}`` to status
-    ``refused`` (``ComputeMixin._invoke``), and a return handed in unrewritten keeps
-    status ``ok``. A provider's own refusal names no ``cannot`` and is not a decline:
-    it is a form failure, censored like any unusable judgement.
-    """
-    if ret.status not in ("ok", "refused") or not isinstance(ret.outputs, dict):
-        return None
-    if str(ret.outputs.get("status", "")).strip().lower() != "cannot":
-        return None
-    return str(ret.outputs.get("reason", ""))[:500] or "the seat declined this commission"
 
 
 def judged_outputs(outputs: Any) -> Any:
@@ -1143,12 +1128,9 @@ class Runtime(
         else:
             # A refusal is still published and may be judged like any return (II.III.b);
             # only if no judge grades it does it settle as the abstention it is.
-            declined = ((str(ret.outputs.get("reason", ""))[:500] or "declined")
-                        if ret.status == "refused" and ret.outputs.get("status") == "cannot"
-                        else None)
             self.pending[handle] = PendingJudgement(handle, CH_VERDICT, self.n,
                                                     opened_at_tick=self.ticks_consumed,
-                                                    declined=declined)
+                                                    declined=declined_reason(ret))
         self.stats.producer_returns += 1
         emitted = self.return_kinds.get(handle, "ProducerReturn" if sample.chosen == NOOP
                                         else self.assemblies[sample.chosen].spec.emits[0])
