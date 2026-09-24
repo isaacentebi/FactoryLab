@@ -123,6 +123,31 @@ def _with_headroom(price: int) -> int:
     return (price * 5 + 3) // 4
 
 
+#: The reserve-key calls this code base signs, by selector: what a stuck one does, and so
+#: what replacing it at its nonce costs. A CCTP mint (``receiveMessage``) delivers funds
+#: already burned on the other chain, so it is never cancelled, only re-sent.
+STEP_SELECTORS = {
+    keccak(text="approve(address,uint256)")[:4]: "approve",
+    keccak(text="depositForBurn(uint256,uint32,bytes32,address,bytes32,uint256,uint32)")[:4]:
+        "burn",
+    keccak(text="receiveMessage(bytes,bytes)")[:4]: "mint",
+    keccak(text="depositFor(address,uint256,uint32)")[:4]: "deposit",
+    keccak(text="transfer(address,uint256)")[:4]: "transfer",
+}
+
+
+def step_kind(sender: str, to: str, data: str) -> str:
+    """What a reserve-key call does, read from the call itself.
+
+    Guarantees every ``receiveMessage`` is ``mint``; a 0-value empty call to the sender
+    itself is ``cancel``; any selector not in ``STEP_SELECTORS`` is ``other``.
+    """
+    raw = bytes.fromhex(str(data).removeprefix("0x"))
+    if not raw:
+        return "cancel" if str(to).lower() == str(sender).lower() else "other"
+    return STEP_SELECTORS.get(raw[:4], "other")
+
+
 class EVM:
     """Each signed call pins chain, sender, nonce, destination, calldata and maximum gas cost."""
 
@@ -171,6 +196,8 @@ class EVM:
             guard.record_transaction({
                 "tx_hash": "0x" + bytes(signed.hash).hex(), "chain_id": self.chain.id,
                 "from": self.account.address, "to": unsigned["to"],
+                "data": unsigned["data"], "value": unsigned["value"],
+                "step": step_kind(self.account.address, unsigned["to"], unsigned["data"]),
                 "nonce": unsigned["nonce"], "gas_price": unsigned["gasPrice"],
                 "start_block": head})
         except Exception as exc:  # noqa: BLE001 - unrecorded means never used

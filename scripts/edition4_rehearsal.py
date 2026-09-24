@@ -36,6 +36,7 @@ from factorylab.runtime.loop import Runtime
 from factorylab.runtime.worlds import PromptSpec, WorldManifest, load_manifest
 from factorylab.world.metering import UnbilledFailure, classify_provider_failure
 from factorylab.world.models import ModelRequest, ModelResponse
+from factorylab.world.x402 import BASE_RPC
 
 DEFAULT_WORLD = Path("worlds/edition6-testnet-rehearsal.toml")
 DEFAULT_SOURCE = Path("/tmp/factorylab-edition4-baseline-source")
@@ -877,6 +878,7 @@ def _rehearse(
     previous_runs: tuple = (),
     capital_loop_transport: Callable | None = None,
     capital_loop_lock_dir: str | Path | None = None,
+    capital_loop_rpcs: dict | None = None,
 ) -> dict[str, Any]:
     """Run a fresh bounded testnet rehearsal and persist a sanitized evidence report.
 
@@ -908,6 +910,17 @@ def _rehearse(
         # live deadline clock delivers. A supplied source (a harness that emits every
         # tick at once) would run the loop faster than the bound it was admitted on.
         raise RehearsalRefused("capital_loop_requires_the_live_clock")
+    if capital_loop and capital_loop_transport is not None:
+        # A funded run reads the chains it bounds itself by over the real network, at the
+        # public RPCs or the ones --rpc-* names; a library caller cannot hand it answers.
+        raise RehearsalRefused("capital_loop_requires_the_live_transport")
+    if capital_loop and capital_loop_lock_dir is not None:
+        from factorylab.runtime.capital_loop import default_lock_dir
+
+        # The operator account's one lock directory is the lock: another one would let a
+        # second run hold "the" reserve beside the first.
+        if Path(capital_loop_lock_dir).resolve() != default_lock_dir().resolve():
+            raise RehearsalRefused("capital_loop_requires_the_operator_lock_dir")
     if now_ns is None:
         now_ns = _wall_ns
     if target_ticks is not None and (type(target_ticks) is not int or target_ticks <= 0):
@@ -961,7 +974,11 @@ def _rehearse(
             lock = ReserveLock(manifest.treasury.reserve_address,
                                lock_dir=capital_loop_lock_dir)
             held.append(lock)
-            transport = capital_loop_transport or _http_request()
+            transport = _http_request()
+            # Each chain's RPC, overridable (--rpc-base, --rpc-hyperevm and the testnet
+            # ones), and the same for every check below.
+            rpcs = dict(capital_loop_rpcs or {})
+            base_rpc = rpcs.get(8453, BASE_RPC)
             # The clock delivers floor(duration / tick) ticks, or --ticks when fewer,
             # and its first tick comes at once: N ticks span N - 1 intervals.
             ticks = duration_ns // manifest.tick_interval_ns
@@ -970,23 +987,24 @@ def _rehearse(
             run_ns = max(0, ticks - 1) * manifest.tick_interval_ns
             # The host clock that will stamp validBefore is the runtime's own clock.
             settlement = settlement_bound(run_ns, manifest.tick_interval_ns,
-                                          transport=transport,
+                                          transport=transport, rpc=base_rpc,
                                           now_s=lambda: now_ns() // 1_000_000_000)
             # The reserve's last holder is read wherever it ran, not only beside --out:
             # it is the one earlier run whose authorization can still be live.
             last = lock.last_run()
             runs = tuple(previous_runs) + _sibling_runs(output_dir)
             launch = launch_check(manifest, previous_runs=runs, recorded_run=last,
-                                  transport=transport)
+                                  transport=transport, rpc=base_rpc)
             # Every authorization ever written ahead of signing, whatever any diary now
             # holds, is resolved against finalized Base before this run may sign.
             recorded = check_authorization_record(
-                lock, transport=transport, now_s=lambda: now_ns() // 1_000_000_000)
+                lock, transport=transport, rpc=base_rpc, rpcs=rpcs,
+                now_s=lambda: now_ns() // 1_000_000_000)
             # And the chain itself, for a record rolled back with its directory: no
             # authorization the reserve made within one settlement window of finalized
             # blocks may be missing from the record.
             cooling = cooling_off_check(
-                lock, transport=transport,
+                lock, transport=transport, rpc=base_rpc,
                 window_s=MAX_AUTHORIZATION_S + 2 * settlement["finalized_behind_s"])
             launch = {**launch, "settlement": settlement, "reserve_lock": str(lock.path),
                       "last_run": None if last is None else str(last),
@@ -1382,8 +1400,18 @@ def main(argv: list[str] | None = None) -> int:
                         help="with --capital-loop: an earlier run directory whose top-up "
                         "authorizations must all be settled or expired before launch "
                         "(sibling run directories of --out are always checked)")
+    for flag, chain in (("--rpc-base", "Base mainnet"), ("--rpc-hyperevm", "HyperEVM"),
+                        ("--rpc-base-sepolia", "Base Sepolia"),
+                        ("--rpc-hyperevm-testnet", "HyperEVM testnet")):
+        parser.add_argument(flag, default=None,
+                            help=f"with --capital-loop: the {chain} JSON-RPC URL its launch "
+                            "checks read")
     args = parser.parse_args(argv)
     from factorylab.runtime.worlds import duration_ns
+
+    rpcs = {chain_id: url for chain_id, url in (
+        (8453, args.rpc_base), (999, args.rpc_hyperevm), (84532, args.rpc_base_sepolia),
+        (998, args.rpc_hyperevm_testnet)) if url}
 
     report = run_rehearsal(args.world, out=args.out, duration_ns=duration_ns(args.duration),
                            target_ticks=args.ticks,
@@ -1393,7 +1421,8 @@ def main(argv: list[str] | None = None) -> int:
                            reasoning=args.reasoning,
                            minimum_ticks=args.minimum_ticks,
                            capital_loop=args.capital_loop,
-                           previous_runs=tuple(args.previous_run))
+                           previous_runs=tuple(args.previous_run),
+                           **({"capital_loop_rpcs": rpcs} if rpcs else {}))
     summary = {"status": report["status"], "out": str(args.out), "cost": report["cost"],
                "behavioral_screen": report.get("behavioral_screen")}
     if "capital_loop_outstanding" in report:

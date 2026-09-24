@@ -1,10 +1,10 @@
 """Print what a capital-loop run left outstanding on chain: keyless, and read-only
-unless ``--acknowledge``, ``--repair-torn``, ``--repair-damaged`` or
+unless ``--acknowledge``, ``--repair-torn``, ``--repair-damaged``, ``--speed-up`` or
 ``--cancel-transaction`` is given.
 
 Guarantees nothing is signed and no signing key is read, except by
-``--cancel-transaction``, which alone loads the reserve key. The run's diary is decrypted
-with its own ledger key file (``<run>/ledger.jsonl.key``), exactly as
+``--cancel-transaction`` and ``--speed-up``, which alone load the reserve key. The run's
+diary is decrypted with its own ledger key file (``<run>/ledger.jsonl.key``), exactly as
 ``factorylab postmortem`` does; the reserve's key is never loaded. Base mainnet is read
 through public ``eth_getBlockByNumber``, ``eth_call`` and ``eth_getLogs`` only.
 
@@ -16,7 +16,7 @@ reserve or relaunching (docs/architecture/capital-loop-rehearsal.md, "After a cr
 
     uv run python scripts/capital_loop_outstanding.py work/capital-loop/<run>
 
-``--acknowledge NONCE`` is the one write: after the operator has settled by hand an
+``--acknowledge NONCE`` writes to the record: after the operator has settled by hand an
 authorization the launch check reports ``recorded_authorization_settled_unbooked`` (real
 USDC moved and no diary booked it), it appends a resolution to the reserve's write-ahead
 authorization record. It takes the reserve's lock, reads the chain keylessly, and
@@ -24,23 +24,31 @@ refuses unless finalized Base shows that recorded authorization used; it signs n
 
     uv run python scripts/capital_loop_outstanding.py --acknowledge 0x<nonce>
 
-``--repair-torn`` is the other: when a launch refuses ``authorization_record_torn`` (a
+``--repair-torn`` does too: when a launch refuses ``authorization_record_torn`` (a
 crash left a fragment at the end of the record), it takes the lock, moves the fragment
-to a ``.torn-<seconds>`` sidecar (nothing is deleted) and records it as a ``torn`` entry
-whose nonce-like values stay open until the chain resolves them.
+to a new ``.torn-<seconds>-<random>`` sidecar (nothing is deleted) and records it as a
+``torn`` entry whose nonce-like values stay open until the chain resolves them.
 
 ``--repair-damaged`` does the same for every line that is not a whole entry, a damaged
 middle line included (a launch refuses ``authorization_record_unreadable``).
 
-``--cancel-transaction 0xHASH`` is the exit for a recorded reserve-key transaction that
-was dropped unmined (a launch refuses ``recorded_transaction_may_still_execute`` while
-its account nonce is unused on its chain): with ``RESERVE_PRIVATE_KEY`` set, it signs a
-0-value transfer to the reserve itself at that nonce, priced at least 12.5% above the
-stuck one, records it ahead like every reserve-key transaction, and sends it under the
-reserve's lock. Once either is finalized the nonce is consumed and both resolve.
+A launch refuses ``recorded_transaction_may_still_execute`` while a recorded reserve-key
+transaction's account nonce is unused on its chain. Its exits load the reserve key from
+``reserve.key`` in the working directory (as every signer reads it) and replace the
+transaction at its recorded nonce, recorded ahead and sent under the reserve's lock:
 
-    RESERVE_PRIVATE_KEY=... uv run python scripts/capital_loop_outstanding.py \
-        --cancel-transaction 0x<hash>
+``--speed-up 0xHASH`` re-signs the identical call at a higher fee: the only exit for a
+stuck CCTP mint, and the gentle one for anything else.
+
+``--cancel-transaction 0xHASH --i-understand-the-world-step-is-abandoned`` signs a
+0-value transfer to the reserve itself at that nonce instead. Never for a mint, and
+only once the world that recorded it has ended: that world's treasury step will not
+complete, and must be recovered by hand.
+
+    uv run python scripts/capital_loop_outstanding.py --speed-up 0x<hash>
+
+``--rpc-base``, ``--rpc-hyperevm``, ``--rpc-base-sepolia`` and ``--rpc-hyperevm-testnet``
+replace each chain's public RPC.
 """
 
 from __future__ import annotations
@@ -55,8 +63,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from factorylab.runtime.capital_loop import (  # noqa: E402
+    CANCEL_CONSEQUENCE,
     CapitalLoopRefused,
     ReserveLock,
+    _chains,
     acknowledge,
     keyless_base,
     open_transactions,
@@ -68,55 +78,148 @@ from factorylab.runtime.worlds import load_manifest  # noqa: E402
 from factorylab.world.x402 import BASE_RPC, http_request  # noqa: E402
 
 DEFAULT_WORLD = ROOT / "worlds/edition6-capital-loop.toml"
-#: The most a cancellation may spend on gas, in wei, unless --max-gas-wei says otherwise.
-DEFAULT_CANCEL_GAS_WEI = 10**15
+#: A replacement's default gas cap: this many times what the replacement itself costs at
+#: the node's gas price now (its gas limit, and on Base its L1 data fee), never more than
+#: ``MAX_DEFAULT_REPLACEMENT_WEI``. ``--max-gas-wei`` sets it instead.
+REPLACEMENT_BUDGET_MULTIPLE = 10
+MAX_DEFAULT_REPLACEMENT_WEI = 10**16
+#: The chain-id order of the four RPC override flags, as ``rpcs`` maps them.
+RPC_FLAGS = (("rpc_base", 8453), ("rpc_hyperevm", 999), ("rpc_base_sepolia", 84532),
+             ("rpc_hyperevm_testnet", 998))
 
 
-def cancel_transaction(lock: ReserveLock, tx_hash: str, *, account, transport,
-                       gas_budget_wei: int = DEFAULT_CANCEL_GAS_WEI) -> dict:
-    """Consume a recorded, unmined reserve-key transaction's account nonce with a no-op.
+def _target(lock: ReserveLock, tx_hash: str, account, reason: str):
+    """The open recorded transaction ``tx_hash`` names, and the least price a replacement
+    at its nonce must pay: 12.5% above every price the record holds for that nonce.
 
-    Guarantees only an open transaction of this reserve's record, with its chain and
-    account nonce known and signed by ``account``, is cancelled, and only while that
-    nonce is unused at the chain's latest block; anything else refuses
-    (``cancel_refused``) and nothing is signed. The cancellation is a 0-value transfer
-    from the reserve to itself at the same nonce, priced at least 12.5% above what the
-    record or the node knows of the stuck one, prepared through ``EVM.prepare`` (so it is
-    recorded ahead, origin ``cancel_transaction``) and sent through ``EVM.broadcast``
-    under this held lock. Whichever of the two the chain mines consumes the nonce.
+    Refuses (``reason``) unless it is an open, whole transaction entry of this record,
+    with its chain and account nonce known, signed by ``account``'s reserve.
     """
-    from factorylab.runtime.capital_loop import _chains
-    from factorylab.world.evm import EVM
-
     key = tx_hash.lower()
-    entry = open_transactions(lock.authorizations()).get(key)
+    entries = lock.authorizations()
+    entry = open_transactions(entries).get(key)
 
     def refused(why: str) -> CapitalLoopRefused:
-        return CapitalLoopRefused("cancel_refused", {"tx_hash": key, "why": why})
+        return CapitalLoopRefused(reason, {"tx_hash": key, "why": why})
 
     if entry is None:
         raise refused("not an open transaction of the record")
-    if entry.get("chain_id") not in _chains() or type(entry.get("tx_nonce")) is not int:
+    if (entry["kind"] != "transaction" or entry.get("chain_id") not in _chains()
+            or type(entry.get("tx_nonce")) is not int):
         raise refused("its chain or account nonce is not known; it resolves by waiting")
     if str(entry["from"]).lower() != account.address.lower():
         raise refused("the key given is not the reserve that signed it")
-    chain = EVM(_chains()[entry["chain_id"]], account, transport=transport,
-                gas_budget_wei=gas_budget_wei)
-    chain.transaction_guard = lock.authorization_log(None, origin="cancel_transaction")
-    used = int(chain.call("eth_getTransactionCount", [account.address, "latest"]), 16)
-    if used > entry["tx_nonce"]:
-        raise refused("its nonce is already used at the latest block: wait for finality")
-    prices = [entry.get("gas_price")]
-    seen = chain.call("eth_getTransactionByHash", [key])
-    if isinstance(seen, dict) and seen.get("gasPrice"):
-        prices.append(int(seen["gasPrice"], 16))
+    prices = [e.get("gas_price") for e in entries
+              if e["kind"] == "transaction" and e.get("chain_id") == entry["chain_id"]
+              and e.get("tx_nonce") == entry["tx_nonce"]
+              and str(e.get("from", "")).lower() == str(entry["from"]).lower()]
     floor = max([(p * 9 + 7) // 8 for p in prices if type(p) is int and p > 0] or [0])
-    reference = chain.prepare(account.address, "0x", gas_remaining_wei=gas_budget_wei,
-                              nonce=entry["tx_nonce"], min_gas_price=floor)
+    return key, entry, floor, refused
+
+
+def _replace(lock: ReserveLock, entry: dict, floor: int, *, account, transport, rpcs,
+             gas_budget_wei: int | None, to: str, data: str, origin: str) -> dict:
+    """Sign ``to``/``data`` at ``entry``'s nonce, recorded ahead and sent under the lock.
+
+    A pure replacement at the recorded nonce: nothing of the mempool is read. Refuses
+    ``replacement_needs_native_gas`` (naming the chain and the wei) when the reserve
+    cannot pay one replacement on that chain.
+    """
+    from factorylab.world.evm import EVM, _with_headroom, calldata
+
+    chain_id = entry["chain_id"]
+    chain = EVM(_chains()[chain_id], account, transport=transport,
+                rpc=(rpcs or {}).get(chain_id))
+    chain.transaction_guard = lock.authorization_log(None, origin=origin)
+    chain.check_chain()
+    gas = 21_000 if data == "0x" else int(chain.call("eth_estimateGas", [{
+        "from": account.address, "to": to, "value": "0x0", "data": data}]), 16)
+    price = max(_with_headroom(int(chain.call("eth_gasPrice", []), 16)), floor)
+    one = (gas * 12 + 9) // 10 * price  # the gas limit prepare signs, at its price
+    if chain_id in (8453, 84532):  # and Base's L1 data fee, as prepare bounds it
+        size = len(bytes.fromhex(data.removeprefix("0x"))) + 120
+        bound = chain.read("0x420000000000000000000000000000000000000F",
+                           calldata("getL1FeeUpperBound(uint256)", ["uint256"], [size]))
+        one += int.from_bytes(bound) * 2
+    held = chain.balance()
+    if held < one:
+        raise CapitalLoopRefused("replacement_needs_native_gas", {
+            "chain_id": chain_id, "reserve": account.address, "needed_wei": one,
+            "balance_wei": held, "rpc": chain.rpc})
+    budget = (gas_budget_wei if gas_budget_wei is not None
+              else min(REPLACEMENT_BUDGET_MULTIPLE * one, MAX_DEFAULT_REPLACEMENT_WEI))
+    chain.gas_budget_wei = budget
+    reference = chain.prepare(to, data, gas_remaining_wei=budget, nonce=entry["tx_nonce"],
+                              min_gas_price=floor)
     chain.broadcast(reference)
+    return {**reference, "max_gas_wei": budget}
+
+
+def cancel_transaction(lock: ReserveLock, tx_hash: str, *, account, transport,
+                       rpcs: dict | None = None, gas_budget_wei: int | None = None,
+                       abandon: bool = False) -> dict:
+    """Consume a recorded, unexecuted reserve-key transaction's nonce with a no-op.
+
+    Guarantees a CCTP mint is never cancelled (its burn would stay with nothing minted;
+    its exit is ``speed_up``), nor a transaction whose call was not recorded (it may be
+    one), nor one whose world is still running (its diary's writer lock is held), nor
+    anything without ``abandon``: the world's step it belonged to then never completes
+    (``CANCEL_CONSEQUENCE``). Otherwise refuses ``cancel_refused`` and signs nothing.
+    The cancellation is a 0-value transfer from the reserve to itself at the recorded
+    nonce, priced 12.5% above every price the record holds for it, recorded ahead
+    (origin ``cancel_transaction``) and sent under this held lock.
+    """
+    key, entry, floor, refused = _target(lock, tx_hash, account, "cancel_refused")
+    step = entry.get("step")
+    if step == "mint":
+        raise refused("a CCTP mint is never cancelled: its burn would stay with nothing "
+                      "minted. Its exit is --speed-up")
+    if step is None or entry.get("data") is None:
+        raise refused("its call was not recorded, so it may be a CCTP mint: it is never "
+                      "cancelled; it resolves by waiting")
+    ledger = entry.get("ledger")
+    if ledger and Path(ledger).exists():
+        from factorylab.kernel.ledger import LedgerBusyError, LedgerLock
+
+        try:
+            LedgerLock(ledger).close()
+        except LedgerBusyError:
+            raise refused("the world that recorded it is still running: stop it first"
+                          ) from None
+    if not abandon:
+        raise refused(f"{CANCEL_CONSEQUENCE}; to accept that, pass "
+                      "--i-understand-the-world-step-is-abandoned")
+    reference = _replace(lock, entry, floor, account=account, transport=transport,
+                         rpcs=rpcs, gas_budget_wei=gas_budget_wei, to=account.address,
+                         data="0x", origin="cancel_transaction")
     return {"canceled": key, "cancel_tx_hash": reference["tx_hash"],
             "chain_id": entry["chain_id"], "tx_nonce": entry["tx_nonce"],
-            "gas_price": reference["tx"]["gasPrice"]}
+            "gas_price": reference["tx"]["gasPrice"], "max_gas_wei": reference["max_gas_wei"],
+            "consequence": CANCEL_CONSEQUENCE}
+
+
+def speed_up(lock: ReserveLock, tx_hash: str, *, account, transport,
+             rpcs: dict | None = None, gas_budget_wei: int | None = None) -> dict:
+    """Re-sign a recorded, unexecuted reserve-key transaction's own call at a higher fee.
+
+    Guarantees the replacement is the identical call (destination, calldata, value 0)
+    at the recorded nonce, priced 12.5% above every price the record holds for it,
+    recorded ahead (origin ``speed_up``) and sent under this held lock; so whichever of
+    them executes does exactly what was recorded. The only exit for a stuck CCTP mint.
+    A transaction whose call was not recorded refuses ``speed_up_refused``.
+    """
+    key, entry, floor, refused = _target(lock, tx_hash, account, "speed_up_refused")
+    if entry.get("data") is None or entry.get("to") is None:
+        raise refused("its call was not recorded; it cannot be re-signed")
+    if int(entry.get("value") or 0) != 0:
+        raise refused("only a 0-value call is signed here")
+    reference = _replace(lock, entry, floor, account=account, transport=transport,
+                         rpcs=rpcs, gas_budget_wei=gas_budget_wei, to=entry["to"],
+                         data=entry["data"], origin="speed_up")
+    return {"sped_up": key, "speed_up_tx_hash": reference["tx_hash"],
+            "chain_id": entry["chain_id"], "tx_nonce": entry["tx_nonce"],
+            "step": entry.get("step"), "gas_price": reference["tx"]["gasPrice"],
+            "max_gas_wei": reference["max_gas_wei"]}
 
 
 def verdict(row: dict) -> str:
@@ -138,7 +241,12 @@ def main(argv: list[str] | None = None, *, transport=http_request) -> int:
     parser.add_argument("run_dir", type=Path, nargs="?")
     parser.add_argument("--world", type=Path, default=DEFAULT_WORLD,
                         help="the manifest whose treasury.reserve_address paid the top-ups")
-    parser.add_argument("--rpc", default=None, help="Base mainnet JSON-RPC URL")
+    parser.add_argument("--rpc-base", "--rpc", dest="rpc_base", default=None,
+                        help="Base mainnet JSON-RPC URL")
+    parser.add_argument("--rpc-hyperevm", default=None, help="HyperEVM JSON-RPC URL")
+    parser.add_argument("--rpc-base-sepolia", default=None, help="Base Sepolia JSON-RPC URL")
+    parser.add_argument("--rpc-hyperevm-testnet", default=None,
+                        help="HyperEVM testnet JSON-RPC URL")
     parser.add_argument("--json", action="store_true", help="print one JSON object")
     parser.add_argument("--acknowledge", metavar="NONCE",
                         help="after settling its books by hand: mark a recorded "
@@ -152,37 +260,60 @@ def main(argv: list[str] | None = None, *, transport=http_request) -> int:
                         help="set every line of the record that is not a whole entry aside "
                         "to its own sidecar and keep what it may have recorded open (takes "
                         "the reserve's lock; deletes nothing)")
+    parser.add_argument("--speed-up", metavar="TX_HASH",
+                        help="re-sign a recorded, unexecuted reserve-key transaction's own "
+                        "call at its nonce with a higher fee (the reserve key from "
+                        "reserve.key; takes the reserve's lock)")
     parser.add_argument("--cancel-transaction", metavar="TX_HASH",
-                        help="with RESERVE_PRIVATE_KEY set: consume a recorded, unmined "
-                        "reserve-key transaction's nonce with a 0-value self-transfer "
-                        "(takes the reserve's lock)")
-    parser.add_argument("--max-gas-wei", type=int, default=DEFAULT_CANCEL_GAS_WEI,
-                        help="the most --cancel-transaction may spend on gas")
+                        help="consume a recorded, unexecuted reserve-key transaction's "
+                        "nonce with a 0-value self-transfer: never a CCTP mint, only once "
+                        "its world has ended, and only with "
+                        "--i-understand-the-world-step-is-abandoned")
+    parser.add_argument("--i-understand-the-world-step-is-abandoned", dest="abandon",
+                        action="store_true", help=CANCEL_CONSEQUENCE)
+    parser.add_argument("--max-gas-wei", type=int, default=None,
+                        help="the most a replacement may spend on gas (default: "
+                        f"{REPLACEMENT_BUDGET_MULTIPLE}x the replacement's own cost at the "
+                        f"node's gas price now, at most {MAX_DEFAULT_REPLACEMENT_WEI} wei)")
     parser.add_argument("--lock-dir", type=Path, default=None, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     reserve = load_manifest(str(args.world)).treasury.reserve_address
     if reserve is None:
         print("the world declares no treasury.reserve_address", file=sys.stderr)
         return 2
-    if args.cancel_transaction:
+    rpcs = {chain_id: getattr(args, name) for name, chain_id in RPC_FLAGS
+            if getattr(args, name)}
+    base_rpc = args.rpc_base or BASE_RPC
+    if args.cancel_transaction or args.speed_up:
         import os
 
         from eth_account import Account
 
+        from factorylab.runtime.cli import _load_dotenv
+
+        _load_dotenv()  # the reserve key from reserve.key, as every signer reads it
         try:
             account = Account.from_key(os.environ["RESERVE_PRIVATE_KEY"])
         except Exception:  # noqa: BLE001 - never echo what was read
-            print("RESERVE_PRIVATE_KEY is missing or invalid", file=sys.stderr)
+            print("the reserve key is missing or invalid (reserve.key)", file=sys.stderr)
             return 2
+        what = "cancel" if args.cancel_transaction else "speed_up"
         try:
             with ReserveLock(reserve, lock_dir=args.lock_dir) as lock:
-                done = cancel_transaction(lock, args.cancel_transaction, account=account,
-                                          transport=transport, gas_budget_wei=args.max_gas_wei)
+                if args.cancel_transaction:
+                    done = cancel_transaction(lock, args.cancel_transaction, account=account,
+                                              transport=transport, rpcs=rpcs,
+                                              gas_budget_wei=args.max_gas_wei,
+                                              abandon=args.abandon)
+                else:
+                    done = speed_up(lock, args.speed_up, account=account,
+                                    transport=transport, rpcs=rpcs,
+                                    gas_budget_wei=args.max_gas_wei)
         except CapitalLoopRefused as exc:
             print(json.dumps({"error": exc.reason, **exc.detail}), file=sys.stderr)
             return 2
         except Exception as exc:  # noqa: BLE001 - a rail refusal names no key material
-            print(json.dumps({"error": "cancel_failed", "why": str(exc)}), file=sys.stderr)
+            print(json.dumps({"error": f"{what}_failed", "why": str(exc)}), file=sys.stderr)
             return 2
         print(json.dumps(done))
         return 0
@@ -199,7 +330,7 @@ def main(argv: list[str] | None = None, *, transport=http_request) -> int:
         try:
             with ReserveLock(reserve, lock_dir=args.lock_dir) as lock:
                 done = acknowledge(lock, args.acknowledge, transport=transport,
-                                   rpc=args.rpc or BASE_RPC)
+                                   rpc=base_rpc)
         except CapitalLoopRefused as exc:
             print(json.dumps({"error": exc.reason, **exc.detail}), file=sys.stderr)
             return 2
@@ -209,7 +340,7 @@ def main(argv: list[str] | None = None, *, transport=http_request) -> int:
         parser.error("a run directory, or --acknowledge NONCE, is required")
     try:
         report = outstanding(args.run_dir, reserve_address=reserve,
-                             base=keyless_base(transport=transport, rpc=args.rpc))
+                             base=keyless_base(transport=transport, rpc=base_rpc))
     except CapitalLoopRefused as exc:
         print(json.dumps({"error": exc.reason, **exc.detail}), file=sys.stderr)
         return 2
@@ -235,8 +366,4 @@ def main(argv: list[str] | None = None, *, transport=http_request) -> int:
 
 
 if __name__ == "__main__":
-    if "--cancel-transaction" in sys.argv:
-        from factorylab.runtime.cli import _load_dotenv
-
-        _load_dotenv()  # the reserve key from its file, as every signer reads it
     raise SystemExit(main())

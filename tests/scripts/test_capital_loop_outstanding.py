@@ -296,7 +296,13 @@ def test_the_launch_check_refuses_while_an_earlier_run_can_still_settle(tmp_path
 
 
 def rehearse(out, rpc, tmp_path, **kwargs):
-    """A capital-loop launch against fakes: the lock lives in the test's own directory."""
+    """A capital-loop launch against fakes: the lock lives in the test's own directory.
+
+    A funded run takes neither a transport nor a lock directory from its caller, so the
+    fakes are swapped in where the runner itself reads them (its HTTP transport and the
+    operator's lock directory) for this launch, and put back.
+    """
+    from factorylab.runtime import capital_loop
     from factorylab.runtime.worlds import duration_ns
     from scripts import edition4_rehearsal as rehearsal
 
@@ -306,13 +312,16 @@ def rehearse(out, rpc, tmp_path, **kwargs):
     kwargs.setdefault("world", "worlds/edition6-capital-loop.toml")
     # A capital-loop run reads only the wall clock; here the wall reads Base's latest
     # block (no lead to add to the bound). Swapped in for this launch and put back.
-    wall = rehearsal._wall_ns
+    wall, http, locks = (rehearsal._wall_ns, rehearsal._http_request,
+                         capital_loop.default_lock_dir)
     rehearsal._wall_ns = lambda: rpc.latest_ts * 1_000_000_000
+    rehearsal._http_request = lambda: rpc
+    capital_loop.default_lock_dir = lambda: tmp_path / "locks"
     try:
-        return rehearsal.run_rehearsal(out=out, capital_loop=True, capital_loop_transport=rpc,
-                                       capital_loop_lock_dir=tmp_path / "locks", **kwargs)
+        return rehearsal.run_rehearsal(out=out, capital_loop=True, **kwargs)
     finally:
-        rehearsal._wall_ns = wall
+        rehearsal._wall_ns, rehearsal._http_request = wall, http
+        capital_loop.default_lock_dir = locks
 
 
 def test_the_rehearsal_runner_runs_the_launch_check_before_anything_is_built(
@@ -1764,31 +1773,35 @@ def test_the_record_is_never_written_without_its_lock_held(tmp_path):
 
 
 class Hyper:
-    """HyperEVM mainnet's node for the reserve: its account nonce (``latest`` counts the
-    mempool's view of what is mined, ``final`` the finalized block's), the raw
-    transactions it was sent, and nothing it knows by hash."""
+    """A HyperEVM node for the reserve. ``latest`` is the account nonce its newest block
+    shows, which HyperBFT makes final; ``pending`` is the mempool's, deliberately not the
+    same (queued transactions), so a replacement that took it would be caught. It holds
+    the raw transactions it was sent, the reserve's native ``balance``, and nothing by
+    hash."""
 
-    def __init__(self, *, nonce):
-        self.latest = self.final = nonce
-        self.sent, self.requests = [], []
+    def __init__(self, *, nonce, chain_id=999, pending=None):
+        self.latest, self.chain_id, self.balance = nonce, chain_id, 10**18
+        self.pending = nonce + 3 if pending is None else pending
+        self.sent, self.requests, self.nonce_tags = [], [], []
 
     def __call__(self, method, url, payload, headers):
         name, params = payload["method"], payload["params"]
         self.requests.append(name)
         if name == "eth_chainId":
-            result = hex(999)
+            result = hex(self.chain_id)
         elif name == "eth_getBlockByNumber":
             result = {"number": hex(500), "hash": "0x" + "ab" * 32, "timestamp": hex(12_000)}
         elif name == "eth_blockNumber":
             result = hex(500)
         elif name == "eth_getTransactionCount":
-            result = hex(self.latest if params[1] in ("latest", "pending") else self.final)
+            self.nonce_tags.append(params[1])
+            result = hex(self.pending if params[1] == "pending" else self.latest)
         elif name == "eth_gasPrice":
             result = hex(100)
         elif name == "eth_estimateGas":
-            result = hex(21_000)
+            result = hex(21_000 if params[0].get("data", "0x") in ("", "0x") else 150_000)
         elif name == "eth_getBalance":
-            result = hex(10**18)
+            result = hex(self.balance)
         elif name == "eth_getTransactionByHash":
             result = None
         elif name == "eth_sendRawTransaction":
@@ -1821,7 +1834,8 @@ def test_a_recorded_reserve_transaction_blocks_the_launch_until_its_nonce_is_fin
                        match="recorded_transaction_may_still_execute") as refused:
         resolve(tmp_path, rpc, now_s=lambda: rpc.latest_ts)
     [row] = refused.value.detail["transactions"]
-    assert row["tx_hash"] == stuck and row["cancel"].endswith(f"--cancel-transaction {stuck}")
+    assert row["tx_hash"] == stuck and row["speed_up"].endswith(f"--speed-up {stuck}")
+    assert f"--cancel-transaction {stuck} " in row["cancel"]
     rpc.consume(RESERVE, 8, at_ts=12_300)  # mined after the finalized head: not yet final
     with pytest.raises(CapitalLoopRefused, match="recorded_transaction_may_still_execute"):
         resolve(tmp_path, rpc, now_s=lambda: rpc.latest_ts)
@@ -1832,60 +1846,211 @@ def test_a_recorded_reserve_transaction_blocks_the_launch_until_its_nonce_is_fin
     assert resolve(tmp_path, rpc)["open_transactions"] == 0
 
 
-def test_cancel_transaction_is_the_exit_for_a_dropped_reserve_transaction(
-        tmp_path, monkeypatch, capsys):
-    # Item 1: a transaction dropped unmined keeps its nonce unused for ever, and anyone
-    # holding its bytes could still send it: the exit consumes the nonce.
-    import rlp
+def reserve_world(tmp_path, reserve):
+    """The capital-loop world with a throwaway reserve (a manifest is named by its stem)."""
+    world = tmp_path / "edition6-capital-loop.toml"
+    world.write_text(Path("worlds/edition6-capital-loop.toml").read_text().replace(
+        RESERVE, reserve.address))
+    return world
+
+
+def hyper_signer(tmp_path, monkeypatch, *, nonce=5):
+    """A throwaway reserve on a HyperEVM fake, its guard writing to the test's lock dir,
+    run from an empty working directory (so no key file of the repo is ever read)."""
     from eth_account import Account
 
     from factorylab.runtime.capital_loop import ReserveGuard
     from factorylab.world.evm import EVM, HYPEREVM
-    from scripts import capital_loop_outstanding
 
     reserve = Account.create()  # a throwaway key, never funded
-    world = tmp_path / "edition6-capital-loop.toml"  # a manifest is named by its stem
-    world.write_text(Path("worlds/edition6-capital-loop.toml").read_text().replace(
-        RESERVE, reserve.address))
-    locks = tmp_path / "locks"
-    rpc, hyper = Rpc(), Hyper(nonce=5)
+    world = reserve_world(tmp_path, reserve)
+    monkeypatch.chdir(tmp_path)
+    rpc, hyper = Rpc(), Hyper(nonce=nonce)
     rpc.others[HYPEREVM.rpc] = hyper
+    locks = tmp_path / "locks"
     chain = EVM(HYPEREVM, reserve, transport=rpc, gas_budget_wei=10**15)
     chain.transaction_guard = ReserveGuard("treasury", lock_dir=locks)
-    stuck = chain.transfer(HYPEREVM.usdc, "0x" + "12" * 20, 1, 10**15)  # never mined
+    return {"reserve": reserve, "rpc": rpc, "hyper": hyper, "locks": locks, "chain": chain,
+            "world": world}
 
-    def launch():
-        from factorylab.runtime.capital_loop import ReserveLock, check_authorization_record
 
-        with ReserveLock(reserve.address, lock_dir=locks) as lock:
-            return check_authorization_record(lock, transport=rpc,
-                                              now_s=lambda: rpc.latest_ts)
+def launch_on(s):
+    from factorylab.runtime.capital_loop import ReserveLock, check_authorization_record
 
-    with pytest.raises(CapitalLoopRefused, match="recorded_transaction_may_still_execute"):
-        launch()
-    argv = ["--cancel-transaction", stuck["tx_hash"], "--world", str(world),
-            "--lock-dir", str(locks)]
-    assert capital_loop_outstanding.main(argv, transport=rpc) == 2  # no key: nothing signed
-    monkeypatch.setenv("RESERVE_PRIVATE_KEY", reserve.key.hex())
-    assert capital_loop_outstanding.main(argv, transport=rpc) == 0
-    printed = capsys.readouterr()
-    assert reserve.key.hex()[2:] not in printed.out + printed.err
-    done = json.loads(printed.out)
-    [raw] = hyper.sent
+    with ReserveLock(s["reserve"].address, lock_dir=s["locks"]) as lock:
+        return check_authorization_record(lock, transport=s["rpc"],
+                                          now_s=lambda: s["rpc"].latest_ts)
+
+
+def tool(s, *argv):
+    from scripts import capital_loop_outstanding
+
+    return capital_loop_outstanding.main(
+        [*argv, "--world", str(s["world"]), "--lock-dir", str(s["locks"])],
+        transport=s["rpc"])
+
+
+def decoded(raw):
+    import rlp
+
     nonce, price, _gas, to, value, data, *_ = rlp.decode(bytes.fromhex(raw[2:]))
-    assert int.from_bytes(nonce) == stuck["tx"]["nonce"] == 5
-    assert to == bytes.fromhex(reserve.address[2:]) and value == b"" and data == b""
-    assert int.from_bytes(price) >= (stuck["tx"]["gasPrice"] * 9 + 7) // 8
-    # Recorded ahead like every reserve-key transaction, and refused once the nonce is used.
+    return {"nonce": int.from_bytes(nonce), "price": int.from_bytes(price), "to": to,
+            "value": value, "data": data}
+
+
+def test_cancel_transaction_is_the_exit_for_a_dropped_reserve_transaction(
+        tmp_path, monkeypatch, capsys):
+    # Item 1: a non-mint transaction dropped unmined keeps its nonce unused for ever, and
+    # anyone holding its bytes could still send it: the exit consumes the recorded nonce.
+    from factorylab.world.evm import HYPEREVM, _with_headroom
+
+    s = hyper_signer(tmp_path, monkeypatch)
+    s["hyper"].pending = 8
+    stuck = s["chain"].transfer(HYPEREVM.usdc, "0x" + "12" * 20, 1, 10**15)  # never mined
+    assert stuck["tx"]["nonce"] == 8
+    s["hyper"].pending = 11  # later transactions queued behind it: not the nonce to take
+    with pytest.raises(CapitalLoopRefused,
+                       match="recorded_transaction_may_still_execute") as refused:
+        launch_on(s)
+    [row] = refused.value.detail["transactions"]
+    assert row["step"] == "transfer" and "will not complete" in row["cancel_consequence"]
+    argv = ("--cancel-transaction", stuck["tx_hash"])
+    assert tool(s, *argv) == 2  # no key: nothing signed
+    monkeypatch.setenv("RESERVE_PRIVATE_KEY", s["reserve"].key.hex())
+    assert tool(s, *argv) == 2  # the consequence must be accepted in so many words
+    assert "will not complete; it must be recovered by hand" in capsys.readouterr().err
+    assert s["hyper"].sent == []
+    assert tool(s, *argv, "--i-understand-the-world-step-is-abandoned") == 0
+    printed = capsys.readouterr()
+    assert s["reserve"].key.hex()[2:] not in printed.out + printed.err
+    done = json.loads(printed.out)
+    [raw] = s["hyper"].sent
+    sent = decoded(raw)
+    assert sent["nonce"] == 8  # the recorded nonce, not the pending count
+    assert sent["to"] == bytes.fromhex(s["reserve"].address[2:])
+    assert sent["value"] == b"" and sent["data"] == b""
+    assert sent["price"] >= (stuck["tx"]["gasPrice"] * 9 + 7) // 8
+    one = (21_000 * 12 + 9) // 10 * max(_with_headroom(100), (stuck["tx"]["gasPrice"] * 9 + 7)
+                                        // 8)
+    assert done["max_gas_wei"] == 10 * one  # the stated default: ten such replacements
     with pytest.raises(CapitalLoopRefused, match="recorded_transaction_may_still_execute"):
-        launch()
-    hyper.latest = 6
-    assert capital_loop_outstanding.main(argv, transport=rpc) == 2
-    assert "already used" in capsys.readouterr().err
-    hyper.final = 6  # finalized: the nonce is consumed, and both can never execute
-    summary = launch()
+        launch_on(s)
+    s["hyper"].latest = 9  # HyperEVM's latest block is final: the nonce is consumed
+    s["hyper"].nonce_tags.clear()
+    summary = launch_on(s)
+    assert set(s["hyper"].nonce_tags) == {"latest"}  # HyperBFT: latest is final
     assert {(r["tx_hash"], r["how"]) for r in summary["resolved_now"]} == {
         (stuck["tx_hash"], "nonce_consumed"), (done["cancel_tx_hash"], "nonce_consumed")}
+
+
+def test_a_cctp_mint_is_never_cancelled_and_is_sped_up_identically(
+        tmp_path, monkeypatch, capsys):
+    # The fourth review (HIGH): cancelling a receiveMessage leaves its burn with nothing
+    # minted. A mint's only exit re-signs the identical call at the same nonce.
+    from factorylab.runtime.capital_loop import read_authorizations
+    from factorylab.world.evm import HYPEREVM, calldata
+
+    s = hyper_signer(tmp_path, monkeypatch)
+    data = calldata("receiveMessage(bytes,bytes)", ["bytes", "bytes"], [b"m" * 40, b"a" * 65])
+    stuck = s["chain"].prepare(HYPEREVM.transmitter, data, gas_remaining_wei=10**15)
+    with pytest.raises(CapitalLoopRefused,
+                       match="recorded_transaction_may_still_execute") as refused:
+        launch_on(s)
+    [row] = refused.value.detail["transactions"]
+    assert row["step"] == "mint" and "cancel" not in row
+    assert row["speed_up"].endswith(f"--speed-up {stuck['tx_hash']}")
+    monkeypatch.setenv("RESERVE_PRIVATE_KEY", s["reserve"].key.hex())
+    assert tool(s, "--cancel-transaction", stuck["tx_hash"],
+                "--i-understand-the-world-step-is-abandoned") == 2
+    assert "never cancelled" in capsys.readouterr().err and s["hyper"].sent == []
+    assert tool(s, "--speed-up", stuck["tx_hash"]) == 0
+    first = json.loads(capsys.readouterr().out)
+    assert tool(s, "--speed-up", stuck["tx_hash"]) == 0  # stuck again: once more
+    second = json.loads(capsys.readouterr().out)
+    one, two = (decoded(raw) for raw in s["hyper"].sent)
+    for sent in (one, two):
+        assert sent["nonce"] == stuck["tx"]["nonce"] and sent["value"] == b""
+        assert sent["to"] == bytes.fromhex(HYPEREVM.transmitter[2:])
+        assert sent["data"] == bytes.fromhex(data[2:])  # the identical call
+    assert one["price"] >= (stuck["tx"]["gasPrice"] * 9 + 7) // 8
+    assert two["price"] >= (one["price"] * 9 + 7) // 8  # above every recorded price
+    steps = [(e["tx_hash"], e["step"], e["origin"]) for e in read_authorizations(
+        s["locks"] / f"{s['reserve'].address.lower()}.authorizations.jsonl")]
+    assert steps == [(stuck["tx_hash"], "mint", "treasury"),
+                     (first["speed_up_tx_hash"], "mint", "speed_up"),
+                     (second["speed_up_tx_hash"], "mint", "speed_up")]
+
+
+def test_a_cancel_waits_for_the_world_that_recorded_it_to_end(tmp_path, monkeypatch, capsys):
+    from factorylab.kernel.ledger import LedgerLock
+    from factorylab.runtime.capital_loop import ReserveGuard
+    from factorylab.world.evm import HYPEREVM
+
+    s = hyper_signer(tmp_path, monkeypatch)
+    diary = tmp_path / "runs" / "world.jsonl"
+    diary.parent.mkdir()
+    diary.write_bytes(b"")
+    s["chain"].transaction_guard = ReserveGuard("treasury", ledger=diary, lock_dir=s["locks"])
+    stuck = s["chain"].approve(HYPEREVM.usdc, HYPEREVM.messenger, 1, 10**15)
+    monkeypatch.setenv("RESERVE_PRIVATE_KEY", s["reserve"].key.hex())
+    argv = ("--cancel-transaction", stuck["tx_hash"], "--i-understand-the-world-step-is-abandoned")
+    with LedgerLock(diary):  # the world is still running
+        assert tool(s, *argv) == 2
+    assert "still running" in capsys.readouterr().err and s["hyper"].sent == []
+    assert tool(s, *argv) == 0  # it ended
+
+
+def test_a_cancel_names_a_key_that_is_not_the_reserves(tmp_path, monkeypatch, capsys):
+    # A surviving mutant: without the explicit check, the guard still refused, but for
+    # another reason. The refusal must say which key is wrong.
+    from eth_account import Account
+
+    from factorylab.world.evm import HYPEREVM
+
+    s = hyper_signer(tmp_path, monkeypatch)
+    stuck = s["chain"].transfer(HYPEREVM.usdc, "0x" + "12" * 20, 1, 10**15)
+    monkeypatch.setenv("RESERVE_PRIVATE_KEY", Account.create().key.hex())
+    for argv in (("--cancel-transaction", stuck["tx_hash"],
+                  "--i-understand-the-world-step-is-abandoned"),
+                 ("--speed-up", stuck["tx_hash"])):
+        assert tool(s, *argv) == 2
+        refusal = json.loads(capsys.readouterr().err)
+        assert refusal["why"] == "the key given is not the reserve that signed it"
+    assert s["hyper"].sent == []
+
+
+def test_a_replacement_with_no_native_gas_names_the_chain_to_fund(
+        tmp_path, monkeypatch, capsys):
+    from factorylab.world.evm import HYPEREVM
+
+    s = hyper_signer(tmp_path, monkeypatch)
+    stuck = s["chain"].transfer(HYPEREVM.usdc, "0x" + "12" * 20, 1, 10**15)
+    s["hyper"].balance = 0
+    monkeypatch.setenv("RESERVE_PRIVATE_KEY", s["reserve"].key.hex())
+    assert tool(s, "--speed-up", stuck["tx_hash"]) == 2
+    refusal = json.loads(capsys.readouterr().err)
+    assert (refusal["error"], refusal["chain_id"]) == ("replacement_needs_native_gas", 999)
+    assert refusal["reserve"] == s["reserve"].address and refusal["needed_wei"] > 0
+    s["hyper"].balance = 10**18
+    assert tool(s, "--speed-up", stuck["tx_hash"], "--max-gas-wei", "1") == 2
+    assert json.loads(capsys.readouterr().err)["error"] == "speed_up_failed"
+    assert s["hyper"].sent == []
+
+
+def test_the_key_file_is_loaded_for_any_spelling_of_the_signing_flags(
+        tmp_path, monkeypatch, capsys):
+    # The fourth review: _load_dotenv ran only on a literal "--cancel-transaction" argv.
+    from factorylab.runtime import cli
+
+    s = hyper_signer(tmp_path, monkeypatch)
+    loaded = []
+    monkeypatch.setattr(cli, "_load_dotenv", lambda: loaded.append(True))
+    monkeypatch.delenv("RESERVE_PRIVATE_KEY", raising=False)
+    for flag in ("--cancel-transaction=0x" + "ab" * 32, "--speed-up=0x" + "ab" * 32):
+        assert tool(s, flag) == 2  # no key in the (empty) key file: nothing signed
+    assert loaded == [True, True]
+    assert tool(s, "--repair-torn") == 0  # no signing flag: no key file read
+    assert loaded == [True, True]
 
 
 def test_a_cut_hyperevm_transaction_line_is_a_torn_transaction_not_an_authorization(
@@ -2027,3 +2192,90 @@ def test_two_repairs_in_one_second_each_keep_their_own_sidecar(tmp_path):
     assert first["sidecar"] != second["sidecar"]
     assert [(tmp_path / r["sidecar"].rsplit("/", 1)[1]).read_bytes()
             for r in (first, second)] == [fragment, other]
+
+
+# ---- Wave 10, the fourth review of 94255ef
+
+
+def test_a_cancel_by_another_authorizer_of_the_same_nonce_is_not_ours(tmp_path):
+    # A surviving mutant: the AuthorizationCanceled scan without the authorizer topic
+    # took another account's cancel of the same nonce for ours.
+    rpc = Rpc()
+    rpc.cancel(LIVE_NONCE, at_ts=11_200, authorizer="0x" + "12" * 20)
+    record(tmp_path, entry(LIVE_NONCE, 11_500, origin="treasury", start_block=11_000))
+    assert [(r["nonce"], r["how"]) for r in resolve(tmp_path, rpc, now_s=lambda: rpc.latest_ts)[
+        "resolved_now"]] == [(LIVE_NONCE, "expired")]
+
+
+def test_a_testnet_transaction_never_blocks_a_mainnet_launch(tmp_path):
+    from factorylab.world.evm import HYPEREVM_TESTNET
+
+    rpc = Rpc()
+    rpc.others[HYPEREVM_TESTNET.rpc] = testnet = Hyper(nonce=3, chain_id=998)
+    recorded_transaction(tmp_path, "0x" + "d2" * 32, chain_id=998, nonce=3)
+    summary = resolve(tmp_path, rpc, now_s=lambda: rpc.latest_ts)
+    assert summary["resolved_now"] == [] and testnet.requests == []
+    with pytest.raises(CapitalLoopRefused, match="recorded_transaction_may_still_execute"):
+        resolve(tmp_path, rpc, now_s=lambda: rpc.latest_ts, testnet=True)
+    testnet.latest = 4  # HyperEVM testnet's latest block is final too
+    assert [r["how"] for r in resolve(tmp_path, rpc, now_s=lambda: rpc.latest_ts,
+                                      testnet=True)["resolved_now"]] == ["nonce_consumed"]
+
+
+def test_each_chains_rpc_is_overridden_and_a_failure_names_the_one_that_failed(tmp_path):
+    from factorylab.world.evm import HYPEREVM
+
+    mine, down = "https://hyperevm.example/rpc", "https://down.example/rpc"
+
+    def unreachable(method, url, payload, headers):
+        raise OSError("connection refused")
+
+    rpc = Rpc()
+    rpc.others[mine] = hyper = Hyper(nonce=7)
+    rpc.others[down] = unreachable
+    rpc.others[HYPEREVM.rpc] = unreachable  # the public one is never asked
+    recorded_transaction(tmp_path, "0x" + "d3" * 32, chain_id=999, nonce=7)
+    with pytest.raises(CapitalLoopRefused, match="recorded_transaction_may_still_execute"):
+        resolve(tmp_path, rpc, now_s=lambda: rpc.latest_ts, rpcs={999: mine})
+    assert "eth_getTransactionCount" in hyper.requests
+    with pytest.raises(CapitalLoopRefused, match="recorded_authorization_unreadable") as failed:
+        resolve(tmp_path, rpc, now_s=lambda: rpc.latest_ts, rpcs={999: down})
+    assert (failed.value.detail["rpc"], failed.value.detail["chain_id"]) == (down, 999)
+
+
+def test_the_runner_reads_base_at_the_rpc_its_flag_names(tmp_path, monkeypatch):
+    from scripts import edition4_rehearsal as rehearsal
+
+    seen = {}
+    monkeypatch.setattr(rehearsal, "run_rehearsal",
+                        lambda world, **kwargs: seen.update(kwargs) or {
+                            "status": "failed", "cost": {}})
+    rehearsal.main(["--out", str(tmp_path / "runs" / "flags"), "--capital-loop",
+                    "--rpc-base", "https://base.example/rpc",
+                    "--rpc-hyperevm", "https://hyperevm.example/rpc"])
+    assert seen["capital_loop_rpcs"] == {8453: "https://base.example/rpc",
+                                         999: "https://hyperevm.example/rpc"}
+    monkeypatch.undo()
+    # And a launch whose Base RPC fails names that RPC, not the public one.
+    report = rehearse(tmp_path / "runs" / "elsewhere", Rpc(), tmp_path,
+                      capital_loop_rpcs={8453: "https://base.example/rpc"})
+    assert report["refusal"]["rpc"] == "https://base.example/rpc"
+
+
+def test_a_funded_run_takes_no_transport_and_no_other_lock_directory(tmp_path):
+    # The fourth review: a library caller could hand the funded loop its own chain answers
+    # or its own lock directory, and so a second "only" lock on the reserve.
+    from scripts import edition4_rehearsal as rehearsal
+
+    common = {"out": tmp_path / "runs" / "bypass", "capital_loop": True,
+              "duration_ns": 3 * 3_600 * 1_000_000_000, "provider": object(),
+              "source_root": tmp_path}
+    with pytest.raises(rehearsal.RehearsalRefused,
+                       match="capital_loop_requires_the_live_transport"):
+        rehearsal.run_rehearsal("worlds/edition6-capital-loop.toml",
+                                capital_loop_transport=Rpc(), **common)
+    with pytest.raises(rehearsal.RehearsalRefused,
+                       match="capital_loop_requires_the_operator_lock_dir"):
+        rehearsal.run_rehearsal("worlds/edition6-capital-loop.toml",
+                                capital_loop_lock_dir=tmp_path / "elsewhere", **common)
+    assert not (tmp_path / "runs").exists() and not (tmp_path / "elsewhere").exists()

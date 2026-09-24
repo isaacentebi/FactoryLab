@@ -247,6 +247,7 @@ def test_a_reserve_transaction_is_written_ahead_before_it_is_returned():
     assert written == {
         "kind": "transaction", "tx_hash": ref["tx_hash"].lower(), "chain_id": 998,
         "from": chain.account.address, "to": ref["tx"]["to"], "tx_nonce": 3,
+        "data": ref["tx"]["data"], "value": 0, "step": "transfer",
         "gas_price": 125, "start_block": 16, "origin": "test", "run_dir": None, "ledger": None}
     replaced = chain.replace(ref, gas_remaining_wei=10**15)
     assert [t["tx_hash"] for t in transactions(chain)] == [
@@ -326,3 +327,20 @@ def test_the_reserve_is_held_from_the_record_check_until_the_send_returns():
     chain.broadcast(ref)
     assert seen == ["capital_loop_reserve_locked"] and len(rpc.sent) == 1
     ReserveLock(chain.account.address).close()  # released once the send returned
+
+
+def test_a_transaction_whose_line_was_damaged_and_repaired_is_still_sendable():
+    # The fourth review: after --repair-damaged, a torn transaction's legible hash is the
+    # record's, and the world that journaled it may still send it.
+    from factorylab.runtime import capital_loop
+
+    rpc, chain, ref = setup()
+    chain.transfer(chain.chain.usdc, Account.create().address, 1, 10**15)  # a later line
+    path = capital_loop.default_lock_dir() / f"{chain.account.address.lower()}.authorizations.jsonl"
+    first, rest = path.read_bytes().split(b"\n", 1)
+    assert ref["tx_hash"].lower().encode() in first
+    path.write_bytes(first[:first.index(b'"tx_nonce"')] + b"\xff\n" + rest)
+    with capital_loop.ReserveLock(chain.account.address) as lock:
+        assert capital_loop.repair_damaged(lock)["open_transactions"] == [ref["tx_hash"].lower()]
+    chain.broadcast(ref)
+    assert len(rpc.sent) == 1

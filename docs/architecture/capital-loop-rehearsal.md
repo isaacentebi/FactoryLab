@@ -327,16 +327,19 @@ nothing.
 
 Plain reserve-key transactions take the same guard. Every one this code base signs goes
 through `EVM.prepare` or `EVM.replace` (`factorylab/world/evm.py`). Each records it
-(transaction hash, chain, account nonce, gas price, destination, the chain head as
-`start_block`, origin, run directory, diary) to the same record under the same lock
-before returning it. `EVM.broadcast` sends only a transaction whose hash is on the
+to the same record under the same lock before returning it. The entry holds the
+transaction hash, chain, account nonce and gas price. It also holds the call itself:
+destination, calldata (public anyway) and value. It holds the step the call is, read
+from its selector: `approve`, `burn` (`depositForBurn`), `mint` (`receiveMessage`),
+`deposit`, `transfer`, `cancel` (an empty self-transfer) or `other`. The rest are the
+chain head as `start_block`, the origin, the run directory and the diary. `EVM.broadcast` sends only a transaction whose hash is on the
 record. It holds the reserve's lock from that check until `eth_sendRawTransaction`
 returns, so no capital-loop launch can start between the two. While a capital-loop run
 holds the reserve, nothing is prepared, replaced or broadcast. These transactions are:
 - the ordinary rail's approvals and HyperCore deposit;
 - CCTP's `depositForBurn` and `receiveMessage`;
 - the acceptance CLI's withdrawal;
-- `--cancel-transaction` (below).
+- `--speed-up` and `--cancel-transaction` (below).
 
 A chain with no guard prepares and sends nothing. The hybrid rail's Base chain has a
 zero gas budget and never signs one. Every launch resolves each recorded transaction
@@ -485,24 +488,57 @@ existence does not rest on any diary:
   - unused and not yet past it: the launch is refused
     (`recorded_authorization_may_still_settle`) until it settles or expires.
 - **Every recorded transaction** is open until the reserve's account nonce on its
-  own chain, read at that chain's finalized block, is past the transaction's nonce.
-  From then on neither it nor any replacement at that nonce can execute. If an
-  unrecorded transaction took the nonce, the cooling-off scan is the check that finds
-  it. Until then the launch is refused (`recorded_transaction_may_still_execute`),
-  naming each transaction. A broadcast transaction resolves once it is mined and
-  finalized. A dropped one never consumes its nonce, and anyone holding its bytes
-  could still send it. Its exit is:
+  own chain is past the transaction's nonce at a final block. On Base that is the
+  finalized block. On HyperEVM it is the latest block, which HyperBFT makes final as
+  it is produced. From then on neither the transaction nor any replacement at that
+  nonce can execute. If an unrecorded transaction took the nonce, the cooling-off scan
+  is the check that finds it. Until then the launch is refused
+  (`recorded_transaction_may_still_execute`). The refusal names each transaction, its
+  step and its exits. A broadcast transaction resolves once it is mined (and, on Base,
+  finalized).
 
-      RESERVE_PRIVATE_KEY=... uv run python scripts/capital_loop_outstanding.py \
-          --cancel-transaction 0x<hash>
+  A launch resolves only its own network's transactions. A mainnet capital loop reads
+  Base (8453) and HyperEVM (999). A testnet transaction (Base Sepolia 84532, HyperEVM
+  testnet 998) is resolved only by a testnet launch and never blocks a mainnet one.
 
-  This takes the reserve's lock. It refuses unless the hash is an open transaction of
-  the record, with its chain and nonce known, and that nonce is still unused at the
-  latest block. It then signs a 0-value transfer from the reserve to itself at the
-  same nonce, priced at least 12.5% above the stuck one, and records it like every
-  reserve-key transaction. It sends it under the lock (`--max-gas-wei` caps its gas,
-  default 10^15 wei). Once either transaction is finalized the nonce is consumed, and
-  the next launch resolves both.
+  A dropped transaction never consumes its nonce, and anyone holding its bytes could
+  still send it. Both exits are pure replacements at the recorded nonce: nothing of
+  the mempool is read. Each is priced 12.5% above every gas price the record holds for
+  that nonce, recorded like every reserve-key transaction, and sent under the reserve's
+  lock. Each loads the reserve key from `reserve.key` in the working directory, the
+  way every signer reads it; never put the key on the command line.
+
+      uv run python scripts/capital_loop_outstanding.py --speed-up 0x<hash>
+
+  `--speed-up` re-signs the identical call (destination, calldata, value) at the same
+  nonce with a higher fee. It is **the only exit for a CCTP mint** (`receiveMessage`).
+  Cancelling a mint would leave its burn on the other chain with nothing minted, so
+  the cancel tool refuses a mint outright. A world that is still running knows only
+  its own transaction's hash, and may not recognise the replacement's. Speed up while
+  its world runs only when that is acceptable: its treasury step may then need to be
+  recovered by hand.
+
+      uv run python scripts/capital_loop_outstanding.py --cancel-transaction 0x<hash> \
+          --i-understand-the-world-step-is-abandoned
+
+  `--cancel-transaction` signs a 0-value transfer from the reserve to itself at the
+  nonce instead. It is refused for:
+  - a mint;
+  - a transaction whose call was not recorded, which may be a mint;
+  - a transaction whose world is still running (its diary's writer lock is held).
+
+  It is also refused without the flag, because **this world's treasury step will not
+  complete; it must be recovered by hand**. A cancelled burn, approval or deposit
+  leaves that world's treasury slot waiting for a step that will never happen.
+
+  Once either transaction executes the nonce is consumed, and the next launch resolves
+  both. `--max-gas-wei` caps a replacement's gas. The default is 10 × the
+  replacement's own cost at the node's gas price now: its gas limit, plus the L1 data
+  fee on Base. It is never more than 10^16 wei. If the reserve cannot pay even one
+  replacement on that chain, the tool refuses `replacement_needs_native_gas`, naming
+  the chain and the wei. Fund the reserve's native gas on that chain (ETH on Base,
+  HYPE on HyperEVM), then speed up or cancel again. `--rpc-base`, `--rpc-hyperevm`,
+  `--rpc-base-sepolia` and `--rpc-hyperevm-testnet` replace each chain's public RPC.
 
   A torn transaction line whose chain and nonce are illegible resolves differently. It
   must wait out a whole cooling-off window (600 s + 2 × the finality lag) after its
@@ -549,20 +585,25 @@ exits 1.
 | `capital_loop_lock_file_missing`, `capital_loop_last_run_missing`, `capital_loop_last_run_unreadable`, `capital_loop_authorization_record_missing` | The deliberate manual reset ("One run per reserve"), once every recorded authorization is settled and booked, or dead. |
 | `run_ledger_missing`, `run_ledger_key_missing`, `run_ledger_key_invalid`, `run_ledger_unreadable`, `recorded_run_ledger_empty` | Put the run's diary and key back where the record names them. If they are gone for good, wait out 600 s + 2 × the finality lag, read the reserve, then the manual reset. |
 | `capital_loop_duration_below_settlement_bound` | Launch with a longer `--duration`, and no `--ticks` that caps it shorter. |
-| `finality_lag_unreadable`, `finalized_tag_not_behind_latest`, `block_times_unreadable`, `recorded_authorization_unreadable`, `cooling_off_unreadable` | Retry, or use another Base RPC whose `finalized` tag trails `latest`. |
+| `finality_lag_unreadable`, `finalized_tag_not_behind_latest`, `block_times_unreadable`, `cooling_off_unreadable` | Retry, or relaunch with `--rpc-base <url>` naming another Base RPC whose `finalized` tag trails `latest`. |
+| `recorded_authorization_unreadable` | Its `rpc` and `chain_id` name the RPC that failed. Retry, or relaunch with `--rpc-base`, `--rpc-hyperevm` (or `--rpc-base-sepolia`, `--rpc-hyperevm-testnet`) naming another one for that chain. |
 | `reserve_floor_leaves_more_than_the_total_cap` | Move the excess out of the reserve (then wait out the cooling-off), or raise the floor in the manifest. |
 | `previous_run_authorization_may_still_settle`, `recorded_authorization_may_still_settle` | Wait: it settles or passes its `validBefore` (at most 600 s plus finality). Cancelling it from a wallet also clears it. |
-| `recorded_authorization_reads_disagree` | Retry: the node's state and logs did not match. If it persists, use another Base RPC. |
+| `recorded_authorization_reads_disagree` | Retry: the node's state and logs did not match. If it persists, relaunch with `--rpc-base <url>` naming another Base RPC. |
 | `recorded_authorization_settled_unbooked` (exit 3) | Settle the books by hand, then `--acknowledge 0x<nonce>`. |
-| `recorded_transaction_may_still_execute` | Wait for it to be mined and finalized, or `--cancel-transaction 0x<hash>`. A torn one with no legible nonce clears after one cooling-off window. |
+| `recorded_transaction_may_still_execute` | Wait for it to be mined (and on Base finalized), or `--speed-up 0x<hash>`. For a CCTP mint (`step: mint`) that is the only exit. For any other step, once its world has ended, there is also `--cancel-transaction 0x<hash> --i-understand-the-world-step-is-abandoned`: that world's treasury step will not complete and must be recovered by hand. A torn one with no legible nonce clears after one cooling-off window. |
 | `transaction_not_on_record` | A broadcast refused its unrecorded hash; nothing was sent. Prepare the transaction again: it is recorded as it is prepared. |
-| `cancel_refused` | Its reason says which: not open (nothing to cancel), no chain or nonce known (it clears by waiting), wrong key (use the reserve's), or the nonce already used (wait for finality). |
+| `cancel_refused` | Its reason says which: not open (nothing to cancel); no chain or nonce known (it clears by waiting); wrong key (put the reserve's in `reserve.key`); a mint (`--speed-up` instead); its call not recorded (wait); its world still running (stop it, then cancel); or the consequence not accepted (add `--i-understand-the-world-step-is-abandoned`). |
+| `speed_up_refused` | Its reason says which: not open, no chain or nonce known, or its call not recorded (it clears by waiting); or wrong key (put the reserve's in `reserve.key`). |
+| `replacement_needs_native_gas` | Fund the reserve's native gas (ETH on Base, HYPE on HyperEVM) on the chain it names, with at least the `needed_wei` it names, then speed up or cancel again. |
+| `cancel_failed`, `speed_up_failed` | Nothing may have been sent. Its `why` is the chain's answer. A gas budget that is too low: raise `--max-gas-wei`. A node that refused the replacement ("nonce too low", "underpriced"): the nonce was consumed (the next launch resolves it) or needs a higher fee (run it again, which prices 12.5% above every recorded attempt). An RPC that failed: retry, or pass that chain's `--rpc-*` flag. |
 | `unrecorded_reserve_authorization` (exit 3) | Book it by hand. It clears by itself when finalized Base is 600 s + 2 × the lag past it. |
 | `unrecorded_reserve_transfer` | Clears by itself when finalized Base is 600 s + 2 × the lag past it (about 58 minutes after a hand transfer). |
 | `authorization_record_torn` | `--repair-torn`. |
 | `authorization_record_unreadable` | `--repair-damaged`. |
 | `acknowledge_refused` | Its reason says which: not an open nonce (nothing to acknowledge), or finalized Base does not show it used yet (wait, then retry). |
 | `capital_loop_requires_the_wall_clock`, `capital_loop_requires_the_live_clock` | Launch without an injected clock (the operator's command never passes one). |
+| `capital_loop_requires_the_live_transport`, `capital_loop_requires_the_operator_lock_dir` | Launch without an injected transport or lock directory (the operator's command never passes one; `--rpc-*` names another RPC instead). |
 | `capital_loop_requires_hybrid_venice_world`, `capital_loop_requires_the_hybrid_rail`, `testnet_hyperliquid_required`, `output_dir_reserved_for_witness`, `source_root_mismatch` | Fix the launch: the capital-loop world, a testnet venue, another `--out`, and `--source-root` naming the imported checkout. |
 | `provider_rail_denied`, `unsupported_provider_rail`, `unsupported_or_x402_model_rail`, `x402_denied`, `openrouter_credential_missing`, `venice_prepaid_credential_missing`, `reasoning_on_requires_declared_tier_support` | Fix the provider configuration or its credential. |
 

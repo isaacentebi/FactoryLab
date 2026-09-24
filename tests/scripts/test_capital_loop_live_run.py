@@ -127,6 +127,7 @@ def repo_root():
 def wired(tmp_path, monkeypatch):
     from hyperliquid.api import API
 
+    from factorylab.runtime.capital_loop import default_lock_dir
     from factorylab.world import x402
 
     main, reserve = Account.create(), Account.create()  # throwaway keys, never funded
@@ -143,7 +144,8 @@ def wired(tmp_path, monkeypatch):
     # A capital-loop run takes no supplied clock: its live deadline clock reads the wall.
     wall = install_wall(monkeypatch, Wall(time.time_ns()))
     return {"chain": chain, "venice": venice, "venue": venue, "reserve": reserve,
-            "world": world(tmp_path, reserve.address), "locks": tmp_path / "locks",
+            # The operator's lock directory, which this test's own (conftest) replaces.
+            "world": world(tmp_path, reserve.address), "locks": default_lock_dir(),
             "wall": wall}
 
 
@@ -162,8 +164,7 @@ def launch_kwargs(w):
 
     return {"provider": Converting(ModelResponse("openai/gpt-6-luna", "{}", 1, 1, "stop",
                                                  cost_micro=1)),
-            "exchange": HyperliquidExchange(mainnet=False),
-            "capital_loop_lock_dir": w["locks"]}
+            "exchange": HyperliquidExchange(mainnet=False)}
 
 
 def relaunch(w, out, tmp_path):
@@ -179,7 +180,7 @@ def relaunch(w, out, tmp_path):
     try:
         return rehearsal.run_rehearsal(
             str(w["world"]), out=out, capital_loop=True, duration_ns=3_600 * 1_000_000_000,
-            source_root=tmp_path, provider=object(), capital_loop_lock_dir=w["locks"])
+            source_root=tmp_path, provider=object())
     finally:
         rehearsal._wall_ns = wall
 

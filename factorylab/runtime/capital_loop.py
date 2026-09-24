@@ -463,10 +463,15 @@ class AuthorizationLog:
         if int(transaction["chain_id"]) not in _chains():
             raise ValueError("a reserve-key transaction on a chain this code does not know")
         price = transaction.get("gas_price")
+        # The call itself (public calldata) and what it does: a stuck one is then re-sent
+        # identically, or, unless it is a CCTP mint, cancelled (``replacement_exit``).
         _append_durably(self.path, {
             "kind": "transaction", "tx_hash": str(transaction["tx_hash"]).lower(),
             "chain_id": int(transaction["chain_id"]), "from": str(transaction["from"]),
             "to": str(transaction["to"]), "tx_nonce": int(transaction["nonce"]),
+            "data": str(transaction.get("data", "0x")),
+            "value": int(transaction.get("value", 0)),
+            "step": str(transaction.get("step") or "other"),
             "gas_price": None if price is None else int(price),
             "start_block": _chain_block(transaction["start_block"]), **self._where()})
 
@@ -480,8 +485,11 @@ class AuthorizationLog:
         nothing is sent.
         """
         self.permit(payer)
-        recorded = {e["tx_hash"].lower() for e in read_authorizations(self.path)
-                    if e["kind"] == "transaction"}
+        entries = read_authorizations(self.path)
+        # A torn line's legible hash is still the record's: a world may send it.
+        recorded = {e["tx_hash"].lower() for e in entries if e["kind"] == "transaction"}
+        recorded |= {h.lower() for e in entries if e["kind"] == "torn"
+                     for h in e.get("tx_hashes", ())}
         if str(tx_hash).lower() not in recorded:
             raise CapitalLoopRefused("transaction_not_on_record", {"tx_hash": str(tx_hash)})
         yield
@@ -891,50 +899,117 @@ def _finalized_number(chain: EVM) -> int:
     return int(chain.call("eth_getBlockByNumber", ["finalized", False])["number"], 16)
 
 
+#: Chain ids a launch resolves transactions on: a mainnet capital loop never waits on a
+#: testnet transaction, and a testnet launch never on a mainnet one.
+MAINNET_CHAINS = (8453, 999)
+TESTNET_CHAINS = (84532, 998)
+#: HyperEVM blocks are final once produced (HyperBFT one-block finality:
+#: https://hyperliquid.gitbook.io/hyperliquid-docs/hyperevm), so its ``latest`` is final.
+HYPEREVM_CHAINS = (999, 998)
+
+
+def chain_reader(chain_id: int, *, transport: Transport = http_request,
+                 rpcs: dict | None = None) -> EVM:
+    """A keyless ``EVM`` for one chain this code base signs on, at its overridden RPC."""
+    return EVM(_chains()[chain_id], None, transport=transport,
+               rpc=(rpcs or {}).get(chain_id))
+
+
+def _reading(chain: EVM, read: Callable[[], Any]) -> Any:
+    """``read()``, or ``recorded_authorization_unreadable`` naming the RPC that failed."""
+    try:
+        return read()
+    except CapitalLoopRefused:
+        raise
+    except Exception:  # noqa: BLE001 - an unread chain resolves nothing
+        raise CapitalLoopRefused("recorded_authorization_unreadable", {
+            "rpc": chain.rpc, "chain_id": chain.chain.id}) from None
+
+
 def _transaction_fate(entry: dict, view: dict, host_s: int, *, base: EVM,
-                      transport: Transport) -> str:
+                      transport: Transport, rpcs: dict | None = None,
+                      network: tuple = MAINNET_CHAINS) -> str:
     """``consumed``, ``dropped`` or ``pending`` for one recorded reserve-key transaction.
 
-    Consumed once the reserve's account nonce on the transaction's own chain, read at
-    that chain's finalized block, is past its ``tx_nonce``: neither it nor any
-    replacement at that nonce can execute any more (an unrecorded transaction that took
-    the nonce is the cooling-off scan's to find). A torn line with no legible chain and
-    account nonce is dropped only once a whole cooling-off window (``MAX_AUTHORIZATION_S``
-    plus twice the finality lag) has passed since its repair and no chain it can be on
-    knows its hash, or knows it only in a finalized block; otherwise it is pending.
+    Consumed once the reserve's account nonce on the transaction's own chain is past its
+    ``tx_nonce`` at a final block (Base's finalized block; HyperEVM's latest, which is
+    final): neither it nor any replacement at that nonce can execute any more (an
+    unrecorded transaction that took the nonce is the cooling-off scan's to find). A
+    torn line with no legible chain and account nonce is dropped only once a whole
+    cooling-off window (``MAX_AUTHORIZATION_S`` plus twice the finality lag) has passed
+    since its repair and no chain of ``network`` it can be on knows its hash, or knows
+    it only in a final block; otherwise it is pending. A read that fails names its RPC.
     """
+    from factorylab.world.evm import address
+
     chains = _chains()
     chain_id, tx_nonce = entry.get("chain_id"), entry.get("tx_nonce")
 
-    def reader(chain: Any) -> EVM:
-        return base if chain.id == BASE.id else EVM(chain, None, transport=transport)
+    def reader(identity: int) -> EVM:
+        return base if identity == BASE.id else chain_reader(identity, transport=transport,
+                                                             rpcs=rpcs)
 
-    def final_of(chain: EVM) -> int:
-        return view["final_number"] if chain is base else _finalized_number(chain)
+    def final_tag(chain: EVM) -> str:
+        if chain is base:
+            return hex(view["final_number"])
+        if chain.chain.id in HYPEREVM_CHAINS:
+            return "latest"  # HyperBFT: a produced block is final (HYPEREVM_CHAINS)
+        return hex(_finalized_number(chain))
 
     if chain_id in chains and type(tx_nonce) is int:
-        from factorylab.world.evm import address
-
-        chain = reader(chains[chain_id])
-        count = chain.call("eth_getTransactionCount",
-                           [address(entry["from"]), hex(final_of(chain))])
+        chain = reader(chain_id)
+        count = _reading(chain, lambda: chain.call(
+            "eth_getTransactionCount", [address(entry["from"]), final_tag(chain)]))
         return "consumed" if int(count, 16) > tx_nonce else "pending"
     window = MAX_AUTHORIZATION_S + 2 * (view["latest_timestamp"] - view["final_timestamp"])
     if host_s - int(entry["repaired_s"]) < window:
         return "pending"
     mined = False
     for tx_hash in entry.get("tx_hashes") or ():
-        for chain in ([chains[chain_id]] if chain_id in chains else chains.values()):
-            evm = reader(chain)
-            evm.check_chain()
-            found = evm.call("eth_getTransactionByHash", [tx_hash])
-            if found is None:
-                continue
-            number = found.get("blockNumber")
-            if number is None or int(number, 16) > final_of(evm):
+        for identity in ([chain_id] if chain_id in chains else network):
+            chain = reader(identity)
+
+            def lookup(chain: EVM = chain, tx_hash: str = tx_hash) -> str:
+                chain.check_chain()
+                found = chain.call("eth_getTransactionByHash", [tx_hash])
+                if found is None:
+                    return "unknown"
+                number, tag = found.get("blockNumber"), final_tag(chain)
+                final = (int(chain.call("eth_getBlockByNumber", ["latest", False])["number"],
+                             16) if tag == "latest" else int(tag, 16))
+                return "final" if number is not None and int(number, 16) <= final else "open"
+
+            seen = _reading(chain, lookup)
+            if seen == "open":
                 return "pending"
-            mined = True
+            mined = mined or seen == "final"
     return "consumed" if mined else "dropped"
+
+
+def replacement_exit(key: str, entry: dict) -> dict:
+    """What an operator may do about a recorded transaction that has not executed.
+
+    A CCTP mint is only ever sped up: cancelling it would leave its burn with nothing
+    minted. Anything else may also be cancelled, once its world has ended, at the price
+    of that world's treasury step (``CANCEL_CONSEQUENCE``). A transaction whose call was
+    not recorded is waited for.
+    """
+    script = "uv run python scripts/capital_loop_outstanding.py"
+    step = entry.get("step")
+    if entry.get("kind") != "transaction" or step is None or entry.get("data") is None:
+        return {"wait": "it resolves once its nonce is used or, torn, once a cooling-off "
+                        "window has passed"}
+    exits = {"speed_up": f"{script} --speed-up {key}"}
+    if step != "mint":
+        exits["cancel"] = (f"{script} --cancel-transaction {key} "
+                           "--i-understand-the-world-step-is-abandoned")
+        exits["cancel_consequence"] = CANCEL_CONSEQUENCE
+    return exits
+
+
+#: What cancelling a recorded reserve-key transaction costs the world that made it.
+CANCEL_CONSEQUENCE = ("this world's treasury step will not complete; it must be recovered "
+                      "by hand")
 
 
 #: Launch refusals that mean real money may have moved without being booked: the
@@ -975,7 +1050,8 @@ def _host_s(now_s: Callable[[], int] | None) -> int:
 
 def check_authorization_record(lock: ReserveLock, *, transport: Transport = http_request,
                                rpc: str = BASE_RPC,
-                               now_s: Callable[[], int] | None = None) -> dict:
+                               now_s: Callable[[], int] | None = None,
+                               rpcs: dict | None = None, testnet: bool = False) -> dict:
     """Resolve everything the reserve's record holds against the chain, or refuse.
 
     Guarantees no authorization or plain transaction this reserve ever wrote ahead of
@@ -990,15 +1066,20 @@ def check_authorization_record(lock: ReserveLock, *, transport: Transport = http
     * canceled or expired: it can never be used (EIP-3009), so resolved;
     * live: refused, ``recorded_authorization_may_still_settle``.
 
-    For each transaction not yet resolved, ``_transaction_fate``: consumed or dropped is
-    resolved; pending refuses, ``recorded_transaction_may_still_execute``, naming the
-    ``--cancel-transaction`` command where the account nonce is known. Each resolution
-    is appended to the record. A chain that cannot be read refuses
-    (``recorded_authorization_unreadable``). Only the lock's holder resolves.
+    For each transaction not yet resolved on this launch's network (``MAINNET_CHAINS``,
+    or ``TESTNET_CHAINS`` when ``testnet``; the other network's never blocks it),
+    ``_transaction_fate``: consumed or dropped is resolved; pending refuses,
+    ``recorded_transaction_may_still_execute``, naming each one's exits
+    (``replacement_exit``). ``rpcs`` overrides each non-Base chain's RPC by chain id.
+    Each resolution is appended to the record. A chain that cannot be read refuses
+    (``recorded_authorization_unreadable``, naming that chain's RPC). Only the lock's
+    holder resolves.
     """
     entries = lock.authorizations()
     pending = _open_authorizations(entries)
-    transactions = open_transactions(entries)
+    network = TESTNET_CHAINS if testnet else MAINNET_CHAINS
+    transactions = {key: entry for key, entry in open_transactions(entries).items()
+                    if entry.get("chain_id") is None or entry.get("chain_id") in network}
     summary = {"open": len(pending), "open_transactions": len(transactions),
                "resolved_now": []}
     if not pending and not transactions:
@@ -1010,7 +1091,7 @@ def check_authorization_record(lock: ReserveLock, *, transport: Transport = http
         fates = {nonce: _authorization_fate(base, entry, view, host_s)
                  for nonce, entry in pending.items()}
         tx_fates = {key: _transaction_fate(entry, view, host_s, base=base,
-                                           transport=transport)
+                                           transport=transport, rpcs=rpcs, network=network)
                     for key, entry in transactions.items()}
     except CapitalLoopRefused:
         raise
@@ -1040,13 +1121,10 @@ def check_authorization_record(lock: ReserveLock, *, transport: Transport = http
     for key, entry in transactions.items():
         fate = tx_fates[key]
         row = {"tx_hash": key, "chain_id": entry.get("chain_id"),
-               "tx_nonce": entry.get("tx_nonce"), "origin": entry.get("origin"),
-               "fate": fate}
+               "tx_nonce": entry.get("tx_nonce"), "step": entry.get("step"),
+               "origin": entry.get("origin"), "fate": fate}
         if fate == "pending":
-            if entry.get("chain_id") is not None and entry.get("tx_nonce") is not None:
-                row["cancel"] = ("uv run python scripts/capital_loop_outstanding.py "
-                                 f"--cancel-transaction {key}")
-            executing.append(row)
+            executing.append({**row, **replacement_exit(key, entry)})
             continue
         how = "nonce_consumed" if fate == "consumed" else "dropped"
         lock.resolve_transaction(entry, how)
