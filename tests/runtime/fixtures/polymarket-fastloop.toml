@@ -50,7 +50,7 @@
 # scripts/fastloop.py on the simulated venues. It is worlds/edition6-testnet-rehearsal.toml
 # unchanged except for this name and the [polymarket] block at the end, which enables
 # Polymarket event markets on the seeded simulated venue (runtime/polymarket.py). No world
-# under worlds/ enables the block. (It copied edition 5 until Wave 5a, when edition 5's
+# under worlds/ enables the simulated venue. (It copied edition 5 until Wave 5a, when edition 5's
 # roster stopped meeting the evaluator population a world that seeds judging must hold.)
 name = "polymarket-fastloop"
 seed = 3

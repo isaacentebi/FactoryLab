@@ -616,9 +616,9 @@ def collect_window(rt) -> None:
     Guarantees: only records whose every reference was released and that no
     checkpoint a resume could start from names are removed, each ledgered by the
     archive, and bytes no record names (a crash's leftover) without an item. An
-    owned blob is never a candidate, so this can take nothing a seat holds. Retained working state is
-    not charged here or anywhere: it is a constraint with a hard limit, not a debit
-    with no counterparty (see the module docstring).
+    owned blob is never a candidate, so this can take nothing a seat holds. Retained
+    working state is not charged here or anywhere: it is a constraint with a hard
+    limit, not a debit with no counterparty (see the module docstring).
     """
     collect = getattr(rt.artifacts, "collect", None)
     if collect is not None:

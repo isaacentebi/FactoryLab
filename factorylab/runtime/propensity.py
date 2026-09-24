@@ -60,6 +60,10 @@ EFFECT_TOOLS: Mapping[str, str] = MappingProxyType({
     # The vault surface's writes ([venue] vault_tools), named "vault:<operation>".
     "venue.vault_create": "vault", "venue.vault_deposit": "vault",
     "venue.vault_withdraw": "vault",
+    # Polymarket's writes ([polymarket] on the simulated venue), named "polymarket:...".
+    # An outcome token's id is not in the name: it is up to 78 digits, one per outcome
+    # of every market, and a label is at most 64 characters.
+    "polymarket.place_limit": "polymarket", "polymarket.cancel": "polymarket",
 })
 # How big the order was, in the base units the return declared, as a closed
 # vocabulary of five bands. Sizing is a decision — half a position and a tenth of
@@ -119,6 +123,14 @@ def effect_label(tool: str, args: Any) -> str | None:
         return f"transfer:{str(args.get('direction', '')).strip().lower()}"[:64]
     if kind == "vault":
         return f"vault:{tool.removeprefix('venue.vault_')}"
+    if kind == "polymarket":
+        if tool == "polymarket.cancel":
+            return "polymarket:cancel"
+        side = str(args.get("side", "")).strip().lower()
+        band = size_band(args.get("size"))
+        if side not in ("buy", "sell") or band is None:
+            return MALFORMED
+        return f"polymarket:{side}:{band}"
     return f"{kind}:{str(args.get('coin', '')).strip().upper()}"[:64]
 
 
@@ -206,7 +218,7 @@ def action_class(label: str, outputs: Any, *, tool_calls: int = 0) -> str:
     outputs = outputs if isinstance(outputs, dict) else {}
     parts = label.split("+")
     if any(p.startswith(("buy:", "sell:", "close:", "cancel:", "leverage:", "transfer:",
-                         "vault:"))
+                         "vault:", "polymarket:"))
            for p in parts):
         return "order"
     register = outputs.get("register")
@@ -248,7 +260,9 @@ def action_vocabulary() -> dict[str, str]:
         "named no placeable size. What a return executes before its final answer is "
         "part of its action: a venue.place_market or venue.place_limit tool call is "
         'named like an order, venue.close "close:<COIN>", venue.cancel "cancel:<COIN>", '
-        'venue.set_leverage "leverage:<COIN>", treasury.transfer "transfer:<direction>" '
+        'venue.set_leverage "leverage:<COIN>", treasury.transfer "transfer:<direction>", '
+        'polymarket.place_limit "polymarket:<side>:<size band>" (size in outcome tokens), '
+        'polymarket.cancel "polymarket:cancel" '
         'and a requested child "request:<assembly id>"; several are joined with "+" in '
         'execution order, and a trade through a tool followed by "hold" is named by '
         "the trade",
