@@ -178,7 +178,8 @@ class ContractQueue:
         Guarantees a cutoff is reached by ticks consumed, never by wall time: a
         stalled loop or a slow tick does not expire a decision whose horizon has
         not elapsed. A decision restored from a checkpoint that predates the tick
-        record keeps the wall-clock deadline it was opened with.
+        record keeps the wall-clock deadline it was opened with. A due decision
+        whose seat declined it settles declined instead, and is not returned.
         """
         rt = self.runtime
         now_tick, now_ns = rt.ticks_consumed, rt.clock.now_ns
@@ -186,6 +187,13 @@ class ContractQueue:
         for decision in self.queue.outstanding():
             cutoff = self.deadline_tick(decision.handle)
             if (decision.deadline_ns <= now_ns) if cutoff is None else cutoff <= now_tick:
+                reason = rt._carried_decline(decision.handle)
+                # A refusal reaching its cutoff ungraded settles declined, exactly as
+                # it would at its settlement check: a timeout is credited the
+                # unpriced neutral, and declining must never pass through that door
+                # free (ruling R9).
+                if reason is not None and rt._settle_declined(decision.handle, reason):
+                    continue
                 due.append(decision.handle)
         return self.queue.time_out(due, now_ns)
 

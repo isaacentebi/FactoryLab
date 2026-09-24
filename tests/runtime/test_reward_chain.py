@@ -549,7 +549,7 @@ def test_a_declined_commission_is_priced_like_an_abstention_not_its_own_mean(mon
     rt._contribution(handle, "evaluator")["invocations"] = 1
     _commitments(rt, "eval-a", censored=4)
     rt._close_price_window()
-    rt._settle_declined(handle, CH_CONFORMITY, "no view")
+    rt._settle_declined(handle, "no view")
     rt._deliver_returns()
     (priced,) = _rows(rt, "router.decline_priced", handle=handle)
     assert priced["penalty"] > 0

@@ -207,19 +207,25 @@ class Assembly:
         except Infeasible as exc:
             return Return(req.handle, {"reason": f"infeasible: {exc}"}, 0, "failed")
         except BillingUncertain as exc:
-            return Return(req.handle, {"reason": str(exc)}, exc.cost, "failed")
+            # The call was made and may be billed: the provider was handed the request.
+            return Return(req.handle, {"reason": str(exc)}, exc.cost, "failed",
+                          delivered=True)
         except Exception as exc:
+            # Refused before any bill (unbilled, or raised before the meter ran the
+            # call): nothing consumed the request.
             return Return(req.handle, {"reason": type(exc).__name__}, 0, "failed")
+        # From here the provider answered: every return below was delivered.
         resp = metered.result
         cost = metered.cost
         if (not isinstance(resp.text, str) or not isinstance(resp.model_id, str)
                 or not isinstance(resp.stop_reason, str) or type(resp.refused) is not bool):
-            return Return(req.handle, {"reason": "invalid response metadata"}, cost, "malformed")
+            return Return(req.handle, {"reason": "invalid response metadata"}, cost, "malformed",
+                          delivered=True)
         provider = _provider_report(resp, mreq.max_tokens)
         if resp.refused:
             return Return(
                 req.handle, {"reason": "refused"}, cost, "refused", served_by=resp.model_id,
-                provider=provider,
+                provider=provider, delivered=True,
             )
         # Reply bytes outside UTF-8 (an emoji cut by max_tokens) are seen exactly as the
         # journal can store them, so a live call and its replay parse the same text.
@@ -246,6 +252,7 @@ class Assembly:
                 served_by=resp.model_id,
                 stop_reason=resp.stop_reason,
                 provider=provider,
+                delivered=True,
             )
         if self.spec.memory_policy == "handle-scoped":
             scope = req.parent_handle or req.handle
@@ -274,6 +281,7 @@ class Assembly:
             tool_calls=tool_calls,
             provider=provider,
             dropped=dropped,
+            delivered=True,
         )
 
     def _children(self, req: Request, parsed: dict[str, Any]) -> tuple[ChildRequest | Request, ...]:
@@ -459,13 +467,16 @@ class ProgramAssembly:
         except Infeasible as exc:
             return Return(req.handle, {"reason": f"infeasible: {exc}"}, 0, "failed")
         except BillingUncertain as exc:
-            return Return(req.handle, {"reason": str(exc)}, exc.cost, "failed")
+            # The run was made and may be billed: stdin was handed to the jail.
+            return Return(req.handle, {"reason": str(exc)}, exc.cost, "failed",
+                          delivered=True)
         except Exception as exc:
             return Return(req.handle, {"reason": type(exc).__name__}, 0, "failed")
         cost = metered.cost
         result = metered.result if isinstance(metered.result, dict) else {}
         state_in = self.state_sha
-        ret = self._interpret(req, result, cost, state_error)
+        # The jail ran the program on its stdin: whatever it answered, it was delivered.
+        ret = replace(self._interpret(req, result, cost, state_error), delivered=True)
         if self.record is not None:
             self.record({
                 "kind": "program.call", "assembly_id": self.spec.id, "handle": req.handle,

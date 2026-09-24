@@ -638,6 +638,82 @@ each measure one, not ten; over global closed windows it divides the window's
 attempted calls by its invocations. The other supported return observations
 are `noop_share` and `revision_rate`.
 
+Context size is published as four seed observations (wave 7; essay II.IV.a, the
+metrics layer is ceded, so the factory can propose a metric only on a quantity the
+world publishes). No card, target or threshold comes with them. They read the
+UTF-8 byte counts every invocation's ledger row already records under `sections`,
+counted once in `ComputeMixin._invoke`: the ledger row, the window's counters and
+the return sample carry the same numbers. Bytes, not provider tokens: the kernel
+renders the bytes identically for every seat, program seats included, while
+tokenizers differ by model family, x402 and program seats report no tokens, and
+the reported `usage` covers only an invocation's final provider call.
+
+| Observation | Units | Unit range | Per return scope | Global closed windows |
+|---|---|---|---|---|
+| `prompt_bytes` | bytes per invocation | [0, 100,000] | mean `sections.total` of the selected responses | summed `prompt_bytes` over `prompts` |
+| `you_bytes` | bytes per invocation | [0, 100,000] | mean `sections.you` | summed `you_bytes` over `prompts` |
+| `inputs_bytes` | bytes per invocation | [0, 100,000] | mean `sections.inputs` | summed `inputs_bytes` over `prompts` |
+| `downstream_read_bytes` | bytes per return | [0, 1,000,000] | reading bytes filed under the scope in its selected responses' windows, over those responses | summed `downstream_read_bytes` over `read_measured` |
+
+The byte counts are of the invocation's opening prompt, the one its ledger row
+records; tool-round continuations are not counted. A response the runtime rendered
+no prompt for (a ballot whose assembly was unavailable) is not a zero-byte sample:
+none of the four selects it, so it is not new evidence for a card's price, never
+takes a horizon slot from a measured response, and is not among the responses
+`downstream_read_bytes` divides by, exactly as a global window divides by its
+invocations. A request that cannot be rendered (an input no prompt section can
+serialise) fails as the assembly fails it: it is an invocation, counted in
+`invocations`, but no prompt. Its ledger row's `sections` is null and the window's
+`prompts` (the invocations whose opening prompt was rendered, the three prompt
+means' denominator) does not count it. Measuring a prompt never fails a call. A
+window record closed before prompts were measured carries no `prompts` and no
+prompt bytes: it measured zero prompts, so merged with later windows it adds nothing
+to either side of a prompt mean, and a selection of such records alone is
+unmeasured (never a mean of zero) and no new sample. A
+whole window with no measured prompt (only rent, such a ballot or such a request)
+is no new sample for the three prompt means. `downstream_read_bytes` has its own
+support, `read_measured`: the invocations whose readings are metered, which is
+every invocation from wave 7 on, a failed render included (so it is not
+`prompts`). A return sample carries the `invoked` marker from wave 7 on, and only a
+marked one is a response of its selection. A window record or return sample from
+before readings were metered carries neither: it adds nothing to either side of
+the mean, a selection of such alone is unmeasured and no new sample, while a
+current invocation no one read is a measured zero. The scope facts publish
+`read_measured` as the window does. All four are measurable over `returns` and
+over `windows`, per role, per assembly or globally, and none over `forecasts`;
+none is `per_window`, since each is a ratio of summable numerators and
+denominators.
+
+A *reading* is the INPUTS section of an invocation whose decision was routed on a
+published return (`decision_subjects`: judges, adversarial judges, metas, and any
+contract that accepts the return's kind), counted only when the request reached its
+executor. The assembly reports that on the return (`Return.delivered`), set where it
+sends: a model's provider call was made (answered, or failed possibly billed), or a
+program's stdin was run by the jail. A request refused before that is still an
+invocation, with its prompt measured if it was rendered, but no reading. Refusals of
+this kind: over its ceiling or price, its reservation refused, the world terminal,
+an unbilled provider failure, a request that could not be rendered. The kernel files its bytes under the
+return's author, its assembly and role, in the window the reading was metered,
+exactly as retained-storage rent is filed: it joins a returns horizon when it was
+metered in the windows of the selected responses, never occupies a response slot
+and never supplies support, and a scope whose returns were read by no one in those
+windows measures zero. Reading rows live apart from the return samples
+(`CardSamples.readings`), so no other observation selects one, and they carry no
+identity of the reader. The reader's request is not touched. `downstream_read_bytes`
+is not a mean of per-response samples, so a card over it cannot declare an
+`interval`. A reading is new evidence for a card's price only once the card's
+current selection reads it: inside a full returns horizon, or beside a response of
+its scope in the selected closed windows. One metered after its author's latest
+response is kept for the next horizon but moves no price until then. A registered
+observation measured per scope reads the scope's summed `prompt_bytes`,
+`you_bytes`, `inputs_bytes` and `downstream_read_bytes` among its facts, and a
+scope whose only row in the selected windows is a reading is measured too. The
+scope's `invocations` fact counts its invocations as `window.invocations` counts the
+window's: an assembly-unavailable ballot is a response but no invocation, so it is
+in neither. Its `prompts` fact counts its responses with a rendered prompt, as the
+window's `prompts` does, so summed prompt bytes over `prompts` is a mean per
+rendered prompt in a scope exactly as it is globally. Its violations are attributed by the generic `1/n` share described below.
+
 `forecasts` selects the latest `n` resolved forecast records in each scope.
 `forecast_skill` uses paired Brier skill against the baseline as it stood before
 each outcome, not lifetime standing. The other supported forecast observations
@@ -1153,7 +1229,10 @@ change either. Bounded fractions and scores use [0, 1], score differences use
 [-1, 1], and standard deviations of unit scores use [0, 0.5]. Unbounded counts
 and ratios use one count or one base quantity as their unit interval [0, 1];
 cost per return uses one dollar [0, 1,000,000] in micro-USD; signed dollar P&L
-uses [-1, 1] USD. These are unit definitions, not acceptable regions or clipping
+uses [-1, 1] USD. Prompt sizes per invocation use [0, 100,000] bytes, a width
+above the opening prompts measured in live runs (median 21k to 29k characters,
+up to 42k in one judge's INPUTS); reading bytes per return, summed over every
+reader of a return, use [0, 1,000,000] bytes. These are unit definitions, not acceptable regions or clipping
 bounds for seed observations: larger and negative observations remain measurable.
 Registered observations must return within their declared range.
 
@@ -1602,9 +1681,10 @@ one wake. A search that returned no results buys no extra round.
 ## Event markets: `[polymarket]`
 
 `[polymarket]` is off by default. A disabled block registers nothing, but its keys are
-still part of the manifest and are hashed like any other. No world under `worlds/`
-enables it. The
-keys, all fixed for the world's life:
+still part of the manifest and are hashed like any other. The two edition 6 worlds enable
+it with `venue = "live"` (reads only) and `read_price_usd = "0"`, since Gamma and the CLOB
+charge nothing for a public read; no world under `worlds/` enables the simulated venue's
+writes. The keys, all fixed for the world's life:
 
 | key | default | meaning |
 |---|---|---|
@@ -1618,7 +1698,10 @@ keys, all fixed for the world's life:
 | `seed` | `0` | the simulated venue's seed |
 
 Tools: `polymarket.search {query, limit?}`, `polymarket.market {market_id}` and
-`polymarket.book {token_id, depth?}` are reads priced at `read_price_usd`. Their answers
+`polymarket.book {token_id, depth?}` are reads priced at `read_price_usd` (a zero price
+is published as "Free."). Gamma answers through a shared cache (`max-age=300`) that served
+a resolved market as still open (read 2026-09-23), so every Gamma read carries a fresh
+query value (`_`) and returns the origin's state at the read; the CLOB is not cached. Their answers
 carry text third parties wrote (questions, rules, slugs, resolution sources), so they are
 outside text exactly as a `connector.fetch` body is: prose of at least
 `MIN_PROTECTED_BODY_CHARS` is protected, and a round that read them runs population,
@@ -1643,15 +1726,39 @@ cannot convert a Polymarket profit out of Hyperliquid money. Every tick the pot 
 micro-USD. A kill cancels resting orders only: held tokens are paid for, cannot be liquidated
 and resolve into the pot, so they are reported as residual exposure (`wind_down_pending`).
 
-Settlement: a fill opens an `event` lot, marked every tick at the CLOB midpoint. At the
+Settlement: a fill opens an `event` lot, marked every tick at the midpoint of its book's
+best bid and ask (never the CLOB's `/midpoint`, which answers 0.5 for an empty book). At the
 consequence backstop a held lot is marked there like a spot lot, so the decision is scored on
 the normal horizon at the market's price: the market's anticipatory settlement (essay
 II.IV.b). The resolution later closes every lot on the token at its payout (1, 0, or 0.5 on a
 50-50), ledgered as `consequence.resolution` with one `resolution` execution receipt per
 decision, and its money reaches the owner through `_settle_late` without rescoring. A token
-with no midpoint loses its mark (`polymarket.mark_unavailable`) and its decision falls back as
+with no two-sided book loses its mark (`polymarket.mark_unavailable`) and its decision falls back as
 any unobserved consequence does. Outcome labels are third-party text: outside the jailed reads
 every surface carries ids and a normalised `YES`, `NO` or `outcome <n>`.
+
+Forecasts: an enabled block, on either venue, adds two seed-logic predicates to the
+world's forecast vocabulary (`world.work` `predicates`, and the forecast schema's
+predicate enum); a world without the block offers neither and refuses them. Both take
+`token_id` (an outcome token id, decimal digits) beside `horizon_events`:
+
+| predicate | params | y at settlement |
+|---|---|---|
+| `event_pays` | `horizon_events`, `token_id` | 1 when the token's market has resolved and the token redeems for 1; 0 while it is open, closed without a final resolution, or resolved 50-50 |
+| `event_price_above` | `horizon_events`, `token_id`, `level` in (0, 1) | 1 when the token's price exceeds `level`: its redemption value once resolved, else the midpoint of its CLOB book's best bid and ask (exact comparison) |
+
+The world reads the token at the forecast's due tick, through the surface's journal
+(`polymarket.event_read`): the market that lists it (Gamma's closed listing first, since
+its open listing excludes closed markets, and the closed listing once more after an empty
+open answer, so a market closing between the two is still found), and for a price claim
+on an unresolved market its book. Each token is read once a settlement pass, and every
+forecast due on it in that pass settles on that one snapshot. A payout exists only for a closed market whose outcome prices are a redemption (1 and 0, or 0.5 each) and whose UMA status, when stated,
+is `resolved`. A read that did not answer, or a price claim with no midpoint, is
+`polymarket.event_unavailable`: the claim settles censored and is excluded as
+`external_unobservable`. A token no market lists settles censored and is not excluded.
+The reads are the kernel's measurement and cost no seat anything. `scripts/fastloop.py`
+answers a live-read world's reads from the simulated venue (`simulate_reads`), which then
+moves and resolves on the world's clock.
 
 ## New kinds of work: reward shapes and predicates
 

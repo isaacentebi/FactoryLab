@@ -713,3 +713,12 @@ class Return:
     # Optional sections of the reply that did not validate and were dropped while
     # the answer stood: ``{"section", "reason"[, "index"]}`` each, in section order.
     dropped: tuple[dict[str, Any], ...] = ()
+    # UTF-8 bytes per section of the prompt the runtime rendered for this invocation,
+    # plus ``total``: the same counts the invocation's ledger row carries as
+    # ``sections``. None when the runtime rendered no prompt for it.
+    prompt_sections: dict[str, int] | None = None
+    # Whether the request reached its executor: set by the assembly at the point of
+    # sending, True once the provider call or the program run was made (billed, or
+    # possibly billed). A request refused before that (over its ceiling, its
+    # reservation refused, the world terminal, no rendering) was read by nobody.
+    delivered: bool = False

@@ -273,10 +273,12 @@ class GovernanceMixin:
     @property
     def predicates(self):
         """Predicate resolution always reads this world's current persisted history."""
+        from factorylab.runtime.polymarket import vocabulary
         from factorylab.settlement.vocabulary import PredicateBook
 
         return PredicateBook(self.registered_predicates,
-                             run=lambda code, facts: self.predicate_runner.run(code, facts))
+                             run=lambda code, facts: self.predicate_runner.run(code, facts),
+                             world=vocabulary(self.m))
 
     def _register_predicate(self, handle: str, prop: PredicateProposal) -> None:
         """Only jailed boolean preflights and durable admission publish a predicate version."""
@@ -1671,8 +1673,10 @@ class GovernanceMixin:
                 ret = self._invoke(assembly_id, req, "voter", child=True)
             self.consequences.finish(handle, ret.cost)
             if asm is None:
+                # A response, but no invocation: nothing was rendered or called, and
+                # the window does not count it among its invocations either.
                 self.card_samples.returned(handle=handle, assembly=assembly_id, role="other",
-                                           window=self.window.index, ret=ret)
+                                           window=self.window.index, ret=ret, invoked=False)
             self._compute_routed = True
             vote = ret.outputs.get("vote") if ret.status == "ok" else None
             if connector is not None:

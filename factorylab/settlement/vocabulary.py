@@ -172,6 +172,40 @@ RETURN_PAID_OFF = Predicate(
 )
 
 
+#: An outcome token's id as the Polymarket CLOB publishes it: decimal digits only.
+TOKEN_ID_PATTERN = r"[0-9]{1,100}"
+
+
+def _event(predicate_id: str, description: str, *, level: bool = False) -> Predicate:
+    properties = {"horizon_events": {"type": "integer", "minimum": 1},
+                  "token_id": {"type": "string", "pattern": f"^{TOKEN_ID_PATTERN}$"}}
+    if level:
+        properties["level"] = {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1}
+    return Predicate(predicate_id, description, {
+        "type": "object", "properties": properties, "required": list(properties),
+        "additionalProperties": False}, "horizon_events")
+
+
+# Seed-logic claims about Polymarket event markets, offered only in a world whose
+# ``[polymarket]`` block is enabled (``PredicateBook(world=...)``). The world measures
+# both: a market's resolution is settled outside the factory (UMA's oracle) and its
+# midpoint is priced by outsiders' money, so a forecast on either is graded by
+# realized consequence and never by another model's reading (essay II.III.b; II.IV.a,
+# "vote on values, bet on beliefs"). The fact is read once, at settlement, from the
+# world's own Polymarket surface (``runtime.polymarket.event_facts``).
+EVENT_VOCABULARY = (
+    _event("event_pays",
+           "At settlement the Polymarket market listing outcome token token_id has "
+           "resolved and the token redeems for 1. A market still open, closed without a "
+           "final resolution, or resolved 50-50 (0.5 a token) does not satisfy it."),
+    _event("event_price_above",
+           "At settlement the price of Polymarket outcome token token_id exceeds level: "
+           "the midpoint of its CLOB book's best bid and ask while its market is open, "
+           "its redemption value once the market has resolved.", level=True),
+)
+EVENT_PREDICATE_IDS = frozenset(p.id for p in EVENT_VOCABULARY)
+
+
 def _require_event_index(value: int, name: str, *, positive: bool = False) -> None:
     if type(value) is not int or value < (1 if positive else 0):
         qualifier = "positive" if positive else "nonnegative"
@@ -185,18 +219,34 @@ def _validate_params(
     _require_id(predicate_id)
     population = (predicate is not None and predicate.id == predicate_id
                   and predicate.code is not None and predicate.proposable)
-    if not population and not any(p.id == predicate_id for p in SEED_VOCABULARY) and not (
+    # An event predicate is known where the world offers it: to a caller holding
+    # that world's definition, or to the kernel sealing a forecast it admitted.
+    event = predicate_id in EVENT_PREDICATE_IDS and (kernel or (
+        predicate is not None and predicate.id == predicate_id and predicate.code is None))
+    if not population and not event and not any(
+            p.id == predicate_id for p in SEED_VOCABULARY) and not (
         kernel and predicate_id == RETURN_PAID_OFF.id
     ):
         raise ValueError(f"unknown predicate: {predicate_id}")
     required = {"horizon_events"}
     if predicate_id == "drawdown_exceeds":
         required.add("fraction")
+    if event:
+        required |= {"token_id", "level"} if predicate_id == "event_price_above" else {
+            "token_id"}
     if not isinstance(params, Mapping) or set(params) != required:
         raise ValueError("params must contain exactly the predicate's declared parameters")
     _require_event_index(params["horizon_events"], "horizon_events", positive=True)
     if predicate_id == "drawdown_exceeds":
         _require_probability(params["fraction"], "fraction")
+    if event:
+        token = params["token_id"]
+        if not isinstance(token, str) or re.fullmatch(TOKEN_ID_PATTERN, token) is None:
+            raise ValueError("token_id must be an outcome token id: decimal digits")
+        if "level" in params:
+            _require_probability(params["level"], "level")
+            if not 0 < params["level"] < 1:
+                raise ValueError("level must be strictly between 0 and 1")
 
 
 MAX_PREDICATE_CODE_CHARS = 8000
@@ -206,7 +256,7 @@ MAX_PREDICATE_DESCRIPTION_CHARS = 500
 def validate_predicate_definition(predicate_id: str, description: str, code: str) -> None:
     """Only bounded, synchronous resolver definitions can reach a jailed preflight."""
     if isinstance(predicate_id, str) and predicate_id in (
-        {p.id for p in SEED_VOCABULARY} | {RETURN_PAID_OFF.id}
+        {p.id for p in SEED_VOCABULARY} | {RETURN_PAID_OFF.id} | EVENT_PREDICATE_IDS
     ):
         raise ValueError("seed and kernel predicate ids cannot be redefined")
     if not isinstance(predicate_id, str) or not re.fullmatch(r"[a-z][a-z0-9-]{1,47}", predicate_id):
@@ -234,16 +284,22 @@ class PredicateBook:
     def __init__(
         self, registered: dict[str, list[dict]] | None = None, *,
         run: Callable[[str, dict], tuple[bool | None, str | None]] | None = None,
+        world: tuple[Predicate, ...] = (),
     ) -> None:
         self.registered = registered if registered is not None else {}
         self._run = run
+        # Seed-logic predicates about a surface this world enables (EVENT_VOCABULARY),
+        # fixed for the world's life by its manifest; empty in every other world.
+        if any(p not in EVENT_VOCABULARY for p in world):
+            raise ValueError("world predicates come from the kernel's event vocabulary")
+        self._world = tuple(world)
 
     def get(self, name: str, version: int | None = None) -> Predicate | None:
         """An explicit version resolves that definition, never a later replacement."""
         _require_id(name)
         if version is not None and (type(version) is not int or version < 1):
             raise ValueError("predicate version must be a positive integer")
-        seed = next((p for p in SEED_VOCABULARY if p.id == name), None)
+        seed = next((p for p in (*SEED_VOCABULARY, *self._world) if p.id == name), None)
         if seed is not None:
             return seed if version in (None, seed.version) else None
         history = self.registered.get(name, ())
@@ -252,8 +308,10 @@ class PredicateBook:
         return Predicate(**history[-1 if version is None else version - 1])
 
     def all(self) -> list[Predicate]:
-        """The current public vocabulary contains the seeds and each latest population version."""
-        return list(SEED_VOCABULARY) + [self.get(name) for name in sorted(self.registered)]
+        """The current public vocabulary: the seeds, this world's own, each latest population
+        version."""
+        return [*SEED_VOCABULARY, *self._world,
+                *(self.get(name) for name in sorted(self.registered))]
 
     def catalogue(self) -> list[dict]:
         """Public metadata retains versioned parameter schemas without private handles."""
@@ -331,6 +389,11 @@ class WindowFacts:
     #: The failures in the window the forecaster's own lineage did not cause, as the
     #: runtime counts them for ``failure_within`` (None when no runtime counted).
     independent_failures: int | None = None
+    #: One outcome token as the world read it at settlement, for an event predicate:
+    #: ``listed``, ``closed``, ``payout`` (its redemption value once resolved, else
+    #: None) and ``midpoint`` (of the CLOB book's best bid and ask, read only for a
+    #: price claim on an unresolved market, else None), numbers as decimal strings.
+    event: dict | None = None
 
     def __post_init__(self) -> None:
         for balance in (
@@ -353,6 +416,28 @@ class WindowFacts:
             if not isinstance(self.public_window, Mapping):
                 raise ValueError("public_window must contain public observation facts")
             object.__setattr__(self, "public_window", _freeze(self.public_window))
+        if self.event is not None:
+            if not isinstance(self.event, Mapping) or type(self.event.get("listed")) is not bool:
+                raise ValueError("event must state whether the token is listed")
+            object.__setattr__(self, "event", _freeze(self.event))
+
+
+def _event_outcome(predicate_id: str, params: Mapping, event: Mapping | None) -> int | None:
+    """What the world's read of one token says about an event claim, or None.
+
+    None means no fact: no read was supplied, the token is not listed (the claim
+    named nothing the world lists), or a price claim met a market with neither a
+    redemption value nor a midpoint. Prices compare exactly, as fractions.
+    """
+    if event is None or not event.get("listed"):
+        return None
+    payout = event.get("payout")
+    if predicate_id == "event_pays":
+        return int(payout is not None and Fraction(str(payout)) == 1)
+    price = payout if payout is not None else event.get("midpoint")
+    if price is None:
+        return None
+    return int(Fraction(str(price)) > Fraction(str(params["level"])))
 
 
 class Observer:
@@ -378,6 +463,8 @@ class Observer:
             return None if value is None else int(value)
         if version not in (None, 1):
             raise ValueError("unknown seed predicate version")
+        if predicate_id in EVENT_PREDICATE_IDS:
+            return _event_outcome(predicate_id, params, facts.event)
         if predicate_id == "wallet_up":
             return int(facts.balance_at_settlement > facts.balance_at_forecast)
         if predicate_id == "drawdown_exceeds":
