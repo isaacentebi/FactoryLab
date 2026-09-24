@@ -686,7 +686,13 @@ denominators.
 
 A *reading* is the INPUTS section of an invocation whose decision was routed on a
 published return (`decision_subjects`: judges, adversarial judges, metas, and any
-contract that accepts the return's kind). The kernel files its bytes under the
+contract that accepts the return's kind), counted only when the request reached its
+executor. The assembly reports that on the return (`Return.delivered`), set where it
+sends: a model's provider call was made (answered, or failed possibly billed), or a
+program's stdin was run by the jail. A request refused before that is still an
+invocation, with its prompt measured if it was rendered, but no reading. Refusals of
+this kind: over its ceiling or price, its reservation refused, the world terminal,
+an unbilled provider failure, a request that could not be rendered. The kernel files its bytes under the
 return's author, its assembly and role, in the window the reading was metered,
 exactly as retained-storage rent is filed: it joins a returns horizon when it was
 metered in the windows of the selected responses, never occupies a response slot

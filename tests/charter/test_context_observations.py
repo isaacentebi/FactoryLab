@@ -298,20 +298,24 @@ def test_the_runtime_files_a_readers_inputs_under_the_subjects_author():
     rt = _Reader()
     sections = {"stable_prefix": 10, "you": 20, "inputs": 700, "total": 730}
     Runtime._record_reading(rt, "judge-h", Return("judge-h", {}, 1, "ok",
-                                                   prompt_sections=sections))
+                                                   prompt_sections=sections, delivered=True))
     assert rt.window.downstream_read_bytes == 700
     assert rt.card_samples.readings == [{"handle": "prod-h", "assembly": "producer-1",
                                          "role": "producer", "window": 3, "read_bytes": 700,
                                          "reading": True}]
-    # No subject, a subject nobody authored, no rendered prompt, or a decision that is
-    # its own subject: nothing is filed.
-    for handle, ret in (("other-h", Return("other-h", {}, 1, "ok", prompt_sections=sections)),
-                        ("judge-h", Return("judge-h", {}, 1, "ok")),
-                        ("self-h", Return("self-h", {}, 1, "ok", prompt_sections=sections))):
+    # No subject, a subject nobody authored, no rendered prompt, a request that never
+    # reached its executor, or a decision that is its own subject: nothing is filed.
+    for handle, ret in (("other-h", Return("other-h", {}, 1, "ok", prompt_sections=sections,
+                                           delivered=True)),
+                        ("judge-h", Return("judge-h", {}, 1, "ok", delivered=True)),
+                        ("judge-h", Return("judge-h", {}, 0, "failed",
+                                           prompt_sections=sections)),
+                        ("self-h", Return("self-h", {}, 1, "ok", prompt_sections=sections,
+                                          delivered=True))):
         Runtime._record_reading(rt, handle, ret)
     rt.decision_subjects["orphan-h"] = "noop-h"
     Runtime._record_reading(rt, "orphan-h", Return("orphan-h", {}, 1, "ok",
-                                                    prompt_sections=sections))
+                                                    prompt_sections=sections, delivered=True))
     assert rt.window.downstream_read_bytes == 700 and len(rt.card_samples.readings) == 1
 
 

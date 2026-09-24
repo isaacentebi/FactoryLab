@@ -96,6 +96,76 @@ def test_a_request_that_cannot_be_rendered_fails_as_the_assembly_fails_it(monkey
     assert observation_for("prompt_bytes").measure(rt.window) is None
 
 
+def _reader(rt, ceiling):
+    """A decision routed on a published return authored by another assembly."""
+    req = request(rt, ceiling)
+    rt.handle_to_assembly["authored-h"] = "author-seat"
+    rt.decision_subjects[req.handle] = "authored-h"
+    return req
+
+
+def test_a_model_request_refused_over_its_ceiling_is_read_by_nobody(monkeypatch):
+    # PR #143 review: a request the assembly refuses before calling the provider was
+    # recorded as a downstream reading of the return it was commissioned on.
+    rt = runtime()
+    called = []
+    monkeypatch.setattr(rt.provider.target, "complete", lambda request: called.append(1))
+    req = _reader(rt, 1)
+    ret = rt._invoke(SEAT, req, "evaluator")
+    assert (ret.status, ret.outputs) == ("failed",
+                                         {"reason": "ceiling exceeds request cost_ceiling"})
+    assert rt.card_samples.readings == [] and rt.window.downstream_read_bytes == 0
+    assert not called and not ret.delivered
+    # Still an invocation, its prompt rendered and measured, its return's readings
+    # metered: only the reading it never received is absent.
+    assert ret.prompt_sections is not None
+    assert (rt.window.invocations, rt.window.prompts, rt.window.read_measured) == (1, 1, 1)
+
+
+def test_a_delivered_request_is_a_downstream_reading(monkeypatch):
+    rt = runtime()
+    req = _reader(rt, 1_000_000)
+    drive(rt, monkeypatch, [{"action": "hold", "rationale": "done"}])
+    ret = rt._invoke(SEAT, req, "evaluator")
+    assert ret.status == "ok" and ret.delivered
+    assert rt.card_samples.readings == [{
+        "handle": "authored-h", "assembly": "author-seat", "role": "producer",
+        "window": rt.window.index, "read_bytes": ret.prompt_sections["inputs"],
+        "reading": True}]
+    assert rt.window.downstream_read_bytes == ret.prompt_sections["inputs"]
+
+
+def test_a_program_refused_over_its_price_is_read_by_nobody():
+    # The program's flat price above the capped ceiling returns before stdin is built.
+    from tests.cortex.test_cortex import TinyWallet
+    from tests.cortex.test_programs import PRICE, program
+    from tests.cortex.test_programs import req as program_request
+
+    asm, wallet, _ = program()
+    refused = asm.invoke(program_request(ceiling=PRICE - 1))
+    assert refused.status == "failed" and not refused.delivered and wallet.log == []
+    # Its reservation refused: nothing was run either.
+    unaffordable, _, _ = program(TinyWallet(balance=PRICE - 1))
+    assert not unaffordable.invoke(program_request()).delivered
+    # And the runtime files no reading for a return that says it was not delivered.
+    rt = runtime()
+    req = _reader(rt, 1_000_000)
+    rt._record_reading(req.handle, replace(refused, handle=req.handle,
+                                            prompt_sections={"inputs": 900, "total": 1_000}))
+    assert rt.card_samples.readings == [] and rt.window.downstream_read_bytes == 0
+
+
+def test_a_program_the_jail_ran_was_delivered():
+    from tests.cortex.test_jail import require_jail
+    from tests.cortex.test_programs import program
+    from tests.cortex.test_programs import req as program_request
+
+    require_jail()
+    asm, _, _ = program()
+    ret = asm.invoke(program_request())
+    assert ret.status == "ok" and ret.delivered
+
+
 def test_a_ballot_no_assembly_answered_is_no_invocation_in_its_scope_facts(monkeypatch):
     # PR #143 review: the window never counts an assembly-unavailable ballot among its
     # invocations; the scope facts published to population code must not either, or

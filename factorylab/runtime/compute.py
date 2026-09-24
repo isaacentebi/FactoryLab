@@ -1620,6 +1620,8 @@ class ComputeMixin:
         # ceiling) and each continuation renders its own prompt, so these are taken
         # now and never recomputed. None when no prompt was rendered for the call.
         sections = getattr(ret, "prompt_sections", None)
+        # Whether the opening request reached its executor, as the assembly reports it.
+        delivered = bool(getattr(ret, "delivered", False))
         # The routing bridge buys only the routed call. Reads and children spend
         # the liable seat's remaining cover, never a fresh claim on the commons.
         seat = self._liable_seat(req.handle) or action_id
@@ -2032,7 +2034,8 @@ class ComputeMixin:
             self.window.prompt_bytes += sections["total"]
             self.window.you_bytes += sections.get("you", 0)
             self.window.inputs_bytes += sections.get("inputs", 0)
-        ret = replace(ret, prompt_sections=dict(sections) if sections is not None else None)
+        ret = replace(ret, prompt_sections=dict(sections) if sections is not None else None,
+                      delivered=delivered)
         if ret.status == "ok":
             self.window.ok += 1
             if role == "producer":

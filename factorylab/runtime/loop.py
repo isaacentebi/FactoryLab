@@ -174,13 +174,17 @@ class Runtime(
         kernel files them under the author's scope in the window the reading was
         metered, the way retained-storage rent is filed; the reader's request is
         not touched, so nothing about the author reaches it. A decision with no
-        subject, a subject no assembly authored, or an invocation for which the
-        runtime rendered no prompt, records nothing.
+        subject, a subject no assembly authored, an invocation for which the
+        runtime rendered no prompt, or one
+        whose request never reached its executor (refused over its ceiling, its
+        reservation refused, the world terminal: ``Return.delivered`` is False),
+        records nothing: no reader read those bytes.
         """
         sections = getattr(ret, "prompt_sections", None)
         subject = self.decision_subjects.get(handle)
         author = self.handle_to_assembly.get(subject) if subject is not None else None
-        if not sections or author is None or subject == handle:
+        if (not sections or not getattr(ret, "delivered", False) or author is None
+                or subject == handle):
             return
         read = int(sections.get("inputs", 0))
         self.window.downstream_read_bytes += read
