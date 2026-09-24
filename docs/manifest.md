@@ -1170,8 +1170,13 @@ end) and for money rails. No manifest key casts a window: `novelty.window`,
   order resuming after the last one evaluated (`watch_cursor`, checkpointed), so each
   of n live watchers is evaluated within `ceil(n / max_watcher_evaluations_per_sweep)`
   sweeps whoever registered first; a watcher not reached waits for the next sweep, and
-  a retired seat's watcher is not evaluated. The world block's `watchers` section
-  publishes the limit and this rule. A terminal state the pass sees is
+  a watcher that is retired, or whose owner is, is not evaluated and takes no place in
+  the rotation. There is no per-owner share, and none is needed: every watcher is a
+  registration, which costs its registrant a registration trial (real money), and the
+  rotation is fair per watcher, so an owner with many watchers dilutes the others (each
+  of n is still reached within `ceil(n / max_watcher_evaluations_per_sweep)` sweeps)
+  but can never monopolize the sweep. The world block's `watchers` section publishes
+  the limit and this rule. A terminal state the pass sees is
   latched: later calls in the event are refused unbilled, routing draws no one
   else, and the event's termination check kills the world through the one kill
   path. No thread is used.
@@ -1718,23 +1723,30 @@ exceeded: Gamma general 4,000 requests, `/events` 500, `/markets` 300,
 every claim's token lookup lands on `/markets`, so the tightest endpoint a request can
 land on is `/markets`: **300 per sliding 10 s**, the load-time ceiling on
 `read_requests_per_10s`. Every Polymarket budget, share and reserve is counted over
-that same sliding 10 s of world time, the window Polymarket itself counts (a budget
-per minute would have let 16 seats burst far past 300 within one 10 s). The default,
+that same sliding 10 s of **wall time**, the window Polymarket itself counts (a budget
+per minute would have let 16 seats burst far past 300 within one 10 s): the live
+reader stamps every request with the wall clock (`time.time_ns()`) as it sends it
+(`PolymarketReader.drain_sends`), the stamps are journaled, so a replay charges what
+the run charged, and every admission and countdown below is read against that clock
+(`wall_now`, the reader's `wall_ns`, journaled too), never the world's; on the
+simulated venue, which sends nothing, the world's clock stands in for it. The default,
 200, is two thirds of it: the host's IP is dedicated to the world (one live
 Polymarket world a host, below), and half (150) would leave each of 16 seats 3
 requests per 10 s, one claim's lookup, while a judge's one return may carry
 `max_forecasts_per_verdict` (2) claims; so 200 is the least budget that fits a whole
-return. The remaining third is margin for wall time (below). 100 of the 200 are held
+return. The remaining third covers only what the world cannot see (below). 100 of the 200 are held
 back for the kernel's own settlement reads (`event_facts`), which no seat can spend.
 The rest is divided over the venue read slots (`[venue] max_readers`, the same slots
 the venue reads use): each slot has a fixed share of `(read_requests_per_10s -
 kernel_reserve_per_10s) // max_readers` requests, 6 at the defaults, over any sliding
-10 s of world time, counted over the registration's own reads (keyed by its id and
-version, never the id string alone); a freed slot is given again only once its last
-holder's last read has left the longest window (the venue's 60 s) and its open reads
-(below) no longer count, so one slot never carries two registrations' reads in one
-window. A share that cannot cover one claim's token lookup (3 requests) is refused at
-load. Every read tool sends one GET, once. A seat read is refused before it is sent
+10 s of wall time, counted over the registration's own reads (keyed by its id and
+version, never the id string alone), each charged after it is sent, at least what it
+sent, at the stamp of its last request; a freed slot is given again only once its last
+holder's last Polymarket charge is 10 s of wall time old and its open reads (below) no
+longer count (and its last venue read has left the venue's own 60 s), so one slot
+never carries two registrations' reads in one window. A share that cannot cover one
+claim's token lookup (3 requests) is refused at load. Every read tool sends one GET,
+once. A seat read is refused before it is sent
 when the seat's remaining share cannot cover it (`polymarket read share spent: <used>
 of <share> requests in the last 10 s; this read sends 1`); nothing else admits or
 refuses it. Every admitted seat read is charged one request, whether it was sent or
@@ -1748,10 +1760,20 @@ simulated venue (`venue = "fake"`, and a live world's offline `simulate_reads`),
 sends Polymarket nothing. A live world with writes is refused at load
 (`polymarket_live_writes_not_built`) until the live-trading wave brings its own bound.
 So the kernel's requests to Polymarket are its settlement reads alone. **One live
-Polymarket world runs a host**: a live-read world takes an exclusive lock
-(`polymarket-ip.lock`, in `FACTORYLAB_STATE_DIR` when set, else beside the ledger, where
-the operator's other locks live) at genesis and at every resume, and a second is
-refused (`polymarket_ip_in_use`), because the budget assumes the IP is the world's own.
+Polymarket world runs a host**: a world whose Polymarket reads go to the network is
+admitted before its first event at genesis and before a resume replays anything
+(`runtime/polymarket.py`, `arm`). It must have a ledger (every request and its wall
+stamp is journaled; refused `polymarket_live_requires_a_ledger`), run on the wall clock
+(Polymarket counts wall time, and a simulated clock's ticks are no measure of it;
+refused `polymarket_live_requires_the_wall_clock`), and take the host's exclusive lock,
+`polymarket-ip.lock` in the operator's one lock directory on the host (the capital
+loop's `default_lock_dir()`, `~/.factorylab/capital-loop` of the account as the
+password database names it, never beside a run), so a second live reader on the host
+is refused (`polymarket_ip_in_use`, its own operator code), whichever directory it runs
+in, because the budget assumes the IP is the world's own. The lock is released when
+the world stops, on every path, including a resume that fails after admission, and by
+process death. A world whose reads are answered offline (`simulate_reads`, or the
+simulated venue) is admitted with no lock, on any clock.
 
 **The kernel's reads fit its reserve by construction; they are never admitted,
 refused or deferred.** A claim is graded on the world at its due pass (essay
@@ -1759,8 +1781,8 @@ II.III.b, prebaked at the Stackelberg move): the settlement reads of `event_fact
 always sent. What bounds them is a limit on what seats can open. An *open read* is a
 seat registration's own: the settlement of its claims on one token due at one tick
 (`<registration>|due:<token>:<tick>`), held whether or not another seat holds the same
-token and tick; it stays open while its claims are pending, and for one window (10 s)
-after the kernel's last read for it. Each registration holds at most **`N //
+token and tick; it stays open while its claims are pending, and for one window (10 s
+of wall time) after the kernel's last request for it. Each registration holds at most **`N //
 max_readers`** of them, where **N = `kernel_reserve_per_10s // 2`** (50 at the
 defaults, 3 a seat at 16 slots; published in the world block's `polymarket_reads`),
 counted over its own claims alone, so what it is told never depends on another seat
@@ -1768,20 +1790,24 @@ counted over its own claims alone, so what it is told never depends on another s
 spent: <share> open reads`), and a key it already holds, open or counting down, is not
 counted again. A world whose seat share would be under 1 is refused at load. A retired
 seat's due keys hold its slot for at most `MAX_FORECAST_HORIZON` ticks. *Proof*
-(`runtime/polymarket.py`, `open_limit`): the kernel sends at most 2 requests for an
-open read in any sliding 10 s (its market by id and, for a price claim on an open
+(`runtime/polymarket.py`, `open_limit`), every window in wall time: the kernel sends at
+most 2 requests for an open read (its market by id and, for a price claim on an open
 market, its book, in the one pass that settles that due tick, since every claim due at
-a tick settles in the first pass at or after it). Every settlement the kernel read for
-in a window `(t - 10 s, t]` is held by an open read still counted at `t`, and a
-registration holds open reads only through a slot, which is not given again while
-they count, so at most `max_readers × N // max_readers <= N` are ever counted: the
-kernel sends at most `2 N <= kernel_reserve_per_10s` in any sliding 10 s, and with the
-seats the world never passes `read_requests_per_10s <= 300`. At the defaults the
-kernel sends at most 100 and the seats at most 96 in any 10 s: 196 of the published
-300. *Wall time.* The bound is in world time, and Polymarket counts wall time: a long
-tick compresses the kernel's reads of several ticks into less wall time. The two-thirds
-default leaves a 1.5× margin, so a 1.5× compression still stays within the published
-limit. A claim's token is looked up when the claim is sealed (`open_claim`), as the
+a tick settles in the first pass at or after it). A kernel request stamped `s` in a
+window `(t - 10 s, t]` keeps every open read holding its settlement counting until at
+least `s + 10 s > t`, so every settlement the kernel read for in the window is held by
+an open read counting at `t`; a registration opens one only while fewer than its share
+count, and holds open reads only through a slot, which is not given again while any
+count, so at most `max_readers × N // max_readers <= N` count at any instant: the
+kernel sends at most `2 N <= kernel_reserve_per_10s` in any 10 s of wall time. A seat
+read admitted at `a` fits the charges in `(a - 10 s, a]` and is charged at its last
+send stamp, not before `a` and not after the next admission, so every read of a
+registration with a request in a window is counted when the last of them is admitted:
+the seats send at most `max_readers × share` in any 10 s of wall time. **Worst case**
+at the defaults: the kernel 2 × 50 = 100 and the seats 16 × 6 = 96, **196 of the
+published 300**, however long or short the world's ticks run. The 104 left cover only
+what the world cannot see: the difference between this host's clock and Polymarket's,
+and a request's time in flight. A claim's token is looked up when the claim is sealed (`open_claim`), as the
 sealing seat's own read through its venue read slot (a seat without one is refused: `a
 polymarket claim needs a venue read slot`), charged 3 requests to its share, the
 lookup's most, and always sent, whether or not the world already knows the token, so
@@ -1846,17 +1872,19 @@ predicate enum); a world without the block offers neither and refuses them. Both
 | `event_price_above` | `horizon_events`, `token_id`, `level` in (0, 1) | 1 when the token's price exceeds `level`: its redemption value once resolved, else the midpoint of its CLOB book's best bid and ask (exact comparison) |
 
 The world reads the token at the forecast's due tick, through the surface's journal
-(`polymarket.event_read`): the market that lists it (Gamma's closed listing first, since
-its open listing excludes closed markets, and the closed listing once more after an empty
-open answer, so a market closing between the two is still found), and for a price claim
-on an unresolved market its book. Each token is read once a settlement pass, and every
+(`polymarket.event_read`): the market that lists it, one GET by the market id the
+claim's sealing found and cached (a claim is admitted only once its token's market is
+found, so settlement never looks a token up, and an uncached token is a kernel fault that
+raises), and for a price claim on an unresolved market its book. Each token is read once a settlement pass, and every
 forecast due on it in that pass settles on that one snapshot. A payout exists only for a closed market whose outcome prices are a redemption (1 and 0, or 0.5 each) and whose UMA status, when stated,
 is `resolved`. A read that did not answer, or a price claim with no midpoint, is
 `polymarket.event_unavailable`: the claim settles censored and is excluded as
-`external_unobservable`. A token no market lists settles censored and is not excluded.
-The reads are the kernel's measurement and cost no seat anything. `scripts/fastloop.py`
-answers a live-read world's reads from the simulated venue (`simulate_reads`), which then
-moves and resolves on the world's clock.
+`external_unobservable`. A token no market lists is refused at sealing, so no claim on
+one reaches settlement.
+The reads are the kernel's measurement and cost no seat anything. `scripts/fastloop.py`,
+and `scripts/edition4_rehearsal.py` when it is handed a simulated clock, answer a
+live-read world's reads from the simulated venue (`simulate_reads`), which then moves and
+resolves on the world's clock; such a run takes no IP lock.
 
 ## New kinds of work: reward shapes and predicates
 
@@ -1970,7 +1998,8 @@ on who reads the venue, not on how many seats exist.** `[venue] max_readers`
 order, a newly registered seat takes the lowest free one if there is one, and a
 retirement frees its seat's slot. A freed slot keeps its place and is given again
 only once its last holder's last read has left the sliding minute (`slot_free_at`)
-and its Polymarket open reads no longer count (`slot_last_reader`), so no two
+and nothing of its Polymarket reads or open reads still counts, in wall time
+(`slot_last_reader`), so no two
 registrations' reads through one slot ever share a window and nothing of a
 predecessor's reads reaches the seat that follows it (AGENTS.md rule 5). Reads are
 counted per registration, its id and version, never the id string, and a round of a

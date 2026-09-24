@@ -692,13 +692,16 @@ class ThinkingMixin:
         against one snapshot of the world read once for the sweep, so watcher work
         does no venue I/O of its own; in id order, resuming after the last one
         evaluated, so each of n live watchers is reached within ceil(n / limit)
-        sweeps whoever registered first; a retired seat's watcher is never evaluated.
+        sweeps whoever registered first; a watcher that is retired, or whose owner is,
+        is never evaluated and takes no place in the rotation.
         """
         from bisect import bisect_right
 
         book = self.subscription_book
-        live = sorted(seat for seat in book.watchers
-                      if seat in self.assemblies and seat not in self.retired_assemblies)
+        retired = self.retired_assemblies
+        live = sorted(seat for seat, record in book.watchers.items()
+                      if seat in self.assemblies and seat not in retired
+                      and record["owner"] not in retired)
         if not live:
             return
         start = 0 if book.watch_cursor is None else bisect_right(live, book.watch_cursor)

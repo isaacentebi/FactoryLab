@@ -258,12 +258,16 @@ class Runtime(
 
     def run(self) -> dict[str, Any]:
         """Keep exclusive ledger ownership through the last runtime action or process death."""
+        from factorylab.runtime import polymarket
+
         try:
+            # A live Polymarket reader is admitted, and holds the host's IP, before the
+            # world's first event; an offline one takes nothing.
+            polymarket.arm(self)
             return self._run()
         finally:
             self._ledger_lock.close()
-            if getattr(self, "_polymarket_ip_lock", None) is not None:
-                self._polymarket_ip_lock.close()
+            polymarket.disarm(self)
 
     def _run(self) -> dict[str, Any]:
         """Continue the original source budget; restored internal events keep their ordering."""

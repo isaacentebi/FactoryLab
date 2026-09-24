@@ -69,6 +69,11 @@ class Reason(StrEnum):
     ARGUMENTS_INCOMPLETE = "arguments_incomplete"
     # A world whose treasury rail signs with the mainnet reserve key needs --ledger.
     MAINNET_RAIL_REQUIRES_A_LEDGER = "mainnet_rail_requires_a_ledger"
+    # A live Polymarket reader: another holds this host's IP; a world that reads live
+    # needs --ledger; and it runs only on the wall clock (runtime/polymarket.py, arm).
+    POLYMARKET_IP_IN_USE = "polymarket_ip_in_use"
+    POLYMARKET_LIVE_REQUIRES_A_LEDGER = "polymarket_live_requires_a_ledger"
+    POLYMARKET_LIVE_REQUIRES_THE_WALL_CLOCK = "polymarket_live_requires_the_wall_clock"
 
 
 class CredentialMissing(RuntimeError):

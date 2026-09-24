@@ -1249,9 +1249,10 @@ class ComputeMixin:
 
         Guarantees at most ``[venue] max_readers`` seats hold a slot, a live seat
         keeps its own, only retirement frees one (``_free_reader_slot``), and a freed
-        slot is given again only once its last holder's last read has left every
-        sliding minute (``slot_free_at``) and none of the Polymarket open reads it
-        holds still counts (``runtime/polymarket.py``, ``open_limit``). So no two
+        slot is given again only once its last holder's last venue read has left the
+        sliding minute (``slot_free_at``) and nothing of its Polymarket reads or open
+        reads still counts in wall time (``runtime/polymarket.py``, ``reader_counts``,
+        ``open_limit``). So no two
         registrations' reads or open reads through one slot ever count at once: the
         slots' totals stay under ``max_readers × share`` on both venues and under
         the open-read limit, and nothing of a predecessor's reads reaches the seat
@@ -1273,8 +1274,9 @@ class ComputeMixin:
     def _free_reader_slot(self, seat: str) -> None:
         """Free a retiring seat's slot, held back until its last read has slid out.
 
-        Guarantees the slot is given to no one before every read charged to the
-        retiring seat, on either venue, is older than the sliding minute.
+        Guarantees the slot is given to no one before every venue read charged to the
+        retiring seat is older than the sliding minute of world time; its Polymarket
+        reads are held to their own window, in wall time, by ``_holds_open_reads``.
         """
         from factorylab.world.venue_tools import READ_WINDOW_NS
 
@@ -1283,21 +1285,21 @@ class ComputeMixin:
         index = self.venue_readers.index(seat)
         reader = self._reader_id(seat)
         since = self.clock.now_ns - READ_WINDOW_NS
-        last = max((row[0] for uses in (self.venue_read_use,
-                                        getattr(self, "polymarket_read_use", {}))
-                    for row in uses.get(reader, ()) if row[0] > since), default=None)
+        last = max((row[0] for row in self.venue_read_use.get(reader, ())
+                    if row[0] > since), default=None)
         self.venue_readers[index] = None
         self.slot_free_at[str(index)] = (self.clock.now_ns if last is None
                                          else last + READ_WINDOW_NS)
         self.slot_last_reader[str(index)] = reader
 
     def _holds_open_reads(self, reader: str | None) -> bool:
-        """Whether the registration ``reader`` still has Polymarket open reads counting."""
+        """Whether anything of the registration ``reader`` still counts against a
+        Polymarket window: an open read, or a read in the last 10 s of wall time."""
         if reader is None or getattr(self, "polymarket", None) is None:
             return False
-        from factorylab.runtime.polymarket import seat_open_reads
+        from factorylab.runtime.polymarket import reader_counts
 
-        return seat_open_reads(self, reader) > 0
+        return reader_counts(self, reader)
 
     def _reader_id(self, seat: str) -> str:
         """The registration a seat's reads and open reads are counted under: its id and
@@ -1334,10 +1336,13 @@ class ComputeMixin:
         from factorylab.world.venue_tools import READ_WINDOW_NS
 
         since = self.clock.now_ns - READ_WINDOW_NS
-        for uses in (self.venue_read_use, getattr(self, "polymarket_read_use", {})):
-            for key in [key for key, rows in uses.items()
-                        if all(row[0] <= since for row in rows)]:
-                del uses[key]
+        uses = self.venue_read_use
+        for key in [key for key, rows in uses.items() if all(row[0] <= since for row in rows)]:
+            del uses[key]
+        if getattr(self, "polymarket", None) is not None:
+            from factorylab.runtime.polymarket import prune_read_use
+
+            prune_read_use(self)  # its own window, in wall time
 
     def _venue_read_used(self, seat: str) -> int:
         """The venue weight charged to this seat's own reads in the sliding minute."""

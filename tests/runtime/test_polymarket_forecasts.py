@@ -453,21 +453,38 @@ def test_a_seat_s_open_reads_are_its_own_share():
 
 class Wire:
     """A live reader that sends what Gamma and the CLOB would, and logs every request
-    with its world time and whether the kernel sent it: a token's lookup is two
+    with the wall-clock instant it was sent and whether the kernel sent it, stamping
+    it as ``PolymarketReader`` does (``drain_sends``): a token's lookup is two
     requests when listed (the closed listing, then the open one) and three when not;
     every other read one. Tokens ``7`` and ``8`` are listed nowhere, and every seventh
-    book read fails, as a transport failure would."""
+    book read fails, as a transport failure would. ``wall`` is its wall clock, which
+    need not be the world's; each request takes ``flight_ns`` of it."""
 
     deterministic = False
 
-    def __init__(self, clock):
-        self.clock, self.kernel, self.log, self.books = clock, [False], [], 0
+    def __init__(self, wall, flight_ns=0):
+        self.wall, self.flight_ns = wall, flight_ns
+        self.kernel, self.log, self.books, self.sends = [False], [], 0, []
 
     def _send(self, requests):
-        self.log.append((self.clock(), requests, self.kernel[0]))
+        for _ in range(requests):
+            stamp = self.wall()
+            self.log.append((stamp, 1, self.kernel[0]))
+            self.sends.append(stamp)
+            self.advance(self.flight_ns)
+
+    def advance(self, ns):
+        pass  # a clock of the test's own moves itself
 
     def requests_sent(self):
         return sum(n for _t, n, _k in self.log)
+
+    def drain_sends(self):
+        sends, self.sends = self.sends, []
+        return sends
+
+    def wall_ns(self):
+        return self.wall()
 
     def market_of_token(self, token_id):
         listed = token_id not in ("7", "8")
@@ -497,7 +514,7 @@ class Wire:
 
 
 def _worst_10s(entries):
-    """The most requests any sliding 10 s holds, over ``(world ns, requests)``."""
+    """The most requests any sliding 10 s holds, over ``(ns, requests)``."""
     window = polymarket.READ_WINDOW_NS
     return max((sum(n for ts, n in entries if start - window < ts <= start)
                 for start, _n in entries), default=0)
@@ -554,6 +571,80 @@ def test_every_polymarket_request_fits_the_published_10s_limit():
     reasons = {i["reason"] for i in diary if i["kind"] == "forecast.refused"}
     assert polymarket.NOT_LISTED_REFUSAL in reasons
     assert any(i["kind"] == "polymarket.event_unavailable" for i in diary)
+
+
+class WallClock:
+    """A wall clock apart from the world's: the test moves it, and each request the
+    wire sends takes a little of it."""
+
+    def __init__(self):
+        self.now = 1_900_000_000 * 10**9
+
+    def __call__(self):
+        return self.now
+
+
+@pytest.mark.gate
+def test_every_polymarket_request_fits_the_published_limit_in_wall_time():
+    """The fifth review's HIGH item: Polymarket counts wall time, and a world tick can
+    be any length of it. Here the wire has its own wall clock, apart from the world's:
+    ticks alternate a 30 s world tick and a 1 s one, while each takes a quarter second
+    of wall time (120× and 4× compression), and every request takes 1 ms in flight.
+    All 16 seats claim and read as hard as they can every tick. In no sliding 10 s of
+    wall time does the kernel send more than 2 N, the seats more than 16 × share, or
+    the world more than the stated bound, 2 N + 16 × share = 196 of the published
+    300 (``open_limit``)."""
+    rt = world(venue="live")  # the defaults: 200 per 10 s, 100 of them the kernel's
+    clock = WallClock()
+    wire = Wire(clock, flight_ns=1_000_000)
+    wire.advance = lambda ns: setattr(clock, "now", clock.now + ns)
+    rt.polymarket.venue.target = wire
+    spec = rt.m.polymarket
+    share = polymarket.read_share(spec, rt.m.exchange.max_readers)
+    settle_due = rt._settle_due_forecasts
+
+    def kernel_pass():
+        wire.kernel[0] = True
+        try:
+            settle_due()
+        finally:
+            wire.kernel[0] = False
+
+    judges = [judge_seat(rt, s) for s in rt.venue_readers if s is not None]
+    judges += [judge_seat(rt, f"judge-{i}") for i in range(16 - len(judges))]
+    tokens = [_token(i) for i in range(40)] + ["7", "8"]
+    world_start, wall_start = rt.clock.now_ns, clock.now
+    for step in range(160):
+        for index, seat in enumerate(judges):
+            k = step * 16 + index
+            seal(rt, ("event_price_above", 0.5, {
+                "horizon_events": 1 + (k * 37) % 30, "token_id": tokens[k % len(tokens)],
+                "level": 0.3}),
+                ("event_pays", 0.5, {"horizon_events": 1 + (k * 11) % 30,
+                                     "token_id": tokens[(k * 7) % len(tokens)]}),
+                judge=seat)
+            rt._run_tool(seat, collateral_decision(rt, seat),
+                         {"tool": "polymarket.search", "args": {"query": f"q{k}"}})
+        rt.ticks_consumed += 1
+        rt.n += 1
+        rt.balance_at.append(rt.wallet.balance)
+        rt.clock.now_ns += (30 if step % 2 == 0 else 1) * 10**9  # a long tick, a fast one
+        clock.now += 250_000_000  # each a quarter second of wall time
+        polymarket.tick(rt)
+        kernel_pass()
+    assert (rt.clock.now_ns - world_start) > 10 * (clock.now - wall_start)  # compressed
+    kernel = [(ts, n) for ts, n, by_kernel in wire.log if by_kernel]
+    seats = [(ts, n) for ts, n, by_kernel in wire.log if not by_kernel]
+    bound = (polymarket.KERNEL_READS_PER_OPEN * polymarket.open_limit(spec)
+             + rt.m.exchange.max_readers * share)
+    assert bound == 196
+    assert sum(n for _ts, n in kernel) > spec.kernel_reserve_per_10s  # it read plenty
+    assert _worst_10s(kernel) <= 2 * polymarket.open_limit(spec) <= spec.kernel_reserve_per_10s
+    assert _worst_10s(seats) <= rt.m.exchange.max_readers * share
+    assert _worst_10s(kernel + seats) <= bound <= 300
+    diary = _consequence_diary(rt)
+    assert polymarket.NOT_LISTED_REFUSAL in {i["reason"] for i in diary
+                                             if i["kind"] == "forecast.refused"}
 
 
 def test_sixteen_seats_bursting_in_one_tick_stay_within_the_seat_budget():

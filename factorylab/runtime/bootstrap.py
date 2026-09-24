@@ -138,15 +138,11 @@ class BootstrapMixin:
             # venue, key or file is touched.
             raise MainnetRailRequiresALedger(MAINNET_RAIL_REFUSED)
         self._ledger_lock = _lock or LedgerLock(ledger_path)
-        from factorylab.runtime.polymarket import ip_lock
-
-        try:
-            # A live-read Polymarket world's budget assumes the host's IP is its own:
-            # one such world a host, at genesis and at every resume.
-            self._polymarket_ip_lock = ip_lock(manifest, ledger_path)
-        except BaseException:
-            self._ledger_lock.close()
-            raise
+        # Where this process keeps the world's diary, and the host's one live Polymarket
+        # reader when this world holds it: taken before the first event or replay, and
+        # released when the world stops (``runtime/polymarket.py``, ``arm``).
+        self.ledger_path = ledger_path
+        self._polymarket_ip_lock = None
         self.m = manifest
         self.kill_at_end = kill_at_end
         self.clock_source = clock_source

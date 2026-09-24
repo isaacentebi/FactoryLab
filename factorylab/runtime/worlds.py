@@ -259,9 +259,9 @@ class PolymarketSpec:
     max_open_micro: int = 100_000_000
     max_orders_per_window: int = 20
     seed: int = 0
-    # The world's Polymarket read requests per sliding 10 s (the window Polymarket
-    # counts), and the part of them held back for the kernel's own settlement and
-    # marking reads. A limit taken from Polymarket's published rate limits
+    # The world's Polymarket read requests per sliding 10 s of wall time (the window
+    # Polymarket counts), and the part of them held back for the kernel's own
+    # settlement reads. A limit taken from Polymarket's published rate limits
     # (world/polymarket.py), never a price.
     read_requests_per_10s: int = 200
     kernel_reserve_per_10s: int = 100

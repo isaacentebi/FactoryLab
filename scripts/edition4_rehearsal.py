@@ -1180,6 +1180,15 @@ def _rehearse(
                 # that rail still supports the venue's spot/perps class move. Replace its
                 # target before launch so every treasury direction is refused pre-signing.
                 runtime.treasury.rail.target = DeniedTransferRail(runtime.treasury.rail.target)
+            from factorylab.runtime import polymarket
+
+            surface = getattr(runtime, "polymarket", None)
+            if (surface is not None and not surface.writes
+                    and not polymarket.wall_paced(runtime.tick_clock)):
+                # A rehearsal on a supplied simulated clock is offline: Polymarket counts
+                # wall time, and a live reader runs only on the wall clock (``arm``), so
+                # its reads are answered by the seeded simulated venue, as fastloop's are.
+                polymarket.simulate_reads(runtime)
             if observe:
                 from scripts import edition4_observer
 

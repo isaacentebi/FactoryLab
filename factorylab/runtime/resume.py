@@ -49,6 +49,10 @@ def resume_reason(exc: Exception) -> Reason:
             return Reason.INVALID_SNAPSHOT
     if isinstance(exc, CredentialMissing):
         return Reason.CREDENTIAL_MISSING
+    from factorylab.runtime.polymarket import LiveReaderRefused
+
+    if isinstance(exc, LiveReaderRefused):
+        return Reason(exc.code)
     if isinstance(exc, GenesisMismatchError):
         return Reason.MANIFEST_MISMATCH
     if isinstance(exc, LedgerIntegrityError):
@@ -493,7 +497,7 @@ def _read_only(name: str) -> bool:
         return True
     if name.startswith("polymarket.") and name.rsplit(".", 1)[-1] in (
             "search_markets", "market", "market_of_token", "midpoint", "order_book",
-            "requests_sent"):
+            "requests_sent", "drain_sends", "wall_ns"):
         return True  # the public Polymarket reads (world/polymarket.py)
     return name.rsplit(".", 1)[-1] in (
         # The safety path's wall-clock and delivered-tick reads (time audit T8).
@@ -788,6 +792,8 @@ _TRANSIENT_STATE = {
     "RecoveryJournal": "the diary itself and this process's replay cursor over it: the "
                        "checkpoint is an item in the diary, not a copy of it",
     "LedgerLock": "this process's exclusive hold on the diary file",
+    "Runtime.ledger_path": "where this process finds the diary it was launched or resumed "
+                           "on",
     "Runtime.diary_id": "bound by the restore to the diary the checkpoint came from",
     "ArtifactStore.root": "where this process finds the archive's bytes beside the ledger",
     "NormInbox.ledger_path": "where this process finds the norm house's files beside the "
@@ -1358,6 +1364,21 @@ def _resume_runtime(manifest, ledger_path, *, provider, market, exchange, clock_
             })
         raise
     journal.bootstrap = False
+    from factorylab.runtime import polymarket
+
+    # A live Polymarket reader is admitted, and holds the host's IP, before the replay:
+    # the tail's last event runs on past the diary's end and may read the network.
+    polymarket.arm(rt)
+    try:
+        return _replay(rt, journal, ledger, tail, snapshot, state, launch_nonce, now_ns)
+    except BaseException:
+        # A resume that fails here never runs, so nothing else would release the host.
+        polymarket.disarm(rt)
+        raise
+
+
+def _replay(rt, journal, ledger, tail, snapshot, state, launch_nonce, now_ns):
+    """Re-run the diary's tail on the restored runtime, then resume at the wall clock."""
     journal.active = journal.recovering = True
     journal.tail = (item for item in tail
                     if item.get("kind") not in ("ledger.repaired", "failed_resume"))

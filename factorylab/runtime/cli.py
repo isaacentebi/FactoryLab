@@ -1059,6 +1059,7 @@ def main(argv: list[str] | None = None) -> int:
         from factorylab.cortex.sandbox import NoJail
         from factorylab.kernel.ledger import LedgerBusyError
         from factorylab.runtime.bootstrap import MainnetRailRequiresALedger
+        from factorylab.runtime.polymarket import LiveReaderRefused
 
         try:
             _load_dotenv()
@@ -1066,6 +1067,9 @@ def main(argv: list[str] | None = None) -> int:
         except MainnetRailRequiresALedger:
             refuse("run", Reason.MAINNET_RAIL_REQUIRES_A_LEDGER)
             return ARGUMENT_EXIT
+        except LiveReaderRefused as exc:
+            refuse("run", Reason(exc.code))
+            return 1 if exc.code == Reason.POLYMARKET_IP_IN_USE else ARGUMENT_EXIT
         except LedgerBusyError:
             refuse("run", Reason.LEDGER_BUSY)
             return LEDGER_BUSY_EXIT

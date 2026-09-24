@@ -544,8 +544,9 @@ class SchematicsMixin:
                         "max_watcher_evaluations_per_sweep of them a sweep, in a "
                         "rotating order by id that resumes after the last one "
                         "evaluated, so each of n watchers is evaluated within "
-                        "ceil(n / max_watcher_evaluations_per_sweep) sweeps. A retired "
-                        "seat's watcher is not evaluated."},
+                        "ceil(n / max_watcher_evaluations_per_sweep) sweeps. A watcher "
+                        "that is retired, or whose owner is, is not evaluated and takes "
+                        "no place in the rotation."},
             "tools": self._published_tool_specs(),
             "reserve": {"protected": self.reserve.remaining(), "units": "micro-USD",
                         "trials": self.m.novelty.trials,
@@ -1311,8 +1312,10 @@ class SchematicsMixin:
             "read_requests_per_10s": spec.read_requests_per_10s,
             "kernel_reserve_per_10s": spec.kernel_reserve_per_10s,
             "rule": (
-                "Every Polymarket budget is counted over any sliding 10 s of world time, "
-                "the window Polymarket counts. An open read is a seat's own: the "
+                "Every Polymarket budget is counted over any sliding 10 s of wall time, "
+                "the window Polymarket counts, each request at the instant it was sent "
+                "(on the simulated venue, which sends nothing, the world's clock). An "
+                "open read is a seat's own: the "
                 "settlement of its Polymarket claims on one token due at one tick. Each "
                 "seat holds at most seat_open_reads = open_reads_limit // "
                 "venue.max_readers of them, counted over its own claims whether or not "

@@ -71,16 +71,27 @@ def test_two_hundred_watchers_are_settled_against_one_read_of_the_world_a_sweep(
 
 
 def test_a_retired_owner_s_watcher_is_not_evaluated_and_none_costs_anything():
+    """The watcher itself stays live; only its owner retires. It is never evaluated
+    again and takes no place in the rotation: with one evaluation a sweep, the sweeps
+    go round the two others."""
     rt = make_runtime()
     rt._manage_reserve_window()
     ids = _watchers(rt, 3)
-    rt.retired_assemblies.add(ids[1])
+    rt.subscription_book.watchers[ids[1]]["owner"] = "owner-b"
+    rt.retired_assemblies.add("owner-b")
+    assert ids[1] not in rt.retired_assemblies and ids[1] in rt.assemblies
     balance = rt.wallet.balance
     rt._evaluate_watchers()
     evaluated = [i["watcher"] for i in ledger_items(rt, "watcher.evaluated")]
     assert evaluated == [ids[0], ids[2]]
     assert rt.wallet.balance == balance
     assert all(i["cost"] == 0 for i in ledger_items(rt, "watcher.evaluated"))
+    rt.m = replace(rt.m, subscriptions=SubscriptionsSpec(1))
+    before = len(ledger_items(rt, "watcher.evaluated"))
+    for sweep in range(4):
+        rt._evaluate_watchers(sweep=f"s{sweep}")
+    assert [i["watcher"] for i in ledger_items(rt, "watcher.evaluated")[before:]] == [
+        ids[0], ids[2], ids[0], ids[2]]
 
 
 def test_no_watchers_read_nothing():

@@ -678,6 +678,7 @@ def test_the_kernel_s_settlement_read_succeeds_when_every_seat_is_spent():
         for n in range(3):
             _search(rt, seat, f"spend {seat} {n}")
         assert "error" in _search(rt, seat, f"again {seat}")
+    rt.polymarket.token_markets[token(rt)] = "fake-1"  # as the claim's sealing found it
     facts = polymarket.event_facts(rt, "event_price_above", token(rt))
     assert facts is not UNOBSERVABLE and facts["listed"] is True
 
@@ -714,6 +715,7 @@ def test_a_seat_s_admission_depends_on_its_own_share_alone():
     """No global meter admits seats: the kernel's reads fit its reserve by construction
     (``open_limit``), so a seat with share left reads, however much the kernel read."""
     rt = world(read_requests_per_10s=108, kernel_reserve_per_10s=60)
+    rt.polymarket.token_markets[token(rt)] = "fake-1"  # as the claim's sealing found it
     for _ in range(20):
         polymarket.event_facts(rt, "event_price_above", token(rt))
     assert "markets" in _search(rt, "seed-decider", "event A")
@@ -721,8 +723,9 @@ def test_a_seat_s_admission_depends_on_its_own_share_alone():
 
 def test_a_freed_polymarket_slot_waits_until_its_last_read_has_slid_out():
     """Rule 5: a newcomer never inherits a predecessor's reads. The retired seat's slot
-    is held back until its last read has left the minute; the newcomer waits (no slot,
-    no Polymarket reads), then gets it, and the assignment is ledgered."""
+    is held back until its last Polymarket read has left Polymarket's window (10 s; the
+    simulated venue counts it on the world's clock); the newcomer waits (no slot, no
+    Polymarket reads), then gets it, and the assignment is ledgered."""
     from tests.runtime.test_real_flows import _register
 
     rt = world(read_requests_per_10s=108, kernel_reserve_per_10s=60)
@@ -733,7 +736,7 @@ def test_a_freed_polymarket_slot_waits_until_its_last_read_has_slid_out():
     _register(rt, "newcomer")
     assert "newcomer" not in rt.venue_readers and rt.slot_waiting == ["newcomer"]
     assert "polymarket.search" not in rt._allowed_tools("newcomer")
-    rt.clock.now_ns += 60_000_000_000 - 1  # a slot waits out the longest window, 60 s
+    rt.clock.now_ns += polymarket.READ_WINDOW_NS - 1  # the read's window, 10 s
     rt._assign_waiting_readers()
     assert "newcomer" not in rt.venue_readers
     rt.clock.now_ns += 1
@@ -788,44 +791,150 @@ class _Stop(BaseException):
     """The process dies here."""
 
 
-def test_one_live_polymarket_world_a_host(tmp_path, monkeypatch):
-    """The read budget assumes the host's IP is the factory's own, so one live-read
-    Polymarket world runs a host at a time: a second is refused at genesis
-    (``polymarket_ip_in_use``), and a resume takes the same lock."""
+def _wall_clock(count=40):
+    """A wall clock the world's ticks are paced against, advancing 1 s a read, that
+    never sleeps."""
+    from factorylab.runtime.live import LiveClock
+
+    now = iter(range(1_900_000_000 * 10**9, 2_000_000_000 * 10**9, 10**9))
+    return LiveClock(10**9, count, now_ns=lambda: next(now), sleep=lambda _s: None)
+
+
+def _live_world(where, *, wall=True, ledger=True):
+    """A world whose Polymarket reads go to the network (the network guard answers
+    every one of them with a failure), in its own run directory."""
     from factorylab.runtime.loop import Runtime
-    from factorylab.runtime.resume import resume_world
 
-    monkeypatch.setenv(polymarket.STATE_DIR_ENV, str(tmp_path / "state"))
-    manifest = _live_manifest()
+    where.mkdir(parents=True, exist_ok=True)
+    return Runtime(_live_manifest(), events=40, seed=1, initial_balance_micro=None,
+                   ledger_path=str(where / "world.jsonl") if ledger else None,
+                   router_gamma=.1, exchange=FakeExchange(),
+                   clock_source=_wall_clock() if wall else None)
 
-    def build(name):
-        (tmp_path / name).mkdir(exist_ok=True)
-        return Runtime(manifest, events=40, seed=1, initial_balance_micro=None,
-                       ledger_path=str(tmp_path / name / "world.jsonl"), router_gamma=.1,
-                       exchange=FakeExchange())
 
-    first = build("a")
-    with pytest.raises(RuntimeError, match=polymarket.IP_IN_USE):
-        build("b")
-    # A world with no live Polymarket reader takes no lock.
-    plain = Runtime(load_manifest("scripted"), events=1, seed=1, initial_balance_micro=None,
-                    ledger_path=str(tmp_path / "a" / "plain.jsonl"), router_gamma=.1,
-                    exchange=FakeExchange())
-    plain._ledger_lock.close()
-    polymarket.simulate_reads(first)  # nothing reaches the network
-    process = first._process_event
+def _stopped(rt):
+    """``rt`` with its first event replaced by the process dying."""
+    def stop():
+        raise _Stop
 
-    def stop_at_twenty(event):
+    rt._run = stop
+    return rt
+
+
+def _host_is_free():
+    lock = polymarket.ip_lock()
+    lock.close()
+    return True
+
+
+def test_one_live_polymarket_reader_a_host_whatever_directory_it_runs_in(tmp_path,
+                                                                        monkeypatch):
+    """The read budget assumes the host's IP is the factory's own, so one live
+    Polymarket reader runs a host at a time. The lock is the host's, in the operator's
+    one lock directory (never beside a run), so a second world in another run
+    directory is refused (``polymarket_ip_in_use``, its own operator code); it is
+    released when the world stops, however it stops."""
+    from factorylab.runtime import capital_loop
+    from factorylab.runtime.reasons import Reason
+    from factorylab.runtime.resume import resume_reason
+
+    monkeypatch.delenv("FACTORYLAB_STATE_DIR", raising=False)
+    first = _stopped(_live_world(tmp_path / "run-a"))
+    second = _stopped(_live_world(tmp_path / "run-b"))
+    polymarket.arm(first)
+    assert (capital_loop.default_lock_dir() / "polymarket-ip.lock").exists()
+    assert not list(tmp_path.rglob("polymarket-ip.lock"))
+    with pytest.raises(polymarket.LiveReaderRefused, match=polymarket.IP_IN_USE) as refused:
+        second.run()
+    assert second._polymarket_ip_lock is None and second._ledger_lock.fd is None
+    assert resume_reason(refused.value) is Reason.POLYMARKET_IP_IN_USE
+    with pytest.raises(_Stop):
+        first.run()  # admitted already; released when the world stops
+    assert first._polymarket_ip_lock is None and _host_is_free()
+    with pytest.raises(_Stop):
+        second.run()
+    assert _host_is_free()
+
+
+def test_a_live_reader_needs_a_ledger_and_the_wall_clock_and_an_offline_one_no_lock(
+        tmp_path):
+    """Polymarket counts wall time, so a world whose reads go to the network runs on
+    the wall clock, with a ledger that journals every request's stamp; each refusal
+    has its own operator code. An offline rehearsal (``simulate_reads``) takes no lock,
+    on any clock, even while the host's reader is held."""
+    from factorylab.runtime.reasons import Reason
+
+    simulated = _live_world(tmp_path / "simulated", wall=False)
+    with pytest.raises(polymarket.LiveReaderRefused,
+                       match=polymarket.LIVE_REQUIRES_THE_WALL_CLOCK) as refused:
+        simulated.run()
+    assert Reason(refused.value.code) is Reason.POLYMARKET_LIVE_REQUIRES_THE_WALL_CLOCK
+    no_ledger = _live_world(tmp_path / "none", ledger=False)
+    with pytest.raises(polymarket.LiveReaderRefused,
+                       match=polymarket.LIVE_REQUIRES_A_LEDGER) as refused:
+        no_ledger.run()
+    assert Reason(refused.value.code) is Reason.POLYMARKET_LIVE_REQUIRES_A_LEDGER
+    assert simulated._polymarket_ip_lock is None and no_ledger._polymarket_ip_lock is None
+    holder = _live_world(tmp_path / "holder")
+    polymarket.arm(holder)
+    offline = _stopped(_live_world(tmp_path / "offline", wall=False))
+    polymarket.simulate_reads(offline)
+    with pytest.raises(_Stop):
+        offline.run()  # admitted, on the simulated clock, with no lock
+    assert offline._polymarket_ip_lock is None
+    polymarket.disarm(holder)
+    holder._ledger_lock.close()
+    assert _host_is_free()
+
+
+def test_a_failed_resume_releases_the_host_and_a_retry_in_process_takes_it(tmp_path,
+                                                                            monkeypatch):
+    """A resume holds the host's reader before it replays anything (the tail's last
+    event runs past the diary's end and may read). A resume that fails after that
+    releases it at once, never at garbage collection, so the same process can retry."""
+    from factorylab.runtime import capital_loop, resume
+
+    lock_dir = capital_loop.default_lock_dir()  # the test's own (tests/conftest.py)
+    world_dir = tmp_path / "run-a"
+    genesis = _live_world(world_dir)
+    process = genesis._process_event
+
+    def stop_at_three(event):
         result = process(event)
-        if first.n == 20:
+        if genesis.n == 3:
             raise _Stop
         return result
 
-    first._process_event = stop_at_twenty
+    genesis._process_event = stop_at_three
     with pytest.raises(_Stop):
-        first.run()  # the lock is released when the world stops, however it stops
-    second = build("b")
-    with pytest.raises(RuntimeError, match=polymarket.IP_IN_USE):
-        resume_world(manifest, str(tmp_path / "a" / "world.jsonl"))
-    second._ledger_lock.close()
-    second._polymarket_ip_lock.close()
+        genesis.run()
+    assert _host_is_free()
+    manifest, ledger = _live_manifest(), str(world_dir / "world.jsonl")
+    held = []
+
+    def failing_replay(rt, *args):
+        held.append(rt._polymarket_ip_lock is not None)
+        raise resume.ResumeError("the witness records this identity's kill",
+                                 code="identity_killed")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(resume, "_replay", failing_replay)
+        with pytest.raises(resume.ResumeError, match="kill"):
+            resume.resume_runtime(manifest, ledger, clock_source=_wall_clock())
+    assert held == [True] and _host_is_free()
+    rt = resume.resume_runtime(manifest, ledger, clock_source=_wall_clock())
+    assert rt._polymarket_ip_lock is not None
+    with pytest.raises(polymarket.LiveReaderRefused, match=polymarket.IP_IN_USE):
+        _live_world(tmp_path / "run-b").run()
+    with pytest.raises(_Stop):
+        _stopped(rt).run()
+    assert _host_is_free() and capital_loop.default_lock_dir() == lock_dir
+
+
+def test_settlement_never_looks_a_token_up():
+    """A claim is admitted only once its token's market is found and cached, so the
+    kernel's settlement read is one GET by market id; an uncached token is a kernel
+    fault and raises, never a lookup of up to 3 requests."""
+    rt = world(venue="live")
+    with pytest.raises(KeyError):
+        polymarket.event_facts(rt, "event_pays", token(rt), due_tick=5)

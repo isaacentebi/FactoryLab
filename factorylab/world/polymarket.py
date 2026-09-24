@@ -328,10 +328,12 @@ PUBLISHED_REQUESTS_PER_10S = 300
 #: share of the limit is left for other tenants. Half (150) would leave each of 16
 #: seats 3 requests per 10 s, one claim's token lookup, but a judge's one return may
 #: carry ``max_forecasts_per_verdict`` (2) claims, 6 requests, so the default is the
-#: least budget that fits a whole return: (200 - 100) // 16 = 6. The remaining third
-#: is margin, because the world's bound is in world time and Polymarket counts wall
-#: time: a 1.5× compression of world time into wall time (a long tick) stays within
-#: the published limit (``runtime/polymarket.py``, ``open_limit``).
+#: least budget that fits a whole return: (200 - 100) // 16 = 6. The world counts
+#: every request at the wall-clock instant it was sent (``PolymarketReader.
+#: drain_sends``), in the window Polymarket counts, so its bound (196 of 300,
+#: ``runtime/polymarket.py``, ``open_limit``) holds in wall time; what remains of the
+#: 300 covers only the difference between this host's clock and Polymarket's, and a
+#: request's time in flight.
 DEFAULT_READ_REQUESTS_PER_10S = 200
 #: Of that, held back for the kernel's own settlement reads, which no seat can spend:
 #: N = 100 // 2 = 50 open reads, 3 a seat at 16 slots.
@@ -364,6 +366,10 @@ class PolymarketReader:
     deterministic: bool = False
     #: A value no earlier Gamma read carried, for ``CACHE_KEY``.
     nonce: Any = time.time_ns
+    #: The wall clock every request is stamped with as it is sent (``drain_sends``).
+    wall: Any = time.time_ns
+    #: The stamps of the requests sent since the last ``drain_sends``.
+    sends: list = field(default_factory=list)
 
     #: Gamma answers through a shared cache (``cache-control: public, max-age=300``),
     #: keyed by the whole URL. Read 2026-09-23: ``/markets/4827887`` was served from it
@@ -378,17 +384,39 @@ class PolymarketReader:
     def _gamma(self, path: str, **params: Any) -> Any:
         fresh = {k: v for k, v in params.items() if v is not None}
         fresh[self.CACHE_KEY] = self.nonce()
-        self.sent = getattr(self, "sent", 0) + 1  # counted before it is sent
+        self._stamp()
         return self.get(f"{self.gamma_url}{path}?{parse.urlencode(fresh)}")
 
     def _clob(self, path: str, **params: Any) -> Any:
-        self.sent = getattr(self, "sent", 0) + 1
+        self._stamp()
         return self.get(f"{self.clob_url}{path}?{parse.urlencode(params)}")
+
+    def _stamp(self) -> None:
+        # Counted and stamped before it is sent: a request that fails in flight may
+        # still have reached Polymarket, so it counts.
+        self.sent = getattr(self, "sent", 0) + 1
+        self.sends.append(int(self.wall()))
 
     def requests_sent(self) -> int:
         """Guarantees the count of every request this reader has sent, monotone. A read
         of its own counter, journaled read-only, so a replay charges what was sent."""
         return getattr(self, "sent", 0)
+
+    def drain_sends(self) -> list[int]:
+        """Guarantees the wall-clock stamp (``time.time_ns`` at send) of every request
+        sent since the last drain, one per request, in send order, each returned once.
+
+        Polymarket counts its limits in wall time, so the world charges each request at
+        the instant it was sent. Read through the journal, so a replay charges the
+        stamps the run read.
+        """
+        sends, self.sends = self.sends, []
+        return sends
+
+    def wall_ns(self) -> int:
+        """The wall clock this reader stamps its requests with, now. Read through the
+        journal, so a replay reads the instant the run read."""
+        return int(self.wall())
 
     def search_markets(self, query: str, limit: int) -> list[dict[str, Any]]:
         """Markets matching ``query`` through Gamma's public search, best ranked first."""
