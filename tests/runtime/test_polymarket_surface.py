@@ -521,6 +521,38 @@ def test_a_kill_cancels_resting_orders_and_leaves_tokens_to_resolve_as_residual(
     assert account["open_orders"] == [] and account["positions"][0]["size"] == "10"
 
 
+# --- the write is the action learned ----------------------------------------------------------
+
+def test_a_polymarket_write_is_named_and_learned_as_the_write_it_made():
+    """A seat that places and then cancels a Polymarket order through the tools is
+    learned as those writes, never as investigate or as its final word (essay II.I.b:
+    the propensity is about the decision the seat actually made)."""
+    from factorylab.runtime.propensity import action_class, effect_label
+
+    place = {"tool": "polymarket.place_limit",
+             "args": {"token_id": "100000000000000000000", "side": "buy", "size": "10",
+                      "price": "0.30"}}
+    cancel = {"tool": "polymarket.cancel", "args": {"order_id": "pm-1"}}
+    for call, status, label in ((place, "resting", "polymarket:buy:xl"),
+                                (cancel, "cancelled", "polymarket:cancel")):
+        rt = world(provider=Scripted({"action": "investigate", "tool_calls": [call]},
+                                     {"action": "hold"}))
+        if call is cancel:  # an order this world placed earlier, resting at 0.30
+            assert buy(rt, collateral_decision(rt), price="0.30")["order_id"] == "pm-1"
+        handle, event = _consequence_produce(rt)
+        executed = event.payload["executed_operations"]
+        assert [(e["operation"], e["status"]) for e in executed] == [(call["tool"], status)]
+        record = rt.queue.declared_propensity(handle)
+        assert record.chosen == label
+        [classified] = [i for i in _consequence_diary(rt)
+                        if i["kind"] == "action.classified" and i["handle"] == handle]
+        assert classified["label"] == label and classified["action"] == "order"
+    assert effect_label("polymarket.place_limit", {"side": "sell", "size": "7"}) == (
+        "polymarket:sell:l")
+    assert effect_label("polymarket.place_limit", {"side": "hold", "size": "7"}) == "malformed"
+    assert action_class("polymarket:cancel", {}) == "order"
+
+
 # --- only true facts: no stale market, no invented price ------------------------------------
 
 def test_the_market_tool_serves_the_markets_current_state_never_a_cached_copy():
