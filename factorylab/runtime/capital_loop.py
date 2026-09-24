@@ -454,38 +454,46 @@ def settlement_bound(run_ns: int, tick_interval_ns: int, *,
 
     * the validity window, always the ``MAX_AUTHORIZATION_S`` cap: the signer obeys
       whatever quote it is handed later, so a quote read now bounds nothing;
-    * plus twice the host's lead over finalized Base: this host's clock now, less the
-      finalized block's timestamp, read in one call. That one difference already holds
-      Base's finality lag, any lead of the host clock over the chain (a ``validBefore``
-      stamped by a fast clock lies that much later in chain time), and any staleness of
-      the node that answered (an old finalized block only lengthens it). A separate
-      ``latest`` read cannot shorten it: there is none, so two nodes behind one URL
-      cannot pair a stale ``latest`` with a fresh ``finalized``. Doubling is the
+    * plus twice how far the finalized block is behind the present: the later of this
+      host's clock and the latest block's timestamp, less the finalized block's
+      timestamp. The host clock carries Base's lag, any lead of the host over the chain
+      (a ``validBefore`` stamped by a fast clock lies that much later in chain time) and
+      any staleness of the node that answered; the latest block's timestamp stands in
+      when the host clock is the slow one, so a slow host cannot shrink it either. A
+      stale ``latest`` cannot shrink it: it only ever raises the maximum. Doubling is the
       allowance for the lag growing during the run (16 minutes measured, 32 allowed);
     * plus one tick for the rail to look.
 
-    Every read is keyless. A finalized block that cannot be read, or whose timestamp is
-    not behind this host's clock (finality always trails real time, so a host clock
-    that far behind the chain cannot be reasoned from), is unavailable and refuses
-    (``finality_lag_unreadable``): no typed constant stands in for Base's own delay.
-    ``run_ns`` is the run's planned length; the bound says nothing of a run the
-    admission cap, a failure, a signal or a kill ends early. A run planned shorter than
-    ``SETTLEMENT_RATIO`` horizons is refused
+    Every read is keyless. The latest block must be above the finalized one
+    (``finalized_tag_not_behind_latest`` otherwise): a provider that answers the
+    ``finalized`` tag with its latest block would make the lag vanish, and the
+    authorization reads the rail relies on would lose their meaning with it. A block
+    that cannot be read, or a present that is not past the finalized block, is
+    unavailable and refuses (``finality_lag_unreadable``): no typed constant stands in
+    for Base's own delay. ``run_ns`` is the run's planned length; the bound says nothing
+    of a run the admission cap, a failure, a signal or a kill ends early. A run planned
+    shorter than ``SETTLEMENT_RATIO`` horizons is refused
     (``capital_loop_duration_below_settlement_bound``).
     """
     base = keyless_base(transport=transport, rpc=rpc)
     try:
         base.check_chain()
         final = base.call("eth_getBlockByNumber", ["finalized", False])
-        host_s = now_s() if now_s is not None else time.time_ns() // 1_000_000_000
-        behind = host_s - int(final["timestamp"], 16)
-        if behind <= 0:
-            raise ValueError
+        latest = base.call("eth_getBlockByNumber", ["latest", False])
+        final_number, latest_number = int(final["number"], 16), int(latest["number"], 16)
+        final_ts, latest_ts = int(final["timestamp"], 16), int(latest["timestamp"], 16)
     except Exception:  # noqa: BLE001 - an unread lag bounds nothing
         raise CapitalLoopRefused("finality_lag_unreadable", {"rpc": base.rpc}) from None
+    if latest_number <= final_number:
+        raise CapitalLoopRefused("finalized_tag_not_behind_latest", {
+            "rpc": base.rpc, "finalized_block": final_number, "latest_block": latest_number})
+    host_s = now_s() if now_s is not None else time.time_ns() // 1_000_000_000
+    behind = max(host_s, latest_ts) - final_ts
+    if behind <= 0:
+        raise CapitalLoopRefused("finality_lag_unreadable", {"rpc": base.rpc})
     window = MAX_AUTHORIZATION_S
     horizon_ns = (window + LAG_ALLOWANCE * behind) * 1_000_000_000 + tick_interval_ns
-    numbers = {"validity_window_s": window, "finalized_behind_host_s": behind,
+    numbers = {"validity_window_s": window, "finalized_behind_s": behind,
                "finality_lag_allowance": LAG_ALLOWANCE,
                "tick_interval_ns": tick_interval_ns,
                "settlement_horizon_ns": horizon_ns, "settlement_ratio": SETTLEMENT_RATIO,

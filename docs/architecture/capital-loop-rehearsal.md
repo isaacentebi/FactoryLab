@@ -182,6 +182,11 @@ covered every block up to it. The runtime clock is never consulted.
    bounds model spend only, not conversions. A longer run spends more model money
    under the same cap.)
 
+   Run it inside `tmux` (or `screen`), not under `nohup`. A closed terminal then stops
+   nothing, and you can reattach to see the end. Under `nohup` SIGHUP is ignored, and
+   the runner leaves an ignored signal alone, so the run goes on without a terminal.
+   That works, but the loud end-of-run warning then goes only to `nohup.out`.
+
    `report.json` carries a `capital_loop` section naming the network, sink, window cap,
    total cap, floor, payee and reserve, and the launch check's numbers. Before building
    anything the runner, in this order:
@@ -216,17 +221,19 @@ authorization. So one conversion's settlement horizon, in Base's own time, is:
 - **600 s**, the validity cap the signer always applies. Never the quote read at
   launch: the signer obeys whatever quote it is handed later, so a launch-time quote
   would bound nothing.
-- **plus twice how far the finalized block is behind this host's clock**: the host's
-  time now, less the timestamp of the one finalized block read at launch. That single
-  difference already holds Base's finality lag, any lead of the host clock over the
-  chain (a `validBefore` stamped by a fast clock lies that much later in chain time),
-  and any staleness of the node that answered (an old finalized block only lengthens
-  it). It deliberately reads no `latest` block: a "latest less finalized" lag pairs two
-  reads that a load balancer can send to two nodes, and a stale `latest` would shrink
-  the lag toward zero and the bound with it. Doubling is the allowance for the lag
-  growing during the run (16 minutes measured, 32 allowed). A finalized block that
-  cannot be read, or that is not behind the host's clock, refuses the launch
-  (`finality_lag_unreadable`).
+- **plus twice how far the finalized block is behind the present**: the later of this
+  host's clock and the latest block's timestamp, less the finalized block's timestamp.
+  The host clock carries Base's finality lag, any lead of the host over the chain (a
+  `validBefore` stamped by a fast clock lies that much later in chain time) and any
+  staleness of the node that answered (an old finalized block only lengthens it). The
+  latest block's time stands in when the host clock is the slow one, so a slow host
+  cannot shrink it; and since it only ever raises the maximum, a stale `latest` (two
+  reads a load balancer sent to two nodes) cannot shrink it either. Doubling is the
+  allowance for the lag growing during the run (16 minutes measured, 32 allowed).
+  The latest block must also be above the finalized one, or the launch is refused
+  (`finalized_tag_not_behind_latest`): some providers answer the `finalized` tag with
+  their latest block, which would make the lag vanish and the rail's finalized reads
+  mean nothing. A block that cannot be read refuses too (`finality_lag_unreadable`).
 - **plus one tick** for the rail to look.
 
 The run commands the conversion, and AGENTS.md rule 12 (essay II, IV.c) asks an inner
@@ -321,10 +328,16 @@ Removing only one of the two refuses every launch until both are gone.
   The runner exits 3 when a top-up was left submitted or the diary could not be read
   (1 for any other failure, 0 otherwise; a pending shadow send alone is testnet money
   and exits 0). From the world's construction on, SIGINT (Ctrl-C), SIGTERM and SIGHUP
-  stop the run in order (`status: stopped`, `stopped_by`): the report is written, the
-  warning printed and the exit code chosen exactly as at a normal end. `report.json` is
-  written before the warning is printed, and the warning is printed even when that
-  write fails. **Treat exit 130, a kill (137), any other unexpected status, or a missing
+  (unless it is ignored, as under `nohup`) stop the run in order (`status: stopped`,
+  `stopped_by`): the report is written, the warning printed and the exit code chosen
+  exactly as at a normal end. From the moment the run's end begins, all three are held
+  back (blocked) until the report is written and the warning printed; one that arrived
+  meanwhile is then recorded and changes nothing. `report.json` is written before the
+  warning is printed; if that write fails, the warning is printed anyway and the exit
+  code is still 3 for an outstanding top-up (`report_write_failed` in what the runner
+  returns). A lost terminal at the final print changes no exit code. A stop skips the
+  end-of-run wind-down (`kill_at_end`), so the testnet venue may be left with open
+  positions: testnet money only, and acceptable. **Treat exit 130, a kill (137), any other unexpected status, or a missing
   report as possibly outstanding**, and run the script below before anything else.
   Do not touch the reserve or relaunch; run its `next_step`,
 

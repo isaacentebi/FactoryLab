@@ -223,6 +223,104 @@ def test_a_signal_mid_run_still_writes_the_report_warns_and_exits_3(
     ReserveLock(w["reserve"].address, lock_dir=w["locks"]).close()
 
 
+def operator_main(w, monkeypatch, out):
+    """``main()`` as the operator runs it, with the harness's fakes added."""
+    from scripts import edition4_rehearsal as rehearsal
+
+    run = rehearsal.run_rehearsal
+    monkeypatch.setattr(rehearsal, "run_rehearsal",
+                        lambda *a, **k: run(*a, **k, **launch_kwargs(w)))
+    return rehearsal.main(["--world", str(w["world"]), "--out", str(out), "--capital-loop",
+                           "--duration", "60m", "--source-root", str(repo_root())])
+
+
+def test_a_signal_as_the_finally_begins_or_during_the_report_cannot_skip_it(
+        tmp_path, monkeypatch, capsys):
+    from scripts import edition4_rehearsal as rehearsal
+
+    w = wired(tmp_path, monkeypatch)
+    hold, report_outstanding = rehearsal._StopOnSignal.hold, rehearsal._report_outstanding
+
+    def signal_then_hold(stops):
+        # The run ended on its own; SIGTERM lands at the very start of its finally,
+        # while the handler is still armed.
+        os.kill(os.getpid(), signal.SIGTERM)
+        return hold(stops)
+
+    masked = []
+
+    def signal_while_reporting(*args):
+        # A second one mid-report: blocked, so it waits until the report is out.
+        masked.append(signal.pthread_sigmask(signal.SIG_BLOCK, []))
+        os.kill(os.getpid(), signal.SIGHUP)
+        return report_outstanding(*args)
+
+    monkeypatch.setattr(rehearsal._StopOnSignal, "hold", signal_then_hold)
+    monkeypatch.setattr(rehearsal, "_report_outstanding", signal_while_reporting)
+    out = tmp_path / "runs" / "late"
+    assert operator_main(w, monkeypatch, out) == 3
+    report = json.loads((out / "report.json").read_text())
+    assert report["status"] == "stopped" and report["stopped_by"] == "SIGTERM"
+    assert report["capital_loop_outstanding"]["top_ups_submitted"]
+    assert "CAPITAL LOOP OUTSTANDING" in capsys.readouterr().err
+    handled = {signal.SIGINT, signal.SIGTERM, signal.SIGHUP}
+    assert handled <= masked[0]  # the report was written with all three held back
+    assert not handled & signal.pthread_sigmask(signal.SIG_BLOCK, [])  # and released
+
+
+def test_nohup_keeps_sighup_ignored_and_the_run_goes_on(tmp_path, monkeypatch, capsys):
+    w = wired(tmp_path, monkeypatch)
+    settle = w["venice"].settle
+
+    def settle_then_hangup(authorization):
+        tx = settle(authorization)
+        os.kill(os.getpid(), signal.SIGHUP)  # the terminal closes under nohup
+        return tx
+
+    w["venice"].settle = settle_then_hangup
+    previous = signal.signal(signal.SIGHUP, signal.SIG_IGN)  # what nohup leaves
+    try:
+        code = operator_main(w, monkeypatch, tmp_path / "runs" / "nohup")
+        assert signal.getsignal(signal.SIGHUP) is signal.SIG_IGN  # left, and left alone
+    finally:
+        signal.signal(signal.SIGHUP, previous)
+    report = json.loads((tmp_path / "runs" / "nohup" / "report.json").read_text())
+    assert report["status"] == "completed" and "stopped_by" not in report
+    assert code == 3  # its top-up is still submitted at the end
+
+
+def test_restore_puts_back_a_handler_installed_from_c_as_the_default():
+    from scripts import edition4_rehearsal as rehearsal
+
+    previous = signal.getsignal(signal.SIGHUP)
+    try:
+        stops = rehearsal._StopOnSignal()
+        stops.arm()
+        stops.previous[signal.SIGHUP] = None  # signal.signal's answer for a C handler
+        stops.restore()  # must not raise
+        assert signal.getsignal(signal.SIGHUP) is signal.SIG_DFL
+    finally:
+        signal.signal(signal.SIGHUP, previous)
+
+
+def test_rehearse_without_stops_arms_nothing(tmp_path, monkeypatch):
+    from scripts import edition4_rehearsal as rehearsal
+
+    w = wired(tmp_path, monkeypatch)
+
+    def never(_stops):
+        raise AssertionError("armed a handler no one would restore")
+
+    monkeypatch.setattr(rehearsal._StopOnSignal, "arm", never)
+    before = {n: signal.getsignal(n) for n in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
+    report = rehearsal._rehearse(str(w["world"]), held=[], stops=None,
+                                 out=tmp_path / "runs" / "library", capital_loop=True,
+                                 duration_ns=3_600 * 1_000_000_000, source_root=repo_root(),
+                                 **launch_kwargs(w))
+    assert report["status"] == "completed", report.get("error")
+    assert {n: signal.getsignal(n) for n in before} == before
+
+
 def test_the_wires_speak_venices_header_names():
     # Guard the harness itself: a payment header urllib title-cases must still reach the
     # Venice fake under the name it checks, or the tests above would prove nothing.

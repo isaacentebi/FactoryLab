@@ -576,22 +576,23 @@ def test_a_run_shorter_than_three_settlement_horizons_is_refused():
     # is behind this host's clock (the 960 s lag, no lead); a tick.
     horizon = (600 + 2 * 960) * S + tick
     numbers = bound(3 * horizon)
-    assert (numbers["validity_window_s"], numbers["finalized_behind_host_s"],
+    assert (numbers["validity_window_s"], numbers["finalized_behind_s"],
             numbers["minimum_run_ns"]) == (600, 960, 3 * horizon)
-    # One block is read, the finalized one: no "latest" from another node to pair with.
     blocks = [r["params"][0] for r in rpc.requests if r["method"] == "eth_getBlockByNumber"]
-    assert blocks == ["finalized"]
+    assert blocks == ["finalized", "latest"]
     with pytest.raises(CapitalLoopRefused,
                        match="capital_loop_duration_below_settlement_bound") as refused:
         bound(3 * horizon - 1)
     assert refused.value.detail["minimum_run_ns"] == 3 * horizon
-    # A stale "latest" answer (a node 959 s behind the head, reporting a 1 s lag) cannot
-    # shorten it; latest-less-finalized would have allowed a run of 3 x 612 s.
-    rpc.lag_s = 1
+    # A stale "latest" answer (a node 958 s behind the head, reporting a 2 s lag) cannot
+    # shorten it; latest-less-finalized would have allowed a run of 3 x 614 s.
+    rpc.lag_s = 2
     assert bound(3 * horizon)["minimum_run_ns"] == 3 * horizon
     with pytest.raises(CapitalLoopRefused, match="below_settlement_bound"):
-        bound(3 * (600 + 2 * 1 + 10) * S)
+        bound(3 * (600 + 2 * 2 + 10) * S)
     rpc.lag_s = 960
+    # A slow host clock cannot shrink it either: the latest block's time stands in.
+    assert bound(3 * horizon, lead_s=-500)["finalized_behind_s"] == 960
     # A host clock ahead of Base stamps validBefore later in chain time: it lengthens it.
     with pytest.raises(CapitalLoopRefused, match="below_settlement_bound") as refused:
         bound(3 * horizon, lead_s=120)
@@ -600,11 +601,13 @@ def test_a_run_shorter_than_three_settlement_horizons_is_refused():
     rpc.final_ts -= 600
     with pytest.raises(CapitalLoopRefused, match="below_settlement_bound") as refused:
         bound(3 * horizon)
-    assert refused.value.detail["finalized_behind_host_s"] == 1_560
+    assert refused.value.detail["finalized_behind_s"] == 1_560
     rpc.final_ts += 600
-    for lead in (-960, -961):  # finalized at or ahead of this host's clock: no measurement
-        with pytest.raises(CapitalLoopRefused, match="finality_lag_unreadable"):
-            bound(10**15, lead_s=lead)
+    # A provider answering "finalized" with its latest block is refused outright.
+    rpc.lag_s = 0
+    with pytest.raises(CapitalLoopRefused, match="finalized_tag_not_behind_latest"):
+        bound(10**15)
+    rpc.lag_s = 960
 
     def base_down(method, url, payload, headers):
         raise TimeoutError
@@ -690,6 +693,19 @@ def test_the_cli_summary_carries_the_outstanding_warning(tmp_path, monkeypatch, 
     assert rehearsal.exit_code({"status": "completed",
                                 "capital_loop_outstanding": shadow_only}) == 0
     assert rehearsal.exit_code({"status": "failed"}) == 1
+    assert rehearsal.exit_code({"status": "completed", "report_write_failed": "OSError"}) == 1
+
+    class Gone:  # the terminal closed: every write to stdout fails
+        def write(self, _text):
+            raise BrokenPipeError
+
+        def flush(self):
+            raise BrokenPipeError
+
+    import sys
+
+    monkeypatch.setattr(sys, "stdout", Gone())
+    assert rehearsal.main(["--out", str(tmp_path / "y"), "--capital-loop"]) == 3
 
 
 def repo_root():
@@ -785,12 +801,14 @@ def test_a_real_launch_records_itself_before_its_world_runs_and_reports_its_end(
 
     if write_fails:
         try:
-            with pytest.raises(PermissionError):
-                launch()
+            ended = launch()
         finally:
             out.chmod(0o700)
         assert not (out / "report.json").exists()
-        # The write failed, and the warning was printed anyway.
+        # The write failed; the warning was printed anyway, and the exit code is still
+        # the outstanding top-up's, not a failure's.
+        assert ended["report_write_failed"] == "PermissionError"
+        assert rehearsal.exit_code(ended) == 3
         assert "CAPITAL LOOP OUTSTANDING" in capsys.readouterr().err
         ReserveLock(reserve.address, lock_dir=locks).close()
         return

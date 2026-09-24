@@ -746,10 +746,14 @@ class _StopOnSignal:
     """Guarantees SIGINT, SIGTERM and SIGHUP end a run through its own ``finally``.
 
     While armed, the first of them raises ``RunStopped`` in the main thread, wherever
-    the run is; every later one, and every one after ``disarm``, is only recorded, so
-    the report is written and announced undisturbed. ``restore`` puts back the handlers
-    it replaced. No thread is started: Python runs signal handlers in the main thread,
-    and off the main thread nothing is installed (``KeyboardInterrupt`` still stops).
+    the run is, and blocks all three there before it raises, so none can interrupt the
+    stop. ``hold`` (the first thing the run's ``finally`` does) disarms and blocks them
+    too; ``release`` unblocks them once the report is written and announced, when a
+    signal that arrived meanwhile is only recorded; ``restore`` puts back the handlers
+    ``arm`` replaced. A signal whose disposition is ``SIG_IGN`` when armed (SIGHUP under
+    ``nohup``) is left alone. No thread is started. Python runs signal handlers, and
+    raises ``KeyboardInterrupt``, only in the main thread: off it nothing is installed
+    and nothing here stops a run, which then ends only as its process does.
     """
 
     NAMES = ("SIGINT", "SIGTERM", "SIGHUP")
@@ -758,6 +762,7 @@ class _StopOnSignal:
         self.previous: dict[int, Any] = {}
         self.armed = False
         self.received: list[str] = []
+        self._mask: set | None = None
 
     def arm(self) -> None:
         import signal
@@ -767,8 +772,9 @@ class _StopOnSignal:
             return
         for name in self.NAMES:
             number = getattr(signal, name, None)
-            if number is not None:
-                self.previous[number] = signal.signal(number, self._stop)
+            if number is None or signal.getsignal(number) is signal.SIG_IGN:
+                continue  # an operator's nohup (or any ignore) is theirs to keep
+            self.previous[number] = signal.signal(number, self._stop)
         self.armed = True
 
     def _stop(self, number: int, _frame: Any) -> None:
@@ -778,17 +784,45 @@ class _StopOnSignal:
         self.received.append(name)
         if self.armed:
             self.armed = False
+            self._block()
             raise RunStopped(name)
 
-    def disarm(self) -> None:
-        self.armed = False
+    def _block(self) -> None:
+        import signal
+        import threading
 
-    def restore(self) -> None:
+        if (self._mask is None and self.previous and hasattr(signal, "pthread_sigmask")
+                and threading.current_thread() is threading.main_thread()):
+            self._mask = signal.pthread_sigmask(signal.SIG_BLOCK, set(self.previous))
+
+    def hold(self) -> None:
+        """No handled signal is raised or delivered from here until ``release``."""
+        self.armed = False
+        self._block()
+
+    def release(self) -> None:
+        """Unblock; a signal that arrived while held reaches ``_stop`` and is recorded."""
         import signal
 
         self.armed = False
+        if self._mask is not None:
+            mask, self._mask = self._mask, None
+            signal.pthread_sigmask(signal.SIG_SETMASK, mask)
+
+    def restore(self) -> None:
+        """Put back every handler ``arm`` replaced; never raises.
+
+        A previous handler of ``None`` was installed from C and cannot be reinstalled
+        from Python: its signal gets ``SIG_DFL``.
+        """
+        import signal
+
+        self.release()
         for number, handler in self.previous.items():
-            signal.signal(number, handler)
+            try:
+                signal.signal(number, signal.SIG_DFL if handler is None else handler)
+            except (ValueError, OSError, TypeError):
+                pass
         self.previous = {}
 
 
@@ -1031,105 +1065,114 @@ def _rehearse(
         }
     runtime = None
     observer = None
-    stops = stops if stops is not None else _StopOnSignal()
-    if capital_loop:
+    if stops is None:
+        stops = _StopOnSignal()  # never armed: only run_rehearsal arms, and restores
+    elif capital_loop:
         # From the world's construction on, SIGINT, SIGTERM or SIGHUP stop it through
         # the finally below: the report, the outstanding warning and the exit code are
         # written whatever stopped it (a default SIGTERM would write none of them).
         stops.arm()
     try:
         try:
-            if provider is None:
-                provider = build_prepaid_provider(manifest, keep_reserve_env=capital_loop)
-            guarded = provider if isinstance(provider, PrepaidProvider) else PrepaidProvider(
-                provider, manifest, admission)
-            events = planned_ticks
-            if clock_source is None and manifest.exchange.kind != "fake":
-                clock_source = LiveClock(manifest.tick_interval_ns, events,
-                                         now_ns=now_ns, deadline_ns=now_ns() + duration_ns)
-            clock_source = (AdmissionClock(clock_source, admission)
-                            if clock_source is not None else None)
-            runtime = Runtime(
-                manifest, events=events, seed=manifest.seed, initial_balance_micro=None,
-                ledger_path=None if output_dir is None else str(output_dir / "ledger.jsonl"),
-                router_gamma=0.1, provider=guarded, market=DeniedMarket(),
-                exchange=exchange, clock_source=clock_source,
-                kill_at_end=True, capital_loop=capital_loop,
-            )
-        finally:
-            # The hybrid rail captured its signer during construction; the running
-            # world never inherits the reserve key, capital loop or not.
+            try:
+                if provider is None:
+                    provider = build_prepaid_provider(manifest, keep_reserve_env=capital_loop)
+                guarded = provider if isinstance(provider, PrepaidProvider) else PrepaidProvider(
+                    provider, manifest, admission)
+                events = planned_ticks
+                if clock_source is None and manifest.exchange.kind != "fake":
+                    clock_source = LiveClock(manifest.tick_interval_ns, events,
+                                             now_ns=now_ns, deadline_ns=now_ns() + duration_ns)
+                clock_source = (AdmissionClock(clock_source, admission)
+                                if clock_source is not None else None)
+                runtime = Runtime(
+                    manifest, events=events, seed=manifest.seed, initial_balance_micro=None,
+                    ledger_path=None if output_dir is None else str(output_dir / "ledger.jsonl"),
+                    router_gamma=0.1, provider=guarded, market=DeniedMarket(),
+                    exchange=exchange, clock_source=clock_source,
+                    kill_at_end=True, capital_loop=capital_loop,
+                )
+            finally:
+                # The hybrid rail captured its signer during construction; the running
+                # world never inherits the reserve key, capital loop or not.
+                if capital_loop:
+                    os.environ.pop("RESERVE_PRIVATE_KEY", None)
             if capital_loop:
-                os.environ.pop("RESERVE_PRIVATE_KEY", None)
-        if capital_loop:
-            # Only the conversion is admitted; the CCTP exits and class moves are
-            # refused before signing, exactly as the denied rail refuses them.
-            runtime.treasury.rail.target = CapitalLoopRail(runtime.treasury.rail.target)
-            # This run's diary exists now and nothing has signed yet: from here on the
-            # next launch on this reserve reads it, wherever its --out is.
-            lock.record_run(output_dir)
-        else:
-            # Bootstrap gives an unconfigured rail for a manifest without a reserve, but
-            # that rail still supports the venue's spot/perps class move. Replace its
-            # target before launch so every treasury direction is refused pre-signing.
-            runtime.treasury.rail.target = DeniedTransferRail(runtime.treasury.rail.target)
-        if observe:
-            from scripts import edition4_observer
+                # Only the conversion is admitted; the CCTP exits and class moves are
+                # refused before signing, exactly as the denied rail refuses them.
+                runtime.treasury.rail.target = CapitalLoopRail(runtime.treasury.rail.target)
+                # This run's diary exists now and nothing has signed yet: from here on the
+                # next launch on this reserve reads it, wherever its --out is.
+                lock.record_run(output_dir)
+            else:
+                # Bootstrap gives an unconfigured rail for a manifest without a reserve, but
+                # that rail still supports the venue's spot/perps class move. Replace its
+                # target before launch so every treasury direction is refused pre-signing.
+                runtime.treasury.rail.target = DeniedTransferRail(runtime.treasury.rail.target)
+            if observe:
+                from scripts import edition4_observer
 
-            observer = edition4_observer.attach_rehearsal_observer(
-                runtime, output_dir / "observer", admission_report=admission.report)
-            report["observer"] = {
-                "enabled": True,
-                "scope": "rehearsal_only_recent_evidence_window",
-                "path": str(output_dir / "observer"),
-                "module_sha256": hashlib.sha256(
-                    Path(edition4_observer.__file__).read_bytes()).hexdigest(),
+                observer = edition4_observer.attach_rehearsal_observer(
+                    runtime, output_dir / "observer", admission_report=admission.report)
+                report["observer"] = {
+                    "enabled": True,
+                    "scope": "rehearsal_only_recent_evidence_window",
+                    "path": str(output_dir / "observer"),
+                    "module_sha256": hashlib.sha256(
+                        Path(edition4_observer.__file__).read_bytes()).hexdigest(),
+                }
+            report["venue_before"] = venue_snapshot(runtime.exchange)
+            report["venue_confounds"] = {
+                "declared_start_cash_usd": manifest.exchange.start_cash_usd,
+                "observed_equity_usd": report["venue_before"].get("equity_usd"),
             }
-        report["venue_before"] = venue_snapshot(runtime.exchange)
-        report["venue_confounds"] = {
-            "declared_start_cash_usd": manifest.exchange.start_cash_usd,
-            "observed_equity_usd": report["venue_before"].get("equity_usd"),
-        }
-        summary = runtime.run()
-        report["status"] = "completed"
-        report["summary"] = summary
-        report["venue_after"] = venue_snapshot(runtime.exchange)
-        report["timing"] = {
-            "declared_interval_ns": manifest.tick_interval_ns,
-            "ticks": runtime.ticks_consumed,
-            "events": summary.get("stats", {}).get("events"),
-            "measured_interval_ns": (
-                clock_source.base.measured_interval_ns()
-                if clock_source is not None
-                and hasattr(clock_source.base, "measured_interval_ns") else None
-            ),
-        }
-        items = runtime.ledger._recovery_items()
-        report["behavioral_screen"] = _behavioral_screen(
-            manifest,
-            runtime,
-            summary,
-            items,
-            admission,
-            planned_ticks=planned_ticks,
-            minimum_ticks=minimum_ticks,
-        )
-        if output_dir is not None:
-            selected = [item for item in items if item.get("kind") != "snapshot"]
-            (output_dir / "events.json").write_text(
-                json.dumps(selected, indent=2, default=str) + "\n"
+            summary = runtime.run()
+            report["status"] = "completed"
+            report["summary"] = summary
+            report["venue_after"] = venue_snapshot(runtime.exchange)
+            report["timing"] = {
+                "declared_interval_ns": manifest.tick_interval_ns,
+                "ticks": runtime.ticks_consumed,
+                "events": summary.get("stats", {}).get("events"),
+                "measured_interval_ns": (
+                    clock_source.base.measured_interval_ns()
+                    if clock_source is not None
+                    and hasattr(clock_source.base, "measured_interval_ns") else None
+                ),
+            }
+            items = runtime.ledger._recovery_items()
+            report["behavioral_screen"] = _behavioral_screen(
+                manifest,
+                runtime,
+                summary,
+                items,
+                admission,
+                planned_ticks=planned_ticks,
+                minimum_ticks=minimum_ticks,
             )
-    except (RunStopped, KeyboardInterrupt) as stop:
-        # An operator's stop is an orderly end: the world is not resumed, and what it
-        # left outstanding is reported below like any other end.
+            if output_dir is not None:
+                selected = [item for item in items if item.get("kind") != "snapshot"]
+                (output_dir / "events.json").write_text(
+                    json.dumps(selected, indent=2, default=str) + "\n"
+                )
+        except (RunStopped, KeyboardInterrupt) as stop:
+            # An operator's stop is an orderly end: the world is not resumed, and what it
+            # left outstanding is reported below like any other end.
+            report["status"] = "stopped"
+            report["stopped_by"] = str(stop) if isinstance(stop, RunStopped) else "SIGINT"
+        except Exception as exc:
+            report["status"] = "failed"
+            report["error"] = _safe_exception(exc)
+    except (RunStopped, KeyboardInterrupt) as late:
+        # A stop that landed inside one of the handlers above, before it could finish.
         report["status"] = "stopped"
-        report["stopped_by"] = str(stop) if isinstance(stop, RunStopped) else "SIGINT"
-    except Exception as exc:
-        stops.disarm()
-        report["status"] = "failed"
-        report["error"] = _safe_exception(exc)
+        report["stopped_by"] = str(late) if isinstance(late, RunStopped) else "SIGINT"
     finally:
-        stops.disarm()  # a second signal must not interrupt the report
+        try:
+            stops.hold()  # from here no handled signal interrupts the report
+        except RunStopped as late:  # one that landed as the finally began
+            stops.hold()
+            report["status"], report["stopped_by"] = "stopped", str(late)
         if stops.received:
             report["signals_received"] = list(stops.received)
         if observer is not None:
@@ -1140,11 +1183,15 @@ def _rehearse(
         try:
             if report_path is not None:
                 report_path.write_text(json.dumps(report, indent=2, default=str) + "\n")
-        finally:
-            # Written first, then printed; and printed even when the write failed.
-            _announce_outstanding(report)
-            if lock is not None:
-                lock.close()
+        except Exception as exc:  # noqa: BLE001 - the warning and exit code must survive it
+            # Not raised: the caller still gets the report, and ``exit_code`` still
+            # answers 3 for an outstanding top-up (1 otherwise).
+            report["report_write_failed"] = type(exc).__name__
+        # Written first, then printed; and printed even when the write failed.
+        _announce_outstanding(report)
+        if lock is not None:
+            lock.close()
+        stops.release()  # a signal that arrived meanwhile is only recorded now
     return report
 
 
@@ -1206,12 +1253,15 @@ def _announce_outstanding(report: dict) -> None:
 
 
 def exit_code(report: dict) -> int:
-    """0 for a completed run with nothing outstanding; 3 when a conversion is left
-    unbooked (a top-up still submitted, or a diary unread at the end), whatever the
-    status, since that is the operator's next step; otherwise 1."""
+    """0 for a completed run with nothing outstanding and its report on disk; 3 when a
+    conversion is left unbooked (a top-up still submitted, or a diary unread at the
+    end), whatever else happened, report write included, since that is the operator's
+    next step; otherwise 1."""
     outstanding = report.get("capital_loop_outstanding") or {}
     if outstanding.get("top_ups_submitted") or outstanding.get("diary_unreadable"):
         return 3
+    if report.get("report_write_failed"):
+        return 1
     return 0 if report.get("status") == "completed" else 1
 
 
@@ -1254,7 +1304,10 @@ def main(argv: list[str] | None = None) -> int:
                "behavioral_screen": report.get("behavioral_screen")}
     if "capital_loop_outstanding" in report:
         summary["capital_loop_outstanding"] = report["capital_loop_outstanding"]
-    print(json.dumps(summary, indent=2, default=str))
+    try:
+        print(json.dumps(summary, indent=2, default=str))
+    except (OSError, ValueError):
+        pass  # the terminal is gone; the report is on disk and the exit code stands
     return exit_code(report)
 
 
