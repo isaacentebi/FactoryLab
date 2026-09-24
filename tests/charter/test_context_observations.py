@@ -132,10 +132,11 @@ def test_a_reading_outside_the_horizons_windows_is_not_selected():
 
 def _closed(samples):
     samples.closed(MeasureWindow(1, 1, invocations=1, ok=1, prompts=1, prompt_bytes=1_000,
-                                 you_bytes=100, inputs_bytes=300, downstream_read_bytes=0))
+                                 you_bytes=100, inputs_bytes=300, downstream_read_bytes=0,
+                                 read_measured=1))
     samples.closed(MeasureWindow(2, 1, invocations=3, ok=2, prompts=3, prompt_bytes=10_000,
                                  you_bytes=1_000, inputs_bytes=5_700,
-                                 downstream_read_bytes=4_000))
+                                 downstream_read_bytes=4_000, read_measured=3))
     return samples
 
 
@@ -158,19 +159,18 @@ def test_seed_measure_of_one_window_and_its_empty_window(observation):
     seed = observation_for(observation)
     assert seed is not None and not seed.per_window and seed.units.startswith("bytes per")
     window = MeasureWindow(1, 1, invocations=4, prompts=4, prompt_bytes=8, you_bytes=4,
-                           inputs_bytes=12, downstream_read_bytes=20)
+                           inputs_bytes=12, downstream_read_bytes=20, read_measured=4)
     assert seed.measure(window) == {"prompt_bytes": 2.0, "you_bytes": 1.0,
                                     "inputs_bytes": 3.0,
                                     "downstream_read_bytes": 5.0}[observation]
     assert seed.measure(MeasureWindow(1, 1)) is None
-    # A record closed before these counters existed measured no prompt: a prompt mean
-    # over it is unmeasured, and nothing was read in it, so no reading bytes.
-    legacy = SimpleNamespace(invocations=2)
-    assert seed.measure(legacy) == (0.0 if observation == "downstream_read_bytes" else None)
+    # A record closed before these counters existed measured no prompt and metered no
+    # reading: every one of the four is unmeasured over it, never zero.
+    assert seed.measure(SimpleNamespace(invocations=2)) is None
 
 
 PRE_PROMPT_FIELDS = ("prompts", "prompt_bytes", "you_bytes", "inputs_bytes",
-                     "downstream_read_bytes")
+                     "downstream_read_bytes", "read_measured")
 
 
 def _legacy(samples, index, invocations):
@@ -382,7 +382,8 @@ def test_a_row_no_prompt_was_rendered_for_neither_reprices_nor_evicts(observatio
     whole = _card(observation, kind="windows", n=1, per=None, answers_for="all")
     idle = MeasureWindow(3, 1, decisions={"rent-h": {"role": "producer", "cost": 5}})
     assert not fresh_sample(whole, samples, idle)
-    assert fresh_sample(whole, samples, MeasureWindow(4, 1, invocations=1, prompts=1))
+    assert fresh_sample(whole, samples, MeasureWindow(4, 1, invocations=1, prompts=1,
+                                                      read_measured=1))
     # A rendered response in the window is new evidence.
     samples.returned(handle="p3", assembly="p", role="producer", window=5,
                      ret=_ret("p3", total=500, you=50, inputs=250))
@@ -482,6 +483,87 @@ def test_scoped_invocations_count_what_the_window_counts_so_prompt_means_agree()
     whole = measure_card(_card("prompt_bytes", kind="windows", n=1, per=None,
                                answers_for="all"), samples)
     assert scoped == seeded == {"v": 1_000.0} and whole == {"all": 1_000.0}
+
+
+def _legacy_row(samples, handle, window):
+    """A return sampled before readings were metered: no ``invoked``, no prompt fields."""
+    samples.returned(handle=handle, assembly="a", role="producer", window=window,
+                     ret=Return(handle, {}, 1, "ok"))
+    for key in ("invoked", "prompt_bytes", "you_bytes", "inputs_bytes"):
+        del samples.returns[-1][key]
+
+
+def _reads_book():
+    from factorylab.runtime.observations import ObservationBook
+
+    return ObservationBook(
+        {"reads_per_measured": {"description": "reading bytes per measured invocation",
+                                "units": "bytes", "unit_range": [0, 1_000_000],
+                                "code": "def observe(facts): ...", "version": 1,
+                                "provenance": "population"}},
+        run=lambda _code, f: ((f["downstream_read_bytes"] / f["read_measured"], None)
+                              if f["read_measured"] else (None, "unmeasured")))
+
+
+@pytest.mark.parametrize("legacy_first", [True, False])
+def test_legacy_invocations_add_nothing_to_reading_bytes(legacy_first):
+    # PR #143 review: legacy rows and windows predate reading measurement; they are
+    # unmeasured, not zero readings. Two legacy invocations and one current one read
+    # for 100 bytes measure 100, not 100/3, globally and per scope alike.
+    samples = CardSamples()
+    current = MeasureWindow(2, 1, invocations=1, ok=1, downstream_read_bytes=100,
+                            read_measured=1)
+    if legacy_first:
+        _legacy(samples, 1, 2)
+        samples.closed(current)
+    else:
+        samples.closed(current)
+        _legacy(samples, 3, 2)
+    whole = _card("downstream_read_bytes", kind="windows", n=2, per=None, answers_for="all")
+    assert measure_card(whole, samples) == {"all": pytest.approx(100.0)}
+    for handle in ("old1", "old2"):
+        _legacy_row(samples, handle, 1 if legacy_first else 3)
+    samples.returned(handle="new", assembly="a", role="producer", window=2,
+                     ret=_ret("new", total=10, you=1, inputs=1))
+    samples.read(handle="new", assembly="a", role="producer", window=2, read_bytes=100)
+    scoped = _card("downstream_read_bytes", kind="windows", n=2, per="assembly")
+    assert measure_card(scoped, samples) == {"a": pytest.approx(100.0)}
+    registered = _card("reads_per_measured", kind="windows", n=2, per="assembly")
+    assert measure_card(registered, samples, observations=_reads_book()) == {"a": 100.0}
+    returns = _card("downstream_read_bytes", n=1)
+    assert measure_card(returns, samples) == {"a": pytest.approx(100.0)}
+
+
+def test_a_legacy_only_reading_selection_is_unmeasured_and_not_fresh():
+    samples = CardSamples()
+    _legacy(samples, 1, 2)
+    _legacy(samples, 2, 3)
+    whole = _card("downstream_read_bytes", kind="windows", n=2, per=None, answers_for="all")
+    assert measure_card(whole, samples) == {}
+    assert not fresh_sample(whole, samples,
+                            SimpleNamespace(**samples.windows[-1], decisions={}))
+    _legacy_row(samples, "old1", 1)
+    _legacy_row(samples, "old2", 2)
+    for card in (_card("downstream_read_bytes", kind="windows", n=2, per="assembly"),
+                 _card("downstream_read_bytes", n=1)):
+        assert measure_card(card, samples) == {}
+        assert not fresh_sample(card, samples, MeasureWindow(2, 1))
+    registered = _card("reads_per_measured", kind="windows", n=2, per="assembly")
+    assert measure_card(registered, samples, observations=_reads_book()) == {}
+
+
+def test_a_current_invocation_no_one_read_is_a_measured_zero():
+    samples = CardSamples()
+    samples.closed(MeasureWindow(1, 1, invocations=1, ok=1, read_measured=1))
+    whole = _card("downstream_read_bytes", kind="windows", n=1, per=None, answers_for="all")
+    assert measure_card(whole, samples) == {"all": 0.0}
+    assert fresh_sample(whole, samples, MeasureWindow(1, 1, invocations=1, read_measured=1))
+    samples.returned(handle="new", assembly="a", role="producer", window=1,
+                     ret=_ret("new", total=10, you=1, inputs=1))
+    for card in (_card("downstream_read_bytes", kind="windows", n=1, per="assembly"),
+                 _card("downstream_read_bytes", n=1)):
+        assert measure_card(card, samples) == {"a": 0.0}
+        assert fresh_sample(card, samples, MeasureWindow(1, 1))
 
 
 def test_a_registered_observation_measures_a_scope_whose_only_row_is_a_reading():

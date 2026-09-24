@@ -108,6 +108,19 @@ def _prompt_mean(w: MeasureWindow, key: str) -> float | None:
     return _ratio(getattr(w, key, 0) or 0, getattr(w, "prompts", 0) or 0)
 
 
+def _read_mean(w: MeasureWindow) -> float | None:
+    """Reading bytes per invocation whose readings are measured; none measured, no mean.
+
+    The denominator is ``read_measured``. A record closed before readings were
+    measured carries neither it nor reading bytes: its invocations' readings were
+    never metered, so it adds nothing to either side of the mean, and a selection
+    of such records alone is unmeasured, never a mean of zero. A current invocation
+    no one read is a measured zero and counts.
+    """
+    return _ratio(getattr(w, "downstream_read_bytes", 0) or 0,
+                  getattr(w, "read_measured", 0) or 0)
+
+
 def _cost_per_return(w: MeasureWindow) -> float | None:
     """Mean cost of the window's well-formed producer returns, rent included.
 
@@ -448,10 +461,10 @@ CATALOGUE: tuple[Observation, ...] = (
         "downstream_read_bytes",
         "INPUTS bytes rendered to the invocations commissioned on a published return "
         "(judges, adversarial judges, metas, any contract routed on it), summed over the "
-        "window and divided by the window's invocations; per role or assembly, filed "
-        "under the return's author.",
+        "window and divided by the window's invocations whose readings are measured; per "
+        "role or assembly, filed under the return's author.",
         "bytes per return",
-        lambda w: _ratio(getattr(w, "downstream_read_bytes", 0), w.invocations),
+        lambda w: _read_mean(w),
         (0.0, 1_000_000.0),
     ),
 )

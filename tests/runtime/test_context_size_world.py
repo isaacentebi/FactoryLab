@@ -43,7 +43,8 @@ def test_the_closed_windows_counters_are_the_sums_of_its_samples(world):
     for record in rt.card_samples.windows:
         rows = [r for r in rt.card_samples.returns if r["window"] == record["index"]
                 and not r.get("storage") and r["prompt_bytes"] is not None]
-        assert record["invocations"] == record["prompts"] == len(rows)
+        assert (record["invocations"] == record["prompts"] == record["read_measured"]
+                == len(rows))
         for key in ("prompt_bytes", "you_bytes", "inputs_bytes"):
             assert record[key] == sum(r[key] for r in rows), key
         readings = [r for r in rt.card_samples.readings if r["window"] == record["index"]]

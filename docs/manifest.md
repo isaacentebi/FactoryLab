@@ -653,7 +653,7 @@ the reported `usage` covers only an invocation's final provider call.
 | `prompt_bytes` | bytes per invocation | [0, 100,000] | mean `sections.total` of the selected responses | summed `prompt_bytes` over `prompts` |
 | `you_bytes` | bytes per invocation | [0, 100,000] | mean `sections.you` | summed `you_bytes` over `prompts` |
 | `inputs_bytes` | bytes per invocation | [0, 100,000] | mean `sections.inputs` | summed `inputs_bytes` over `prompts` |
-| `downstream_read_bytes` | bytes per return | [0, 1,000,000] | reading bytes filed under the scope in its selected responses' windows, over those responses | summed `downstream_read_bytes` over invocations |
+| `downstream_read_bytes` | bytes per return | [0, 1,000,000] | reading bytes filed under the scope in its selected responses' windows, over those responses | summed `downstream_read_bytes` over `read_measured` |
 
 The byte counts are of the invocation's opening prompt, the one its ledger row
 records; tool-round continuations are not counted. A response the runtime rendered
@@ -671,8 +671,15 @@ prompt bytes: it measured zero prompts, so merged with later windows it adds not
 to either side of a prompt mean, and a selection of such records alone is
 unmeasured (never a mean of zero) and no new sample. A
 whole window with no measured prompt (only rent, such a ballot or such a request)
-is no new sample for the three prompt means, and one with no invocation none for
-`downstream_read_bytes`. All four are measurable over `returns` and
+is no new sample for the three prompt means. `downstream_read_bytes` has its own
+support, `read_measured`: the invocations whose readings are metered, which is
+every invocation from wave 7 on, a failed render included (so it is not
+`prompts`). A return sample carries the `invoked` marker from wave 7 on, and only a
+marked one is a response of its selection. A window record or return sample from
+before readings were metered carries neither: it adds nothing to either side of
+the mean, a selection of such alone is unmeasured and no new sample, while a
+current invocation no one read is a measured zero. The scope facts publish
+`read_measured` as the window does. All four are measurable over `returns` and
 over `windows`, per role, per assembly or globally, and none over `forecasts`;
 none is `per_window`, since each is a ratio of summable numerators and
 denominators.

@@ -69,7 +69,9 @@ def fresh_sample(card: MetricCard, samples: CardSamples, window) -> bool:
             # A record closed before prompts were measured measured none.
             return (getattr(window, "prompts", 0) or 0) > 0
         if observation == READ_OBSERVATION:
-            return window.invocations > 0  # measured over the window's invocations
+            # Measured over the invocations whose readings are metered; a record closed
+            # before they were metered measured none.
+            return (getattr(window, "read_measured", 0) or 0) > 0
         if observation in RETURN_OBSERVATIONS:
             return window.invocations > 0 or bool(window.decisions)
         support = _WINDOW_SUPPORT.get(observation)
@@ -174,8 +176,10 @@ def measurement_catalogue(observations=None) -> list[dict]:
         "return, filed under that return's author in the window each reading was metered, "
         "over the author scope's selected responses. Readings metered in the same windows as "
         "the selected responses count, whichever return they read; a scope whose returns no "
-        "invocation read in those windows measures zero. Global closed windows divide the "
-        "window's summed reading bytes by its invocations.",
+        "invocation read in those windows measures zero. Only responses whose readings are "
+        "measured are selected: one sampled before readings were metered is in neither the "
+        "numerator nor the denominator. Global closed windows divide the window's summed "
+        "reading bytes by its read_measured invocations.",
     }
     result = (observations or seed_book()).catalogue()
     for row in result:
@@ -262,6 +266,9 @@ def scope_facts(windows: list[dict], returns: list[dict], forecasts: list[dict],
         **{key: sum(row.get(key) or 0 for row in responses)
            for key in PROMPT_OBSERVATIONS.values()},
         "downstream_read_bytes": sum(row["read_bytes"] for row in readings),
+        # The reading mean's denominator, as the window's ``read_measured`` is: the
+        # scope's invocations sampled since readings were metered.
+        "read_measured": sum(row.get("invoked") is True for row in responses),
         "verdicts": {row["handle"]: {"judge": [row["verdict"]]} for row in responses
                      if row.get("verdict") is not None},
         "forecast_skills": [row["skill"] for row in forecasts if row.get("skill") is not None],
@@ -581,7 +588,7 @@ def preflight_measurement(card: MetricCard, observations=None, *,
                            meta_verdicts=[0.0], max_position_notional_micro=0,
                            verdicts={"sample": {"a": [0.0], "b": [0.0]}},
                            prompts=1, prompt_bytes=1, you_bytes=1, inputs_bytes=1,
-                           downstream_read_bytes=1)
+                           downstream_read_bytes=1, read_measured=1)
     if unit.id not in measure_cards((unit,), samples, window, observations=observations):
         raise ValueError(f"card {card.id} window: measurement preflight produced no value")
 
@@ -603,10 +610,12 @@ def _selected(observation: str, rows: list[dict]) -> list[dict]:
     if observation in COST_OBSERVATIONS:
         return [row for row in rows if not row.get("reading")]
     if observation == READ_OBSERVATION:
-        # Its responses are the invocations, as the global window's are: a ballot no
-        # assembly answered is none (a request that failed to render still is one).
+        # Its responses are the invocations whose readings are metered, as the global
+        # window's ``read_measured`` are: a ballot no assembly answered is none (a
+        # request that failed to render still is one), and a row sampled before
+        # readings were metered carries no ``invoked`` marker and is none either.
         return [row for row in rows if not row.get("storage") and (
-            row.get("reading") or row.get("invoked", True))]
+            row.get("reading") or row.get("invoked") is True)]
     if observation in PROMPT_OBSERVATIONS:
         key = PROMPT_OBSERVATIONS[observation]
         return [row for row in rows if not row.get("storage") and not row.get("reading")

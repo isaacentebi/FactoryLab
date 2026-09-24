@@ -112,6 +112,10 @@ class MeasureWindow:
     # The INPUTS bytes of the window's invocations commissioned on a published return,
     # summed: what reading returns cost in context, filed under no author here.
     downstream_read_bytes: int = 0
+    # The invocations whose downstream reading is measured: the reading mean's
+    # denominator. Every invocation from wave 7 on; a record closed before it has none,
+    # since its returns' readings were never metered (not metered as zero).
+    read_measured: int = 0
 
 
 #: The definition of a censored settlement that carries a price: its decision left

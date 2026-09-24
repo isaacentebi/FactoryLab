@@ -2020,6 +2020,9 @@ class ComputeMixin:
                 "max_tokens": ret.provider.get("max_tokens"), "ts": self.clock.now_ns,
             })
         self.window.invocations += 1
+        # Its return's readings are metered from here on (``downstream_read_bytes``),
+        # whether or not its prompt could be rendered: a failed return is published too.
+        self.window.read_measured += 1
         # Essay II.IV.a: the metrics layer is ceded, and the factory can propose a
         # metric only on a quantity the world publishes. These are that quantity for
         # context size: facts, with no target attached (the seed observations
