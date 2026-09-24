@@ -60,18 +60,19 @@ def prepare_top_up(client: X402Client, *, now_s: int, nonce: bytes,
             "created_s": now_s, "authorization": typed["message"], "credit_before_micro": credit}
 
 
-def top_up(client: X402Client, reference: dict, *, pay_to: str | None = None) -> dict:
+def top_up(client: X402Client, reference: dict, *, pay_to: str | None = None,
+           guard: Any = None, head: Any = None) -> dict:
     """The existing x402 transport signs and submits only the journal's exact authorization.
 
     The CLI client's one-shot method generates a new nonce per call. Treasury retries
     instead reconstruct this fixed nonce and expiry, so an ambiguous reply cannot
     authorize another $5. References contain no signature or private signing material.
     With ``pay_to`` pinned, a reference paying anyone else is refused before signing.
+    The signature is made only through ``sign_transfer_authorization`` with ``guard``
+    (the client's own when none is given): recorded ahead, or never signed.
     """
     _pinned(pay_to, reference["accepted"].get("payTo"))
     _pinned(pay_to, reference["authorization"].get("to"))
-    from eth_account.messages import encode_typed_data
-
     from factorylab.world.x402 import (
         BASE_NETWORK,
         TOP_UP_MICRO,
@@ -80,6 +81,7 @@ def top_up(client: X402Client, reference: dict, *, pay_to: str | None = None) ->
         _decode,
         _header,
         authorization_typed_data,
+        sign_transfer_authorization,
     )
 
     quote = PaymentQuote(reference["accepted"], reference["resource"], reference["extensions"])
@@ -91,7 +93,10 @@ def top_up(client: X402Client, reference: dict, *, pay_to: str | None = None) ->
     )
     if typed["message"] != reference["authorization"]:
         raise X402Error("Venice authorization differs from the journal")
-    signature = client._account.sign_message(encode_typed_data(full_message=typed))
+    signature = sign_transfer_authorization(
+        client._account, typed,
+        guard=guard if guard is not None else getattr(client, "guard", None),
+        head=head if head is not None else getattr(client, "chain_head", None))
     authorization = {k: str(v) if k in ("value", "validAfter", "validBefore") else v
                      for k, v in typed["message"].items()}
     envelope = {"x402Version": 2, "accepted": quote.accepted,

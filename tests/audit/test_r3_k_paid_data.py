@@ -11,6 +11,11 @@ from tests.conftest import make_runtime
 from tests.runtime.test_connectors import decision, ledger_items, recording_journal
 from tests.world.test_market import TEST_KEY, SellerHTTP
 
+# Every signature here goes through the production chokepoint, with a real
+# ReserveGuard in this test's temporary lock directory (tests/conftest.py).
+pytestmark = pytest.mark.usefixtures("write_ahead")
+
+
 
 class DataTransport:
     def __init__(self, amount=1734, paid=None):

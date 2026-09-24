@@ -244,7 +244,10 @@ class Proof:
                 "HL_PRIVATE_KEY",
             )
         )
-        self.client = X402Client(transport=self.wire)
+        from factorylab.runtime.capital_loop import ReserveGuard
+
+        # Recorded ahead under the reserve lock, or never signed.
+        self.client = X402Client(transport=self.wire, guard=ReserveGuard("compute_proof"))
         return {
             "address": self.client.address,
             "network": BASE_NETWORK,
@@ -310,7 +313,8 @@ class Proof:
     def seller(self, model: str) -> dict:
         """The exact unpaid request body is reused once under a $0.10 payment ceiling."""
         extra = {"venice_parameters": {"disable_thinking": True}} if model == AISPACE_MODEL else {}
-        provider = X402Provider(transport=self.wire, extra_body=extra)
+        provider = X402Provider(transport=self.wire, extra_body=extra,
+                                guard=self.client.guard)
         req = model_request(model)
         quote = provider.quote(req)
         self.current.update(

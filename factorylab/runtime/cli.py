@@ -201,7 +201,9 @@ def _cmd_probe(args: argparse.Namespace) -> int:
             refuse("probe", Reason.ARGUMENTS_INCOMPLETE)
             return ARGUMENT_EXIT
         model_id = f"x402:{seller_root(args.seller)}#{args.model}"
-        provider = X402Provider(rpc=args.rpc or BASE_RPC)
+        from factorylab.runtime.capital_loop import ReserveGuard
+
+        provider = X402Provider(rpc=args.rpc or BASE_RPC, guard=ReserveGuard("x402_probe"))
         req = ModelRequest(
             model_id,
             "Reply briefly.",
@@ -347,7 +349,12 @@ def _cmd_reserve(args: argparse.Namespace) -> int:
         except (InvalidOperation, ValueError):
             refuse("reserve topup", Reason.TOPUP_AMOUNT_REFUSED)
             return ARGUMENT_EXIT
-    client = X402Client(base_url=args.base_url or VENICE_URL, rpc=args.rpc or BASE_RPC)
+    from factorylab.runtime.capital_loop import ReserveGuard
+
+    # A top-up's authorization is written ahead to the reserve's record under its lock,
+    # or never signed; a capital-loop run holding the reserve refuses it.
+    client = X402Client(base_url=args.base_url or VENICE_URL, rpc=args.rpc or BASE_RPC,
+                        guard=ReserveGuard("reserve_topup"))
     if args.reserve_cmd == "status":
         usdc, eth, venice = client.usdc_balance(), client.eth_balance(), client.venice_balance()
         print(
@@ -1051,10 +1058,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "run":
         from factorylab.cortex.sandbox import NoJail
         from factorylab.kernel.ledger import LedgerBusyError
+        from factorylab.runtime.bootstrap import MainnetRailRequiresALedger
 
         try:
             _load_dotenv()
             return int(args.func(args))
+        except MainnetRailRequiresALedger:
+            refuse("run", Reason.MAINNET_RAIL_REQUIRES_A_LEDGER)
+            return ARGUMENT_EXIT
         except LedgerBusyError:
             refuse("run", Reason.LEDGER_BUSY)
             return LEDGER_BUSY_EXIT

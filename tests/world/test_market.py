@@ -23,6 +23,11 @@ from factorylab.world.x402 import (
     X402Error,
 )
 
+# Every signature here goes through the production chokepoint, with a real
+# ReserveGuard in this test's temporary lock directory (tests/conftest.py).
+pytestmark = pytest.mark.usefixtures("write_ahead")
+
+
 # Public deterministic fixture only. No test reads any reserve key file.
 TEST_KEY = "0x" + "11" * 32
 MODEL = "x402:https://seller.test#model/flash"

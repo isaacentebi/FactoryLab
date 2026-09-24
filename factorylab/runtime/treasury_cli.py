@@ -198,6 +198,11 @@ def command(args) -> int:
     # only thing between the acceptance CLI and a mainnet rail.
     if not (rail.testnet and rail.hyper.chain.id == 998 and rail.base.chain.id == 84532):
         raise RailError("the acceptance CLI runs on testnet only (HyperEVM 998, Base Sepolia)")
+    from factorylab.runtime.capital_loop import ReserveGuard
+
+    # Every reserve-key transaction is written ahead under the reserve's lock, or never
+    # prepared: a capital-loop run holding the reserve refuses it.
+    rail.bind_guard(ReserveGuard("treasury_cli"))
     config = {"name": "treasury-testnet-acceptance", "format": 1, "venue": rail.venue_address,
               "reserve": reserve, "networks": [998, 84532],
               "max_transfer_fee_micro": spec.max_transfer_fee_micro,
