@@ -14,6 +14,7 @@ import pytest
 
 from factorylab.cortex.sandbox import jail_available
 from factorylab.kernel.ledger import canonical
+from factorylab.runtime.capital_loop import default_lock_dir as operator_default_lock_dir
 from factorylab.runtime.loop import Runtime, run_world
 from factorylab.runtime.resume import restore_runtime, runtime_state
 from factorylab.runtime.worlds import load_manifest
@@ -343,3 +344,30 @@ def _forget_in_process_kills():
     witness._killed_here.clear()
     yield
     witness._killed_here.clear()
+
+
+@pytest.fixture(autouse=True)
+def _capital_loop_locks_stay_in_tmp(monkeypatch, tmp_path_factory):
+    """No test can touch the operator's real capital-loop lock or last-run record.
+
+    ``ReserveLock`` without a ``lock_dir`` resolves ``default_lock_dir()``, the operator
+    account's ``~/.factorylab/capital-loop``, which holds the live reserve's record. Every
+    test gets its own temporary directory there instead, made only if a test asks.
+    """
+    from factorylab.runtime import capital_loop
+
+    made = []
+
+    def temporary():
+        if not made:
+            made.append(tmp_path_factory.mktemp("capital-loop-locks"))
+        return made[0]
+
+    monkeypatch.setattr(capital_loop, "default_lock_dir", temporary)
+
+
+@pytest.fixture
+def operator_lock_dir():
+    """The real ``default_lock_dir`` the autouse fixture above replaces: call it only to
+    compute a path, never to lock anything there."""
+    return operator_default_lock_dir

@@ -734,9 +734,25 @@ def _safe_exception(exc: BaseException) -> dict[str, str]:
     }
 
 
-def run_rehearsal(
+def run_rehearsal(world: str | Path = DEFAULT_WORLD, **kwargs: Any) -> dict[str, Any]:
+    """Run a fresh bounded testnet rehearsal and persist a sanitized evidence report.
+
+    Keywords are ``_rehearse``'s. Guarantees a capital-loop run's reserve lock is
+    released when this returns or raises, whatever the path, so a library caller can
+    never keep a reserve locked in a living process by an exception it caught.
+    """
+    held: list = []
+    try:
+        return _rehearse(world, held=held, **kwargs)
+    finally:
+        for lock in held:
+            lock.close()
+
+
+def _rehearse(
     world: str | Path = DEFAULT_WORLD,
     *,
+    held: list,
     out: str | Path | None = None,
     duration_ns: int = DEFAULT_DURATION_NS,
     target_ticks: int | None = None,
@@ -763,10 +779,12 @@ def run_rehearsal(
     USDC, every other treasury route and x402 purchase stays denied. It then also
     guarantees: the reserve is held by this run alone on this host from before its
     launch check until the run returns (``ReserveLock``, in ``capital_loop_lock_dir``,
-    by default the operator's ``~/.factorylab/capital-loop``); the run is at least
-    ``SETTLEMENT_RATIO`` conversion settlement horizons long; and a run that ends with a
-    top-up still submitted says so in ``report["capital_loop_outstanding"]``, on stdout
-    and on stderr, naming ``scripts/capital_loop_outstanding.py``.
+    by default the operator's ``~/.factorylab/capital-loop``; ``held`` receives it so
+    ``run_rehearsal`` releases it); the run is planned at least ``SETTLEMENT_RATIO``
+    conversion settlement horizons long; and a run that ends with a top-up still
+    submitted says so in ``report["capital_loop_outstanding"]``, written to
+    ``report.json`` first and then printed on stdout and stderr, naming
+    ``scripts/capital_loop_outstanding.py``.
     """
     if type(duration_ns) is not int or duration_ns <= 0:
         raise ValueError("duration_ns must be positive integer")
@@ -821,11 +839,14 @@ def run_rehearsal(
             # authorization, so two runs on one reserve must never overlap.
             lock = ReserveLock(manifest.treasury.reserve_address,
                                lock_dir=capital_loop_lock_dir)
+            held.append(lock)
             transport = capital_loop_transport or _http_request()
             run_ns = (duration_ns if target_ticks is None
                       else min(duration_ns, target_ticks * manifest.tick_interval_ns))
+            # The host clock that will stamp validBefore is the runtime's own clock.
             settlement = settlement_bound(run_ns, manifest.tick_interval_ns,
-                                          transport=transport)
+                                          transport=transport,
+                                          now_s=lambda: now_ns() // 1_000_000_000)
             # The reserve's last holder is read wherever it ran, not only beside --out:
             # it is the one earlier run whose authorization can still be live.
             last = lock.last_run()
@@ -1041,6 +1062,8 @@ def run_rehearsal(
         report["cost"] = admission.report()
         if report_path is not None:
             report_path.write_text(json.dumps(report, indent=2, default=str) + "\n")
+        # Printed only once it is on disk: a failed print must not lose the warning.
+        _announce_outstanding(report)
         if lock is not None:
             lock.close()
     return report
@@ -1051,12 +1074,11 @@ def _report_outstanding(report: dict, runtime: Any, output_dir: Path | None) -> 
 
     A top-up still submitted at the end (its authorization may settle after the world
     is dead, or settled with its credit unbooked), a shadow send still pending, or a
-    diary that cannot be read is written to ``report["capital_loop_outstanding"]`` and
-    printed on stdout and stderr with the next step, ``scripts/
-    capital_loop_outstanding.py`` on this run's directory. Nothing is signed or retried.
+    diary that cannot be read is written to ``report["capital_loop_outstanding"]`` with
+    the next step, ``scripts/capital_loop_outstanding.py`` on this run's directory, for
+    ``_announce_outstanding`` to print once the report is on disk. Nothing is signed or
+    retried.
     """
-    import sys
-
     from factorylab.runtime.capital_loop import (
         OUTSTANDING_SCRIPT,
         journaled_references,
@@ -1084,9 +1106,28 @@ def _report_outstanding(report: dict, runtime: Any, output_dir: Path | None) -> 
         "runbook": "docs/architecture/capital-loop-rehearsal.md, After the run",
     }
     section["outstanding_at_end"] = report["capital_loop_outstanding"] = outstanding
+
+
+def _announce_outstanding(report: dict) -> None:
+    """Print a run's outstanding conversion on stdout and stderr, if it left one."""
+    import sys
+
+    outstanding = report.get("capital_loop_outstanding")
+    if outstanding is None:
+        return
     print(json.dumps({"capital_loop_outstanding": outstanding}, default=str), flush=True)
     print(f"CAPITAL LOOP OUTSTANDING: {outstanding['warning']}. Before touching the reserve "
-          f"or relaunching, run: {command}", file=sys.stderr, flush=True)
+          f"or relaunching, run: {outstanding['next_step']}", file=sys.stderr, flush=True)
+
+
+def exit_code(report: dict) -> int:
+    """0 for a completed run with nothing outstanding; 3 when a conversion is left
+    unbooked (a top-up still submitted, or a diary unread at the end), whatever the
+    status, since that is the operator's next step; otherwise 1."""
+    outstanding = report.get("capital_loop_outstanding") or {}
+    if outstanding.get("top_ups_submitted") or outstanding.get("diary_unreadable"):
+        return 3
+    return 0 if report.get("status") == "completed" else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1129,7 +1170,7 @@ def main(argv: list[str] | None = None) -> int:
     if "capital_loop_outstanding" in report:
         summary["capital_loop_outstanding"] = report["capital_loop_outstanding"]
     print(json.dumps(summary, indent=2, default=str))
-    return 0 if report["status"] == "completed" else 1
+    return exit_code(report)
 
 
 if __name__ == "__main__":

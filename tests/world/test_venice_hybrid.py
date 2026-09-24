@@ -418,7 +418,7 @@ class Final(Chain):
                 and len(log["topics"]) >= len(topics)
                 and all(want is None or want.lower() == got.lower()
                         for want, got in zip(topics, log["topics"], strict=False))
-                ], self.scanned_to
+                ], end  # coverage: never past the finalized head, as EVM.scan reports it
 
     def logs(self, contract, topics, start):
         return self.scan(contract, topics, start)[0]
@@ -1124,10 +1124,16 @@ class VenueWire:
             known = (self.main.lower(), self.sink.lower())
             return {"role": "user" if payload["user"].lower() in known else "missing"}
         if kind == "clearinghouseState":
-            return {"marginSummary": {"accountValue": str(self.withdrawable)},
-                    "withdrawable": str(self.withdrawable)}
+            value = str(self.withdrawable)
+            return {"marginSummary": {"accountValue": value, "totalMarginUsed": "0.0",
+                                      "totalNtlPos": "0.0", "totalRawUsd": value},
+                    "withdrawable": value, "assetPositions": []}
         if kind == "userNonFundingLedgerUpdates":
             return [deepcopy(r) for r in self.rows if r["time"] >= payload["startTime"]]
+        if kind == "spotClearinghouseState":
+            return {"balances": []}
+        if kind == "allMids":
+            return {"BTC": "60000", "ETH": "3000"}
         raise AssertionError(f"unexpected venue info {kind}")
 
 

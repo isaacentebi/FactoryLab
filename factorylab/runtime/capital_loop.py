@@ -30,7 +30,10 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import pwd
 import tempfile
+import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -38,11 +41,8 @@ from factorylab.world.evm import BASE, EVM
 from factorylab.world.x402 import (
     BASE_RPC,
     MAX_AUTHORIZATION_S,
-    TOP_UP_MICRO,
-    VENICE_URL,
     Transport,
     http_request,
-    parse_quote,
     usdc_balance,
 )
 
@@ -51,6 +51,9 @@ from factorylab.world.x402 import (
 #: the outer loop that commands it). The run commands the conversion; a run shorter
 #: than three settlement horizons leaves most of its conversions settling after it.
 SETTLEMENT_RATIO = 3
+#: How many times the finality lag sampled at launch a settlement horizon allows: the
+#: one sample must also cover the lag growing while the run lasts.
+LAG_ALLOWANCE = 2
 #: The next step an operator takes when a run ends with a top-up still submitted.
 OUTSTANDING_SCRIPT = "scripts/capital_loop_outstanding.py"
 
@@ -66,16 +69,24 @@ class CapitalLoopRefused(RuntimeError):
 def read_items(run_dir: str | Path) -> list[dict]:
     """Every diary item of a run, decrypted with the run's own ledger key file.
 
-    Guarantees no item is silently dropped. Every line but the last must be a complete
-    sealed record that this run's key decrypts, and the records must form one unbroken
-    chain from the genesis header (each names its sequence number and its predecessor's
-    hash), or the read is refused (``run_ledger_unreadable``, naming the line). The only
-    line ever skipped is a torn last one, with no newline: the process died mid-append,
-    and an item that never finished writing never reached the rail, since the treasury
-    journals a step before it acts on it. A run folder carrying another run's key (a copy
-    or a restore), a corrupted, removed or reordered middle line, or a complete last line
-    that does not decrypt could each hide a ``step_submitted`` authorization that is
-    still live, so each refuses rather than reading as "nothing outstanding".
+    Guarantees no item that is in the file is silently dropped. Every line but the last
+    must be a complete sealed record that this run's key decrypts, and the records must
+    form one unbroken chain from the genesis header (each names its sequence number and
+    its predecessor's hash), or the read is refused (``run_ledger_unreadable``, naming
+    the line). A last line without its newline is read like any other when it decrypts
+    and chains (a diary whose final newline was cut is not hiding its newest item); it
+    is skipped only when it does not, which is a torn append: the process died
+    mid-write, and an item that never finished writing never reached the rail, since
+    the treasury journals a step before it acts on it. A run folder carrying another
+    run's key (a copy or a restore), a corrupted, removed or reordered middle line, or a
+    complete last line that does not decrypt could each hide a ``step_submitted``
+    authorization that is still live, so each refuses rather than reading as "nothing
+    outstanding".
+
+    What no read of the file alone can detect is a diary cut at a line boundary: the
+    lines left are a valid prefix. The defence against that is outside the file: the
+    reserve lock's last-run record makes every launch read the last run, and the chain
+    (``authorization_status``) is consulted for every authorization that is read.
     """
     from cryptography.fernet import Fernet, InvalidToken
 
@@ -103,8 +114,9 @@ def read_items(run_dir: str | Path) -> list[dict]:
         except (ValueError, KeyError, TypeError):
             raise unreadable(1) from None
         for seq, line in enumerate(stream):
-            if not line.endswith(b"\n"):
-                break  # only the last line can lack its newline: the torn final append
+            # Only the last line can lack its newline. It counts if it reads; if not,
+            # it is the torn final append and nothing after it exists.
+            torn = not line.endswith(b"\n")
             try:
                 record = json.loads(line)
                 if not isinstance(record, dict) or set(record) != {"item"}:
@@ -115,6 +127,8 @@ def read_items(run_dir: str | Path) -> list[dict]:
                         or not isinstance(item.get("hash"), str)):
                     raise ValueError
             except (ValueError, KeyError, TypeError, AttributeError, InvalidToken):
+                if torn:
+                    break
                 raise unreadable(seq + 2) from None  # 1-based, counting the header
             previous = item["hash"]
             items.append(item)
@@ -226,9 +240,20 @@ def default_lock_dir() -> Path:
 
     Guarantees every checkout, worktree, ``--out`` and copied run folder of the same
     operator account resolves the same directory, so the lock is keyed by the reserve
-    and nothing else: it lives under the home directory, never under a run or a repo.
+    and nothing else: it lives under the account's home directory as the password
+    database names it, never under a run or a repo, and never under ``$HOME``, which a
+    launch could point at a fresh, empty directory.
     """
-    return Path.home() / ".factorylab" / "capital-loop"
+    return Path(pwd.getpwuid(os.getuid()).pw_dir) / ".factorylab" / "capital-loop"
+
+
+def _fsync_directory(directory: Path) -> None:
+    """Make a rename or a creation inside ``directory`` durable before returning."""
+    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 class ReserveLock:
@@ -249,7 +274,15 @@ class ReserveLock:
     a dead EIP-3009 authorization never revives, so the last holder is the only earlier
     run that can still be live. Per host only: another machine is not excluded (the
     on-chain floor still bounds it).
+
+    The record cannot be switched off by removing it. The process that creates a
+    reserve's lock file also creates its record, naming no run, before it takes the
+    lock; from then on a lock file without a record refuses every launch
+    (``capital_loop_last_run_missing``). The one way back is the deliberate manual
+    reset in the runbook: remove both files while no run holds the reserve.
     """
+
+    _FLAGS = os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC
 
     def __init__(self, reserve_address: str, *, lock_dir: str | Path | None = None):
         from factorylab.world.x402 import _address
@@ -261,7 +294,18 @@ class ReserveLock:
         self.path = directory / f"{name}.lock"
         self.record_path = directory / f"{name}.last-run.json"
         self.reserve_address = reserve_address
-        fd = os.open(self.path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        try:
+            fd = os.open(self.path, self._FLAGS | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            fd = os.open(self.path, self._FLAGS)
+        else:
+            try:
+                # This reserve was never locked on this account: say so on disk before
+                # anyone can hold it, so a missing record always means a removed one.
+                self._create_record(None)
+            except BaseException:
+                os.close(fd)
+                raise
         try:
             os.set_inheritable(fd, False)  # explicit, and a no-op where O_CLOEXEC held
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -275,39 +319,60 @@ class ReserveLock:
         self.fd = fd
 
     def last_run(self) -> Path | None:
-        """The run that last held this reserve, or None when none was ever recorded.
+        """The run that last held this reserve, or None when the record names none.
 
-        A record that cannot be read refuses (``capital_loop_last_run_unreadable``):
-        it may name a run whose authorization is still live.
+        A missing record refuses (``capital_loop_last_run_missing``): the lock file
+        exists, so a record was written and has since been removed. A record that cannot
+        be read refuses (``capital_loop_last_run_unreadable``). Either may hide a run
+        whose authorization is still live.
         """
         if not self.record_path.exists():
-            return None
+            raise CapitalLoopRefused("capital_loop_last_run_missing", {
+                "record": str(self.record_path), "lock": str(self.path)})
         try:
             record = json.loads(self.record_path.read_text())
             if record["reserve_address"].lower() != self.reserve_address.lower():
                 raise ValueError
-            return Path(record["run_dir"])
+            return None if record["run_dir"] is None else Path(record["run_dir"])
         except (ValueError, KeyError, TypeError, AttributeError, OSError):
             raise CapitalLoopRefused("capital_loop_last_run_unreadable",
                                      {"record": str(self.record_path)}) from None
+
+    def _record(self, run_dir: str | Path | None) -> bytes:
+        return json.dumps({"reserve_address": self.reserve_address,
+                           "run_dir": None if run_dir is None
+                           else str(Path(run_dir).resolve())}).encode()
+
+    def _create_record(self, run_dir: str | Path | None) -> None:
+        """Write the first record, durably, unless one is already there to keep."""
+        try:
+            fd = os.open(self.record_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                         | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        except FileExistsError:
+            return  # a lock file removed by hand beside its record: the record stands
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(self._record(run_dir))
+            stream.flush()
+            os.fsync(stream.fileno())
+        _fsync_directory(self.record_path.parent)
 
     def record_run(self, run_dir: str | Path) -> None:
         """Durably name ``run_dir`` as this reserve's last holder, atomically.
 
         Guarantees the record on disk is the previous one or this one, never a torn mix,
-        and that this one is on disk before it returns. Only the holder may record.
+        and that this one is on disk, its rename included (the directory is synced),
+        before it returns. Only the holder may record.
         """
         if self.fd is None:
             raise RuntimeError("the reserve lock is not held")
-        data = json.dumps({"reserve_address": self.reserve_address,
-                           "run_dir": str(Path(run_dir).resolve())}).encode()
         fd, temporary = tempfile.mkstemp(prefix=".last-run-", dir=self.record_path.parent)
         try:
             with os.fdopen(fd, "wb") as stream:
-                stream.write(data)
+                stream.write(self._record(run_dir))
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temporary, self.record_path)
+            _fsync_directory(self.record_path.parent)
         finally:
             Path(temporary).unlink(missing_ok=True)
 
@@ -329,42 +394,50 @@ class ReserveLock:
 
 def settlement_bound(run_ns: int, tick_interval_ns: int, *,
                      transport: Transport = http_request, rpc: str = BASE_RPC,
-                     venice_url: str = VENICE_URL) -> dict:
-    """Refuse a run shorter than ``SETTLEMENT_RATIO`` conversion settlement horizons.
+                     now_s: Callable[[], int] | None = None) -> dict:
+    """Refuse a run planned shorter than ``SETTLEMENT_RATIO`` settlement horizons.
 
     A top-up authorization settles, or provably dies, only once a finalized Base block
     is past its debit or past its ``validBefore``, and the rail sees that at its next
-    tick. So one conversion's horizon is its validity window (the quote's
-    ``maxTimeoutSeconds``, capped at ``MAX_AUTHORIZATION_S`` exactly as the signer caps
-    it) plus Base's finality lag plus one tick. The window is read from Venice's unpaid
-    quote (a POST with no payment and no credential, which signs and moves nothing);
-    when that quote cannot be read, the cap stands in, which can only lengthen the
-    bound. The lag is read keylessly now, the latest block's timestamp less the
-    finalized block's; unreadable, the launch is refused (``finality_lag_unreadable``),
-    since no typed constant stands in for Base's own delay. A run shorter than
+    tick. The signer sets ``validBefore`` from this host's clock, at most
+    ``MAX_AUTHORIZATION_S`` after it prepares the authorization. So one conversion's
+    horizon is, in the chain's own time:
+
+    * the validity window, always the ``MAX_AUTHORIZATION_S`` cap: the signer obeys
+      whatever quote it is handed later, so a quote read now bounds nothing;
+    * plus the host clock's lead over the latest Base block, when it leads: a
+      ``validBefore`` stamped by a fast clock lies that much further in chain time;
+    * plus twice the finality lag sampled now (latest block's timestamp less the
+      finalized block's): one sample at launch must also cover the lag growing during
+      the run, and doubling it is the allowance (16 minutes measured, 32 allowed);
+    * plus one tick for the rail to look.
+
+    Every read is keyless. A lag that cannot be read, or reads zero or less (Base's
+    finalized head always trails its latest), is unavailable and refuses
+    (``finality_lag_unreadable``): no typed constant stands in for Base's own delay.
+    ``run_ns`` is the run's planned length; the bound says nothing of a run the
+    admission cap, a failure or a kill ends early. A run planned shorter than
     ``SETTLEMENT_RATIO`` horizons is refused
     (``capital_loop_duration_below_settlement_bound``).
     """
-    window, source = MAX_AUTHORIZATION_S, "cap"
-    try:
-        quote = parse_quote(transport("POST", venice_url.rstrip("/") + "/x402/top-up", {}, {}),
-                            amount_micro=TOP_UP_MICRO)
-        window, source = min(quote.accepted["maxTimeoutSeconds"], MAX_AUTHORIZATION_S), "quote"
-    except Exception:  # noqa: BLE001 - the cap bounds every window this adapter signs
-        pass
     base = keyless_base(transport=transport, rpc=rpc)
     try:
         base.check_chain()
         latest = base.call("eth_getBlockByNumber", ["latest", False])
         final = base.call("eth_getBlockByNumber", ["finalized", False])
-        lag = int(latest["timestamp"], 16) - int(final["timestamp"], 16)
-        if lag < 0:
+        latest_ts = int(latest["timestamp"], 16)
+        lag = latest_ts - int(final["timestamp"], 16)
+        if lag <= 0:
             raise ValueError
     except Exception:  # noqa: BLE001 - an unread lag bounds nothing
         raise CapitalLoopRefused("finality_lag_unreadable", {"rpc": base.rpc}) from None
-    horizon_ns = (window + lag) * 1_000_000_000 + tick_interval_ns
-    numbers = {"validity_window_s": window, "validity_source": source,
-               "finality_lag_s": lag, "tick_interval_ns": tick_interval_ns,
+    host_s = now_s() if now_s is not None else time.time_ns() // 1_000_000_000
+    skew = max(0, host_s - latest_ts)
+    window = MAX_AUTHORIZATION_S
+    horizon_ns = (window + skew + LAG_ALLOWANCE * lag) * 1_000_000_000 + tick_interval_ns
+    numbers = {"validity_window_s": window, "host_clock_lead_s": skew,
+               "finality_lag_s": lag, "finality_lag_allowance": LAG_ALLOWANCE,
+               "tick_interval_ns": tick_interval_ns,
                "settlement_horizon_ns": horizon_ns, "settlement_ratio": SETTLEMENT_RATIO,
                "minimum_run_ns": SETTLEMENT_RATIO * horizon_ns, "run_ns": run_ns}
     if run_ns < SETTLEMENT_RATIO * horizon_ns:
