@@ -273,10 +273,12 @@ class GovernanceMixin:
     @property
     def predicates(self):
         """Predicate resolution always reads this world's current persisted history."""
+        from factorylab.runtime.polymarket import vocabulary
         from factorylab.settlement.vocabulary import PredicateBook
 
         return PredicateBook(self.registered_predicates,
-                             run=lambda code, facts: self.predicate_runner.run(code, facts))
+                             run=lambda code, facts: self.predicate_runner.run(code, facts),
+                             world=vocabulary(self.m))
 
     def _register_predicate(self, handle: str, prop: PredicateProposal) -> None:
         """Only jailed boolean preflights and durable admission publish a predicate version."""
