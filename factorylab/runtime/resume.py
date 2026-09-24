@@ -503,10 +503,9 @@ def _read_only(name: str) -> bool:
         "quote", "fetch",
         "registration_price", "seller_models", "funding_payments", "lookup",
         "reserve_balance", "discover_index", "instruments",
-        # The live adapter's count of venue request weight it has sent, and what it
-        # sent in the venue's sliding minute: reads of its own counters, replayed from
-        # the journal and never a write to the venue.
-        "request_weight_sent", "request_weight_window",
+        # The live adapter's count of venue request weight it has sent: a read of its
+        # own counter, replayed from the journal and never a write to the venue.
+        "request_weight_sent",
         # The vault surface's reads: a vault's record, this account's vault equities,
         # its vault ledger rows, and the ledger match that resolves a lost write.
         "vault_details", "vault_equities", "vault_ledger", "vault_lookup",
@@ -679,21 +678,20 @@ _RUNTIME_FIELDS = (
     # Each seat's venue read weight in the sliding minute. An older checkpoint starts
     # every share unspent.
     "venue_read_use",
-    # The weight the seats' reads sent to a simulated venue in the sliding minute.
-    "venue_sent",
+    # When each freed venue read slot may be given again, and the seats waiting for one.
+    "slot_free_at", "slot_waiting",
     # The seats holding a venue read slot. An older checkpoint gives the seeds theirs.
     "venue_readers",
     # The retired ids, oldest retirement first (the order the retained private state
     # cap releases their kept state in).
     "retirement_order",
-    # Who registered each id's current version: whose next version inherits its head.
-    # An older checkpoint knows none, so only an id itself inherits its head.
-    "registrants",
+    # Each id's lineage key, the serial they are drawn from, and the key of the seat
+    # that registered each id's current version: whose next version inherits its head.
+    # An older checkpoint knows only the seeds' keys, so only an id itself inherits.
+    "lineage_keys", "registration_serial", "registrants",
     # Each seat's Polymarket read requests in the sliding minute. An older checkpoint
     # (or a world without the block) starts every share unspent.
     "polymarket_read_use",
-    # Every Polymarket request the world sent in the sliding minute, kernel and seats.
-    "polymarket_sent",
     # The pause between releases: None while awake, else the entry record (C2).
     "dormancy",
     # C10: each seat's last rendered call ceiling and the world size it was priced at.

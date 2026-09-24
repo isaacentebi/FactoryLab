@@ -20,7 +20,7 @@ round-three fixes to the existing contracts.
 | `tools.max_depth` | Integer ≥ 0, never boolean or float | `4` | Yes: root depth is 0; zero disables children |
 | `tools.max_children` | Integer ≥ 0, never boolean or float | `3` | Yes: per-request fan-out; zero disables children |
 | `tools.max_tool_calls` | Integer ≥ 0, never boolean or float | `4` (the existing limit, now a manifest key) | Yes: per request; zero disables tool calls |
-| `venue.max_readers` | Integer ≥ 1 | `16` | Yes: the venue read slots. Seeds take slots in manifest order; a registration takes the lowest free one; a retirement frees one, and the slot keeps its read history for the next seat that holds it; a seat without one registers all the same, without the venue read tools. The venue read share divides by it (see "Seeing the world"). The population itself has no size cap: `tools.max_seats` was removed and is refused |
+| `venue.max_readers` | Integer ≥ 1 | `16` | Yes: the venue read slots. Seeds take slots in manifest order; a registration takes the lowest free one; a retirement frees one, given again only once its last holder's last read has left the sliding minute; a seat without one registers all the same, without the venue read tools. The venue read share divides by it (see "Seeing the world"). The population itself has no size cap: `tools.max_seats` was removed and is refused |
 
 The assembly proposal uses the same accepts/emits/schemas contract. A custom
 schema validates the returned payload, excluding the protocol fields `emits`,
@@ -1633,33 +1633,55 @@ be shared; 60 of those are held back for the kernel's own settlement and marking
 reads (`event_facts`, `mark`), which no seat can spend. The rest is divided over the
 venue read slots (`[venue] max_readers`, the same slots the venue reads use): each
 slot has a fixed share of `(read_requests_per_minute - kernel_reserve_per_minute) //
-max_readers` requests, 7 at the defaults, over any sliding 60 s of world time. The
-share is the slot's, not the seat's: a seat registered into a slot a retired seat
-held inherits what was charged to it in the window. **One meter counts every
-request the world sends**, the kernel's and the seats' together
-(`polymarket_sent`, checkpointed): what the live reader reports it sent
-(`PolymarketReader.requests_sent`, journaled read-only), and on the simulated venue
-(`fake`, and a rehearsal's `simulate_reads`) what the live reader would have sent
-for the same read (`FakePolymarket.requests_sent`: a token's market lookup is 1 to
-3 requests, every other read 1). Every read tool sends one GET, once. A seat read is
-refused before it is sent when its slot's remaining share cannot cover it
-(`polymarket read share spent: <used> of <share> requests in the last 60 s; this
-read sends 1`), or when the world's requests in the sliding minute leave less than
-the kernel's reserve plus the read (`polymarket requests held for the kernel`). Every
-admitted seat read is charged one request to its slot, whether it was sent or
-answered from the tick (below): a share is a quota on reads asked, so a seat cannot
-tell a tick's answer from a sent read. The kernel's own reads (`kernel_read`: the
-settlement reads of `event_facts`, and `mark`) are admitted while the most they can
-send fits the world's budget; past it they are deferred, never refused and never
-counted as unanswered: the settlement pass stops, records
-`polymarket.settlement_deferred {count}`, and the rest settle on a later pass;
-`mark` stops, records `polymarket.mark_deferred {count}`, and the rest keep their
-marks. So the requests sent in any sliding minute never pass
-`read_requests_per_minute`. Which market lists a token is fixed when the market is
-made, so the kernel looks a token up once for the world's life
-(`PolymarketSurface.token_markets`, checkpointed) and reads its market by id (one
-GET) afterwards. A seat without a venue read slot does not hold the Polymarket
-reads. Within one world tick, until a Polymarket write, a read identical to one
+max_readers` requests, 7 at the defaults, over any sliding 60 s of world time,
+counted over the seat's own reads; a freed slot is given again only once its last
+holder's last read has left the minute, so one slot never carries two seats' reads in
+one window. Every read tool sends one GET, once. A seat read is refused before it is
+sent when the seat's remaining share cannot cover it (`polymarket read share spent:
+<used> of <share> requests in the last 60 s; this read sends 1`); nothing else admits
+or refuses it. Every admitted seat read is charged one request, whether it was sent
+or answered from the tick (below): a share is a quota on reads asked, so a seat cannot
+tell a tick's answer from a sent read. The seats therefore send at most
+`read_requests_per_minute - kernel_reserve_per_minute` in any sliding minute.
+
+**The kernel's reads fit its reserve by construction; they are never admitted,
+refused or deferred.** A claim is graded on the world at its due pass (essay
+II.III.b, prebaked at the Stackelberg move): the settlement reads of `event_facts`
+and the marks of `mark` are always sent. What bounds them is a limit on what seats
+can open. An *open read* is either the settlement of the claims on one token due at
+one tick (`due:<token>:<tick>`) or one token the pot holds or orders
+(`held:<token>`); it stays open while its claims are pending or its token is held,
+and for 60 s after the kernel's last read for it. At most **N =
+`kernel_reserve_per_minute // 2` open reads** are kept (30 at the defaults; published
+in the world block's `polymarket_reads`): a claim that would open one more is refused
+at sealing, and a buy that would open a held token beyond it is refused, both with
+`polymarket open reads are at the world's limit of N`; a claim joining a due tick
+already open on its token is always admitted. *Proof* (`runtime/polymarket.py`,
+`open_limit`): the kernel sends at most 2 requests for an open read in any sliding
+minute (its market by id and, for a price claim on an open market, its book, in the
+one pass that settles that due tick, since every claim due at a tick settles in the
+first pass at or after it; or one book a minute for a held token, as `mark` reads a
+held token's book at most once in any 60 s and keeps its mark in between). Every
+open read the kernel read for in a window `(t - 60 s, t]` is still counted at `t`,
+and at most N are ever counted, so the kernel sends at most `2 N <=
+kernel_reserve_per_minute` in any minute, and with the seats the world never passes
+`read_requests_per_minute`. A world whose reserve cannot cover one open read (`N <
+1`) is refused at load. A claim's token is looked up when the claim is sealed
+(`open_claim`), as the sealing seat's own read through its venue read slot (a seat
+without one is refused: `a polymarket claim needs a venue read slot`), charged 3
+requests to its share, the lookup's most, whether or not the world already knew the
+token. Which market lists a token is fixed when the market is made, so a token is
+looked up once for the world's life (`PolymarketSurface.token_markets`,
+checkpointed; it grows with the distinct tokens the world has seen claimed or
+traded, the world's record of them) and its market is read by id (one GET)
+afterwards; a token no market listed at its lookup settles on that fact, with no
+read. A refused claim is not sealed: `forecast.refused` is ledgered and its owner is
+told. The simulated venue (`fake`, and a rehearsal's `simulate_reads`) counts what the
+live reader would send for the same read (`FakePolymarket.requests_sent`: a token's
+lookup is 1 to 3 requests, every other read 1). Writes exist only on the simulated
+venue, which sends Polymarket nothing; a write's checks read the token's market
+through the journal and the same lookup. A seat without a venue read slot does not
+hold the Polymarket reads. Within one world tick, until a Polymarket write, a read identical to one
 already answered in that tick (the kernel's own `order_book` read included) is
 answered from that answer and sends no request (`polymarket.read_answered`); the
 answer carries no marker. A world whose per-slot share cannot cover one read is
@@ -1833,10 +1855,13 @@ fixed for the world's life) is what the population's reads may use. **The limit 
 on who reads the venue, not on how many seats exist.** `[venue] max_readers`
 (default `16`) is the number of venue read slots: the seeds take slots in manifest
 order, a newly registered seat takes the lowest free one if there is one, and a
-retirement frees its seat's slot for the next registration. The slot keeps its place
-and its read history: a seat given a slot a retired seat held inherits what was
-charged to it in the sliding minute, so no slot ever has more than its share. A seat with no slot registers all
-the same, with every tool but the venue reads, which it is refused as an unknown
+retirement frees its seat's slot. A freed slot keeps its place and is given again
+only once its last holder's last read has left the sliding minute (`slot_free_at`),
+so no two seats' reads through one slot ever share a window and nothing of a
+predecessor's reads reaches the seat that follows it (AGENTS.md rule 5). A seat
+registered while no slot is free waits (`slot_waiting`) and is given the next one to
+come free, in registration order, at a tick (`venue.reader_slot {slot: true}`). A
+seat with no slot registers all the same, with every tool but the venue reads, which it is refused as an unknown
 or disallowed tool; its proposer's inbox receives a `registration_admitted` item
 saying so, and the seat's own `YOU` block carries `venue_read_slot`. It reads the
 market through the world update, or through a reader seat by contract. A seat
@@ -1849,17 +1874,11 @@ refusals. A first-come shared budget would let one seat starve the others and
 signal them through refusals, and a share over the live seats would let
 registering seats shrink everyone's share: both are a third channel between seats
 (AGENTS.md rule 4). A read is admitted when the weight its first attempt sends
-fits in what the slot's reads left of its share, and refused before it is sent
-otherwise (`tool.refused`, naming the slot's own use and share). **One meter also
-weighs the IP:** a read is refused, unsent, when the venue weight the world sent in
-the sliding minute, the kernel's included, leaves less than the kernel's part
-(`1200 - public_read_weight_per_minute`, 720 at the default) plus the read (`venue
-weight held for the kernel`). The live adapter weighs every request it sends over
-the venue's own minute (`request_weight_window`, journaled read-only) and never
-lets the total pass 1200: a kernel request past it waits for the window to slide,
-as the SDK's own backoff on a 429 would, and is never refused; a seat's read is
-refused unsent. On a simulated venue the kernel sends nothing, and the seats' reads
-that reached it are what the meter counts (`venue_sent`, checkpointed).
+fits in what the seat's own reads left of its share, and refused before it is sent
+otherwise (`tool.refused`, naming the seat's own use and share). The seats' total
+is capped by the shares, one seat a slot at a time, at `public_read_weight_per_minute`
+(480), which leaves the kernel the rest of the venue's 1200 (720); the physical
+per-IP limit is the venue's own (a 429), which `_guarded` backs off from.
 
 **A read answered earlier in the tick is not sent again.** Within one world tick,
 until a venue or treasury write that can change what the venue answers (an order,
@@ -1868,8 +1887,8 @@ a cancel, a leverage or vault write, a transfer; not the simulated venue's local
 classifies it as a write for replay), a seat read identical to a venue request already
 answered in that tick (same adapter method, same arguments; the kernel's own
 reads of the same endpoints included) is answered from that answer, shaped by the
-same tool code: no request is sent (`venue.read_answered`). The seat's slot is
-charged for it as for any read, and the answer carries no marker, so a seat cannot
+same tool code: no request is sent (`venue.read_answered`). The seat is charged
+for it as for any read, and the answer carries no marker, so a seat cannot
 tell a tick's answer from a sent read (AGENTS.md rule 4). The kernel's own reads are never answered this way, so
 what a price or a balance has a consequence for is still read afresh. Every
 answered read is kept from the journal's own result (`JournalProxy.observer`), and
@@ -1885,15 +1904,14 @@ out-of-range count taken at its maximum. **A seat's read is sent once**: the
 adapter's `_guarded` makes three attempts for the kernel's own calls, but one for
 a seat's (`single_attempt`), so no retry can take a seat past the share its read
 was admitted on, and the retry reserve in the arithmetic below is zero. A seat
-read that meets a 429 or a transient failure fails and the seat is told. The slot
-is charged the read's first-attempt weight on admission; what the live adapter
-reports it sent (`HyperliquidExchange.request_weight_sent`, a journaled read-only
-call, replayed from the journal and never counted as a venue write: every attempt
-`_guarded` makes, and the item weight of what came back) is what the IP meter
-weighs. A simulated venue sends nothing and counts the first-attempt weight of a
-read that reached it, so the limit binds the same way in a scripted world; a
-counter that cannot be read counts the same, and no failure of it escapes the
-tool call. The sum of all seats' reads over any 60 s is therefore
+read that meets a 429 or a transient failure fails and the seat is told. The seat
+is charged the read's first-attempt weight on admission, and, once it answered,
+whatever the live adapter reports it sent beyond that
+(`HyperliquidExchange.request_weight_sent`, a journaled read-only call, replayed
+from the journal and never counted as a venue write: every attempt `_guarded` makes,
+and the item weight of what came back). A simulated venue reports nothing, so the
+first-attempt weight is what binds there, the same way; a counter that cannot be
+read charges nothing more, and no failure of it escapes the tool call. The sum of all seats' reads over any 60 s is therefore
 at most `max_readers × share ≤ public_read_weight_per_minute`, and the rest of
 the 1200 is the kernel's: 720 at the default. That headroom rests on an estimate,
 not a measurement: at 10-second ticks the kernel's own reads (mids, account and
@@ -1953,9 +1971,15 @@ with decisions, on the order of 0.5 KiB per outcome addressed to a seat (an inbo
 body with its evidence pointer and what the seat said). Retirement is final for a
 version, not for an id: a retired id's head and a retired program's private state
 are kept. The id registered again as its next version inherits its head, which is
-its memory, only when the proposer is the id's owner: the seat that registered its
-previous version (`registrants`, the registering handle's seat), or the id itself; a
-seed has no registrant, so only the seed itself. Registered by any other seat, the
+its memory, only when the proposer is the id's owner. Ownership is a lineage key,
+never an id string: every registration draws a serial (`registration_serial`; the
+seeds take the first ones), an id keeps its key (`lineage_keys`) only when its owner
+re-versions it and gets a fresh one otherwise, and `registrants[id]` is the key of
+the seat that registered its current version at that time. The owner is the seat
+whose current key equals `registrants[id]` (the registering handle's seat), or the id
+itself; a seed has no registrant, so only the seed itself. A seat that later takes
+an id string another seat once registered therefore owns nothing that seat's
+children hold. Registered by any other seat, the
 next version starts with no private state. A program's private state is never
 inherited: a next version is new code, which cannot be assumed to read the old
 code's state, so it starts with none. What is not inherited is superseded at the

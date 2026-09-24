@@ -1012,6 +1012,14 @@ class WorldManifest:
                 return (f"each reader's polymarket read share, (read_requests_per_minute - "
                         f"kernel_reserve_per_minute) // venue.max_readers = {pm_share}, "
                         f"cannot cover one read of {SEAT_READ_REQUESTS} request")
+            from factorylab.runtime.polymarket import KERNEL_READS_PER_OPEN, open_limit
+
+            if open_limit(pm) < 1:
+                # The kernel could keep no open read at all: no claim could ever be
+                # settled on a Polymarket market.
+                return (f"polymarket.kernel_reserve_per_minute = "
+                        f"{pm.kernel_reserve_per_minute} cannot cover one open read of "
+                        f"{KERNEL_READS_PER_OPEN} requests")
         return None
 
     def storage_problem(self) -> str | None:

@@ -1206,8 +1206,7 @@ class HyperliquidExchange:
 
         from factorylab.world.venue_tools import request_weight
 
-        single = getattr(self, "single_attempt", False)
-        if single:
+        if getattr(self, "single_attempt", False):
             # A seat's read: sent once, so its weight never exceeds what its share
             # admitted (runtime/compute.py, ``_seat_read_attempts``).
             attempts = 1
@@ -1215,7 +1214,6 @@ class HyperliquidExchange:
         for attempt in range(attempts):
             # Every attempt is a request the venue weighs against the IP limit, a
             # retry after a 429 included: counted before it is sent, whatever answers.
-            self._admit_weight(what, request_weight(what), single=single)
             self.request_weight = getattr(self, "request_weight", 0) + request_weight(what)
             try:
                 result = call()
@@ -1239,61 +1237,15 @@ class HyperliquidExchange:
                 delay *= 2
             else:
                 # The weight that grows with what was returned is known only now.
-                grown = request_weight(what, result) - request_weight(what)
-                self.request_weight += grown
-                if grown:
-                    self._weight_log().append((self._monotonic(), grown))
+                self.request_weight += request_weight(what, result) - request_weight(what)
                 return result
         raise AssertionError("unreachable")
-
-    def _monotonic(self) -> float:
-        import time
-
-        return getattr(self, "monotonic", time.monotonic)()
-
-    def _weight_log(self) -> list:
-        """(monotonic s, weight) of every request sent in the venue's sliding minute."""
-        log = self.__dict__.setdefault("_sent_weights", [])
-        since = self._monotonic() - 60
-        while log and log[0][0] <= since:
-            log.pop(0)
-        return log
-
-    def _admit_weight(self, what: str, weight: int, *, single: bool) -> None:
-        """Hold a request until the venue's per-IP minute has room for it.
-
-        Guarantees that every request this adapter sends, the kernel's and the seats'
-        together, keeps the weight it sent in any sliding 60 s at or under
-        ``VENUE_WEIGHT_PER_MINUTE`` (Hyperliquid's documented IP limit). A kernel
-        request past it waits for the window to slide, as the SDK's own backoff on a
-        429 would; it is never refused. A seat's read (``single``) is never held: it
-        is refused unsent, which its admission already made rare.
-        """
-        import time
-
-        from factorylab.world.venue_tools import VENUE_WEIGHT_PER_MINUTE
-
-        while True:
-            log = self._weight_log()
-            if sum(w for _t, w in log) + weight <= VENUE_WEIGHT_PER_MINUTE or not log:
-                break
-            if single:
-                raise VenueUnavailable(f"{what}: the venue's weight limit is spent")
-            wait = log[0][0] + 60 - self._monotonic()
-            getattr(self, "sleep", time.sleep)(max(wait, 0.01))
-        log.append((self._monotonic(), weight))
 
     def request_weight_sent(self) -> int:
         """Guarantees the documented venue weight of every request this adapter has sent,
         every attempt counted, monotone. Journaled like any venue read, so a replay
         charges exactly what the recording measured."""
         return getattr(self, "request_weight", 0)
-
-    def request_weight_window(self) -> int:
-        """Guarantees the venue weight this adapter sent in the venue's sliding minute
-        ending now, kernel and seats together. Journaled read-only, like
-        ``request_weight_sent``."""
-        return sum(w for _t, w in self._weight_log())
 
     # ---- reads
 

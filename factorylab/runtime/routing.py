@@ -1516,10 +1516,11 @@ class RoutingMixin:
         # state are kept for its next version, until the retained private state cap
         # needs the room (``_reclaimable_state``).
         self.retirement_order.append(assembly_id)
-        if assembly_id in getattr(self, "venue_readers", ()):
-            # A retirement frees its venue read slot for the next registration. The
-            # slot keeps its place, and its read history stays with it.
-            self.venue_readers[self.venue_readers.index(assembly_id)] = None
+        # A retirement frees its venue read slot, for the next registration once the
+        # seat's last read has left the sliding minute.
+        self._free_reader_slot(assembly_id)
+        if assembly_id in self.slot_waiting:
+            self.slot_waiting.remove(assembly_id)
         book = getattr(self, "subscription_book", None)
         if book is not None:
             # A retired watcher stops being evaluated, and stops being charged for it.

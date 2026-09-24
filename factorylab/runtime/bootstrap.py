@@ -412,9 +412,14 @@ class BootstrapMixin:
         # The retired ids, oldest retirement first: whose kept state is released first
         # when a private-state write needs room under the cap (``[storage]``).
         self.retirement_order: list[str] = []
-        # id -> the seat that registered its current version (None: no known seat).
-        # A seed is in none: only the seed itself owns it.
-        self.registrants: dict[str, str | None] = {}
+        # id -> its lineage key: a registration serial, kept by an id's next version
+        # only when its owner registers it, and fresh otherwise. The seeds take the
+        # first ones. id -> the lineage key of the seat that registered its current
+        # version (None: no known seat); a seed is in none, so only it owns itself.
+        self.lineage_keys: dict[str, int] = {
+            a.id: index + 1 for index, a in enumerate(manifest.assemblies)}
+        self.registration_serial = len(manifest.assemblies)
+        self.registrants: dict[str, int | None] = {}
         self.retirement_proposals: dict[str, dict] = {}
         self.return_kinds: dict[str, str] = {}
         self.return_bindings: dict[str, dict] = {}
@@ -644,34 +649,31 @@ class BootstrapMixin:
             self.tool_specs[tool_id]["description"] += (
                 f" Held by seats with a venue read slot (at most {seats}). Each slot has "
                 f"a fixed share of {budget // seats} venue request weight ({budget} over "
-                f"{seats} slots) in any sliding 60 s of world time, kept by the slot "
-                f"whichever seat holds it. This read is sent at most once and weighs "
-                f"{weight}"
+                f"{seats} slots) in any sliding 60 s of world time; the rest of the "
+                f"venue's {VENUE_WEIGHT_PER_MINUTE} a minute per IP is the kernel's. This "
+                f"read is sent at most once and weighs {weight}"
                 + (" plus 1 per 60 candles asked" if tool_id == "venue.candles" else
                    " plus 1 per 20 rates asked" if tool_id == "venue.funding_history"
                    else "")
-                + ", charged to your slot's share for every read. A read is refused, and "
-                "not sent, when your slot's remaining share cannot cover it, or when the "
-                "venue weight the world sent in the last 60 s leaves less than the "
-                f"kernel's {VENUE_WEIGHT_PER_MINUTE - budget} plus this read (the venue "
-                f"weighs {VENUE_WEIGHT_PER_MINUTE} a minute per IP). " + TICK_ANSWER_FACT)
-        # reader slot -> [[world ns, venue weight]] of the reads charged to it in the
-        # sliding minute; the slot keeps it whichever seat holds the slot.
+                + ", charged to your share for every read. A read your remaining share "
+                "cannot cover is refused and not sent. " + TICK_ANSWER_FACT)
+        # seat -> [[world ns, venue weight]] of its reads in the sliding minute.
         self.venue_read_use: dict[str, list[list[int]]] = {}
-        # [[world ns, weight]] the seats' reads sent to a simulated venue (the live
-        # adapter weighs everything it sends itself: ``request_weight_window``).
-        self.venue_sent: list[list[int]] = []
-        # The same for Polymarket reads (``runtime/polymarket.py``), and every
-        # Polymarket request the world sent, kernel and seats; empty, and never
+        # The same for Polymarket reads (``runtime/polymarket.py``); empty, and never
         # spent, in a world without the block.
         self.polymarket_read_use: dict[str, list[list[int]]] = {}
-        self.polymarket_sent: list[list[int]] = []
         self._polymarket_tick_reads = None
+        # slot index -> the world ns from which a freed slot may be given again (its
+        # last holder's last read has left the sliding minute by then), and the seats
+        # registered while no slot was free, in registration order.
+        self.slot_free_at: dict[str, int] = {}
         # The venue read slots, by position: the seeds, in manifest order, up to
         # ``[venue] max_readers``; then registrations into the lowest free slot. A
-        # retired seat's slot is None until it is given again.
-        self.venue_readers: list[str | None] = [
-            a.id for a in manifest.assemblies][:manifest.exchange.max_readers]
+        # retired seat's slot is None until it is given again. Seeds past the slots
+        # wait for one like any seat registered without one.
+        seeds = [a.id for a in manifest.assemblies]
+        self.venue_readers: list[str | None] = seeds[:manifest.exchange.max_readers]
+        self.slot_waiting: list[str] = seeds[manifest.exchange.max_readers:]
 
         self.tool_specs["treasury.transfer"] = {
             "id": "treasury.transfer",

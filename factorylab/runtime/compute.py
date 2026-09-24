@@ -567,7 +567,7 @@ class ComputeMixin:
             asm = ProgramAssembly(
                 spec, self.program_runner, meter,
                 artifacts=self.artifacts, validator=self._validate_output_contract,
-                record=lambda entry: self.ledger.append(entry),
+                record=self._record_program,
                 state_gate=lambda: self._state_write_refusal(spec.id, spec.version),
             )
             self.assemblies[spec.id] = asm
@@ -1140,8 +1140,6 @@ class ComputeMixin:
         return metered_data(meter, handle, cap, execute, self._record_market)
 
     PUBLIC_READ_REFUSAL = "venue read share spent"
-    #: A seat read the venue's per-IP weight, less the kernel's part, cannot cover now.
-    VENUE_BUDGET_REFUSAL = "venue weight held for the kernel"
 
     def venue_read_share(self) -> int:
         """Each reader's venue read share: the read budget over the venue read slots.
@@ -1242,78 +1240,88 @@ class ComputeMixin:
             tools.exchange = real
 
     def _assign_reader_slot(self, seat: str) -> bool:
-        """Give a newly admitted seat a venue read slot when one is free; say whether.
+        """Give a seat a venue read slot when one is free; say whether.
 
         Guarantees at most ``[venue] max_readers`` seats hold a slot, a live seat
-        keeps its own, and only retirement frees one (``_retire_assembly``). A freed
-        slot keeps its place, and the lowest free one is given first, so a slot is a
-        fixed identity whose read history outlives the seats that hold it.
+        keeps its own, only retirement frees one (``_free_reader_slot``), and a freed
+        slot is given again only once its last holder's last read has left every
+        sliding minute (``slot_free_at``). So no two seats' reads through one slot
+        ever fall in one 60 s window: the slots' total stays under ``max_readers ×
+        share`` on both venues, and nothing of a predecessor's reads reaches the seat
+        that follows it (AGENTS.md rule 5).
         """
         if seat in self.venue_readers:
             return True
-        if None in self.venue_readers:
-            self.venue_readers[self.venue_readers.index(None)] = seat
-            return True
+        now = self.clock.now_ns
+        for index, holder in enumerate(self.venue_readers):
+            if holder is None and self.slot_free_at.get(str(index), 0) <= now:
+                self.venue_readers[index] = seat
+                return True
         if len(self.venue_readers) >= self.m.exchange.max_readers:
             return False
         self.venue_readers.append(seat)
         return True
 
-    def _reader_key(self, seat: str) -> str:
-        """What a seat's reads are charged to: its venue read slot, else the seat itself.
+    def _free_reader_slot(self, seat: str) -> None:
+        """Free a retiring seat's slot, held back until its last read has slid out.
 
-        Guarantees a slot's history stays with the slot: a seat given a slot a retired
-        seat held inherits what was spent through it in the window, for both venues,
-        so no slot ever has more than its share in any sliding minute."""
-        readers = getattr(self, "venue_readers", ())
-        return f"slot:{readers.index(seat)}" if seat in readers else seat
+        Guarantees the slot is given to no one before every read charged to the
+        retiring seat, on either venue, is older than the sliding minute.
+        """
+        from factorylab.world.venue_tools import READ_WINDOW_NS
+
+        if seat not in self.venue_readers:
+            return
+        index = self.venue_readers.index(seat)
+        since = self.clock.now_ns - READ_WINDOW_NS
+        last = max((row[0] for uses in (self.venue_read_use,
+                                        getattr(self, "polymarket_read_use", {}))
+                    for row in uses.get(seat, ()) if row[0] > since), default=None)
+        self.venue_readers[index] = None
+        self.slot_free_at[str(index)] = (self.clock.now_ns if last is None
+                                         else last + READ_WINDOW_NS)
+
+    def _assign_waiting_readers(self) -> None:
+        """Give free slots to the seats registered without one, in registration order.
+
+        Guarantees each assignment is ledgered (``venue.reader_slot``) and a retired
+        seat waits for nothing. Called once a tick.
+        """
+        for seat in list(self.slot_waiting):
+            if seat in self.retired_assemblies or seat not in self.assemblies:
+                self.slot_waiting.remove(seat)
+                continue
+            if not self._assign_reader_slot(seat):
+                return
+            self.slot_waiting.remove(seat)
+            self.ledger.append({"kind": "venue.reader_slot", "assembly_id": seat,
+                                "slot": True, "ts": self.clock.now_ns})
 
     def _venue_read_used(self, seat: str) -> int:
-        """The venue weight charged to this seat's read slot in the sliding minute."""
+        """The venue weight charged to this seat's own reads in the sliding minute."""
         from factorylab.world.venue_tools import READ_WINDOW_NS
 
-        key = self._reader_key(seat)
         since = self.clock.now_ns - READ_WINDOW_NS
         uses = getattr(self, "venue_read_use", {})
-        kept = [row for row in uses.get(key, ()) if row[0] > since]
+        kept = [row for row in uses.get(seat, ()) if row[0] > since]
         if kept:
-            uses[key] = kept
+            uses[seat] = kept
         else:
-            uses.pop(key, None)
+            uses.pop(seat, None)
         return sum(weight for _ts, weight in kept)
 
-    def _venue_sent_in_window(self) -> int:
-        """The venue weight the world sent in the sliding minute, the kernel's included.
-
-        The live adapter weighs every request it sends, kernel and seat alike, over the
-        venue's own minute (``request_weight_window``, journaled read-only); a
-        simulated venue sends nothing of the kernel's, so what the seats' reads that
-        reached it would have weighed is all it counts.
-        """
-        from factorylab.world.venue_tools import READ_WINDOW_NS
-
-        if hasattr(self.exchange, "request_weight_window"):
-            try:
-                window = self.exchange.request_weight_window()
-            except Exception:  # noqa: BLE001 - an unread counter is read as full below
-                window = None
-            if type(window) is int:
-                return window
-        since = self.clock.now_ns - READ_WINDOW_NS
-        self.venue_sent = [row for row in getattr(self, "venue_sent", ()) if row[0] > since]
-        return sum(weight for _ts, weight in self.venue_sent)
-
     def _venue_read_refusal(self, seat: str, tool_id: str, args: Any) -> str | None:
-        """Refuse a seat's venue read before anything is sent, on its slot's share or
-        on the venue's per-IP weight.
+        """Refuse a seat's venue read its share cannot cover, before anything is sent.
 
         Guarantees: a read is admitted only when the weight its first attempt sends
-        fits in what the slot's reads left of its share over the sliding minute, and
-        when the weight the world sent in that minute, the kernel's included, leaves
-        the kernel's whole part (``VENUE_WEIGHT_PER_MINUTE`` less the read budget) plus
-        this read. The kernel's part is never spent by a seat. Any other tool passes.
+        fits in what the seat's own reads left of its share over the sliding minute;
+        another seat's reads never enter it. With one seat a slot at a time
+        (``_assign_reader_slot``), the seats together send at most
+        ``public_read_weight_per_minute`` a minute, which leaves the kernel the rest of
+        the venue's 1200. The venue itself enforces its per-IP limit (a 429), which the
+        adapter backs off from. Any other tool passes untouched.
         """
-        from factorylab.world.venue_tools import VENUE_WEIGHT_PER_MINUTE, public_read_weight
+        from factorylab.world.venue_tools import public_read_weight
 
         weight = public_read_weight(tool_id, args)
         if weight is None or weight == 0:
@@ -1322,32 +1330,28 @@ class ComputeMixin:
         if used + weight > share:
             return (f"{self.PUBLIC_READ_REFUSAL}: {used} of {share} venue request weight "
                     f"in the last 60 s; this read sends {weight}")
-        kernel = VENUE_WEIGHT_PER_MINUTE - self.m.exchange.public_read_weight_per_minute
-        if self._venue_sent_in_window() + kernel + weight > VENUE_WEIGHT_PER_MINUTE:
-            return (f"{self.VENUE_BUDGET_REFUSAL}: the world's venue weight in the last "
-                    f"60 s leaves less than the kernel's {kernel} plus this read")
         return None
 
-    def _charge_slot_read(self, seat: str, tool_id: str, args: Any) -> None:
-        """Charge an admitted seat read to its slot: its first-attempt weight, whether
-        the tick already held the answer or the read was sent. A share is a quota on
-        reads asked, so a seat cannot tell a cached answer from a sent one."""
-        from factorylab.world.venue_tools import public_read_weight
-
-        weight = public_read_weight(tool_id, args)
+    def _charge_venue_read(self, seat: str, weight: int) -> None:
         if weight:
             self._venue_read_used(seat)
-            self.venue_read_use.setdefault(self._reader_key(seat), []).append(
-                [self.clock.now_ns, weight])
+            self.venue_read_use.setdefault(seat, []).append([self.clock.now_ns, weight])
+
+    def _charge_slot_read(self, seat: str, tool_id: str, args: Any) -> None:
+        """Charge an admitted seat read its first-attempt weight, whether the tick already
+        held the answer or the read is sent. A share is a quota on reads asked, so a seat
+        cannot tell a tick's answer from a sent read (AGENTS.md rule 4)."""
+        from factorylab.world.venue_tools import public_read_weight
+
+        self._charge_venue_read(seat, public_read_weight(tool_id, args) or 0)
 
     def _venue_weight_sent(self) -> int | None:
         """The live adapter's count of venue weight sent, or None.
 
         None for a simulated venue, which sends nothing, and for a counter that could
-        not be read: the caller then charges the read's first-attempt weight, which
-        is what a seat read sends (it is never retried). A journaled read-only call
-        (``runtime/resume.py``, ``_read_only``), so a replay returns what was recorded
-        and it moves no memo keyed on venue writes.
+        not be read. A journaled read-only call (``runtime/resume.py``,
+        ``_read_only``), so a replay returns what was recorded and it moves no memo
+        keyed on venue writes.
         """
         if not hasattr(self.exchange, "request_weight_sent"):
             return None
@@ -1362,29 +1366,22 @@ class ComputeMixin:
         if hasattr(self.exchange, "request_weight_sent"):
             self.exchange.single_attempt = single
 
-    def _charge_venue_sent(self, seat: str, tool_id: str, args: Any,
-                           before: int | None, dispatched: int | None = None) -> None:
-        """Count what a seat's read sent against the world's venue weight.
+    def _charge_excess_sent(self, seat: str, tool_id: str, args: Any,
+                            before: int | None) -> None:
+        """Charge a sent seat read whatever the live adapter reports it sent beyond its
+        first-attempt weight, already charged on admission.
 
-        A seat read is sent once (``_seat_read_attempts``). The live adapter reports
-        what it sent (and weighs it in its own window too); a simulated venue sends
-        nothing and reports nothing, and is counted the first-attempt weight only when
-        the read reached the adapter (the journal proxy's ``dispatched`` count moved).
-        The seat's slot was charged on admission (``_charge_slot_read``). Never raises.
+        A seat read is sent once (``_seat_read_attempts``) and its first-attempt weight
+        counts a requested item count at its most, so the excess is normally nothing;
+        should the venue weigh more than documented, the seat's own share pays for it.
+        A simulated venue reports nothing. Never raises.
         """
         from factorylab.world.venue_tools import public_read_weight
 
         after = self._venue_weight_sent()
         if before is not None and after is not None and after >= before:
-            sent = after - before
-        elif dispatched is not None and getattr(self.exchange, "dispatched",
-                                                dispatched) == dispatched:
-            sent = 0  # nothing reached the adapter
-        else:
-            sent = public_read_weight(tool_id, args)
-        if sent:
-            self._venue_sent_in_window()
-            self.venue_sent = [*getattr(self, "venue_sent", ()), [self.clock.now_ns, sent]]
+            self._charge_venue_read(
+                seat, max(0, after - before - (public_read_weight(tool_id, args) or 0)))
 
     def _tool_price_bound(self, call: dict) -> int:
         """Variable tool prices fit the remaining request ceiling before dispatch."""
@@ -1703,7 +1700,6 @@ class ComputeMixin:
             return answered, 0
         if venue_read:
             weight_before = self._venue_weight_sent()
-            dispatched_before = getattr(self.exchange, "dispatched", None)
         price = int(spec["price_micro_per_call"])
 
         def execute() -> dict:
@@ -1820,8 +1816,7 @@ class ComputeMixin:
                 try:
                     self._seat_read_attempts(False)
                 finally:
-                    self._charge_venue_sent(action_id, tool_id, args, weight_before,
-                                            dispatched_before)
+                    self._charge_excess_sent(action_id, tool_id, args, weight_before)
         if spec["kind"] == "venue":
             if tool_id in self.venue_tools.PUBLIC_READS:
                 from factorylab.runtime.observations import record_venue_facts
@@ -1988,7 +1983,8 @@ class ComputeMixin:
         if (ret.status == "ok" and (ret.tool_calls or ret.children)
                 and isinstance(ret.outputs, dict) and "working_state" in ret.outputs):
             working_state_handled = True
-            if self._write_working_state(action_id, req.handle, ret.outputs):
+            if self._write_working_state(action_id, req.handle, ret.outputs,
+                                         version=assembly.spec.version):
                 req = replace(req, inputs={**req.inputs,
                                           "your_state": self.working_state.render(action_id)})
         total_cost = ret.cost
@@ -2261,7 +2257,8 @@ class ComputeMixin:
             if (ret.status == "ok" and has_continuation
                     and isinstance(ret.outputs, dict) and "working_state" in ret.outputs):
                 working_state_handled = True
-                if self._write_working_state(action_id, req.handle, ret.outputs):
+                if self._write_working_state(action_id, req.handle, ret.outputs,
+                                             version=assembly.spec.version):
                     req = replace(req, inputs={**req.inputs,
                                               "your_state": self.working_state.render(action_id)})
                     state_changed = True
@@ -2369,7 +2366,8 @@ class ComputeMixin:
         self._record_actions(req.handle, taken, record)
         self.niche_rounds.pop(req.handle, None)
         self._apply_continuity(
-            action_id, req.handle, ret, working_state_handled=working_state_handled)
+            action_id, req.handle, ret, working_state_handled=working_state_handled,
+            version=assembly.spec.version)
         ret = replace(ret, dropped=tuple(dropped))
         if dropped and ret.status == "ok":
             self._report_dropped_sections(action_id, req.handle, ret.dropped)
@@ -2425,7 +2423,8 @@ class ComputeMixin:
                           "ts": self.clock.now_ns})
 
     def _apply_continuity(self, action_id: str, handle: str, ret: Return, *,
-                          working_state_handled: bool = False) -> None:
+                          working_state_handled: bool = False,
+                          version: int | None = None) -> None:
         """Advance the seat's own head and inbox cursor from its answer (C1).
 
         Every answer of every shape passes here — producer, verdict, meta, child,
@@ -2453,9 +2452,15 @@ class ComputeMixin:
             self._deliver_program_result_to_inbox(action_id, handle, ret)
         self.outcomes.record_said(action_id, handle, ret.outputs)
         if not working_state_handled:
-            self._write_working_state(action_id, handle, ret.outputs)
+            self._write_working_state(action_id, handle, ret.outputs, version=version)
         if "ack_through" in ret.outputs:
             self.outcomes.ack_through(action_id, ret.outputs["ack_through"])
+
+    def _record_program(self, entry: dict[str, Any]) -> int:
+        """Ledger what a program seat's executor records; a refusal carries its time."""
+        if entry.get("kind") == "state.refused":
+            entry = {**entry, "ts": self.clock.now_ns}
+        return self.ledger.append(entry)
 
     def _state_write_refusal(self, seat: str, version: int | None = None) -> str | None:
         """``retired`` when a return of ``seat`` (at ``version``) may not write state.
@@ -2471,7 +2476,8 @@ class ComputeMixin:
             return "retired"
         return None
 
-    def _write_working_state(self, action_id: str, handle: str, outputs: Any) -> bool:
+    def _write_working_state(self, action_id: str, handle: str, outputs: Any, *,
+                             version: int | None = None) -> bool:
         """Commit one accepted private head, or leave the prior head unchanged.
 
         This is shared by intermediate tool-call returns and the final continuity
@@ -2483,7 +2489,7 @@ class ComputeMixin:
         if (action_id not in self.assemblies or not isinstance(outputs, dict)
                 or "working_state" not in outputs):
             return False
-        refused = self._state_write_refusal(action_id)
+        refused = self._state_write_refusal(action_id, version)
         if refused is not None:
             self.ledger.append({"kind": "state.refused", "assembly_id": action_id,
                                 "handle": handle, "reason": refused,

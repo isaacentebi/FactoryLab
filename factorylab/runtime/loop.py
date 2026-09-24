@@ -338,6 +338,7 @@ class Runtime(
         self._observe_delivered_event(ev)
         if ev.kind is EventKind.TICK:
             self._open_pending_epochs()
+            self._assign_waiting_readers()
             self._chaos_tick()  # seat-facing faults only (runtime.chaos), drawn per tick
             self._reconcile_orders()
             if getattr(self, "polymarket", None) is not None:

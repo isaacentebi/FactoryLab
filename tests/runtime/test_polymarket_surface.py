@@ -607,6 +607,9 @@ def test_a_token_with_no_two_sided_book_is_not_marked_at_an_invented_price():
     fake.midpoint = lambda token_id: "0.5"
     fake.order_book = lambda token_id, depth: {"token_id": token_id, "bids": [], "asks": [],
                                                "midpoint": None}
+    polymarket.mark(rt)  # within the minute: the book is not read again
+    assert rt.consequences.mids[coin] == "0.40"
+    rt.clock.now_ns += polymarket.READ_WINDOW_NS
     polymarket.mark(rt)
     assert coin not in rt.consequences.mids
     marks = [i for i in _consequence_diary(rt) if i["kind"] == "polymarket.mark_unavailable"]
@@ -615,6 +618,7 @@ def test_a_token_with_no_two_sided_book_is_not_marked_at_an_invented_price():
     fake.order_book = lambda token_id, depth: {"token_id": token_id, "asks": [],
                                                "bids": [{"price": "0.3", "size": "5"}],
                                                "midpoint": None}
+    rt.clock.now_ns += polymarket.READ_WINDOW_NS
     polymarket.mark(rt)
     assert coin not in rt.consequences.mids
 
@@ -644,7 +648,7 @@ def test_a_seat_s_polymarket_reads_are_refused_once_its_share_is_spent():
     rt.clock.now_ns += 61_000_000_000
     assert "markets" in _search(rt, "seed-decider", "event C")
     text = rt.tool_specs["polymarket.search"]["description"]
-    assert "76 requests a minute, of which 60 are held back for the kernel" in text
+    assert "76 requests a minute, of which 60 are the kernel's own settlement" in text
 
 
 def test_an_identical_read_in_the_tick_is_answered_and_charged_like_any_read():
@@ -653,12 +657,13 @@ def test_an_identical_read_in_the_tick_is_answered_and_charged_like_any_read():
     of the same shape; only the one request actually sent counts against the world's
     budget."""
     rt = world(read_requests_per_minute=76, kernel_reserve_per_minute=60)
+    before = rt.polymarket.venue.target.requests_sent()
     first = _search(rt, "seed-decider", "event A")
     second = _search(rt, "seed-observer", "event A")  # answered from the tick
     assert "markets" in first and first == second
     assert polymarket._read_used(rt, "seed-decider") == 1
     assert polymarket._read_used(rt, "seed-observer") == 1
-    assert polymarket.sent_in_window(rt) == 1
+    assert rt.polymarket.venue.target.requests_sent() - before == 1
     # With the share spent, a read the tick could answer is refused like any other.
     again = _search(rt, "seed-decider", "event A")
     assert again["error"].startswith(polymarket.READ_REFUSAL)
@@ -687,40 +692,49 @@ def test_the_polymarket_budget_is_validated_at_load_against_the_published_limit(
             ({"read_requests_per_minute": 100, "kernel_reserve_per_minute": 100},
              "kernel_reserve_per_minute"),
             ({"read_requests_per_minute": 70, "kernel_reserve_per_minute": 60},
-             "cannot cover one read")):
+             "cannot cover one read"),
+            ({"read_requests_per_minute": 100, "kernel_reserve_per_minute": 1},
+             "cannot cover one open read of 2 requests")):
         with pytest.raises(ValueError, match=match):
             manifest_from_dict({**raw, "polymarket": {"enabled": True, **block}})
     assert manifest_from_dict({**raw, "polymarket": {
         "enabled": True, "read_requests_per_minute": 1800}}).polymarket.enabled
 
 
-def test_a_seat_is_refused_when_the_world_s_requests_leave_the_kernel_too_little():
-    """One meter counts every request the world sent, kernel and seats. A seat with
-    share left is refused, unsent, when the minute's requests leave less than the
-    kernel's reserve plus its read; the kernel's own reads still go out."""
+def test_a_seat_s_admission_depends_on_its_own_share_alone():
+    """No global meter admits seats: the kernel's reads fit its reserve by construction
+    (``open_limit``), so a seat with share left reads, however much the kernel read."""
     rt = world(read_requests_per_minute=76, kernel_reserve_per_minute=60)
-    for _ in range(16):
-        polymarket.kernel_read(rt, "order_book", token(rt), 1)
-    assert polymarket.sent_in_window(rt) == 16  # 16 + 60 reserve + 1 > 76
-    refused = _search(rt, "seed-decider", "event A")
-    assert refused["error"].startswith(polymarket.BUDGET_REFUSAL)
-    assert polymarket._read_used(rt, "seed-decider") == 0
-    assert polymarket.kernel_read(rt, "order_book", token(rt), 1)["token_id"] == token(rt)
-    assert polymarket.sent_in_window(rt) == 17
+    for _ in range(20):
+        polymarket.event_facts(rt, "event_price_above", token(rt))
+    assert "markets" in _search(rt, "seed-decider", "event A")
 
 
-def test_a_polymarket_slot_keeps_its_history_when_its_seat_retires():
+def test_a_freed_polymarket_slot_waits_until_its_last_read_has_slid_out():
+    """Rule 5: a newcomer never inherits a predecessor's reads. The retired seat's slot
+    is held back until its last read has left the minute; the newcomer waits (no slot,
+    no Polymarket reads), then gets it, and the assignment is ledgered."""
     from tests.runtime.test_real_flows import _register
 
     rt = world(read_requests_per_minute=76, kernel_reserve_per_minute=60)  # share 1
+    rt.m = replace(rt.m, exchange=replace(rt.m.exchange, max_readers=len(rt.venue_readers)))
     assert "markets" in _search(rt, "seed-observer", "event A")
     slot = rt.venue_readers.index("seed-observer")
     rt._retire_assembly("seed-observer", "vote-1")
     _register(rt, "newcomer")
-    assert rt.venue_readers.index("newcomer") == slot
-    assert _search(rt, "newcomer", "event B")["error"].startswith(polymarket.READ_REFUSAL)
-    rt.clock.now_ns += polymarket.READ_WINDOW_NS
+    assert "newcomer" not in rt.venue_readers and rt.slot_waiting == ["newcomer"]
+    assert "polymarket.search" not in rt._allowed_tools("newcomer")
+    rt.clock.now_ns += polymarket.READ_WINDOW_NS - 1
+    rt._assign_waiting_readers()
+    assert "newcomer" not in rt.venue_readers
+    rt.clock.now_ns += 1
+    rt._assign_waiting_readers()
+    assert rt.venue_readers[slot] == "newcomer" and rt.slot_waiting == []
     assert "markets" in _search(rt, "newcomer", "event B")
+    assert polymarket._read_used(rt, "newcomer") == 1  # its own reads, and only them
+    slots = [i for i in _consequence_diary(rt) if i["kind"] == "venue.reader_slot"]
+    assert [(i["assembly_id"], i["slot"]) for i in slots] == [
+        ("newcomer", False), ("newcomer", True)]
 
 
 def test_the_simulated_venue_counts_what_the_live_reader_would_send():

@@ -533,6 +533,7 @@ class SchematicsMixin:
                         "releasing all of it would not fit is refused, releasing nothing, "
                         "with the error 'private state is at the world's capacity', as on "
                         "a full disk. A live seat's state is never released to make room."},
+            **self._polymarket_reads_section(),
             "tools": self._published_tool_specs(),
             "reserve": {"protected": self.reserve.remaining(), "units": "micro-USD",
                         "trials": self.m.novelty.trials,
@@ -1279,6 +1280,31 @@ class SchematicsMixin:
         traded = {"perp": set(self.venue_tools.coins), "spot": set(self.venue_tools.spot_pairs)}
         return {market: [row for row in rows if row.get("coin") in traded.get(market, ())]
                 for market, rows in memo[1].items()}
+
+    def _polymarket_reads_section(self) -> dict[str, Any]:
+        """The kernel's open-read limit on Polymarket, as a published limit (II.I.b)."""
+        if getattr(self, "polymarket", None) is None:
+            return {}
+        from factorylab.runtime.polymarket import KERNEL_READS_PER_OPEN, open_limit
+
+        spec = self.m.polymarket
+        return {"polymarket_reads": {
+            "open_reads_limit": open_limit(spec),
+            "kernel_reserve_per_minute": spec.kernel_reserve_per_minute,
+            "rule": (
+                "An open read is the settlement of the Polymarket claims on one token due "
+                "at one tick, or one token the pot holds or orders. It stays open while "
+                "its claims are pending or the token is held, and for 60 s after the "
+                "kernel's last read for it. The kernel sends at most "
+                f"{KERNEL_READS_PER_OPEN} requests for an open read in any sliding 60 s "
+                "(the market, and the book for a price claim; a held token's book once a "
+                "minute), so open_reads_limit = kernel_reserve_per_minute // "
+                f"{KERNEL_READS_PER_OPEN} keeps the kernel within its reserve. A claim on "
+                "a token is looked up when it is sealed, as the sealing seat's own read "
+                "through its venue read slot, charged 3 requests to its share. A claim "
+                "joining a due tick already open on its token is always admitted; a claim "
+                "or a buy that would open one more than open_reads_limit is refused with "
+                "'polymarket open reads are at the world's limit'.")}}
 
     def _published_tool_specs(self, *, full: bool = False) -> list[dict[str, Any]]:
         """Every registered tool's contract, with the venue's listing named rather than spelled.

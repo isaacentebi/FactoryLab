@@ -430,7 +430,7 @@ def test_a_retired_program_registered_again_by_its_owner_keeps_its_head_only():
     rt = make_runtime()
     rt._manage_reserve_window()
     _register_program(rt, "prog-a")  # registered by seed-decider
-    assert rt.registrants["prog-a"] == "seed-decider"
+    assert rt.registrants["prog-a"] == rt.lineage_keys["seed-decider"]
     _write_both(rt, "prog-a", {"lesson": "keep"})
     head = rt.working_state.head("prog-a")
     state = rt.assemblies["prog-a"].state_sha
@@ -473,7 +473,7 @@ def test_a_retired_id_registered_again_by_another_seat_starts_with_no_private_st
     released = {(i["sha"], i["artifact_kind"], i["cause"])
                 for i in ledger_items(rt, "artifact.released") if i["owner"] == "prog-b"}
     assert (head["sha"], "working.state", "superseded") in released
-    assert rt.registrants["prog-b"] == "seed-observer"
+    assert rt.registrants["prog-b"] == rt.lineage_keys["seed-observer"]
     # A seed: no registrant, so not even the seat that registers its next version
     # inherits its head.
     rt.working_state.put("seed-observer", {"seed": 1}, handle=decision(rt, "seed-observer"))
@@ -710,3 +710,80 @@ def test_a_storage_price_or_an_unknown_storage_key_is_refused():
                                            "micro_per_byte_day": "0"}))
     with pytest.raises(ValueError, match="unknown storage manifest key"):
         manifest_from_dict(_world(storage={"max_bytes": 1 << 20}))
+
+
+def _fund(rt, seat):
+    """Give a registered seat enough of its own entitlement to register a child."""
+    rt.budget.transfer("seed-decider", seat, 20 * rt.ev.trial_amount_micro, "test:fund")
+
+
+def test_ownership_is_a_lineage_key_so_a_reused_id_string_owns_nothing():
+    """The review's scenario (cold #1): seed-decider registers ``parent``; ``parent``
+    registers ``child``, which keeps a head, and both retire. seed-observer, not the
+    owner, re-registers ``parent`` (a fresh lineage key), then registers ``child``'s
+    next version: the id string ``parent`` is the one that registered ``child``, but
+    the key is not, so ``child`` starts with no private state and its head is
+    released ``superseded``."""
+    rt = make_runtime()
+    rt._manage_reserve_window()
+    _register_by(rt, "seed-decider", "parent")
+    first_key = rt.lineage_keys["parent"]
+    _fund(rt, "parent")
+    _register_by(rt, "parent", "child")
+    assert rt.registrants["child"] == first_key
+    rt.working_state.put("child", {"secret": "child's own"}, handle=decision(rt, "child"))
+    head = rt.working_state.head("child")
+    rt._retire_assembly("child", "vote-1")
+    rt._retire_assembly("parent", "vote-2")
+    _register_by(rt, "seed-observer", "parent")
+    assert rt.lineage_keys["parent"] != first_key
+    _fund(rt, "parent")
+    _register_by(rt, "parent", "child")
+    assert rt.working_state.head("child") is None
+    assert not rt.artifacts.private_holdings("child")
+    released = [(i["sha"], i["cause"]) for i in ledger_items(rt, "artifact.released")
+                if i["owner"] == "child"]
+    assert (head["sha"], "superseded") in released
+
+
+def test_the_owner_re_versioning_keeps_the_key_and_the_head():
+    rt = make_runtime()
+    rt._manage_reserve_window()
+    _register_by(rt, "seed-decider", "prog-k")
+    key = rt.lineage_keys["prog-k"]
+    rt.working_state.put("prog-k", {"kept": 1}, handle=decision(rt, "prog-k"))
+    head = rt.working_state.head("prog-k")
+    rt._retire_assembly("prog-k", "vote-1")
+    _register_by(rt, "seed-decider", "prog-k")
+    assert rt.lineage_keys["prog-k"] == key
+    assert rt.working_state.head("prog-k") == head
+
+
+def test_a_tool_round_of_an_older_version_writes_nothing_into_the_next_one():
+    """Cold #11: a v1 round still running after v2 registers writes no working state
+    into v2's head (``state.refused``, reason ``retired``, with its time)."""
+    rt = make_runtime()
+    rt._manage_reserve_window()
+    _register_by(rt, "seed-decider", "prog-v")
+    v1 = rt.assemblies["prog-v"].spec.version
+    handle = decision(rt, "prog-v")
+    rt._retire_assembly("prog-v", "vote-1")
+    _register_by(rt, "seed-decider", "prog-v")
+    assert rt.assemblies["prog-v"].spec.version == v1 + 1
+    rt.working_state.put("prog-v", {"v2": True}, handle=decision(rt, "prog-v"))
+    head = rt.working_state.head("prog-v")
+    assert rt._write_working_state("prog-v", handle, {"working_state": {"v1": True}},
+                                   version=v1) is False
+    refused = ledger_items(rt, "state.refused")[-1]
+    assert (refused["reason"], refused["ts"]) == ("retired", rt.clock.now_ns)
+    assert rt.working_state.head("prog-v") == head
+    assert rt._write_working_state("prog-v", handle, {"working_state": {"v2": 2}},
+                                   version=v1 + 1)
+
+
+def test_a_program_state_refusal_is_ledgered_with_its_time():
+    rt = make_runtime()
+    rt._manage_reserve_window()
+    rt._record_program({"kind": "state.refused", "assembly_id": "p", "handle": "h",
+                        "state_kind": "program.state", "reason": "retired"})
+    assert ledger_items(rt, "state.refused")[-1]["ts"] == rt.clock.now_ns

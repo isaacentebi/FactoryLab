@@ -912,19 +912,31 @@ class GovernanceMixin:
             # never inherits that. What is not inherited is superseded, released
             # through the journaled release (ledger before index): it neither lingers
             # unreachable nor holds capacity.
+            # Ownership is by lineage key, never by id string: an id re-registered by
+            # anyone else gets a fresh key, so a seat that later takes a string another
+            # seat once registered never inherits what that seat's children hold.
             proposer = self._trial_proposer(handle)
-            owner = proposer is not None and proposer in (self.registrants.get(prop.id),
-                                                          prop.id)
+            proposer_key = self.lineage_keys.get(proposer) if proposer is not None else None
+            owner = proposer is not None and (
+                proposer == prop.id
+                or (proposer_key is not None
+                    and proposer_key == self.registrants.get(prop.id)))
             for sha, kind in self.artifacts.private_holdings(prop.id):
                 if kind == "program.state" or not owner:
                     self.artifacts.release(sha, owner=prop.id, kind=kind,
                                            cause="superseded")
             if not owner:
                 self.working_state.heads.pop(prop.id, None)
-            self.registrants[prop.id] = proposer
+            if not owner or prop.id not in self.lineage_keys:
+                self.registration_serial += 1
+                self.lineage_keys[prop.id] = self.registration_serial
+            self.registrants[prop.id] = proposer_key
             if not self._assign_reader_slot(prop.id):
-                # Every venue read slot is held: the seat is admitted all the same,
-                # without the venue reads, and its proposer's receipt says so.
+                # No venue read slot is free: the seat is admitted all the same,
+                # without the venue reads, gets the next slot to come free (ledgered
+                # then), and its proposer's receipt says so.
+                if prop.id not in self.slot_waiting:
+                    self.slot_waiting.append(prop.id)
                 self.ledger.append({"kind": "venue.reader_slot", "assembly_id": prop.id,
                                     "slot": False, "ts": self.clock.now_ns})
                 self._note_to_owner(handle, "registration_admitted", id=prop.id,
