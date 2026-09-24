@@ -1178,7 +1178,10 @@ def test_an_append_never_lands_on_a_torn_fragment(tmp_path):
 
 
 def test_a_torn_fragment_is_set_aside_and_its_nonce_resolved_like_any_other(
-        tmp_path, capsys):
+        tmp_path, capsys, monkeypatch):
+    from types import SimpleNamespace
+
+    from factorylab.runtime import capital_loop
     from factorylab.runtime.capital_loop import (
         ReserveLock,
         check_authorization_record,
@@ -1186,6 +1189,8 @@ def test_a_torn_fragment_is_set_aside_and_its_nonce_resolved_like_any_other(
     )
     from scripts import capital_loop_outstanding
 
+    # The script repairs at the host's time: here chain time 12_400 (its bound 13_000).
+    monkeypatch.setattr(capital_loop, "time", SimpleNamespace(time_ns=lambda: 12_400 * 10**9))
     rpc = Rpc()
     path = tmp_path / f"{RESERVE.lower()}.authorizations.jsonl"
     with ReserveLock(RESERVE, lock_dir=tmp_path) as lock:
@@ -1529,11 +1534,12 @@ def repair(tmp_path, now):
     (b'"validBefore": "13', "12600"),  # cut mid-digits: unknown, never 13
     (b'"validBefore": 13', "12600"),  # a bare number with no delimiter after it
     (b'"validBefore": "99999999", "va', "12600"),  # capped at repair + 600
-    (b'"validBefore": "12400", "va', "12400"),  # terminated and in range: its own
+    (b'"validBefore": "12400", "va', "12600"),  # legible and plausible: still the bound
 ])
 def test_a_torn_validbefore_counts_only_when_terminated_and_is_capped(
         tmp_path, tail, expected):
-    # Items 3 and 9 (repair_torn without the min(..., bound) cap).
+    # Items 3 and 9, and Codex on 507c2ea: nothing read from a torn line shortens the
+    # bound; its validBefore is always the repair time + 600.
     from factorylab.runtime.capital_loop import read_authorizations
 
     path = torn_record(tmp_path, b'{"kind": "authorization", "nonce": "' + LIVE_NONCE.encode()
@@ -1544,8 +1550,8 @@ def test_a_torn_validbefore_counts_only_when_terminated_and_is_capped(
 
 
 def test_a_torn_nonce_scans_from_the_repair_anchor_never_genesis(tmp_path):
-    # Item 3: a torn nonce with no legible start_block scans from the legacy anchor on
-    # the repair-time bound; with a terminated start_block, from that.
+    # Item 3: a torn nonce scans from the legacy anchor on the repair-time bound, a
+    # legible start_block in it included (Codex on 507c2ea: it may be wrong).
     rpc = Rpc()
     torn_record(tmp_path, b'{"kind": "authorization", "nonce": "' + LIVE_NONCE.encode()
                 + b'", "validBefore": "1', old=False)
@@ -1562,7 +1568,8 @@ def test_a_torn_nonce_scans_from_the_repair_anchor_never_genesis(tmp_path):
     rpc.requests.clear()
     with pytest.raises(CapitalLoopRefused, match="recorded_authorization_may_still_settle"):
         resolve(other, rpc, now_s=lambda: rpc.latest_ts)
-    assert min(first for first, _ in get_logs(rpc)) == 11_900 - 300
+    assert min(first for first, _ in get_logs(rpc)) == rpc.number_at(
+        12_600 - 600 - 0 - 300 - rpc.lag_s)
 
 
 def test_a_used_torn_nonce_is_a_recovery_not_spent(tmp_path):
@@ -1976,9 +1983,10 @@ def test_a_cctp_mint_is_never_cancelled_and_is_sped_up_identically(
     assert two["price"] >= (one["price"] * 9 + 7) // 8  # above every recorded price
     steps = [(e["tx_hash"], e["step"], e["origin"]) for e in read_authorizations(
         s["locks"] / f"{s['reserve'].address.lower()}.authorizations.jsonl")]
+    # Each replacement is recorded as the world's own (Codex on 507c2ea).
     assert steps == [(stuck["tx_hash"], "mint", "treasury"),
-                     (first["speed_up_tx_hash"], "mint", "speed_up"),
-                     (second["speed_up_tx_hash"], "mint", "speed_up")]
+                     (first["speed_up_tx_hash"], "mint", "treasury"),
+                     (second["speed_up_tx_hash"], "mint", "treasury")]
 
 
 def test_a_cancel_waits_for_the_world_that_recorded_it_to_end(tmp_path, monkeypatch, capsys):
@@ -2279,3 +2287,68 @@ def test_a_funded_run_takes_no_transport_and_no_other_lock_directory(tmp_path):
         rehearsal.run_rehearsal("worlds/edition6-capital-loop.toml",
                                 capital_loop_lock_dir=tmp_path / "elsewhere", **common)
     assert not (tmp_path / "runs").exists() and not (tmp_path / "elsewhere").exists()
+
+
+# ---- Wave 10, Codex on 507c2ea
+
+
+def test_a_damaged_lines_plausible_validbefore_never_shortens_its_bound(tmp_path):
+    # P1: a damaged line's legible, terminated validBefore may be wrong; the entry
+    # resolves only once finalized Base is past the repair time + 600.
+    from factorylab.runtime.capital_loop import ReserveLock, read_authorizations, repair_damaged
+
+    path = record(tmp_path, entry(OLD_NONCE, 11_500, origin="reserve_topup",
+                                  start_block=11_000))
+    damaged = (b'{"from": "' + RESERVE.encode() + b'", "kind": "authorization", '
+               b'"nonce": "' + LIVE_NONCE.encode() + b'", "start_block": 11990, '
+               b'"validBefore": "12100", "vali\xff')
+    path.write_bytes(damaged + b"\n" + path.read_bytes())
+    with ReserveLock(RESERVE, lock_dir=tmp_path) as lock:
+        repair_damaged(lock, now_s=lambda: 12_000)
+    torn = read_authorizations(path)[0]
+    assert (torn["validBefore"], torn["start_block"]) == ("12600", None)
+    rpc = Rpc()
+    rpc.final_ts = 12_300  # past the line's own 12100, not past the bound
+    with pytest.raises(CapitalLoopRefused, match="recorded_authorization_may_still_settle"):
+        resolve(tmp_path, rpc, now_s=lambda: rpc.latest_ts)
+    assert min(first for first, _ in get_logs(rpc)) < 11_990 - 300  # the legacy anchor
+    rpc.final_ts = 12_601
+    assert (LIVE_NONCE, "expired") in [
+        (r["nonce"], r["how"]) for r in resolve(tmp_path, rpc, now_s=lambda: rpc.latest_ts)[
+            "resolved_now"]]
+
+
+def test_a_running_worlds_step_cannot_be_cancelled_through_its_replacement(
+        tmp_path, monkeypatch, capsys):
+    # P2: a sped-up replacement is the world's own, and a cancel checks every entry at
+    # the nonce, so the replacement's hash is no way around the running world.
+    from factorylab.kernel.ledger import LedgerLock
+    from factorylab.runtime.capital_loop import ReserveGuard, read_authorizations
+    from factorylab.world.evm import HYPEREVM, calldata
+
+    s = hyper_signer(tmp_path, monkeypatch)
+    diary = tmp_path / "runs" / "world.jsonl"
+    diary.parent.mkdir()
+    diary.write_bytes(b"")
+    s["chain"].transaction_guard = ReserveGuard("treasury", run_dir=diary.parent,
+                                                ledger=diary, lock_dir=s["locks"])
+    data = calldata(
+        "depositForBurn(uint256,uint32,bytes32,address,bytes32,uint256,uint32)",
+        ["uint256", "uint32", "bytes32", "address", "bytes32", "uint256", "uint32"],
+        [1, 6, bytes(32), HYPEREVM.usdc, bytes(32), 1, 2000])
+    burn = s["chain"].prepare(HYPEREVM.messenger, data, gas_remaining_wei=10**15)
+    monkeypatch.setenv("RESERVE_PRIVATE_KEY", s["reserve"].key.hex())
+    with LedgerLock(diary):  # the world is running
+        assert tool(s, "--speed-up", burn["tx_hash"]) == 0
+        replacement = json.loads(capsys.readouterr().out)["speed_up_tx_hash"]
+        for target in (replacement, burn["tx_hash"]):
+            assert tool(s, "--cancel-transaction", target,
+                        "--i-understand-the-world-step-is-abandoned") == 2
+            assert "still running" in json.loads(capsys.readouterr().err)["why"]
+    [_, recorded] = [e for e in read_authorizations(
+        s["locks"] / f"{s['reserve'].address.lower()}.authorizations.jsonl")]
+    assert (recorded["tx_hash"], recorded["step"], recorded["origin"]) == (
+        replacement, "burn", "treasury")
+    assert (recorded["ledger"], recorded["run_dir"]) == (
+        str(diary.resolve()), str(diary.parent.resolve()))
+    assert len(s["hyper"].sent) == 1  # the speed-up only

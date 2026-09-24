@@ -412,18 +412,19 @@ existence does not rest on any diary:
   records a `torn` entry carrying its bytes. A fragment of a **transaction** line (its
   keys start with `"chain_id"`, or it names `"kind": "transaction"`, a `tx_hash` or a
   `tx_nonce`) is kept as a torn transaction. Its legible hash, chain and account nonce
-  stay open under the transaction rule below, and no value in it is read as a nonce.
-  Its `start_block` is kept only when its chain is legibly Base mainnet. In any other
-  fragment every nonce-like value becomes an open authorization, resolved against the
-  chain like any other (a torn append was never signed, but the record does not assume
-  it). A torn nonce
-  always resolves as a recovery if it was used: nothing shows where it was booked. Its
-  `validBefore` is the fragment's own only when the value is terminated (a closing
-  quote, or a delimiter after a bare number): `"validBefore": "13` cut mid-digits is
-  unknown, never 13. Known or not, it is capped at the repair time + 600 s, since a
-  signer capped at 600 s wrote it before the repair. Its `start_block` is the
-  fragment's own when terminated; otherwise its scan starts by the legacy rule below,
-  from that capped `validBefore`, so it never starts at the genesis block.
+  stay open under the transaction rule below (a number counts only when it is
+  terminated), and no value in it is read as a nonce. In any other fragment every
+  nonce-like value becomes an open authorization, resolved against the chain like any
+  other (a torn append was never signed, but the record does not assume it). A torn
+  nonce always resolves as a recovery if it was used: nothing shows where it was
+  booked.
+
+  Only what is looked for (a nonce, a transaction hash) is read from a torn or damaged
+  line. Nothing read from it ever shortens a bound, because a damaged line's legible
+  value may be wrong. Its `validBefore` is always the repair time + 600 s: every signer
+  caps validity at 600 s from a signing time no later than the repair. Any
+  `validBefore` or `start_block` the line shows is ignored, and its scan starts by the
+  legacy rule below from that bound, so it never starts at the genesis block.
 
   The repair is atomic. It writes and flushes the sidecar, writes the new record (the
   good prefix and the `torn` entry) whole to a temporary file beside it and flushes
@@ -438,7 +439,10 @@ existence does not rest on any diary:
   This is the same atomic sidecar-and-replace. Each line that is not a whole entry gets
   its own sidecar and is replaced in place by the `torn` entry made from it, under the
   same rules, so every legible nonce and transaction hash stays open. Whole lines are
-  kept byte for byte.
+  kept byte for byte. The residual risk: a line whose nonce itself was corrupted names
+  a nonce that is not the true one, and the true one is unknown. Only the cooling-off
+  scan protects that case. It catches the true authorization once it is used, inside
+  its window, as `unrecorded_reserve_authorization`.
 - **At every launch**, every recorded authorization not yet resolved is read twice,
   and the two reads must agree: USDC's `authorizationState` at the finalized block, and
   a scan of the finalized blocks it could have been used in for its `AuthorizationUsed`.
@@ -504,8 +508,9 @@ existence does not rest on any diary:
   A dropped transaction never consumes its nonce, and anyone holding its bytes could
   still send it. Both exits are pure replacements at the recorded nonce: nothing of
   the mempool is read. Each is priced 12.5% above every gas price the record holds for
-  that nonce, recorded like every reserve-key transaction, and sent under the reserve's
-  lock. Each loads the reserve key from `reserve.key` in the working directory, the
+  that nonce, and recorded like every reserve-key transaction. It is recorded as the
+  stuck transaction's world's own (same origin, run directory and diary), and sent
+  under the reserve's lock. Each loads the reserve key from `reserve.key` in the working directory, the
   way every signer reads it; never put the key on the command line.
 
       uv run python scripts/capital_loop_outstanding.py --speed-up 0x<hash>
@@ -525,7 +530,9 @@ existence does not rest on any diary:
   nonce instead. It is refused for:
   - a mint;
   - a transaction whose call was not recorded, which may be a mint;
-  - a transaction whose world is still running (its diary's writer lock is held).
+  - a nonce whose world is still running (its diary's writer lock is held). Every entry
+    at that nonce is checked, the original and each replacement alike, so a
+    replacement's hash is no way around it.
 
   It is also refused without the flag, because **this world's treasury step will not
   complete; it must be recovered by hand**. A cancelled burn, approval or deposit
@@ -600,7 +607,7 @@ exits 1.
 | `unrecorded_reserve_authorization` (exit 3) | Book it by hand. It clears by itself when finalized Base is 600 s + 2 × the lag past it. |
 | `unrecorded_reserve_transfer` | Clears by itself when finalized Base is 600 s + 2 × the lag past it (about 58 minutes after a hand transfer). |
 | `authorization_record_torn` | `--repair-torn`. |
-| `authorization_record_unreadable` | `--repair-damaged`. |
+| `authorization_record_unreadable` | `--repair-damaged`. Each damaged line's legible nonces and hashes stay open, bounded by the repair time + 600 s. If a line's nonce itself was corrupted, the true nonce is unknown, and only the cooling-off scan protects it (it refuses `unrecorded_reserve_authorization` once that authorization is used). |
 | `acknowledge_refused` | Its reason says which: not an open nonce (nothing to acknowledge), or finalized Base does not show it used yet (wait, then retry). |
 | `capital_loop_requires_the_wall_clock`, `capital_loop_requires_the_live_clock` | Launch without an injected clock (the operator's command never passes one). |
 | `capital_loop_requires_the_live_transport`, `capital_loop_requires_the_operator_lock_dir` | Launch without an injected transport or lock directory (the operator's command never passes one; `--rpc-*` names another RPC instead). |

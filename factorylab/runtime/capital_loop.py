@@ -569,10 +569,8 @@ def read_authorizations(path: str | Path) -> list[dict]:
 
 
 _NONCE = re.compile(rb"0x[0-9a-fA-F]{64}")
-#: A value counts only when it is terminated: a closing quote, or for a bare number a
-#: delimiter. "validBefore": "13 cut mid-digits is unknown, never 13.
-_VALID_BEFORE = re.compile(rb'"validBefore"\s*:\s*(?:"(\d{1,20})"|(\d{1,20})\s*[,}])')
-_START_BLOCK = re.compile(rb'"start_block"\s*:\s*(\d{1,20})\s*[,}]')
+#: A number counts only when it is terminated (a delimiter follows it): a transaction's
+#: chain and account nonce cut mid-digits are unknown.
 _CHAIN_ID = re.compile(rb'"chain_id"\s*:\s*(\d{1,20})\s*[,}]')
 _TX_NONCE = re.compile(rb'"tx_nonce"\s*:\s*(\d{1,20})\s*[,}]')
 _TX_HASH = re.compile(rb'"tx_hash"\s*:\s*"(0x[0-9a-fA-F]{64})"')
@@ -592,11 +590,14 @@ def _terminated(pattern: re.Pattern, fragment: bytes) -> int | None:
 def _torn_entry(fragment: bytes, reserve: str, sidecar: Path, now: int, bound: int) -> dict:
     """What a line that is not a whole entry may have recorded, kept open.
 
-    A transaction's line gives only its hash, and its chain and account nonce when
-    each is terminated; no nonce is read from it, so it never becomes an authorization.
-    An authorization's line gives every nonce-like value, a terminated ``validBefore``
-    capped at ``bound`` (``bound`` itself when none), and a terminated ``start_block``.
-    A transaction's ``start_block`` is kept only when its chain is legibly Base mainnet.
+    Only what is looked for is read from the line; nothing read from it shortens a
+    bound, since a damaged line's legible value may be wrong. An authorization's line
+    gives every nonce-like value; its ``validBefore`` is always ``bound`` (the repair
+    time plus ``MAX_AUTHORIZATION_S``: every signer caps validity at that from a signing
+    time no later than the repair) and it has no ``start_block``, so its scan starts by
+    the legacy rule on that bound. A transaction's line gives its hash, and its chain
+    and account nonce when each is terminated; no nonce is read from it, so it never
+    becomes an authorization.
     """
     entry = {"kind": "torn", "from": reserve, "fragment_hex": fragment.hex(),
              "sidecar": str(sidecar), "repaired_s": now}
@@ -608,15 +609,12 @@ def _torn_entry(fragment: bytes, reserve: str, sidecar: Path, now: int, bound: i
             "torn_kind": "transaction", "nonces": [], "validBefore": str(bound),
             "tx_hashes": [] if found is None else [found.group(1).decode().lower()],
             "chain_id": chain_id, "tx_nonce": _terminated(_TX_NONCE, fragment),
-            "start_block": (_terminated(_START_BLOCK, fragment) if chain_id == BASE.id
-                            else None)})
+            "start_block": None})
         return entry
-    named = _terminated(_VALID_BEFORE, fragment)
     entry.update({
         "torn_kind": "authorization",
         "nonces": sorted({n.decode().lower() for n in _NONCE.findall(fragment)}),
-        "validBefore": str(bound if named is None else min(named, bound)),
-        "start_block": _terminated(_START_BLOCK, fragment)})
+        "validBefore": str(bound), "start_block": None})
     return entry
 
 

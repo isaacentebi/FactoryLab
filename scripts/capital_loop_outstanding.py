@@ -89,8 +89,9 @@ RPC_FLAGS = (("rpc_base", 8453), ("rpc_hyperevm", 999), ("rpc_base_sepolia", 845
 
 
 def _target(lock: ReserveLock, tx_hash: str, account, reason: str):
-    """The open recorded transaction ``tx_hash`` names, and the least price a replacement
-    at its nonce must pay: 12.5% above every price the record holds for that nonce.
+    """The open recorded transaction ``tx_hash`` names, every entry the record holds at
+    its chain, reserve and nonce (itself, and each replacement of it), and the least
+    price a replacement must pay: 12.5% above every price those entries hold.
 
     Refuses (``reason``) unless it is an open, whole transaction entry of this record,
     with its chain and account nonce known, signed by ``account``'s reserve.
@@ -109,17 +110,21 @@ def _target(lock: ReserveLock, tx_hash: str, account, reason: str):
         raise refused("its chain or account nonce is not known; it resolves by waiting")
     if str(entry["from"]).lower() != account.address.lower():
         raise refused("the key given is not the reserve that signed it")
-    prices = [e.get("gas_price") for e in entries
-              if e["kind"] == "transaction" and e.get("chain_id") == entry["chain_id"]
-              and e.get("tx_nonce") == entry["tx_nonce"]
-              and str(e.get("from", "")).lower() == str(entry["from"]).lower()]
+    same = [e for e in entries
+            if e["kind"] == "transaction" and e.get("chain_id") == entry["chain_id"]
+            and e.get("tx_nonce") == entry["tx_nonce"]
+            and str(e.get("from", "")).lower() == str(entry["from"]).lower()]
+    prices = [e.get("gas_price") for e in same]
     floor = max([(p * 9 + 7) // 8 for p in prices if type(p) is int and p > 0] or [0])
-    return key, entry, floor, refused
+    return key, entry, same, floor, refused
 
 
 def _replace(lock: ReserveLock, entry: dict, floor: int, *, account, transport, rpcs,
-             gas_budget_wei: int | None, to: str, data: str, origin: str) -> dict:
+             gas_budget_wei: int | None, to: str, data: str) -> dict:
     """Sign ``to``/``data`` at ``entry``'s nonce, recorded ahead and sent under the lock.
+
+    The replacement is recorded as the world's own: it inherits ``entry``'s origin, run
+    directory and diary, so every check of whose it is sees the same world.
 
     A pure replacement at the recorded nonce: nothing of the mempool is read. Refuses
     ``replacement_needs_native_gas`` (naming the chain and the wei) when the reserve
@@ -130,7 +135,9 @@ def _replace(lock: ReserveLock, entry: dict, floor: int, *, account, transport, 
     chain_id = entry["chain_id"]
     chain = EVM(_chains()[chain_id], account, transport=transport,
                 rpc=(rpcs or {}).get(chain_id))
-    chain.transaction_guard = lock.authorization_log(None, origin=origin)
+    chain.transaction_guard = lock.authorization_log(
+        entry.get("run_dir"), origin=entry.get("origin") or "capital_loop",
+        ledger=entry.get("ledger"))
     chain.check_chain()
     gas = 21_000 if data == "0x" else int(chain.call("eth_estimateGas", [{
         "from": account.address, "to": to, "value": "0x0", "data": data}]), 16)
@@ -166,21 +173,24 @@ def cancel_transaction(lock: ReserveLock, tx_hash: str, *, account, transport,
     anything without ``abandon``: the world's step it belonged to then never completes
     (``CANCEL_CONSEQUENCE``). Otherwise refuses ``cancel_refused`` and signs nothing.
     The cancellation is a 0-value transfer from the reserve to itself at the recorded
-    nonce, priced 12.5% above every price the record holds for it, recorded ahead
-    (origin ``cancel_transaction``) and sent under this held lock.
+    nonce, priced 12.5% above every price the record holds for it, recorded ahead as
+    its world's, and sent under this held lock. Every entry at that nonce is checked:
+    one replacement of a running world's step is as much that world's as the original.
     """
-    key, entry, floor, refused = _target(lock, tx_hash, account, "cancel_refused")
-    step = entry.get("step")
-    if step == "mint":
+    key, entry, same, floor, refused = _target(lock, tx_hash, account, "cancel_refused")
+    # Every entry at this nonce (the original and each replacement) is the same step of
+    # the same world: none may be a mint, unrecorded, or a running world's.
+    if any(e.get("step") == "mint" for e in same):
         raise refused("a CCTP mint is never cancelled: its burn would stay with nothing "
                       "minted. Its exit is --speed-up")
-    if step is None or entry.get("data") is None:
+    if any(e.get("step") is None or e.get("data") is None for e in same):
         raise refused("its call was not recorded, so it may be a CCTP mint: it is never "
                       "cancelled; it resolves by waiting")
-    ledger = entry.get("ledger")
-    if ledger and Path(ledger).exists():
-        from factorylab.kernel.ledger import LedgerBusyError, LedgerLock
+    from factorylab.kernel.ledger import LedgerBusyError, LedgerLock
 
+    for ledger in {e.get("ledger") for e in same if e.get("ledger")}:
+        if not Path(ledger).exists():
+            continue
         try:
             LedgerLock(ledger).close()
         except LedgerBusyError:
@@ -191,7 +201,7 @@ def cancel_transaction(lock: ReserveLock, tx_hash: str, *, account, transport,
                       "--i-understand-the-world-step-is-abandoned")
     reference = _replace(lock, entry, floor, account=account, transport=transport,
                          rpcs=rpcs, gas_budget_wei=gas_budget_wei, to=account.address,
-                         data="0x", origin="cancel_transaction")
+                         data="0x")
     return {"canceled": key, "cancel_tx_hash": reference["tx_hash"],
             "chain_id": entry["chain_id"], "tx_nonce": entry["tx_nonce"],
             "gas_price": reference["tx"]["gasPrice"], "max_gas_wei": reference["max_gas_wei"],
@@ -204,18 +214,19 @@ def speed_up(lock: ReserveLock, tx_hash: str, *, account, transport,
 
     Guarantees the replacement is the identical call (destination, calldata, value 0)
     at the recorded nonce, priced 12.5% above every price the record holds for it,
-    recorded ahead (origin ``speed_up``) and sent under this held lock; so whichever of
+    recorded ahead as its world's and sent under this held lock; so whichever of
     them executes does exactly what was recorded. The only exit for a stuck CCTP mint.
     A transaction whose call was not recorded refuses ``speed_up_refused``.
     """
-    key, entry, floor, refused = _target(lock, tx_hash, account, "speed_up_refused")
+    key, entry, _same, floor, refused = _target(lock, tx_hash, account,
+                                                "speed_up_refused")
     if entry.get("data") is None or entry.get("to") is None:
         raise refused("its call was not recorded; it cannot be re-signed")
     if int(entry.get("value") or 0) != 0:
         raise refused("only a 0-value call is signed here")
     reference = _replace(lock, entry, floor, account=account, transport=transport,
                          rpcs=rpcs, gas_budget_wei=gas_budget_wei, to=entry["to"],
-                         data=entry["data"], origin="speed_up")
+                         data=entry["data"])
     return {"sped_up": key, "speed_up_tx_hash": reference["tx_hash"],
             "chain_id": entry["chain_id"], "tx_nonce": entry["tx_nonce"],
             "step": entry.get("step"), "gas_price": reference["tx"]["gasPrice"],
