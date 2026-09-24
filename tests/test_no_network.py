@@ -39,6 +39,24 @@ def test_an_attempt_swallowed_by_the_code_is_still_remembered(_no_network):
     _no_network.clear()
 
 
+def test_a_datagram_to_a_numeric_address_is_refused_and_recorded(_no_network):
+    # Codex on 805b12b: UDP to a numeric address needs neither DNS nor connect.
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
+        for send in (lambda: udp.sendto(b"x", ("8.8.8.8", 53)),
+                     lambda: udp.sendto(b"x", 0, ("8.8.8.8", 53)),
+                     lambda: udp.sendmsg([b"x"], [], 0, ("8.8.8.8", 53))):
+            with pytest.raises(NetworkForbidden, match="8.8.8.8"):
+                send()
+    assert len(_no_network) == 3 and all("8.8.8.8" in a for a in _no_network)
+    _no_network.clear()
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as local, \
+            socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
+        local.bind(("127.0.0.1", 0))
+        sender.sendto(b"y", local.getsockname())  # loopback stays open
+        sender.sendmsg([b"z"], [], 0, local.getsockname())
+        assert local.recv(1) == b"y" and local.recv(1) == b"z"
+
+
 def test_loopback_and_unix_sockets_stay_open():
     server = socket.socket()
     server.bind(("127.0.0.1", 0))

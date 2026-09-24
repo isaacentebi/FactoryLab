@@ -438,14 +438,14 @@ def _no_network(request, monkeypatch):
     """Every outbound network path raises ``NetworkForbidden``, naming what it reached.
 
     Covers ``socket.getaddrinfo`` (a DNS lookup is already traffic),
-    ``socket.socket.connect``/``connect_ex`` and ``socket.create_connection`` (loopback
-    and unix sockets allowed), ``urllib.request.urlopen`` and every
-    ``OpenerDirector.open``, which the project's own seams ``x402.http_request`` and
-    ``polymarket.http_get_json`` both open through (a test that fakes the opener beneath
-    a seam reaches nothing, and is not stopped). Each attempt is also remembered and
-    fails the test at
-    teardown, so code that catches the error (a rail that turns any transport failure
-    into a retry) cannot hide it. A test marked ``network`` is left alone; such tests
+    ``socket.socket.connect``/``connect_ex``, a datagram's ``sendto``/``sendmsg`` to an
+    address, and ``socket.create_connection`` (loopback and unix sockets allowed),
+    ``urllib.request.urlopen`` and every ``OpenerDirector.open``, which the project's
+    own seams ``x402.http_request`` and ``polymarket.http_get_json`` both open through
+    (a test that fakes the opener beneath a seam reaches nothing, and is not stopped).
+    Each attempt is also remembered and fails the test at teardown, so code that
+    catches the error (a rail that turns any transport failure into a retry) cannot
+    hide it. A test marked ``network`` is left alone; such tests
     are never in the check or gate tiers.
     """
     if request.node.get_closest_marker("network"):
@@ -476,6 +476,25 @@ def _no_network(request, monkeypatch):
             return real(self, address)
         return connect
 
+    def remote(sock, address) -> bool:
+        return sock.family in (socket.AF_INET, socket.AF_INET6) and not _local_host(
+            address[0] if isinstance(address, tuple) else address)
+
+    real_sendto, real_sendmsg = socket.socket.sendto, socket.socket.sendmsg
+
+    def sendto(self, data, *args):
+        # sendto(data, address) or sendto(data, flags, address): a datagram needs no
+        # DNS lookup or connect to leave for a numeric address.
+        if args and remote(self, args[-1]):
+            forbid(f"socket sendto {args[-1]!r}")
+        return real_sendto(self, data, *args)
+
+    def sendmsg(self, buffers, *args, **kwargs):
+        address = kwargs.get("address", args[2] if len(args) > 2 else None)
+        if address is not None and remote(self, address):
+            forbid(f"socket sendmsg to {address!r}")
+        return real_sendmsg(self, buffers, *args, **kwargs)
+
     real_create_connection = socket.create_connection
 
     def create_connection(address, *args, **kwargs):
@@ -500,6 +519,8 @@ def _no_network(request, monkeypatch):
     monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
     monkeypatch.setattr(socket.socket, "connect", guarded(socket.socket.connect))
     monkeypatch.setattr(socket.socket, "connect_ex", guarded(socket.socket.connect_ex))
+    monkeypatch.setattr(socket.socket, "sendto", sendto)
+    monkeypatch.setattr(socket.socket, "sendmsg", sendmsg)
     monkeypatch.setattr(socket, "create_connection", create_connection)
     monkeypatch.setattr(urllib.request.OpenerDirector, "open", opener_open)
     monkeypatch.setattr(urllib.request, "urlopen", urlopen)
