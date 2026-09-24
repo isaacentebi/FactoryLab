@@ -1503,8 +1503,20 @@ class ComputeMixin:
         req = replace(req, cost_ceiling=min(
             req.cost_ceiling, max(0, self.wallet.available_for(req.handle, reason)), cover,
         ))
+        # The bytes of the prompt this call renders, counted on the very request the
+        # assembly is handed: its ``YOU`` states this ceiling, so a count taken before
+        # the cap, or after the caller has since changed the request, is of a prompt
+        # nobody was sent (edition 3, C4). The count renders exactly what the assembly
+        # renders, so a request that cannot be rendered fails here as it fails there.
+        # A measurement never fails a call: the call keeps its own failure path (the
+        # assembly returns it failed) and the prompt is simply unmeasured, as the
+        # ceiling probe above is.
         try:
-            ret = asm.invoke(req)
+            sections = replace(req, inputs={**req.inputs, "you": action_id}).section_bytes()
+        except Exception:
+            sections = None
+        try:
+            ret = replace(asm.invoke(req), prompt_sections=sections)
         finally:
             self.entitlement_bridges.pop(req.handle, None)
         if ceiling is not None:
@@ -1603,6 +1615,13 @@ class ComputeMixin:
         taken: set[str] = set()  # the tool actions this decision dispatched (action_key)
         niche_spent = 0  # what this decision's unhistoried actions used of the niche
         ret = self._invoke_compute(action_id, req)
+        # The opening prompt's bytes, as the first call rendered them. ``req`` changes
+        # below (the cover cap, a working state written in a tool round, the niche's
+        # ceiling) and each continuation renders its own prompt, so these are taken
+        # now and never recomputed. None when no prompt was rendered for the call.
+        sections = getattr(ret, "prompt_sections", None)
+        # Whether the opening request reached its executor, as the assembly reports it.
+        delivered = bool(getattr(ret, "delivered", False))
         # The routing bridge buys only the routed call. Reads and children spend
         # the liable seat's remaining cover, never a fresh claim on the commons.
         seat = self._liable_seat(req.handle) or action_id
@@ -1958,6 +1977,9 @@ class ComputeMixin:
         self.stats.invocations_by_role[role] = self.stats.invocations_by_role.get(role, 0) + 1
         sr = ret.stop_reason or "none"
         self.stats.stop_reasons[sr] = self.stats.stop_reasons.get(sr, 0) + 1
+        # Rendered bytes per prompt section (edition 3, C4), counted once on the opening
+        # call: the ledger row, the window's public counters and the return's
+        # measurement sample all carry these same numbers, so none can drift.
         self.ledger.append(
             {
                 "kind": "invocation",
@@ -1982,8 +2004,7 @@ class ComputeMixin:
                 # institutional catalogue behind catalogue.search is a claim about
                 # bytes; the claim is recorded beside the bill it is supposed to
                 # move, so the change is measured rather than assumed.
-                "sections": replace(
-                    req, inputs={**req.inputs, "you": action_id}).section_bytes(),
+                "sections": sections,
                 **({"prompt_cache": prompt_cache} if prompt_cache is not None else {}),
                 "ts": self.clock.now_ns,
             }
@@ -2001,6 +2022,20 @@ class ComputeMixin:
                 "max_tokens": ret.provider.get("max_tokens"), "ts": self.clock.now_ns,
             })
         self.window.invocations += 1
+        # Its return's readings are metered from here on (``downstream_read_bytes``),
+        # whether or not its prompt could be rendered: a failed return is published too.
+        self.window.read_measured += 1
+        # Essay II.IV.a: the metrics layer is ceded, and the factory can propose a
+        # metric only on a quantity the world publishes. These are that quantity for
+        # context size: facts, with no target attached (the seed observations
+        # ``prompt_bytes``, ``you_bytes`` and ``inputs_bytes`` read them).
+        if sections is not None:
+            self.window.prompts += 1
+            self.window.prompt_bytes += sections["total"]
+            self.window.you_bytes += sections.get("you", 0)
+            self.window.inputs_bytes += sections.get("inputs", 0)
+        ret = replace(ret, prompt_sections=dict(sections) if sections is not None else None,
+                      delivered=delivered)
         if ret.status == "ok":
             self.window.ok += 1
             if role == "producer":

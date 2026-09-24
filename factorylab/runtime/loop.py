@@ -162,7 +162,35 @@ class Runtime(
                                        or self.assemblies[action_id].spec.emits),
                                    window=self.window.index, ret=ret)
         self.card_samples.returns[-1]["tool_calls"] = self.window.tool_calls - tool_calls
+        self._record_reading(req.handle, ret)
         return ret
+
+    def _record_reading(self, handle: str, ret) -> None:
+        """File a reader's INPUTS bytes under the author of the return it was commissioned on.
+
+        Essay II.IV.a (the metrics layer is ceded) and II.I.b (minimal disclosure):
+        a decision routed on a published return reads that return in its INPUTS, so
+        those bytes are a fact about the return as much as about the reader. The
+        kernel files them under the author's scope in the window the reading was
+        metered, the way retained-storage rent is filed; the reader's request is
+        not touched, so nothing about the author reaches it. A decision with no
+        subject, a subject no assembly authored, an invocation for which the
+        runtime rendered no prompt, or one
+        whose request never reached its executor (refused over its ceiling, its
+        reservation refused, the world terminal: ``Return.delivered`` is False),
+        records nothing: no reader read those bytes.
+        """
+        sections = getattr(ret, "prompt_sections", None)
+        subject = self.decision_subjects.get(handle)
+        author = self.handle_to_assembly.get(subject) if subject is not None else None
+        if (not sections or not getattr(ret, "delivered", False) or author is None
+                or subject == handle):
+            return
+        read = int(sections.get("inputs", 0))
+        self.window.downstream_read_bytes += read
+        self.card_samples.read(handle=subject, assembly=author,
+                               role=self._decision_role(subject),
+                               window=self.window.index, read_bytes=read)
 
     def _settle_due_forecasts(self) -> None:
         """A6 sampling and A2 cadence openings both wrap the one settlement implementation."""

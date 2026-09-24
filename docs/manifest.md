@@ -638,6 +638,82 @@ each measure one, not ten; over global closed windows it divides the window's
 attempted calls by its invocations. The other supported return observations
 are `noop_share` and `revision_rate`.
 
+Context size is published as four seed observations (wave 7; essay II.IV.a, the
+metrics layer is ceded, so the factory can propose a metric only on a quantity the
+world publishes). No card, target or threshold comes with them. They read the
+UTF-8 byte counts every invocation's ledger row already records under `sections`,
+counted once in `ComputeMixin._invoke`: the ledger row, the window's counters and
+the return sample carry the same numbers. Bytes, not provider tokens: the kernel
+renders the bytes identically for every seat, program seats included, while
+tokenizers differ by model family, x402 and program seats report no tokens, and
+the reported `usage` covers only an invocation's final provider call.
+
+| Observation | Units | Unit range | Per return scope | Global closed windows |
+|---|---|---|---|---|
+| `prompt_bytes` | bytes per invocation | [0, 100,000] | mean `sections.total` of the selected responses | summed `prompt_bytes` over `prompts` |
+| `you_bytes` | bytes per invocation | [0, 100,000] | mean `sections.you` | summed `you_bytes` over `prompts` |
+| `inputs_bytes` | bytes per invocation | [0, 100,000] | mean `sections.inputs` | summed `inputs_bytes` over `prompts` |
+| `downstream_read_bytes` | bytes per return | [0, 1,000,000] | reading bytes filed under the scope in its selected responses' windows, over those responses | summed `downstream_read_bytes` over `read_measured` |
+
+The byte counts are of the invocation's opening prompt, the one its ledger row
+records; tool-round continuations are not counted. A response the runtime rendered
+no prompt for (a ballot whose assembly was unavailable) is not a zero-byte sample:
+none of the four selects it, so it is not new evidence for a card's price, never
+takes a horizon slot from a measured response, and is not among the responses
+`downstream_read_bytes` divides by, exactly as a global window divides by its
+invocations. A request that cannot be rendered (an input no prompt section can
+serialise) fails as the assembly fails it: it is an invocation, counted in
+`invocations`, but no prompt. Its ledger row's `sections` is null and the window's
+`prompts` (the invocations whose opening prompt was rendered, the three prompt
+means' denominator) does not count it. Measuring a prompt never fails a call. A
+window record closed before prompts were measured carries no `prompts` and no
+prompt bytes: it measured zero prompts, so merged with later windows it adds nothing
+to either side of a prompt mean, and a selection of such records alone is
+unmeasured (never a mean of zero) and no new sample. A
+whole window with no measured prompt (only rent, such a ballot or such a request)
+is no new sample for the three prompt means. `downstream_read_bytes` has its own
+support, `read_measured`: the invocations whose readings are metered, which is
+every invocation from wave 7 on, a failed render included (so it is not
+`prompts`). A return sample carries the `invoked` marker from wave 7 on, and only a
+marked one is a response of its selection. A window record or return sample from
+before readings were metered carries neither: it adds nothing to either side of
+the mean, a selection of such alone is unmeasured and no new sample, while a
+current invocation no one read is a measured zero. The scope facts publish
+`read_measured` as the window does. All four are measurable over `returns` and
+over `windows`, per role, per assembly or globally, and none over `forecasts`;
+none is `per_window`, since each is a ratio of summable numerators and
+denominators.
+
+A *reading* is the INPUTS section of an invocation whose decision was routed on a
+published return (`decision_subjects`: judges, adversarial judges, metas, and any
+contract that accepts the return's kind), counted only when the request reached its
+executor. The assembly reports that on the return (`Return.delivered`), set where it
+sends: a model's provider call was made (answered, or failed possibly billed), or a
+program's stdin was run by the jail. A request refused before that is still an
+invocation, with its prompt measured if it was rendered, but no reading. Refusals of
+this kind: over its ceiling or price, its reservation refused, the world terminal,
+an unbilled provider failure, a request that could not be rendered. The kernel files its bytes under the
+return's author, its assembly and role, in the window the reading was metered,
+exactly as retained-storage rent is filed: it joins a returns horizon when it was
+metered in the windows of the selected responses, never occupies a response slot
+and never supplies support, and a scope whose returns were read by no one in those
+windows measures zero. Reading rows live apart from the return samples
+(`CardSamples.readings`), so no other observation selects one, and they carry no
+identity of the reader. The reader's request is not touched. `downstream_read_bytes`
+is not a mean of per-response samples, so a card over it cannot declare an
+`interval`. A reading is new evidence for a card's price only once the card's
+current selection reads it: inside a full returns horizon, or beside a response of
+its scope in the selected closed windows. One metered after its author's latest
+response is kept for the next horizon but moves no price until then. A registered
+observation measured per scope reads the scope's summed `prompt_bytes`,
+`you_bytes`, `inputs_bytes` and `downstream_read_bytes` among its facts, and a
+scope whose only row in the selected windows is a reading is measured too. The
+scope's `invocations` fact counts its invocations as `window.invocations` counts the
+window's: an assembly-unavailable ballot is a response but no invocation, so it is
+in neither. Its `prompts` fact counts its responses with a rendered prompt, as the
+window's `prompts` does, so summed prompt bytes over `prompts` is a mean per
+rendered prompt in a scope exactly as it is globally. Its violations are attributed by the generic `1/n` share described below.
+
 `forecasts` selects the latest `n` resolved forecast records in each scope.
 `forecast_skill` uses paired Brier skill against the baseline as it stood before
 each outcome, not lifetime standing. The other supported forecast observations
@@ -1153,7 +1229,10 @@ change either. Bounded fractions and scores use [0, 1], score differences use
 [-1, 1], and standard deviations of unit scores use [0, 0.5]. Unbounded counts
 and ratios use one count or one base quantity as their unit interval [0, 1];
 cost per return uses one dollar [0, 1,000,000] in micro-USD; signed dollar P&L
-uses [-1, 1] USD. These are unit definitions, not acceptable regions or clipping
+uses [-1, 1] USD. Prompt sizes per invocation use [0, 100,000] bytes, a width
+above the opening prompts measured in live runs (median 21k to 29k characters,
+up to 42k in one judge's INPUTS); reading bytes per return, summed over every
+reader of a return, use [0, 1,000,000] bytes. These are unit definitions, not acceptable regions or clipping
 bounds for seed observations: larger and negative observations remain measurable.
 Registered observations must return within their declared range.
 
