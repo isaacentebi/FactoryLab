@@ -90,9 +90,10 @@ def test_a_world_without_the_block_has_no_surface_and_a_named_block_is_hashed():
                                                   "collateral_usd": "5"}})
 
 
-def test_no_world_in_the_repository_enables_event_markets():
+def test_only_the_edition6_worlds_enable_event_markets_and_only_to_read():
     from pathlib import Path
 
+    enabled = set()
     for path in sorted(Path(__file__).parents[2].joinpath("worlds").glob("*.toml")):
         try:
             world = load_manifest(str(path))
@@ -100,7 +101,12 @@ def test_no_world_in_the_repository_enables_event_markets():
             # A pre-Wave-5a roster the kernel refuses loads no surface at all (R8).
             assert "evaluator population" in str(exc), path.name
             continue
-        assert world.polymarket.enabled is False, path.name
+        if world.polymarket.enabled:
+            enabled.add(path.name)
+            # The public read APIs only: no world under worlds/ trades event markets.
+            assert world.polymarket.venue == "live", path.name
+            assert world.polymarket.collateral_micro == 0, path.name
+    assert enabled == {"edition6-testnet-rehearsal.toml", "edition6-capital-loop.toml"}
 
 
 def test_published_tools_state_what_they_do_and_cost_and_carry_valid_examples():

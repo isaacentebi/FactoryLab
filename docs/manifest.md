@@ -1602,9 +1602,9 @@ one wake. A search that returned no results buys no extra round.
 ## Event markets: `[polymarket]`
 
 `[polymarket]` is off by default. A disabled block registers nothing, but its keys are
-still part of the manifest and are hashed like any other. No world under `worlds/`
-enables it. The
-keys, all fixed for the world's life:
+still part of the manifest and are hashed like any other. The two edition 6 worlds enable
+it with `venue = "live"` (reads only); no world under `worlds/` enables the simulated
+venue's writes. The keys, all fixed for the world's life:
 
 | key | default | meaning |
 |---|---|---|
@@ -1652,6 +1652,28 @@ decision, and its money reaches the owner through `_settle_late` without rescori
 with no midpoint loses its mark (`polymarket.mark_unavailable`) and its decision falls back as
 any unobserved consequence does. Outcome labels are third-party text: outside the jailed reads
 every surface carries ids and a normalised `YES`, `NO` or `outcome <n>`.
+
+Forecasts: an enabled block, on either venue, adds two seed-logic predicates to the
+world's forecast vocabulary (`world.work` `predicates`, and the forecast schema's
+predicate enum); a world without the block offers neither and refuses them. Both take
+`token_id` (an outcome token id, decimal digits) beside `horizon_events`:
+
+| predicate | params | y at settlement |
+|---|---|---|
+| `event_pays` | `horizon_events`, `token_id` | 1 when the token's market has resolved and the token redeems for 1; 0 while it is open, closed without a final resolution, or resolved 50-50 |
+| `event_price_above` | `horizon_events`, `token_id`, `level` in (0, 1) | 1 when the token's price exceeds `level`: its redemption value once resolved, else the midpoint of its CLOB book's best bid and ask (exact comparison) |
+
+The world reads the token once, at the forecast's due tick, through the surface's journal
+(`polymarket.event_read`): the market that lists it (Gamma's closed listing first, since
+its open listing can lag a resolution), and for a price claim on an unresolved market its
+book (never the CLOB's `/midpoint`, which answers 0.5 for an empty book). A payout exists only for a closed market whose
+outcome prices are a redemption (1 and 0, or 0.5 each) and whose UMA status, when stated,
+is `resolved`. A read that did not answer, or a price claim with no midpoint, is
+`polymarket.event_unavailable`: the claim settles censored and is excluded as
+`external_unobservable`. A token no market lists settles censored and is not excluded.
+The reads are the kernel's measurement and cost no seat anything. `scripts/fastloop.py`
+answers a live-read world's reads from the simulated venue (`simulate_reads`), which then
+moves and resolves on the world's clock.
 
 ## New kinds of work: reward shapes and predicates
 
