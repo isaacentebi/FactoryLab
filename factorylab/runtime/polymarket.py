@@ -187,12 +187,14 @@ class PolymarketSurface:
         # token id -> the id of the market that lists it, or None for a token no market
         # listed when it was looked up. Which market lists a token is fixed when the
         # market is made, so a token is looked up once for the world's life, and every
-        # later read of its market is one GET by market id. It grows with the distinct
-        # tokens the world has seen claimed or traded: the world's record of them.
-        self.token_markets: dict[str, str | None] = {}
-        # The kernel's open reads (``open_limit``): "due:<token>:<tick>" for the
-        # settlement of the forecasts on a token due at one tick, "held:<token>" for a
-        # token the pot holds or orders; None while open, else the world ns until which
+        # later read of its market is one GET by market id. Only a found market is
+        # kept. It grows with the distinct listed tokens the world has seen claimed or
+        # traded: the world's record of them.
+        self.token_markets: dict[str, str] = {}
+        # Each seat registration's open reads (``open_limit``):
+        # "<registration>|due:<token>:<tick>" for the settlement of its forecasts on a
+        # token due at one tick, "<registration>|held:<token>" for a token it bought
+        # that the pot holds or orders; None while open, else the world ns until which
         # it still counts (60 s after the kernel's last read for it).
         self.open_reads: dict[str, int | None] = {}
         # token -> the world ns of the kernel's last mark read of its book.
@@ -347,20 +349,25 @@ def event_facts(rt: Any, predicate_id: str, token_id: str,
         return UNOBSERVABLE
 
     if due_tick is not None:
-        # This settlement read of the token's due tick counts toward the open reads for
-        # the next 60 s, so its requests stay inside the window ``open_limit`` bounds.
-        surface.open_reads[f"due:{token_id}:{due_tick}"] = rt.clock.now_ns + READ_WINDOW_NS
+        # This settlement read counts, for the next 60 s, against every open read that
+        # admitted it (and only those), so its requests stay inside the window
+        # ``open_limit`` bounds.
+        suffix = f"|due:{token_id}:{due_tick}"
+        for key in surface.open_reads:
+            if key.endswith(suffix):
+                surface.open_reads[key] = rt.clock.now_ns + READ_WINDOW_NS
     snapshot = snapshots.get(token_id)
     if snapshot is None:
         try:
-            if token_id not in surface.token_markets:
-                # A claim sealed before claims were looked up at sealing: the one
-                # lookup its token will ever need.
-                listed = surface.venue.market_of_token(token_id)
-                surface.token_markets[token_id] = (None if listed is None
-                                                   else str(listed["market_id"]))
-            market_id = surface.token_markets[token_id]
-            market = None if market_id is None else surface.venue.market(market_id)
+            market_id = surface.token_markets.get(token_id)
+            if market_id is None:
+                # A claim sealed before claims were looked up at sealing: looked up now,
+                # and kept only once a market is found.
+                market = surface.venue.market_of_token(token_id)
+                if market is not None:
+                    surface.token_markets[token_id] = str(market["market_id"])
+            else:
+                market = surface.venue.market(market_id)
             snapshot = {"market": market, "answered": True}
         except Exception:  # noqa: BLE001 - an unanswered read is an absent fact
             snapshot = {"market": None, "answered": False}
@@ -469,10 +476,12 @@ def execute(rt: Any, action_id: str, handle: str, tool_id: str, args: dict,
 # --- the read limit: Polymarket's published rate limits, shared by slot -------------------
 
 READ_REFUSAL = "polymarket read share spent"
-#: A new open read the kernel could not settle inside its reserve (``open_limit``).
-OPEN_LIMIT_REFUSAL = "polymarket open reads are at the world's limit"
+#: A seat's new open read beyond its own share of the kernel's open reads.
+OPEN_LIMIT_REFUSAL = "polymarket open read share spent"
 #: A Polymarket claim's lookup is a read, and a seat reads only through a slot.
-NO_SLOT_REFUSAL = "a polymarket claim needs a venue read slot"
+NO_SLOT_REFUSAL = "a polymarket claim or buy needs a venue read slot"
+#: A claim or order on a token no market lists: refused, and looked up again next time.
+NOT_LISTED_REFUSAL = "token not listed"
 #: The span a seat's Polymarket read share is counted over: any sliding minute.
 READ_WINDOW_NS = 60_000_000_000
 #: The most requests the kernel sends for one open read in any sliding minute: the
@@ -490,11 +499,18 @@ def read_share(spec: Any, readers: int) -> int:
 def open_limit(spec: Any) -> int:
     """N, the most open reads the kernel keeps: ``kernel_reserve_per_minute // 2``.
 
-    An open read is either the settlement of the forecasts on one token due at one
-    tick (``due:<token>:<tick>``) or one token the pot holds or orders
-    (``held:<token>``). One stays open while its forecasts are pending or its token
-    is held, and for 60 s after the kernel's last read for it. A new one is admitted
-    only while fewer than N are open (``open_claim``, and ``refusal`` for an order).
+    An open read is a seat's claim to kernel reads: the settlement of its forecasts
+    on one token due at one tick (``<registration>|due:<token>:<tick>``) or a token it
+    bought that the pot holds or orders (``<registration>|held:<token>``). Each seat
+    registration holds its own, whether or not another seat holds the same token and
+    tick, and at most ``seat_open_share`` of them (``open_claim``, ``refusal``). One
+    stays open while its forecasts are pending or its token is held, and for 60 s
+    after the kernel's last read for it. A seat holds open reads only through a venue
+    read slot, and a freed slot is given again only once every open read its last
+    holder held has stopped counting, so at most ``max_readers × seat_open_share <=
+    N`` count at any moment; the distinct (token, tick) settlements and held tokens
+    the kernel reads for are never more than the keys that count, since each is held
+    by at least one seat.
 
     **Bound.** Every request the kernel sends to Polymarket is (a) a settlement read
     (``event_facts``): the market by id, then the book for a price claim on an open
@@ -502,20 +518,34 @@ def open_limit(spec: Any) -> int:
     due tick (every forecast due at a tick is settled in the first pass at or after
     it, and none is ever deferred), or (b) a mark read (``mark``): one book, at most
     once a minute a held token. Take any sliding window ``(t - 60 s, t]``. A settlement
-    read at ``s`` in it leaves its open read counted until ``s + 60 s > t``, and a
-    mark read at ``s`` leaves its held token counted until ``s + 60 s > t``; so every
-    open read the kernel read for in the window is counted at ``t``, and each was read
-    for at most once in it: at most ``KERNEL_READS_PER_OPEN`` requests each. Open reads
-    enter the count only at admission, which requires fewer than N counted, so at
-    most N are counted at ``t``. The kernel therefore sends at most
-    ``2 N <= kernel_reserve_per_minute`` requests in any sliding minute; the token
-    lookups (up to 3 requests) are made at a claim's sealing, as the sealing seat's
-    own read, charged to its share. With the defaults, N = 60 // 2 = 30. The seats'
-    reads, each seat within its share and one seat a slot at a time, send at most
+    read at ``s`` in it leaves every open read that holds that settlement counted
+    until ``s + 60 s > t``, and a mark read at ``s`` does the same for the held token;
+    so every settlement and held token the kernel read for in the window is held by
+    an open read counted at ``t``, and each was read for at most once in it: at most
+    ``KERNEL_READS_PER_OPEN`` requests each. At most N open reads count at ``t``, so
+    the kernel sends at most ``2 N <= kernel_reserve_per_minute`` requests in any
+    sliding minute. The token lookups (up to 3 requests) are made at a claim's
+    sealing, as the sealing seat's own read, charged to its share. The seats' reads,
+    each seat within its share and one registration a slot at a time, send at most
     ``max_readers × share <= read_requests_per_minute - kernel_reserve_per_minute``,
     so the world never passes ``read_requests_per_minute``.
+
+    **World time and wall time.** The bound is in world time, and Polymarket counts
+    wall time. A world tick that runs long compresses the kernel's reads of several
+    ticks into less wall time than they span in world time. The default budget is
+    half the tightest published limit (``DEFAULT_READ_REQUESTS_PER_MINUTE``), which
+    leaves a 2× margin: a worst-case 2× compression of world time into wall time
+    still stays within the published limit.
+
+    With the defaults, N = 300 // 2 = 150, and each of 16 slots holds up to 9.
     """
     return spec.kernel_reserve_per_minute // KERNEL_READS_PER_OPEN
+
+
+def seat_open_share(spec: Any, readers: int) -> int:
+    """How many open reads one seat registration may hold: ``N // max_readers``, a
+    manifest constant computed at load (a world whose share is under 1 is refused)."""
+    return open_limit(spec) // max(1, readers)
 
 
 def _held_tokens(rt: Any) -> set[str]:
@@ -535,35 +565,47 @@ def _held_tokens(rt: Any) -> set[str]:
     return tokens
 
 
-def open_reads(rt: Any) -> int:
-    """How many open reads count now (see ``open_limit``); expired ones are dropped."""
+def _expire(rt: Any) -> None:
+    """Drop the open reads that no longer count (see ``open_limit``)."""
     surface = rt.polymarket
     now = rt.clock.now_ns
     held = _held_tokens(rt)
     for key, until in list(surface.open_reads.items()):
-        if key.startswith("held:") and until is None and key[5:] not in held:
+        kind = key.partition("|")[2] or key
+        if kind.startswith("held:") and until is None and kind[5:] not in held:
             # Held no more: it counts until its last mark read has left the minute.
-            last = surface.mark_reads.get(key[5:])
-            surface.open_reads[key] = until = (now if last is None
-                                               else last + READ_WINDOW_NS)
-        if (key.startswith("due:") and until is None
-                and int(key.rsplit(":", 1)[1]) < rt.ticks_consumed):
+            last = surface.mark_reads.get(kind[5:])
+            surface.open_reads[key] = until = now if last is None else last + READ_WINDOW_NS
+        if (kind.startswith("due:") and until is None
+                and int(kind.rsplit(":", 1)[1]) < rt.ticks_consumed):
             # Its pass has run and read nothing for it (a claim whose sealing did not
             # complete): nothing will read for it, so it counts no more.
             surface.open_reads[key] = until = now
         if until is not None and until <= now:
             del surface.open_reads[key]
-    return len(surface.open_reads)
 
 
-def _open(rt: Any, key: str) -> str | None:
-    """Open one read, or say why the world's limit refuses it; an open one is joined."""
+def seat_open_reads(rt: Any, reader: str) -> int:
+    """How many open reads the registration ``reader`` holds that still count."""
+    _expire(rt)
+    prefix = f"{reader}|"
+    return sum(1 for key in rt.polymarket.open_reads if key.startswith(prefix))
+
+
+def _open(rt: Any, reader: str, kind: str, *, pending: int = 0) -> str | None:
+    """Open one of ``reader``'s own open reads, or say why its share refuses it.
+
+    A key the registration already holds, open or still counting down, is not
+    counted again. ``pending`` counts open reads the same batch will add first.
+    """
     surface = rt.polymarket
-    if surface.open_reads.get(key, 0) is None:
+    key = f"{reader}|{kind}"
+    if key in surface.open_reads:
+        surface.open_reads[key] = None
         return None
-    limit = open_limit(surface.spec)
-    if key not in surface.open_reads and open_reads(rt) >= limit:
-        return f"{OPEN_LIMIT_REFUSAL} of {limit}"
+    share = seat_open_share(surface.spec, rt.m.exchange.max_readers)
+    if seat_open_reads(rt, reader) + pending >= share:
+        return f"{OPEN_LIMIT_REFUSAL}: {share} open reads"
     surface.open_reads[key] = None
     return None
 
@@ -571,12 +613,14 @@ def _open(rt: Any, key: str) -> str | None:
 def open_claim(rt: Any, seat: str, token_id: str, due_tick: int) -> str | None:
     """Admit a Polymarket forecast on ``token_id`` due at ``due_tick``, or say why not.
 
-    Guarantees: the claim's lookup is the sealing seat's own read, made through its
-    venue read slot and charged to its share at the lookup's most (3 requests)
-    whether or not the world already knew the token, so its share says nothing of
-    other seats' claims; the token's market is looked up once for the world's life;
-    a claim joining a due tick already open on that token is always admitted, and a
-    new one only under ``open_limit``. Refusals change nothing.
+    Guarantees: the claim counts against the sealing registration's own share of
+    open reads, whether or not another seat holds the same token and tick, so its
+    admission depends on its own open reads alone (AGENTS.md rules 4 and 5); the
+    claim's lookup is the seat's own read, through its venue read slot, charged to
+    its share at the lookup's most (3 requests) whether or not the world already
+    knew the token; a token's market is cached once found, and only then; a token
+    no market lists is refused (``token not listed``) and looked up again by the
+    next claim. A refusal before the lookup changes nothing.
     """
     from factorylab.world.polymarket import read_requests
 
@@ -587,27 +631,22 @@ def open_claim(rt: Any, seat: str, token_id: str, due_tick: int) -> str | None:
     refused = _read_refusal(rt, seat, lookup)
     if refused is not None:
         return refused
-    known = token_id in surface.token_markets
-    market_id = surface.token_markets.get(token_id)
-    if known and market_id is None:
-        _charge_slot(rt, seat, lookup)
-        return None  # a token no market lists: settled on that fact, with no read
-    if known:
-        refused = _open(rt, f"due:{token_id}:{due_tick}")
-        if refused is None:
-            _charge_slot(rt, seat, lookup)
-        return refused
-    if open_reads(rt) >= open_limit(surface.spec):
-        return f"{OPEN_LIMIT_REFUSAL} of {open_limit(surface.spec)}"
+    reader = rt._reader_id(seat)
+    kind = f"due:{token_id}:{due_tick}"
+    if f"{reader}|{kind}" not in surface.open_reads:
+        share = seat_open_share(surface.spec, rt.m.exchange.max_readers)
+        if seat_open_reads(rt, reader) >= share:
+            return f"{OPEN_LIMIT_REFUSAL}: {share} open reads"
     _charge_slot(rt, seat, lookup)
-    try:
-        listed = surface.venue.market_of_token(token_id)
-    except Exception:  # noqa: BLE001 - the lookup is the seat's read; it failed
-        return "polymarket read unavailable"
-    surface.token_markets[token_id] = None if listed is None else str(listed["market_id"])
-    if listed is None:
-        return None
-    return _open(rt, f"due:{token_id}:{due_tick}")
+    if token_id not in surface.token_markets:
+        try:
+            listed = surface.venue.market_of_token(token_id)
+        except Exception:  # noqa: BLE001 - the lookup is the seat's read; it failed
+            return "polymarket read unavailable"
+        if listed is None:
+            return NOT_LISTED_REFUSAL
+        surface.token_markets[token_id] = str(listed["market_id"])
+    return _open(rt, reader, kind)
 
 
 def _read_call(tool_id: str, args: dict) -> tuple[str, tuple]:
@@ -626,28 +665,30 @@ def _read_result(tool_id: str, value: Any) -> dict[str, Any]:
 
 
 def _read_used(rt: Any, seat: str) -> int:
-    """The Polymarket requests charged to this seat's own reads in the sliding minute."""
+    """The Polymarket requests charged to this registration's own reads in the minute."""
+    reader = rt._reader_id(seat)
     since = rt.clock.now_ns - READ_WINDOW_NS
     uses = rt.polymarket_read_use
-    kept = [row for row in uses.get(seat, ()) if row[0] > since]
+    kept = [row for row in uses.get(reader, ()) if row[0] > since]
     if kept:
-        uses[seat] = kept
+        uses[reader] = kept
     else:
-        uses.pop(seat, None)
+        uses.pop(reader, None)
     return sum(requests for _ts, requests in kept)
 
 
 def _charge_slot(rt: Any, seat: str, requests: int) -> None:
     _read_used(rt, seat)
-    rt.polymarket_read_use.setdefault(seat, []).append([rt.clock.now_ns, requests])
+    rt.polymarket_read_use.setdefault(rt._reader_id(seat), []).append(
+        [rt.clock.now_ns, requests])
 
 
 def _read_refusal(rt: Any, seat: str, requests: int) -> str | None:
     """Refuse a seat read its own share cannot cover, before anything is sent.
 
-    Guarantees: the share is a manifest constant and the seat's own reads alone
-    count against it (AGENTS.md rules 4 and 5); with one seat a slot at a time the
-    seats together stay within ``read_requests_per_minute -
+    Guarantees: the share is a manifest constant and the registration's own reads
+    alone count against it (AGENTS.md rules 4 and 5); with one registration a slot at
+    a time the seats together stay within ``read_requests_per_minute -
     kernel_reserve_per_minute``, so the kernel's reserve is never a seat's.
     """
     share = read_share(rt.m.polymarket, rt.m.exchange.max_readers)
@@ -660,14 +701,16 @@ def _read_refusal(rt: Any, seat: str, requests: int) -> str | None:
 
 def _write_market(rt: Any, surface: PolymarketSurface, token_id: str) -> dict | None:
     """The market listing ``token_id`` for a write's checks, through the journal and the
-    world's lookup of the token (one GET by market id once it is known). Writes exist
-    only on the simulated venue, which sends Polymarket nothing."""
-    if token_id not in surface.token_markets:
+    world's lookup of the token (one GET by market id once it is known; a token no
+    market lists is not cached). Writes exist only on the simulated venue, which sends
+    Polymarket nothing."""
+    market_id = surface.token_markets.get(token_id)
+    if market_id is None:
         listed = surface.venue.market_of_token(token_id)
-        surface.token_markets[token_id] = None if listed is None else str(listed["market_id"])
+        if listed is not None:
+            surface.token_markets[token_id] = str(listed["market_id"])
         return listed
-    market_id = surface.token_markets[token_id]
-    return None if market_id is None else surface.venue.market(market_id)
+    return surface.venue.market(market_id)
 
 
 def _tick_key(rt: Any) -> tuple | None:
@@ -827,13 +870,14 @@ def refusal(rt: Any, surface: PolymarketSurface, seat: str | None, handle: str,
     except Exception:  # noqa: BLE001 - an unread market blocks new risk
         return "polymarket read unavailable"
     if market is None:
-        return "token is not listed"
-    if args["side"] == "buy" and surface.open_reads.get(f"held:{args['token_id']}", 0) is not None:
-        # A buy on a token the pot does not yet hold or order opens a held token,
-        # which the kernel marks: it is admitted only under the open-read limit.
-        limit = open_limit(spec)
-        if open_reads(rt) >= limit:
-            return f"{OPEN_LIMIT_REFUSAL} of {limit}"
+        return NOT_LISTED_REFUSAL
+    if args["side"] == "buy":
+        # A buy opens a held token the kernel marks: an open read of the buying seat's
+        # own, admitted only through its slot and within its own share. A key it holds
+        # already, open or still counting down, is not counted again.
+        refused = _held_refusal(rt, surface, seat, args["token_id"])
+        if refused is not None:
+            return refused
     if not market["accepting_orders"]:
         return "market is not accepting orders"
     try:
@@ -864,6 +908,20 @@ def refusal(rt: Any, surface: PolymarketSurface, seat: str | None, handle: str,
     return None
 
 
+def _held_refusal(rt: Any, surface: PolymarketSurface, seat: str | None, token_id: str,
+                  *, pending: int = 0) -> str | None:
+    """Why a buy may not open ``seat``'s held open read of ``token_id``, or None."""
+    if seat is None or seat not in getattr(rt, "venue_readers", ()):
+        return NO_SLOT_REFUSAL
+    reader = rt._reader_id(seat)
+    if f"{reader}|held:{token_id}" in surface.open_reads:
+        return None
+    share = seat_open_share(surface.spec, rt.m.exchange.max_readers)
+    if seat_open_reads(rt, reader) + pending >= share:
+        return f"{OPEN_LIMIT_REFUSAL}: {share} open reads"
+    return None
+
+
 def batch_refusal(rt: Any, seat: str, handle: str,
                   writes: list[tuple[str, str, dict]]) -> tuple[int, str] | None:
     """The first Polymarket write of a batch that would be refused, and why, or None.
@@ -890,12 +948,12 @@ def batch_refusal(rt: Any, seat: str, handle: str,
                 return index, "the same order is placed twice in one batch"
             placed.add(key)
             token = args.get("token_id")
-            if (args.get("side") == "buy" and token not in opening
-                    and surface.open_reads.get(f"held:{token}", 0) is not None):
-                limit = open_limit(surface.spec)
-                if open_reads(rt) + len(opening) >= limit:
-                    return index, f"{OPEN_LIMIT_REFUSAL} of {limit}"
-                opening.add(token)
+            if args.get("side") == "buy" and token not in opening:
+                refused = _held_refusal(rt, surface, seat, token, pending=len(opening))
+                if refused is not None:
+                    return index, refused
+                if f"{rt._reader_id(seat)}|held:{token}" not in surface.open_reads:
+                    opening.add(token)
         reason = refusal(rt, surface, seat, handle, tool_id, args, committed=committed,
                          window_count=count)
         if reason:
@@ -935,12 +993,15 @@ def _write(rt: Any, surface: PolymarketSurface, action_id: str, handle: str, too
         return rt._refuse_order(handle, reason, kind="polymarket.refused")
     token = (args["token_id"] if tool_id == "polymarket.place_limit"
              else surface.intents[surface.order_ids[args["order_id"]]]["args"]["token_id"])
+    if tool_id == "polymarket.place_limit" and args["side"] == "buy":
+        reason = _open(rt, rt._reader_id(seat), f"held:{token}")
+        if reason:
+            rt.venue_attempts[handle] = reason
+            return rt._refuse_order(handle, reason, kind="polymarket.refused")
     intent = {"handle": handle, "client_id": client_id, "operation": tool_id,
               "args": dict(args), "result": {"status": "uncertain"}}
     rt.ledger.append({"kind": "polymarket.intent", **intent})
     surface.intents[client_id] = intent
-    if tool_id == "polymarket.place_limit" and args["side"] == "buy":
-        _open(rt, f"held:{token}")  # admitted by ``refusal`` above
     rt.consequences.order_intent(client_id, handle, coin_of(token))
     try:
         if tool_id == "polymarket.place_limit":
@@ -1064,10 +1125,6 @@ def mark(rt: Any) -> None:
         if last is not None and now - last < READ_WINDOW_NS:
             continue
         surface.mark_reads[token] = now
-        if surface.open_reads.get(f"held:{token}", 0) is not None:
-            # A lot the kernel had not yet counted (an order admitted before the limit):
-            # it counts from its first mark read.
-            surface.open_reads[f"held:{token}"] = None
         try:
             mid = _decimal(surface.venue.order_book(token, 1)["midpoint"])
         except Exception:  # noqa: BLE001 - an unread price is an absent price

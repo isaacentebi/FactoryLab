@@ -1692,8 +1692,8 @@ venue's writes. The keys, all fixed for the world's life:
 | `max_open_usd` | `"100"` | the most the pot may have committed: tokens held at cost plus resting buys |
 | `max_orders_per_window` | `20` | orders placed per reserve window |
 | `seed` | `0` | the simulated venue's seed |
-| `read_requests_per_minute` | `180` | the Polymarket requests the world's reads may send per sliding minute, all together; at most `1800`, Polymarket's tightest published limit a minute |
-| `kernel_reserve_per_minute` | `60` | of those, held back for the kernel's own settlement and marking reads; at least 1, below `read_requests_per_minute` |
+| `read_requests_per_minute` | `900` | the Polymarket requests the world's reads may send per sliding minute, all together; at most `1800`, Polymarket's tightest published limit a minute |
+| `kernel_reserve_per_minute` | `300` | of those, held back for the kernel's own settlement and marking reads; below `read_requests_per_minute`; its half, N, is the kernel's open reads, and `N // max_readers` (a seat's open reads) must be at least 1 |
 
 Tools: `polymarket.search {query, limit?}`, `polymarket.market {market_id}` and
 `polymarket.book {token_id, depth?}` are free reads (a public market read pays no one;
@@ -1707,15 +1707,19 @@ exceeded: Gamma general 4,000 requests, `/events` 500, `/markets` 300,
 `/public-search` 350; CLOB general 9,000, `/book` 1,500, `/books` 500, `/price` 1,500,
 `/midpoint` 1,500. The reads here reach `/public-search`, `/markets` and `/book`, so the
 tightest endpoint a request can land on is `/markets`: 1,800 a minute, the load-time
-ceiling on `read_requests_per_minute`. The default, 180, is 10% of it, since the IP may
-be shared; 60 of those are held back for the kernel's own settlement and marking
-reads (`event_facts`, `mark`), which no seat can spend. The rest is divided over the
-venue read slots (`[venue] max_readers`, the same slots the venue reads use): each
-slot has a fixed share of `(read_requests_per_minute - kernel_reserve_per_minute) //
-max_readers` requests, 7 at the defaults, over any sliding 60 s of world time,
-counted over the seat's own reads; a freed slot is given again only once its last
-holder's last read has left the minute, so one slot never carries two seats' reads in
-one window. Every read tool sends one GET, once. A seat read is refused before it is
+ceiling on `read_requests_per_minute`. The default, 900, is 50% of it: the IP of the
+host a world runs on is dedicated to that factory, so nothing is left for other
+tenants, and the other half is margin for wall time (below). 300 of those are held
+back for the kernel's own settlement and marking reads (`event_facts`, `mark`), which
+no seat can spend. The rest is divided over the venue read slots (`[venue]
+max_readers`, the same slots the venue reads use): each slot has a fixed share of
+`(read_requests_per_minute - kernel_reserve_per_minute) // max_readers` requests, 37
+at the defaults, over any sliding 60 s of world time, counted over the registration's
+own reads (keyed by its id and version, never the id string alone); a freed slot is
+given again only once its last holder's last read has left the minute and its open
+reads (below) no longer count, so one slot never carries two registrations' reads in
+one window. A share that cannot cover one claim's token lookup (3 requests) is refused
+at load. Every read tool sends one GET, once. A seat read is refused before it is
 sent when the seat's remaining share cannot cover it (`polymarket read share spent:
 <used> of <share> requests in the last 60 s; this read sends 1`); nothing else admits
 or refuses it. Every admitted seat read is charged one request, whether it was sent
@@ -1727,34 +1731,41 @@ tell a tick's answer from a sent read. The seats therefore send at most
 refused or deferred.** A claim is graded on the world at its due pass (essay
 II.III.b, prebaked at the Stackelberg move): the settlement reads of `event_facts`
 and the marks of `mark` are always sent. What bounds them is a limit on what seats
-can open. An *open read* is either the settlement of the claims on one token due at
-one tick (`due:<token>:<tick>`) or one token the pot holds or orders
-(`held:<token>`); it stays open while its claims are pending or its token is held,
-and for 60 s after the kernel's last read for it. At most **N =
-`kernel_reserve_per_minute // 2` open reads** are kept (30 at the defaults; published
-in the world block's `polymarket_reads`): a claim that would open one more is refused
-at sealing, and a buy that would open a held token beyond it is refused, both with
-`polymarket open reads are at the world's limit of N`; a claim joining a due tick
-already open on its token is always admitted. *Proof* (`runtime/polymarket.py`,
-`open_limit`): the kernel sends at most 2 requests for an open read in any sliding
-minute (its market by id and, for a price claim on an open market, its book, in the
-one pass that settles that due tick, since every claim due at a tick settles in the
-first pass at or after it; or one book a minute for a held token, as `mark` reads a
-held token's book at most once in any 60 s and keeps its mark in between). Every
-open read the kernel read for in a window `(t - 60 s, t]` is still counted at `t`,
-and at most N are ever counted, so the kernel sends at most `2 N <=
-kernel_reserve_per_minute` in any minute, and with the seats the world never passes
-`read_requests_per_minute`. A world whose reserve cannot cover one open read (`N <
-1`) is refused at load. A claim's token is looked up when the claim is sealed
-(`open_claim`), as the sealing seat's own read through its venue read slot (a seat
-without one is refused: `a polymarket claim needs a venue read slot`), charged 3
-requests to its share, the lookup's most, whether or not the world already knew the
-token. Which market lists a token is fixed when the market is made, so a token is
-looked up once for the world's life (`PolymarketSurface.token_markets`,
-checkpointed; it grows with the distinct tokens the world has seen claimed or
-traded, the world's record of them) and its market is read by id (one GET)
-afterwards; a token no market listed at its lookup settles on that fact, with no
-read. A refused claim is not sealed: `forecast.refused` is ledgered and its owner is
+can open. An *open read* is a seat registration's own: the settlement of its claims
+on one token due at one tick (`<registration>|due:<token>:<tick>`) or a token it
+bought that the pot holds or orders (`<registration>|held:<token>`), held whether or
+not another seat holds the same token and tick; it stays open while its claims are
+pending or its token is held, and for 60 s after the kernel's last read for it. Each
+registration holds at most **`N // max_readers`** of them, where **N =
+`kernel_reserve_per_minute // 2`** (150 at the defaults, 9 a seat at 16 slots;
+published in the world block's `polymarket_reads`), counted over its own claims and
+buys alone, so what it is told never depends on another seat (AGENTS.md rules 4 and
+5); a claim or buy past that is refused (`polymarket open read share spent: <share>
+open reads`), and a key it already holds, open or counting down, is not counted
+again. A world whose seat share would be under 1 is refused at load. *Proof*
+(`runtime/polymarket.py`, `open_limit`): the kernel sends at most 2 requests for an
+open read in any sliding minute (its market by id and, for a price claim on an open
+market, its book, in the one pass that settles that due tick, since every claim due
+at a tick settles in the first pass at or after it; or one book a minute for a held
+token, as `mark` reads a held token's book at most once in any 60 s and keeps its
+mark in between). Every settlement and held token the kernel read for in a window
+`(t - 60 s, t]` is held by an open read still counted at `t`, and a registration
+holds open reads only through a slot, which is not given again while they count, so
+at most `max_readers × N // max_readers <= N` are ever counted: the kernel sends at
+most `2 N <= kernel_reserve_per_minute` in any minute, and with the seats the world
+never passes `read_requests_per_minute`. *Wall time.* The bound is in world time,
+and Polymarket counts wall time: a long tick compresses the kernel's reads of several
+ticks into less wall time. The 50% default leaves a 2× margin, so a worst-case 2×
+compression still stays within the published limit. A claim's token is looked up
+when the claim is sealed (`open_claim`), as the sealing seat's own read through its
+venue read slot (a seat without one is refused: `a polymarket claim or buy needs a
+venue read slot`), charged 3 requests to its share, the lookup's most, whether or not
+the world already knew the token. Which market lists a token is fixed when the market
+is made, so a found market is kept for the world's life
+(`PolymarketSurface.token_markets`, checkpointed; it grows with the distinct listed
+tokens the world has seen claimed or traded, the world's record of them) and read by
+id (one GET) afterwards. A token no market lists is refused at sealing (`token not
+listed`), charged to the seat, and not kept: the next claim on it looks it up again. A refused claim is not sealed: `forecast.refused` is ledgered and its owner is
 told. The simulated venue (`fake`, and a rehearsal's `simulate_reads`) counts what the
 live reader would send for the same read (`FakePolymarket.requests_sent`: a token's
 lookup is 1 to 3 requests, every other read 1). Writes exist only on the simulated
@@ -1935,11 +1946,16 @@ on who reads the venue, not on how many seats exist.** `[venue] max_readers`
 (default `16`) is the number of venue read slots: the seeds take slots in manifest
 order, a newly registered seat takes the lowest free one if there is one, and a
 retirement frees its seat's slot. A freed slot keeps its place and is given again
-only once its last holder's last read has left the sliding minute (`slot_free_at`),
-so no two seats' reads through one slot ever share a window and nothing of a
-predecessor's reads reaches the seat that follows it (AGENTS.md rule 5). A seat
-registered while no slot is free waits (`slot_waiting`) and is given the next one to
-come free, in registration order, at a tick (`venue.reader_slot {slot: true}`). A
+only once its last holder's last read has left the sliding minute (`slot_free_at`)
+and its Polymarket open reads no longer count (`slot_last_reader`), so no two
+registrations' reads through one slot ever share a window and nothing of a
+predecessor's reads reaches the seat that follows it (AGENTS.md rule 5). Reads are
+counted per registration, its id and version, never the id string, and a round of a
+version no longer current runs no tool (`tool.refused`, reason `retired`), so it
+spends nothing of the next version's share. A seat registered while no slot is free
+waits (`slot_waiting`); the queue is served first in, first out, at every
+registration, retirement and tick, before any later registration, which joins the
+back while anyone waits (`venue.reader_slot {slot: true}` when one is given). A
 seat with no slot registers all the same, with every tool but the venue reads, which it is refused as an unknown
 or disallowed tool; its proposer's inbox receives a `registration_admitted` item
 saying so, and the seat's own `YOU` block carries `venue_read_slot`. It reads the
@@ -2049,21 +2065,22 @@ outcome body and archived rationale, retained for the world's life and growing
 with decisions, on the order of 0.5 KiB per outcome addressed to a seat (an inbox
 body with its evidence pointer and what the seat said). Retirement is final for a
 version, not for an id: a retired id's head and a retired program's private state
-are kept. The id registered again as its next version inherits its head, which is
-its memory, only when the proposer is the id's owner. Ownership is a lineage key,
-never an id string: every registration draws a serial (`registration_serial`; the
-seeds take the first ones), an id keeps its key (`lineage_keys`) only when its owner
-re-versions it and gets a fresh one otherwise, and `registrants[id]` is the key of
-the seat that registered its current version at that time. The owner is the seat
-whose current key equals `registrants[id]` (the registering handle's seat), or the id
-itself; a seed has no registrant, so only the seed itself. A seat that later takes
-an id string another seat once registered therefore owns nothing that seat's
-children hold. Registered by any other seat, the
-next version starts with no private state. A program's private state is never
-inherited: a next version is new code, which cannot be assumed to read the old
-code's state, so it starts with none. What is not inherited is superseded at the
-re-registration and released through the journaled release (`artifact.released`
-with `cause: "superseded"`, ledgered before the index changes). A retired version
+are kept. **A retired id takes its next version only from its owner**, which
+inherits its head (its memory), its inbox and its records; any other proposer is
+refused at admission (`a retired id takes its next version only from its owner`; ids
+are public, so the refusal discloses nothing) and picks a new id, so no other lineage
+ever holds an id whose records are another's private state. Ownership is a lineage
+key, never an id string: a new id draws a registration serial (`registration_serial`;
+the seeds take the first ones) as its key (`lineage_keys`), which it keeps across its
+owner's re-versions, and `registrants[id]` is the key of the seat that registered its
+current version at that time. The owner is the seat whose current key equals
+`registrants[id]` (the registering handle's seat), or the id itself; a seed has no
+registrant, and a seat cannot endow itself, so a retired seed's id takes no next
+version. A program's private state is never inherited: a next version is new code,
+which cannot be assumed to read the old code's state, so it starts with none, and the
+old version's is superseded at the re-registration and released through the journaled
+release (`artifact.released` with `cause: "superseded"`, ledgered before the index
+changes). A retired version
 writes no state: its pending return may settle, but a working-state or program-state
 write in it is refused (`state.refused`, reason `retired`). The disk is finite, so
 the whole of retained private state has its own hard limit:

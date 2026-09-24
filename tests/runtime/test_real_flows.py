@@ -407,7 +407,10 @@ def test_the_share_is_fixed_whatever_the_population_does():
 def test_a_registration_past_the_reader_cap_is_admitted_without_venue_reads():
     """The venue's IP limit bounds who reads it, never how many seats exist: past the
     last slot a seat registers all the same, holds no venue read tool, and its
-    proposer's receipt says so. Retiring a reader frees its slot for the next one."""
+    proposer's receipt says so. A slot that comes free goes to the queue first in,
+    first out, before any registration that arrives after (the review's first and
+    second: ``second`` waited, so it gets the slot ``first`` frees, and ``third``,
+    registered later, waits behind it)."""
     rt = make_runtime()
     rt._manage_reserve_window()
     readers = len(rt.venue_readers)
@@ -423,11 +426,14 @@ def test_a_registration_past_the_reader_cap_is_admitted_without_venue_reads():
     receipt = rt.outcomes.get(rt.handle_to_assembly[handle], handle)["outcome"]
     assert receipt["kind"] == "registration_admitted" and receipt["id"] == "second"
     assert "no venue read slot is free" in receipt["venue_reads"]
-    rt._retire_assembly("first", "vote-1")
-    assert "first" not in rt.venue_readers
+    rt._retire_assembly("first", "vote-1")  # it read nothing: its slot is free at once
+    assert "first" not in rt.venue_readers and "second" in rt.venue_readers
+    assert rt.slot_waiting == []
     _register(rt, "third")
-    assert "third" in rt.venue_readers
-    assert "error" not in _read(rt, "third", "venue.mids")
+    assert "third" not in rt.venue_readers and rt.slot_waiting == ["third"]
+    assert "error" not in _read(rt, "second", "venue.mids")
+    slots = [(i["assembly_id"], i["slot"]) for i in ledger_items(rt, "venue.reader_slot")]
+    assert slots == [("second", False), ("second", True), ("third", False)]
 
 
 def test_a_seat_sees_its_own_slot_and_nobody_else_s():
@@ -797,3 +803,39 @@ def test_two_seats_reading_the_same_thing_in_a_tick_are_each_charged_alike():
     assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
     assert rt._venue_read_used("seed-decider") == rt._venue_read_used("seed-observer") == 20
     assert sent == [1]
+
+
+def test_a_registration_s_reads_are_its_own_and_an_older_version_spends_nothing():
+    """The review's reuse scenario (cold #2): the read shares are keyed by the
+    registration (id and version), never the id string. ``reader`` v1 spends its share
+    and retires; its owner registers v2, whose share is untouched; and a round of v1
+    still in flight runs no tool, so it spends nothing of v2's share. (A seed's own id,
+    seed-observer's in the review, is owned by itself alone, and a seat cannot endow
+    itself, so no one ever takes a retired seed's id.)"""
+    rt = _read_runtime(30)
+    _register(rt, "reader")  # by seed-decider
+    assert "error" not in _read(rt, "reader", "venue.funding")  # 20 of 30
+    v1 = rt.assemblies["reader"].spec.version
+    old_round = decision(rt, "reader")
+    rt._retire_assembly("reader", "vote-1")
+    _register(rt, "reader")  # its owner, seed-decider, again
+    assert rt.assemblies["reader"].spec.version == v1 + 1
+    assert rt._reader_id("reader") == f"reader#{v1 + 1}"
+    assert rt._venue_read_used("reader") == 0
+    refused = rt._run_tool("reader", old_round, {"tool": "venue.funding", "args": {}},
+                           version=v1)
+    assert refused == ({"error": "retired"}, 0)
+    assert rt._venue_read_used("reader") == 0
+    assert ledger_items(rt, "tool.refused")[-1]["reason"] == "retired"
+    # The seed's own id: no one else may take it, and it cannot endow itself.
+    rt._retire_assembly("seed-observer", "vote-2")
+    from factorylab.cortex.request import Return
+
+    handle = decision(rt, "seed-decider")
+    rt._apply_registrations(handle, Return(handle, {"register": [{
+        "kind": "assembly", "id": "seed-observer", "model_id": "fake-haiku",
+        "role": "producer", "accepts": ["Tick"], "system_prompt": "x",
+        "max_tokens": 128}]}, 0, "ok"))
+    assert "seed-observer" in rt.retired_assemblies
+    assert ledger_items(rt, "registration.rejected")[-1]["reason"].endswith(
+        "a retired id takes its next version only from its owner")

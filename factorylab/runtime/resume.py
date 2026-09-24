@@ -681,7 +681,7 @@ _RUNTIME_FIELDS = (
     # every share unspent.
     "venue_read_use",
     # When each freed venue read slot may be given again, and the seats waiting for one.
-    "slot_free_at", "slot_waiting",
+    "slot_free_at", "slot_last_reader", "slot_waiting",
     # The seats holding a venue read slot. An older checkpoint gives the seeds theirs.
     "venue_readers",
     # The retired ids, oldest retirement first (the order the retained private state

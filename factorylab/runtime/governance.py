@@ -885,10 +885,24 @@ class GovernanceMixin:
             # Novelty admission remains the fixed registration trial. A founder's
             # chosen endowment is a conserved transfer after admission, not a demand
             # on the shared novelty runway.
-            self._register_with_trial(
-                contract, handle, self.ev.trial_amount_micro,
-                refuse=("id already registered: a live assembly is retired by vote before "
-                        "its id takes a next version") if live else "")
+            # Ownership is by lineage key, never by id string (the owner is the seat
+            # whose current key registered the id's current version, or the id
+            # itself). A retired id takes its next version only from its owner, so no
+            # other lineage ever holds an id whose records (head, inbox, archived
+            # rationales, artifacts) are another's private state (essay II.I.b). Ids
+            # are public, so the refusal discloses nothing.
+            proposer = self._trial_proposer(handle)
+            proposer_key = self.lineage_keys.get(proposer) if proposer is not None else None
+            owner = proposer is not None and (
+                proposer == prop.id
+                or (proposer_key is not None
+                    and proposer_key == self.registrants.get(prop.id)))
+            refuse = ("id already registered: a live assembly is retired by vote before "
+                      "its id takes a next version") if live else ""
+            if not refuse and prop.id in self.assemblies and not owner:
+                refuse = "a retired id takes its next version only from its owner"
+            self._register_with_trial(contract, handle, self.ev.trial_amount_micro,
+                                      refuse=refuse)
             self._instantiate(spec)
             if getattr(spec, "trigger", None):
                 # A watcher answers to the seat that registered it: the kernel wakes
@@ -904,34 +918,23 @@ class GovernanceMixin:
             self.retired_assemblies.discard(prop.id)
             if prop.id in self.retirement_order:
                 self.retirement_order.remove(prop.id)
-            # The id's head is its memory and passes to its next version only when
-            # the proposer is the id's owner: the seat that registered its previous
-            # version, or the seat itself (a seed only by itself). Private state is
-            # never handed to anyone else (essay II.I.b). A program's next version is
-            # new code, which cannot be assumed to read the old code's state, so it
-            # never inherits that. What is not inherited is superseded, released
-            # through the journaled release (ledger before index): it neither lingers
-            # unreachable nor holds capacity.
-            # Ownership is by lineage key, never by id string: an id re-registered by
-            # anyone else gets a fresh key, so a seat that later takes a string another
-            # seat once registered never inherits what that seat's children hold.
-            proposer = self._trial_proposer(handle)
-            proposer_key = self.lineage_keys.get(proposer) if proposer is not None else None
-            owner = proposer is not None and (
-                proposer == prop.id
-                or (proposer_key is not None
-                    and proposer_key == self.registrants.get(prop.id)))
+            # Only the owner re-versions an id (above), so the id keeps its head, its
+            # inbox and its key. A program's next version is new code, which cannot be
+            # assumed to read the old code's state, so it never inherits that: it is
+            # superseded, released through the journaled release (ledger before
+            # index), and neither lingers unreachable nor holds capacity.
             for sha, kind in self.artifacts.private_holdings(prop.id):
-                if kind == "program.state" or not owner:
+                if kind == "program.state":
                     self.artifacts.release(sha, owner=prop.id, kind=kind,
                                            cause="superseded")
-            if not owner:
-                self.working_state.heads.pop(prop.id, None)
-            if not owner or prop.id not in self.lineage_keys:
+            if prop.id not in self.lineage_keys:
                 self.registration_serial += 1
                 self.lineage_keys[prop.id] = self.registration_serial
             self.registrants[prop.id] = proposer_key
-            if not self._assign_reader_slot(prop.id):
+            # Seats already waiting are served first, in order; a new registration
+            # joins the back of the queue while anyone waits.
+            self._assign_waiting_readers()
+            if self.slot_waiting or not self._assign_reader_slot(prop.id):
                 # No venue read slot is free: the seat is admitted all the same,
                 # without the venue reads, gets the next slot to come free (ledgered
                 # then), and its proposer's receipt says so.

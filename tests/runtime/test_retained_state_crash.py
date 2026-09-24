@@ -271,9 +271,10 @@ RETIRE_AT = 60
 def _retiring(monkeypatch, retire=None, register=None):
     """Every runtime this test builds, a resumed one included, retires each seat of
     ``retire`` (event -> seat; by default seed-observer after ``RETIRE_AT``) and
-    registers each ``register`` (event -> (proposer, id)) as a model seat's next
-    version right after that event: governance recorded in the diary like any other,
-    so the replay applies it at the same point."""
+    registers each ``register`` (event -> (proposer, id)) as a program seat, a new id
+    or a retired id's next version, right after that event; a program's first version
+    is given a private state. Governance recorded in the diary like any other, so the
+    replay applies it at the same point."""
     from factorylab.cortex.request import Return
     from factorylab.kernel.queue import PropensityRecord
 
@@ -286,7 +287,8 @@ def _retiring(monkeypatch, retire=None, register=None):
         seat = retire.get(self.n)
         if seat is not None and seat not in self.retired_assemblies:
             self._retire_assembly(seat, f"vote-{seat}")
-        if self.n in register and register[self.n][1] in self.retired_assemblies:
+        if self.n in register and (register[self.n][1] not in self.assemblies
+                                   or register[self.n][1] in self.retired_assemblies):
             proposer, seat_id = register[self.n]
             handle = self.queue.open(
                 actor=proposer, event_id="re-register", propensity=PropensityRecord(
@@ -294,9 +296,14 @@ def _retiring(monkeypatch, retire=None, register=None):
                 deadline_ns=10**15, parent_handle=None, cost_ceiling=10_000_000)
             self.handle_to_assembly[handle] = proposer
             self._apply_registrations(handle, Return(handle, {"register": [{
-                "kind": "assembly", "id": seat_id, "model_id": "fake-haiku",
-                "role": "producer", "accepts": ["Tick"], "system_prompt": "x",
-                "max_tokens": 128}]}, 0, "ok"))
+                "kind": "assembly", "id": seat_id, "model_id": "program",
+                "accepts": ["Tick"], "code": "print('{}')", "state_policy": "private"}]},
+                0, "ok"))
+            program = self.assemblies[seat_id]
+            if program.spec.version == 1:
+                program.state_sha = self.artifacts.put(
+                    json.dumps({"kept": seat_id}).encode(), owner=seat_id,
+                    kind="program.state")
         return result
 
     monkeypatch.setattr(Runtime, "_process_event", process_then_govern)
@@ -445,11 +452,16 @@ def test_a_crash_partway_through_a_put_s_evictions_resumes(tmp_path, monkeypatch
 
 def test_a_crash_between_a_superseded_release_and_the_registration_resumes(
         tmp_path, monkeypatch):
-    """seed-observer retires, then seed-decider (not its owner: a seed owns itself)
-    registers its next version, so the kept head is superseded and released. The
-    process dies right after that release's ledger line, before the registration
-    completes: the replay repeats it, and the world ends as the uninterrupted one."""
-    _retiring(monkeypatch, register={80: ("seed-decider", "seed-observer")})
+    """seed-decider registers the program ``prog-c``, which keeps a private state; it
+    retires, and seed-decider, its owner, registers its next version: new code starts
+    with no program state, so the old one is superseded and released. The process
+    dies right after that release's ledger line, before the registration completes:
+    the replay repeats it, and the world ends as the uninterrupted one."""
+    from tests.cortex.test_jail import require_jail
+
+    require_jail()
+    _retiring(monkeypatch, retire={60: "prog-c"},
+              register={40: ("seed-decider", "prog-c"), 80: ("seed-decider", "prog-c")})
 
     def superseded(item, _seen):
         return item.get("kind") == "artifact.released" and item.get("cause") == "superseded"
@@ -459,10 +471,8 @@ def test_a_crash_between_a_superseded_release_and_the_registration_resumes(
         tmp_path, manifest, superseded)
     released = [i for i in expected if i.get("cause") == "superseded"]
     assert [(i["owner"], i["artifact_kind"]) for i in released] == [
-        ("seed-observer", "working.state")]
+        ("prog-c", "program.state")]
     assert before[-1]["cause"] == "superseded"
-    assert not any(i["kind"] == "assembly.registered" and i.get("id") == "seed-observer"
-                   for i in before[-3:])
     assert after[:len(before)] == before
     assert _trail(after) == _trail(expected)
     assert [i for i in after if i.get("cause") == "superseded"] == released

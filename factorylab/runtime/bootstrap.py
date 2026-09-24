@@ -670,6 +670,9 @@ class BootstrapMixin:
         # last holder's last read has left the sliding minute by then), and the seats
         # registered while no slot was free, in registration order.
         self.slot_free_at: dict[str, int] = {}
+        # slot index -> the registration that last held it, whose Polymarket open reads
+        # must all have stopped counting before the slot is given again.
+        self.slot_last_reader: dict[str, str] = {}
         # The venue read slots, by position: the seeds, in manifest order, up to
         # ``[venue] max_readers``; then registrations into the lowest free slot. A
         # retired seat's slot is None until it is given again. Seeds past the slots

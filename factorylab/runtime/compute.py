@@ -1250,16 +1250,19 @@ class ComputeMixin:
         Guarantees at most ``[venue] max_readers`` seats hold a slot, a live seat
         keeps its own, only retirement frees one (``_free_reader_slot``), and a freed
         slot is given again only once its last holder's last read has left every
-        sliding minute (``slot_free_at``). So no two seats' reads through one slot
-        ever fall in one 60 s window: the slots' total stays under ``max_readers ×
-        share`` on both venues, and nothing of a predecessor's reads reaches the seat
+        sliding minute (``slot_free_at``) and none of the Polymarket open reads it
+        holds still counts (``runtime/polymarket.py``, ``open_limit``). So no two
+        registrations' reads or open reads through one slot ever count at once: the
+        slots' totals stay under ``max_readers × share`` on both venues and under
+        the open-read limit, and nothing of a predecessor's reads reaches the seat
         that follows it (AGENTS.md rule 5).
         """
         if seat in self.venue_readers:
             return True
         now = self.clock.now_ns
         for index, holder in enumerate(self.venue_readers):
-            if holder is None and self.slot_free_at.get(str(index), 0) <= now:
+            if (holder is None and self.slot_free_at.get(str(index), 0) <= now
+                    and not self._holds_open_reads(self.slot_last_reader.get(str(index)))):
                 self.venue_readers[index] = seat
                 return True
         if len(self.venue_readers) >= self.m.exchange.max_readers:
@@ -1278,19 +1281,38 @@ class ComputeMixin:
         if seat not in self.venue_readers:
             return
         index = self.venue_readers.index(seat)
+        reader = self._reader_id(seat)
         since = self.clock.now_ns - READ_WINDOW_NS
         last = max((row[0] for uses in (self.venue_read_use,
                                         getattr(self, "polymarket_read_use", {}))
-                    for row in uses.get(seat, ()) if row[0] > since), default=None)
+                    for row in uses.get(reader, ()) if row[0] > since), default=None)
         self.venue_readers[index] = None
         self.slot_free_at[str(index)] = (self.clock.now_ns if last is None
                                          else last + READ_WINDOW_NS)
+        self.slot_last_reader[str(index)] = reader
+
+    def _holds_open_reads(self, reader: str | None) -> bool:
+        """Whether the registration ``reader`` still has Polymarket open reads counting."""
+        if reader is None or getattr(self, "polymarket", None) is None:
+            return False
+        from factorylab.runtime.polymarket import seat_open_reads
+
+        return seat_open_reads(self, reader) > 0
+
+    def _reader_id(self, seat: str) -> str:
+        """The registration a seat's reads and open reads are counted under: its id and
+        version, never the id string alone, so a later registration of the same id
+        (a next version, which can only be its owner's) counts only its own."""
+        assembly = self.assemblies.get(seat) if hasattr(self, "assemblies") else None
+        return seat if assembly is None else f"{seat}#{assembly.spec.version}"
 
     def _assign_waiting_readers(self) -> None:
-        """Give free slots to the seats registered without one, in registration order.
+        """Give free slots to the seats registered without one, first in first out.
 
-        Guarantees each assignment is ledgered (``venue.reader_slot``) and a retired
-        seat waits for nothing. Called once a tick.
+        Guarantees each assignment is ledgered (``venue.reader_slot``), the queue is
+        served in order (a later seat never takes a slot an earlier one waits for),
+        and a retired seat waits for nothing. Called at every registration and
+        retirement and once a tick, so a slot that comes free goes to the queue.
         """
         for seat in list(self.slot_waiting):
             if seat in self.retired_assemblies or seat not in self.assemblies:
@@ -1306,13 +1328,14 @@ class ComputeMixin:
         """The venue weight charged to this seat's own reads in the sliding minute."""
         from factorylab.world.venue_tools import READ_WINDOW_NS
 
+        reader = self._reader_id(seat)
         since = self.clock.now_ns - READ_WINDOW_NS
         uses = getattr(self, "venue_read_use", {})
-        kept = [row for row in uses.get(seat, ()) if row[0] > since]
+        kept = [row for row in uses.get(reader, ()) if row[0] > since]
         if kept:
-            uses[seat] = kept
+            uses[reader] = kept
         else:
-            uses.pop(seat, None)
+            uses.pop(reader, None)
         return sum(weight for _ts, weight in kept)
 
     def _venue_read_refusal(self, seat: str, tool_id: str, args: Any) -> str | None:
@@ -1340,7 +1363,8 @@ class ComputeMixin:
     def _charge_venue_read(self, seat: str, weight: int) -> None:
         if weight:
             self._venue_read_used(seat)
-            self.venue_read_use.setdefault(seat, []).append([self.clock.now_ns, weight])
+            self.venue_read_use.setdefault(self._reader_id(seat), []).append(
+                [self.clock.now_ns, weight])
 
     def _charge_slot_read(self, seat: str, tool_id: str, args: Any) -> None:
         """Charge an admitted seat read its first-attempt weight, whether the tick already
@@ -1584,11 +1608,21 @@ class ComputeMixin:
         return batch_refusal(self, seat, handle, writes)
 
     def _run_tool(self, action_id: str, handle: str, call: dict[str, Any], *,
-                  slot: str = "tool:0") -> tuple[dict, int]:
-        """Execute one tool call through metering. Returns (result, cost)."""
+                  slot: str = "tool:0", version: int | None = None) -> tuple[dict, int]:
+        """Execute one tool call through metering. Returns (result, cost).
+
+        Guarantees a round of a version that is no longer current (retired, or
+        succeeded by a next version) runs no tool, so it spends nothing of the
+        current version's shares, as it writes nothing into its state.
+        """
         self._ensure_connector_tool()
         tool_id = str(call.get("tool"))
         args = call.get("args") if isinstance(call.get("args"), dict) else {}
+        if version is not None and self._state_write_refusal(action_id, version):
+            self.ledger.append({"kind": "tool.refused", "handle": handle,
+                                "assembly_id": action_id, "tool": tool_id,
+                                "reason": "retired", "ts": self.clock.now_ns})
+            return {"error": "retired"}, 0
         if tool_id not in self.tool_specs or tool_id not in self._allowed_tools(action_id):
             return {"error": "unknown or disallowed tool"}, 0
         if tool_id == "connector.fetch":
@@ -2095,7 +2129,8 @@ class ComputeMixin:
                                             "found": True, "scope": "invocation",
                                             "ts": self.clock.now_ns})
                     else:
-                        result, cost = self._run_tool(action_id, req.handle, call, slot=slot)
+                        result, cost = self._run_tool(action_id, req.handle, call, slot=slot,
+                                                      version=assembly.spec.version)
                     dispatched = True
                     taken.add(self._tool_action(str(call.get("tool"))))
                     if niche is not None:

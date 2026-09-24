@@ -520,13 +520,12 @@ class SchematicsMixin:
                         "holder's at its full size, is at most retained_private_bytes, "
                         "always; bytes on disk can exceed it by the releases since the last "
                         "checkpoint, until they are removed. A retired id's head and "
-                        "private state are kept until capacity is needed. The id registered "
-                        "again as its next version keeps its head, if still kept, only "
-                        "when the proposer registered its previous version or is the id "
-                        "itself (a seed only by itself); registered by any other seat, it "
-                        "starts with no head and the old one is released. A program's next "
-                        "version always starts with no private state, and the old "
-                        "version's is released at that registration. A retired version "
+                        "private state are kept until capacity is needed. A retired id "
+                        "takes its next version only from its owner, the seat that "
+                        "registered its previous version, and keeps its head if still "
+                        "kept; any other proposer is refused. A program's next version "
+                        "always starts with no private state, and the old version's is "
+                        "released at that registration. A retired version "
                         "writes no state. A write that would take retained private state "
                         "over retained_private_bytes releases retired ids' state, oldest "
                         "retirement first, only until the write fits; a write that "
@@ -1285,26 +1284,34 @@ class SchematicsMixin:
         """The kernel's open-read limit on Polymarket, as a published limit (II.I.b)."""
         if getattr(self, "polymarket", None) is None:
             return {}
-        from factorylab.runtime.polymarket import KERNEL_READS_PER_OPEN, open_limit
+        from factorylab.runtime.polymarket import (
+            KERNEL_READS_PER_OPEN,
+            OPEN_LIMIT_REFUSAL,
+            open_limit,
+            seat_open_share,
+        )
 
         spec = self.m.polymarket
         return {"polymarket_reads": {
             "open_reads_limit": open_limit(spec),
+            "seat_open_reads": seat_open_share(spec, self.m.exchange.max_readers),
             "kernel_reserve_per_minute": spec.kernel_reserve_per_minute,
             "rule": (
-                "An open read is the settlement of the Polymarket claims on one token due "
-                "at one tick, or one token the pot holds or orders. It stays open while "
-                "its claims are pending or the token is held, and for 60 s after the "
-                "kernel's last read for it. The kernel sends at most "
-                f"{KERNEL_READS_PER_OPEN} requests for an open read in any sliding 60 s "
-                "(the market, and the book for a price claim; a held token's book once a "
-                "minute), so open_reads_limit = kernel_reserve_per_minute // "
-                f"{KERNEL_READS_PER_OPEN} keeps the kernel within its reserve. A claim on "
-                "a token is looked up when it is sealed, as the sealing seat's own read "
-                "through its venue read slot, charged 3 requests to its share. A claim "
-                "joining a due tick already open on its token is always admitted; a claim "
-                "or a buy that would open one more than open_reads_limit is refused with "
-                "'polymarket open reads are at the world's limit'.")}}
+                "An open read is a seat's own: the settlement of its Polymarket claims on "
+                "one token due at one tick, or a token it bought that the pot holds or "
+                "orders. Each seat holds at most seat_open_reads = open_reads_limit // "
+                "venue.max_readers of them, counted over its own claims and buys whether "
+                "or not another seat holds the same token and tick, through its venue read "
+                "slot. One stays open while its claims are pending or its token is held, "
+                "and for 60 s after the kernel's last read for it. The kernel sends at "
+                f"most {KERNEL_READS_PER_OPEN} requests for an open read in any sliding "
+                "60 s (the market, and the book for a price claim; a held token's book "
+                "once a minute), so open_reads_limit = kernel_reserve_per_minute // "
+                f"{KERNEL_READS_PER_OPEN} keeps the kernel within its reserve. A claim's "
+                "token is looked up when it is sealed, as the sealing seat's own read, "
+                "charged 3 requests to its share; a token no market lists is refused "
+                "('token not listed'). A claim or buy past the seat's own share is "
+                f"refused with '{OPEN_LIMIT_REFUSAL}'.")}}
 
     def _published_tool_specs(self, *, full: bool = False) -> list[dict[str, Any]]:
         """Every registered tool's contract, with the venue's listing named rather than spelled.

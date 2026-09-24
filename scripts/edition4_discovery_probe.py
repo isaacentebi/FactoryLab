@@ -280,12 +280,13 @@ def restrict_tools(runtime: Runtime, refusals: list[dict], receipts: list[dict])
     """
     inner = runtime._run_tool
 
-    def guarded(action_id: str, handle: str, call: dict, *, slot: Any) -> tuple[dict, int]:
+    def guarded(action_id: str, handle: str, call: dict, *, slot: Any,
+                version: int | None = None) -> tuple[dict, int]:
         tool = str(call.get("tool"))
         if tool not in ALLOWED_TOOLS:
             refusals.append({"tool": tool, "assembly_id": action_id, "handle": handle})
             return {"error": "capability refused: diagnostic restriction"}, 0
-        result, cost = inner(action_id, handle, call, slot=slot)
+        result, cost = inner(action_id, handle, call, slot=slot, version=version)
         if tool == "calc" and isinstance(result, dict):
             # The receipt's own value, kept so the answer can be checked against
             # what the tool returned rather than against a restatement of it.

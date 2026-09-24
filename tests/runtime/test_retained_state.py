@@ -411,14 +411,17 @@ def _private_bytes(rt):
                if k in ("working.state", "program.state"))
 
 
-def _register_by(rt, proposer, seat_id):
+def _register_by(rt, proposer, seat_id, *, admitted=True):
     from factorylab.cortex.request import Return
 
     handle = decision(rt, proposer)
     rt._apply_registrations(handle, Return(handle, {"register": [{
         "kind": "assembly", "id": seat_id, "model_id": "program", "accepts": ["Tick"],
         "code": "print('{}')", "state_policy": "private"}]}, 0, "ok"))
-    assert seat_id not in rt.retired_assemblies, ledger_items(rt, "registration.rejected")
+    if admitted:
+        assert seat_id in rt.assemblies and seat_id not in rt.retired_assemblies, (
+            ledger_items(rt, "registration.rejected"))
+    return handle
 
 
 def test_a_retired_program_registered_again_by_its_owner_keeps_its_head_only():
@@ -456,27 +459,33 @@ def test_a_retired_program_registered_again_by_its_owner_keeps_its_head_only():
     assert "prog-a" not in rt.retirement_order
 
 
-def test_a_retired_id_registered_again_by_another_seat_starts_with_no_private_state():
-    """Rules 4 and 5: private state never passes to a proposer that does not own the id.
-    Any seat may register the id's next version, but it starts with no head, and the
-    old head is released, journaled ``superseded``. A seed is owned by itself alone."""
+def test_a_retired_id_takes_its_next_version_only_from_its_owner():
+    """Codex P1 on d460d55: every record keyed by an id (its head, inbox, archived
+    rationales, artifacts) is its lineage's private state, so no other lineage may
+    ever hold the id. A non-owner's registration of a retired id is refused at
+    admission, for a public reason, and changes nothing: the id stays retired, its
+    key and its state as they were."""
     rt = make_runtime()
     rt._manage_reserve_window()
     _register_program(rt, "prog-b")  # registered by seed-decider
     _write_both(rt, "prog-b", {"lesson": "mine"})
-    head = rt.working_state.head("prog-b")
+    item = rt.outcomes.append("prog-b", handle=decision(rt, "prog-b"),
+                              outcome={"kind": "fill"}, evidence="e-b")
+    head, key = rt.working_state.head("prog-b"), rt.lineage_keys["prog-b"]
     rt._retire_assembly("prog-b", "vote-1")
-    _register_by(rt, "seed-observer", "prog-b")
-    assert rt.working_state.head("prog-b") is None
-    assert rt.assemblies["prog-b"].state_sha is None
-    assert not rt.artifacts.private_holdings("prog-b")
-    released = {(i["sha"], i["artifact_kind"], i["cause"])
-                for i in ledger_items(rt, "artifact.released") if i["owner"] == "prog-b"}
-    assert (head["sha"], "working.state", "superseded") in released
-    assert rt.registrants["prog-b"] == rt.lineage_keys["seed-observer"]
-    # A seed: no registrant, so not even the seat that registers its next version
-    # inherits its head.
-    rt.working_state.put("seed-observer", {"seed": 1}, handle=decision(rt, "seed-observer"))
+    version = rt.assemblies["prog-b"].spec.version
+    handle = _register_by(rt, "seed-observer", "prog-b", admitted=False)
+    [rejected] = [i for i in ledger_items(rt, "registration.rejected")
+                  if i["handle"] == handle]
+    assert rejected["reason"].endswith(
+        "a retired id takes its next version only from its owner")
+    assert "prog-b" in rt.retired_assemblies
+    assert rt.assemblies["prog-b"].spec.version == version
+    assert rt.working_state.head("prog-b") == head and rt.lineage_keys["prog-b"] == key
+    assert rt.outcomes.body(item["sha"])["outcome"] == {"kind": "fill"}
+    assert not [i for i in ledger_items(rt, "artifact.released")
+                if i["owner"] == "prog-b" and i.get("cause") == "superseded"]
+    # A seed has no registrant: only the seed itself owns its id.
     assert "seed-observer" not in rt.registrants
 
 
@@ -717,46 +726,51 @@ def _fund(rt, seat):
     rt.budget.transfer("seed-decider", seat, 20 * rt.ev.trial_amount_micro, "test:fund")
 
 
-def test_ownership_is_a_lineage_key_so_a_reused_id_string_owns_nothing():
-    """The review's scenario (cold #1): seed-decider registers ``parent``; ``parent``
-    registers ``child``, which keeps a head, and both retire. seed-observer, not the
-    owner, re-registers ``parent`` (a fresh lineage key), then registers ``child``'s
-    next version: the id string ``parent`` is the one that registered ``child``, but
-    the key is not, so ``child`` starts with no private state and its head is
-    released ``superseded``."""
+def test_no_path_lets_a_different_lineage_hold_a_retired_id():
+    """The review's parent/child scenario (cold #1). seed-decider registers ``parent``;
+    ``parent`` registers ``child``; both retire. Neither seed-observer nor seed-decider
+    (not ``child``'s registrant) may take ``child``, and seed-observer may not take
+    ``parent``, so no other lineage ever holds either id; the owners may."""
     rt = make_runtime()
     rt._manage_reserve_window()
     _register_by(rt, "seed-decider", "parent")
-    first_key = rt.lineage_keys["parent"]
+    parent_key = rt.lineage_keys["parent"]
     _fund(rt, "parent")
     _register_by(rt, "parent", "child")
-    assert rt.registrants["child"] == first_key
+    assert rt.registrants["child"] == parent_key
     rt.working_state.put("child", {"secret": "child's own"}, handle=decision(rt, "child"))
     head = rt.working_state.head("child")
     rt._retire_assembly("child", "vote-1")
     rt._retire_assembly("parent", "vote-2")
-    _register_by(rt, "seed-observer", "parent")
-    assert rt.lineage_keys["parent"] != first_key
+    for proposer, seat_id in (("seed-observer", "parent"), ("seed-observer", "child"),
+                              ("seed-decider", "child")):
+        _register_by(rt, proposer, seat_id, admitted=False)
+        assert seat_id in rt.retired_assemblies
+    assert rt.lineage_keys["parent"] == parent_key
+    assert rt.working_state.head("child") == head
+    # The owners may: seed-decider re-versions parent, which re-versions child.
+    _register_by(rt, "seed-decider", "parent")
+    assert rt.lineage_keys["parent"] == parent_key
     _fund(rt, "parent")
     _register_by(rt, "parent", "child")
-    assert rt.working_state.head("child") is None
-    assert not rt.artifacts.private_holdings("child")
-    released = [(i["sha"], i["cause"]) for i in ledger_items(rt, "artifact.released")
-                if i["owner"] == "child"]
-    assert (head["sha"], "superseded") in released
+    assert rt.working_state.head("child") == head
 
 
-def test_the_owner_re_versioning_keeps_the_key_and_the_head():
+def test_the_owner_re_versioning_keeps_its_key_head_and_outcomes():
     rt = make_runtime()
     rt._manage_reserve_window()
     _register_by(rt, "seed-decider", "prog-k")
     key = rt.lineage_keys["prog-k"]
-    rt.working_state.put("prog-k", {"kept": 1}, handle=decision(rt, "prog-k"))
+    handle = decision(rt, "prog-k")
+    rt.working_state.put("prog-k", {"kept": 1}, handle=handle)
+    item = rt.outcomes.append("prog-k", handle=handle, outcome={"kind": "fill"},
+                              evidence="e-k")
     head = rt.working_state.head("prog-k")
     rt._retire_assembly("prog-k", "vote-1")
     _register_by(rt, "seed-decider", "prog-k")
     assert rt.lineage_keys["prog-k"] == key
     assert rt.working_state.head("prog-k") == head
+    assert rt.outcomes.get("prog-k", f"outcome:{item['seq']}")["outcome"] == {"kind": "fill"}
 
 
 def test_a_tool_round_of_an_older_version_writes_nothing_into_the_next_one():

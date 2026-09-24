@@ -319,12 +319,17 @@ def http_get_json(url: str, *, timeout_s: int = HTTP_TIMEOUT_S) -> Any:
 #: reads here reach /public-search, /markets and /book, so the tightest endpoint a
 #: request can land on is Gamma /markets: 300 per 10 s, 1,800 a minute.
 PUBLISHED_REQUESTS_PER_MINUTE = 1_800
-#: What the world's Polymarket reads may use by default, all together: 10% of the
-#: tightest published limit, a conservative fraction, since the IP may be shared.
-DEFAULT_READ_REQUESTS_PER_MINUTE = 180
+#: What the world's Polymarket reads may use by default, all together: 50% of the
+#: tightest published limit. The IP of the host a world runs on is dedicated to
+#: that factory, so no share of the limit is left for other tenants; the other
+#: half is margin, because the world's bound is in world time and Polymarket counts
+#: wall time: a worst-case 2× compression of world time into wall time (a long
+#: tick) stays within the published limit (``runtime/polymarket.py``, ``open_limit``).
+DEFAULT_READ_REQUESTS_PER_MINUTE = 900
 #: Of that, held back for the kernel's own settlement and marking reads, which no
-#: seat can spend.
-DEFAULT_KERNEL_RESERVE_PER_MINUTE = 60
+#: seat can spend: N = 300 // 2 = 150 open reads, 9 a seat at 16 slots, and
+#: (900 - 300) // 16 = 37 requests a minute a seat.
+DEFAULT_KERNEL_RESERVE_PER_MINUTE = 300
 #: Requests one seat read sends: every Polymarket read tool is one GET, sent once.
 SEAT_READ_REQUESTS = 1
 #: The most requests one kernel read can send, by reader method: ``market_of_token``

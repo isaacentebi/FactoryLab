@@ -307,7 +307,7 @@ class CompositionMixin:
                             "requester_handle": requester_handle, "ts": self.clock.now_ns})
 
     def _run_tool(self, action_id: str, handle: str, call: dict[str, Any], *,
-                  slot: str = "tool:0") -> tuple[dict, int]:
+                  slot: str = "tool:0", version: int | None = None) -> tuple[dict, int]:
         """Run a tool as the kernel does, and note a population tool used across lineages.
 
         Guarantees nothing about the call changes. A population tool that answered
@@ -317,7 +317,8 @@ class CompositionMixin:
         (``_credit_requested``). A lineage calling its own tool, directly or through
         an intermediary it requested, earns nothing extra.
         """
-        result, cost = super()._run_tool(action_id, handle, call, slot=slot)
+        result, cost = super()._run_tool(action_id, handle, call, slot=slot,
+                                         version=version)
         tool_id = str(call.get("tool"))
         builder = self.tool_owner.get(tool_id)
         if (tool_id not in self.population_tools or builder is None

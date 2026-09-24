@@ -262,8 +262,8 @@ class PolymarketSpec:
     # The world's Polymarket read requests per sliding minute, and the part of them
     # held back for the kernel's own settlement and marking reads. A limit taken from
     # Polymarket's published rate limits (world/polymarket.py), never a price.
-    read_requests_per_minute: int = 180
-    kernel_reserve_per_minute: int = 60
+    read_requests_per_minute: int = 900
+    kernel_reserve_per_minute: int = 300
 
     def __post_init__(self):
         from factorylab.world.polymarket import PUBLISHED_REQUESTS_PER_MINUTE
@@ -1004,22 +1004,23 @@ class WorldManifest:
             return (f"each reader's venue read share, venue.public_read_weight_per_minute // "
                     f"venue.max_readers = {share}, cannot cover {heaviest} at {weight}")
         if self.polymarket.enabled:
-            from factorylab.world.polymarket import SEAT_READ_REQUESTS
+            from factorylab.runtime.polymarket import open_limit, seat_open_share
+            from factorylab.world.polymarket import read_requests
 
             pm = self.polymarket
             pm_share = (pm.read_requests_per_minute - pm.kernel_reserve_per_minute) // readers
-            if pm_share < SEAT_READ_REQUESTS:
+            lookup = read_requests("market_of_token")
+            if pm_share < lookup:
+                # A claim's token lookup is the seat's own read of up to 3 requests: a
+                # share under it could seal no event claim at all.
                 return (f"each reader's polymarket read share, (read_requests_per_minute - "
                         f"kernel_reserve_per_minute) // venue.max_readers = {pm_share}, "
-                        f"cannot cover one read of {SEAT_READ_REQUESTS} request")
-            from factorylab.runtime.polymarket import KERNEL_READS_PER_OPEN, open_limit
-
-            if open_limit(pm) < 1:
-                # The kernel could keep no open read at all: no claim could ever be
-                # settled on a Polymarket market.
-                return (f"polymarket.kernel_reserve_per_minute = "
-                        f"{pm.kernel_reserve_per_minute} cannot cover one open read of "
-                        f"{KERNEL_READS_PER_OPEN} requests")
+                        f"cannot cover one claim's token lookup of {lookup} requests")
+            if seat_open_share(pm, readers) < 1:
+                # No seat could hold one open read, so no claim could ever be sealed.
+                return (f"each reader's polymarket open read share, "
+                        f"kernel_reserve_per_minute // 2 // venue.max_readers = "
+                        f"{open_limit(pm)} // {readers}, cannot hold one open read")
         return None
 
     def storage_problem(self) -> str | None:

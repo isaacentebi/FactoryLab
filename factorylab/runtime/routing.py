@@ -1529,6 +1529,7 @@ class RoutingMixin:
         self._free_reader_slot(assembly_id)
         if assembly_id in self.slot_waiting:
             self.slot_waiting.remove(assembly_id)
+        self._assign_waiting_readers()
         book = getattr(self, "subscription_book", None)
         if book is not None:
             # A retired watcher stops being evaluated, and stops being charged for it.
