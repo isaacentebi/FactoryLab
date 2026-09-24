@@ -502,6 +502,9 @@ def _read_only(name: str) -> bool:
         "quote", "fetch",
         "registration_price", "seller_models", "funding_payments", "lookup",
         "reserve_balance", "discover_index", "instruments",
+        # The live adapter's count of venue request weight it has sent: a read of its
+        # own counter, replayed from the journal and never a write to the venue.
+        "request_weight_sent",
         # The vault surface's reads: a vault's record, this account's vault equities,
         # its vault ledger rows, and the ledger match that resolves a lost write.
         "vault_details", "vault_equities", "vault_ledger", "vault_lookup",
@@ -798,7 +801,7 @@ _COMPONENT_FIELDS = (
     ("reconciler", "", ("every", "_ticks")),
     # The artifact archive's index (C9): hash -> owner, kind, size, time, published.
     # The bytes stay beside the ledger and are found again by hash.
-    ("artifacts", "", ("index",)),
+    ("artifacts", "", ("index", "released_recent")),
     # Continuity (C1): the head pointer each seat holds and the inbox indexes and
     # read cursors addressed to it. Both name artifacts; the bodies are in the
     # archive and ``_verify_artifacts`` proves they are still there before the
@@ -1036,6 +1039,9 @@ def restore_runtime(rt, state: dict) -> None:
                 continue
             if name == "artifacts" and name not in components:
                 # Older checkpoints predate the artifact archive; it starts empty.
+                continue
+            if name == "artifacts" and field not in components[name]:
+                # Older checkpoints predate releases: no seat has released anything.
                 continue
             if name in ("working_state", "outcomes") and name not in components:
                 # Older checkpoints predate continuity; heads and inboxes start empty.

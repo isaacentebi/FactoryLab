@@ -15,6 +15,7 @@ from factorylab.cortex.assembly import (
     public_description,
     reserved_return_fields,
 )
+from factorylab.kernel.artifacts import RELEASED_MEMORY
 from factorylab.kernel.money import money_to_usd
 from factorylab.runtime.cadence import tick_intervals
 from factorylab.runtime.continuity import HARD_STATE_BYTES
@@ -499,15 +500,20 @@ class SchematicsMixin:
                         "pricing": "Retained working_state costs no money. A working_state "
                         "over working_state_max_bytes is refused and the head is left as "
                         "it was.",
-                        "retention": "Retained per seat: its current working_state head "
-                        "and, for a program seat, its current private state, each at most "
-                        "its max_bytes. Writing a successor releases the superseded one: "
-                        "artifact.get answers artifact_released for it, and its bytes are "
-                        "removed at the next reserve-window boundary if no checkpoint names "
-                        "it, otherwise at the first boundary after a later checkpoint. "
-                        "Outcome bodies and archived rationales are retained for the "
-                        "world's life and grow with decisions, on the order of 0.5 KiB per "
-                        "outcome addressed to a seat."},
+                        "retention": "A seat retains its current working_state head, at "
+                        "most working_state_max_bytes. A program seat retains its current "
+                        "private state, at most program_state_max_bytes, written when a "
+                        "call prints one; seats of its lineage read it while it is current. "
+                        "Writing a successor releases the superseded head or state: "
+                        "artifact.get answers artifact_released to the seat that released "
+                        f"it, for its last {RELEASED_MEMORY} releases, and answers every other "
+                        "reader as it "
+                        "answers for any hash it holds no reference to. Released bytes are "
+                        "removed at the next reserve-window boundary when no checkpoint "
+                        "names them, otherwise at the first boundary after a later "
+                        "checkpoint. Outcome bodies and archived rationales are retained for "
+                        "the world's life and grow with decisions, on the order of 0.5 KiB "
+                        "per outcome addressed to a seat."},
             "tools": self._published_tool_specs(),
             "reserve": {"protected": self.reserve.remaining(), "units": "micro-USD",
                         "trials": self.m.novelty.trials,

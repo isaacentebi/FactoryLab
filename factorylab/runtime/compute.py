@@ -169,6 +169,12 @@ def _venue_aliases(call: dict) -> None:
     if "is_buy" in args and "side" not in args and isinstance(args["is_buy"], bool):
         args["side"] = "buy" if args.pop("is_buy") else "sell"
 
+def read_share(manifest: Any) -> int:
+    """A seat's venue read share: the read budget over the world's maximum population."""
+    return (manifest.exchange.public_read_weight_per_minute
+            // max(1, manifest.tools.max_seats))
+
+
 def _cursor_position(cursor: str) -> tuple[int, str] | None:
     """The listing-order key an ``artifact.list`` cursor ``<ns>:<sha>`` names, or None."""
     ns, _, sha = cursor.partition(":")
@@ -1123,14 +1129,15 @@ class ComputeMixin:
     PUBLIC_READ_REFUSAL = "venue read share spent"
 
     def venue_read_share(self) -> int:
-        """Each live seat's venue read share: the world's read budget over the live seats.
+        """Each seat's venue read share: the read budget over the world's maximum population.
 
-        Guarantees the shares together never exceed ``[venue]
-        public_read_weight_per_minute``, and that a seat's share depends only on that
-        manifest constant and the public count of live seats: never on what another
-        seat read (AGENTS.md rule 4: no channel between seats through refusals).
+        Guarantees: a manifest constant, fixed for the world's life (``[venue]
+        public_read_weight_per_minute // [tools] max_seats``), so the shares of every
+        seat that can ever be live never sum past the budget, and nothing another
+        seat does (reading, registering, retiring) changes a seat's share or its
+        refusals (AGENTS.md rule 4: no channel between seats).
         """
-        return self.m.exchange.public_read_weight_per_minute // max(1, len(self._live_seats()))
+        return read_share(self.m)
 
     def _venue_read_used(self, seat: str) -> int:
         """The venue weight this seat's reads sent in the sliding minute ending now."""
@@ -1164,23 +1171,41 @@ class ComputeMixin:
         return None
 
     def _venue_weight_sent(self) -> int | None:
-        """The live adapter's count of venue weight sent, journaled; None for a simulation."""
+        """The live adapter's count of venue weight sent, or None.
+
+        None for a simulated venue, which sends nothing, and for a counter that could
+        not be read: the caller then charges the read's first-attempt weight, which
+        is what a seat read sends (it is never retried). A journaled read-only call
+        (``runtime/resume.py``, ``_read_only``), so a replay returns what was recorded
+        and it moves no memo keyed on venue writes.
+        """
+        if not hasattr(self.exchange, "request_weight_sent"):
+            return None
+        try:
+            sent = self.exchange.request_weight_sent()
+        except Exception:  # noqa: BLE001 - a counter read never fails the seat's call
+            return None
+        return sent if type(sent) is int else None
+
+    def _seat_read_attempts(self, single: bool) -> None:
+        """A seat's read goes to the venue once: no retry can overshoot the seat's share."""
         if hasattr(self.exchange, "request_weight_sent"):
-            return self.exchange.request_weight_sent()
-        return None
+            self.exchange.single_attempt = single
 
     def _charge_venue_read(self, seat: str, tool_id: str, args: Any,
                            before: int | None) -> None:
-        """Charge a seat's read what the adapter actually sent for it, retries included.
+        """Charge a seat's read what the adapter reports it sent for it.
 
-        A simulated venue sends nothing and reports nothing; it is charged the weight
-        of one attempt, so the limit binds the same way in a scripted world.
+        A seat read is sent once (``_seat_read_attempts``), so what is charged is at
+        most the first-attempt weight it was admitted on. A simulated venue sends
+        nothing and reports nothing; it is charged the first-attempt weight, so the
+        limit binds the same way in a scripted world. Never raises.
         """
         from factorylab.world.venue_tools import public_read_weight
 
         after = self._venue_weight_sent()
         sent = (after - before if before is not None and after is not None
-                else public_read_weight(tool_id, args))
+                and after >= before else public_read_weight(tool_id, args))
         if sent:
             self._venue_read_used(seat)
             self.venue_read_use.setdefault(seat, []).append([self.clock.now_ns, sent])
@@ -1463,6 +1488,7 @@ class ComputeMixin:
                                     "reason": refusal, "ts": self.clock.now_ns})
                 return {"error": refusal}, 0
             weight_before = self._venue_weight_sent()
+            self._seat_read_attempts(True)
         price = int(spec["price_micro_per_call"])
 
         def execute() -> dict:
@@ -1571,6 +1597,7 @@ class ComputeMixin:
             return {"error": f"{type(exc).__name__}: {exc}"[:200]}, 0
         finally:
             if venue_read:
+                self._seat_read_attempts(False)
                 self._charge_venue_read(action_id, tool_id, args, weight_before)
         if spec["kind"] == "venue":
             if tool_id in self.venue_tools.PUBLIC_READS:

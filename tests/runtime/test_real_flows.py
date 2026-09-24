@@ -106,10 +106,10 @@ def test_every_seeded_tool_is_free_and_a_free_call_moves_no_money():
 
 
 def _read_runtime(budget):
-    """A scripted runtime whose read budget gives each live seat ``budget`` weight."""
+    """A scripted runtime whose read budget gives each seat ``budget`` weight."""
     rt = make_runtime()
     rt._manage_reserve_window()
-    seats = len(rt._live_seats())
+    seats = rt.m.tools.max_seats
     rt.m = replace(rt.m, exchange=replace(rt.m.exchange,
                                           public_read_weight_per_minute=budget * seats))
     assert rt.venue_read_share() == budget
@@ -212,6 +212,12 @@ def test_a_live_read_is_charged_every_attempt_the_adapter_sent(monkeypatch):
         venue._guarded("l2_snapshot", lambda: (_ for _ in ()).throw(
             ClientError(429, None, "slow down", {})))
     assert venue.request_weight_sent() == 42 + 3 * 2  # three attempts at 2
+    # A seat's read is sent once: no retry can overshoot the share it was admitted on.
+    venue.single_attempt = True
+    with pytest.raises(VenueUnavailable):
+        venue._guarded("l2_snapshot", lambda: (_ for _ in ()).throw(
+            ClientError(429, None, "slow down", {})))
+    assert venue.request_weight_sent() == 48 + 2
     # The runtime charges the seat exactly what the adapter reports it sent.
     rt = _read_runtime(100)
     reported = iter([0, 42])
@@ -221,10 +227,56 @@ def test_a_live_read_is_charged_every_attempt_the_adapter_sent(monkeypatch):
     assert rt._venue_read_used("seed-decider") == 42
 
 
+def test_the_share_is_fixed_whatever_the_population_does():
+    """Budget // tools.max_seats, not // live seats: registering or retiring seats
+    changes no seat's share, and the refusal text carries no live count."""
+    rt = _read_runtime(30)
+    share = rt.venue_read_share()
+    rt.retired_assemblies.add("seed-observer")
+    assert rt.venue_read_share() == share
+    refusal = [_read(rt, "seed-decider", "venue.funding") for _ in range(2)][-1]["error"]
+    assert refusal.endswith("20 of 30 venue request weight in the last 60 s; "
+                            "this read sends 20")
+
+
+def test_a_registration_past_max_seats_is_refused_before_its_trial():
+    from dataclasses import replace as _replace
+
+    rt = make_runtime()
+    rt._manage_reserve_window()
+    rt.m = _replace(rt.m, tools=_replace(rt.m.tools, max_seats=len(rt._live_seats())))
+    handle = decision(rt)
+    from factorylab.cortex.request import Return
+
+    before = rt.budget.entitlements()
+    rt._apply_registrations(handle, Return(handle, {"register": [{
+        "kind": "assembly", "id": "one-too-many", "model_id": "fake-haiku",
+        "role": "producer", "accepts": ["Tick"], "system_prompt": "x"}]}, 0, "ok"))
+    assert "one-too-many" not in rt.assemblies and rt.budget.entitlements() == before
+    rejected = ledger_items(rt, "registration.rejected")[-1]
+    assert "tools.max_seats" in str(rejected)
+
+
+def test_a_world_whose_share_cannot_cover_its_heaviest_read_is_refused():
+    with pytest.raises(ValueError, match="cannot cover venue.funding_history at 25"):
+        manifest_from_dict(_world(venue={"public_read_weight_per_minute": 390},
+                                  tools={"max_seats": 16}))
+    with pytest.raises(ValueError, match="max_seats must be a positive integer"):
+        manifest_from_dict(_world(tools={"max_seats": 0}))
+    two = _world()
+    two["assemblies"] = two["assemblies"] + [{"id": "b", "model_id": "m"}]
+    with pytest.raises(ValueError, match="seeds 2 seats"):
+        manifest_from_dict({**two, "tools": {"max_seats": 1}})
+    with pytest.raises(ValueError, match="cannot cover"):
+        Runtime(replace(load_manifest("scripted"), tools=replace(
+            load_manifest("scripted").tools, max_seats=100)), events=0, seed=1,
+            initial_balance_micro=1, ledger_path=None, router_gamma=.1)
+
+
 def test_the_read_share_is_published_where_the_tool_is():
     text = make_runtime().tool_specs["venue.candles"]["description"]
-    assert "480 venue request weight divided by the live seats" in text
-    assert "sends 20 plus 1 per 60 candles" in text and "retries included" in text
+    assert "fixed venue read share of 30 venue request weight (480 over at most 16" in text
+    assert "sent once and sends 20 plus 1 per 60 candles" in text
 
 
 def test_the_default_read_budget_leaves_the_kernel_most_of_the_venue_limit():

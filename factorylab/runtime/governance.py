@@ -846,6 +846,11 @@ class GovernanceMixin:
             if program and not self.tool_jail_available:
                 raise Infeasible("no jail on this host")
             live = prop.id in self.assemblies and prop.id not in self.retired_assemblies
+            if not live and len(self._live_seats()) >= self.m.tools.max_seats:
+                # A hard cast, refused before any trial is spent: the venue read share
+                # every seat holds is the budget over this many seats.
+                raise ValueError(f"the population is at tools.max_seats "
+                                 f"({self.m.tools.max_seats} live seats)")
             version = (self.assemblies[prop.id].spec.version + 1
                        if prop.id in self.assemblies else 1)
             emits = prop.emits or None

@@ -148,6 +148,10 @@ class ToolsSpec:
     max_depth: int = 4
     max_children: int = 3
     max_tool_calls: int = 4
+    # The most seats that may be live at once, seeds included; a registration that
+    # would pass it is refused. A limit the venue read share is divided by, so the
+    # shares of every seat that can ever be live never sum past the read budget.
+    max_seats: int = 16
 
 
 @dataclass(frozen=True)
@@ -937,7 +941,39 @@ class WorldManifest:
             raise ValueError("the evaluator population Chapter II §III requires is not seeded: "
                              + "; ".join(problems))
 
+    def read_share_problem(self) -> str | None:
+        """Why this world's venue read share cannot hold, or None.
+
+        Guarantees a world is refused whose seeds exceed ``tools.max_seats``, or
+        whose per-seat share (``[venue] public_read_weight_per_minute //
+        tools.max_seats``) cannot cover the first attempt of the heaviest venue read
+        it publishes: a published read no seat could ever be admitted to would be a
+        tool in name only. A seat read is sent once, so its first attempt is all it
+        can spend, and the shares of all ``max_seats`` seats sum to at most the
+        budget: the rest of the venue's per-IP limit is the kernel's.
+        """
+        from factorylab.world.venue_tools import _BASE_WEIGHT, VAULT_READS, public_read_weight
+
+        seats = self.tools.max_seats
+        if type(seats) is not int or seats < 1:
+            return "tools.max_seats must be a positive integer"
+        if len(self.assemblies) > seats:
+            return (f"tools.max_seats is {seats} but the world seeds {len(self.assemblies)} "
+                    "seats")
+        share = self.exchange.public_read_weight_per_minute // seats
+        published = [tool for tool in _BASE_WEIGHT
+                     if tool not in VAULT_READS or self.exchange.vault_tools]
+        heaviest = max(published, key=lambda tool: public_read_weight(tool, {}))
+        weight = public_read_weight(heaviest, {})
+        if share < weight:
+            return (f"each seat's venue read share, venue.public_read_weight_per_minute // "
+                    f"tools.max_seats = {share}, cannot cover {heaviest} at {weight}")
+        return None
+
     def validate(self) -> None:
+        problem = self.read_share_problem()
+        if problem is not None:
+            raise ValueError(problem)
         namespace = self.exchange.client_namespace
         if self.prompt.mode not in ("reference", "compact"):
             raise ValueError("prompt.mode must be reference or compact")
@@ -1546,6 +1582,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             (d.get("tools") or {}).get("max_depth", 4),
             (d.get("tools") or {}).get("max_children", 3),
             (d.get("tools") or {}).get("max_tool_calls", 4),
+            (d.get("tools") or {}).get("max_seats", 16),
         ),
         prices=prices,
         treasury=TreasurySpec(

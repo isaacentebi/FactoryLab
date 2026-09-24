@@ -1206,6 +1206,10 @@ class HyperliquidExchange:
 
         from factorylab.world.venue_tools import request_weight
 
+        if getattr(self, "single_attempt", False):
+            # A seat's read: sent once, so its weight never exceeds what its share
+            # admitted (runtime/compute.py, ``_seat_read_attempts``).
+            attempts = 1
         delay = 0.5
         for attempt in range(attempts):
             # Every attempt is a request the venue weighs against the IP limit, a

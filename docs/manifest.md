@@ -20,6 +20,7 @@ round-three fixes to the existing contracts.
 | `tools.max_depth` | Integer ≥ 0, never boolean or float | `4` | Yes: root depth is 0; zero disables children |
 | `tools.max_children` | Integer ≥ 0, never boolean or float | `3` | Yes: per-request fan-out; zero disables children |
 | `tools.max_tool_calls` | Integer ≥ 0, never boolean or float | `4` (the existing limit, now a manifest key) | Yes: per request; zero disables tool calls |
+| `tools.max_seats` | Integer ≥ 1 and at least the seeded seats | `16` | Yes: the most seats live at once, seeds included; a registration that would pass it is refused before its trial is spent. The venue read share divides by it (see "Seeing the world") |
 
 The assembly proposal uses the same accepts/emits/schemas contract. A custom
 schema validates the returned payload, excluding the protocol fields `emits`,
@@ -1784,36 +1785,47 @@ one more per 60 items returned, `fundingHistory`, `userFunding` and `userFills` 
 more per 20; the added weight per interval is not stated and is counted as 1).
 `[venue] public_read_weight_per_minute` (default `480`, an integer below `1200`,
 fixed for the world's life) is what the population's reads may use, and **each
-live seat has an equal share of it**: the budget divided by the live seats,
-rounded down, over any sliding 60 s of world time. The shares never sum past the
-budget, and a seat's refusals depend only on its own reads and on the public count
-of live seats, never on another seat's reads: a first-come shared budget would let
-one seat starve the others and signal them through refusals, a third channel
-between seats (AGENTS.md rule 4). A read is admitted when the weight its first
-attempt sends fits in what the seat's own reads left of its share, and refused
-before it is sent otherwise (`tool.refused`, naming the seat's use and share).
+seat has an equal, fixed share of it**: the budget divided by `tools.max_seats`,
+rounded down, over any sliding 60 s of world time. The share is a manifest
+constant: the shares of every seat that can ever be live never sum past the
+budget, and nothing another seat does (reading, registering, retiring) changes a
+seat's share or its refusals. A first-come shared budget would let one seat starve
+the others and signal them through refusals, and a share over the live seats would
+let registering seats shrink everyone's share: both are a third channel between
+seats (AGENTS.md rule 4). A read is admitted when the weight its first attempt
+sends fits in what the seat's own reads left of its share, and refused before it
+is sent otherwise (`tool.refused`, naming the seat's own use and share).
 The first-attempt weights are `venue.instruments` 0 (the adapter answers it from
 the listing it loaded and sends no request), `venue.mids` and `venue.order_book`
 2, `venue.positions` 6 (user state, spot user state and all mids),
 `venue.funding`, `venue.open_orders` and `venue.vault_details` 20,
 `venue.vault_positions` 40 (vault equities and leading vaults), `venue.candles` 20
 plus 1 per 60 candles and `venue.funding_history` 20 plus 1 per 20 rates, an
-out-of-range count taken at its maximum. The seat is then charged what the live
-adapter reports it sent (`HyperliquidExchange.request_weight_sent`, read through
-the journal): every attempt `_guarded` makes, a retry after a 429 or a transient
-failure included, and the item weight of what came back; a simulated venue sends
-nothing and is charged the first-attempt weight, so the limit binds the same way
-in a scripted world. A seat's use over any 60 s is therefore at most its share
-plus the retries of its last admitted read (at most two more attempts of it). The
-default leaves 720 a minute to the kernel. That headroom rests on an estimate, not
-a measurement: at 10-second ticks the kernel's own reads (mids, account and spot
-state, asset contexts, open orders, fills and funding pages) come to roughly 90
-weight a tick, about 540 a minute, which with the default budget is about 1020 of
-the 1200.
-A read whose first attempt weighs more than the seat's share (fourteen live seats
-leave 34 each, so `venue.vault_positions` at 40) is refused until fewer seats are
-live or the budget is raised. The sliding minute's use is checkpointed. Each tool's
-description states the share rule and its weight. The
+out-of-range count taken at its maximum. **A seat's read is sent once**: the
+adapter's `_guarded` makes three attempts for the kernel's own calls, but one for
+a seat's (`single_attempt`), so no retry can take a seat past the share its read
+was admitted on, and the retry reserve in the arithmetic below is zero. A seat
+read that meets a 429 or a transient failure fails and the seat is told. The
+seat is charged what the live adapter reports it sent
+(`HyperliquidExchange.request_weight_sent`, a journaled read-only call, replayed
+from the journal and never counted as a venue write): every attempt `_guarded`
+makes, and the item weight of what came back. A simulated venue sends nothing and
+is charged the first-attempt weight, so the limit binds the same way in a
+scripted world; a counter that cannot be read is charged the same, and no failure
+of it escapes the tool call. The sum of all seats' reads over any 60 s is therefore
+at most `tools.max_seats × share ≤ public_read_weight_per_minute`, and the rest of
+the 1200 is the kernel's: 720 at the default. That headroom rests on an estimate,
+not a measurement: at 10-second ticks the kernel's own reads (mids, account and
+spot state, asset contexts, open orders, fills and funding pages) come to roughly
+90 weight a tick, about 540 a minute. **Load-time invariant:** a world is refused
+whose seeds exceed `tools.max_seats`, or whose share cannot cover the first
+attempt of the heaviest venue read it publishes (`venue.funding_history` at 25
+without the vault surface, `venue.vault_positions` at 40 with it), checked when a
+manifest is read and again when a runtime is built from one: a published read no
+seat could ever be admitted to would be a tool in name only. The default, 480 over
+16 seats, is 30 a seat; a world publishing the vault surface needs a share of 40,
+for example `tools.max_seats = 12` at the default budget. The sliding minute's use
+is checkpointed. Each tool's description states the share rule and its weight. The
 launch seed only ever adds to the adapter's own listing; on the deterministic
 venue a seeded market the adapter does not list is dropped, and on a live one an
 unlisted spot pair fails launch. An adapter that publishes no listing keeps the
@@ -1858,8 +1870,10 @@ outcome body and archived rationale, retained for the world's life and growing
 with decisions, on the order of 0.5 KiB per outcome addressed to a seat (an inbox
 body with its evidence pointer and what the seat said). Writing a new head
 releases the superseded one's reference (`artifact.released`), and `artifact.get`
-answers `artifact_released` for it to the seat that released it. The world
-block's `storage` section states the limits and this retention as facts. The size of every head is ledgered on its `state.put` item, and the
+answers `artifact_released` for it to the seat that released it (for its last
+eight releases) and `artifact_private` to every other reader. The world block's
+`storage` section states the limits and this retention as facts. The size of every
+head is ledgered on its `state.put` item, and the
 archive's size after each boundary's collection on `artifact.retained {records,
 bytes, released_bytes, window}`, where a measurement could read them so the
 charter can price retained state through λ on reward (§II.b soft casts, §IV.a) if
@@ -2000,7 +2014,8 @@ watcher once per tick plus the safety sweeps); `tools.max_tool_calls` per reques
 and the five tool rounds a decision may buy; `tools.max_children`; the jail's wall
 timeout (`timeout_s`, 1–10 s) with its CPU rlimit and output cap; the 64 KiB
 private-state limit, with one state retained; `connectors.max_calls_per_window`
-and the seat's venue read share (`[venue] public_read_weight_per_minute`) for
+and the seat's venue read share (`[venue] public_read_weight_per_minute //
+tools.max_seats`) for
 whatever it fetches; and governance, which retires it through a retirement
 proposal. Anything it buys from outside (a model call it subcontracts, a paid
 read, a search) is metered at its real price against its entitlement as before.
@@ -2132,23 +2147,34 @@ collected, so a resume never needs bytes that are gone; the resume's archive che
 skips released records. A record fully released and then written by another seat
 is re-owned: its owner of record and kind become the new writer's, so no reader is
 shown who wrote the bytes before, and the lineage check reads the new owner. Each
-removal of a record is ledgered `artifact.collected {sha, ts}`. Bytes no record
-names (a crash's leftover) are removed without an item, and never while the
-journal is recovering, so a live run and its replay ledger the same removals. The runtime calls it at each
+removal of a record is ledgered `artifact.collected {sha, ts}` whatever the disk
+does: the record leaves the index and is ledgered even when its unlink fails, and
+its bytes are then a leftover, so a live run and its replay ledger the same
+removals; `collect()` returns only the hashes whose bytes are gone. Bytes no record
+names (a crash's leftover, a put whose item was never written) and the temporary
+file of a write torn before its rename are removed without an item, and never while
+the journal is recovering. A put that finds a torn or corrupted file under its
+hash replaces it atomically with the bytes in hand, which hash to that name. The runtime calls it at each
 reserve-window boundary (`continuity.collect_window`). An owned blob is never a
 candidate, so collection can never take a seat's working state, an inbox body or
 an archived rationale.
 
 `artifact.get {sha}` is a seed tool, version 1, priced at zero and available
-to every seat: it returns `sha`, `owner`, `kind` (the reader's own reference's
-kind when it has one), `bytes` and the content as
-`text` (or `base64` for bytes that are not UTF-8) up to 65,536 bytes, an
-`error` above that or for an unknown or malformed hash, and ledgers
-`artifact.get {sha, handle, assembly_id, found, ts}`. The read is **scoped**
-(edition 3, C1): a seat reads what it owns;
-a program's `program.state` is readable within the program's own lineage
-(`BudgetBook.lineage`); anything else answers `{sha, error: "artifact_private"}`
-and nothing about the bytes, and the ledger row carries `reason`. `entries()`
+to every seat: it returns `sha`, `kind` (the reader's own reference's kind, or
+`program.state` for its lineage's program), `bytes` and the content as `text` (or
+`base64` for bytes that are not UTF-8) up to 65,536 bytes, an `error` above that
+or for a malformed hash, and ledgers `artifact.get {sha, handle, assembly_id,
+found, ts}`. **A view never names an owner or anything about another holder**
+(essay II.I.b; AGENTS.md rules 4 and 5). The read is **scoped** (edition 3, C1): a
+seat reads what it holds a reference to; a program's state is readable by a seat
+whose lineage (`BudgetBook.lineage`) holds a `program.state` reference to those
+bytes now, whoever wrote them first. A hash that is one of the reader's own last
+eight releases (`RELEASED_MEMORY`, kept apart from the records and checkpointed)
+answers `{sha, error: "artifact_released"}`; any other hash the reader cannot read
+answers `{sha, error: "artifact_private"}`, byte for byte the same whether the
+archive never saw it, another seat holds it, it was released or collected, or
+leftover bytes sit on the disk, so the store is no existence oracle. The ledger
+row carries the same `reason`. `entries()`
 returns `(sha, owner, bytes, created_ns)` rows. There is no `artifact.put` tool: the writers are a private-state program
 seat and a seat's own working state. `owner_for(sha)` names the owner of record.
 

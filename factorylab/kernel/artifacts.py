@@ -74,6 +74,10 @@ PRIVATE_REFUSAL = "artifact_private"
 # What a reader is told of its own superseded state after it was released
 # (``Reason.ARTIFACT_RELEASED``): the archive no longer keeps it for the reader.
 RELEASED_REFUSAL = "artifact_released"
+#: How many of its own most recent releases a reader is told about by name. Older
+#: ones answer like any hash the reader holds no reference to. Bounded, so the
+#: checkpoint does not grow with every head a seat ever wrote.
+RELEASED_MEMORY = 8
 
 
 class ArtifactError(ValueError):
@@ -108,6 +112,10 @@ class ArtifactStore:
         # The hashes the latest durable checkpoint's index held (``seal_released``):
         # derived, never checkpointed, and set identically by a live run and a resume.
         self.checkpointed: frozenset[str] = frozenset()
+        # reader -> its own last ``RELEASED_MEMORY`` releases, oldest first. The
+        # reader's own history, kept apart from the records so that what it is told
+        # never depends on whether another seat holds the bytes or they were collected.
+        self.released_recent: dict[str, list[str]] = {}
 
     # Change tracking, for views derived from the index (the runtime's directory
     # listing) that would otherwise re-read the whole archive on every request:
@@ -172,11 +180,11 @@ class ArtifactStore:
                 # An index restored from a checkpoint written before references carries
                 # its readers; each becomes that reader's own reference, as it always was.
                 refs.setdefault(existing, {"kind": record["kind"], "ts": record["ts"]})
-        released_by = record.get("released_by")
-        if released_by is not None:
-            released_by.pop(owner, None)
-            if not released_by:
-                record.pop("released_by")
+        recent = self.released_recent.get(owner)
+        if recent is not None and sha in recent:
+            recent.remove(sha)
+            if not recent:
+                self.released_recent.pop(owner)
         reference = refs.setdefault(owner, {"kind": kind, "ts": ts})
         kinds = set(reference.get("kinds", [reference["kind"]]))
         if kind not in kinds:
@@ -222,12 +230,19 @@ class ArtifactStore:
         record["refs"] = refs
         record["readers"] = sorted(refs)
         if owner not in refs:
-            record.setdefault("released_by", {})[owner] = reference["ts"]
+            recent = self.released_recent.setdefault(owner, [])
+            recent.append(sha)
+            del recent[:-RELEASED_MEMORY]
             if refs and record["owner"] == owner:
                 # The owner of record no longer holds the bytes: the earliest remaining
-                # holder is, with the kind it holds them under.
+                # holder is, with the kind it holds them under. Kernel bookkeeping only:
+                # no reader is ever shown a record's owner.
                 holder = min(refs, key=lambda seat: (refs[seat]["ts"], seat))
                 record.update(owner=holder, kind=refs[holder]["kind"])
+        elif record["owner"] == owner:
+            # The owner of record keeps the bytes under another kind: the record names
+            # what it still holds, never a kind nobody holds them under any more.
+            record["kind"] = refs[owner]["kind"]
         if not refs:
             # Named by the latest checkpoint: kept until a later one is durable. Written
             # since it: no checkpoint names it and a replay re-creates it (``collect``).
@@ -304,8 +319,10 @@ class ArtifactStore:
         """Remove sealed released records, ledgering each, and unnamed leftovers (R3-F).
 
         The only blobs this can reach are records whose every reference was released
-        and sealed (returned, and each ledgered ``artifact.collected``), and bytes a
-        crash between ``_write`` and the ledger item left behind (removed without an
+        and sealed (each leaves the index and is ledgered ``artifact.collected``
+        whether or not its unlink succeeds; returned only when its bytes are gone,
+        and bytes that stay behind are a leftover), and bytes no record names, such
+        as a crash between ``_write`` and the ledger item leaves (removed without an
         item, and only when the journal is not recovering; not returned). An owned
         blob is never a candidate, so collection can never take a seat's state or an
         inbox body. A live run and its replay therefore ledger the same removals.
@@ -346,14 +363,25 @@ class ArtifactStore:
             # diary never knew them and a replay cannot know which ones a disk held.
             for sha in leftovers:
                 self._remove_bytes(sha)
-        orphans = sealed
-        for sha in orphans:
-            if not self._remove_bytes(sha):
-                continue
+            if self.root is not None:
+                # A write torn before its rename leaves only its temporary file.
+                for path in self.root.glob(".*-*"):
+                    try:
+                        path.unlink()
+                    except OSError:
+                        pass
+        removed = []
+        for sha in sealed:
+            # The record leaves the index and is ledgered whatever the disk does, so a
+            # live run and its replay write the same items. Bytes an unlink could not
+            # remove are a leftover from here on, removed (unledgered) at a later
+            # boundary; only hashes whose bytes are gone are returned.
             self.index.pop(sha, None)
             self._changed_sha(sha)
             self.ledger.append({"kind": "artifact.collected", "sha": sha, "ts": self.clock()})
-        return orphans
+            if self._remove_bytes(sha):
+                removed.append(sha)
+        return removed
 
     def _remove_bytes(self, sha: str) -> bool:
         """Remove one blob's bytes; True when they are gone, already gone included."""
@@ -372,24 +400,27 @@ class ArtifactStore:
 
     def visible_to(self, sha: str, reader: str | None,
                    lineage_of: Callable[[str], str] | None = None) -> bool:
-        """Whether ``reader`` may read this artifact (C1): own or same lineage.
+        """Whether ``reader`` may read this artifact (C1): its own, or its lineage's program.
 
-        A seat reads what it wrote; a program's state
-        is private to its program's owner lineage, so the seat that registered a
-        program can still read what the program keeps, and a stranger cannot.
-        A hash the archive never saw is not private, it is unknown, and the read
-        path says so instead.
+        A seat reads what it holds a reference to. A program's state is private to
+        its lineage: a reader sees it when a seat of its own lineage holds a
+        ``program.state`` reference to those bytes now, whoever else holds them and
+        whoever wrote them first. Unindexed bytes confer no read authority.
         """
         record = self.index.get(sha)
         if record is None:
-            return False  # Unindexed durable bytes confer no read authority.
+            return False
         if reader is None:
             return True  # Kernel-only inspection retains its existing contract.
-        if reader in self.references(sha, record):
+        refs = self.references(sha, record)
+        if reader in refs:
             return True
-        if record["kind"] == "program.state" and lineage_of is not None:
-            return lineage_of(record["owner"]) == lineage_of(reader)
-        return False
+        if lineage_of is None:
+            return False
+        lineage = lineage_of(reader)
+        return any("program.state" in reference.get("kinds", [reference["kind"]])
+                   and lineage_of(holder) == lineage
+                   for holder, reference in refs.items())
 
     def owner_for(self, sha: str) -> str | None:
         """The artifact's owner of record, or None for a hash the archive never saw.
@@ -402,33 +433,35 @@ class ArtifactStore:
 
     def read(self, sha: Any, *, reader: str | None = None,
              lineage_of: Callable[[str], str] | None = None) -> dict[str, Any]:
-        """The ``artifact.get`` view: metadata and inline content, or a bounded error.
+        """The ``artifact.get`` view: the reader's own reference and the bytes, or a refusal.
 
-        Scoping precedes retrieval: a reader who may not see the artifact is told
-        it is private and nothing about its bytes, its size or its owner.
+        Guarantees (essay II.I.b; AGENTS.md rules 4 and 5): the view never names an
+        owner or anything about another holder; its ``kind`` is the reader's own
+        (``program.state`` for its lineage's program state). A reader that may not see
+        the hash gets ``artifact_released`` when it is one of the reader's own last
+        ``RELEASED_MEMORY`` releases, and otherwise ``{sha, error: artifact_private}``,
+        byte for byte the same whether the archive never saw the hash, another seat
+        holds it, it was collected or leftover bytes sit on disk.
         """
         try:
             sha = _valid_sha(sha)
-            if sha not in self.index:
-                # Unindexed durable bytes confer no read authority, but a hash the
-                # archive never saw at all is unknown, not private, and says so.
-                self.get(sha)
-                return {"sha": sha, "error": PRIVATE_REFUSAL}
-            if not self.visible_to(sha, reader, lineage_of):
-                record = self.index[sha]
-                if reader is not None and reader in record.get("released_by", {}):
-                    # The reader's own superseded state: released, not someone's secret.
-                    return {"sha": sha, "error": RELEASED_REFUSAL}
-                return {"sha": sha, "error": PRIVATE_REFUSAL}
+        except ArtifactError as exc:
+            return {"error": str(exc)}
+        if reader is None and sha not in self.index:
+            return {"error": "unknown artifact"}  # kernel-only inspection, never a seat's
+        if not self.visible_to(sha, reader, lineage_of):
+            if reader is not None and sha in self.released_recent.get(reader, ()):
+                return {"sha": sha, "error": RELEASED_REFUSAL}
+            return {"sha": sha, "error": PRIVATE_REFUSAL}
+        try:
             data = self.get(sha)
         except ArtifactError as exc:
             return {"error": str(exc)}
         record = self.index.get(sha, {})
-        # A reader that owns its own reference is shown the kind it wrote under,
-        # not the first writer's; the owner of record is the blob's.
         reference = self.references(sha, record).get(reader) if record else None
-        view = {"sha": sha, "owner": record.get("owner"),
-                "kind": (reference or record).get("kind"), "bytes": len(data)}
+        view = {"sha": sha, "kind": (reference or {}).get(
+                    "kind", "program.state" if reader is not None else record.get("kind")),
+                "bytes": len(data)}
         if len(data) > MAX_TOOL_READ_BYTES:
             return {**view, "error": f"artifact exceeds {MAX_TOOL_READ_BYTES} bytes"}
         try:
@@ -445,8 +478,13 @@ class ArtifactStore:
             return
         path = self.root / sha
         if path.exists():
-            self.get(sha)  # Verify an existing file instead of blessing corruption.
-            return
+            try:
+                self.get(sha)  # Verify an existing file instead of blessing corruption.
+                return
+            except ArtifactError:
+                # A torn or corrupted file under this name: the bytes in hand hash to
+                # it, so they replace it atomically below rather than fail the put.
+                pass
         self.root.mkdir(parents=True, exist_ok=True)
         fd, temporary = tempfile.mkstemp(prefix=f".{sha[:12]}-", dir=self.root)
         try:

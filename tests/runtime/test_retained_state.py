@@ -185,26 +185,123 @@ def test_re_writing_released_bytes_is_the_new_writer_s_alone():
     store.release(a, owner="alice", kind="working.state")
     assert store.index[a]["released"] == "sealed"
     assert store.put(b"A", owner="alice", kind="working.state") == a
-    assert "released" not in store.index[a] and "released_by" not in store.index[a]
+    assert "released" not in store.index[a] and a not in store.released_recent.get("alice", [])
     assert store.collect() == [] and store.get(a) == b"A"
-    # Released by alice, then written by bob: bob is not shown who wrote it before.
+    # Released by alice, then written by bob: bob sees his own reference alone.
     store.release(a, owner="alice", kind="working.state")
     store.put(b"A", owner="bob", kind="program.state")
-    view = store.read(a, reader="bob")
-    assert view["owner"] == "bob" and view["kind"] == "program.state"
-    assert "alice" not in str(view) and store.owner_for(a) == "bob"
+    assert store.read(a, reader="bob") == {"sha": a, "kind": "program.state", "bytes": 1,
+                                           "text": "A"}
+    assert "alice" not in str(store.index[a]) and store.owner_for(a) == "bob"
     # Alice is told what happened to her own bytes, and nothing about who holds them.
     assert store.read(a, reader="alice") == {"sha": a, "error": "artifact_released"}
     assert store.visible_to(a, "bob-child", lambda seat: "bob")  # bob's lineage reads it
 
 
-def test_the_owner_of_record_letting_go_leaves_a_holder_as_owner():
+def test_a_co_holder_sees_nothing_of_the_other_holder_and_no_owner_flip():
+    """Two seats writing the same bytes (``{}``): neither view names an owner or the
+    other holder, and one letting go (the owner-of-record handoff) changes nothing
+    the other can read."""
     store, _ = _store()
-    sha = store.put(b"shared", owner="alice", kind="working.state")
-    store.put(b"shared", owner="bob", kind="working.state")
+    sha = store.put(b"{}", owner="alice", kind="working.state")
+    store.put(b"{}", owner="bob", kind="outcome.item")
+    before = store.read(sha, reader="bob")
+    assert before == {"sha": sha, "kind": "outcome.item", "bytes": 2, "text": "{}"}
     store.release(sha, owner="alice", kind="working.state")
-    assert store.index[sha]["owner"] == "bob"
-    assert store.read(sha, reader="bob")["owner"] == "bob"
+    assert store.index[sha]["owner"] == "bob"  # kernel bookkeeping only
+    assert store.read(sha, reader="bob") == before
+    store.put(b"{}", owner="alice", kind="working.state")
+    assert store.read(sha, reader="bob") == before
+    assert store.read(sha, reader="alice") == {"sha": sha, "kind": "working.state",
+                                               "bytes": 2, "text": "{}"}
+
+
+def test_a_non_holder_gets_the_same_answer_whoever_else_holds_the_bytes(tmp_path):
+    """No existence oracle: a seat with no reference to a hash gets one answer, byte
+    for byte, whether nobody holds it, someone holds it, someone released it while
+    another still holds it, it was collected, or leftover bytes sit on the disk."""
+    import hashlib
+
+    blob = b'"probe"'
+    sha = hashlib.sha256(blob).hexdigest()
+    answers = []
+    store, _ = _store(tmp_path / "nobody")
+    answers.append(store.read(sha, reader="carol"))
+    store, _ = _store(tmp_path / "held")
+    store.put(blob, owner="dave", kind="working.state")
+    answers.append(store.read(sha, reader="carol"))
+    store, _ = _store(tmp_path / "released-while-held")
+    store.put(blob, owner="erin", kind="working.state")
+    store.put(blob, owner="dave", kind="working.state")
+    store.release(sha, owner="erin", kind="working.state")
+    answers.append(store.read(sha, reader="carol"))
+    store, _ = _store(tmp_path / "collected")
+    store.put(blob, owner="erin", kind="working.state")
+    store.release(sha, owner="erin", kind="working.state")
+    store.collect()
+    answers.append(store.read(sha, reader="carol"))
+    store, _ = _store(tmp_path / "leftover")
+    store._write(sha, blob)
+    answers.append(store.read(sha, reader="carol"))
+    assert answers == [{"sha": sha, "error": "artifact_private"}] * 5
+    # A seat that released it is told so, whether or not another seat still holds it.
+    for others in (False, True):
+        store, _ = _store(tmp_path / f"own-{others}")
+        store.put(blob, owner="carol", kind="working.state")
+        if others:
+            store.put(blob, owner="dave", kind="working.state")
+        store.release(sha, owner="carol", kind="working.state")
+        store.seal_released()
+        store.collect()
+        assert store.read(sha, reader="carol") == {"sha": sha, "error": "artifact_released"}
+
+
+def test_a_program_s_lineage_reads_only_state_its_lineage_holds():
+    lineage = {"prog": "L", "sib": "L", "bob": "M"}.get
+    store, _ = _store()
+    old = store.put(b'{"v":1}', owner="prog", kind="program.state")
+    new = store.put(b'{"v":2}', owner="prog", kind="program.state")
+    store.release(old, owner="prog", kind="program.state")
+    assert store.read(new, reader="sib", lineage_of=lineage)["text"] == '{"v":2}'
+    assert store.read(old, reader="sib", lineage_of=lineage)["error"] == "artifact_private"
+    assert store.read(old, reader="prog", lineage_of=lineage)["error"] == "artifact_released"
+    # Another lineage re-writes the released bytes: still not the program lineage's.
+    store.put(b'{"v":1}', owner="bob", kind="working.state")
+    assert store.read(old, reader="sib", lineage_of=lineage)["error"] == "artifact_private"
+    # The owner of record keeps bytes under another kind only: the record's kind
+    # follows what it holds, and the lineage no longer reads them as program state.
+    both = store.put(b"{}", owner="prog", kind="program.state")
+    store.put(b"{}", owner="prog", kind="working.state")
+    store.release(both, owner="prog", kind="program.state")
+    assert store.index[both]["kind"] == "working.state"
+    assert store.read(both, reader="sib", lineage_of=lineage)["error"] == "artifact_private"
+
+
+def test_a_seat_s_own_releases_survive_a_checkpoint():
+    from factorylab.runtime.resume import restore_runtime, runtime_state
+
+    rt = make_runtime()
+    rt._manage_reserve_window()
+    handle = decision(rt)
+    old = rt.working_state.put("seed-decider", {"v": 1}, handle=handle)["sha"]
+    rt.working_state.put("seed-decider", {"v": 2}, handle=handle)
+    rt2 = make_runtime()
+    restore_runtime(rt2, runtime_state(rt))
+    assert rt2.artifacts.read(old, reader="seed-decider")["error"] == "artifact_released"
+
+
+def test_collect_returns_only_what_it_removed_and_ledgers_the_same_either_way(tmp_path):
+    """An unlink that fails still takes the record out of the index and ledgers it,
+    exactly as a replay whose unlink succeeds would; the bytes stay a leftover and the
+    hash is not returned."""
+    store, ledger = _store(tmp_path)
+    sha = store.put(b"x", owner="a", kind="working.state")
+    store.release(sha, owner="a", kind="working.state")
+    store._remove_bytes = lambda _sha: False
+    assert store.collect() == [] and sha not in store.index
+    assert [i["sha"] for i in _kinds(ledger, "artifact.collected")] == [sha]
+    del store._remove_bytes
+    assert store.collect() == [] and (tmp_path / "w.artifacts" / sha).exists() is False
 
 
 def test_release_refuses_a_non_owner_a_wrong_kind_and_an_unknown_hash():

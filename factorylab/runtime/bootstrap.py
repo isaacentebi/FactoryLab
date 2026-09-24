@@ -100,6 +100,11 @@ class BootstrapMixin:
             from factorylab.world.evm import RailError
 
             raise RailError(CAPITAL_LOOP_REFUSED)
+        # The venue read share is a load-time invariant, checked before anything is
+        # written, for a manifest built in code as for one read from a file.
+        problem = manifest.read_share_problem()
+        if problem is not None:
+            raise ValueError(problem)
         self._ledger_lock = _lock or LedgerLock(ledger_path)
         self.m = manifest
         self.kill_at_end = kill_at_end
@@ -601,6 +606,7 @@ class BootstrapMixin:
         from factorylab.world.venue_tools import _BASE_WEIGHT
 
         budget = manifest.exchange.public_read_weight_per_minute
+        seats = manifest.tools.max_seats
         for tool_id, weight in _BASE_WEIGHT.items():
             if tool_id not in self.tool_specs:
                 continue
@@ -611,14 +617,13 @@ class BootstrapMixin:
                     "request and spends none of your venue read share.")
                 continue
             self.tool_specs[tool_id]["description"] += (
-                f" Each live seat has an equal venue read share: {budget} venue request "
-                "weight divided by the live seats, over any sliding 60 s of world time. "
-                f"This read's first attempt sends {weight}"
+                f" Each seat has a fixed venue read share of {budget // seats} venue "
+                f"request weight ({budget} over at most {seats} seats) in any sliding 60 s "
+                f"of world time. This read is sent once and sends {weight}"
                 + (" plus 1 per 60 candles" if tool_id == "venue.candles" else
                    " plus 1 per 20 rates" if tool_id == "venue.funding_history" else "")
-                + "; every attempt the adapter sends, retries included, is charged to "
-                "your share. A read your remaining share cannot cover is refused and not "
-                "sent.")
+                + ", charged to your share as the venue weighs it. A read your remaining "
+                "share cannot cover is refused and not sent.")
         # seat -> [[world ns, venue weight sent]] of its reads in the sliding minute.
         self.venue_read_use: dict[str, list[list[int]]] = {}
         self.tool_specs["treasury.transfer"] = {
@@ -707,10 +712,11 @@ class BootstrapMixin:
         self.tool_specs["artifact.get"] = {
             "id": "artifact.get",
             "description": "Read an archived artifact by its sha256: your own working "
-            "state, an artifact you wrote, or the private state of a program in your "
-            "own lineage. Anything else is "
-            "refused with artifact_private. The read is free and ledgered. Returns "
-            "owner, kind, bytes and text (base64 for binary), up to 64 KiB.",
+            "state, an artifact you hold, or the current private state of a program in "
+            "your own lineage. A hash you released recently is refused with "
+            "artifact_released; any other hash you hold no reference to is refused with "
+            "artifact_private, whether or not the archive holds it. The read is free and "
+            "ledgered. Returns your kind, bytes and text (base64 for binary), up to 64 KiB.",
             "args_schema": {
                 "type": "object",
                 "properties": {"sha": {"type": "string", "minLength": 64, "maxLength": 64}},
