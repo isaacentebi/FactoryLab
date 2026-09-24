@@ -104,7 +104,7 @@ def test_a_return_declined_trade_is_frozen_from_the_mids_already_broadcast():
     """Ruling R2: the benchmark is fixed ex ante, from the world's own broadcast mids."""
     from tests.runtime.test_reward_chain import _mids
 
-    rt = _consequence_runtime(provider=Population(counterfactual={"coin": "btc",
+    rt = _consequence_runtime(provider=Population(counterfactual={"coin": "BTC",
                                                                    "side": "sell"}))
     _mids(rt, BTC="100", ETH="10")
     producer, _event = _unsettled_produce(rt)

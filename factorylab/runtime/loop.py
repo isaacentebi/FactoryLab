@@ -1117,6 +1117,10 @@ class Runtime(
             if len(kinds) > 1 or kinds[0] in self.event_schemas:
                 schema = self._contract_schema(sample.chosen)
                 description += " Select one of your declared emits kinds."
+            else:
+                # The one kind this contract answers as, as the kernel reads ``emits``
+                # (§II.b: the published contract is the enforced one).
+                schema["properties"]["emits"] = {"enum": [kinds[0]]}
             req = self._request(handle, description, inputs, schema, deadline,
                                 self.queue.get(handle).channel)
             ret = (returned if returned is not None
