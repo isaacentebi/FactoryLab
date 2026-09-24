@@ -619,8 +619,13 @@ class ComputeMixin:
                 raise SectionError(section, f"more than {limit} {section}", limit)
         validate_schema(live, {"type": "object", "properties": reserved_return_fields(
             max_children=self.m.tools.max_children, max_tool_calls=self.m.tools.max_tool_calls)})
+        # A decline in the published form ({"status": "cannot", "reason": ...}) names no
+        # kind: declining is not one of the contract's returns, so a contract with
+        # several kinds is not asked to pick one before it may decline.
+        declining = ("emits" not in parsed and parsed.get("status") == "cannot"
+                     and isinstance(parsed.get("reason"), str))
         binding = self.return_bindings.get(req.handle)
-        if binding is not None:
+        if binding is not None and not declining:
             emits = parsed.get("emits")
             if emits is None and len(binding["channels"]) == 1:
                 emits = next(iter(binding["channels"]))
@@ -631,7 +636,7 @@ class ComputeMixin:
         owner = self.handle_to_assembly.get(req.handle)
         # The request's own channel says whether this is a contract return; a policy ballot
         # is not one, and a handle the kernel queue never opened cannot be looked up at all.
-        if owner in self.assemblies and req.scoring_channel != "policy":
+        if owner in self.assemblies and req.scoring_channel != "policy" and not declining:
             spec = self.assemblies[owner].spec
             emits = parsed.get("emits", spec.emits[0] if len(spec.emits) == 1 else None)
             if emits not in spec.emits:
@@ -2340,12 +2345,8 @@ class ComputeMixin:
         ret = self._invoke(target, req, "child", child=True)
         emitted = self.return_kinds.get(handle, next(iter(channels), "ProducerReturn"))
         if len(channels) > 1 and handle not in self.return_kinds:
-            from factorylab.kernel.queue import SettleStatus
-
             self.consequences.finish(handle, ret.cost)
-            self.queue.settle(handle, channel=self.queue.get(handle).channel, score=0.0,
-                              status=SettleStatus.CENSORED,
-                              definition_version="unselected-return-v1", sampling_ref=None)
+            self._settle_unselected(handle, ret)
             return ret
         if emitted in ("Verdict", "MetaVerdict"):
             event = Event(f"child-input-{handle}", EventKind.REGISTERED,
@@ -2363,6 +2364,8 @@ class ComputeMixin:
                 self._freeze_declined_trade(handle, ret.outputs)
             if emitted == "Exposure":
                 self.pending_exposure[handle] = self.ticks_consumed
+                if (reason := declined_reason(ret)) is not None:
+                    self.declined_exposures[handle] = reason
             else:
                 # A requested child's refusal is a decline like a routed one: unjudged,
                 # it settles declined and its request router prices it as an
@@ -2384,6 +2387,23 @@ class ComputeMixin:
             # Published as its own kind only (primitive audit F12).
             self._emit(emitted, payload)
         return ret
+
+    def _settle_unselected(self, handle: str, ret: Return) -> None:
+        """Close a return that named none of its contract's several kinds.
+
+        Guarantees a seat that answered ``status: cannot`` settles declined, priced
+        as an abstention (ruling R9), since no kind was bound for any judge to grade;
+        any other such return settles censored, as a form failure.
+        """
+        from factorylab.kernel.queue import SettleStatus
+
+        reason = declined_reason(ret)
+        if reason is not None:
+            self._settle_declined(handle, self.queue.get(handle).channel, reason)
+            return
+        self.queue.settle(handle, channel=self.queue.get(handle).channel, score=0.0,
+                          status=SettleStatus.CENSORED,
+                          definition_version="unselected-return-v1", sampling_ref=None)
 
     def _check_compute_return(self, handle: str, ret: Return) -> None:
         """Assembly-wrapped affordability failures join the enclosing event's insolvency count."""

@@ -591,6 +591,8 @@ class JournalProxy:
 # Explicit schemas keep SDK clients, keys, bound callbacks and dependencies out of snapshots.
 _RUNTIME_FIELDS = (
     "rng", "cascade", "stats", "charter", "pending_exposure",
+    # Exposure refusals awaiting settlement; defaults empty for an older checkpoint.
+    "declined_exposures",
     "delivered_seen", "snapshot_keys", "noop_credits", "recent_mids", "realized_to_date",
     "fees_to_date",
     "funding_to_date", "spot_inventory", "handle_to_assembly", "tool_specs",

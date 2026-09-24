@@ -1834,7 +1834,8 @@ class SchematicsMixin:
             "antagonist_exposure": (
                 "an Exposure return settles on the exposure channel: the mean over the judges "
                 "scored on it of (1 - their consequence score), less the antagonist's card "
-                "penalty; censored when no judge's verdict on it was scored"
+                "penalty; censored when no judge's verdict on it was scored, or declined "
+                "when it answered status: cannot"
             ),
             "composed_return": (
                 "a requested child drawn by a kind's request router, whose return reached "
@@ -1861,6 +1862,11 @@ class SchematicsMixin:
                 "router probability mass on contracts declaring Exposure is renormalised to "
                 "at most "
                 f"{ev.adversarial_share} before every draw"
+            ),
+            "declined_return": (
+                "any return that answered status: cannot and earned no score on its "
+                "channel settles declined: its call is charged, and the router that drew "
+                "the seat and the seat's own learner are credited as for an abstention"
             ),
             "abstention": (
                 "a router's NOOP draw is credited the zero-consequence reward of the rounds "

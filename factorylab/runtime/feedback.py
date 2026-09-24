@@ -1506,7 +1506,7 @@ class FeedbackMixin:
         miss elsewhere (II.III.b: the adversarial layer farms realized consequence;
         evaluations S4 removed the fixed endorsement threshold). A return no judge
         was scored on settles censored once no judge is still waiting on it and its
-        verdict window has passed.
+        verdict window has passed, or declined when its seat answered ``cannot``.
         """
         timeout = self.ev.verdict_timeout_ticks
         for handle, opened in list(self.pending_exposure.items()):
@@ -1517,8 +1517,16 @@ class FeedbackMixin:
                 continue
             del self.pending_exposure[handle]
             self.exposure_scores.pop(handle, None)
+            declined = self.declined_exposures.pop(handle, None)
             if self.queue.get(handle).status not in (SettleStatus.PENDING,
                                                      SettleStatus.TIMED_OUT):
+                continue
+            if not scores and declined is not None:
+                # A refusal no judge was scored on is an abstention, priced as one
+                # (ruling R9), never censored at a free neutral.
+                self.ledger.append({"kind": "exposure.settled", "handle": handle,
+                                    "score": None, "declined": True, "ts": self.clock.now_ns})
+                self._settle_declined(handle, CH_EXPOSURE, declined)
                 continue
             if not scores:
                 self.ledger.append({"kind": "exposure.settled", "handle": handle,

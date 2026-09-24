@@ -68,14 +68,14 @@ def _priced_runtime(monkeypatch):
     return rt
 
 
-def _drawn(rt, chosen):
+def _drawn(rt, chosen, channel="verdict"):
     """One Tick-router decision that drew ``chosen``, at the router's own odds."""
     state = rt.routers["Tick"][0]
     feasible = lambda a: (a == chosen, "")  # noqa: E731 - only this arm may be woken
     sample = next(s for s in (state.router.route("Tick", feasible, random.Random(i))
                               for i in range(200)) if s.chosen == chosen)
     handle = rt.queue.open(actor=state.learner.id, event_id=f"tick-{chosen}",
-                           propensity=rt._propensity(sample), channel="verdict",
+                           propensity=rt._propensity(sample), channel=channel,
                            deadline_ns=10**18, parent_handle=None,
                            cost_ceiling=rt.wallet.available)
     return state, handle
@@ -215,6 +215,59 @@ def test_a_requested_childs_refusal_is_priced_as_an_abstention_on_its_request_ro
     ((learned, fb),) = updates
     expected, penalty = rt._priced_abstention(handle, NEUTRAL_REWARD)
     assert learned == handle and penalty > 0 and fb.reward == pytest.approx(expected)
+
+
+def _forecast_desk(rt):
+    from tests.audit.test_r3_j_runtime import register_work
+
+    register_work(rt)  # a custom kind with reward shape "forecast", accepting Tick
+    return "weather-desk"
+
+
+def _mixed_contract(rt):
+    from factorylab.cortex.registration import AssemblyProposal
+
+    rt._register("author", AssemblyProposal(
+        "dual", "producer", "fake-haiku", "Reply with JSON.", ("Tick",), 128, "low",
+        ("ProducerReturn", "Verdict"), {}))
+    return "dual"
+
+
+@pytest.mark.parametrize(("seat", "channel"), [
+    ("antagonist-a", "exposure"),      # Exposure: settles once no judge was scored on it
+    ("forecast", "consequence"),       # a forecast-shaped custom kind: nothing to score
+    ("mixed", "verdict"),              # several emits kinds, none bound by a refusal
+])
+def test_an_ungraded_refusal_on_any_producing_channel_settles_declined_at_the_price(
+        monkeypatch, seat, channel):
+    """Every producing contract's refusal, through the real ``_invoke``: none settles
+    censored at a free neutral; each is priced on its router as an abstention."""
+    rt = _priced_runtime(monkeypatch)
+    seat = {"forecast": _forecast_desk, "mixed": _mixed_contract}.get(
+        seat, lambda _rt: seat)(rt)
+    _commitments(rt, "eval-a", censored=4)
+    rt._close_price_window()  # a violation measured, and priced, before the refusal
+    state, handle = _drawn(rt, seat, channel)
+    rt.n += 1
+    rt._producer_step(
+        Event(f"tick-{rt.n}", EventKind.TICK, rt.clock.now_ns, {"index": 0}, "test"),
+        handle, SimpleNamespace(chosen=seat), rt.queue.get(handle).deadline_ns)
+    (invocation,) = _rows(rt, "invocation", handle=handle)
+    assert invocation["status"] == "refused"
+    rt.ticks_consumed += rt.ev.verdict_timeout_ticks + 1
+    rt._settle_exposures()
+    rt._censor_stale_judgements()
+    (settled,) = rt.queue.history(handle)
+    assert settled.status is SettleStatus.INAPPLICABLE
+    assert settled.definition_version == DECLINED_DEFINITION
+    rt._deliver_returns()
+    (priced,) = _rows(rt, "router.decline_priced", handle=handle)
+    assert priced["penalty"] > 0
+    assert priced["reward"] == pytest.approx(state.neutral() - priced["penalty"])
+    _noop_state, noop = _drawn(rt, NOOP, channel)
+    rt._contribution(noop, rt.window.decisions[handle]["role"])
+    noop_reward, _noop_penalty = rt._priced_abstention(noop, state.neutral())
+    assert priced["reward"] <= noop_reward
 
 
 # --- a judge, a meta and a counter-judge decline their commissions ---------------------

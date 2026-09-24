@@ -1093,9 +1093,7 @@ class Runtime(
                 return
             if emitted is None:
                 self.consequences.finish(handle, ret.cost)
-                self.queue.settle(handle, channel=self.queue.get(handle).channel, score=0.0,
-                                  status=SettleStatus.CENSORED,
-                                  definition_version="unselected-return-v1", sampling_ref=None)
+                self._settle_unselected(handle, ret)
                 return
             if self._may_write(handle):
                 # Only a producer kind's answer is an order (primitive audit F7).
@@ -1125,6 +1123,8 @@ class Runtime(
         self.window.revision_handles.discard(handle)
         if self.queue.get(handle).channel == CH_EXPOSURE:
             self.pending_exposure[handle] = self.ticks_consumed
+            if (reason := declined_reason(ret)) is not None:
+                self.declined_exposures[handle] = reason
         else:
             # A refusal is still published and may be judged like any return (II.III.b);
             # only if no judge grades it does it settle as the abstention it is.
@@ -1163,6 +1163,10 @@ class Runtime(
             handle, sample.chosen, self._event_subject(ev) or handle,
             ret.outputs.get("forecasts") if ret.status == "ok" else None)
         self.forecast_returns[handle] = {"handles": forecasts, "results": {}}
+        if (reason := declined_reason(ret)) is not None:
+            # A refusal makes no prediction, so nothing will ever score it: it settles
+            # declined now, priced as an abstention, never censored at a free neutral.
+            self._settle_declined(handle, self.queue.get(handle).channel, reason)
         self._settle_forecast_returns()
         self._emit(emitted, {"about_handle": handle, "outputs": public_return(ret.outputs),
                              "cost": ret.cost, "status": ret.status,
