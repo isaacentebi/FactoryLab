@@ -115,6 +115,8 @@ class FakeDigitalOcean:
         # When set, the droplet's own line carries its uuid only on these invoices (and
         # never on the preview); elsewhere its resource_uuid is empty.
         self.uuid_only_in: set[str] | None = None
+        # Invoices that answer 404, by uuid: how many more times (float("inf"): always).
+        self.broken: dict[str, float] = {}
 
     # ---- the account's own model -------------------------------------------------------
 
@@ -318,6 +320,9 @@ class FakeDigitalOcean:
             month, until, lines = self._preview_lines()
         else:
             found = [inv for inv in self.invoices if inv["uuid"] == which]
+            if self.broken.get(which, 0) > 0:
+                self.broken[which] -= 1
+                return 404, b'{"id": "not_found", "message": "temporarily unavailable"}'
             if not found:
                 return 404, b'{"id": "not_found", "message": "no such invoice"}'
             month, lines = found[0]["period"], found[0]["lines"]

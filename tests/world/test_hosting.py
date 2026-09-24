@@ -771,3 +771,77 @@ def test_an_invoice_with_an_unclassifiable_uuid_only_line_stays_pending():
     pending = items(w, "treasury.hosting_invoice_pending")
     assert [(p["uuid"], p["reason"]) for p in pending] == [(held, "uuid unknown")]
     assert w.hosting.estimate_final is False
+
+
+# --- Codex on 0f74165 --------------------------------------------------------------------------
+
+def _october_with_invoices(w, count):
+    """September's invoices posted while nothing was read, each a supplement of $1."""
+    w.fake.down = True
+    windows(w, 9)
+    uuids = [f"00000000-0000-4000-8000-00000000010{n}" for n in range(count)]
+    for uuid in uuids:
+        w.fake.post_supplement("2026-09", {w.droplet: "1.00"}, uuid=uuid)
+    w.fake.down = False
+    return uuids
+
+
+def test_an_invoice_that_always_fails_is_held_and_nothing_else_freezes():
+    w = world()
+    first, second, third = _october_with_invoices(w, 3)
+    w.fake.broken[first] = float("inf")
+    windows(w, 1, hours=1)
+    assert w.hosting.unread is None                     # the read went through
+    assert w.hosting.held[first] == "unreadable"
+    assert second in w.hosting.reconciled
+    before = w.hosting.burn_by_month().get("2026-10", 0)
+    windows(w, 3, hours=24)
+    assert third in w.hosting.reconciled
+    assert first not in w.hosting.reconciled
+    assert w.hosting.burn_by_month()["2026-10"] > before  # the preview kept booking
+    pending = [p for p in items(w, "treasury.hosting_invoice_pending") if p["uuid"] == first]
+    assert [p["reason"] for p in pending] == ["unreadable"]   # once, not every read
+
+
+def test_an_invoice_that_fails_once_is_booked_when_the_rotation_returns():
+    w = world()
+    first, second, third = _october_with_invoices(w, 3)
+    w.fake.broken[first] = 1
+    windows(w, 1, hours=1)
+    # The failure is that invoice's alone: the rest of the batch is booked now.
+    assert w.hosting.held[first] == "unreadable" and second in w.hosting.reconciled
+    windows(w, 2, hours=1)                   # the rotation comes back round to it
+    assert {first, second, third} <= set(w.hosting.reconciled)
+    assert first not in w.hosting.held
+    assert sum(v for k, v in w.hosting.lines["2026-09"].items()
+               if k.startswith(first)) == 1_000_000
+
+
+def test_the_launch_estimate_is_not_final_while_a_launch_month_invoice_is_unreadable():
+    w = world()
+    windows(w, 9)
+    main = w.fake.post_invoice("2026-09")["uuid"]
+    stuck = w.fake.post_supplement("2026-09", {w.droplet: "0.50"},
+                                   uuid="00000000-0000-4000-8000-0000000000ff")["uuid"]
+    w.fake.broken[stuck] = float("inf")
+    windows(w, 4, hours=1)
+    assert main in w.hosting.reconciled and w.hosting.held[stuck] == "unreadable"
+    assert w.hosting.estimate_final is False
+    del w.fake.broken[stuck]
+    windows(w, 2, hours=1)
+    assert w.hosting.estimate_final is True
+
+
+@pytest.mark.parametrize("bad", ["deadbeef", "--------", "{b6fc48db-a5d4-4ec1-9f09-3e23bd8a0a12}",
+                                 "b6fc48dba5d44ec19f093e23bd8a0a12"])
+def test_a_uuid_that_is_not_canonical_is_no_uuid_and_the_canonical_one_is_learned(bad):
+    import uuid as uuidlib
+
+    w = world()
+    _uuid_only_charge(w)
+    w.fake.uuid_of[w.droplet] = bad
+    windows(w, 2)
+    assert w.hosting.droplet_uuid is None
+    del w.fake.uuid_of[w.droplet]
+    windows(w, 1)
+    assert w.hosting.droplet_uuid == str(uuidlib.uuid5(uuidlib.NAMESPACE_URL, w.droplet))

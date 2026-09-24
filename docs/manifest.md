@@ -1742,8 +1742,14 @@ docs.digitalocean.com/reference/api/reference/billing/):
   launch month or later that have not been reconciled, each reconciled once by its uuid (a
   month can have several invoices). They are read from a checkpointed cursor that rotates
   through the waiting invoices in (period, uuid) order, so each of n waiting invoices is
-  read within ceil(n / 2) reads: within that bound every one is reconciled, or held for a
-  stated reason, or its read failed and the whole read is unavailable;
+  read within ceil(n / 2) reads: within that bound every one is reconciled or held for a
+  stated reason. A failure reading one closed invoice (a 404, a timeout on its own share of
+  the deadline, a malformed line of this droplet's) is that invoice's alone: it is held as
+  `unreadable` (`treasury.hosting_invoice_pending`, once per change of reason), the cursor
+  moves past it, the rest of the read is booked, and it is read again when the rotation
+  comes back round. Only a failure of what the whole read stands on (the invoice index, the
+  preview, the sizes, the history, or the account and droplet) makes the whole read
+  unavailable;
 - `GET /v2/customers/my/invoices/preview`: the month's accruing lines ("an invoice preview
   is generated daily, which can be accessed with the `preview` keyword in place of
   `$INVOICE_UUID`");
@@ -1758,7 +1764,9 @@ its `product` is one billed against a droplet (`DROPLET_PRODUCTS`: `Droplets`,
 invoice's names, and a line carrying the droplet's uuid is matched whatever its product is
 called). The droplet object carries no uuid (docs.digitalocean.com/reference/api/reference/droplets/),
 so the billing uuid is learned from the droplet's own `Droplets` line, matched by id, and
-checkpointed once a valid one is actually seen; until then it is unknown, nothing else is
+checkpointed once a valid one is actually seen (canonical 8-4-4-4-12 hex, parsed as a
+uuid and compared lowercased; anything else, such as `deadbeef`, is no uuid); until then it
+is unknown, nothing else is
 ever recorded in its place, and every read looks for it again (on the preview, and on every
 invoice read with it) before any line of that read is classified. While it is unknown, the
 id-and-product match still books what it matches with certainty, and a line that names a uuid
@@ -1819,7 +1827,7 @@ launch month's entry in the pot's `burn_by_month` carry `estimated: true` and
 `overshoot_bound_micro`: the most the booked launch-month burn can exceed the true
 post-launch charge by, and `estimate_final`, which becomes true only once the launch month has
 closed, an invoice for it carrying this droplet's lines is reconciled, and no invoice known
-for it is still waiting. At every read the booked launch-month burn is at most the published
+for it is still waiting or held, for any reason. At every read the booked launch-month burn is at most the published
 bound plus the true post-launch charge. The bound is a sum of each line's uncertainty and
 is never below zero; no line reduces it. A line wholly before or wholly after the launch is
 certain and adds nothing (a line with no span is a charge at its instant, dated there). For

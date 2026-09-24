@@ -229,7 +229,21 @@ def deadline_http(method: str, url: str, headers: dict[str, str], body: bytes | 
 # --- parsing ------------------------------------------------------------------------------
 
 _SLUG = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
-_UUID = re.compile(r"[0-9a-fA-F-]{8,64}")
+def uuid_of(value: Any) -> str | None:
+    """A uuid in canonical 8-4-4-4-12 hex, lowercased, or None for anything else.
+
+    Parsed with ``uuid.UUID`` and accepted only when it is already written that way:
+    ``deadbeef``, a run of hyphens, braces or an unhyphenated form are no uuid.
+    """
+    import uuid
+
+    if not isinstance(value, str):
+        return None
+    try:
+        canonical = str(uuid.UUID(value))
+    except ValueError:
+        return None
+    return canonical if canonical == value.lower() else None
 _PERIOD = re.compile(r"[0-9]{4}-(0[1-9]|1[0-2])")
 
 
@@ -318,11 +332,11 @@ def _invoice(raw: Any) -> dict[str, Any] | None:
     if not isinstance(raw, dict):
         return None
     uuid, period = raw.get("invoice_uuid"), raw.get("invoice_period")
-    if not isinstance(uuid, str) or _UUID.fullmatch(uuid) is None:
+    if uuid_of(uuid) is None:
         return None
     if not isinstance(period, str) or _PERIOD.fullmatch(period) is None:
         return None
-    return {"uuid": uuid, "period": period}
+    return {"uuid": uuid_of(uuid), "period": period}
 
 
 def _by_id(raw: Any, droplet_id: int) -> bool:
@@ -339,9 +353,9 @@ def droplet_uuid(rows: list, droplet_id: int) -> str | None:
     """
     for raw in rows:
         if _by_id(raw, droplet_id) and raw.get("product") == DROPLET_PRODUCT:
-            uuid = raw.get("resource_uuid")
-            if isinstance(uuid, str) and _UUID.fullmatch(uuid):
-                return uuid.lower()
+            uuid = uuid_of(raw.get("resource_uuid"))
+            if uuid is not None:
+                return uuid
     return None
 
 
@@ -354,8 +368,7 @@ def _uncertain(raw: Any, droplet_id: int) -> bool:
     """
     if not isinstance(raw, dict):
         return False
-    named = raw.get("resource_uuid")
-    if not (isinstance(named, str) and _UUID.fullmatch(named)):
+    if uuid_of(raw.get("resource_uuid")) is None:
         return False
     if _is_mine(raw, droplet_id, None):
         return False
@@ -374,8 +387,7 @@ def _is_mine(raw: Any, droplet_id: int, uuid: str | None) -> bool:
     """
     if not isinstance(raw, dict):
         return False
-    named = raw.get("resource_uuid")
-    if uuid and isinstance(named, str) and named.lower() == uuid:
+    if uuid and uuid_of(raw.get("resource_uuid")) == uuid:
         return True
     return _by_id(raw, droplet_id) and raw.get("product") in DROPLET_PRODUCTS
 
@@ -431,7 +443,7 @@ def _entry(raw: Any) -> dict[str, Any] | None:
     except DigitalOceanError:
         return None
     uuid = raw.get("invoice_uuid")
-    uuid = uuid if isinstance(uuid, str) and _UUID.fullmatch(uuid) else None
+    uuid = uuid_of(uuid)
     key = hashlib.sha256(json.dumps([kind, amount, date, uuid],
                                     separators=(",", ":")).encode()).hexdigest()[:24]
     return {"type": kind, "amount_micro": amount, "date": date, "invoice_uuid": uuid,
@@ -568,7 +580,7 @@ class DigitalOceanClient:
             raise DigitalOceanError(None, "account missing")
         team = account.get("team") if isinstance(account.get("team"), dict) else None
         owner = team.get("uuid") if team is not None else account.get("uuid")
-        if not isinstance(owner, str) or _UUID.fullmatch(owner) is None:
+        if uuid_of(owner) is None:
             raise DigitalOceanError(None, "account without a uuid")
         try:
             droplet = self.droplet(droplet_id, deadline)
@@ -576,14 +588,14 @@ class DigitalOceanClient:
             if exc.status != 404:
                 raise
             droplet = None
-        return {"billing_uuid": owner.lower(), "billing_kind": "team" if team else "user",
+        return {"billing_uuid": uuid_of(owner), "billing_kind": "team" if team else "user",
                 "droplet_id": int(droplet_id),
                 "droplet_held": droplet is not None and droplet["id"] == int(droplet_id),
                 "metadata_id": self.metadata_droplet_id(deadline), "droplet": droplet}
 
     def _rows(self, invoice: str, deadline: Deadline) -> list:
         """One invoice's raw lines (``preview`` for the month so far), every page."""
-        if invoice != "preview" and _UUID.fullmatch(invoice) is None:
+        if invoice != "preview" and uuid_of(invoice) is None:
             raise DigitalOceanError(None, "invoice uuid is malformed")
         rows, _ = self._pages(f"/v2/customers/my/invoices/{invoice}", "invoice_items",
                               deadline)
@@ -646,30 +658,45 @@ class DigitalOceanClient:
         start = next((n for n, inv in enumerate(waiting)
                       if after is not None and (inv["period"], inv["uuid"]) > after), 0)
         batch = (waiting[start:] + waiting[:start])[:INVOICES_PER_READ]
+        # What the whole read stands on: the preview, the sizes and the history. A
+        # failure in any of them makes the whole read unavailable.
         preview_rows = self._rows("preview", deadline)
-        read = [(inv, self._rows(inv["uuid"], deadline)) for inv in batch]
+        sizes = self.sizes(deadline)
+        raw = self._get(f"/v2/customers/my/billing_history?per_page={PER_PAGE}&page=1",
+                        deadline)
+        history = raw.get("billing_history") if isinstance(raw, dict) else None
+        entries = [e for e in (_entry(row) for row in history or []) if e is not None]
+        # Then the closed invoices of this turn, each on its own share of what the
+        # deadline leaves: a failure in one (a 404, a timeout, a malformed line of this
+        # droplet's) holds that invoice alone, as ``unreadable``, and is retried when
+        # the rotation comes back round.
+        read, held = [], []
+        for n, inv in enumerate(batch):
+            try:
+                share = Deadline(deadline.remaining() / (len(batch) - n))
+                read.append((inv, self._rows(inv["uuid"], share)))
+            except (DigitalOceanError, TimeoutError, ValueError):
+                held.append({**inv, "reason": "unreadable"})
         if uuid is None:
-            for found in (preview_rows, *(raw for _, raw in read)):
+            for found in (preview_rows, *(rows for _, rows in read)):
                 uuid = droplet_uuid(found, droplet_id)
                 if uuid is not None:
                     break
         # The preview is re-read every window: what cannot be classified on it yet is
         # simply not booked yet.
         current = self._classify(preview_rows, "preview", period, droplet_id, uuid)
-        closed, held = [], []
-        for inv, raw in read:
-            if uuid is None and any(_uncertain(row, droplet_id) for row in raw):
+        closed = []
+        for inv, rows in read:
+            if uuid is None and any(_uncertain(row, droplet_id) for row in rows):
                 held.append({**inv, "reason": "uuid unknown"})
-            else:
-                closed.append({**inv, **self._classify(raw, inv["uuid"], inv["period"],
+                continue
+            try:
+                closed.append({**inv, **self._classify(rows, inv["uuid"], inv["period"],
                                                        droplet_id, uuid)})
+            except DigitalOceanError:
+                held.append({**inv, "reason": "unreadable"})
         reconciled = {inv["uuid"] for inv in closed}
         pending = [inv for inv in waiting if inv["uuid"] not in reconciled]
-        sizes = self.sizes(deadline)
-        raw = self._get(f"/v2/customers/my/billing_history?per_page={PER_PAGE}&page=1",
-                        deadline)
-        history = raw.get("billing_history") if isinstance(raw, dict) else None
-        entries = [e for e in (_entry(row) for row in history or []) if e is not None]
         return {"identity": identity, "droplet": droplet, "sizes": sizes,
                 "droplet_uuid": uuid,
                 "period": period, "lines": current["mine"], "others": current["others"],
