@@ -14,7 +14,10 @@ from factorylab.learners.base import NEUTRAL_REWARD, BanditFeedback
 from factorylab.runtime.cascade import CascadeGate, event_tier, release_window
 from factorylab.runtime.clockwork import deadline_ticks, tick_ns
 from factorylab.runtime.grounded import (
+    ATTEMPTED_DEFINITION,
     OPPORTUNITY_DEFINITION,
+    attempted_cost,
+    attempted_trade,
     declined_trade,
     latest_mids,
     opportunity_cost,
@@ -1239,10 +1242,19 @@ class FeedbackMixin:
             opened = frozen["tick"] if frozen is not None else self.ticks_consumed
         return self.ticks_consumed >= opened + ticks
 
-    def _price_declined(self, about: str, frozen: dict) -> dict[str, Any] | None:
-        """The named declined trade priced from its frozen mids to the mids now (R2)."""
-        return opportunity_cost(tuple(tuple(m) for m in frozen["mids"]), latest_mids(self),
-                                self.ev.opportunity_scale_bps, frozen["declined"])
+    def _price_declined(self, about: str, frozen: dict) -> tuple[dict[str, Any] | None, str]:
+        """The frozen named trade priced from its frozen mids to the mids now, and its kind.
+
+        Guarantees ``attempted-trade-v1`` (``attempted_cost``) for the trade a refused
+        answer order named, and ``opportunity-cost-v2`` (``opportunity_cost``, ruling R2)
+        for a declined one; the same mids and horizon for both.
+        """
+        opened = tuple(tuple(m) for m in frozen["mids"])
+        if frozen.get("attempted") is not None:
+            return (attempted_cost(opened, latest_mids(self), self.ev.opportunity_scale_bps,
+                                   frozen["attempted"]), ATTEMPTED_DEFINITION)
+        return (opportunity_cost(opened, latest_mids(self), self.ev.opportunity_scale_bps,
+                                 frozen["declined"]), OPPORTUNITY_DEFINITION)
 
     def _final_outcome(self, about: str) -> tuple[str, float | None, str | None]:
         """The final measured outcome of a judged return: ``(state, y, kind)``.
@@ -1259,6 +1271,11 @@ class FeedbackMixin:
           ``opportunity_cost``), from the mids frozen when the return was made; the
           contract of a producing kind requires the name whenever the world lists a
           coin (``ComputeMixin._counterfactual_refusal``);
+        * a return whose answer order was refused (by the collateral check, the
+          venue, or a terminal error) and that executed nothing else is measured by
+          the order's own named trade for its side, from the same frozen mids at the
+          same horizons (``attempted-trade-v1``, ``attempted_cost``); a write left
+          uncertain is acting, and stays with ``return_paid_off``;
         * anything else (a return made while the world listed no coin, a declined
           commission, or a named coin whose prices are missing at the horizon) has
           no world outcome, and only the tier above grades a verdict about it.
@@ -1288,24 +1305,29 @@ class FeedbackMixin:
             return self._keep_outcome(self.world_outcomes, about, "none", None, None)
         if not self._horizon_reached(about, account, frozen, self.ev.consequence_backstop_ticks):
             return "open", None, None
-        priced = self._price_declined(about, frozen)
+        priced, definition = self._price_declined(about, frozen)
         self.reference_mids.pop(about, None)
         if priced is None:
             return self._keep_outcome(self.world_outcomes, about, "none", None, None)
-        self.ledger.append({"kind": "consequence.opportunity", "handle": about,
+        attempted = definition == ATTEMPTED_DEFINITION
+        self.ledger.append({"kind": ("consequence.attempted" if attempted
+                                     else "consequence.opportunity"), "handle": about,
                             "horizon_ticks": self.ev.consequence_backstop_ticks,
                             **priced, "ts": self.clock.now_ns})
         owner = self.handle_to_assembly.get(about) or self.outcomes.seat_of(about)
         if owner is not None:
             # A fact about the producer's own decision, told to it; it is not its reward
             # (ruling R2: it never replaces the verdict as a producer's score).
+            named = ({"attempted": priced["attempted"]} if attempted
+                     else {"declined": priced["declined"]})
             self.outcomes.append(owner, handle=about, evidence=f"opportunity:{about}",
-                                 outcome={"kind": "opportunity_cost", "score": priced["score"],
-                                          "declined": priced["declined"],
+                                 outcome={"kind": ("attempted_trade" if attempted
+                                                   else "opportunity_cost"),
+                                          "score": priced["score"], **named,
                                           "gross_bps": priced["gross_bps"],
                                           "moves": priced["moves"]})
         return self._keep_outcome(self.world_outcomes, about, "measured",
-                                  float(priced["score"]), OPPORTUNITY_DEFINITION)
+                                  float(priced["score"]), definition)
 
     def _reward_outcome(self, about: str) -> tuple[str, float | None, str | None, str]:
         """The outcome a verdict's reward is scored on: ``(state, y, kind, phase)``.
@@ -1339,15 +1361,17 @@ class FeedbackMixin:
                                 "y": payoff.y, "net_micro": payoff.net_micro,
                                 "cost_micro": payoff.cost_micro, "ts": self.clock.now_ns})
             return "measured", float(payoff.y), RETURN_PAID_OFF.id, "mark"
-        priced = self._price_declined(about, frozen)
+        priced, definition = self._price_declined(about, frozen)
         if priced is None:
             return "open", None, None, "mark"
-        self.ledger.append({"kind": "consequence.opportunity_mark", "handle": about,
+        self.ledger.append({"kind": ("consequence.attempted_mark"
+                                     if definition == ATTEMPTED_DEFINITION
+                                     else "consequence.opportunity_mark"), "handle": about,
                             "horizon_ticks": self.ev.consequence_horizon_ticks,
                             **priced, "ts": self.clock.now_ns})
         self._keep_outcome(self.marked_outcomes, about, "measured", float(priced["score"]),
-                           OPPORTUNITY_DEFINITION)
-        return "measured", float(priced["score"]), OPPORTUNITY_DEFINITION, "mark"
+                           definition)
+        return "measured", float(priced["score"]), definition, "mark"
 
     def _keep_outcome(self, kept: dict, about: str, state: str, y: float | None,
                       kind: str | None) -> tuple[str, float | None, str | None]:
@@ -1356,19 +1380,34 @@ class FeedbackMixin:
         return state, y, kind
 
     def _freeze_declined_trade(self, handle: str, outputs: Any) -> None:
-        """Freeze the mids a declined trade is priced from, when the return names one.
+        """Freeze the mids a named trade is priced from, when the return names one.
 
         Guarantees the benchmark is fixed ex ante, from the mids the world had
-        already broadcast when the return was made (ruling R2).
+        already broadcast when the return was made (ruling R2). The trade is the
+        answer order's own when the return's kind owns the answer order and its
+        answer is one (``attempted-trade-v1``, priced only when nothing the decision
+        wrote executed, ``_acted``); otherwise the declined trade it names
+        (``opportunity-cost-v2``). Either coin is in the world's own spelling.
         """
+        from factorylab.cortex.assembly import ANSWER_ORDER_KINDS
+
         mids = latest_mids(self)
-        # The coin in the world's own spelling, the one its mids are keyed by.
-        declined = declined_trade(outputs if isinstance(outputs, dict) else {},
-                                  [coin for coin, _ in mids])
-        if declined is None or not mids:
+        if not mids:
+            return
+        outputs = outputs if isinstance(outputs, dict) else {}
+        listed = [coin for coin, _ in mids]
+        kind = self.return_kinds.get(handle)
+        if kind is None:
+            owner = self.assemblies.get(self.handle_to_assembly.get(handle, ""))
+            emits = owner.spec.emits if owner is not None else ()
+            kind = emits[0] if len(emits) == 1 else None
+        attempted = attempted_trade(outputs, listed) if kind in ANSWER_ORDER_KINDS else None
+        declined = None if attempted is not None else declined_trade(outputs, listed)
+        if attempted is None and declined is None:
             return
         self.reference_mids[handle] = {"declined": declined, "mids": [list(m) for m in mids],
-                                       "tick": self.ticks_consumed}
+                                       "tick": self.ticks_consumed,
+                                       **({"attempted": attempted} if attempted else {})}
 
     def _score_verdict(self, rec: PendingJudgement, y: float, kind: str, phase: str) -> None:
         """Score one judge's verdict against its return's measured outcome (ruling R1).

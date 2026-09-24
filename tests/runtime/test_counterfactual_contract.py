@@ -18,12 +18,15 @@ import pytest
 
 from factorylab.cortex.assembly import COUNTERFACTUAL_FIELD, with_counterfactual
 from factorylab.runtime.grounded import (
+    ATTEMPTED_DEFINITION,
     COUNTERFACTUAL_ABSENT,
     COUNTERFACTUAL_SHAPE,
     COUNTERFACTUAL_UNLISTED,
     OPPORTUNITY_DEFINITION,
+    attempted_cost,
     counterfactual_refusal,
     declined_trade,
+    opportunity_cost,
 )
 from factorylab.world.models import ModelResponse
 from factorylab.world.scripted import _description_from_prompt
@@ -216,6 +219,79 @@ def test_an_uncertain_venue_write_is_acting_and_needs_no_counterfactual(monkeypa
     assert [row["status"] for row in rt.executed_operations(handle)] == ["uncertain"]
     assert rt._acted(handle)
     assert _returned(rt, handle) == ("ok", None)
+
+
+def _attempted_run(rt, gross_to="102", *, verdict_q=0.7):
+    """Judge the one producer return in ``rt``, move BTC, and run past the backstop."""
+    producer, event = _consequence_produce(rt)
+    judge = _judge(rt, event)
+    rt._settle_arrived_verdicts()
+    _mids(rt, BTC=gross_to)
+    _advance(rt, rt.ev.consequence_backstop_ticks + 1)
+    return producer, judge
+
+
+def _assert_attempted(rt, producer, judge, side):
+    assert not rt._acted(producer)
+    (priced,) = _rows(rt, "consequence.attempted", handle=producer)
+    assert priced["attempted"] == {"coin": "BTC", "side": side}
+    assert not _rows(rt, "consequence.opportunity", handle=producer)
+    assert rt.world_outcomes[producer]["kind"] == ATTEMPTED_DEFINITION
+    assert rt.world_outcomes[producer]["y"] == pytest.approx(priced["score"])
+    scored = _rows(rt, "verdict.consequence", handle=judge)
+    assert scored and scored[0]["outcome"] == ATTEMPTED_DEFINITION
+    return priced
+
+
+def test_a_collateral_refused_answer_order_is_priced_as_its_attempted_trade():
+    """An answer order the collateral check refused placed nothing, and is priced on
+    the trade it named, for its own side, and its judge is scored on that."""
+    rt = _world({"action": "order", "coin": "BTC", "side": "buy", "size": "1000"})
+    producer, judge = _attempted_run(rt)
+    assert _returned(rt, producer) == ("ok", None)
+    assert not rt.executed_operations(producer)  # refused before any intent
+    assert _rows(rt, "order.infeasible", handle=producer)  # the collateral check
+    priced = _assert_attempted(rt, producer, judge, "buy")
+    assert float(priced["gross_bps"]) == pytest.approx(200)  # 100 -> 102, for the buy
+    assert priced["score"] > 0.5
+
+
+def test_a_venue_rejected_answer_order_is_priced_as_its_attempted_trade(monkeypatch):
+    rt = _world({"action": "order", "coin": "BTC", "side": "sell", "size": "0.0001"})
+    _venue_answers(rt, monkeypatch, "rejected")
+    producer, judge = _attempted_run(rt)
+    assert [row["status"] for row in rt.executed_operations(producer)] == ["rejected"]
+    priced = _assert_attempted(rt, producer, judge, "sell")
+    assert float(priced["gross_bps"]) == pytest.approx(-200)  # BTC rose against a sell
+    assert priced["score"] < 0.5
+
+
+def test_an_uncertain_answer_order_stays_with_return_paid_off(monkeypatch):
+    rt = _world({"action": "order", "coin": "BTC", "side": "buy", "size": "0.0001"})
+    _venue_answers(rt, monkeypatch, ConnectionError("lost"))
+    producer, _judge_handle = _attempted_run(rt)
+    assert rt._acted(producer)
+    assert not _rows(rt, "consequence.attempted", handle=producer)
+    assert rt.world_outcomes.get(producer, {}).get("kind") != ATTEMPTED_DEFINITION
+
+
+@pytest.mark.parametrize("side", ["buy", "sell"])
+def test_the_attempted_trade_is_the_mirror_of_the_declined_one(side):
+    """No move gives 0.5; a move for the ordered side goes toward 1, against it toward
+    0; and it is 1 minus the declined form on the same named trade."""
+    trade = {"coin": "BTC", "side": side}
+    opened = (("BTC", "100"),)
+    flat = attempted_cost(opened, (("BTC", "100"),), 50, trade)
+    assert flat["score"] == 0.5
+    up, down = (attempted_cost(opened, (("BTC", px),), 50, trade) for px in ("101", "99"))
+    favourable, adverse = (up, down) if side == "buy" else (down, up)
+    assert 0.5 < favourable["score"] < 1 and 0 < adverse["score"] < 0.5
+    assert favourable["score"] + adverse["score"] == pytest.approx(1)
+    far = attempted_cost(opened, (("BTC", "150" if side == "buy" else "50"),), 50, trade)
+    assert far["score"] == pytest.approx(1, abs=1e-6)
+    declined = opportunity_cost(opened, (("BTC", "101"),), 50, trade)
+    assert up["score"] + declined["score"] == pytest.approx(1)
+    assert attempted_cost(opened, (("ETH", "1"),), 50, trade) is None  # no price, no y
 
 
 def test_nothing_is_required_while_the_world_lists_no_coin():
