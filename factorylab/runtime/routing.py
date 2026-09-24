@@ -192,8 +192,7 @@ class ContractQueue:
                 # it would at its settlement check: a timeout is credited the
                 # unpriced neutral, and declining must never pass through that door
                 # free (ruling R9).
-                if reason is not None and rt._settle_declined(
-                        decision.handle, decision.channel, reason):
+                if reason is not None and rt._settle_declined(decision.handle, reason):
                     continue
                 due.append(decision.handle)
         return self.queue.time_out(due, now_ns)

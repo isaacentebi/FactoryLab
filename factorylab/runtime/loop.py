@@ -1166,7 +1166,7 @@ class Runtime(
         if (reason := declined_reason(ret)) is not None:
             # A refusal makes no prediction, so nothing will ever score it: it settles
             # declined now, priced as an abstention, never censored at a free neutral.
-            self._settle_declined(handle, self.queue.get(handle).channel, reason)
+            self._settle_declined(handle, reason)
         self._settle_forecast_returns()
         self._emit(emitted, {"about_handle": handle, "outputs": public_return(ret.outputs),
                              "cost": ret.cost, "status": ret.status,
@@ -1287,7 +1287,7 @@ class Runtime(
             # A commission may be declined (§6.B). The seat is charged the call it
             # made; no score, no quota; its learners credit the decline as an
             # abstention, less its role's price (ruling R9), as the schematic says.
-            self._settle_declined(handle, CH_CONFORMITY, reason)
+            self._settle_declined(handle, reason)
             return
         verdict = _as_unit(ret.outputs.get("verdict")) if ret.status == "ok" else None
         if verdict is None:
@@ -1442,7 +1442,7 @@ class Runtime(
         if reason is not None:
             # Meta work is a commission like any other: it may be declined, at the
             # cost of the call, and is priced as an abstention (ruling R9).
-            self._settle_declined(handle, channel, reason)
+            self._settle_declined(handle, reason)
             return
         conformity = _as_unit(ret.outputs.get("conformity")) if ret.status == "ok" else None
         if conformity is None:
@@ -1547,7 +1547,7 @@ class Runtime(
         self._apply_registrations(handle, ret)
         reason = declined_reason(ret)
         if reason is not None:
-            self._settle_declined(handle, channel, reason)
+            self._settle_declined(handle, reason)
             return
         q = _as_unit(ret.outputs.get("verdict")) if ret.status == "ok" else None
         if q is None:

@@ -2399,7 +2399,7 @@ class ComputeMixin:
 
         reason = declined_reason(ret)
         if reason is not None:
-            self._settle_declined(handle, self.queue.get(handle).channel, reason)
+            self._settle_declined(handle, reason)
             return
         self.queue.settle(handle, channel=self.queue.get(handle).channel, score=0.0,
                           status=SettleStatus.CENSORED,

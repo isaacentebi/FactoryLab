@@ -310,6 +310,61 @@ def test_a_refusal_cut_off_before_its_settlement_check_still_settles_declined(
     assert len(_rows(rt, "router.decline_priced", handle=handle)) == 1
 
 
+class SelectThenDecline(ScriptedProvider):
+    """A seat that selects Exposure and reads in its first round, then declines."""
+
+    def _produce(self, desc, inputs):
+        if "tool_results" in inputs:
+            return {"status": "cannot", "reason": REASON}
+        return {"emits": "Exposure", "action": "hold", "tool_calls": [
+            {"tool": "catalogue.search", "args": {"substring": "fake", "limit": 1}}]}
+
+
+def test_a_polymorphic_decline_settles_on_the_kind_it_selected_at_its_cutoff(monkeypatch):
+    """A multi-kind decision that selected Exposure in a tool round and then declined
+    waits on the exposure channel; at its cutoff it settles declined there. The kernel's
+    own routing channel for it is ``emits``, and a settlement naming that is refused."""
+    from factorylab.cortex.registration import AssemblyProposal
+
+    rt = _priced_runtime(monkeypatch)
+    rt.provider.target.__class__ = SelectThenDecline
+    rt._register("author", AssemblyProposal(
+        "dual-x", "producer", "fake-haiku", "Reply with JSON.", ("Tick",), 128, "low",
+        ("ProducerReturn", "Exposure"), {}))
+    assert "dual-x" in rt.assemblies
+    _commitments(rt, "eval-a", censored=4)
+    rt._close_price_window()
+    state = rt.routers["Tick"][0]
+    feasible = lambda a: (a == "dual-x", "")  # noqa: E731 - only this arm may be woken
+    sample = next(s for s in (state.router.route("Tick", feasible, random.Random(i))
+                              for i in range(200)) if s.chosen == "dual-x")
+    handle = rt.queue.open(actor=state.learner.id, event_id="tick-dual",
+                           propensity=rt._propensity(sample), channel="verdict",
+                           return_channels=rt._return_channels("dual-x"),
+                           deadline_ns=10**18, parent_handle=None,
+                           cost_ceiling=rt.wallet.available)
+    assert rt.queue.queue.get(handle).channel == "emits"
+    rt.n += 1
+    rt._producer_step(
+        Event(f"tick-{rt.n}", EventKind.TICK, rt.clock.now_ns, {"index": 0}, "test"),
+        handle, SimpleNamespace(chosen="dual-x"), rt.queue.get(handle).deadline_ns)
+    assert [r["status"] for r in _rows(rt, "invocation", handle=handle)] == ["refused"]
+    assert rt.return_kinds[handle] == "Exposure"
+    assert rt.queue.get(handle).channel == "exposure"
+    rt.decision_ticks[handle] = [rt.ticks_consumed, rt.ticks_consumed + 1]
+    rt.ticks_consumed += 1
+    assert handle not in rt.queue.expire_due()
+    (settled,) = rt.queue.history(handle)
+    assert settled.status is SettleStatus.INAPPLICABLE
+    assert settled.definition_version == DECLINED_DEFINITION
+    (declined,) = _rows(rt, "evaluation.declined", handle=handle)
+    assert declined["channel"] == "exposure"
+    rt._deliver_returns()
+    (priced,) = _rows(rt, "router.decline_priced", handle=handle)
+    assert priced["penalty"] > 0
+    assert priced["reward"] == pytest.approx(state.neutral() - priced["penalty"])
+
+
 # --- a judge, a meta and a counter-judge decline their commissions ---------------------
 
 

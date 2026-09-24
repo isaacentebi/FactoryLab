@@ -583,7 +583,7 @@ class FeedbackMixin:
             return pend.declined
         return self.declined_exposures.get(handle)
 
-    def _settle_declined(self, handle: str, channel: str, reason: str) -> bool:
+    def _settle_declined(self, handle: str, reason: str) -> bool:
         """Close one declined commission with no score, no price and no standing.
 
         A seat may decline paid judging work (§6.B), and a producer may decline the
@@ -593,12 +593,18 @@ class FeedbackMixin:
         seat's own choice, never a list the kernel keeps of what may be judged
         (evaluations S1). Nothing enters a standing, nothing
         enters a base rate, no card is blamed, and no money moves.
+
+        Guarantees the settlement addresses the decision's own channel as the
+        contract queue reports it: the kind a polymorphic decision selected (in a
+        tool round, before it declined) when it selected one, so no caller can name
+        a channel the queue refuses and abort the world.
         """
         definition = DECLINED_DEFINITION
         try:
-            status = self.queue.get(handle).status
+            decision = self.queue.get(handle)
         except KeyError:
             return False
+        status, channel = decision.status, decision.channel
         if status not in (SettleStatus.PENDING, SettleStatus.TIMED_OUT):
             return False
         self.ledger.append({"kind": "evaluation.declined", "handle": handle,
@@ -1539,7 +1545,7 @@ class FeedbackMixin:
                 # (ruling R9), never censored at a free neutral.
                 self.ledger.append({"kind": "exposure.settled", "handle": handle,
                                     "score": None, "declined": True, "ts": self.clock.now_ns})
-                self._settle_declined(handle, CH_EXPOSURE, declined)
+                self._settle_declined(handle, declined)
                 continue
             if not scores:
                 self.ledger.append({"kind": "exposure.settled", "handle": handle,
@@ -1744,7 +1750,7 @@ class FeedbackMixin:
                 # was credited that reward unpriced, and declining escaped the price
                 # a NOOP draw and a judged hold both bear (essay II.I.a: selection
                 # moves share only where abstaining is not free).
-                self._settle_declined(p.handle, p.channel, p.declined)
+                self._settle_declined(p.handle, p.declined)
             elif self.queue.get(p.handle).status is SettleStatus.PENDING:
                 self.queue.settle(
                     p.handle,
