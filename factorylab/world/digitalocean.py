@@ -251,6 +251,12 @@ def _time(value: Any, field: str) -> str:
     return value
 
 
+def _instant(stamp: str):
+    from datetime import datetime
+
+    return datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+
+
 def _period(value: Any, field: str) -> str:
     if not isinstance(value, str) or _PERIOD.fullmatch(value) is None:
         raise DigitalOceanError(None, f"{field} is not a YYYY-MM period")
@@ -368,6 +374,11 @@ def _line(raw: dict, period: str, source: str) -> dict[str, Any]:
     """
     start = _time(raw.get("start_time"), "start_time")
     end = _time(raw.get("end_time"), "end_time")
+    # A line's span must be ordered. One with no length (start equals end) is a charge
+    # at an instant, booked whole where it is dated; one that ends before it starts is a
+    # malformed answer, and the whole read is unavailable rather than half-believed.
+    if _instant(end) < _instant(start):
+        raise DigitalOceanError(None, "an invoice line ends before it starts")
     product = raw.get("product")
     if not isinstance(product, str) or not 0 < len(product) <= 100:
         raise DigitalOceanError(None, "this droplet's line names no product")

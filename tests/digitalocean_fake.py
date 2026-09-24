@@ -109,6 +109,7 @@ class FakeDigitalOcean:
         self.stall = None                          # a callable run before each answer
         self.untagged = False                      # lines that name no resource
         self.uuid_of: dict[str, str] = {}          # resource -> the uuid its lines carry
+        self.span_of: dict[str, tuple] = {}        # resource -> the span its lines state
 
     # ---- the account's own model -------------------------------------------------------
 
@@ -316,6 +317,7 @@ class FakeDigitalOcean:
             res = self.resources[rid]
             start = max(res["since"], month_start(month))
             end = min(until, res["until"] or until)
+            start, end = self.span_of.get(rid, (start, end))
             items.append({"product": res["product"],
                           "resource_id": "" if self.untagged else res["billed_as"],
                           "resource_uuid": "" if self.untagged

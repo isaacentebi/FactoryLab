@@ -511,8 +511,20 @@ class Treasury:
         if reason is not None:
             unread("hosting_refused", reason)
             return None
-        result = hosting.observe(reading)
+        before = hosting.state()
+        try:
+            result = hosting.observe(reading)
+        except Exception:  # noqa: BLE001 - no answer from the venue may crash a tick
+            # Whatever the answer held that could not be booked, it is not booked: the
+            # books go back to where they were, the reading is recorded as unread, and
+            # a replay of the same recorded answer takes the same path.
+            hosting.restore(before)
+            unread("hosting_unread", "billing answer could not be booked")
+            return None
         common = {"counterparty": "digitalocean", "droplet_id": hosting.droplet_id}
+        if result["launch_price"] is not None:
+            self._write("hosting_launch_price", **common, month=hosting.since,
+                        **result["launch_price"])
         for invoice in result["reconciled"]:
             self._write("hosting_invoice", **invoice)
         if result["baseline"] is not None:

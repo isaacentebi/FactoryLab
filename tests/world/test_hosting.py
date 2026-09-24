@@ -8,6 +8,7 @@ computed by the fake alone.
 """
 
 from copy import deepcopy
+from datetime import timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -546,3 +547,107 @@ def test_the_launch_share_follows_a_backup_line_that_arrives_after_the_first_rea
     assert w.hosting.view()["burn_by_month"][0]["estimate_final"] is True
     shares = items(w, "treasury.hosting_launch_share")
     assert len(shares) > 1                            # recomputed as lines changed
+
+
+# --- Codex on 2f61a39 --------------------------------------------------------------------------
+
+def _recorded_world(fake=None):
+    """A world whose hosting reads and ledger items go through a recovery journal, so a
+    reading it booked can be replayed in a second world from the record alone."""
+    from factorylab.runtime.resume import JournalProxy, RecoveryJournal
+
+    w = world(fake)
+    recorded = []
+
+    def append(item):
+        recorded.append({**item, "seq": len(recorded), "ts": item.get("ts", 0)})
+        return len(recorded) - 1
+
+    journal = RecoveryJournal(SimpleNamespace(append=append), lambda: 0)
+    journal.active = True
+    w.treasury.ledger = journal
+    w.hosting.client = JournalProxy(DigitalOceanClient(http=w.fake), journal, "hosting")
+    return w, journal, recorded
+
+
+def _replay(w, recorded):
+    """A second world restored to where ``w`` started, replaying ``recorded``."""
+    from factorylab.runtime.resume import JournalProxy, RecoveryJournal
+
+    twin = world(w.fake)
+    journal = RecoveryJournal(SimpleNamespace(append=lambda item: len(recorded)), lambda: 0)
+    journal.active = journal.recovering = True
+    journal.tail = list(recorded)
+    twin.treasury.ledger = journal
+    twin.hosting.launch_ns = w.hosting.launch_ns
+    twin.hosting.client = JournalProxy(DigitalOceanClient(http=lambda *a: pytest.fail(
+        "a replay asked DigitalOcean")), journal, "hosting")
+    return twin
+
+
+@pytest.mark.parametrize("shape", ["zero", "inverted"])
+def test_a_line_with_no_span_or_an_inverted_one_never_crashes_a_read_or_its_replay(shape):
+    w, _, recorded = _recorded_world()
+    start = w.launch - timedelta(hours=5)
+    w.fake.span_of[w.droplet] = ((w.launch + timedelta(hours=2),) * 2 if shape == "zero"
+                                 else (w.launch + timedelta(hours=3), start))
+    w.fake.advance(24)
+    w.treasury.observe_hosting()            # must not raise
+    if shape == "zero":
+        # No time to split: booked whole, in the month it is dated, after the launch.
+        assert w.hosting.unread is None
+        assert w.hosting.burn_by_month()["2026-09"] == micro(w.fake.visible(w.droplet,
+                                                                           "2026-09"))
+    else:
+        assert w.hosting.unread == "billing read failed or passed its deadline"
+        assert w.hosting.burn_by_month() == {}
+    twin = _replay(w, recorded)
+    twin.treasury.observe_hosting()         # the same recorded answer resumes cleanly
+    assert twin.hosting.state() == w.hosting.state()
+
+
+def test_the_bound_is_priced_at_the_launch_months_rate_not_after_a_price_change():
+    """A resize after the launch month's first read lowers the droplet's hourly price; a
+    bound priced at the new rate collapsed to zero while the booked burn still over-reached."""
+    w = world()
+    windows(w, 2)
+    launch_price = items(w, "treasury.hosting_launch_price")
+    assert launch_price and launch_price[0]["price_hourly_micro"] == 17_860
+    w.fake.size = "s-1vcpu-1gb"             # the droplet now lists at half the rate
+    w.fake.advance(24 * 9)
+    w.fake.post_invoice("2026-09")
+    windows(w, 1)
+    bound = launch_bound(w)
+    overshoot = w.hosting.burn_by_month()["2026-09"] - truth(w, "2026-09")
+    assert overshoot > CENT_MICRO and bound >= overshoot
+    assert_months(w, ["2026-09"])
+
+
+def test_without_a_launch_price_the_bound_is_the_whole_post_launch_allocation():
+    w = world()
+    w.fake.down = True
+    windows(w, 9)
+    w.fake.down = False
+    w.fake.post_invoice("2026-09")
+    windows(w, 2)
+    assert not items(w, "treasury.hosting_launch_price")
+    assert launch_bound(w) == w.hosting.burn_by_month()["2026-09"] > 0
+    assert_months(w, ["2026-09"])
+
+
+def test_a_credit_spanning_the_launch_widens_the_bound_and_never_narrows_it():
+    def run(with_credit):
+        w = world()
+        if with_credit:
+            w.fake.add("cr-1", "Droplet Backups", "-0.00200", "credit",
+                       billed_as=w.droplet, since=month_start("2026-09"))
+        windows(w, 3)
+        return w
+
+    plain, credited = run(False), run(True)
+    assert launch_bound(credited) >= launch_bound(plain) + 10_000 > 0
+    post = sum(micro(credited.fake.visible(r, "2026-09")) for r in (credited.droplet, "cr-1"))
+    post -= sum(micro(credited.fake.accrued_before(r, credited.launch))
+                for r in (credited.droplet, "cr-1"))
+    booked = credited.hosting.burn_by_month()["2026-09"]
+    assert booked <= launch_bound(credited) + post + CENT_MICRO

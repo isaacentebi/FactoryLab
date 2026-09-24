@@ -1757,8 +1757,12 @@ checkpointed. It is settled before any line of a read is classified (from the pr
 any invoice read with it); while it is still unknown, no closed invoice is reconciled: it
 waits, unread as foreign, until its lines can be told apart. A snapshot or volume whose numeric id happens to equal the droplet's has
 neither that uuid nor a droplet product, and is not matched. Only this droplet's lines are
-parsed, strictly (exact decimal amounts, ISO 8601 `start_time` and `end_time`); every other
-line, whatever it holds, is only counted, so no other resource's line can make a read fail.
+parsed, strictly (exact decimal amounts, ISO 8601 `start_time` and `end_time`, and an
+ordered span: a line that ends before it starts makes the whole read unavailable); every
+other line, whatever it holds, is only counted, so no other resource's line can make a read
+fail. No answer from DigitalOcean can crash a tick: an answer that cannot be booked leaves
+the books where they were and is recorded as unread (`billing answer could not be booked`),
+and a replay of the same recorded answer takes the same path.
 A line's identity within its month is a digest of the month, its source (the preview, or an
 invoice's uuid), its product and its `start_time`; its description is never read, and its
 product is never published.
@@ -1800,11 +1804,16 @@ launch month's entry in the pot's `burn_by_month` carry `estimated: true` and
 post-launch charge by, and `estimate_final`, which becomes true only once the launch month has
 closed, an invoice for it carrying this droplet's lines is reconciled, and no invoice known
 for it is still waiting. At every read the booked launch-month burn is at most the published
-bound plus the true post-launch charge. For the droplet's own line it is the pre-launch part of the line's
-discount against the droplet's published hourly price for the hours in its span (the true
-pre-launch charge is at most that price for those hours); for any other line billed against
-the droplet, whose accrual over its span is not reported, it is that line's whole post-launch
-part. Every other month is DigitalOcean's figure, `estimated: false`.
+bound plus the true post-launch charge. The bound is a sum of each line's uncertainty and
+is never below zero; no line reduces it. A line wholly before or wholly after the launch is
+certain and adds nothing (a line with no span is a charge at its instant, dated there). For
+a positive line of the droplet's own, it is the pre-launch part of the line's discount
+against the droplet's hourly price for the hours in its span (the true pre-launch charge is
+at most that price for those hours), priced at the rate the droplet listed when first read
+in the launch month (`treasury.hosting_launch_price`, with its monthly cap), never at a rate
+it was resized or repriced to later. For any other line, a credit included (its size, not its
+sign), or when no launch-month price was read, it is that line's whole post-launch part.
+Every other month is DigitalOcean's figure, `estimated: false`.
 
 A month whose lines include none of this droplet's while other lines exist is flagged
 `treasury.hosting_unmatched`, keeps what is booked, and is never labelled as invoiced; it is

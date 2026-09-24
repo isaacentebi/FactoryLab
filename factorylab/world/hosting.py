@@ -119,7 +119,7 @@ class HostingAccount:
     FIELDS = ("bound", "launch_ns", "lines", "baseline", "reconciled", "invoiced",
               "unmatched", "booked", "negative", "unread", "history", "snapshot",
               "pending_baseline", "pending_noted", "droplet_uuid", "spans",
-              "estimate_final")
+              "estimate_final", "launch_price")
 
     def __init__(self, client: Any, *, droplet_id: int, bound: dict[str, Any] | None,
                  launch_ns: int | None, budget_s: float) -> None:
@@ -148,6 +148,9 @@ class HostingAccount:
         self.spans: dict[str, list] = {}
         # Whether the launch month has closed and every invoice known for it is read.
         self.estimate_final = False
+        # The droplet's hourly rate and monthly cap as first read in the launch month:
+        # the prices its launch-month lines were billed at, whatever it is resized to.
+        self.launch_price: dict[str, int] | None = None
 
     @property
     def since(self) -> str | None:
@@ -214,38 +217,43 @@ class HostingAccount:
         which one reaches past the launch can say it; until then it is pending, and
         the month books nothing.
 
-        The share is an allocation, and it carries a bound on how far the booked
-        post-launch burn can exceed the true one. For the droplet's own line: the
-        pre-launch part of what DigitalOcean discounted the line by, against the
-        droplet's published hourly price for the hours in its span (the monthly cap
-        discounts the end of a month, which sharing by span spreads over the whole of
-        it, so the share falls short of the pre-launch charge by at most that part).
-        For any other line billed against the droplet (a backup, say), whose accrual
-        over its span nothing here knows: its whole post-launch part.
+        The share is an allocation, and it carries a bound, never below zero, on how
+        far the booked post-launch burn can exceed the true one: a sum of each line's
+        uncertainty, never reduced by any line. A line wholly before or wholly after
+        the launch (a line with no span is dated at its instant) is certain. For a
+        positive line of the droplet's own, when its launch-month price was read: the
+        pre-launch part of what DigitalOcean discounted the line by, against that
+        hourly price for the hours in its span (the monthly cap discounts the end of a
+        month, which sharing by span spreads over the whole of it, so the share falls
+        short of the pre-launch charge by at most that part). For any other line, a
+        credit included, or when the launch-month price is unknown: the absolute size
+        of its whole post-launch part.
         """
         amounts = self.lines.get(self.since, {})
         spans = [(*self.spans[key][:2], amount, self.spans[key][2])
                  for key, amount in amounts.items() if key in self.spans]
         if not any(end > self.launch_ns for _, end, _, _ in spans):
             return None
-        hourly = (self.snapshot.get("droplet") or {}).get("price_hourly_micro")
+        hourly = (self.launch_price or {}).get("price_hourly_micro")
         share = bound = 0
         for start, end, amount, own in spans:
-            if end <= self.launch_ns:
+            if end <= self.launch_ns:            # before the launch (or dated before it)
                 share += amount
                 continue
-            pre = amount * (max(start, self.launch_ns) - start) // (end - start)
+            if start >= self.launch_ns:          # after it: all this world's, certain
+                continue
+            pre = amount * (self.launch_ns - start) // (end - start)
             share += pre
             post = amount - pre
-            if own and type(hourly) is int:
+            if own and amount > 0 and type(hourly) is int:
                 listed = hourly * (end - start) // 3_600_000_000_000
                 discount = max(0, listed - amount)
                 # The true pre-launch charge is at most the listed price for its hours,
                 # so the share falls short of it, and the burn over-reaches, by at most
                 # the discount's pre-launch part.
-                bound += -(-discount * (max(start, self.launch_ns) - start) // (end - start))
+                bound += -(-discount * (self.launch_ns - start) // (end - start))
             else:
-                bound += post
+                bound += abs(post)
         return {"micro": share, "method": "within each line's own span", "estimated": True,
                 "overshoot_bound_micro": bound,
                 "bound": ("the booked launch-month burn exceeds the true post-launch charge "
@@ -299,11 +307,20 @@ class HostingAccount:
         """
         self.unread = None
         self.snapshot = {"droplet": reading["droplet"], "sizes": reading["sizes"]}
+        droplet = reading["droplet"] or {}
+        if (self.launch_price is None and reading["period"] == self.since
+                and type(droplet.get("price_hourly_micro")) is int):
+            # The launch month's prices, first read in it, and journaled with the read.
+            self.launch_price = {"price_hourly_micro": droplet["price_hourly_micro"],
+                                 "price_monthly_micro": droplet.get("price_monthly_micro")}
+            result_price = dict(self.launch_price)
+        else:
+            result_price = None
         if self.droplet_uuid is None:
             self.droplet_uuid = reading.get("droplet_uuid")
         result: dict[str, Any] = {"changes": [], "baseline": None, "unmatched": [],
                                   "cleared": [], "negative": [], "reconciled": [],
-                                  "entries": []}
+                                  "entries": [], "launch_price": result_price}
         for invoice in reading["closed"]:
             if invoice["uuid"] in self.reconciled:
                 continue
