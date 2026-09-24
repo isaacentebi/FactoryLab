@@ -309,6 +309,10 @@ class BootstrapMixin:
             "exchange",
             deterministic=isinstance(self.exchange, FakeExchange) and not self.live,
         )
+        # Every answered venue read is kept for the rest of its tick, so an identical
+        # seat read is answered without a request (``ComputeMixin._tick_answer``).
+        self._tick_reads = None
+        self.exchange.observer = self._observe_venue_answer
         from factorylab.world.venue_tools import seed_markets
 
         seed_markets(self.exchange, manifest.exchange)
@@ -603,29 +607,36 @@ class BootstrapMixin:
             specs, vault_examples = vault_specs()
             self.tool_specs.update(specs)
             self.treasury.vault_custody = True
-        from factorylab.world.venue_tools import _BASE_WEIGHT
+        from factorylab.world.venue_tools import _BASE_WEIGHT, TICK_ANSWER_FACT
 
         budget = manifest.exchange.public_read_weight_per_minute
-        seats = manifest.tools.max_seats
+        seats = manifest.exchange.max_readers
         for tool_id, weight in _BASE_WEIGHT.items():
             if tool_id not in self.tool_specs:
                 continue
             # A limit is a published fact (essay II.I.b), never advice.
             if weight == 0:
                 self.tool_specs[tool_id]["description"] += (
-                    " Answered from the listing the venue adapter loaded: it sends no "
-                    "request and spends none of your venue read share.")
+                    " Held by seats with a venue read slot. Answered from the listing the "
+                    "venue adapter loaded: it sends no request and spends none of your "
+                    "venue read share.")
                 continue
             self.tool_specs[tool_id]["description"] += (
-                f" Each seat has a fixed venue read share of {budget // seats} venue "
-                f"request weight ({budget} over at most {seats} seats) in any sliding 60 s "
-                f"of world time. This read is sent once and sends {weight}"
+                f" Held by seats with a venue read slot (at most {seats}). Each slot has "
+                f"a fixed share of {budget // seats} venue request weight ({budget} over "
+                f"{seats} slots) in any sliding 60 s of world time. This read is sent once "
+                f"and sends {weight}"
                 + (" plus 1 per 60 candles" if tool_id == "venue.candles" else
                    " plus 1 per 20 rates" if tool_id == "venue.funding_history" else "")
                 + ", charged to your share as the venue weighs it. A read your remaining "
-                "share cannot cover is refused and not sent.")
+                "share cannot cover is refused and not sent. " + TICK_ANSWER_FACT)
         # seat -> [[world ns, venue weight sent]] of its reads in the sliding minute.
         self.venue_read_use: dict[str, list[list[int]]] = {}
+        # The seats holding a venue read slot: the seeds, in manifest order, up to
+        # ``[venue] max_readers``; then registrations while one is free.
+        self.venue_readers: list[str] = [
+            a.id for a in manifest.assemblies][:manifest.exchange.max_readers]
+
         self.tool_specs["treasury.transfer"] = {
             "id": "treasury.transfer",
             "description": "Move USDC spot_to_perps or perps_to_spot, between venue and reserve, "

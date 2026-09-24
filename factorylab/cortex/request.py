@@ -458,6 +458,8 @@ class Request:
             "runway": (entry.get("your_resources") or {}).get(
                 "runway_at_observed_burn", UNAVAILABLE),
             "subscription": entry.get("subscription", UNAVAILABLE),
+            # Whether this seat holds a venue read slot: its own fact, nobody else's.
+            "venue_read_slot": entry.get("venue_read_slot", UNAVAILABLE),
             "open_commitments": entry.get("open_commitments", UNAVAILABLE),
             "outcomes": {
                 **{key: value for key, value in outcomes.items()

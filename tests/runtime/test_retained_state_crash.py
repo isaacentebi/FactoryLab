@@ -27,7 +27,7 @@ pytestmark = pytest.mark.gate
 
 EVENTS = 140
 TRAIL = ("state.put", "artifact.put", "artifact.released", "artifact.collected",
-         "artifact.retained")
+         "artifact.retained", "venue.read_answered", "tool.refused")
 
 
 class Writer(ScriptedProvider):
@@ -43,6 +43,9 @@ class Writer(ScriptedProvider):
         if isinstance(body, dict):
             k = int(hashlib.sha256(response.text.encode()).hexdigest()[:2], 16) % 40
             body["working_state"] = {"k": k, "pad": "x" * (5000 if k % 2 else 10)}
+            if "action" in body and not body.get("tool_calls") and k % 3 == 0:
+                # A read the kernel already made this tick: answered from the tick.
+                body["tool_calls"] = [{"tool": "venue.mids", "args": {}}]
         return replace(response, text=json.dumps(body))
 
 
@@ -87,7 +90,7 @@ def uninterrupted(tmp_path_factory):
     summary = _runtime(path).run()
     items = _items(path)
     kinds = {i["kind"] for i in items}
-    assert {"artifact.released", "artifact.collected"} <= kinds
+    assert {"artifact.released", "artifact.collected", "venue.read_answered"} <= kinds
     return _summary(summary), _trail(items)
 
 

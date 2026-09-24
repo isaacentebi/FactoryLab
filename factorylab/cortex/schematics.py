@@ -595,7 +595,9 @@ class SchematicsMixin:
                 "venue lists far more than those: call the venue.instruments public read "
                 "for the whole listing, and register a market proposal to trade one of them. "
                 "venue.mids, venue.funding, venue.candles, venue.order_book and "
-                "venue.funding_history read any listed coin or pair without registering it."
+                "venue.funding_history read any listed coin or pair without registering it. "
+                f"The venue reads are held by seats with a venue read slot, at most "
+                f"{self.m.exchange.max_readers}: your YOU block says whether you hold one."
             ),
             "trading_markets": {"perp": list(self.venue_tools.coins),
                                 "spot": list(self.venue_tools.spot_pairs)},
@@ -1542,6 +1544,8 @@ class SchematicsMixin:
                 "subscription": self._subscription_view(seat),
                 "last_successful_delivery": self._last_successful_delivery(seat),
                 "directory": self._seat_directory(seat),
+                # This seat's own venue read slot, and nobody else's (AGENTS.md rule 5).
+                "venue_read_slot": seat in getattr(self, "venue_readers", (seat,)),
             })
         return views
 

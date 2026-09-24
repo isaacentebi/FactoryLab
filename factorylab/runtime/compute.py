@@ -169,10 +169,22 @@ def _venue_aliases(call: dict) -> None:
     if "is_buy" in args and "side" not in args and isinstance(args["is_buy"], bool):
         args["side"] = "buy" if args.pop("is_buy") else "sell"
 
+class _TickAnswers:
+    """The venue as one tick's answer: the answered method returns it, all else is the venue."""
+
+    def __init__(self, venue: Any, method: str, value: Any) -> None:
+        self._venue, self._method, self._value = venue, method, value
+
+    def __getattr__(self, name: str) -> Any:
+        if name == self._method:
+            return lambda *_args, **_kwargs: self._value
+        return getattr(self._venue, name)
+
+
 def read_share(manifest: Any) -> int:
-    """A seat's venue read share: the read budget over the world's maximum population."""
+    """A reader's venue read share: the read budget over the venue read slots."""
     return (manifest.exchange.public_read_weight_per_minute
-            // max(1, manifest.tools.max_seats))
+            // max(1, manifest.exchange.max_readers))
 
 
 def _cursor_position(cursor: str) -> tuple[int, str] | None:
@@ -1129,15 +1141,102 @@ class ComputeMixin:
     PUBLIC_READ_REFUSAL = "venue read share spent"
 
     def venue_read_share(self) -> int:
-        """Each seat's venue read share: the read budget over the world's maximum population.
+        """Each reader's venue read share: the read budget over the venue read slots.
 
         Guarantees: a manifest constant, fixed for the world's life (``[venue]
-        public_read_weight_per_minute // [tools] max_seats``), so the shares of every
-        seat that can ever be live never sum past the budget, and nothing another
-        seat does (reading, registering, retiring) changes a seat's share or its
-        refusals (AGENTS.md rule 4: no channel between seats).
+        public_read_weight_per_minute // max_readers``), so the shares of every slot
+        never sum past the budget, and nothing another seat does (reading,
+        registering, retiring) changes a reader's share or its refusals (AGENTS.md
+        rule 4: no channel between seats).
         """
         return read_share(self.m)
+
+    def _tick_key(self) -> tuple[int, int, int] | None:
+        """The tick and the journal's venue and treasury write counts, or None.
+
+        An answer is good for the tick it was read in and only until a venue or a
+        treasury write, which may move what a read would answer. A ledger with no
+        journal keeps no answers.
+        """
+        writes = getattr(self.ledger, "writes", None)
+        if type(writes) is not dict:
+            return None
+        return (self.ticks_consumed, writes.get("exchange", 0), writes.get("treasury", 0))
+
+    @staticmethod
+    def _answer_key(method: str, args: tuple, kwargs: dict) -> str:
+        return json.dumps([method, list(args), kwargs], sort_keys=True, default=str)
+
+    def _observe_venue_answer(self, method: str, args: tuple, kwargs: dict,
+                              result: Any) -> None:
+        """Keep the tick's first answer to each venue read, whoever asked for it.
+
+        Guarantees: fed the journal's own result, so a replay keeps exactly what the
+        recording kept; only reads a seat can make are kept; the first answer of the
+        tick stands until the tick or a venue or treasury write moves the key.
+        """
+        from copy import deepcopy
+
+        from factorylab.world.venue_tools import TICK_ANSWERED
+
+        if method not in {name for name, _ in TICK_ANSWERED.values()}:
+            return
+        key = self._tick_key()
+        if key is None:
+            return
+        cache = getattr(self, "_tick_reads", None)
+        if cache is None or cache["key"] != key:
+            cache = self._tick_reads = {"key": key, "answers": {}}
+        cache["answers"].setdefault(self._answer_key(method, args, kwargs), deepcopy(result))
+
+    def _tick_answer(self, tool_id: str, args: dict) -> dict | None:
+        """A seat read answered from this tick's answer to the identical request, or None.
+
+        Guarantees: no request is sent, so nothing is charged; the answer is shaped by
+        the same tool code a sent read is, from the very value the venue returned
+        earlier in this tick (the kernel's own read included), and only while no
+        venue or treasury write has happened since. None when there is no such answer.
+        """
+        from copy import deepcopy
+
+        from factorylab.world.venue_tools import TICK_ANSWERED, _json_value, _validate
+
+        spec = TICK_ANSWERED.get(tool_id)
+        cache = getattr(self, "_tick_reads", None)
+        key = self._tick_key()
+        if spec is None or cache is None or key is None or cache["key"] != key:
+            return None
+        try:
+            _validate(args, self.tool_specs[tool_id]["args_schema"])
+        except ValueError:
+            return None
+        method, names = spec
+        answer_key = self._answer_key(method, tuple(args[name] for name in names), {})
+        if answer_key not in cache["answers"]:
+            return None
+        value = deepcopy(cache["answers"][answer_key])
+        if tool_id in VAULT_READS:
+            return _json_value(value)
+        tools = self.venue_tools
+        real = tools.exchange
+        tools.exchange = _TickAnswers(real, method, value)
+        try:
+            return tools.call(tool_id, args)
+        finally:
+            tools.exchange = real
+
+    def _assign_reader_slot(self, seat: str) -> bool:
+        """Give a newly admitted seat a venue read slot when one is free; say whether.
+
+        Guarantees at most ``[venue] max_readers`` seats hold a slot, a live seat
+        keeps its own, and only retirement frees one (``_retire_assembly``).
+        """
+        if seat in self.venue_readers:
+            return True
+        if len(self.venue_readers) >= self.m.exchange.max_readers:
+            return False
+        self.venue_readers.append(seat)
+        return True
 
     def _venue_read_used(self, seat: str) -> int:
         """The venue weight this seat's reads sent in the sliding minute ending now."""
@@ -1332,8 +1431,18 @@ class ComputeMixin:
         return True
 
     def _allowed_tools(self, action_id: str) -> set[str]:
-        """Every registered tool is a public primitive; schematics are public."""
-        return set(self.tool_specs)
+        """Every registered tool is a public primitive; schematics are public.
+
+        The venue reads are held only by a seat with a venue read slot: the venue's
+        IP limit bounds who reads it (``[venue] max_readers``), never how many
+        seats exist.
+        """
+        from factorylab.world.venue_tools import _BASE_WEIGHT
+
+        tools = set(self.tool_specs)
+        if action_id not in getattr(self, "venue_readers", (action_id,)):
+            tools -= set(_BASE_WEIGHT)
+        return tools
 
     def _weigh_venue_batch(self, action_id: str, handle: str, ret: Return,
                            tool_round: int) -> Return:
@@ -1480,6 +1589,17 @@ class ComputeMixin:
         from factorylab.world.venue_tools import public_read_weight
 
         venue_read = public_read_weight(tool_id, args) is not None
+        answered = self._tick_answer(tool_id, args) if venue_read else None
+        if answered is not None:
+            # No request, no weight: the tick already holds the venue's answer.
+            self.ledger.append({"kind": "venue.read_answered", "handle": handle,
+                                "assembly_id": action_id, "tool": tool_id,
+                                "ts": self.clock.now_ns})
+            if tool_id in self.venue_tools.PUBLIC_READS:
+                from factorylab.runtime.observations import record_venue_facts
+
+                record_venue_facts(self.window, tool_id, args, answered, self.clock.now_ns)
+            return answered, 0
         if venue_read:
             refusal = self._venue_read_refusal(action_id, tool_id, args)
             if refusal is not None:
@@ -2338,6 +2458,15 @@ class ComputeMixin:
                             "assembly_id": action_id, "recommended": recommended,
                             "p": policy[recommended], "ts": self.clock.now_ns})
         return record
+
+    def _note_to_owner(self, handle: str, kind: str, **facts: Any) -> None:
+        """Address one fact about a decision to its owner's inbox, and to no one else."""
+        owner = self.handle_to_assembly.get(handle) or self.outcomes.seat_of(handle)
+        self.outcomes.append(owner, handle=handle,
+                             outcome={"kind": kind, "status": "admitted", **facts},
+                             delta_micro=0,
+                             evidence={"kind": kind, "handle": handle,
+                                       "ts": self.clock.now_ns})
 
     def _refusal_to_owner(self, handle: str, kind: str, reason: str, **extra: Any) -> None:
         """Address one refusal to the inbox of the seat whose decision it was, and to no one else.

@@ -174,6 +174,22 @@ _BASE_WEIGHT = {"venue.instruments": 0, "venue.mids": 2, "venue.order_book": 2,
 _ITEMS_PER_WEIGHT = {"venue.candles": ("n", 60, 200), "venue.funding_history": ("n", 20, 100)}
 #: The span a seat's venue read share is counted over: any sliding minute.
 READ_WINDOW_NS = 60_000_000_000
+#: Each seat read and the adapter method (and arguments, from the read's own) that
+#: answers it: the key an identical read within one tick is answered under.
+TICK_ANSWERED = {
+    "venue.instruments": ("instruments", ()), "venue.mids": ("mids", ()),
+    "venue.funding": ("funding", ()),
+    "venue.candles": ("candles", ("coin", "interval", "n")),
+    "venue.order_book": ("order_book", ("coin", "depth")),
+    "venue.funding_history": ("funding_history", ("coin", "n")),
+    "venue.open_orders": ("open_orders", ()), "venue.positions": ("account", ()),
+    "venue.vault_details": ("vault_details", ("vault",)),
+    "venue.vault_positions": ("vault_equities", ()),
+}
+TICK_ANSWER_FACT = (
+    "Within one world tick, until a venue write, a read identical to a venue request "
+    "already answered in that tick (the kernel's own included) is answered from that "
+    "answer: no request is sent and none of your share is spent.")
 
 
 def public_read_weight(tool_id: str, args: Any) -> int | None:

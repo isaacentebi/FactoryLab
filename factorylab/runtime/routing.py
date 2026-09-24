@@ -1512,6 +1512,9 @@ class RoutingMixin:
                             "proposal_id": proposal_id,
                             "version": self.assemblies[assembly_id].spec.version})
         self.retired_assemblies.add(assembly_id)
+        if assembly_id in getattr(self, "venue_readers", ()):
+            # A retirement frees its venue read slot for the next registration.
+            self.venue_readers.remove(assembly_id)
         book = getattr(self, "subscription_book", None)
         if book is not None:
             # A retired watcher stops being evaluated, and stops being charged for it.

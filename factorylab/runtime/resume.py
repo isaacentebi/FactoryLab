@@ -556,6 +556,10 @@ class JournalProxy:
         self.target, self.journal, self._journal_name = target, journal, name
         self.deterministic = deterministic
         self.call_metrics = {}
+        # Told of every answered call as ``(method, args, kwargs, result)``, the result
+        # being what the journal returned: the recorded one on replay, so whatever an
+        # observer builds from it is the same in a live run and its replay.
+        self.observer = None
 
     def __getattr__(self, name):
         attr = getattr(self.target, name)
@@ -568,8 +572,11 @@ class JournalProxy:
         def call(*args, **kwargs):
             started = time.monotonic_ns()
             try:
-                return self.journal.call(f"{self._journal_name}.{name}", attr, args, kwargs,
-                                         deterministic=self.deterministic)
+                result = self.journal.call(f"{self._journal_name}.{name}", attr, args, kwargs,
+                                           deterministic=self.deterministic)
+                if self.observer is not None:
+                    self.observer(name, args, kwargs, result)
+                return result
             finally:
                 if not self.deterministic and not self.journal.recovering:
                     metric = self.call_metrics.setdefault(name, {"calls": 0, "elapsed_ns": 0})
@@ -579,13 +586,15 @@ class JournalProxy:
         return call
 
     def __setattr__(self, name, value):
-        if name in ("target", "journal", "_journal_name", "deterministic", "call_metrics"):
+        if name in ("target", "journal", "_journal_name", "deterministic", "call_metrics",
+                    "observer"):
             object.__setattr__(self, name, value)
         else:
             setattr(self.target, name, value)
 
     def __delattr__(self, name):
-        if name in ("target", "journal", "_journal_name", "deterministic", "call_metrics"):
+        if name in ("target", "journal", "_journal_name", "deterministic", "call_metrics",
+                    "observer"):
             object.__delattr__(self, name)
         else:
             delattr(self.target, name)
@@ -664,6 +673,8 @@ _RUNTIME_FIELDS = (
     # Each seat's venue read weight in the sliding minute. An older checkpoint starts
     # every share unspent.
     "venue_read_use",
+    # The seats holding a venue read slot. An older checkpoint gives the seeds theirs.
+    "venue_readers",
     # The pause between releases: None while awake, else the entry record (C2).
     "dormancy",
     # C10: each seat's last rendered call ceiling and the world size it was priced at.

@@ -74,6 +74,12 @@ class ExchangeSpec:
     # real constraint shared with the kernel's own calls, so it is a limit, not a price
     # (essay II.II.b); the default leaves the kernel most of it (world/venue_tools.py).
     public_read_weight_per_minute: int = DEFAULT_PUBLIC_READ_WEIGHT_PER_MINUTE
+    # ``[venue] max_readers``: the venue read slots. The venue's IP limit bounds who
+    # reads the venue, not how many seats exist: seeds take slots in manifest order,
+    # a registration takes a free one, a retirement frees one, and a seat with none
+    # registers all the same, without the venue read tools. Each slot's share is the
+    # read budget over this count.
+    max_readers: int = 16
 
 
 @dataclass(frozen=True)
@@ -148,10 +154,6 @@ class ToolsSpec:
     max_depth: int = 4
     max_children: int = 3
     max_tool_calls: int = 4
-    # The most seats that may be live at once, seeds included; a registration that
-    # would pass it is refused. A limit the venue read share is divided by, so the
-    # shares of every seat that can ever be live never sum past the read budget.
-    max_seats: int = 16
 
 
 @dataclass(frozen=True)
@@ -944,30 +946,27 @@ class WorldManifest:
     def read_share_problem(self) -> str | None:
         """Why this world's venue read share cannot hold, or None.
 
-        Guarantees a world is refused whose seeds exceed ``tools.max_seats``, or
-        whose per-seat share (``[venue] public_read_weight_per_minute //
-        tools.max_seats``) cannot cover the first attempt of the heaviest venue read
-        it publishes: a published read no seat could ever be admitted to would be a
-        tool in name only. A seat read is sent once, so its first attempt is all it
-        can spend, and the shares of all ``max_seats`` seats sum to at most the
-        budget: the rest of the venue's per-IP limit is the kernel's.
+        Guarantees a world is refused whose per-slot share (``[venue]
+        public_read_weight_per_minute // max_readers``) cannot cover the first attempt
+        of the heaviest venue read it publishes: a published read no reader could
+        ever be admitted to would be a tool in name only. A seat read is sent once,
+        so its first attempt is all it can spend, and the shares of all
+        ``max_readers`` slots sum to at most the budget: the rest of the venue's
+        per-IP limit is the kernel's.
         """
         from factorylab.world.venue_tools import _BASE_WEIGHT, VAULT_READS, public_read_weight
 
-        seats = self.tools.max_seats
-        if type(seats) is not int or seats < 1:
-            return "tools.max_seats must be a positive integer"
-        if len(self.assemblies) > seats:
-            return (f"tools.max_seats is {seats} but the world seeds {len(self.assemblies)} "
-                    "seats")
-        share = self.exchange.public_read_weight_per_minute // seats
+        readers = self.exchange.max_readers
+        if type(readers) is not int or readers < 1:
+            return "venue.max_readers must be a positive integer"
+        share = self.exchange.public_read_weight_per_minute // readers
         published = [tool for tool in _BASE_WEIGHT
                      if tool not in VAULT_READS or self.exchange.vault_tools]
         heaviest = max(published, key=lambda tool: public_read_weight(tool, {}))
         weight = public_read_weight(heaviest, {})
         if share < weight:
-            return (f"each seat's venue read share, venue.public_read_weight_per_minute // "
-                    f"tools.max_seats = {share}, cannot cover {heaviest} at {weight}")
+            return (f"each reader's venue read share, venue.public_read_weight_per_minute // "
+                    f"venue.max_readers = {share}, cannot cover {heaviest} at {weight}")
         return None
 
     def validate(self) -> None:
@@ -1420,6 +1419,10 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
     vault_tools = venue.get("vault_tools", False)
     if type(vault_tools) is not bool:
         raise ValueError("venue.vault_tools must be true or false")
+    if "max_seats" in (d.get("tools") or {}):
+        raise ValueError("tools.max_seats was removed: the population has no size cap; the "
+                         "venue's IP limit bounds who reads the venue ([venue] max_readers)")
+    max_readers = venue.get("max_readers", 16)
     read_weight = venue.get("public_read_weight_per_minute",
                             DEFAULT_PUBLIC_READ_WEIGHT_PER_MINUTE)
     if type(read_weight) is not int or not 1 <= read_weight < VENUE_WEIGHT_PER_MINUTE:
@@ -1442,6 +1445,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         principal_usd=principal,
         vault_tools=vault_tools,
         public_read_weight_per_minute=read_weight,
+        max_readers=max_readers,
         shocks=tuple(
             Shock(int(sh["step"]), str(sh["coin"]), str(sh["multiplier"]))
             for sh in ex.get("shocks", [])
@@ -1582,7 +1586,6 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             (d.get("tools") or {}).get("max_depth", 4),
             (d.get("tools") or {}).get("max_children", 3),
             (d.get("tools") or {}).get("max_tool_calls", 4),
-            (d.get("tools") or {}).get("max_seats", 16),
         ),
         prices=prices,
         treasury=TreasurySpec(

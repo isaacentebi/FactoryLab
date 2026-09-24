@@ -10,6 +10,7 @@ of a real bill (re-attributed between seats, never created or destroyed) leaves 
 world's total debits equal to the real outflows.
 """
 
+import json
 from dataclasses import dataclass, field, replace
 
 import pytest
@@ -106,20 +107,34 @@ def test_every_seeded_tool_is_free_and_a_free_call_moves_no_money():
 
 
 def _read_runtime(budget):
-    """A scripted runtime whose read budget gives each seat ``budget`` weight."""
+    """A scripted runtime whose read budget gives each reader slot ``budget`` weight."""
     rt = make_runtime()
     rt._manage_reserve_window()
-    seats = rt.m.tools.max_seats
+    slots = rt.m.exchange.max_readers
     rt.m = replace(rt.m, exchange=replace(rt.m.exchange,
-                                          public_read_weight_per_minute=budget * seats))
+                                          public_read_weight_per_minute=budget * slots))
     assert rt.venue_read_share() == budget
     rt.clock.now_ns = 60_000_000_000 * 1_000
     return rt
 
 
-def _read(rt, seat, tool, handle=None, **args):
+def _read(rt, seat, tool, handle=None, *, fresh=True, **args):
+    """One seat read; ``fresh`` drops the tick's answers first, so the read is sent."""
+    if fresh:
+        rt._tick_reads = None
     handle = handle or decision(rt, seat)
     return rt._run_tool(seat, handle, {"tool": tool, "args": args})[0]
+
+
+def _register(rt, seat_id):
+    from factorylab.cortex.request import Return
+
+    handle = decision(rt)
+    rt._apply_registrations(handle, Return(handle, {"register": [{
+        "kind": "assembly", "id": seat_id, "model_id": "fake-haiku", "role": "producer",
+        "accepts": ["Tick"], "system_prompt": "x", "max_tokens": 128}]}, 0, "ok"))
+    assert seat_id in rt.assemblies, ledger_items(rt, "registration.rejected")
+    return handle
 
 
 def test_a_seat_s_venue_reads_are_capped_by_its_own_share_over_a_sliding_minute():
@@ -157,15 +172,15 @@ def test_a_seat_s_venue_reads_are_capped_by_its_own_share_over_a_sliding_minute(
     rt2.clock.now_ns = rt.clock.now_ns
     assert "error" in _read(rt2, "seed-decider", "venue.positions")
     # Sliding, not bucketed: 31 s later the two funding reads (40) have left the
-    # minute but the mids read 30 s after them (6) has not.
+    # minute but the mids reads 30 s after them (6) have not.
     rt.clock.now_ns += 31_000_000_000
     assert rt._venue_read_used("seed-decider") == 6
     assert "error" not in _read(rt, "seed-decider", "venue.funding")
 
 
 def test_one_seat_exhausting_its_share_never_changes_another_seat_s_refusals():
-    """AGENTS.md rule 4: no channel between seats. Each seat's refusals depend on its
-    own reads and on the public count of live seats, never on another seat's reads."""
+    """AGENTS.md rule 4: no channel between seats. A reader's refusals depend on its own
+    reads alone, never on another seat's reads."""
     def refusals(rt, seat):
         return ["error" in _read(rt, seat, "venue.funding") for _ in range(4)]
 
@@ -179,7 +194,7 @@ def test_one_seat_exhausting_its_share_never_changes_another_seat_s_refusals():
 
 
 def test_venue_instruments_sends_nothing_and_spends_no_share():
-    rt = _read_runtime(1)
+    rt = _read_runtime(2)
     for _ in range(5):
         assert "error" not in _read(rt, "seed-decider", "venue.instruments")
     assert rt._venue_read_used("seed-decider") == 0
@@ -228,10 +243,11 @@ def test_a_live_read_is_charged_every_attempt_the_adapter_sent(monkeypatch):
 
 
 def test_the_share_is_fixed_whatever_the_population_does():
-    """Budget // tools.max_seats, not // live seats: registering or retiring seats
-    changes no seat's share, and the refusal text carries no live count."""
+    """Budget // venue.max_readers, not // live seats: registering or retiring seats
+    changes no reader's share, and the refusal text carries no population count."""
     rt = _read_runtime(30)
     share = rt.venue_read_share()
+    _register(rt, "newcomer")
     rt.retired_assemblies.add("seed-observer")
     assert rt.venue_read_share() == share
     refusal = [_read(rt, "seed-decider", "venue.funding") for _ in range(2)][-1]["error"]
@@ -239,43 +255,92 @@ def test_the_share_is_fixed_whatever_the_population_does():
                             "this read sends 20")
 
 
-def test_a_registration_past_max_seats_is_refused_before_its_trial():
-    from dataclasses import replace as _replace
+def test_a_registration_past_the_reader_cap_is_admitted_without_venue_reads():
+    """The venue's IP limit bounds who reads it, never how many seats exist: past the
+    last slot a seat registers all the same, holds no venue read tool, and its
+    proposer's receipt says so. Retiring a reader frees its slot for the next one."""
+    rt = make_runtime()
+    rt._manage_reserve_window()
+    readers = len(rt.venue_readers)
+    rt.m = replace(rt.m, exchange=replace(rt.m.exchange, max_readers=readers + 1))
+    _register(rt, "first")
+    assert "first" in rt.venue_readers
+    handle = _register(rt, "second")
+    assert "second" not in rt.venue_readers and len(rt.venue_readers) == readers + 1
+    assert rt._run_tool("second", decision(rt, "second"),
+                        {"tool": "venue.mids", "args": {}})[0] == {
+        "error": "unknown or disallowed tool"}
+    assert "calc" in rt._allowed_tools("second")  # everything but the venue reads
+    receipt = rt.outcomes.get(rt.handle_to_assembly[handle], handle)["outcome"]
+    assert receipt["kind"] == "registration_admitted" and receipt["id"] == "second"
+    assert "no venue read slot is free" in receipt["venue_reads"]
+    rt._retire_assembly("first", "vote-1")
+    assert "first" not in rt.venue_readers
+    _register(rt, "third")
+    assert "third" in rt.venue_readers
+    assert "error" not in _read(rt, "third", "venue.mids")
+
+
+def test_a_seat_sees_its_own_slot_and_nobody_else_s():
+    """The slot is a fact in the seat's own row, which only that seat's request
+    renders; no public section lists the slot holders."""
+    from factorylab.cortex.request import Request
 
     rt = make_runtime()
     rt._manage_reserve_window()
-    rt.m = _replace(rt.m, tools=_replace(rt.m.tools, max_seats=len(rt._live_seats())))
-    handle = decision(rt)
-    from factorylab.cortex.request import Return
+    rt.m = replace(rt.m, exchange=replace(rt.m.exchange, max_readers=len(rt.venue_readers)))
+    _register(rt, "late")
+    rows = {row["seat_id"]: row for row in rt._seat_views()}
+    assert rows["seed-decider"]["venue_read_slot"] is True
+    assert rows["late"]["venue_read_slot"] is False
+    world = rt._world_block()
+    assert "venue_readers" not in json.dumps({k: v for k, v in world.items() if k != "seats"})
+    text = Request("h", "d", {"world": world, "you": "late"}, {}, {"type": "object"}, 0,
+                   1_000_000, None, "answer", "verdict", "late").prompt_text()
+    assert text.count("venue_read_slot") == 1 and '"venue_read_slot":false' in text.replace(
+        " ", "")
 
-    before = rt.budget.entitlements()
-    rt._apply_registrations(handle, Return(handle, {"register": [{
-        "kind": "assembly", "id": "one-too-many", "model_id": "fake-haiku",
-        "role": "producer", "accepts": ["Tick"], "system_prompt": "x"}]}, 0, "ok"))
-    assert "one-too-many" not in rt.assemblies and rt.budget.entitlements() == before
-    rejected = ledger_items(rt, "registration.rejected")[-1]
-    assert "tools.max_seats" in str(rejected)
+
+def test_an_identical_read_within_a_tick_is_answered_without_a_request():
+    """The tick's answer to the identical venue request (the kernel's own included)
+    answers the read: nothing is sent, nothing is charged, and a venue write or a new
+    tick ends it."""
+    rt = _read_runtime(30)
+    sent = []
+    mids = rt.exchange.target.mids
+    rt.exchange.target.mids = lambda: sent.append("mids") or mids()
+    kernel = rt.exchange.mids()  # the kernel's own read of the tick
+    answered = _read(rt, "seed-decider", "venue.mids", fresh=False)
+    assert answered == {"mids": {c: str(p) for c, p in kernel.items()}}
+    assert sent == ["mids"] and rt._venue_read_used("seed-decider") == 0
+    assert ledger_items(rt, "venue.read_answered")[-1]["tool"] == "venue.mids"
+    rt.ticks_consumed += 1  # a new tick: the read is sent and charged
+    _read(rt, "seed-decider", "venue.mids", fresh=False)
+    assert sent == ["mids", "mids"] and rt._venue_read_used("seed-decider") == 2
+    rt.exchange.drain_events()  # a venue write moves the key
+    _read(rt, "seed-decider", "venue.mids", fresh=False)
+    assert sent == ["mids"] * 3
+    text = rt.tool_specs["venue.mids"]["description"]
+    assert "no request is sent and none of your share is spent" in text
 
 
 def test_a_world_whose_share_cannot_cover_its_heaviest_read_is_refused():
     with pytest.raises(ValueError, match="cannot cover venue.funding_history at 25"):
-        manifest_from_dict(_world(venue={"public_read_weight_per_minute": 390},
-                                  tools={"max_seats": 16}))
-    with pytest.raises(ValueError, match="max_seats must be a positive integer"):
-        manifest_from_dict(_world(tools={"max_seats": 0}))
-    two = _world()
-    two["assemblies"] = two["assemblies"] + [{"id": "b", "model_id": "m"}]
-    with pytest.raises(ValueError, match="seeds 2 seats"):
-        manifest_from_dict({**two, "tools": {"max_seats": 1}})
+        manifest_from_dict(_world(venue={"public_read_weight_per_minute": 390}))
+    with pytest.raises(ValueError, match="max_readers must be a positive integer"):
+        manifest_from_dict(_world(venue={"max_readers": 0}))
+    with pytest.raises(ValueError, match="tools.max_seats was removed"):
+        manifest_from_dict(_world(tools={"max_seats": 16}))
     with pytest.raises(ValueError, match="cannot cover"):
-        Runtime(replace(load_manifest("scripted"), tools=replace(
-            load_manifest("scripted").tools, max_seats=100)), events=0, seed=1,
+        Runtime(replace(load_manifest("scripted"), exchange=replace(
+            load_manifest("scripted").exchange, max_readers=100)), events=0, seed=1,
             initial_balance_micro=1, ledger_path=None, router_gamma=.1)
 
 
 def test_the_read_share_is_published_where_the_tool_is():
     text = make_runtime().tool_specs["venue.candles"]["description"]
-    assert "fixed venue read share of 30 venue request weight (480 over at most 16" in text
+    assert "Held by seats with a venue read slot (at most 16)" in text
+    assert "fixed share of 30 venue request weight (480 over 16 slots)" in text
     assert "sent once and sends 20 plus 1 per 60 candles" in text
 
 

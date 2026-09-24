@@ -846,11 +846,6 @@ class GovernanceMixin:
             if program and not self.tool_jail_available:
                 raise Infeasible("no jail on this host")
             live = prop.id in self.assemblies and prop.id not in self.retired_assemblies
-            if not live and len(self._live_seats()) >= self.m.tools.max_seats:
-                # A hard cast, refused before any trial is spent: the venue read share
-                # every seat holds is the budget over this many seats.
-                raise ValueError(f"the population is at tools.max_seats "
-                                 f"({self.m.tools.max_seats} live seats)")
             version = (self.assemblies[prop.id].spec.version + 1
                        if prop.id in self.assemblies else 1)
             emits = prop.emits or None
@@ -907,6 +902,14 @@ class GovernanceMixin:
             if custom:
                 self.kind_reward_shapes.update(shapes)
             self.retired_assemblies.discard(prop.id)
+            if not self._assign_reader_slot(prop.id):
+                # Every venue read slot is held: the seat is admitted all the same,
+                # without the venue reads, and its proposer's receipt says so.
+                self.ledger.append({"kind": "venue.reader_slot", "assembly_id": prop.id,
+                                    "slot": False, "ts": self.clock.now_ns})
+                self._note_to_owner(handle, "registration_admitted", id=prop.id,
+                                    venue_reads="no venue read slot is free: this seat "
+                                    "holds no venue read tools until one is")
             # Time audit T14: a contract version replaces the seat's configuration; its
             # decisions are corrected on the consequence loop.
             configuration_changed(self, f"seat:{prop.id}", self._consequence_period())
