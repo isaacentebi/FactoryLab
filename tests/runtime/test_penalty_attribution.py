@@ -187,16 +187,43 @@ def test_a_saturated_ratchet_is_ledgered_and_published_to_governance(monkeypatch
 
 def test_gain_headroom_states_the_relation_and_its_numbers():
     """The fewest windows in which the PID alone presses a unit violation onto the cap
-    must exceed the fewest windows a stable failure is diagnosed in by min_ratio."""
-    edition6 = load_manifest("edition6-capital-loop")
-    assert edition6.gain_headroom() == {"saturation_windows": 1, "diagnosis_windows": 3,
-                                        "min_ratio": 3, "holds": False}
-    p = edition6.prices
-    slow = replace(edition6, prices=replace(p, kp=0.0, eta=p.penalty_cap / 9))
-    assert slow.gain_headroom()["saturation_windows"] == 9
-    assert slow.gain_headroom()["holds"]
-    fast = replace(slow, prices=replace(slow.prices, eta=p.penalty_cap / 8))
-    assert not fast.gain_headroom()["holds"]  # the violation attempt: one window short
+    must be at least min_ratio times the fewest a stable failure is diagnosed in."""
+    world = load_manifest("edition6-capital-loop")
+    assert world.gain_headroom() == {"saturation_windows": 9, "diagnosis_windows": 3,
+                                     "min_ratio": 3, "holds": True}
+    p = world.prices
+    fast = replace(world, prices=replace(p, eta=p.penalty_cap / 8))
+    assert fast.gain_headroom()["saturation_windows"] == 8
+    assert not fast.gain_headroom()["holds"]  # one window short
+    stated = replace(world, prices=replace(p, kp=0.5, eta=0.5))  # edition 6 as written
+    assert stated.gain_headroom() == {"saturation_windows": 1, "diagnosis_windows": 3,
+                                      "min_ratio": 3, "holds": False}
+
+
+@pytest.mark.parametrize("prices", [{"kp": 0.5, "eta": 0.5}, {"eta": 0.5}, {"kp": 0.5},
+                                    {"eta": 0.5 / 8}])
+def test_a_manifest_without_gain_headroom_is_refused_at_load(prices):
+    """Second addendum, Q-G1: the relation is enforced at load, with its numbers."""
+    import tomllib
+
+    from factorylab.runtime.worlds import WORLDS_DIR
+
+    raw = tomllib.loads((WORLDS_DIR / "scripted.toml").read_text())
+    with pytest.raises(ValueError, match="no gain headroom") as refused:
+        manifest_from_dict({**raw, "prices": {**raw["prices"], **prices}})
+    assert "times the 3 windows (immune.k)" in str(refused.value)
+
+
+def test_an_unstated_eta_is_derived_from_the_relation():
+    import tomllib
+
+    from factorylab.runtime.worlds import WORLDS_DIR, derived_eta
+
+    raw = tomllib.loads((WORLDS_DIR / "scripted.toml").read_text())
+    assert "eta" not in raw["prices"]
+    world = manifest_from_dict({**raw, "prices": {**raw["prices"], "kp": 0.2}})
+    assert world.prices.eta == pytest.approx(0.3 / 9) == derived_eta(0.5, 0.2, 3, 3)
+    assert world.gain_headroom()["saturation_windows"] == 9
 
 
 def test_gain_headroom_is_published_with_the_price_law(monkeypatch):

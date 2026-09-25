@@ -410,9 +410,14 @@ connector_timeout = 0.05
 # proportion to the window's violation, kd raises it sooner while the measurement moves
 # deeper into violation (positive part only, Stooke et al. 2020, so it damps the climb
 # and never discounts a card still out of its region).
-kp = 0.5
+# kp was 0.5, equal to penalty_cap: the proportional term alone pressed a unit
+# violation onto the cap in one window whatever eta was, so the SF-0 relation
+# (wave 16) refused the world. The integral law alone (kp = 0) with eta unstated,
+# derived as (penalty_cap - kp) / (timing.min_ratio * immune.k), reaches the cap
+# in min_ratio times the windows stable failure is diagnosed in. Revertible: the
+# operator sets the gains of edition 7.
+kp = 0.0
 kd = 0.25
-eta = 0.5
 decay = 0.1
 min_window_events = 1
 min_blame_share = 0.1
