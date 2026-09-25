@@ -1701,7 +1701,10 @@ rates and `fee_basis`):
 - A limit order that crosses on arrival fills at the book's prices at the taker rate
   and rests the remainder. A resting limit fills only when a recorded mid after it
   began resting is strictly through its price (a trade happened through it); a book
-  level that merely sits past its price is a quote, not a trade, and fills nothing.
+  level that merely sits past its price is a quote, not a trade, and fills nothing;
+  and the opposite top of book (recorded or synthetic) must also be at or through its
+  price (a buy: the ask at or below it; a sell: the bid at or above it), since a mid
+  through the price with no counterparty quoting it is no fill.
   It fills at its own price, at the maker rate, up to what the top level on that side
   still holds. Within one tick, arriving orders (takers) are matched before resting
   ones (makers), as on the venue.

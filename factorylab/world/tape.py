@@ -450,8 +450,9 @@ class TapeVenue(FakeExchange):
     cancelled; a limit that crosses on arrival takes at the book's prices, at the taker
     rate, and rests the remainder; a resting limit fills only when a recorded mid after
     it rested is strictly through its price (a trade-through, never a book level that
-    merely sits past it), at its price, at the maker rate, up to what the top level of
-    the book on that side still holds; within one tick arriving takers are matched
+    merely sits past it) and the opposite top of book has reached it, at its price,
+    at the maker rate, up to what the top level of the book on that side still
+    holds; within one tick arriving takers are matched
     before resting makers, as on the venue; liquidity taken from one recorded snapshot
     is not offered again; a synthetic level is never unbounded, and a market the tape
     recorded no liquidity for refuses every order; every order is refused below the
@@ -699,8 +700,9 @@ class TapeVenue(FakeExchange):
         "on arrival fills at the book's prices at taker_fee_rate and rests the rest. "
         "Within one tick arriving orders are matched before resting ones. A resting "
         "limit fills only when a recorded mid after it rested is strictly beyond its "
-        "price, at its price, at maker_fee_rate, up to what the top level on that side "
-        "still holds. Size taken from one recorded snapshot is not offered again. "
+        "price and the opposite top of book is at or through its price, at its price, "
+        "at maker_fee_rate, up to what the top level on that side still holds. "
+        "Size taken from one recorded snapshot is not offered again. "
         "Funding settles at each UTC hour on the position then held, at the last "
         "recorded rate and mid, and pro rata for the part of an hour when the world "
         "ends.")
@@ -868,12 +870,17 @@ class TapeVenue(FakeExchange):
     def _cross_resting(self) -> list[WorldEvent]:
         """Fill resting limits a recorded mid has traded through, at their price, as makers.
 
-        A resting buy fills only when a mid recorded after it began resting is strictly
-        below its price (a sell: strictly above): a trade happened through it. A book
-        level that merely sits past its price is not a trade and fills nothing. The
-        fill is at the order's price, at the maker rate, capped by what the top level
-        of the book on that side still holds after this tick's arriving takers, and
-        what it takes is not offered again.
+        A resting buy fills only when both hold: a mid recorded after it began resting is
+        strictly below its price (a sell: strictly above), so a trade happened through
+        it; and the opposite top of book, recorded or synthetic, is at or below its
+        price (a sell: the bid at or above it), so a counterparty offered at its price.
+        A mid through the price with the ask still above it is no fill: nobody sold at
+        the limit, and filling there would book the gap between the ask and the limit
+        as profit. A book level that merely sits past its price, the mid not through
+        it, is a quote and not a trade, and fills nothing either. The fill is at the
+        order's price, at the maker rate, capped by what the top level of the book on
+        that side still holds after this tick's arriving takers, and what it takes is
+        not offered again.
         """
         events: list[WorldEvent] = []
         for oid, order in list(self._resting.items()):
@@ -889,6 +896,9 @@ class TapeVenue(FakeExchange):
             if not levels:
                 continue
             top_px, available = levels[0]
+            offered = top_px <= order.limit_px if order.is_buy else top_px >= order.limit_px
+            if not offered:
+                continue  # the mid went through, but no counterparty quoted the limit
             filled = min(order.size, available)
             if filled <= 0:
                 continue
@@ -898,6 +908,7 @@ class TapeVenue(FakeExchange):
             events.extend(self.drain_events())
             if result.status != "filled":
                 del self._resting[oid]
+                self._rested_ns.pop(oid, None)
                 if order.market == "spot":
                     events.extend(self._refuse(oid, order, result.error or "rejected"))
                 else:
@@ -908,6 +919,7 @@ class TapeVenue(FakeExchange):
                 self._resting[oid] = replace_size(order, order.size - filled)
             else:
                 del self._resting[oid]
+                self._rested_ns.pop(oid, None)
         return events
 
     def _spot_affordable(self, order: Order, px: Decimal) -> bool:
@@ -932,7 +944,10 @@ class TapeVenue(FakeExchange):
             return dict(self._cancel_results[client_id])
         flight = self._inflight.get(order_id)
         if flight is None or coin is not None and flight["order"].coin != coin:
-            return super().cancel(order_id, coin=coin, client_id=client_id)
+            result = super().cancel(order_id, coin=coin, client_id=client_id)
+            if order_id not in self._resting:
+                self._rested_ns.pop(order_id, None)  # no longer resting: nothing to cross
+            return result
         if flight["order"].kind is OrderKind.MARKET:
             result = {"status": "rejected",
                       "error": "an immediate-or-cancel order cannot be cancelled"}

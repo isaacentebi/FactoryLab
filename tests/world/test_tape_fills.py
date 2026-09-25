@@ -115,6 +115,61 @@ def test_a_book_level_past_a_resting_limit_is_not_a_fill_only_a_mid_through_it_i
     assert venue.open_orders()[0]["size"] == Decimal("0.05")  # the rest keeps resting
 
 
+def _rested(limit, *, buy=True, mids=(("0", "100.5"), ("10", "100.5")), cash="1000"):
+    """A resting limit on a synthetic 2 bps book: sent at 0, rested on arrival at 10."""
+    rows = [(int(t), Decimal(px)) for t, px in mids]
+    venue = _venue(_tape({"BTC": rows}), cash=cash)
+    venue.advance(T0)
+    order = (_buy("0.2", limit=limit, cid="rest") if buy
+             else _sell("0.2", limit=limit, cid="rest"))
+    placed = venue.place(order)
+    assert _fills(venue.advance(T0 + 10 * S)) == []
+    assert venue.lookup("rest").status == "resting"
+    return venue, placed.order_id
+
+
+def test_a_mid_through_the_limit_with_the_ask_still_above_it_is_no_fill():
+    """Sol's re-review: a mid strictly through a resting buy's price is not enough. With
+    the mid at 99.995 the synthetic ask is 100.005: nobody offered at 100, and a fill
+    there books ask minus limit as profit the market never offered."""
+    venue, oid = _rested("100", mids=(("0", "100.5"), ("10", "100.5"), ("20", "99.995")))
+    assert venue.order_book("BTC", 1)["asks"][0]["price"] > 100  # still at 10 s
+    assert _fills(venue.advance(T0 + 20 * S)) == []
+    assert venue.order_book("BTC", 1)["asks"][0]["price"] > 100
+    assert venue.lookup("rest").status == "resting"
+
+
+def test_a_mid_through_the_limit_with_the_ask_at_or_below_it_is_a_maker_fill():
+    venue, oid = _rested("100", mids=(("0", "100.5"), ("10", "100.5"), ("20", "99.98")))
+    [fill] = _fills(venue.advance(T0 + 20 * S))  # the ask, 99.99, is below 100
+    assert Decimal(fill["px"]) == 100 and Decimal(fill["size"]) == Decimal("0.2")
+    assert Decimal(fill["fee_usd"]) == (Decimal(20) * Decimal("0.00015")).quantize(
+        Decimal("0.000001"))
+    assert oid not in venue._rested_ns  # filled whole: no longer resting
+
+
+def test_a_resting_sell_needs_the_mid_through_and_the_bid_at_or_above_its_price():
+    venue, _oid = _rested("100", buy=False, mids=(
+        ("0", "99.5"), ("10", "99.5"), ("20", "100.005"), ("30", "100.02")))
+    assert _fills(venue.advance(T0 + 20 * S)) == []  # the bid, 99.995, is below 100
+    [fill] = _fills(venue.advance(T0 + 30 * S))  # the bid, 100.01, is above it
+    assert Decimal(fill["px"]) == 100 and fill["is_buy"] is False
+
+
+def test_a_resting_orders_rest_instant_is_dropped_whenever_it_stops_resting():
+    """Sol's re-review: the rest instant outlived its order on a cancel and a failure."""
+    venue, oid = _rested("90")
+    assert oid in venue._rested_ns
+    assert venue.cancel(oid)["status"] == "cancelled"
+    assert oid not in venue._rested_ns and venue.open_orders() == []
+    # Too little collateral when the fill comes: the order is refused and dropped.
+    poor, poor_oid = _rested("100", cash="5", mids=(
+        ("0", "100.5"), ("10", "100.5"), ("20", "99.98")))
+    assert _fills(poor.advance(T0 + 20 * S)) == []
+    assert poor.lookup("rest").status == "rejected"
+    assert poor_oid not in poor._rested_ns and poor.open_orders() == []
+
+
 def test_within_a_tick_the_arriving_taker_is_served_before_the_resting_maker():
     tape = _tape({"BTC": [(0, 100), (10, 100), (20, 100), (30, 99)]},
                  books={"BTC": [_level(10, "99.9", "100.1"), _level(20, "99.9", "100.1"),
