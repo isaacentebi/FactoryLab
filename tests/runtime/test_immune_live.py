@@ -142,7 +142,9 @@ def test_a_core_router_that_stops_moving_pays_less_and_the_frontier_nothing():
                              - rt._thrash_charged(core, "hi", 0.95)))
     rt._record_movement(frontier, _draw(frontier, (0.8, 0.2)), "f1")
     rt._record_movement(frontier, _draw(frontier, (0.2, 0.8)), "f2")
-    assert "f2" not in rt.thrash_charges and rt._thrash_charged(frontier, "f2", 0.7) == 0.7
+    # Unattributed, uncharged: still learned on the one map (ruling R10-c).
+    assert "f2" not in rt.thrash_charges
+    assert rt._thrash_charged(frontier, "f2", 0.7) == pytest.approx((0.7 + cap) / (1 + cap))
     # Waking nobody pays it too (ruling R9).
     handle = rt.queue.open(
         actor=core.learner.id, event_id="noop", channel="verdict", deadline_ns=10**18,
@@ -275,7 +277,9 @@ def test_an_unhistoried_action_of_a_historied_seat_may_spend_the_niche():
     rt._manage_reserve_window()
     seat, tool = "seed-decider", "venue.positions"
     _settle(rt, _open(rt, seat))
-    assert not rt._unhistoried(seat)  # past its first record: no seat trial
+    assert rt._unhistoried(seat)  # a seed's trial lasts its patience (ruling R10-b)
+    rt.ticks_consumed = rt._patience()  # past it: no seat trial
+    assert not rt._unhistoried(seat)
     handle = _open(rt, seat)
     reason, model = f"tool:{tool}", f"model:{rt.assemblies[seat].spec.model_id}"
     assert rt._novelty_compute(handle, reason)
@@ -346,6 +350,7 @@ def test_niche_cover_reaches_only_the_call_and_the_one_round_that_reads_it(monke
     known = _open(rt, seat)  # venue.mids has history for this seat; venue.positions not
     rt.queue.record_actions(known, {rt._tool_action("venue.mids")})
     _settle(rt, known)
+    rt.ticks_consumed = rt._patience()  # the seat's trial is over (ruling R10-b)
     handle = _open(rt, seat)
     seen = []
     replies = iter([

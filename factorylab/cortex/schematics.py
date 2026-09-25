@@ -1820,7 +1820,8 @@ class SchematicsMixin:
                 "min(prices.penalty_cap, lambda * m), m the total-variation distance "
                 "between that draw's distribution and the router's previous draw's; its "
                 "reward r is learned as (r + prices.penalty_cap - c) / (1 + "
-                "prices.penalty_cap), as is every round of a core router"),
+                "prices.penalty_cap); every round of every router is learned on that map, "
+                "with c = 0 when uncharged"),
             "controller": {
                 "law": "pid",
                 "eta": pr.eta, "kp": pr.kp, "kd": pr.kd, "decay": pr.decay,

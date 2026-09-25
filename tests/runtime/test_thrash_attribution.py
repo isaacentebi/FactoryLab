@@ -81,7 +81,28 @@ def test_with_no_role_named_the_core_bears_it_as_before():
         rt._record_movement(state, _draw(state, (0.8, 0.1, 0.1)), f"{name}1")
         rt._record_movement(state, _draw(state, (0.1, 0.8, 0.1)), f"{name}2")
     assert "p2" in rt.thrash_charges and "j2" not in rt.thrash_charges
-    assert rt._thrash_charged(judges, "j2", 0.7) == 0.7
+    cap = rt.m.prices.penalty_cap
+    assert rt._thrash_charged(judges, "j2", 0.7) == pytest.approx((0.7 + cap) / (1 + cap))
+
+
+def test_a_charge_never_raises_a_reward_on_any_router():
+    """Ruling R10-c: every round of every router is learned on one affine map. For
+    every router, an attributed round with c = 0 learns what an unattributed round with
+    the same r learns, and any c > 0 learns strictly less."""
+    rt = make_runtime()
+    cap = rt.m.prices.penalty_cap
+    states = rt._all_router_states()
+    assert states
+    for i, state in enumerate(states):
+        for r in (0.0, 0.3, 1.0):
+            rt.stats.thrash = {"lambda": 0.4, "roles": []}
+            unattributed = rt._thrash_charged(state, f"u{i}-{r}", r)
+            rt.stats.thrash = {"lambda": 0.4, "roles": sorted(rt._router_roles(state))}
+            rt.thrash_charges[f"z{i}-{r}"] = 0.0
+            attributed = rt._thrash_charged(state, f"z{i}-{r}", r)
+            assert attributed == unattributed == pytest.approx((r + cap) / (1 + cap))
+            rt.thrash_charges[f"c{i}-{r}"] = 0.01
+            assert rt._thrash_charged(state, f"c{i}-{r}", r) < unattributed
 
 
 def test_the_roles_are_published_with_the_price():

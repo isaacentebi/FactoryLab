@@ -413,7 +413,7 @@ public facts) keeps every print.
 
 | Key | Type | Default | Cast | Meaning |
 |---|---|---|---|---|
-| `trials` | int >= 1 | 3 | hard | Settled consequences delivered to a population assembly before its protected trial ends (A13). Replaces `trial_invocations`, which counted model calls; continuations and children do not count. |
+| `trials` | int >= 1 | 3 | hard | Settled consequences delivered to an assembly before its protected trial ends (A13), or its patience (`min_ratio` consequence periods) since it was born, whichever comes first: a population assembly at its registration, a seed assembly at the world's first tick (wave 16, R10-b). Replaces `trial_invocations`, which counted model calls; continuations and children do not count. |
 | `seat_share` | number in (0, 1] | 0.25 | hard | The most of one consequence period's share of the novelty reserve one seat's unhistoried actions (tool calls and the rounds that read them) may use, so no seat starves the registration trials (ruling R5; the #134 review). |
 | `max_lifetime_windows` | int >= 1 | 6 | hard | Reserve windows after registration after which the trial ends regardless of deliveries (A13). |
 
@@ -1276,11 +1276,10 @@ router draws, its abstentions included, carries
 `c = min(prices.penalty_cap, lambda * m)`, `m` the total-variation distance between
 that draw's distribution and the router's previous draw's: the router's own policy
 movement, so holding still is what lowers it (a charge every round bore alike would
-be a constant shift a no-regret learner ignores). A core router learns
-`(r + penalty_cap - c) / (1 + penalty_cap)` for every round, charged or not, one
-affine map with no clip (`thrash.charged`); another router learns the same map for
-every round drawn while the price was attributed to its tier, charge 0 included, and
-its other rounds unmapped. The price is published in
+be a constant shift a no-regret learner ignores). Every router learns
+`(r + penalty_cap - c) / (1 + penalty_cap)` for every round, charged or not (`c = 0`
+uncharged), one affine map with no clip and one scale per router for the world's
+life, so a charge never raises a reward (wave 16, ruling R10-c; `thrash.charged`). The price is published in
 `world.adaptive_scoring.thrash_price`; its controller resumes with the checkpoint
 (`thrash_controller`), and each open round's charge with `thrash_charges`.
 
@@ -1472,8 +1471,11 @@ share (a rate, or any other generic observation) is the window's count when it
 closed: a decision settling while its window is open is deferred
 (`price.deferred`) and settles at the close, so no share depends on the order
 decisions settled in. **The unhistoried niche bears no penalty** (essay II.II.b;
-wave 16, R-E as amended): a decision of a seat in its protected trial (a seed seat
-before its first settled record, a registered seat inside its patience), or one
+wave 16, R-E as amended): a decision of a seat in its protected trial (no settled
+delivery yet, of any status: a decline, NOOP or abstention credited at its D4 price
+is a reward trail; or fewer than `novelty.trials` settled consequences inside its
+patience, counted from its registration or, for a seed, the world's first tick;
+ruling R10-b), or one
 that took an unhistoried action the novelty reserve paid for (`niche.action`), is
 priced at zero, is not in any split's denominator and waits for no close. It is a
 penalty rule, never a reward floor: the decision keeps whatever its judges gave it. A card measured per assembly or per role is attributable to

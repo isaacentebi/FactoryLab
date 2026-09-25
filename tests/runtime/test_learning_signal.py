@@ -105,9 +105,15 @@ def test_an_unscored_round_is_credited_zero_consequence_never_the_arms_own_mean(
     rt._deliver_returns()
     after_b = _weights(state)
     # b's censored round is credited the router's observed mean ((0.9 + 0.1) / 2 = 0.5),
-    # not b's own mean (0.1): b gained 0.1 + 0.5, a one increment of 0.9, at equal odds.
+    # not b's own mean (0.1): b gained 0.1 + 0.5, a one increment of 0.9, at equal odds,
+    # each learned on the router's one affine map (ruling R10-c).
+    cap = rt.m.prices.penalty_cap
+
+    def learned(r):
+        return (r + cap) / (1 + cap)
+
     assert after_b[b] - min(after_b.values()) == pytest.approx(
-        6 * (after_b[a] - min(after_b.values())) / 9)
+        (learned(0.1) + learned(0.5)) * (after_b[a] - min(after_b.values())) / learned(0.9))
 
 
 def test_a_parent_selected_child_never_trains_the_router():
@@ -170,4 +176,7 @@ def test_a_keyed_router_learns_a_timed_out_round_once(monkeypatch):
     rt._deliver_returns()
     _settle(rt, late, SettleStatus.SETTLED, 0.1)
     rt._deliver_returns()
-    assert [(key, fb.reward) for key, fb in updates] == [("k-first", 0.7), ("k-late", 0.7)]
+    cap = rt.m.prices.penalty_cap
+    learned = (0.7 + cap) / (1 + cap)  # the router's one affine map (ruling R10-c)
+    assert [(key, fb.reward) for key, fb in updates] == [
+        ("k-first", pytest.approx(learned)), ("k-late", pytest.approx(learned))]

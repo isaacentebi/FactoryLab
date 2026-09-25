@@ -655,28 +655,31 @@ class RoutingMixin:
         return lid
 
     def _unhistoried(self, action_id: str) -> bool:
-        """No settled record, or an unfinished population trial, admits protected compute.
+        """No settled record, or an unfinished trial, admits protected compute.
 
-        A population assembly's trial ends when ``novelty.trials`` settled
-        consequences have been delivered to it (continuations and children do not
-        count) or its patience has passed since its registration, whichever comes
-        first: the lifetime ends the trial even when no consequence ever arrived, so
-        silence is not an unbounded entitlement. Its patience is ``min_ratio``
-        measured consequence periods in ticks (``_patience``; time audit T5), so the
-        consequence that pays it can arrive inside it (essay II.IV.b: the
-        compensation period must be shorter than the lifetime). A seed assembly has
-        no registration tick; it is protected until its first settled record. A seat
-        past its trial still reaches the niche through each unhistoried action it
-        takes (``_niche_action``; ruling R5).
+        An assembly's trial ends when ``novelty.trials`` settled consequences have
+        been delivered to it (continuations and children do not count) or its
+        patience has passed since it was born, whichever comes first: the lifetime
+        ends the trial even when no consequence ever arrived, so silence is not an
+        unbounded entitlement. Its patience is ``min_ratio`` measured consequence
+        periods in ticks (``_patience``; time audit T5), so the consequence that pays
+        it can arrive inside it (essay II.IV.b: the compensation period must be
+        shorter than the lifetime). A population assembly is born at its
+        registration; a seed assembly, on the same terms, at the world's first tick
+        (wave 16, ruling R10-b: a seat that only declines leaves a reward trail and
+        is not protected for the world's life). A seat past its trial still reaches
+        the niche through each unhistoried action it takes (``_niche_action``;
+        ruling R5).
         """
         try:
             population = self.registry.get(action_id).provenance != "seed"
         except KeyError:  # no contract: nothing the population registered, so no lifetime
             population = False
-        if not population:
-            return not self.queue.has_history(action_id)
-        # Registered before the tick clock: its patience counts from the first read.
-        born = self.stats.registered_tick.setdefault(action_id, self.ticks_consumed)
+        if population:
+            # Registered before the tick clock: its patience counts from the first read.
+            born = self.stats.registered_tick.setdefault(action_id, self.ticks_consumed)
+        else:
+            born = 0  # the world's first tick
         if self.ticks_consumed - born >= self._patience():
             return False
         if not self.queue.has_history(action_id):
@@ -1327,10 +1330,10 @@ class RoutingMixin:
         policy, so the thrash charge on this round (``FeedbackMixin._thrash_charged``)
         scales with how far this draw's distribution moved from the router's last,
         over the union of their actions; a first draw has not moved. The charge is
-        held for a router the price is attributed to (``_thrash_attributed``): a core
-        router's round only when charged (every core round is learned on the charged
-        scale), any other router's round whenever it is attributed, charge 0 included,
-        so its rounds under the price share one scale.
+        held for a router the price is attributed to (``_thrash_attributed``), and
+        only when positive: every round of every router is learned on the one map
+        (``FeedbackMixin._thrash_charged``; ruling R10-c), so an uncharged round needs
+        no record.
         """
         now = dict(zip(sample.action_ids, (float(p) for p in sample.probs), strict=True))
         before = state.last_draw
@@ -1343,8 +1346,7 @@ class RoutingMixin:
             return
         charge = min(self.m.prices.penalty_cap,
                      self.stats.thrash.get("lambda", 0.0) * min(1.0, moved))
-        core = state.kind in self.m.evaluation.no_swap_regret_kinds
-        if charge > 0 or (not core and self.stats.thrash.get("lambda", 0.0) > 0):
+        if charge > 0:
             self.thrash_charges[handle] = charge
 
     def _close_abstention_watch(self, state: RouterState) -> None:

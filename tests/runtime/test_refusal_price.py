@@ -567,11 +567,17 @@ def test_in_a_world_every_unjudged_refusal_and_decline_settles_at_the_abstention
     assert priced
     for row in priced:
         assert row["reward"] == pytest.approx(max(0.0, row["neutral"] - row["penalty"]))
-    # A decision taken in the unhistoried niche bears no card penalty (wave 16, R-E as
-    # amended): a seat with no settled record is in its protected trial, and a seat
-    # that only ever declines never gets one. Every other decline bears its price.
+    # A seat that only refuses, once past its trial, bears its penalty share (ruling
+    # R10-b: its priced declines are a reward trail, and a seed's trial ends at its
+    # patience); inside the niche nothing is charged.
     niche = {row["handle"] for row in _rows(rt, "price.contribution") if row.get("niche")}
+    refused = [row for row in priced if drawn.get(row["handle"]) == REFUSER]
+    assert any(row["penalty"] > 0 for row in refused if row["handle"] not in niche)
     assert all(row["penalty"] == 0 for row in priced if row["handle"] in niche)
+    late = [h for h in drawn if drawn[h] == REFUSER
+            and rt.queue.opened_tick(h) is not None
+            and rt.queue.opened_tick(h) >= rt._patience()]
+    assert late and not set(late) & niche  # past the trial, never in the niche
     # The judges who declined to grade a refusal ("no return to judge") declined too,
     # in the form ``_invoke`` hands on: none is censored at a free neutral, each is
     # priced on its router as an abstention, and some of those prices bite.
@@ -581,6 +587,44 @@ def test_in_a_world_every_unjudged_refusal_and_decline_settles_at_the_abstention
     declined = {row["handle"] for row in _rows(rt, "evaluation.declined",
                                                 channel=CH_CONFORMITY)}
     judged = [row for row in priced if row["router"] in judge_routers]
-    assert declined and {row["handle"] for row in judged} == declined
+    # Every decline is priced, except one still owed at the run's end: a decline
+    # outside the niche is priced on its window's close (D5), which the run may end
+    # before.
+    owed = {h for h in declined if h in rt.noop_credits}
+    assert declined and {row["handle"] for row in judged} == declined - owed
+    assert all(not rt._is_niche(h) for h in owed)
     assert all(row["reward"] <= row["neutral"] for row in judged)
     assert all(row["penalty"] == 0 for row in judged if row["handle"] in niche)
+
+
+def test_a_seat_that_declines_every_round_leaves_the_niche_when_its_trial_ends(monkeypatch):
+    """Ruling R10-b, the violation attempt: declining is a reward trail, and a seed's
+    trial ends at its patience from the world's first tick, so a seat that declines
+    every round is protected inside the trial and charged after it."""
+    monkeypatch.setattr(pricing, "close_window", lambda *_a: None)
+    card = _card(per=None)
+    seed = load_manifest("scripted")
+    rt = Runtime(replace(seed, charter=replace(seed.charter, cards=(card,))), events=0,
+                 seed=1, initial_balance_micro=None, ledger_path=None, router_gamma=0.1,
+                 provider=Refuser())
+    rt._manage_reserve_window()
+    rt._derive_regions()
+    rt.controller.set_price(card.id, 0.8, amendment_id="test")
+    _commitments(rt, "eval-a", censored=4)
+    rt._close_price_window()  # a violation measured, and priced
+
+    def decline_penalty():
+        _state, handle = _refuse(rt)
+        _commitments(rt, "eval-a", censored=4)
+        rt._close_price_window()
+        _past_the_verdict_timeout(rt)
+        rt._deliver_returns()
+        return handle, rt._is_niche(handle), rt._priced_abstention(handle, 0.5)[1]
+
+    inside = decline_penalty()
+    assert inside[1] and inside[2] == 0.0  # the trial: protected, charged nothing
+    assert rt.queue.has_history("seed-decider")  # its priced decline is a reward trail
+    rt.ticks_consumed = max(rt.ticks_consumed, rt._patience())
+    assert not rt._unhistoried("seed-decider")
+    after = decline_penalty()
+    assert not after[1] and after[2] > 0  # out of the niche: it bears its share

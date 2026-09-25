@@ -2556,7 +2556,7 @@ class FeedbackMixin:
         return any(self._awaits_close(role, handle) for role in sorted(roles))
 
     def _thrash_charged(self, state: Any, handle: str, reward: float) -> float:
-        """A no-swap-regret router's reward, less the thrash charge on its own movement.
+        """A router's reward, less the thrash charge on its own movement.
 
         Essay II.II.b: "in the case of thrash, one should penalize the duration of
         spectral-gap volatility, incentivizing the surplus-retaining core of
@@ -2568,18 +2568,15 @@ class FeedbackMixin:
         from its previous draw). A router that holds its policy still is charged
         nothing; abstentions are charged the same way (ruling R9).
 
-        Guarantees the charged reward is ``(r + cap - c) / (1 + cap)`` for every round
-        of a core router, charged or not: one affine map, so no clip at 0 lets a
-        low-reward arm escape part of its charge and an uncharged round sits on the
-        same scale as a charged one. A round of another router drawn while the price
-        was attributed to its tier (wave 16, second addendum, I-10;
-        ``RoutingMixin._thrash_attributed``) is learned on the same map with its own
-        charge; its other rounds are untouched. A charge is ledgered
+        Guarantees the learned reward is ``(r + cap - c) / (1 + cap)`` for every round
+        of every router, charged or not (c = 0 uncharged): one affine map and one scale
+        per router for the world's life, so no clip at 0 lets a low-reward arm escape
+        part of its charge, an uncharged round sits on the same scale as a charged one,
+        and a charge never raises a reward (wave 16, ruling R10-c). Any router can be
+        charged: the thrash price lands on the tier whose behaviour moved (I-10;
+        ``RoutingMixin._thrash_attributed``). A charge is ledgered
         (``thrash.charged``).
         """
-        if (state.kind not in self.m.evaluation.no_swap_regret_kinds
-                and handle not in self.thrash_charges):
-            return reward
         cap = self.m.prices.penalty_cap
         charge = self.thrash_charges.pop(handle, 0.0)
         charged = (reward + cap - charge) / (1.0 + cap)

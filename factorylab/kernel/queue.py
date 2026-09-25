@@ -394,8 +394,12 @@ class DecisionQueue:
         self.__decisions[handle] = replace(decision, status=retained.status)
         self.__pending.pop(handle, None)  # no outcome status is PENDING
         self.__returns[handle].append(retained)
-        if status == SettleStatus.SETTLED:
-            self.__settled_contracts.add(decision.propensity.chosen)
+        # Essay II.II.b defines unhistoried actions as "decisions that arrive carrying
+        # no propensity record and no reward trail": a settled delivery of any status
+        # (a score, or a decline, abstention or censored decision credited at its
+        # published price) is a reward trail (wave 16, ruling R10-b). A timeout is not
+        # a settlement and leaves none.
+        self.__settled_contracts.add(decision.propensity.chosen)
         self._history(handle)
         # The outcome is final: every later settle, timeout, propensity or action on
         # this handle is refused before it reads the actions, and ``_history`` has just
@@ -493,7 +497,8 @@ class DecisionQueue:
         return tuple(self.__returns[handle])
 
     def has_history(self, contract_id: str) -> bool:
-        """Count settled performance even after retirement; exclude missingness and timeouts."""
+        """Whether any decision of the contract was settled, whatever its status, even
+        after retirement: a reward trail (ruling R10-b). A timeout alone leaves none."""
         return contract_id in self.__settled_contracts
 
     def state(self) -> dict:
