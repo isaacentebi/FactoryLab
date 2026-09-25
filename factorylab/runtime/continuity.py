@@ -37,14 +37,20 @@ delivery, while merely rendering new previews cannot grow delivery state.
 ``outcome.get`` fetches any of them whole by ``outcome_id`` (a handle is a fallback
 that answers with the oldest unread item of that decision, and says so); an
 answer's ``ack_through`` takes an id and advances the cursor only as far as this
-seat was actually delivered. An unacknowledged item stays. Nothing is lost.
+seat was actually delivered. An item stays until its seat acknowledges it or its
+published retention horizon passes, whichever is first; then its body is released
+(wave 17b; essay II.IV.c: a verdict "is consumed as a reward signal ... and then
+discarded", and II.I.b: the reward line is thin). The diary keeps every
+``outcome.addressed`` item, so the record is whole; the inbox is the reward line, not
+the record.
 
 What the seat said is retained until its decision's last consequence settles or
 the seat retires; only then, and only over ``MAX_SAID``, is the oldest such
 record archived as an artifact and dropped from the table — ``outcome.get`` and
 the settler still read it back. A decision with open consequences is never
 evictable (R3-F; GPT-6 third reading §3, "MAX_SAID can evict decision-linked
-material before a delayed consequence").
+material before a delayed consequence"). Once its decision is fully settled and
+released (``SettledMixin``), nothing is addressed to it again and its record goes.
 
 Retained bytes are a constraint, not a cash flow. Holding them pays no one: the
 disk is the world's fixed-price machine, so no money leaves the factory at the
@@ -106,7 +112,10 @@ MAX_SAID = 1_024
 
 STATE_TOO_LARGE = f"working_state exceeds {HARD_STATE_BYTES} bytes"
 STATE_NOT_OBJECT = "working_state must be a JSON object"
-OUTCOME_UNKNOWN = "no outcome addressed to you carries that handle"
+#: What an id or handle no held item answers to says: never addressed to this seat,
+#: or released once acknowledged or past its retention horizon (wave 17b).
+OUTCOME_UNKNOWN = ("no outcome addressed to you and still held carries that id or handle; "
+                   "an item is released once acknowledged or past its retention horizon")
 STATE_NOT_LOADED = (
     f"this head is over the {INLINE_STATE_BYTES}-byte display bound, so it is named here "
     "and not carried; artifact.get on its sha returns the bytes exactly as written"
@@ -264,11 +273,12 @@ def _with_usd(value: Any) -> Any:
 class OutcomeInbox:
     """Items addressed to the seat whose decision settled, with a per-seat read cursor.
 
-    Guarantees: an item is appended once per settlement fact and never
-    overwritten; the cursor only advances, and only to a handle the seat was
+    Guarantees: an item is appended once per settlement fact while it is held, and
+    never overwritten; the cursor only advances, and only to a handle the seat was
     actually addressed on; an item the seat has not acknowledged stays unread
-    however many others arrive after it; and every body is an artifact, so a
-    checkpoint carries indexes and cursors while the archive carries the text.
+    however many others arrive after it, until its retention horizon passes
+    (``release_items``); and every body is an artifact, so a checkpoint carries
+    indexes and cursors while the archive carries the text.
     """
 
     def __init__(self, artifacts: Any, ledger: Any, clock: Any) -> None:
@@ -287,13 +297,16 @@ class OutcomeInbox:
         # Items fetched past a delivery gap. They become part of
         # ``delivered_through`` only after every earlier item for this seat arrives.
         self.delivered_sparse: dict[str, set[int]] = {}
-        # handle -> the sha of a ``said`` record evicted under MAX_SAID. Nothing is
-        # lost: the rationale is an artifact and is read back on demand.
+        # handle -> the sha of a ``said`` record evicted under MAX_SAID: the rationale
+        # is an artifact and is read back on demand, until its decision is released.
         self.archived_said: dict[str, str] = {}
         # Set by the runtime to ``lambda handle: <the decision still has an open
         # consequence>``. Until it is set nothing is evictable, which is the
         # conservative reading and the behaviour that preceded R3-F.
         self.consequences_open: Any = None
+        # Set by the runtime to the world's tick clock (ticks consumed): an item's
+        # retention horizon counts ticks, never wall time (wave 17b; time audit T3).
+        self.tick: Any = None
 
     # -- what the seat said, kept so an outcome can be addressed to a reason ------------
 
@@ -403,7 +416,8 @@ class OutcomeInbox:
         sha = self.artifacts.put(canonical(body), owner=seat, kind="outcome.item")
         next_seq = self.seq + 1
         record = {"seq": next_seq, "handle": handle, "sha": sha,
-                  "observed_at_ns": observed, "fact": fact}
+                  "observed_at_ns": observed, "fact": fact,
+                  **({"tick": self.tick()} if self.tick is not None else {})}
         self.ledger.append({"kind": "outcome.addressed", "assembly_id": seat, "handle": handle,
                             "sha": sha, "item": next_seq, "delta_micro": int(delta_micro),
                             "evidence": evidence, "ts": observed})
@@ -641,6 +655,66 @@ class OutcomeInbox:
                             "cursor": cursor, "ts": self.clock()})
         self.cursors[seat] = cursor
         return cursor
+
+    # -- retention (wave 17b) ----------------------------------------------------------
+
+    def release_items(self, *, before_tick: int) -> int:
+        """Release every item its seat acknowledged, and every item addressed before the
+        world tick ``before_tick``; return how many went.
+
+        Essay II.IV.c: a verdict "is consumed as a reward signal ... and then
+        discarded"; II.I.b: the reward line is thin. An item is kept until its seat
+        acknowledges it or its retention horizon passes, whichever is first (the
+        runtime passes the horizon it publishes, ``storage`` in the world's
+        schematics). Guarantees: an unacknowledged item addressed at or after
+        ``before_tick`` stays (an item from a checkpoint older than item ticks counts
+        as addressed at tick 0); a released item's body is released from the archive
+        (``artifact.released``, then collected once no durable checkpoint names it)
+        unless another item this seat still holds carries the same body; the
+        cursors never move; delivery bookkeeping keeps only held items' ids.
+        """
+        released = 0
+        for seat, rows in self.items.items():
+            cursor = self.cursors.get(seat, 0)
+
+            def expired(record, cursor=cursor):
+                return record["seq"] <= cursor or record.get("tick", 0) < before_tick
+
+            gone = [r for r in rows if expired(r)]
+            if not gone:
+                continue
+            kept = [r for r in rows if not expired(r)]
+            self.items[seat] = kept
+            held = {r["sha"] for r in kept}
+            for sha in dict.fromkeys(r["sha"] for r in gone):
+                if sha not in held:
+                    self.artifacts.release(sha, owner=seat, kind="outcome.item",
+                                           cause="retention")
+            sparse = self.delivered_sparse.get(seat)
+            if sparse:
+                sparse.intersection_update(r["seq"] for r in kept)
+                if not sparse:
+                    self.delivered_sparse.pop(seat, None)
+            released += len(gone)
+        self.items = {seat: rows for seat, rows in self.items.items() if rows}
+        return released
+
+    def forget_said(self, handles) -> None:
+        """Drop what the seat said on decisions that were released (wave 17b).
+
+        An item copies ``said`` into its body when it is addressed, and a released
+        decision is addressed nothing more, so nothing reads its record again; an
+        archived record's artifact is released with it.
+        """
+        for handle in handles:
+            self.said.pop(handle, None)
+            sha = self.archived_said.pop(handle, None)
+            if sha is not None:
+                record = self.artifacts.index.get(sha) or {}
+                for owner, reference in dict(record.get("refs") or {}).items():
+                    if "said.archived" in reference.get("kinds", [reference.get("kind")]):
+                        self.artifacts.release(sha, owner=owner, kind="said.archived",
+                                               cause="retention")
 
     # -- the delivery and retention bookkeeping a checkpoint carries -------------------
 

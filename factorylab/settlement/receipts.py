@@ -204,24 +204,59 @@ class ReceiptBook:
     def __init__(self, ledger: Ledger) -> None:
         self.__ledger = ledger
         self.__by_id: dict[str, _Receipt] = {}
-        self.__execution_ids: list[str] = []
+        # How many execution receipts were ever recorded (the global cursor), and how
+        # many of them were released with their decisions (wave 17b): the cursor is
+        # the released ones plus the ones still held.
+        self.__executions = 0
+        self.__released_executions = 0
         self.__execution_by_handle: dict[str, list[tuple[int, str]]] = {}
 
     def _index_execution(self, identity: str, receipt: _Receipt) -> None:
         """Append one execution receipt to the derived global and per-handle indexes."""
         if not isinstance(receipt, ExecutionReceipt):
             return
-        ordinal = len(self.__execution_ids)
-        self.__execution_ids.append(identity)
+        ordinal = self.__executions
+        self.__executions += 1
         self.__execution_by_handle.setdefault(receipt.handle, []).append((ordinal, identity))
 
-    def restore(self, receipts: Iterable[_Receipt]) -> None:
-        """Restore record order and rebuild derived execution indexes in one pass."""
+    def restore(self, receipts: Iterable[_Receipt], *, released_executions: int = 0) -> None:
+        """Restore record order and rebuild derived execution indexes in one pass.
+
+        ``released_executions`` is how many execution receipts were released before
+        the checkpoint (``released_executions()``); an older checkpoint released none.
+        Guarantees ``execution_count`` equals the recording book's, so every receipt
+        recorded after the checkpoint takes the position it took there, and a cursor
+        taken at the checkpoint or later reads exactly what it read there. Held
+        receipts are numbered after the released ones, in record order.
+        """
         self.__by_id = {receipt.id: receipt for receipt in receipts}
-        self.__execution_ids = []
+        self.__released_executions = released_executions
+        self.__executions = released_executions
         self.__execution_by_handle = {}
         for identity, receipt in self.__by_id.items():
             self._index_execution(identity, receipt)
+
+    def release(self, handles) -> int:
+        """Forget every receipt about the released ``handles``; return how many.
+
+        Wave 17b (essay II.IV.c: a verdict is "consumed ... and then discarded"):
+        a receipt is addressable evidence about a decision, and a released decision
+        is owed nothing more. Guarantees ``execution_count`` is unchanged and that
+        no receipt about any other handle moves. Its ledger rows stay the record.
+        """
+        gone = set(handles)
+        drop = [i for i, r in self.__by_id.items() if getattr(r, "handle", None) in gone]
+        for identity in drop:
+            receipt = self.__by_id.pop(identity)
+            if isinstance(receipt, ExecutionReceipt):
+                self.__released_executions += 1
+        for handle in gone:
+            self.__execution_by_handle.pop(handle, None)
+        return len(drop)
+
+    def released_executions(self) -> int:
+        """How many execution receipts this book released (``release``)."""
+        return self.__released_executions
 
     def record(self, receipt: _Receipt) -> str:
         """Ledger one object and return its id; an identical re-record writes nothing."""
@@ -243,13 +278,13 @@ class ReceiptBook:
 
     def execution_count(self) -> int:
         """Return the global execution-receipt cursor in constant time."""
-        return len(self.__execution_ids)
+        return self.__executions
 
     def executions_since(self, handle: str, cursor: int) -> list[ExecutionReceipt]:
         """Return this handle's execution receipts at or after one global cursor."""
         if not isinstance(handle, str) or not handle:
             raise ValueError("handle is required")
-        if type(cursor) is not int or not 0 <= cursor <= len(self.__execution_ids):
+        if type(cursor) is not int or not 0 <= cursor <= self.__executions:
             raise ValueError("execution cursor is outside this receipt book")
         rows = self.__execution_by_handle.get(handle, ())
         start = bisect_left(rows, (cursor, ""))

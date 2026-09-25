@@ -211,9 +211,11 @@ class SummaryMixin:
             "ledger_verify": self.ledger.verify(),
             "outstanding_decisions": len(self.queue.outstanding()),
             "execution": {
-                "intents": len(self.order_intents),
+                # A released decision's intents are counts (wave 17b).
+                "intents": len(self.order_intents) + self.released_intents.get("intents", 0),
                 "statuses": {status: sum(i["result"]["status"] == status
                                          for i in self.order_intents.values())
+                             + self.released_intents.get(f"status:{status}", 0)
                              for status in ("filled", "resting", "cancelled",
                                             "rejected", "uncertain")},
                 "polled_fills": self.stats.fills,

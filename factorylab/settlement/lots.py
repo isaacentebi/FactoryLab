@@ -116,6 +116,16 @@ class LotOrder:
     remaining: Fraction
     ordered: Fraction | None = None  # None: an order bound before sizes were tracked
     executed: Fraction = Fraction(0)
+    # The caller's tick at which the order was cancelled or rejected (wave 17b): a fill
+    # that executed before the cancel took effect may still arrive after it.
+    cancelled_tick: int | None = None
+
+
+#: The per-account counts ``released`` keeps for accounts no longer in ``returns``.
+RELEASED_COUNTS = ("accounts", "paid_off", "not_paid_off", "marked", "censored_outcomes",
+                   "voided", "lots_opened", "lots_closed", "closes_credited")
+#: Why a fill naming a released account's order moves nothing (``LotTable.fill``).
+RELEASED_ORDER = "the order's return was settled and released"
 
 
 @dataclass(frozen=True)
@@ -126,6 +136,11 @@ class LotTable:
     returns: tuple[ReturnAccount, ...] = ()
     orders: tuple[LotOrder, ...] = ()
     services: tuple[tuple[str, str], ...] = ()  # (service id, registering return)
+    # Wave 17b: accounts released once closed and fully settled survive only as these
+    # counts (``RELEASED_COUNTS`` order), and their orders as (order id, owning
+    # handle, the caller's release mark) until the caller forgets them.
+    released: tuple[int, ...] = ()
+    released_orders: tuple[tuple[str, str, int], ...] = ()
 
     def seed_spot(self, coin: str, size: str, px: str) -> "LotTable":
         """Launch inventory has an exact basis and no decision receives opening credit."""
@@ -197,7 +212,10 @@ class LotTable:
         handle = self.service_return(service)
         if handle is None:
             return self
-        account = self.account(handle)
+        try:
+            account = self.account(handle)
+        except KeyError:
+            return self  # released: its outcome was fixed long ago, and stays as it was
         if account.payoff is not None:
             return self
         return self._accounts({handle: replace(
@@ -246,18 +264,25 @@ class LotTable:
         quantity = exact(size)
         if quantity <= 0:
             raise ValueError("order size must be positive")
-        if any(o.order_id == order_id for o in self.orders):
+        if any(o.order_id == order_id for o in self.orders) or any(
+                o == order_id for o, _h, _m in self.released_orders):
             raise ValueError("order already attributed")
         if not any(r.handle == handle for r in self.returns):
             raise ValueError("order requires an open consequence account")
         return replace(self, orders=(*self.orders, LotOrder(order_id, handle, quantity, quantity)))
 
-    def cancel(self, order_id: str) -> "LotTable":
-        """Clear unfilled liability without deleting the order's historical ownership."""
+    def cancel(self, order_id: str, tick: int | None = None) -> "LotTable":
+        """Clear unfilled liability without deleting the order's historical ownership.
+
+        ``tick`` is when the cancel (or rejection) was acknowledged; the first one
+        recorded stays.
+        """
         return replace(
             self,
             orders=tuple(
-                replace(o, remaining=Fraction(0)) if o.order_id == order_id else o
+                replace(o, remaining=Fraction(0),
+                        cancelled_tick=o.cancelled_tick if o.cancelled_tick is not None
+                        else tick) if o.order_id == order_id else o
                 for o in self.orders
             ),
         )
@@ -307,6 +332,13 @@ class LotTable:
         order = next((o for o in self.orders if o.order_id == order_id), None)
         owner = order.handle if order else None
         accounts = {r.handle: r for r in self.returns}
+        if not liquidation and order is None:
+            released = next((h for o, h, _mark in self.released_orders if o == order_id), None)
+            if released is not None:
+                # The order's owner was closed, fully settled and released: its score
+                # and its money were fixed, so this fill moves no lot and is refused
+                # by name rather than pooled (the caller ledgers it).
+                raise ValueError(f"{RELEASED_ORDER}: {released}")
         if not liquidation and owner not in accounts:
             raise ValueError("fill without an open consequence account")
         if market in ("spot", "event") and not is_buy and quantity > sum(
@@ -526,6 +558,106 @@ class LotTable:
         acted = account.opened_lots > 0 or account.closes > 0 or account.earnings > 0
         return Payoff(handle, int(acted and micro + account.earned_micro > cost), micro, cost,
                       event, bool(lots), account.liquidated, account.earned_micro)
+
+    def closed(self, handle: str, *, tick: int | None = None, patience: int = 0) -> bool:
+        """Whether ``handle``'s account can never change again: nothing is owed to it.
+
+        Guarantees True only for an account whose outcome is fixed (or that was
+        voided), whose realised money is all booked to its owner
+        (``late_realizations`` owes it nothing), that owns no open lot (a marked
+        outcome's lots still realise late money for it), no order with an unfilled
+        liability, and no order that could still fill: each of its orders executed
+        its whole size, or was cancelled at least ``patience`` ticks before ``tick``
+        (a fill that executed before the cancel took effect is accepted up to the
+        order's size, so it is awaited that long). A released or unknown handle is
+        False.
+        """
+        try:
+            account = self.account(handle)
+        except KeyError:
+            return False
+        if account.payoff is None and not account.voided:
+            return False
+        realized = account.realized_micro.numerator // account.realized_micro.denominator
+        if account.payoff is not None and realized != account.late_micro:
+            return False  # realised money not yet booked to its owner (``late_realizations``)
+        if any(lot.handle == handle for lot in self.lots):
+            return False
+        for order in self.orders:
+            if order.handle != handle:
+                continue
+            if order.remaining:
+                return False
+            if order.ordered is not None and order.executed >= order.ordered:
+                continue
+            if (order.cancelled_tick is None or tick is None
+                    or tick - order.cancelled_tick < patience):
+                return False
+        return True
+
+    def release(self, handles, mark: int, *, patience: int = 0) -> "LotTable":
+        """Release closed accounts into counts; their orders keep only their owner.
+
+        Essay II.IV.c: a consequence is "consumed ... and then discarded"; what
+        persists is aggregates. Guarantees every handle is ``closed`` at tick
+        ``mark`` with ``patience`` (otherwise ``ValueError`` and the table is
+        unchanged), that ``released_counts`` plus
+        the retained accounts give exactly the counts the unreleased table gave,
+        and that each released account's orders survive as (order id, owner,
+        ``mark``) so a later fill naming one is refused by name (``RELEASED_ORDER``)
+        until ``forget_released_orders`` passes ``mark``. Nothing else changes.
+        """
+        handles = list(dict.fromkeys(handles))
+        if not handles:
+            return self
+        for handle in handles:
+            if not self.closed(handle, tick=mark, patience=patience):
+                raise ValueError(f"account {handle} is open or unknown and cannot be released")
+        gone = set(handles)
+        counts = dict(self.released_counts())
+        for account in self.returns:
+            if account.handle not in gone:
+                continue
+            payoff = account.payoff
+            observed = payoff is not None and payoff.censored is None
+            counts["accounts"] += 1
+            counts["paid_off"] += int(observed and payoff.y == 1)
+            counts["not_paid_off"] += int(observed and payoff.y != 1)
+            counts["marked"] += int(observed and payoff.marked)
+            counts["censored_outcomes"] += int(payoff is not None and payoff.censored is not None)
+            counts["voided"] += int(account.voided)
+            counts["lots_opened"] += account.opened_lots
+            counts["lots_closed"] += account.closed_lots
+            counts["closes_credited"] += account.closes
+        return replace(
+            self,
+            returns=tuple(r for r in self.returns if r.handle not in gone),
+            orders=tuple(o for o in self.orders if o.handle not in gone),
+            released=tuple(counts[name] for name in RELEASED_COUNTS),
+            released_orders=(*self.released_orders,
+                             *((o.order_id, o.handle, mark) for o in self.orders
+                               if o.handle in gone)),
+        )
+
+    def released_counts(self) -> dict[str, int]:
+        """The counts of every released account, by ``RELEASED_COUNTS`` name."""
+        values = self.released or (0,) * len(RELEASED_COUNTS)
+        return dict(zip(RELEASED_COUNTS, values, strict=True))
+
+    def order_owner(self, order_id: str) -> str | None:
+        """The handle that owns ``order_id``: a retained order's, or a released one's."""
+        order = next((o for o in self.orders if o.order_id == order_id), None)
+        if order is not None:
+            return order.handle
+        return next((h for o, h, _mark in self.released_orders if o == order_id), None)
+
+    def forget_released_orders(self, before: int) -> "LotTable":
+        """Forget released orders marked before ``before``; a later fill naming one is
+        then an order no account owns, refused as such (never pooled)."""
+        kept = tuple(row for row in self.released_orders if row[2] >= before)
+        if len(kept) == len(self.released_orders):
+            return self
+        return replace(self, released_orders=kept)
 
     def _accounts(self, updates: dict[str, ReturnAccount]) -> "LotTable":
         if not updates:

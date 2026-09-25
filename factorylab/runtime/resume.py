@@ -781,6 +781,11 @@ _RUNTIME_FIELDS = (
     # tier is taken as viable until measured, no epoch waits, and the anchor is
     # rebuilt from the treasury's own window.
     "card_clock", "governance_viable", "pending_epochs", "cap_anchor_ns",
+    # Wave 17b: each seat's ballot cursor over its own deliveries, the committee
+    # eligibility tally and the evidence it counted, and released decisions' order
+    # intents as counts. An older checkpoint has none: its seats have read nothing, its
+    # tally is rebuilt from the scan (nothing was released), and no intent was folded.
+    "policy_seen", "eligibility_tally", "eligibility_evidence", "released_intents",
 )
 # Runtime fields read through a property with no setter, and the attribute behind it.
 _RUNTIME_BACKING = {
@@ -813,7 +818,8 @@ _DERIVED_STATE = {
     "ArtifactStore.epoch": "a rebuild counter for views over the index, bumped on restore",
     "ForecastBook._ForecastBook__open_cache": "the unsettled handles, rebuilt from the "
                                               "forecast map and settled set it names",
-    "ReceiptBook._ReceiptBook__execution_ids": "derived global execution-receipt cursor",
+    "ReceiptBook._ReceiptBook__executions": "derived global execution-receipt cursor: the "
+                                            "released count plus the receipts held",
     "ReceiptBook._ReceiptBook__execution_by_handle": "derived per-handle execution index",
     "FakeTreasury._balances_memo": "the scripted rail's balances, keyed on what they read",
     "Runtime._safety_ns": "the safety path's last wall read, reset at every event's start",
@@ -855,12 +861,18 @@ _UNORDERED_STATE = {
     "SubscriptionBook.last_wake": "per-seat last wake tick, read by seat",
     "OutcomeInbox.delivered_through": "per-seat delivery cursor, read by seat",
     "OutcomeInbox.delivered_sparse": "out-of-order delivered ids, read by seat",
+    # Wave 17b: rebuilt on restore from the retained decisions and deliveries.
+    "DecisionQueue._DecisionQueue__children": "each retained decision's retained children, "
+                                              "read by handle",
+    "DecisionQueue._DecisionQueue__held": "each handle's unreleased deliveries, read by handle",
 }
 # An older checkpoint's ``timing`` and ``buffer`` entries (the deleted TimingRegistry
 # and UpwardBuffer, time audit T9) are not read.
 _KERNEL_FIELDS = ("wallet", "queue", "registry", "reserve")
 _COMPONENT_FIELDS = (
-    ("book", "_ForecastBook__", ("forecasts", "settled", "requested")),
+    # Wave 17b: forecasts released per [evaluator, predicate]. An older checkpoint
+    # released none.
+    ("book", "_ForecastBook__", ("forecasts", "settled", "requested", "released")),
     ("baseline", "_PrevalenceBaseline__", ("counts",)),
     ("cadence", "_", ("latencies", "last_activation_ns", "waiting", "deferred",
                        "current_event", "last_activation_event", "outstanding", "min_support",
@@ -964,6 +976,12 @@ def runtime_state(rt) -> Checkpoint:
         "components": encode(components),
         "treasury": encode(rt.treasury.snapshot()),
         "receipts": encode(receipts),
+        # Wave 17b: execution receipts each book released with their decisions, so the
+        # restored cursor counts them. Present only once a book has released one.
+        **({"receipts_released": released}
+           if (released := {path: _resolve(rt, path).released_executions()
+                            for path in _RECEIPT_BOOKS
+                            if _resolve(rt, path).released_executions()}) else {}),
         # A program seat's private state is restored by artifact hash (C8); the key is
         # present only for program seats, so a world without one checkpoints as before.
         "assemblies": encode([{"spec": a.spec, "memory": a.memory,
@@ -1119,9 +1137,11 @@ def restore_runtime(rt, state: dict) -> None:
         rt.budget._restore_state(decode(state["budget"]))
     rt.treasury.restore(decode(state["treasury"]))
     # Older checkpoints predate the receipt books; theirs start empty, as they did.
+    released_receipts = state.get("receipts_released") or {}
     for path, saved in decode(state.get("receipts") or {}).items():
         # A retired receipt kind (an adjudication) decodes to None and is dropped.
-        _resolve(rt, path).restore(r for r in saved if r is not None)
+        _resolve(rt, path).restore((r for r in saved if r is not None),
+                                   released_executions=released_receipts.get(path, 0))
     for name, prefix, names in _COMPONENT_FIELDS:
         for field in names:
             if (name == "controller" and field in ("kp", "kd")
@@ -1159,6 +1179,9 @@ def restore_runtime(rt, state: dict) -> None:
                 continue
             if name == "thrash_controller" and name not in components:
                 # Older checkpoints predate the thrash price; it starts at zero.
+                continue
+            if name == "book" and field == "released" and field not in components[name]:
+                # Older checkpoints predate decision release (wave 17b): none released.
                 continue
             setattr(getattr(rt, name), prefix + field, components[name][field])
     # The recorded run sealed every release this checkpoint shows the moment it was
@@ -1214,6 +1237,10 @@ def restore_runtime(rt, state: dict) -> None:
     for contract in rt.registry.available("exchange"):
         if contract.id.startswith("market:"):
             rt._admit_market(contract.input_schema["coin"], contract.input_schema["market"])
+    if "eligibility_tally" not in saved_runtime:
+        # A checkpoint older than the tally released nothing: the scan it replaced
+        # still sees every decision, once.
+        rt._rebuild_eligibility_tally()
 
 
 def check_witness_identity(saved_runtime: dict) -> None:

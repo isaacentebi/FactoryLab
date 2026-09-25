@@ -371,8 +371,12 @@ class VenueMixin:
         """The decision that placed an order, from the consequence book's own record."""
         if order_id is None:
             return None
-        orders = getattr(getattr(self.consequences, "table", None), "orders", None) or ()
-        return next((o.handle for o in orders if o.order_id == str(order_id)), None)
+        table = getattr(self.consequences, "table", None)
+        if table is None:
+            return None
+        # A released account's order still names its owner (wave 17b), so a very late
+        # fill is booked to the decision that placed it, as it was before the release.
+        return table.order_owner(str(order_id))
 
     def _settle_exchange_effects(self, evs: list[WorldEvent], *,
                                  observe_positions: bool = True) -> None:

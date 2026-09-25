@@ -4,7 +4,7 @@ from collections import Counter
 from dataclasses import asdict
 
 from factorylab.kernel.ledger import Ledger
-from factorylab.settlement.lots import LotTable, Payoff
+from factorylab.settlement.lots import RELEASED_ORDER, LotTable, Payoff
 from factorylab.settlement.receipts import ExecutionReceipt, ReceiptBook
 from factorylab.settlement.vocabulary import _require_event_index
 
@@ -183,9 +183,9 @@ class ReturnConsequences:
             return
         size = args.get("size") if result["status"] == "resting" else result.get("filled_size")
         oid = str(result["order_id"])
-        existing = next((o for o in self.table.orders if o.order_id == oid), None)
+        existing = self.table.order_owner(oid)
         if existing is not None:
-            if existing.handle != handle:
+            if existing != handle:
                 raise ValueError("order already belongs to another decision")
             return
         if not self.account_open(handle) and handle not in self._unresolved_handles():
@@ -211,7 +211,8 @@ class ReturnConsequences:
 
     def cancel(self, order_id: str, event: int) -> None:
         """Release only the unfilled liability of an acknowledged cancellation or rejection."""
-        self._apply("cancel", {"order_id": order_id, "event": event}, self.table.cancel(order_id))
+        self._apply("cancel", {"order_id": order_id, "event": event},
+                    self.table.cancel(order_id, self._tick(event)))
 
     def observe(self, kind: str, payload: dict, event: int) -> None:
         """Only observed fills and signed funding payments change lot economics."""
@@ -245,6 +246,17 @@ class ReturnConsequences:
                     self.ledger.append({"kind": "consequence.quarantined", "event": event,
                                         "order_id": str(payload["order_id"]),
                                         "reason": str(exc), "payload": dict(payload)})
+                    return
+                if RELEASED_ORDER in str(exc):
+                    # A very late fill on an order whose return was closed, fully
+                    # settled and released (wave 17b): its outcome and its money were
+                    # fixed, so the fill is a ledgered fact naming the owner, and moves
+                    # no lot. Never pooled, never dropped unseen.
+                    owner = self.table.order_owner(str(payload["order_id"]))
+                    self.ledger.append({"kind": "consequence.refused", "event": event,
+                                        "order_id": str(payload["order_id"]),
+                                        "handle": owner, "reason": RELEASED_ORDER,
+                                        "payload": dict(payload)})
                     return
                 if "open consequence account" not in str(exc):
                     raise
@@ -322,23 +334,83 @@ class ReturnConsequences:
         return self.table.account(handle).payoff
 
     def counts(self) -> dict[str, int]:
-        """Count returns once, independent of how many evaluators judged each return."""
+        """Count returns once, independent of how many evaluators judged each return.
+
+        Released accounts (wave 17b) are counted from the table's own counts, so a
+        release never changes an answer here.
+        """
         every = [r.payoff for r in self.table.returns if r.payoff is not None]
         # A censored outcome answers nothing, so it is neither a payoff nor a
         # failure to pay off; it is counted only as what it is.
         outcomes = [p for p in every if p.censored is None]
+        released = self.table.released_counts()
         return {
-            "paid_off": sum(p.y for p in outcomes),
-            "not_paid_off": sum(1 - p.y for p in outcomes),
-            "marked": sum(p.marked for p in outcomes),
-            "censored_outcomes": sum(p.censored is not None for p in every),
-            # A voided return is not pending: it owes no outcome at all.
+            "paid_off": sum(p.y for p in outcomes) + released["paid_off"],
+            "not_paid_off": sum(1 - p.y for p in outcomes) + released["not_paid_off"],
+            "marked": sum(p.marked for p in outcomes) + released["marked"],
+            "censored_outcomes": (sum(p.censored is not None for p in every)
+                                  + released["censored_outcomes"]),
+            # A voided return is not pending: it owes no outcome at all. Nor is a
+            # released one: only a closed account is ever released.
             "consequences_pending": sum(
                 r.payoff is None and not r.voided for r in self.table.returns),
-            "lots_opened": sum(r.opened_lots for r in self.table.returns),
-            "lots_closed": sum(r.closed_lots for r in self.table.returns),
-            "closes_credited": sum(r.closes for r in self.table.returns),
+            "lots_opened": sum(r.opened_lots for r in self.table.returns)
+            + released["lots_opened"],
+            "lots_closed": sum(r.closed_lots for r in self.table.returns)
+            + released["lots_closed"],
+            "closes_credited": sum(r.closes for r in self.table.returns)
+            + released["closes_credited"],
         }
+
+    def releasable(self, handle: str, *, tick: int | None = None, patience: int = 0) -> bool:
+        """Whether ``handle``'s account is closed and nothing held here still names it.
+
+        Guarantees False while its account is open or owns a lot or a live order
+        (``LotTable.closed``), while an intent it sent is unacknowledged
+        (``pending_orders``) or unresolved (``unresolved_orders``: the venue may
+        still admit to an order that is its), and while any fill or funding payment
+        waits in ``deferred_events`` (whose order's owner is not known yet). A
+        handle with no account at all is releasable here: nothing here owes it.
+        """
+        if self.deferred_events:
+            return False
+        if any(item.get("handle") == handle for item in self.pending_orders.values()):
+            return False
+        if any(item.get("handle") == handle for item in self.unresolved_orders.values()):
+            return False
+        try:
+            self.table.account(handle)
+        except KeyError:
+            return True
+        return self.table.closed(handle, tick=tick, patience=patience)
+
+    def release(self, handles, mark: int, *, patience: int = 0) -> None:
+        """Release closed accounts into the table's counts.
+
+        Guarantees every handle is ``releasable`` (otherwise ``ValueError`` and
+        nothing changes). Every fact a released account holds is already ledgered
+        (its admission, cost, orders, fills and outcome), and a release changes no
+        attribution: its orders keep their owner (``LotTable.order_owner``), so no
+        new evidence precedes it. Handles with no account are skipped.
+        """
+        owned = [h for h in dict.fromkeys(handles) if self._has_account(h)]
+        if not owned:
+            return
+        for handle in owned:
+            if not self.releasable(handle, tick=mark, patience=patience):
+                raise ValueError(f"account {handle} is not closed and cannot be released")
+        self.table = self.table.release(owned, mark, patience=patience)
+
+    def _has_account(self, handle: str) -> bool:
+        try:
+            self.table.account(handle)
+        except KeyError:
+            return False
+        return True
+
+    def forget_released_orders(self, before: int) -> None:
+        """Forget released orders marked before ``before`` (``LotTable.forget_released_orders``)."""
+        self.table = self.table.forget_released_orders(before)
 
 
 class FillCursor:

@@ -470,6 +470,10 @@ class ContractConsequences(ReturnConsequences):
 
     def resolve(self, event):
         resolved = super().resolve(event)
+        for payoff in resolved:
+            # An observed payoff is committee evidence the moment it is fixed (wave 17b:
+            # the eligibility tally is kept at settlement, not rescanned).
+            self.runtime._tally_payoff(payoff)
         return [payoff for payoff in resolved
                 if self.runtime.queue.get(payoff.handle).channel in (CH_VERDICT, "exposure")]
 

@@ -544,6 +544,9 @@ class SchematicsMixin:
             "storage": {"working_state_max_bytes": HARD_STATE_BYTES,
                         "program_state_max_bytes": MAX_PROGRAM_STATE_BYTES,
                         "retained_private_bytes": self.m.storage.retained_private_bytes,
+                        # Wave 17b: the published retention of an unacknowledged
+                        # outcome body (``SettledMixin._inbox_retention_ticks``).
+                        "outcome_retention_ticks": self._inbox_retention_ticks(),
                         "units": "bytes of canonical JSON",
                         "pricing": "Retained working_state costs no money. A working_state "
                         "over working_state_max_bytes is refused and the head is left as "
@@ -559,10 +562,16 @@ class SchematicsMixin:
                         "answers for any hash it holds no reference to. Released bytes are "
                         "removed at the next reserve-window boundary when no checkpoint "
                         "names them, otherwise at the first boundary after a later "
-                        "checkpoint. Outcome bodies and archived rationales are retained for "
-                        "the world's life and grow with decisions, on the order of 0.5 KiB "
-                        "per outcome addressed to a seat; they are the world's record and "
-                        "outside retained_private_bytes. Retained private state, every head "
+                        "checkpoint. An outcome body addressed to a seat is kept until the seat "
+                        "acknowledges it (ack_through) or until outcome_retention_ticks "
+                        "world ticks (timing.min_ratio times consequence_backstop_ticks "
+                        "plus verdict_timeout_ticks) after it was addressed, whichever "
+                        "comes first; it is then released and removed as released bytes "
+                        "are, and outcome.get answers that it is no longer held. What a "
+                        "seat said on a decision is kept until that decision is settled "
+                        "and released. Outcome bodies are outside retained_private_bytes; "
+                        "every outcome.addressed item stays in the diary. Retained private "
+                        "state, every head "
                         "and program private state held, a retired id's included, each "
                         "holder's at its full size, is at most retained_private_bytes, "
                         "always; bytes on disk can exceed it by the releases since the last "
