@@ -163,16 +163,22 @@ record['checkpoint'] = totals['funded.checkpoint']
 record['io'] = totals['funded.io']
 (stage / 'runs/funded.release.json').write_text(json.dumps(record, indent=2, sort_keys=True) + '\n')
 PY
-# Where the release's own interpreter is installed, the staged copy is proven
-# restorable before it leaves the host: the copied diary's latest checkpoint is
-# beside it and hash-true, and every artifact that checkpoint names is there
-# (runtime/sidecar.py, ``verify_restorable``). A copy that fails is not uploaded.
-if [[ "$python" != /usr/bin/python3 ]]; then
-    if ! (cd "$root/repo" && PYTHONPATH="$root/repo" "$python" -m factorylab.runtime.sidecar \
-            "$stage/runs/funded.jsonl" "$stage/repo/worlds/funded.toml") > /dev/null 2>&1; then
-        echo "backup copy is not restorable" >&2
-        exit 1
-    fi
+# The staged copy is proven restorable before it leaves the host, by the release's
+# own interpreter: the copied diary's latest checkpoint is beside it and hash-true,
+# every artifact that checkpoint names is there, and every recorded answer its
+# replay tail names is there (runtime/sidecar.py, ``verify_restorable``). A copy that
+# cannot be proven is never uploaded: a backup nobody proved restorable must not
+# look like, or rotate out, one that was. With no release interpreter there is no
+# proof, so the backup fails loudly rather than uploading an unverified copy.
+verifier="$root/repo/.venv/bin/python"
+if [[ ! -x "$verifier" ]]; then
+    echo "backup not uploaded: no release interpreter at $verifier to prove the copy restorable" >&2
+    exit 1
+fi
+if ! (cd "$root/repo" && PYTHONPATH="$root/repo" "$verifier" -m factorylab.runtime.sidecar \
+        "$stage/runs/funded.jsonl" "$stage/repo/worlds/funded.toml") > /dev/null 2>&1; then
+    echo "backup not uploaded: the staged copy is not restorable" >&2
+    exit 1
 fi
 # No unencrypted tar is ever created. The stage is root-only in systemd's PrivateTmp.
 members=(runs repo openrouter.key hyperliquid.key reserve.key)

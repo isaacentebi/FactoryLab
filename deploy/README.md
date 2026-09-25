@@ -721,11 +721,14 @@ backup runs, so the checkpoint and artifact files are pinned with hard links
 (`runs/.backup-pin/`, removed on exit) once just before the ledger's length is
 fixed and once after it is copied, and archived from the pin: the files the
 copied diary names cannot be removed from under the copy. Counts and sizes of
-each are recorded in `runs/funded.release.json`. Where the release's own
-interpreter is installed (`repo/.venv`), the staged copy is then proven
-restorable (`python -m factorylab.runtime.sidecar`: its latest checkpoint is
-present and hash-true, and every artifact it names is there) and a copy that
-fails is not uploaded. The sidecars are part of the world's memory: a restore
+each are recorded in `runs/funded.release.json`. The staged copy is then proven
+restorable by the release's own interpreter (`repo/.venv/bin/python -m
+factorylab.runtime.sidecar`: its latest checkpoint is present and hash-true,
+every artifact it names is there, and every recorded answer its replay tail
+names is there and hash-true). A copy that fails is not uploaded, and neither is
+one that cannot be checked: without `repo/.venv/bin/python` the backup fails
+with `backup not uploaded: no release interpreter`, so an unproven copy never
+stands in for a proven one. The sidecars are part of the world's memory: a restore
 without them is refused by `resume` with `checkpoint_missing`,
 `checkpoint_mismatch`, `io_result_missing` or `artifact_missing` (the last as a
 `failed_resume` item naming the sha and its owner), never continued with a

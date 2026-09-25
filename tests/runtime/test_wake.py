@@ -223,7 +223,11 @@ def test_alert_posts_only_allowed_json_line(tmp_path, code, status, mode, event,
         assert not capture.exists()
 
 
-def test_backup_captures_complete_prefix_and_pipes_to_age_before_upload(world, tmp_path):
+@pytest.mark.parametrize("verifier", ["proves", "absent", "refuses"])
+def test_backup_captures_complete_prefix_and_pipes_to_age_before_upload(world, tmp_path,
+                                                                         verifier):
+    """The staged copy is uploaded only when the release's interpreter proved it
+    restorable: an absent interpreter or a refused proof uploads nothing."""
     import tarfile
 
     root, bin_path = tmp_path / "factory", tmp_path / "bin"
@@ -251,6 +255,19 @@ def test_backup_captures_complete_prefix_and_pipes_to_age_before_upload(world, t
         (root / relative).parent.mkdir(exist_ok=True)
         (root / relative).write_bytes(data)
         ((root / relative).parent / ".tmp-torn").write_bytes(b"partial")
+    # The release's interpreter, standing in for verify_restorable: it records what it
+    # was asked to prove. It has no package, so the release module is unavailable.
+    verified = tmp_path / "verified.json"
+    if verifier != "absent":
+        interpreter = root / "repo/.venv/bin/python"
+        interpreter.parent.mkdir(parents=True)
+        interpreter.write_text(
+            '#!/usr/bin/env python3\nimport json, os, sys\n'
+            'if "factorylab.runtime.release" in sys.argv: sys.exit(1)\n'
+            'assert sys.argv[1:3] == ["-m", "factorylab.runtime.sidecar"]\n'
+            'open(os.environ["VERIFIED"], "w").write(json.dumps(sys.argv[3:]))\n'
+            f'sys.exit({0 if verifier == "proves" else 1})\n')
+        interpreter.chmod(0o700)
     # These stand-ins validate orchestration, not age's cryptography or remote connectivity.
     age = bin_path / "age"
     age.write_text('#!/usr/bin/env python3\nimport sys\nfrom pathlib import Path\n'
@@ -271,8 +288,17 @@ def test_backup_captures_complete_prefix_and_pipes_to_age_before_upload(world, t
         "AGE_RECIPIENT": "age1-fixture", "BACKUP_REMOTE": "fixture:bucket",
         "RCLONE_CONFIG": str(tmp_path / "fixture.conf"), "CAPTURE": str(capture),
         "COPYFILE_DISABLE": "1",  # macOS tar metadata is absent on the Ubuntu target.
+        "VERIFIED": str(verified),
     })
+    if verifier != "proves":
+        assert proc.returncode != 0
+        assert b"backup not uploaded" in proc.stderr
+        assert (b"no release interpreter" in proc.stderr) == (verifier == "absent")
+        assert not capture.exists()
+        return
     assert proc.returncode == 0, proc.stderr.decode()
+    staged = json.loads(verified.read_text())
+    assert [Path(p).name for p in staged] == ["funded.jsonl", "funded.toml"]
     with tarfile.open(capture) as archive:
         assert {m.name for m in archive if m.isfile()} == {
             "runs/funded.jsonl", "runs/funded.release.json", "repo/worlds/funded.toml",

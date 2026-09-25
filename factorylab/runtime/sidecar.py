@@ -264,11 +264,14 @@ def verify_restorable(ledger_path: str | os.PathLike[str],
     """Prove a copied diary resumable as far as its bytes go: what ``resume`` would read.
 
     Guarantees, when it returns: the diary's chain is intact, its latest checkpoint
-    is beside it and is exactly the state the chain names, and every artifact that
-    state's archive index still holds is beside it, hash-true. Otherwise it raises
-    (``ResumeError`` with ``checkpoint_missing``, ``checkpoint_mismatch`` or
-    ``artifact_missing``, or ``LedgerIntegrityError``). Opens the diary read-only
-    and writes nothing. ``deploy/backup.sh`` runs it on the staged copy.
+    is beside it and is exactly the state the chain names, every artifact that
+    state's archive index still holds is beside it, hash-true, and every recorded
+    answer the replay tail names by hash (an ``io.result`` after that checkpoint) is
+    beside it, unseals under the diary's key and matches its hash and size.
+    Otherwise it raises (``ResumeError`` with ``checkpoint_missing``,
+    ``checkpoint_mismatch``, ``artifact_missing`` or ``io_result_missing``, naming
+    the sha, or ``LedgerIntegrityError``). Opens the diary read-only and writes
+    nothing. ``deploy/backup.sh`` runs it on the staged copy.
     """
     import json
 
@@ -279,10 +282,23 @@ def verify_restorable(ledger_path: str | os.PathLike[str],
 
     manifest = load_manifest(str(manifest_path))
     ledger = Ledger.open_read_only(ledger_path, manifest=json.loads(manifest.canonical_json()))
-    snapshot, _tail = ledger._recovery_tail()
+    snapshot, tail = ledger._recovery_tail()
     if snapshot is None:
         raise ResumeError("ledger has no recoverable snapshot")
     state = checkpoint_state(ledger, snapshot)
+    # The answers a resume replays: only the tail after the checkpoint is read back.
+    answers = IoStore(ledger)
+    named = 0
+    for item in tail:
+        if item.get("kind") != "io.result" or "result_sha" not in item:
+            continue
+        try:
+            answers.get(item)
+        except (SidecarMissing, SidecarMismatch, OSError):
+            raise ResumeError("a recorded answer the replay tail names is missing or altered",
+                              code="io_result_missing", sha=item["result_sha"],
+                              seq=item["seq"]) from None
+        named += 1
     index = (decode(state["components"]).get("artifacts") or {}).get("index") or {}
     archive = ArtifactStore(None, root=artifact_root(ledger_path), clock_ns=lambda: 0)
     for sha, record in index.items():
@@ -294,7 +310,7 @@ def verify_restorable(ledger_path: str | os.PathLike[str],
             raise ResumeError("the archive index names bytes that are missing or corrupt",
                               code="artifact_missing", sha=sha) from None
     return {"state_sha": snapshot.get("state_sha"), "snapshot_seq": snapshot["seq"],
-            "artifacts": len(index)}
+            "artifacts": len(index), "answers": named}
 
 
 if __name__ == "__main__":

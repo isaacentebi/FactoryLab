@@ -274,6 +274,53 @@ def test_a_backup_copy_is_proven_restorable_or_refused(tmp_path):
     assert refused.value.code == "checkpoint_missing"
 
 
+@pytest.mark.parametrize("damage", ["missing", "corrupt"])
+def test_a_backup_copy_missing_a_replayed_answer_is_refused_by_name(tmp_path, monkeypatch,
+                                                                     damage):
+    """Every answer the replay tail names by hash must be beside the copy and hash-true.
+
+    ``Writer`` pads every answer's working state past the 1 KiB inline cutoff, so the
+    tail after the checkpoint names answers that live only in ``<world>.io/``."""
+    from factorylab.runtime.sidecar import verify_restorable
+
+    path = tmp_path / "w.jsonl"
+    keep_every_checkpoint(monkeypatch)  # the copy is cut back below its last checkpoint
+    _run(path, 60, provider=Writer())
+    monkeypatch.undo()
+    diary = _items(path)
+    first = next(i["seq"] for i in diary if i["kind"] == "snapshot" and i["n"] > 0)
+    tail = [i for i in diary if i["kind"] == "io.result" and "result_sha" in i
+            and i["seq"] > first]
+    named = tail[len(tail) // 2]
+    cut = named["seq"] + 3
+    lines = path.read_bytes().splitlines(keepends=True)
+    path.write_bytes(b"".join(lines[:cut]))
+    Path(str(path) + ".head").unlink()
+    manifest = Path(__file__).resolve().parents[2] / "worlds" / "scripted.toml"
+    report = verify_restorable(path, manifest)
+    assert report["snapshot_seq"] == max(i["seq"] for i in diary
+                                         if i["kind"] == "snapshot" and i["seq"] < cut - 1)
+    assert report["answers"] >= 1
+    scripted = json.loads(load_manifest("scripted").canonical_json())
+    blob = io_root(path) / Ledger.open_read_only(path, manifest=scripted).sidecar_name(
+        named["result_sha"])
+    if damage == "missing":
+        blob.unlink()
+    else:
+        raw = bytearray(blob.read_bytes())
+        raw[len(raw) // 2] ^= 0x01
+        blob.write_bytes(bytes(raw))
+    before = path.read_bytes()
+    with pytest.raises(ResumeError) as refused:
+        verify_restorable(path, manifest)
+    assert refused.value.code == "io_result_missing"
+    # One file per distinct answer: the refusal names the first tail item that needs it.
+    first_use = next(i["seq"] for i in tail if i["result_sha"] == named["result_sha"]
+                     and i["seq"] > report["snapshot_seq"])
+    assert refused.value.details == {"sha": named["result_sha"], "seq": first_use}
+    assert path.read_bytes() == before
+
+
 def test_an_older_diary_s_inline_checkpoint_still_reads():
     from factorylab.runtime.resume import checkpoint_state
 
