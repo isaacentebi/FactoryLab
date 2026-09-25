@@ -574,9 +574,19 @@ before its horizon.
 wave 16: a manifest that names either is refused. A world that lists a venue must
 state `timing.world_repricing`.
 
-A declined commission (`status: cannot`) is credited to the router that drew the
-seat as an abstention is, the zero-consequence reward less its role's card
-penalty (`router.decline_priced`), never the seat's own mean. The meta tier's
+**Nothing happened is priced at what happening earned** (wave 16, D4; ruling R-F).
+A decline, a NOOP and an abstention are priced at the router's observed average raw
+score less the same penalty: a router's NOOP draw (`router.abstention_priced`), a
+declined commission (`status: cannot`, `router.decline_priced`) and a decision
+censored or timed out without a score (`router.unscored_priced`) are each credited
+`r - p`, `r` the mean score before card penalty of every seat round the router has
+learned from a settlement (`RouterState.neutral`: cumulative over the router's life
+and carried to its successor, so a router that stops waking seats keeps its last
+mean), `p` the card penalty a decision of the role it filled, or would have filled,
+bears in the window it was drawn in. A seat's own learner is credited the same.
+Before a router's first settled round `r` is the published prior 0.5
+(`NEUTRAL_REWARD`, `world.scoring.abstention`); no other constant prices a round that
+delivered nothing, and never the seat's own mean (time audit T4). The meta tier's
 cascade window reads first a verdict on a return with no world outcome, since the
 tier above is that verdict's only grader.
 

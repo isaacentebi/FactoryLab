@@ -577,7 +577,7 @@ def test_an_evaluator_decision_trains_its_router_on_the_combined_reward():
                                    "runtime"))
     _advance(rt, rt.ev.verdict_timeout_ticks + 1)
     rt._deliver_returns()
-    assert state.definitions.get("evaluation-v1") == 1
+    assert state.definitions.get("evaluation-v1") == [1, pytest.approx(0.6)]
 
 
 def test_a_judge_decision_lives_until_its_return_can_be_measured():

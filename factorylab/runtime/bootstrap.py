@@ -594,6 +594,9 @@ class BootstrapMixin:
         self.snapshot_keys: dict[str, str] = {}  # decision handle -> snapshot key
         # NOOP handle -> the abstention credit its router is owed, and when it is due.
         self.noop_credits: dict[str, dict] = {}
+        # Decision handle -> its settled score before the card penalty, until the router
+        # that drew it learns it (wave 16, D4: the router's observed mean raw score).
+        self.raw_scores: dict[str, float] = {}
 
         # world memory (public facts) and assembly memory (private to each assembly)
         self.recent_mids: dict[str, deque[dict[str, Any]]] = {}

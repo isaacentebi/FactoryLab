@@ -701,6 +701,9 @@ _RUNTIME_FIELDS = (
     # each coin's latest mid and funding-rate print. Absent from an older checkpoint:
     # the next broadcast reads them.
     "fee_schedule", "venue_marks", "funding_prints",
+    # Wave 16 (D4): settled raw scores awaiting their router. An older checkpoint has
+    # none: its routers learn effective scores until the next settlement.
+    "raw_scores",
     # Wave 5a (evaluations M1, P5): each judge's ordinary consequence tally, the
     # adversarial judges' open counter-verdicts, and the chaos faults of the tick in
     # progress. Each defaults empty when an older checkpoint lacks it.

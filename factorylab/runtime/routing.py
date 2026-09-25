@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
-from types import MappingProxyType
 from typing import Any
 
 from factorylab.cortex.assembly import PROGRAM_MODEL_ID
@@ -276,42 +274,17 @@ class ContractQueue:
         return self.queue.delivered_count(actor)
 
 
-#: What a round that delivered nothing scores, per score definition a router can be
-#: trained on: the reward an abstention (NOOP) is credited, so a seat is woken more
-#: only by beating what doing nothing would have scored on the same scale. A NOOP
-#: that a know-nothing seat outscores is a dead arm: the router pays to wake someone
-#: every time, which is thrash's bill, "the entire cost of exploration" for nothing
-#: delivered (essay II.II.a). Only settled scores need a value: censored,
-#: inapplicable, unmeasured, declined, timed-out and uninformative rounds carry no
-#: score and are imputed. A definition not listed is worth ``NEUTRAL_REWARD``.
-ZERO_CONSEQUENCE: Mapping[str, float] = MappingProxyType({
-    # Producer scores on the midpoint scale: the mean verdict of an uninformed judge.
-    DEF_VERDICT: 0.5,
-    # A composed return's two signals, its verdict and its requester's settled score,
-    # are both on the producer scale.
-    DEF_COMPOSED: 0.5,
-    # An evaluator decision's two signals are both centred at 0.5: an uninformed tier
-    # grade, and a prediction no better than the base rate (``consequence_score``).
-    DEF_EVALUATION: 0.5,
-    # 1 when a ballot matched the promise the world kept: a coin-flip ballot expects 0.5.
-    "policy-promise-brier-v2": 0.5,
-    # Brier scores, 1 - (q - y)^2: the uninformed forecaster (q = 0.5) earns 0.75
-    # whatever happens. The per-predicate prevalence baseline scores at least that,
-    # but it prices a judge's standing question by question, not a router's round.
-    "brier-v1": 0.75,
-    "forecast-mean-v1": 0.75,  # the mean brier-v1 of a forecast return's predictions
-    # 1 - the judges' consequence score on the antagonist's return: an antagonist
-    # whose return they predicted exactly as well as the base rate earns 0.5.
-    DEF_EXPOSURE: 0.5,
-    # 0.5 + 0.5 * (the counter's Brier - the verdict's): a counter that repeats the
-    # verdict it read earns 0.5 whatever happens.
-    DEF_COUNTER: 0.5,
+#: The score definitions on the midpoint scale: the ones whose uninformed score is 0.5
+#: (an uninformed judge's verdict, a composed return's two producer-scale signals, an
+#: evaluator decision's grade and consequence score, a coin-flip ballot, an exposure or
+#: a counter that repeats what it read). A Brier forecast (``brier-v1``,
+#: ``forecast-mean-v1``) is on another scale, where the uninformed forecaster earns
+#: 0.75. This names a scale, never a price: what a round that delivered nothing is
+#: credited is the router's observed mean (``RouterState.neutral``; wave 16, D4).
+MIDPOINT_DEFINITIONS: frozenset[str] = frozenset({
+    DEF_VERDICT, DEF_COMPOSED, DEF_EVALUATION, "policy-promise-brier-v2", DEF_EXPOSURE,
+    DEF_COUNTER,
 })
-
-
-def zero_consequence(definition: str) -> float:
-    """What a round settled under ``definition`` scores when it delivered nothing."""
-    return ZERO_CONSEQUENCE.get(definition, NEUTRAL_REWARD)
 
 
 def learning_death_floor(gamma: float) -> float:
@@ -341,9 +314,10 @@ class RouterState:
     # [total ticks, rounds]: how long this router's learned seat rounds took to be
     # learned, in world ticks, the delay an abstention's credit is deferred by.
     latency: list[int] = field(default_factory=lambda: [0, 0])
-    # definition -> learned seat rounds settled under it: the scales this router's
-    # rewards are on, and so what an abstention is worth to it (``neutral``).
-    definitions: dict[str, int] = field(default_factory=dict)
+    # definition -> [learned seat rounds settled under it, the sum of their raw scores
+    # before any card penalty]: what this router's woken rounds actually earned, and so
+    # what a round that delivered nothing is credited (``neutral``; wave 16, D4).
+    definitions: dict[str, list] = field(default_factory=dict)
     # This window's NOOP watch, {"window", "draws", "min_p"} and, per draw that offered
     # an unhistoried seat, "unhistoried_offered", the "unhistoried_mass" it put on such
     # seats, the largest such seat's probability over the exploration floor
@@ -356,20 +330,31 @@ class RouterState:
     last_draw: dict = field(default_factory=dict)
 
     def neutral(self) -> float:
-        """Guarantees the zero-consequence reward of the rounds this router learns from.
+        """Guarantees the observed mean raw score of the settled seat rounds this router
+        learned: what a round that delivered nothing is credited, before its penalty.
 
-        It is the mean of ``zero_consequence`` over the definitions its learned seat
-        rounds settled under, weighted by how many settled under each: a router whose
-        seats are scored by Brier credits NOOP 0.75, one scored on producer outcomes
-        0.5, and a mixed router what its own wakes would have scored had every woken
-        seat delivered nothing. ``NEUTRAL_REWARD`` before any seat round is learned.
-        Independent of insertion order, so a resumed router computes the same value.
+        Wave 16, D4 and ruling R-F: a NOOP draw, a decline and a censored or timed-out
+        decision each delivered nothing measurable, and a mean-based learner compares
+        arms by their mean rewards, so the only imputation that tilts the router
+        neither toward waking a seat nor toward abstaining is the mean of the rounds the
+        world did measure, on the same scale: ``sum(raw) / count`` over every
+        definition. The raw score is the one settled before the card penalty (the
+        caller subtracts the same penalty from the credit). The sums are cumulative
+        over the router's life and carried to its successor, so a router that stops
+        waking seats keeps crediting its last observed mean. Before its first settled
+        round there is no observation, and the credit is the published prior,
+        ``NEUTRAL_REWARD`` (``world.scoring.abstention``). Independent of insertion
+        order, so a resumed router computes the same value.
         """
-        total = sum(self.definitions.values())
-        if not total:
+        count = sum(int(row[0]) for row in self.definitions.values())
+        if not count:
             return NEUTRAL_REWARD
-        return math.fsum(zero_consequence(d) * self.definitions[d]
-                         for d in sorted(self.definitions)) / total
+        return math.fsum(float(self.definitions[d][1]) for d in sorted(self.definitions)) / count
+
+    def record_round(self, definition: str, raw: float) -> None:
+        """Count one learned, settled seat round and its raw score (``neutral``)."""
+        count, total = self.definitions.get(definition, (0, 0.0))
+        self.definitions[definition] = [int(count) + 1, float(total) + float(raw)]
 
     def state(self) -> dict:
         """Retain the exact learner, public universe order, comparator epoch and successor."""
@@ -386,7 +371,7 @@ class RouterState:
         if self.latency[1]:
             saved["latency_ticks"] = list(self.latency)
         if self.definitions:
-            saved["definitions"] = dict(self.definitions)
+            saved["definitions"] = {d: list(row) for d, row in self.definitions.items()}
         if self.watch:
             saved["watch"] = dict(self.watch)
         if self.last_draw:
@@ -411,7 +396,11 @@ class RouterState:
                    # A router saved before the tick clock measured its delay in wall
                    # nanoseconds ("latency"): that sample is not read, and restarts.
                    state.get("successor"), list(state.get("latency_ticks", [0, 0])),
-                   dict(state.get("definitions", {})), dict(state.get("watch", {})),
+                   # A router saved before wave 16 counted rounds without their scores:
+                   # that count prices nothing, and its observed mean restarts.
+                   {d: list(row) for d, row in (state.get("definitions") or {}).items()
+                    if isinstance(row, list)},
+                   dict(state.get("watch", {})),
                    dict(state.get("last_draw", {})))
 
 
@@ -1514,7 +1503,7 @@ class RoutingMixin:
                     # The new identity learns on the same arms' evidence it inherits.
                     ObservedRewards(state.observed.state()),
                     latency=list(state.latency),
-                    definitions=dict(state.definitions),
+                    definitions={d: list(row) for d, row in state.definitions.items()},
                     watch=dict(state.watch),
                 )
             self.stats.epochs += 1

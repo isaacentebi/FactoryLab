@@ -20,6 +20,7 @@ from factorylab.cortex.assembly import (
 )
 from factorylab.kernel.artifacts import RELEASED_MEMORY
 from factorylab.kernel.money import money_to_usd
+from factorylab.learners.base import NEUTRAL_REWARD
 from factorylab.runtime.cadence import tick_intervals
 from factorylab.runtime.continuity import HARD_STATE_BYTES
 from factorylab.runtime.custody import UNAVAILABLE
@@ -2004,10 +2005,8 @@ class SchematicsMixin:
                 "score is the mean of the verdicts (0 to 1) the judges that read it gave, "
                 f"less the card penalty; a return no judge read within {ev.verdict_timeout_ticks} "
                 "ticks is censored: no score, and its router and the seat's own learner are "
-                "credited the zero-consequence reward, unpriced; except a return that answered "
-                "status: cannot, which then settles as declined: the router that drew the "
-                "seat and the seat's own learner are credited as for an abstention, less the "
-                "card penalty its role bears"
+                "credited as for an abstention (world.scoring.abstention); a return that "
+                "answered status: cannot settles as declined and is credited the same way"
             ),
             "verdict_is_a_prediction": (
                 "a verdict q is scored against the judged return's measured outcome y, "
@@ -2085,7 +2084,7 @@ class SchematicsMixin:
                 "whose target is refused settles censored; its call is charged. status: "
                 "cannot declines the commission: the call is charged, it settles as "
                 "declined, and the router that drew the seat and the seat's own learner are "
-                "credited as for an abstention"
+                "credited as for an abstention (world.scoring.abstention)"
             ),
             "counter_return": (
                 "a counter-verdict q' on the return a first-tier verdict q judged, made in "
@@ -2131,12 +2130,20 @@ class SchematicsMixin:
             "declined_return": (
                 "any return that answered status: cannot and earned no score on its "
                 "channel settles declined: its call is charged, and the router that drew "
-                "the seat and the seat's own learner are credited as for an abstention"
+                "the seat and the seat's own learner are credited as for an abstention "
+                "(world.scoring.abstention)"
             ),
             "abstention": (
-                "a router's NOOP draw is credited the zero-consequence reward of the rounds "
-                "that router learns from, less the card penalty a decision of the role it "
-                "would have filled bears in the window it was drawn in"
+                "a decline, a NOOP and an abstention are priced at the router's observed "
+                "average raw score less the same penalty: a router's NOOP draw, a declined "
+                "commission, and a decision censored or timed out without a score are each "
+                "credited r - p, r the mean score before card penalty of every seat round "
+                "the router has learned from a settlement (cumulative over the router's "
+                "life and its successors'), p the card penalty a decision of the role it "
+                "filled, or would have filled, bears in the window it was drawn in (a NOOP "
+                "weighs each role by the odds its draw gave that role's seats); before the "
+                "router's first settled round r is the published prior "
+                f"{NEUTRAL_REWARD}. A seat's own learner is credited the same"
             ),
             "consequence_standing": (
                 "0.5 + skill, clipped to [0, 1] and capped at 0.5 below minimum coverage; "

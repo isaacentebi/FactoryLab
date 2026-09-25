@@ -14,9 +14,8 @@ import pytest
 
 from factorylab.charter.charter import MetricCard
 from factorylab.charter.windows import MetricWindow
-from factorylab.kernel.queue import LearningReturn, PropensityRecord, SettleStatus
+from factorylab.kernel.queue import PropensityRecord, SettleStatus
 from factorylab.runtime import pricing
-from factorylab.runtime.feedback import _priced
 from factorylab.runtime.loop import Runtime
 from factorylab.runtime.pricing import UNRESOLVED_PRICED
 from factorylab.runtime.worlds import load_manifest
@@ -130,12 +129,11 @@ def test_an_avoidably_unresolved_commitment_is_priced_for_its_owner(monkeypatch)
     assert rt.queue.history(bystander)[-1].score == 0.0
     entry = [i for i in rt.ledger._recovery_items() if i["kind"] == "price.penalty"][0]
     assert entry["raw"] is None and entry["unresolved"] == ["f-1"]
-    # Its learners are credited the neutral estimate less that price, never a zero score.
-    assert _priced(0.6, charged) == pytest.approx(0.6 - charged.score)
-    assert _priced(None, charged) is None
-    plain = LearningReturn("h", "consequence", 0.0, "forecast-mean-v1",
-                           SettleStatus.CENSORED, None)
-    assert _priced(0.6, plain) == 0.6
+    # Its learners are credited as for an abstention: the router's observed mean less the
+    # same price, never a zero score (wave 16, D4). The bystander bears nothing.
+    assert rt._priced_abstention(owner, 0.6) == (pytest.approx(0.6 - charged.score),
+                                                 pytest.approx(charged.score))
+    assert rt._priced_abstention(bystander, 0.6) == (0.6, 0.0)
 
 
 def test_forecast_return_with_an_unresolved_commitment_is_settled_priced(monkeypatch):

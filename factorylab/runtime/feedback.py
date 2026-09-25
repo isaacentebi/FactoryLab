@@ -25,7 +25,6 @@ from factorylab.runtime.grounded import (
     latest_mids,
     opportunity_cost,
 )
-from factorylab.runtime.pricing import UNRESOLVED_PRICED
 from factorylab.runtime.routing import _KeyedLearner
 from factorylab.runtime.shared import (
     CH_CONFORMITY,
@@ -55,21 +54,6 @@ from factorylab.settlement.vocabulary import (
     RETURN_PAID_OFF,
     UNOBSERVABLE,
 )
-
-
-def _priced(neutral: float | None, lr: LearningReturn | None) -> float | None:
-    """The neutral credit of an unscored decision, less the price its settlement carries.
-
-    Only a censored settlement under ``UNRESOLVED_PRICED`` carries one (its score is
-    the penalty for a commitment its owner left avoidably unresolved); every other
-    unscored decision keeps its neutral credit unchanged. The result stays in [0, 1],
-    and no neutral estimate (nothing observed yet) stays None.
-    """
-    if (neutral is None or lr is None or lr.status is not SettleStatus.CENSORED
-            or lr.definition_version != UNRESOLVED_PRICED):
-        return neutral
-    return min(1.0, max(0.0, neutral - float(lr.score)))
-
 
 #: A judgement the kernel could not use: malformed, refused by the model, or
 #: addressed to nothing this judgement may be about. The call is charged, and the
@@ -748,8 +732,9 @@ class FeedbackMixin:
 
         A seat may decline paid judging work (§6.B), and a producer may decline the
         event it was woken for when no judge grades its refusal: the call it made is
-        its only money cost, and its learners price the decline as an abstention
-        (``_learn_router_return``, ``_close_assembly_round``). Declining is the
+        its only money cost, and its learners price the decline as an abstention, at
+        the router's observed mean raw score less its role's card penalty
+        (``_learn_router_return``, ``_close_assembly_round``; wave 16, D4). Declining is the
         seat's own choice, never a list the kernel keeps of what may be judged
         (evaluations S1). Nothing enters a standing, nothing
         enters a base rate, no card is blamed, and no money moves.
@@ -2204,11 +2189,9 @@ class FeedbackMixin:
             if p.declined is not None:
                 # A refusal no judge graded is a seat choosing to do nothing with the
                 # work it was woken for: it settles as a declined commission, so its
-                # learners are credited as an abstention is, at the zero-consequence
-                # reward less the charter price of its role (ruling R9). Censored, it
-                # was credited that reward unpriced, and declining escaped the price
-                # a NOOP draw and a judged hold both bear (essay II.I.a: selection
-                # moves share only where abstaining is not free).
+                # learners are credited as an abstention is, at the router's observed
+                # mean raw score less the charter price of its role (ruling R9; wave
+                # 16, D4). A censored return is credited the same way.
                 self._settle_declined(p.handle, p.declined)
             elif self.queue.get(p.handle).status is SettleStatus.PENDING:
                 self.queue.settle(
@@ -2248,10 +2231,12 @@ class FeedbackMixin:
         The reward is the same thin score the router receives; what differs is the
         distribution it is attributed to. The router's record prices the choice of
         who acted; this one prices what the actor chose to do, over the action set
-        the actor declared. A decision with no observed score (censored,
-        inapplicable, or past its cutoff) is credited zero consequence, never the
-        action's own long-run mean (time audit T4), less the price its settlement
-        carries, as the router's are; a declined one is credited as an abstention.
+        the actor declared. A decision with no observed score (declined, censored,
+        inapplicable, or past its cutoff) delivered nothing measurable and is
+        credited exactly as its router credits it: the router's observed mean raw
+        score less the card penalty of its role (``_priced_abstention``; wave 16, D4),
+        never the action's own long-run mean (time audit T4) and never a flat
+        constant.
         """
         assembly_id = self.assembly_rounds.pop(handle, None)
         if assembly_id is None:
@@ -2261,13 +2246,8 @@ class FeedbackMixin:
             return
         declared = self.queue.declared_propensity(handle)
         imputed = reward is None
-        if (declared is not None and reward is None and priced is not None
-                and priced.definition_version == DECLINED_DEFINITION):
-            # Declining is priced for the seat's own learner as for its router
-            # (``_learn_router_return``): an abstention's credit, never a free neutral.
-            reward, _penalty = self._priced_abstention(handle, NEUTRAL_REWARD)
-        elif declared is not None and reward is None:
-            reward = _priced(NEUTRAL_REWARD, priced)
+        if declared is not None and reward is None:
+            reward, _penalty = self._priced_abstention(handle, self._router_neutral(handle))
         if reward is None or declared is None:
             try:
                 learner.discard_for(handle)
@@ -2290,6 +2270,22 @@ class FeedbackMixin:
                             "assembly_id": assembly_id, "action": declared.chosen,
                             "propensity": declared.probs[index], "reward": reward,
                             "imputed": imputed, "ts": self.clock.now_ns})
+
+    def _router_neutral(self, handle: str) -> float:
+        """What the router that drew ``handle`` credits a round that delivered nothing.
+
+        Its live successor's observed mean raw score (``RouterState.neutral``); a
+        decision no router drew (a seat's own request of itself) is credited the
+        published prior, ``NEUTRAL_REWARD``.
+        """
+        try:
+            actor = self.queue.get(handle).actor
+        except KeyError:
+            return NEUTRAL_REWARD
+        for state in [*self._all_router_states(), *self.retired_routers.values()]:
+            if state.learner.id == actor:
+                return self._successor_state(state).neutral()
+        return NEUTRAL_REWARD
 
     @staticmethod
     def _router_sampled(decision: Any) -> bool:
@@ -2315,28 +2311,30 @@ class FeedbackMixin:
         The rule (defects 2 and 4): a decision's cutoff is its tick cutoff (its own
         horizon plus a ratio slack, time audit T3). Its first outcome is its one
         update. A score that settled it before the cutoff is observed and trains the
-        router at that score. A decision that closed without an observed score
-        (censored, inapplicable) or reached its cutoff unscored (timed out) is not a
-        zero, and it is not the arm's own long-run mean either: a population paid
-        long-run averages "ceases to produce variation" (essay II.IV.b; time audit
-        T4). It is credited the router's zero-consequence reward (``RouterState.
-        neutral``: what a woken seat that delivered nothing scores), less the price
-        its settlement carries. A score that arrives after the cutoff still settles
+        router at that score, and its raw score (before its card penalty) enters the
+        router's observed mean (``RouterState.record_round``). A decision that
+        closed without an observed score (declined, censored, inapplicable) or
+        reached its cutoff unscored (timed out) delivered nothing measurable. It is
+        not a zero, and it is not the arm's own long-run mean either: a population
+        paid long-run averages "ceases to produce variation" (essay II.IV.b; time
+        audit T4). It is credited exactly as a NOOP is (wave 16, D4 and ruling R-F):
+        the router's observed mean raw score (``RouterState.neutral``, the router's
+        population mean, never the arm's own) less the card penalty of its role
+        (``_priced_abstention``). A score that arrives after the cutoff still settles
         the decision for the kernel -- its money, its standing, its history -- but
         trains no learner a second time.
 
-        An abstention (NOOP) is credited the router's zero-consequence reward
-        (``RouterState.neutral``), whatever its settlement: waking nobody is worth
-        what a woken seat that delivered nothing scores on the scale the router's
-        seat rounds are settled on (0.5 for producer outcomes, 0.75 for Brier), so
-        it is never worth the average the seats earned (the free-average defect),
-        and a seat is woken more often only by scoring above it. The credit is deferred to the delay
-        the router's seat rounds take to be learned (``_defer_abstention``): an
-        abstention settles at once, and crediting it at once would put it a whole
-        feedback delay ahead of every seat it competes with. A router that has
-        been replaced trains its live successor on these rounds instead of itself
-        (``_apply_router_round``), so no settled reward is spent on a copy that
-        never samples again.
+        An abstention (NOOP) is credited the same: the router's observed mean raw
+        score less the penalty a woken decision of its role bears. Waking nobody is
+        then worth exactly what the woken, measured rounds earned on average, less
+        the same price, so the imputation favours neither acting nor abstaining; a
+        seat is woken more often only by scoring above its router's mean. The credit
+        is deferred to the delay the router's seat rounds take to be learned
+        (``_defer_abstention``): an abstention settles at once, and crediting it at
+        once would put it a whole feedback delay ahead of every seat it competes
+        with. A router that has been replaced trains its live successor on these
+        rounds instead of itself (``_apply_router_round``), so no settled reward is
+        spent on a copy that never samples again.
         """
         decision = self.queue.get(lr.handle)
         prop = decision.propensity
@@ -2364,25 +2362,20 @@ class FeedbackMixin:
         settled = lr.status is SettleStatus.SETTLED
         if settled:
             reward = min(1.0, max(0.0, float(lr.score)))
-        elif lr.definition_version == DECLINED_DEFINITION:
-            # A declined commission is a seat choosing to do nothing with work it was
-            # handed: credited like an abstention, the zero-consequence reward less the
-            # card penalty of its role, never its own mean (the #128 review: judges
-            # otherwise earned more by avoiding the world than by facing it).
-            reward, penalty = self._priced_abstention(lr.handle, target.neutral())
-            self.ledger.append({"kind": "router.decline_priced", "handle": lr.handle,
-                                "router": state.learner.id, "neutral": target.neutral(),
+        else:
+            # A decline, a censoring or a cutoff delivered nothing measurable: credited
+            # as an abstention, the router's observed mean raw score less the card
+            # penalty of its role (wave 16, D4), never its own mean (the #128 review:
+            # judges otherwise earned more by avoiding the world than by facing it).
+            neutral = target.neutral()
+            reward, penalty = self._priced_abstention(lr.handle, neutral)
+            self.ledger.append({"kind": ("router.decline_priced"
+                                         if lr.definition_version == DECLINED_DEFINITION
+                                         else "router.unscored_priced"),
+                                "handle": lr.handle, "router": state.learner.id,
+                                "status": str(lr.status), "neutral": neutral,
                                 "penalty": penalty, "reward": reward,
                                 "ts": self.clock.now_ns})
-        else:
-            # The router's zero-consequence baseline on the live successor, never the
-            # arm's own mean (time audit T4), less any charter price its settlement
-            # carries (routers-learn + charter-price-bites).
-            reward = _priced(target.neutral(), lr)
-        if reward is None:
-            if key is not None:
-                state.learner.inner.discard_for(key)
-            return
         if keyed and key is None:
             return  # its frozen round is already spent: nothing trains, nothing is booked
         charged = self._thrash_charged(state, lr.handle, reward)
@@ -2417,8 +2410,8 @@ class FeedbackMixin:
             self.clockwork.record(f"router:{state.kind}", ticks)
         if settled:
             target.observed.record(prop.chosen, reward)
-            target.definitions[lr.definition_version] = (
-                target.definitions.get(lr.definition_version, 0) + 1)
+            target.record_round(lr.definition_version,
+                                self.raw_scores.pop(lr.handle, float(lr.score)))
 
     def _abstention_owed_or_credited(self, lr: LearningReturn) -> bool:
         """Whether this abstention is already owed, or was credited on an earlier return.
@@ -2475,8 +2468,9 @@ class FeedbackMixin:
                                     "ts": now})
                 continue
             prop = self.queue.get(handle).propensity
-            # Priced when due, on the scales of every seat round learned by then, less
-            # the charter prices a woken decision bears in the window it was drawn in.
+            # Priced when due, at the observed mean raw score of every seat round learned
+            # by then, less the charter prices a woken decision bears in the window it
+            # was drawn in (wave 16, D4).
             neutral = self._successor_state(drawer).neutral()
             reward, penalty = self._priced_abstention(handle, neutral)
             self.ledger.append({"kind": "router.abstention_priced", "handle": handle,
@@ -2489,7 +2483,7 @@ class FeedbackMixin:
             self._apply_router_round(drawer, handle, credit["p"], credit["executed"], fb)
 
     def _priced_abstention(self, handle: str, neutral: float) -> tuple[float, float]:
-        """An abstention's credit: the router's zero-consequence reward less its price.
+        """An abstention's credit: the router's observed mean raw score less its price.
 
         Ruling R9 (versioning P4, primitive F1): the arm that wakes nobody bears the
         same charter prices a woken decision bears in the window it was drawn in,
@@ -2501,8 +2495,9 @@ class FeedbackMixin:
         therefore never beat waking a seat merely because penalties touched only the
         decisions that acted, and a stable failure's ratcheted prices reach it too.
         An abstention drawn before its window recorded it is credited unpriced. A
-        declined commission is priced the same way, on the role its seat was
-        measured in when it answered. Returns (reward, penalty).
+        declined, censored or timed-out decision is priced the same way, on the role
+        its seat was measured in when it answered (wave 16, D4: NOOP, decline and
+        censored are one imputation). Returns (reward, penalty).
         """
         origin = self.price_origins.get(handle, {}).get("origin")
         window = self.price_windows.get(origin)

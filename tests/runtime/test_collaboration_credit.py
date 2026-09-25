@@ -114,7 +114,7 @@ def test_credit_reaches_the_executors_handle_only_after_its_requester_settles(mo
     rt._deliver_returns()
     state = rt.routers[request_router_key("ProducerReturn")][0]
     assert state.observed.sums["helper-a"] == [pytest.approx(0.6), 1]
-    assert state.definitions == {DEF_COMPOSED: 1}
+    assert list(state.definitions) == [DEF_COMPOSED] and state.definitions[DEF_COMPOSED][0] == 1
 
 
 def test_a_requester_that_settles_unscored_leaves_the_child_its_own_verdict(monkeypatch):

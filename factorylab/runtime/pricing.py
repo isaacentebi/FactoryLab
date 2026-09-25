@@ -369,6 +369,14 @@ class PricingMixin:
 
     def _prune_price_evidence(self) -> None:
         """Completed decisions release old attribution windows after their totals are frozen."""
+        for handle in tuple(self.raw_scores):
+            # A raw score waits for the router that drew its decision to read it; a
+            # decision no router drew, or one its router has read, keeps nothing.
+            decision = self.queue.get(handle)
+            if (decision.status not in (SettleStatus.PENDING, SettleStatus.TIMED_OUT)
+                    and self.queue.delivered_count(decision.actor)
+                    <= self.delivered_seen.get(decision.actor, 0)):
+                del self.raw_scores[handle]
         for handle in tuple(self.thrash_charges):
             # A charge is spent when its round trains; a round that closed and whose
             # router has read every return it was owed will never train.
@@ -1063,12 +1071,17 @@ class PricingMixin:
         A decision whose own commitments were left avoidably unresolved
         (``unresolved`` names them) has no observed score, so it settles censored,
         never as a zero; its penalty is carried on that censored settlement under
-        ``UNRESOLVED_PRICED`` and subtracted from the neutral estimate its learners
-        are credited instead of a score (``_learn_router_return``).
+        ``UNRESOLVED_PRICED`` for the record, and its learners are credited as for
+        an abstention, the router's observed mean raw score less the same penalty
+        (``_learn_router_return``; wave 16, D4).
         """
         if handle not in self.price_origins:
             self._contribution(handle, cards)
         penalty = self._penalty_for(cards, handle)
+        if not unresolved:
+            # The score before its card penalty: what the router's observed mean is made
+            # of (``RouterState.neutral``; wave 16, D4), taken when the router learns it.
+            self.raw_scores[handle] = float(score)
         if unresolved:
             status, effective = SettleStatus.CENSORED, None
             definition_version, settled_score = UNRESOLVED_PRICED, penalty
