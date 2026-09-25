@@ -211,8 +211,12 @@ def test_judges_see_the_rule_they_are_graded_by_in_every_prompt_mode(monkeypatch
     section = dict(req.sections())["scoring"]
     assert section.startswith("SCORING\n")
     shown = json.loads(section.split("\n", 2)[2])
-    assert shown == {k: scoring[k] for k in ("evaluator_return", "verdict_is_a_prediction")}
+    assert shown == {k: scoring[k] for k in ("evaluator_return", "verdict_is_a_prediction",
+                                             "abstention")}
     assert "0.5 + 0.5 * (brier - base)" in section
+    # Wave 16, section 9 item 5: D4 is carried verbatim in the SCORING section.
+    assert ("a decline, a NOOP and an abstention are priced at the router's observed "
+            "average raw score less the same penalty") in section
     for advice in ("should", "try to", "aim", "best", "better"):
         assert advice not in section.lower()
 
@@ -231,7 +235,8 @@ def test_metas_see_the_rule_they_are_graded_by(monkeypatch):
                      "propensity": None}, "kernel")
     rt._meta_step(verdict, meta, SimpleNamespace(chosen="meta-a"), rt.queue.get(meta).deadline_ns)
     (req,) = captured
-    assert "meta_return" in json.loads(dict(req.sections())["scoring"].split("\n", 2)[2])
+    shown = json.loads(dict(req.sections())["scoring"].split("\n", 2)[2])
+    assert "meta_return" in shown and shown["abstention"] == rt._scoring_block()["abstention"]
     answer = req.outcome_schema["anyOf"][0]
     assert answer["properties"]["conformity"] == {"type": "number", "minimum": 0,
                                                   "maximum": 1}
@@ -508,3 +513,26 @@ def test_a_polymorphic_contract_with_a_judging_kind_carries_its_decline_form():
     rt.assemblies["eval-a"].spec = replace(spec, emits=("Verdict", "ProducerReturn"))
     contract = rt._contract_schema("eval-a")
     assert contract["anyOf"][-1] == DECLINE_FORM
+
+
+def test_every_wave_16_formula_is_published_in_world_scoring():
+    """Wave 16: each changed reward formula is a factual, retrievable world.scoring
+    entry (Chapter II §I.b), never advice."""
+    from tests.conftest import make_runtime
+
+    rt = make_runtime()
+    scoring = rt._scoring_block()
+    text = json.dumps(scoring)
+    for fact in (
+        "declined-trade-net-v1", "attempted-trade-net-v1",  # D1
+        "H = timing.world_repricing / timing.min_ratio",  # D2
+        "verdict:<definition>:<coin>:<side>:<H in ns>", "uninformative",  # D3
+        "the equal mean of those that exist",  # D6
+        "No consequence score enters a card, a lambda or a posted lambda",  # section 9
+        "priced at the router's observed average raw score less the same penalty",  # D4
+        "unhistoried niche", "non-relieving",  # D5
+        "whose penalty sits at penalty_cap is not raised",  # R-E
+    ):
+        assert fact in text, fact
+    for advice in ("you should", "try to", "aim to", "it is best"):
+        assert advice not in text.lower()

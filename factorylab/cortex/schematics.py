@@ -1932,13 +1932,16 @@ class SchematicsMixin:
 
 
     #: The ``world.scoring`` entries that state how each judging kind's answer settles:
-    #: its own formula and the consequence score it predicts. The decline's settlement
-    #: is ``world.scoring.malformed_judgement``; the decline itself is stated once, as a
+    #: its own formula, the consequence score it predicts, and what a decline, a NOOP
+    #: and an abstention are priced at (``abstention``; wave 16, section 9 item 5: D4
+    #: travels with the request, verbatim). The decline's settlement is
+    #: ``world.scoring.malformed_judgement``; the decline itself is stated once, as a
     #: form of the outcome schema.
     SETTLEMENT_KEYS: dict[str, tuple[str, ...]] = {
-        "Verdict": ("evaluator_return", "verdict_is_a_prediction"),
-        "MetaVerdict": ("meta_return", "evaluator_return", "verdict_is_a_prediction"),
-        "CounterVerdict": ("counter_return", "verdict_is_a_prediction"),
+        "Verdict": ("evaluator_return", "verdict_is_a_prediction", "abstention"),
+        "MetaVerdict": ("meta_return", "evaluator_return", "verdict_is_a_prediction",
+                        "abstention"),
+        "CounterVerdict": ("counter_return", "verdict_is_a_prediction", "abstention"),
     }
 
     #: The ``world.scoring`` entry each reward shape settles by.
@@ -2144,7 +2147,7 @@ class SchematicsMixin:
                 "a decline, a NOOP and an abstention are priced at the router's observed "
                 "average raw score less the same penalty: a router's NOOP draw, a declined "
                 "commission, and a decision censored or timed out without a score are each "
-                "credited r - p, r the mean score before card penalty of every seat round "
+                "credited max(0, r - p), r the mean score before card penalty of every seat round "
                 "the router has learned from a settlement (cumulative over the router's "
                 "life and its successors'), p the card penalty a decision of the role it "
                 "filled, or would have filled, bears in the window it was drawn in (a NOOP "
