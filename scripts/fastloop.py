@@ -29,6 +29,22 @@ is fixed in the manifest (``[exchange.tape]``), so it is in the Launch record an
 resume on another tape is refused. ``tape <diary> -o tape.json`` cuts the compact
 tape once, so later runs do not re-read a large diary.
 
+A tape world runs on the idle-skipping clock: waiting is skipped, busy time stays
+real, so a real model's latency costs the market exactly what it would live.
+``--latency-from <diary>`` gives the scripted stand-in the per-call latencies that
+diary measured, as modelled busy time. Fills are the recording's, a tick late; the
+card's ``fill_band`` shows the P&L beside a pessimistic shadow of it, and its
+``pace`` block the busy time, the delivered gaps and the idle skipped. Every model
+on the menu must state a training cutoff the tape postdates, unless
+``--allow-unknown-cutoff`` admits the unknown ones on the record; web access is off.
+Tapes are listed by regime in ``worlds/tapes/library.toml``, whose sealed holdouts run
+only with ``--release-candidate``.
+
+``--provider live`` on a tape runs the edition-4 roster, cheap and of several
+families, and nothing else: there is no single-family roster (Chapter II §III: a
+shared foundation model is a forcing function). A different roster would be a
+different world, and a roster is never chosen from what seats did on a tape.
+
 A tape run's profit and loss is an observation about one recorded market. It is
 never evidence for a code change: iterating code against a tape until its card
 looks right is the architect optimizing toward its own "better" (AGENTS.md rule 2).
@@ -41,7 +57,8 @@ Examples::
     uv run python scripts/fastloop.py run --provider live --ticks 30 --cap-usd 2
     uv run python scripts/fastloop.py run --provider live --ticks 30 --seeds 1,2,3,4
     uv run python scripts/fastloop.py tape work/capital-loop/run3/events.json -o run3.tape.json
-    uv run python scripts/fastloop.py run --tape-from run3.tape.json
+    uv run python scripts/fastloop.py run --tape-from run3.tape.json --allow-unknown-cutoff \\
+        --latency-from work/capital-loop/longrun1-open
     uv run python scripts/fastloop.py resume work/fastloop/scripted-<stamp>-s1
 
 Nothing here touches a real venue, a reserve or a transfer rail.
@@ -1066,6 +1083,42 @@ def tape_spec(tape: Tape, allow_unknown_cutoff: bool = False) -> TapeSpec:
                     allow_unknown_cutoff=allow_unknown_cutoff)
 
 
+#: The tape library: recorded markets by regime, and the sealed holdouts.
+LIBRARY = ROOT / "worlds" / "tapes" / "library.toml"
+#: The regimes a library entry may name (their rules are in the library's header).
+REGIMES = frozenset({"trend", "chop", "jump", "funding_flip", "outage"})
+
+
+def tape_library(path: Path = LIBRARY) -> dict[str, dict[str, Any]]:
+    """The library's entries by tape SHA-256, each a known regime and a holdout flag."""
+    import tomllib
+
+    entries: dict[str, dict[str, Any]] = {}
+    for entry in tomllib.loads(Path(path).read_text()).get("tape", []):
+        sha = entry.get("sha256")
+        if (not isinstance(sha, str) or len(sha) != 64 or sha in entries
+                or not set(entry.get("regimes") or ()) <= REGIMES
+                or type(entry.get("holdout")) is not bool):
+            raise ValueError(f"tape library entry {entry.get('id')!r} is malformed")
+        entries[sha] = entry
+    return entries
+
+
+def library_entry(tape: Tape, release_candidate: bool = False,
+                  path: Path = LIBRARY) -> dict[str, Any] | None:
+    """The library's entry for ``tape``, refusing a sealed holdout off a release candidate.
+
+    Critique H4: a holdout tape runs only on a release candidate, and only for plumbing
+    invariants, so no iteration ever sees it. A tape the library does not list runs,
+    and the card says it is unlisted.
+    """
+    entry = tape_library(path).get(tape.sha256)
+    if entry and entry["holdout"] and not release_candidate:
+        raise ValueError(f"sealed_holdout: tape {entry['id']!r} runs only with "
+                         "--release-candidate")
+    return entry
+
+
 def tape_venue(tape: Tape, manifest: Any) -> TapeVenue:
     """The fake venue replaying ``tape`` for the manifest's markets, funded as bootstrap
     funds the seeded fake."""
@@ -1140,7 +1193,8 @@ def run(provider_kind: str, ticks: int | None, world: Path, out: Path, cap_usd: 
         seed: int, vault_depositor_usd: str | None = None,
         gaps_from: Path | None = None, tape_from: Path | None = None,
         latency_from: Path | None = None,
-        allow_unknown_cutoff: bool = False) -> dict[str, Any]:
+        allow_unknown_cutoff: bool = False,
+        release_candidate: bool = False) -> dict[str, Any]:
     """``vault_depositor_usd`` opts the world into the vault surface and scripts one
     outside depositor into every vault the factory creates, who leaves ten steps later;
     the fake's vaults earn nothing on their own, so the depositor pays no commission
@@ -1150,7 +1204,8 @@ def run(provider_kind: str, ticks: int | None, world: Path, out: Path, cap_usd: 
     idle-skipping clock; ``ticks`` then bounds the run, which otherwise ends when the
     tape does. ``latency_from`` gives the scripted stand-in the call latencies a paid
     diary measured, as modelled busy time. ``allow_unknown_cutoff`` admits models that
-    state no training cutoff onto a tape, and the manifest records that it did."""
+    state no training cutoff onto a tape, and the manifest records that it did;
+    ``release_candidate`` admits a sealed holdout tape (``worlds/tapes/library.toml``)."""
     from factorylab.runtime.loop import Runtime
 
     if tape_from is not None and gaps_from is not None:
@@ -1159,11 +1214,15 @@ def run(provider_kind: str, ticks: int | None, world: Path, out: Path, cap_usd: 
     target = out / f"{provider_kind}-{stamp}-s{seed}"
     target.mkdir(parents=True, exist_ok=True)
     tape = None if tape_from is None else Tape.load(tape_from)
+    entry = None if tape is None else library_entry(tape, release_candidate)
     manifest, admission, provider, exchange, latent = _world_parts(
         provider_kind, world, seed, cap_usd, vault_depositor_usd, tape, latency_from,
         allow_unknown_cutoff)
     started = time.monotonic()
     card: dict[str, Any] = {"provider": provider_kind, "out": str(target)}
+    if tape is not None:
+        card["tape_library"] = ({k: entry[k] for k in ("id", "regimes", "holdout")}
+                                if entry else "unlisted")
     clock_source = None
     if gaps_from is not None:
         ticks = 20 if ticks is None else ticks
@@ -1183,7 +1242,8 @@ def run(provider_kind: str, ticks: int | None, world: Path, out: Path, cap_usd: 
         "tape_from": None if tape_from is None else str(tape_from),
         "tape_sha256": None if tape is None else tape.sha256,
         "latency_from": None if latency_from is None else str(latency_from),
-        "allow_unknown_cutoff": allow_unknown_cutoff}, indent=2) + "\n")
+        "allow_unknown_cutoff": allow_unknown_cutoff,
+        "release_candidate": release_candidate}, indent=2) + "\n")
     runtime = None
     try:
         runtime = Runtime(manifest, events=ticks, seed=manifest.seed,
@@ -1218,6 +1278,8 @@ def resume(target: Path, tape_from: Path | None = None) -> dict[str, Any]:
     if (tape and tape.sha256) != spec.get("tape_sha256"):
         raise TapeMismatch(f"tape_mismatch: launched on {str(spec.get('tape_sha256'))[:12]}, "
                            f"resumed on {str(tape and tape.sha256)[:12]}")
+    if tape is not None:
+        library_entry(tape, spec.get("release_candidate", False))
     latency_from = spec.get("latency_from") and Path(spec["latency_from"])
     manifest, admission, provider, exchange, latent = _world_parts(
         spec["provider"], Path(spec["world"]), spec["seed"], spec["cap_usd"],
@@ -1340,7 +1402,8 @@ def run_seeds(args: argparse.Namespace, seeds: list[int]) -> dict[str, Any]:
          *(["--gaps-from", str(args.gaps_from)] if args.gaps_from else []),
          *(["--tape-from", str(args.tape_from)] if args.tape_from else []),
          *(["--latency-from", str(args.latency_from)] if args.latency_from else []),
-         *(["--allow-unknown-cutoff"] if args.allow_unknown_cutoff else [])],
+         *(["--allow-unknown-cutoff"] if args.allow_unknown_cutoff else []),
+         *(["--release-candidate"] if args.release_candidate else [])],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=ROOT) for seed in seeds]
     cards = []
     for seed, proc in zip(seeds, procs, strict=True):
@@ -1382,6 +1445,9 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--allow-unknown-cutoff", action="store_true",
                    help="on a tape, admit models that state no training cutoff; the manifest "
                         "records it (exchange.tape.allow_unknown_cutoff)")
+    r.add_argument("--release-candidate", action="store_true",
+                   help="admit a sealed holdout tape (worlds/tapes/library.toml): a release "
+                        "candidate's plumbing check, never an iteration")
     t = sub.add_parser("tape", help="cut a compact tape from a diary and print its identity")
     t.add_argument("diary", type=Path)
     t.add_argument("-o", "--output", type=Path, required=True)
@@ -1408,7 +1474,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if all(c.get("status") == "completed" for c in card["seeds"]) else 1
     card = run(args.provider, args.ticks, args.world, args.out, args.cap_usd, args.seed,
                args.vault_depositor_usd, args.gaps_from, args.tape_from, args.latency_from,
-               args.allow_unknown_cutoff)
+               args.allow_unknown_cutoff, args.release_candidate)
     print_card(card)
     return 0 if card.get("status") == "completed" else 1
 

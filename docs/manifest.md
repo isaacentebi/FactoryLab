@@ -1731,6 +1731,14 @@ stated spread on every fill. Both numbers are always shown. Tape P&L is never ev
 for a code change: iterating code against a tape until its card looks right is the
 architect optimizing toward its own "better" (AGENTS.md rule 2).
 
+Tapes are listed by market regime in `worlds/tapes/library.toml` (trend, chop,
+jump, funding flip, outage; the rules are in its header), each by SHA-256 with the
+paid diary it was cut from, split into dev tapes and sealed holdouts. The harness
+runs a holdout only with `--release-candidate`, and only for plumbing invariants.
+Seeds on one tape vary the routers, not the market: each seed's card names its tape.
+A real-model tape run uses the edition-4 roster, several families and cheap; there is
+no single-family roster, and a roster is never chosen from what seats did on a tape.
+
 ## Vaults
 
 `venue.vault_tools` is a boolean, default `false`, fixed at launch. When

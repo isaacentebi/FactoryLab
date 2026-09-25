@@ -139,6 +139,26 @@ def test_the_fill_band_shows_the_tapes_pnl_beside_a_pessimistic_shadow_of_it():
     assert fastloop.scorecard(events)["fill_band"] == band
 
 
+def test_the_tape_library_names_regimes_and_seals_its_holdouts(tmp_path):
+    """Critique H4: tapes are organised by regime and split into dev and sealed holdout
+    tapes; a holdout runs only on a release candidate, so no iteration sees it."""
+    library = fastloop.tape_library()
+    assert {e["holdout"] for e in library.values()} == {True, False}
+    assert all(set(e["regimes"]) <= fastloop.REGIMES and e["source"].startswith("work/")
+               for e in library.values())
+    tape = Tape.load(OTHER)
+    assert fastloop.library_entry(tape) is None  # an unlisted tape runs, and says so
+    sealed = tmp_path / "library.toml"
+    sealed.write_text(f'[[tape]]\nid = "sealed"\nsource = "work/x"\nsha256 = "{tape.sha256}"\n'
+                      'regimes = ["chop"]\nholdout = true\n')
+    with pytest.raises(ValueError, match="sealed_holdout"):
+        fastloop.library_entry(tape, path=sealed)
+    assert fastloop.library_entry(tape, True, path=sealed)["id"] == "sealed"
+    sealed.write_text(sealed.read_text().replace('"chop"', '"bullish"'))
+    with pytest.raises(ValueError, match="malformed"):
+        fastloop.tape_library(sealed)
+
+
 LATENCY = FIXTURES / "longrun1-call-latency-ms.json"
 S = 10**9
 

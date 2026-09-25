@@ -589,6 +589,10 @@ class TapeVenue(FakeExchange):
             for market in markets:
                 row = dict(recorded.get(market) or {"coin": market, "lot_size": "0.000001",
                                                     "tick_size": "0.01"})
+                # A recording that could not read its account's rates said so; the rates
+                # this venue charges are stated below, so that note no longer applies.
+                row.pop("fee_rates", None)
+                row.pop("reason", None)
                 spread, spread_source = self._tape.spread_bps(market)
                 depth = self._tape.level_size(market)
                 row.update({
