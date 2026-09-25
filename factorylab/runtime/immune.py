@@ -78,6 +78,45 @@ def thrash_controller(ledger, manifest) -> PriceController:
     return controller
 
 
+#: The tier whose behaviour an observation measures, where that is not the role its card
+#: answers for: a judge's verdicts and forecasts are the judges' behaviour, a meta's
+#: conformity the metas', an antagonist's exposure the antagonists' (wave 16, second
+#: addendum, I-10: a penalty lands on the decisions whose behaviour it measures).
+MEASURED_TIER = {"verdict_mean": "evaluator", "verdict_std": "evaluator",
+                 "evaluator_disagreement": "evaluator", "forecast_skill": "evaluator",
+                 "meta_verdict_mean": "meta", "exposure_win_rate": "antagonist"}
+
+
+def thrash_roles(rt, windows: list[dict]) -> list[str]:
+    """The roles whose behaviour the thrash signals read as moving.
+
+    Guarantees the roles measured by the cards whose region-relative cell took more
+    than one value over the retained horizon the diagnosis read (``live.cells`` over
+    ``timing.min_ratio × immune.k`` windows): a card on ``MEASURED_TIER``'s
+    observations names that tier, any other card the role it answers for. A card
+    answering for ``all``, and movement in activity alone, name no role: then the
+    price lands where essay II.II.b puts it, on the no-swap-regret core.
+    """
+    horizon = rt.m.timing.min_ratio * rt.m.immune.k
+    span = windows[-horizon:]
+    if len(span) < 2:
+        return []
+    bins = {"registration_bins": rt.m.immune.registration_bins,
+            "revision_bins": rt.m.immune.revision_bins}
+    dims, series = live.cells(span, activity=False, **bins)
+    cards = {f"card:{card.id}": card for card in rt.charter.cards}
+    roles = set()
+    for i, name in enumerate(dims):
+        card = cards.get(name)
+        if card is None or len({cell[i] for cell in series}) < 2:
+            continue
+        observation = card.observation.strip().lower()
+        role = MEASURED_TIER.get(observation, card.answers_for)
+        if role != "all":
+            roles.add(role)
+    return sorted(roles)
+
+
 def thrash_penalty(rt) -> dict:
     """Update the thrash price from the volatility just read, and the penalty it sets.
 
@@ -336,7 +375,9 @@ def close_window(rt, values: dict[str, float]) -> None:
     for kind, detected in flags.items():
         if detected:
             rt.ledger.append({"kind": f"pathology.{kind}", **evidence})
-    rt.stats.thrash = thrash_penalty(rt)
+    # Wave 16, second addendum (I-10): the thrash price is charged on the routers of
+    # the tiers whose behaviour moved, never shifted to another tier's.
+    rt.stats.thrash = {**thrash_penalty(rt), "roles": thrash_roles(rt, windows)}
     # Versioning P5, time audit T2: the organ diagnoses every closed window but acts
     # (gain, ratchet) only on its own loop, at least ``min_ratio`` price-loop
     # periods apart with its own jitter, so it never revises the controller at the

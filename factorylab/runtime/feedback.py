@@ -2571,10 +2571,14 @@ class FeedbackMixin:
         Guarantees the charged reward is ``(r + cap - c) / (1 + cap)`` for every round
         of a core router, charged or not: one affine map, so no clip at 0 lets a
         low-reward arm escape part of its charge and an uncharged round sits on the
-        same scale as a charged one. Rounds of other routers are untouched. A charge
-        is ledgered (``thrash.charged``).
+        same scale as a charged one. A round of another router drawn while the price
+        was attributed to its tier (wave 16, second addendum, I-10;
+        ``RoutingMixin._thrash_attributed``) is learned on the same map with its own
+        charge; its other rounds are untouched. A charge is ledgered
+        (``thrash.charged``).
         """
-        if state.kind not in self.m.evaluation.no_swap_regret_kinds:
+        if (state.kind not in self.m.evaluation.no_swap_regret_kinds
+                and handle not in self.thrash_charges):
             return reward
         cap = self.m.prices.penalty_cap
         charge = self.thrash_charges.pop(handle, 0.0)

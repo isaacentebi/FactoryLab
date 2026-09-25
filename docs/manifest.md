@@ -1261,14 +1261,24 @@ ramped unchecked overshoots into thrash.
 Thrash is priced (essay II.II.b, versioning audit C2): the diagnosis's
 unsettledness `u` (below) above `immune.tv_threshold` is priced by the charter's PID
 law and gains (`prices.eta`, `kp`, `kd`, `decay`, `penalty_cap`), so its integral
-accumulates how long the thrash lasts. A round a router of
-`evaluation.no_swap_regret_kinds` draws, its abstentions included, carries
+accumulates how long the thrash lasts. The price lands on the tier whose behaviour
+moved (wave 16, second addendum, I-10; ruling R-E): the organ reads which cards'
+region-relative cells took more than one value over the retained horizon and names
+the roles they measure (`verdict_mean`, `verdict_std`, `evaluator_disagreement` and
+`forecast_skill` measure evaluators, `meta_verdict_mean` metas, `exposure_win_rate`
+antagonists, any other card the role it answers for;
+`world.adaptive_scoring.thrash_price.roles`). A router whose seats fill one of those
+roles is charged; with no role named (a card answering for `all`, or activity alone)
+the routers of `evaluation.no_swap_regret_kinds` are, as before. A round such a
+router draws, its abstentions included, carries
 `c = min(prices.penalty_cap, lambda * m)`, `m` the total-variation distance between
 that draw's distribution and the router's previous draw's: the router's own policy
 movement, so holding still is what lowers it (a charge every round bore alike would
-be a constant shift a no-regret learner ignores). The router learns
+be a constant shift a no-regret learner ignores). A core router learns
 `(r + penalty_cap - c) / (1 + penalty_cap)` for every round, charged or not, one
-affine map with no clip (`thrash.charged`). The price is published in
+affine map with no clip (`thrash.charged`); another router learns the same map for
+every round drawn while the price was attributed to its tier, charge 0 included, and
+its other rounds unmapped. The price is published in
 `world.adaptive_scoring.thrash_price`; its controller resumes with the checkpoint
 (`thrash_controller`), and each open round's charge with `thrash_charges`.
 

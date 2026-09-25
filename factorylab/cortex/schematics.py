@@ -1808,12 +1808,19 @@ class SchematicsMixin:
                 "and the current one has not settled; 1 - lifespan / latency for a "
                 "configuration outlived by the loop that corrects it. v = max(0, u - "
                 "immune.tv_threshold); lambda follows the controller's recurrence with v "
-                "(world.adaptive_scoring.thrash_price). A round a router of "
-                "evaluation.no_swap_regret_kinds draws, abstentions included, carries c = "
+                "(world.adaptive_scoring.thrash_price). The price lands on the routers "
+                "whose seats fill a role the moving cards measure (a card whose "
+                "region-relative cell took more than one value over the retained "
+                "timing.min_ratio * immune.k windows; verdict_mean, verdict_std, "
+                "evaluator_disagreement and forecast_skill measure evaluators, "
+                "meta_verdict_mean metas, exposure_win_rate antagonists, any other card "
+                "the role it answers for; world.adaptive_scoring.thrash_price.roles), "
+                "and on the routers of evaluation.no_swap_regret_kinds when no role is "
+                "named. A round such a router draws, abstentions included, carries c = "
                 "min(prices.penalty_cap, lambda * m), m the total-variation distance "
                 "between that draw's distribution and the router's previous draw's; its "
                 "reward r is learned as (r + prices.penalty_cap - c) / (1 + "
-                "prices.penalty_cap)"),
+                "prices.penalty_cap), as is every round of a core router"),
             "controller": {
                 "law": "pid",
                 "eta": pr.eta, "kp": pr.kp, "kd": pr.kd, "decay": pr.decay,
@@ -1889,7 +1896,8 @@ class SchematicsMixin:
             "sampling_blind": getattr(self, "sampling_blind", None),
             # The thrash price in force (world.mechanics.thrash_price): it moves each window.
             "thrash_price": {"lambda": thrash.get("lambda", 0.0),
-                             "penalty": thrash.get("penalty", 0.0)},
+                             "penalty": thrash.get("penalty", 0.0),
+                             "roles": list(thrash.get("roles") or [])},
             "committed": "world.mechanics carries the committed value of each of these; a "
             "difference is this runtime's own adaptation, not an amendment",
         }

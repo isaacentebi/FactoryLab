@@ -1298,17 +1298,40 @@ class RoutingMixin:
                                            max(fresh) / floor if floor > 0 else math.inf)
             watch["incumbent_min"] = min(watch.get("incumbent_min", 1.0), max(known, default=0.0))
 
+    def _thrash_attributed(self, state: RouterState) -> bool:
+        """Whether the thrash price in force lands on this router's rounds.
+
+        Wave 16, second addendum (I-10), ruling R-E: a penalty is attributed to the
+        decisions, and the routers, whose behaviour the violation measures. A router
+        is charged when a role one of its seats fills is among the roles the organ read
+        as moving (``immune.thrash_roles``); when the movement names no role, the price
+        lands on the no-swap-regret core, as essay II.II.b puts it.
+        """
+        roles = self.stats.thrash.get("roles") or []
+        if not roles:
+            return state.kind in self.m.evaluation.no_swap_regret_kinds
+        return bool(self._router_roles(state) & set(roles))
+
+    def _router_roles(self, state: RouterState) -> set[str]:
+        """The roles the seats a router can wake fill, by the kind each emits."""
+        from factorylab.cortex.registration import measured_role
+
+        return {measured_role(self.assemblies[a].spec.emits)
+                for a in state.universe if a in self.assemblies}
+
     def _record_movement(self, state: RouterState, sample: Sample, handle: str) -> None:
-        """A core router's policy movement at this draw: TV from the draw before it.
+        """A router's policy movement at this draw: TV from the draw before it.
 
         Essay II.II.b: thrash is priced "incentivizing the surplus-retaining core of
         no-swap-regret learners to stabilize". What a router can hold still is its own
         policy, so the thrash charge on this round (``FeedbackMixin._thrash_charged``)
         scales with how far this draw's distribution moved from the router's last,
-        over the union of their actions; a first draw has not moved.
+        over the union of their actions; a first draw has not moved. The charge is
+        held for a router the price is attributed to (``_thrash_attributed``): a core
+        router's round only when charged (every core round is learned on the charged
+        scale), any other router's round whenever it is attributed, charge 0 included,
+        so its rounds under the price share one scale.
         """
-        if state.kind not in self.m.evaluation.no_swap_regret_kinds:
-            return
         now = dict(zip(sample.action_ids, (float(p) for p in sample.probs), strict=True))
         before = state.last_draw
         moved = (0.5 * math.fsum(abs(now.get(a, 0.0) - before.get(a, 0.0))
@@ -1316,9 +1339,12 @@ class RoutingMixin:
         state.last_draw = now
         # The thrash price in force now times this movement is the round's charge; with
         # no price in force (the common case) nothing is held for it.
+        if not self._thrash_attributed(state):
+            return
         charge = min(self.m.prices.penalty_cap,
                      self.stats.thrash.get("lambda", 0.0) * min(1.0, moved))
-        if charge > 0:
+        core = state.kind in self.m.evaluation.no_swap_regret_kinds
+        if charge > 0 or (not core and self.stats.thrash.get("lambda", 0.0) > 0):
             self.thrash_charges[handle] = charge
 
     def _close_abstention_watch(self, state: RouterState) -> None:

@@ -499,5 +499,6 @@ def test_the_niche_is_published_as_a_schematic_and_nothing_more():
     mechanics = rt._mechanics_block()
     assert "eligible" in mechanics["novelty"] and "thrash_price" in mechanics
     assert "uptake" in mechanics
-    assert set(rt._adaptive_scoring_block()["thrash_price"]) == {"lambda", "penalty"}
+    # Wave 16, second addendum (I-10): the roles the price lands on travel with it.
+    assert set(rt._adaptive_scoring_block()["thrash_price"]) == {"lambda", "penalty", "roles"}
     assert load_manifest("scripted").immune.gap_threshold > 0
