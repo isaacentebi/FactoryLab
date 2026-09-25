@@ -135,6 +135,12 @@ section is unchanged. OpenAI-hosted routes stay on the default: their hosts
 refuse a schema whose root is a union, and strict mode would require every
 property and close every object, which is a different contract.
 
+`models[].training_cutoff` is the last UTC day (`"YYYY-MM-DD"`) a model's training
+data may cover, as its provider states it; absent (the default) means unknown. It is
+fixed for the world's life and hashed. It binds only a world that replays a recorded
+tape (`[exchange.tape]`, the look-ahead guard below); no shipped world states one,
+because a cutoff is the provider's statement to record, not the architect's guess.
+
 The deterministic scripted fixture reuses its existing call schedule: the third
 registration slot installs a helper and a producer accepting `ProducerReturn`;
 the fourth tool slot requests helper → grandchild with a catalogue tool; the
@@ -1689,6 +1695,220 @@ are allowed).
 `treasury.transfer` accepts `perps_to_spot` and `spot_to_perps`, moving available
 USDC through the same intent, submission and receipt journal. Venue pots show
 `perps` and `spot` as components of `venue`, never additional capital.
+
+## Recorded tapes: `[exchange.tape]`
+
+`exchange.tape` is absent by default (the fake venue walks its seeded random
+path) and fixed for the world's life when present. It names the recorded market a
+fake venue replays: a past paid run's diary, cut to its market data
+(`factorylab/world/tape.py`, `scripts/fastloop.py tape`). A tape is the world, not
+architecture. The keys:
+
+| Key | Meaning |
+|---|---|
+| `sha256` | SHA-256 of the compact tape's canonical JSON: the tape's identity |
+| `start_ns`, `end_ns` | The first and last recorded tick stamps |
+| `markets` | The perps and pairs whose mids the tape recorded |
+| `spread_bps` | Each market's spread as the tape states it: the median recorded top-of-book spread, else the median over the tape's other recorded books; a tape that recorded no book states none (the market is absent here) |
+| `allow_unknown_cutoff` | Default `false`. Whether the operator admitted models that state no `training_cutoff` (`fastloop --allow-unknown-cutoff`); recorded, since such a model may have been trained on the tape's market |
+
+Load-time invariants: only `exchange.kind = "fake"` replays a tape (a tape world
+never reaches a live adapter, a live rail or a real-money branch); a tape world has
+no `exchange.shocks`; every seeded coin and pair is one the tape recorded. The
+runtime refuses a venue whose tape's SHA-256 is not the manifest's, and a tape venue
+under a manifest that names none, at launch and on every resume (`tape_mismatch`).
+Because the key is hashed, the Launch record carries the tape's identity and a
+resume on another tape is a different world.
+
+The look-ahead guard (load-time invariants of a tape world). A replayed market is in
+the past; a model trained on data covering it, or a seat that can read today's web,
+could know the price path it is about to be surprised by, and evaluators graded on a
+consequence the outside already knew would learn to consult it rather than judge
+(Chapter II §III.b):
+
+- Every model on the menu (not only the seed roster: a seat may move to any menu model
+  by proposal) states a `training_cutoff` whose day ends before the tape's first
+  instant. A known cutoff that does not is refused whatever else is set. A model
+  with no stated cutoff is refused unless `allow_unknown_cutoff` is true.
+- The same policy binds every model admitted after genesis: a model proposal (a
+  catalogue model, a reasoning variant, a `venice:` or `x402:` id) is refused before
+  its trial is charged unless the cutoff this manifest states for its base id ends
+  before the tape's first instant; a model off the menu has no stated cutoff, so it
+  is admitted only under the recorded `allow_unknown_cutoff` waiver; no web route is
+  ever admitted. The rule is published as a fact in `proposal_shapes.model.admission`
+  (`WorldManifest.look_ahead_rule`), and a refusal reaches the proposer as its
+  registration's refusal reason.
+- Web access is off, not a declared confound: a tape world has no `[web]` search
+  route and lists no `:online` model and no model with a `web` plugin table (the
+  harness removes them from the menu), publishes no `connector.fetch` (a fetch is
+  refused), and admits no live Polymarket reader (`polymarket_live_on_a_tape`; the
+  simulated event markets stay).
+- The scorecard's `tape` block states the cutoffs, the models admitted with none,
+  whether the operator allowed that, and `web: "off"`.
+
+What the venue replays, and how:
+
+- The tape holds what the diary recorded and nothing else: the delivered tick
+  stamps; each market's mids and each perp's funding-rate observations, stamped as
+  delivered; the order books the run happened to read, stamped with the venue's own
+  book time; its first instrument listing; the account's fee rates (below). A funding row that moved money was the
+  recording account's payment, not market data, and is left out.
+- Every read answers the latest recorded row at or before the venue's instant, and
+  nothing before a series' first row. Past the last row the last row holds; the tape
+  never loops.
+- The venue's instant is the world's tick. The world keeps the manifest's
+  `tick_interval` and the charter may amend it; the tape is sampled at the tick, never
+  the reverse. A tape world launches at the tape's first instant and ends before the
+  first tick past its last.
+- Funding is charged once per hour boundary of tape time, on the position held at
+  the boundary, at the last recorded rate and mid at or before it: never once per
+  recorded row. When the world ends (the tape ran out, the budget did, or a kill),
+  the position-hours actually held since the last boundary are charged at the last
+  recorded rate and mid, once, before the production mark: the last partial hour is
+  never free, and a receipt is never booked for time a position was not held.
+  The venue's time never passes the recording's end (`closes_ns`, the last recorded
+  tick): an advance to a later instant is an advance to the end, so no fill, mark or
+  funding boundary is invented in time the tape never recorded, and the world's own
+  clock is held there too. When the paced clock reaches the end inside an event (a
+  long call), the world is terminal (`tape_ended`): later calls of the event are
+  refused unbilled, venue writes are refused ("the recorded market has ended"), and
+  the event's termination check ends the world. When the tape ended the run (its
+  clock stopped before its tick budget, or `tape_ended`), the venue is first advanced
+  and settled exactly through the end, so an order in flight meets the tail rows
+  after the world's last tick and funding runs through the end; an explicit, earlier
+  budget or termination closes at the world's own instant.
+  The terminal sequence, on every path that ends a tape world (the tape running out,
+  the budget, a termination condition, an explicit kill; a crashed world resumes and
+  ends by the same path): (a) that partial hour's funding is charged; (b) every order
+  still in flight, which no later recorded row can ever deliver, is cancelled (reason
+  "the recorded market ended before the order arrived"; an immediate-or-cancel order
+  no counterparty met), settled like any venue cancel; the production mark is written;
+  (c) the kill's wind-down closes positions and spot balances, each close filling at
+  once against the last recorded book by the same depth rules, the 5% bound and the
+  taker rate, and its fill and realized P&L are booked; (d) only then is the venue
+  sealed, refusing every further order ("the recorded market has ended"); (e) the
+  world is `Terminated`. The operator's `factorylab kill` of a dead simulated world
+  (any fake venue, a tape's included) winds no venue down: its venue state lives only
+  in the process that died.
+- The venue is named `tape:<first 8 hex of sha256>`.
+
+Fills are the recording's and never kinder (money path). Every rule below is
+published, as a fact and without advice, in each instrument record the venue lists
+(`execution`, with `spread_bps`, `spread_source`, `synthetic_level_size`, the fee
+rates and `fee_basis`):
+
+- An order is acknowledged `resting` and executes when the recording first shows its
+  market after the instant it was sent: at least one world tick later, and never
+  against the book or mid its sender was shown.
+- The book it meets is the recorded order book when that is at least as recent as the
+  recorded mid; otherwise one level each side at the mid plus or minus half the tape's
+  spread. No level is ever unbounded. The synthetic level holds the market's own
+  median recorded top-of-book size; else the smallest-notional top-of-book level
+  recorded for any market on the tape, converted to this market's units at its mid
+  (`synthetic_level_source`); else there is no level, and every order on the market is
+  refused: "the tape recorded no liquidity for this market", published as the
+  instrument record's `liquidity`. `venue.order_book` answers this same book.
+- A market order is immediate-or-cancel within 5% of the mid it was sent at
+  (Hyperliquid's market order); what it cannot fill is cancelled (`OrderRejected`,
+  reason `immediate-or-cancel remainder cancelled`), never rested. An
+  immediate-or-cancel order in flight cannot be cancelled; a limit in flight can.
+- A limit order that crosses on arrival fills at the book's prices at the taker rate
+  and rests the remainder. A resting limit fills only when a recorded mid after it
+  began resting is strictly through its price (a trade happened through it); a book
+  level that merely sits past its price is a quote, not a trade, and fills nothing;
+  and the opposite top of book (recorded or synthetic) must also be at or through its
+  price (a buy: the ask at or below it; a sell: the bid at or above it), since a mid
+  through the price with no counterparty quoting it is no fill.
+  It fills at its own price, at the maker rate, up to what the top level on that side
+  still holds. Within one tick, arriving orders (takers) are matched before resting
+  ones (makers), as on the venue.
+- Size taken from one recorded snapshot is not offered again.
+- Every order below the venue's order floor is refused when sent: the recorded
+  listing's `min_order_value_usd`.
+- Fee rates are this account's, as the recording stood at the venue's instant: a
+  step function of tape time, each rate usable only from the instant the diary
+  recorded it, never averaged across the future. The primary source is the venue's
+  own statement of the rates (`userFees`, read with each instrument listing since
+  live-4: `venue_read`). Else the rate the latest recorded fill on this market stated
+  (`fills`); else the latest fill on the venue's other markets of the same class,
+  perp or spot, whose rates are separate schedules (`fills_pooled`). A fill states its
+  rate only to within one unit of its fee's last recorded place, so its rate is the
+  simplest decimal in that interval. The diary does not record the venue's `crossed`
+  flag, so a fill's side is read off its recorded order: every fill of an
+  immediate-or-cancel order (`venue.place_market`, `venue.close`) and of a limit the
+  venue acknowledged filled took liquidity (taker); a fill of a limit acknowledged
+  resting with nothing filled, observed after that acknowledgement, provided it
+  (maker); any other fill (a limit acknowledged resting part-filled, a liquidation, an
+  order the diary does not name) states no side and is not used. The tape carries
+  each rate with its provenance (the fills by order id, instant and position, or the
+  instrument read's call). A side never recorded by an instant stays refused then: a
+  market order needs the taker rate, a limit the maker rate, and a limit that would
+  cross on arrival with no taker rate is refused on arrival. The listing publishes
+  each side's rate, `taker_fee_source` / `maker_fee_source`, the instant each was
+  recorded (`*_fee_since_ns`), and `market_orders_refused` / `limit_orders_refused`.
+  Only a diary of a live venue states fee rates. A pair trades on its own (spot) rates.
+- A tape world never exposes a value its recording does not contain (Codex review of
+  #151): where the recording is silent the venue refuses, and says so as a fact, never
+  with the fake's constant in the recording's place. A market is absent from
+  `venue.mids`, `venue.order_book` (and candles and funding history) and the
+  instrument listing until its first recorded mid, and an order on it is refused ("the
+  recording has no market for this coin yet"); the bootstrap seeds no price onto a
+  tape venue. An order is refused on a market whose recorded listing row does not
+  state its lot size, tick size and order floor; the listing shows those terms as
+  null and the reason as `refused`. An order is held to the recorded
+  precision: a size that is not a multiple of `lot_size`, or a limit price that is not
+  a multiple of `tick_size` or has more than `price_significant_figures` significant
+  figures (an integer price excepted when `integer_prices_allowed`), is refused. The
+  recording states no leverage terms, so no credit is extended: perp positions are
+  margined at 1x (`max_leverage` 1; `set_leverage` above 1 is refused), and positions
+  are closed at the mid, at the recorded taker rate (the maker rate while no taker
+  rate is recorded), only when the perps account's equity is below zero. The recording has no vaults: vault writes are refused. A
+  resting spot buy holds its cost and its recorded maker fee. A synthetic level holds
+  whole recorded lots. Which sides of which tapes can trade, and from when, is in
+  `worlds/tapes/library.toml`.
+- Orders in flight hold margin in `collateral_view` as resting orders do.
+- An order that has filled anything is never reported rejected: when its unfilled rest
+  can no longer execute (the account cannot carry a later fill, a spot balance cannot
+  pay for it, an immediate-or-cancel remainder), what it executed stands, the rest is
+  cancelled with one `OrderRejected` naming it (`reason` "remainder cancelled: …",
+  `cancelled_size`), and `lookup` reads it back `cancelled` with its executed size.
+  `lookup` always reports an order's executed size, whatever ended it.
+
+A tape world runs on the idle-skipping clock (`IdleSkipClock`, `runtime/live.py`), a
+wall-paced clock that compresses only waiting. Its instant is the tape's first
+instant, plus the real time the process has been busy, plus any busy time a stand-in's
+calls were modelled to take, plus every idle wait it skipped. A tick with time to
+spare fires exactly on its declared instant having slept nothing; a tick whose work
+outlasts the interval fires late, exactly as it would live, and the measured interval
+reports the lateness. The harness can give its scripted stand-in the per-call
+latencies a paid diary measured (`fastloop --latency-from`); without them the
+stand-in costs no time and the pace measures only the kernel's own work. Every
+wall-clock reader is keyed on whether the tick clock is paced by the wall
+(`wall_paced`), never on whether the venue is live:
+
+| Reader | Under the idle-skipping clock |
+|---|---|
+| Model-call deadline (`min_ratio` delivered ticks, wall seconds) | Real seconds of busy time, as live; a modelled call past it expires |
+| Safety pass between model calls | Runs once a delivered tick of wall time has passed in an event; it advances the recorded venue to the wall's instant and settles what filled, refused or funded (never a mid) |
+| `wall` journal (`WallClock`) | Recorded, not re-executed, so a replay reads the run's own instants |
+| Checkpoint cost alarm (`checkpoint.slow`) | Measured in real busy time |
+| Tick clock restore | Restored as the clock it was: the saved skipped and modelled time and its saved paced reading (the one the last event's `runtime.event_done` recorded, so a modelled call inside a tick is not undone and the next tick skips only the remainder), with the fresh clock's deadline (the tape's end). A stand-in's modelled latency rides in its recorded answer and is spent by the provider's observer, live and on replay alike. Each event's `runtime.event_done` records the clock's reading and totals (`clock`), and a replayed event's clock adopts them, so after the replay the clock reads and totals what the recorded run's did, never the checkpoint's stale instant; a replay of a diary's gaps (`--gaps-from`) restores its recorded gaps and measured sample; a restore never changes a clock's kind (`tick_clock_mismatch`) |
+| Resume instant | The world's saved instant |
+| Treasury cap window, venue read share, Polymarket windows, the kernel's ledger and queue | The world's clock, unchanged |
+
+The harness's scorecard carries a `fill_band`: the venue P&L the tape's rules booked,
+and beside it the same recomputed with an extra adverse slippage of half the market's
+stated spread on every fill. Both numbers are always shown. Tape P&L is never evidence
+for a code change: iterating code against a tape until its card looks right is the
+architect optimizing toward its own "better" (AGENTS.md rule 2).
+
+Tapes are listed by market regime in `worlds/tapes/library.toml` (trend, chop,
+jump, funding flip, outage; the rules are in its header), each by SHA-256 with the
+paid diary it was cut from, split into dev tapes and sealed holdouts. The harness
+runs a holdout only with `--release-candidate`, and only for plumbing invariants.
+Seeds on one tape vary the routers, not the market: each seed's card names its tape.
+A real-model tape run uses the edition-4 roster, several families and cheap; there is
+no single-family roster, and a roster is never chosen from what seats did on a tape.
 
 ## Vaults
 

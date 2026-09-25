@@ -42,10 +42,13 @@ def seed_markets(exchange, spec) -> None:
             (*target.spot_pairs, *target.listed_spot_pairs)))
         coins = tuple(c for c in coins if c in target.listed_coins)
         pairs = tuple(p for p in pairs if p in target.listed_spot_pairs)
-        for coin in target.listed_coins:
+        # A recorded market's prices are the recording's alone: a market with no
+        # recorded row yet has no mid, never the fake's seeded 100 (factorylab/world/tape.py).
+        recorded = bool(getattr(target, "tape_sha256", None))
+        for coin in () if recorded else target.listed_coins:
             target._mids.setdefault(coin, Decimal(100))
             target._mid_history.setdefault(coin, [])
-        for pair in target.listed_spot_pairs:
+        for pair in () if recorded else target.listed_spot_pairs:
             base = pair.split("/")[0]
             target._mids.setdefault(base, Decimal(100))
             target._mids.setdefault(pair, target._mids[base])

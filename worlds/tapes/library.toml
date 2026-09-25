@@ -1,0 +1,116 @@
+# The tape library: recorded markets a fake venue may replay (factorylab/world/tape.py),
+# by market regime, with a sealed holdout.
+#
+# A tape is identified by the SHA-256 of its compact form (`fastloop.py tape <diary>`),
+# whatever file carried it; `source` is the paid diary it was cut from, under the
+# operator's untracked work/ directory. `scripts/fastloop.py run --tape-from` looks
+# every tape up here: a holdout tape runs only with `--release-candidate`, and only
+# for plumbing invariants (critique H4). Seeds on one tape vary the routers, not the
+# market, so a scorecard names its tape and seeds are read nested within tapes.
+#
+# Tape P&L, and any action-mix figure a tape run produces, is never evidence for a
+# code change: iterating code against a tape until its card looks right is the
+# architect optimizing toward its own "better" (AGENTS.md rule 2).
+#
+# Regimes are facts measured on the tape, by these rules (BTC and ETH mids):
+#   trend         the net move over the tape is at least 0.5% on either coin
+#   chop          neither coin moved 0.5% net
+#   jump          one recorded step moved a coin at least 0.5%
+#   funding_flip  a coin's recorded funding rate changed sign
+#   outage        a delivered tick gap of 300 s or more
+# On a tape every perp position is margined at 1x (the recording states no leverage
+# terms), so no recorded gap reaches a liquidation: the fake venue's scripted shocks
+# remain the stress tape for that regime.
+#
+# `trades` says which sides of which markets can take an order, from which instant (UTC
+# on the tape's day) and on which fee source (docs/manifest.md, recorded tapes): a
+# market order needs a recorded taker rate and a limit a recorded maker rate, each
+# usable from the instant the diary recorded it, and an order needs a recorded book
+# (or a book recorded on another market of the tape). An empty list: the tape replays
+# prices, funding and the clock, and refuses every order, saying why.
+
+[[tape]]
+id = "longrun1"
+source = "work/capital-loop/longrun1-open"
+sha256 = "3e2e38fe9655a3111c06fd3356081369998324f74e50fc48007cf4e9f6cb53ac"
+trades = ["BTC taker 0.00045 from 19:42:03Z (fills)", "ETH taker 0.00045 from 19:42:03Z (fills_pooled)"]
+start_utc = "2026-09-24T19:31:33Z"
+hours = 6.087
+ticks = 925
+regimes = ["chop", "jump", "outage"]
+holdout = false
+facts = { btc_move_pct = -0.163, eth_move_pct = -0.194, eth_max_step_pct = 0.693, max_gap_s = 1847.6, books = 4 }
+
+[[tape]]
+id = "run3"
+source = "work/capital-loop/run3/events.json"
+sha256 = "ab8778860c75ab2a184c76f40f02c98fc770e736c3e0fc1c7f7c43a9c206d040"
+trades = []
+start_utc = "2026-09-24T12:07:54Z"
+hours = 2.481
+ticks = 453
+regimes = ["trend"]
+holdout = false
+facts = { btc_move_pct = 0.617, eth_move_pct = 1.801, eth_max_step_pct = 0.359, max_gap_s = 145.6, books = 0 }
+
+[[tape]]
+id = "live-1"
+source = "work/merged/live-1/events.json"
+sha256 = "abf56eb68fcc69f7880f73330e262c950f774633287762732c12e9d2d8eff413"
+trades = []
+start_utc = "2026-09-24T11:39:45Z"
+hours = 0.4
+ticks = 81
+regimes = ["trend", "jump"]
+holdout = false
+facts = { btc_move_pct = -0.974, eth_move_pct = 0.049, btc_max_step_pct = 0.95, max_gap_s = 63.8, books = 0 }
+
+[[tape]]
+id = "live-2"
+source = "work/merged/live-2/events.json"
+sha256 = "78b0ed8140a05778bb6ddb9ae25f5f03f167d30b3a8ff29a4908cd14212621af"
+trades = []
+start_utc = "2026-09-24T18:06:15Z"
+hours = 0.247
+ticks = 21
+regimes = ["trend", "outage"]
+holdout = false
+facts = { btc_move_pct = 0.396, eth_move_pct = 0.539, max_gap_s = 335.5, books = 0 }
+
+[[tape]]
+id = "live-4"
+source = "work/merged/live-4/events.json"
+sha256 = "1f053bab80b06a6ab3172703598c11425a080aa1974d421f6ab460929a86a65e"
+trades = []
+start_utc = "2026-09-25T07:17:16Z"
+hours = 0.271
+ticks = 50
+regimes = ["chop"]
+holdout = false
+facts = { btc_move_pct = -0.078, eth_move_pct = 0.081, max_gap_s = 76.3, books = 0 }
+
+# Sealed holdouts: run only on a release candidate, only for plumbing invariants.
+
+[[tape]]
+id = "pr121"
+source = "work/population-pr121/live/events.json"
+sha256 = "934e4ad457fb4f9b8881211b605452556d39ab5e5e04c4812f145c7d71725607"
+trades = []
+start_utc = "2026-09-21T18:05:20Z"
+hours = 1.601
+ticks = 240
+regimes = ["trend", "funding_flip"]
+holdout = true
+facts = { btc_move_pct = 0.925, eth_move_pct = 0.937, eth_funding_sign_flips = 2, max_gap_s = 106.2, books = 0 }
+
+[[tape]]
+id = "live-3"
+source = "work/merged/live-3/events.json"
+sha256 = "b5f851411e4da44ec20385abe1a992f8cae0839385cb62c465a44b7eace3203f"
+trades = []
+start_utc = "2026-09-24T18:55:45Z"
+hours = 0.405
+ticks = 45
+regimes = ["chop", "jump"]
+holdout = true
+facts = { btc_move_pct = 0.217, eth_move_pct = -0.186, eth_max_step_pct = 0.563, max_gap_s = 112.6, books = 0 }
