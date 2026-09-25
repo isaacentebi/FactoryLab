@@ -277,6 +277,25 @@ class Settler:
         """
         return self.__excluded.pop(handle, None)
 
+    def forget(self, about_handles) -> int:
+        """Drop the base-rate snapshot and record of every question about a released
+        decision; return how many entries went.
+
+        Wave 17b: a decision is released only once no verdict about it can still
+        arrive (no judgement of it waits, and a judgement naming it is refused), so
+        no question about it is ever scored again; ``PrevalenceBaseline`` already
+        holds the aggregate its outcome entered. Guarantees no other question moves.
+        """
+        gone = set(about_handles)
+        if not gone:
+            return 0
+        count = 0
+        for store in (self.__snapshots, self.__recorded):
+            for question in [q for q in store if q.rpartition(":")[2] in gone]:
+                del store[question]
+                count += 1
+        return count
+
     def score_verdict(self, *, about_handle: str, q: float, outcome: float,
                       key: str) -> tuple[float, float]:
         """Score one verdict against a provisional outcome, recording nothing.

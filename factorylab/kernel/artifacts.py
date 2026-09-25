@@ -436,8 +436,10 @@ class ArtifactStore:
         and bytes that stay behind are a leftover), and bytes no record names, such
         as a crash between ``_write`` and the ledger item leaves (removed without an
         item, and only when the journal is not recovering; not returned). An owned
-        blob is never a candidate, so collection can never take a seat's state or an
-        inbox body. A live run and its replay therefore ledger the same removals.
+        blob is never a candidate, so collection can never take bytes a seat still
+        holds: its state, or an inbox body it has not released (an acknowledged body,
+        or one past its published retention, is released by its inbox first). A live
+        run and its replay therefore ledger the same removals.
 
         **A replay collects only what the diary knows (R4-C).** The archive
         directory is not replayed state. After a crash it still holds the bytes

@@ -416,3 +416,48 @@ def test_a_head_whose_bytes_are_gone_is_unavailable_at_any_size(state):
         state.artifacts.index.pop(sha, None)
         with pytest.raises(RuntimeError, match="present but unavailable"):
             state.render("alice")
+
+
+# ---- retention: acknowledged, or past the published horizon (wave 17b) -------------------
+
+
+def test_an_item_is_kept_until_acknowledged_or_past_its_retention_horizon(archive):
+    """Essay II.IV.c: a verdict is "consumed ... and then discarded". An unacknowledged
+    item addressed at or after the horizon stays; an acknowledged one, or one older than
+    the horizon, leaves the inbox and its body is released from the archive."""
+    ledger, clock, store = archive
+    ticks = SimpleNamespace(now=0)
+    inbox = OutcomeInbox(store, ledger, lambda: clock.ns)
+    inbox.tick = lambda: ticks.now
+    records = []
+    for tick in range(6):
+        ticks.now = tick
+        records.append(inbox.append("alice", handle=f"decision-{tick}",
+                                    outcome={"kind": "verdict", "score": tick / 10},
+                                    evidence=f"diary:{tick}", observed_at_ns=1_000 + tick))
+    inbox.unread("alice")
+    inbox.ack_through("alice", "outcome:2")  # delivered, then acknowledged
+    assert inbox.release_items(before_tick=4) == 4  # 1, 2 acknowledged; 3, 4 expired
+    assert [r["seq"] for r in inbox.items["alice"]] == [5, 6]
+    released = [row for row in ledger.rows if row["kind"] == "artifact.released"]
+    assert {r["sha"] for r in released} == {r["sha"] for r in records[:4]}
+    assert all(r["cause"] == "retention" and r["artifact_kind"] == "outcome.item"
+               for r in released)
+    # An id no longer held answers as one never addressed does, and says why it may be.
+    assert inbox.get("alice", "outcome:3") == {"error": OUTCOME_UNKNOWN}
+    assert "retention horizon" in OUTCOME_UNKNOWN
+    assert inbox.unread("alice")["count"] == 2
+    assert inbox.release_items(before_tick=4) == 0  # nothing more is due
+
+
+def test_a_body_another_held_item_carries_is_not_released(archive):
+    ledger, clock, store = archive
+    inbox = OutcomeInbox(store, ledger, lambda: clock.ns)
+    inbox.tick = lambda: 0
+    first = inbox.append("alice", handle="h", outcome={"kind": "fill"}, observed_at_ns=1)
+    inbox.tick = lambda: 9
+    second = inbox.append("alice", handle="h", outcome={"kind": "fill"}, observed_at_ns=1)
+    assert first["sha"] == second["sha"] and first["seq"] != second["seq"]
+    assert inbox.release_items(before_tick=5) == 1
+    assert not [r for r in ledger.rows if r["kind"] == "artifact.released"]
+    assert inbox.get("alice", f"outcome:{second['seq']}")["outcome"] == {"kind": "fill"}
