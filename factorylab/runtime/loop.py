@@ -44,6 +44,7 @@ from factorylab.cortex.request import Return, public_return
 from factorylab.cortex.sandbox import NoJail, jail_probe
 from factorylab.cortex.schematics import SchematicsMixin
 from factorylab.kernel.events import Event, EventKind
+from factorylab.kernel.ledger import canonical
 from factorylab.kernel.queue import SettleStatus
 from factorylab.kernel.termination import DORMANT
 from factorylab.learners.router import Sample
@@ -592,20 +593,51 @@ class Runtime(
             self.clockwork.record("capital", ticks)
 
     def _snapshot(self, boundary: str) -> bool:
-        """Persist a complete continuation at launch and after each boundary event finishes."""
+        """Persist a complete continuation at launch and after each boundary event finishes.
+
+        Guarantees (wave 17): the state is one rolling checkpoint file beside the
+        diary, durable before the ``snapshot`` item naming its SHA-256 and size is
+        appended, and every older checkpoint file is removed only after that item
+        is durable (``runtime/sidecar.py``). The item also carries what the
+        checkpoint cost, in the clock the world is paced by, against the period
+        it serves; a cost above ``1/min_ratio`` of that period is ledgered as a
+        ``checkpoint.slow`` alarm (essay II.IV.c: an inner loop settles at least
+        ``min_ratio`` times faster than the loop it serves; the apparatus may not be
+        slower than its environment). The alarm is a fact, never a kill.
+        """
+        started = self.wall.now_ns()
+        # Retained state no reader can reach is dropped here, at the one boundary a
+        # live run and its replay share (``_prune_retained``).
+        self._prune_retained()
         try:
             state = runtime_state(self)
             # Router states contain ordinary JSON floats as well as tagged codec values.
             from factorylab.cortex.assembly import _finite_json
 
             _finite_json(state)
+            data = canonical(state)
         except (ValueError, OverflowError, RecursionError):
             self.ledger.append({"kind": "snapshot.refused", "boundary": boundary, "n": self.n,
                                 "reason": "invalid checkpoint number or nesting"})
             return False
+        reference = self.ledger.checkpoints.write(data)
+        cost_ns = max(0, self.wall.now_ns() - started)
+        tick = self.wall.tick_ns()
+        # The checkpoint serves the price loop: one is written at each of its
+        # boundaries. Before the loop's first period (launch) there is none to serve.
+        period = (self.clockwork.period("price")
+                  if self.clockwork.opened("price") is not None else None)
+        cost = {"cost_ns": cost_ns, "tick_ns": tick, "period_ticks": period}
+        if period is not None and cost_ns * self.m.timing.min_ratio > period * tick:
+            self.ledger.append({"kind": "checkpoint.slow", "boundary": boundary, "n": self.n,
+                                **cost, "min_ratio": self.m.timing.min_ratio,
+                                "ts": self.clock.now_ns})
         self.ledger.append(
-            {"kind": "snapshot", "boundary": boundary, "n": self.n, "state": state}
+            {"kind": "snapshot", "boundary": boundary, "n": self.n, **reference, **cost}
         )
+        # Durable in the chain: no resume can start from an older checkpoint now.
+        self.ledger.checkpoints.retire_others(reference)
+        self.ledger.io_store.sweep()
         # The checkpoint just made durable names no reference to anything released
         # before it, so those records may now be collected (kernel/artifacts.py).
         self.artifacts.seal_released()
@@ -627,6 +659,110 @@ class Runtime(
         if forget is not None:
             forget()
         return True
+
+    def _prune_retained(self) -> None:
+        """Drop retained state no reader can reach; called only at a checkpoint boundary.
+
+        Essay II.II.b: the disk and the memory are the world's own finite machine,
+        a hard cast, and essay II.IV.c: the control apparatus may not become slower
+        than its environment, as a checkpoint that grows with every event does.
+        Pruning is deterministic and happens at the boundary a live run and its
+        replay share (before the checkpoint is taken), so a resumed world holds
+        exactly what the uninterrupted one holds. Each rule below removes only
+        what no reader of that structure can reach, and says why.
+        """
+        self._prune_event_log()
+        self._slim_return_events()
+        self._release_read_deliveries()
+
+    def _release_read_deliveries(self) -> None:
+        """Release, in the kernel queue, every router's deliveries it has already read.
+
+        Readers of the deliveries addressed to a router learner (``router:<kind>``
+        ids, the keys of ``delivered_seen``): ``_deliver_returns`` reads them from its
+        cursor ``delivered_seen[lid]`` on, and ``_retain_router`` and
+        ``_prune_price_evidence`` compare their count with that cursor. A cursor
+        only advances, and a router id starting at 0 is fresh, never used before
+        (``_fresh_router_id``). Governance reads the deliveries of committee seats,
+        whose ids (``assembly:<id>``) are never router ids and are never released.
+        So every delivery before a router's cursor is unreachable; the kernel keeps
+        its count (``DecisionQueue.release_delivered``) and every decision stays.
+        """
+        for lid, seen in self.delivered_seen.items():
+            self.queue.release_delivered(lid, seen)
+
+    def _slim_return_events(self) -> None:
+        """Drop the payload of every published return no judgement can accept any more.
+
+        Readers of ``return_events[R]`` (the event that published return R): only
+        ``_judged_event`` and ``_hindsight_reason``. They read the event's kind, its
+        subject field (``_event_subject``) and its ``tier``, to decide whether a
+        judgement may address R and why not; the rest of the payload is read only by
+        the caller of a judgement that was *accepted* (the verdict's
+        ``producer_outputs``, a meta's judge handle). So once no judgement can ever
+        accept R, the payload is unreachable, and the entry keeps exactly the fields
+        the refusals read. Every refusal is then decided, and worded, as before.
+
+        R can never be accepted again when all hold:
+
+        * no event waiting in ``internal`` has R as its subject, so no judge will be
+          delivered R by the router (the one path with no hindsight check); a later
+          event about R replaces the entry whole when it is emitted;
+        * R has no open judgement state (``pending``), so its tier is fixed by its
+          kind and published tier alone;
+        * the hindsight refusal is permanent: for a judged tier, R's consequence
+          score is in (``consequence_scores`` never forgets one); for a return,
+          its account is voided or its consequence horizon, counted in ticks from
+          the tick it opened, has passed (the horizon is the manifest's, fixed for
+          the world's life, and ticks only advance).
+
+        The key itself stays: a judgement may still name R, and is refused as before.
+        """
+        from dataclasses import replace
+
+        queued = {self._event_subject(ev) for ev in self.internal}
+        horizon = self.ev.consequence_horizon_ticks
+        for about, event in self.return_events.items():
+            key = {"Verdict": "evaluator_handle", "MetaVerdict": "by"}.get(
+                str(event.kind), "about_handle")
+            # A MetaVerdict is only a valid event with its handles, tier and score.
+            kept = ((key, "tier", "about", "score") if event.kind is EventKind.META_VERDICT
+                    else (key, "tier"))
+            slim = {k: event.payload[k] for k in kept if k in event.payload}
+            if event.payload == slim or about in queued or about in self.pending:
+                continue
+            if self._judged_tier(event, None):
+                if about not in self.consequence_scores:
+                    continue
+            else:
+                try:
+                    account = self.consequences.table.account(about)
+                except KeyError:
+                    continue
+                if not account.voided and (
+                        account.opened_at_tick is None
+                        or self.ticks_consumed < account.opened_at_tick + horizon):
+                    continue
+            self.return_events[about] = replace(event, payload=slim)
+
+    def _prune_event_log(self) -> None:
+        """Keep ``balance_at`` and ``events_log`` from the oldest open forecast's start.
+
+        Readers (the whole list): ``_facts_for`` reads ``balance_at[start:n+1]`` and
+        ``events_log[start+1:n+1]`` for a forecast being settled, where ``start`` is
+        its ``made_at_event``; ``_chaos_fault`` writes into the current event's entry.
+        Only forecasts in the book's unsettled set are ever settled, and every
+        forecast sealed later is sealed at ``made_at_event = n`` or after. So the
+        rule: entries before ``min(n, made_at_event of every unsettled forecast)``
+        are unreachable, and dropped; ``event_log_base`` keeps event numbers exact.
+        """
+        keep = min([self.n, *(f.made_at_event for f in self.book.pending())])
+        drop = keep - self.event_log_base
+        if drop <= 0:
+            return
+        del self.balance_at[:drop]
+        del self.events_log[:drop]
+        self.event_log_base = keep
 
     def _resume_at(self, now_ns: int) -> None:
         """Reconcile and ledger outage timeouts before admitting another world event."""

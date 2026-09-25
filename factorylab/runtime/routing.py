@@ -266,9 +266,14 @@ class ContractQueue:
         return tuple(self._mapped(r.handle, r) for r in self.queue.returns_for(actor))
 
     def returns_since(self, actor, start):
-        """``(returns_for(actor)[start:], len(returns_for(actor)))``, mapping only the tail."""
-        raw = self.queue.returns_for(actor)
-        return tuple(self._mapped(r.handle, r) for r in raw[start:]), len(raw)
+        """``(deliveries to actor from position start on, delivered_count(actor))``,
+        mapping only the tail."""
+        raw, total = self.queue.returns_since(actor, start)
+        return tuple(self._mapped(r.handle, r) for r in raw), total
+
+    def delivered_count(self, actor):
+        """How many returns were ever delivered to ``actor``, released ones included."""
+        return self.queue.delivered_count(actor)
 
 
 #: What a round that delivered nothing scores, per score definition a router can be
@@ -640,7 +645,7 @@ class RoutingMixin:
         """Stop sampling an old router while its original decisions can still train it."""
         lid = state.learner.id
         if self.queue.outstanding(lid) or (
-            len(self.queue.returns_for(lid)) > self.delivered_seen.get(lid, 0)
+            self.queue.delivered_count(lid) > self.delivered_seen.get(lid, 0)
         ) or self._router_owed_abstention(lid):
             self.ledger.append({"kind": "router.retained", "learner_id": lid})
             self.retired_routers[lid] = state

@@ -1,7 +1,10 @@
 """Sealed evidence and fixed kernel aggregate views."""
 
+import base64
+import binascii
 import fcntl
 import hashlib
+import hmac
 import json
 import operator
 import os
@@ -209,6 +212,12 @@ class KeyStore:
 
     def _decrypt(self, token: bytes) -> bytes:
         return self.__cipher.decrypt(token)
+
+    def _name(self, label: bytes) -> str:
+        # A keyed hash, never the key: the name reveals nothing without the key, and the
+        # domain prefix keeps it from ever equalling any other use of the key.
+        return hmac.new(self.__key, b"factorylab.sidecar-name\x00" + label,
+                        hashlib.sha256).hexdigest()
 
 
 class Ledger:
@@ -663,6 +672,54 @@ class Ledger:
     def byte_hash(self) -> str | None:
         """SHA-256 of every diary byte written or verified so far; None for a memory-only ledger."""
         return self.__raw_hash.hexdigest() if self.__path is not None else None
+
+    # -- Sealed sidecar bytes (wave 17) -------------------------------------------------
+    # Bytes the diary names by hash but does not carry (the rolling checkpoint, large
+    # recorded answers) are sealed under this diary's own key, so the disk beside the
+    # diary is as private as the diary itself (essay II.I.b: local state is private).
+    # Only the chain authenticates them: an item holds their SHA-256, and a reader
+    # checks the unsealed bytes against it.
+
+    def seal_bytes(self, data: bytes) -> bytes:
+        """Return ``data`` encrypted and authenticated under this diary's key.
+
+        Guarantees only this diary's key unseals the token, and that any change to
+        the token is refused by ``_unseal_bytes``. Sealing reveals nothing, so it
+        needs no release of the key.
+        """
+        if not isinstance(data, (bytes, bytearray)):
+            raise TypeError("sealed data must be bytes")
+        return self.__keys._encrypt(bytes(data))
+
+    def _unseal_bytes(self, token: bytes) -> bytes:
+        """Recovery-only: the bytes ``seal_bytes`` sealed under this diary's key.
+
+        Guarantees a token sealed under another key, truncated or altered in any
+        byte raises ``LedgerIntegrityError`` rather than returning anything. Like
+        ``_recovery_tail``, it is an internal export for resume; the public seal
+        on items stays closed until termination.
+        """
+        try:
+            token = bytes(token)
+            # Base64 decoding forgives bytes after the padding; a sealed token is only
+            # ever its one canonical encoding, so any other byte string is refused.
+            if base64.urlsafe_b64encode(base64.urlsafe_b64decode(token)) != token:
+                raise ValueError("not a canonical token")
+            return self.__keys._decrypt(token)
+        except (InvalidToken, TypeError, ValueError, binascii.Error) as exc:
+            raise LedgerIntegrityError("sealed bytes are not this diary's") from exc
+
+    def sidecar_name(self, digest: str) -> str:
+        """A file name for the sealed bytes whose plaintext hashes to ``digest``.
+
+        Guarantees one name per digest for this diary's key, 64 lowercase hex
+        characters, and that without the key the name does not reveal the digest:
+        the disk cannot confirm a guess at what the world read or kept.
+        """
+        if (not isinstance(digest, str) or len(digest) != 64
+                or any(c not in "0123456789abcdef" for c in digest)):
+            raise ValueError("digest must be 64 lowercase hex characters")
+        return self.__keys._name(digest.encode("ascii"))
 
     def healthy(self) -> bool:
         """Cheap integrity check: persisted size and tail match what this ledger wrote.

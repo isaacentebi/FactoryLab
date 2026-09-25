@@ -27,6 +27,7 @@ from factorylab.runtime.resume import resume_world
 from factorylab.runtime.worlds import StorageSpec, load_manifest
 from factorylab.world.exchange import FakeExchange
 from factorylab.world.scripted import ScriptedProvider
+from tests.helpers import keep_every_checkpoint
 
 pytestmark = pytest.mark.gate
 
@@ -175,9 +176,86 @@ def _kill_in_write(rt, n, how):
     store._write = watch
 
 
+def _kill_in_sidecar(rt, n, mode, monkeypatch):
+    """Die at one step of the wave 17 sidecar protocol, the Nth time it is reached.
+
+    Checkpoint: inside the file write (a torn temporary), after the file is durable
+    and before the diary names it, after the diary names it and before older files
+    are removed, and after they are removed. Recorded answer: inside the file write,
+    after the file is durable and before the ``io.result`` item, and after the item.
+    """
+    from factorylab.runtime import sidecar
+
+    seen = [0]
+
+    def reached():
+        seen[0] += 1
+        return seen[0] == n
+
+    step = mode.split("-", 1)[1]
+    suffix = ".checkpoint" if mode.startswith("checkpoint") else ".io"
+    if step == "torn":
+        create = sidecar.durable_create
+
+        def torn(root, name, data):
+            if root.suffix == suffix and reached():
+                root.mkdir(parents=True, exist_ok=True)
+                (root / f".{name[:12]}-torn").write_bytes(data[: len(data) // 2])
+                raise Crash
+            return create(root, name, data)
+
+        monkeypatch.setattr(sidecar, "durable_create", torn)
+    elif mode == "checkpoint-written":
+        write = sidecar.CheckpointStore.write
+
+        def written(self, state):
+            reference = write(self, state)
+            if reached():
+                raise Crash
+            return reference
+
+        monkeypatch.setattr(sidecar.CheckpointStore, "write", written)
+    elif mode in ("checkpoint-named", "checkpoint-retired"):
+        retire = sidecar.CheckpointStore.retire_others
+
+        def retired(self, reference):
+            if step == "named" and reached():
+                raise Crash
+            retire(self, reference)
+            if step == "retired" and reached():
+                raise Crash
+
+        monkeypatch.setattr(sidecar.CheckpointStore, "retire_others", retired)
+    elif mode == "io-written":
+        put = sidecar.IoStore.put
+
+        def written(self, body):
+            reference = put(self, body)
+            if reached():
+                raise Crash
+            return reference
+
+        monkeypatch.setattr(sidecar.IoStore, "put", written)
+    else:  # io-named
+        append = rt.ledger.append
+
+        def named(entry):
+            seq = append(entry)
+            if entry.get("kind") == "io.result" and "result_sha" in entry and reached():
+                raise Crash
+            return seq
+
+        rt.ledger.append = named
+
+
+SIDECAR_MODES = [("checkpoint-torn", 3), ("checkpoint-written", 3), ("checkpoint-named", 3),
+                 ("checkpoint-retired", 3), ("io-torn", 5), ("io-written", 5),
+                 ("io-named", 5)]
+
+
 @pytest.mark.parametrize("mode,n", [("event", 37), ("event", 90), ("collected", 1),
                                     ("unlink", 2), ("write", 40), ("torn", 60),
-                                    ("torn-final", 80)])
+                                    ("torn-final", 80), *SIDECAR_MODES])
 def test_a_crash_anywhere_resumes_to_the_uninterrupted_run(uninterrupted, tmp_path,
                                                            monkeypatch, mode, n):
     path = tmp_path / "world.jsonl"
@@ -188,6 +266,8 @@ def test_a_crash_anywhere_resumes_to_the_uninterrupted_run(uninterrupted, tmp_pa
         _kill_after_collected(rt, n)
     elif mode == "unlink":
         _kill_after_unlink(rt, n, monkeypatch)
+    elif (mode, n) in SIDECAR_MODES:
+        _kill_in_sidecar(rt, n, mode, monkeypatch)
     else:
         _kill_in_write(rt, n, mode)
     with pytest.raises(Crash):
@@ -207,6 +287,11 @@ def test_a_crash_anywhere_resumes_to_the_uninterrupted_run(uninterrupted, tmp_pa
     leftover = hashlib.sha256(LEFTOVER).hexdigest()
     assert not (root / leftover).exists()
     assert leftover not in json.dumps(after)
+    # One rolling checkpoint, the one the diary names last, and no torn temporary
+    # beside it or beside the recorded answers.
+    checkpoints = list(path.with_suffix(".checkpoint").iterdir())
+    assert len(checkpoints) == 1 and not checkpoints[0].name.startswith(".")
+    assert not list(path.with_suffix(".io").glob(".*"))
 
 
 class WeighedVenue(FakeExchange):
@@ -257,7 +342,7 @@ class SeatReader(Writer):
         return replace(response, text=json.dumps(body))
 
 
-def test_a_kill_between_the_weight_counter_call_and_its_result_resumes(tmp_path):
+def test_a_kill_between_the_weight_counter_call_and_its_result_resumes(tmp_path, monkeypatch):
     """The counter is a read: an unanswered call to it is not an unacknowledged write,
     a replay re-reads it, it counts no venue write, and nothing escapes the tool."""
     from factorylab.runtime.loop import run_world
@@ -269,6 +354,7 @@ def test_a_kill_between_the_weight_counter_call_and_its_result_resumes(tmp_path)
     m = replace(base, exchange=replace(base.exchange, kind="hyperliquid", coins=("BTC",)))
     path = tmp_path / "live.jsonl"
     venue = WeighedVenue()
+    keep_every_checkpoint(monkeypatch)  # the diary is cut back to its first checkpoint
     run_world(m, events=30, seed=1, ledger_path=str(path), provider=SeatReader(),
               exchange=venue, clock_source=ClockSource(1_000_000_000, 1_000_000_000, 30).events())
     diary = [i for i in Ledger.reopen(str(path), manifest=json.loads(m.canonical_json()))

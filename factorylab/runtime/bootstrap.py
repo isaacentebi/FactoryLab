@@ -919,8 +919,11 @@ class BootstrapMixin:
 
         # loop state
         self.pending: dict[str, PendingJudgement] = {}
-        self.balance_at: list[int] = [self.wallet.balance]  # index = event number
+        # index + event_log_base = event number. Both lists hold only the events an
+        # open forecast's window can still read (``_prune_event_log``, wave 17).
+        self.balance_at: list[int] = [self.wallet.balance]
         self.events_log: list[dict[str, Any]] = [{"kind": "Launch", "payload": {}}]
+        self.event_log_base = 0
         self.reserve_window_start: int | None = None
         self.internal: deque[Event] = deque()
         self.n = 0

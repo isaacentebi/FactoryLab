@@ -760,10 +760,14 @@ class FeedbackMixin:
         return True
 
     def _facts_for(self, f: Forecast, snapshots: dict | None = None) -> WindowFacts | None:
-        if f.made_at_event >= len(self.balance_at):
+        base = self.event_log_base
+        if f.made_at_event >= base + len(self.balance_at):
             return None
         start = f.made_at_event
-        window_balances = self.balance_at[start : self.n + 1]
+        if start < base:
+            # ``_prune_event_log`` keeps every event an open forecast's window reads.
+            raise RuntimeError("an open forecast's window was pruned")
+        window_balances = self.balance_at[start - base : self.n + 1 - base]
         public = {}
         if isinstance(f, PredicateForecast):
             from factorylab.runtime.observations import window_facts_since
@@ -791,11 +795,11 @@ class FeedbackMixin:
             if event is UNOBSERVABLE:
                 return UNOBSERVABLE
             public["event"] = event
-        events = tuple(self.events_log[start + 1 : self.n + 1])
+        events = tuple(self.events_log[start + 1 - base : self.n + 1 - base])
         if f.predicate_id == "failure_within":
             public["independent_failures"] = self._independent_failures(f.evaluator_id, events)
         return WindowFacts(
-            balance_at_forecast=self.balance_at[start],
+            balance_at_forecast=self.balance_at[start - base],
             balance_at_settlement=self.wallet.balance,
             min_balance_in_window=min(window_balances) if window_balances else self.wallet.balance,
             events=events,

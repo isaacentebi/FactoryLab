@@ -393,6 +393,9 @@ def test_renaming_the_diary_does_not_revive_a_killed_identity(tmp_path, monkeypa
     renamed = tmp_path / "earlier" / "not-w.jsonl"
     (tmp_path / "earlier" / path.name).rename(renamed)
     Path(str(tmp_path / "earlier" / path.name) + ".key").rename(str(renamed) + ".key")
+    # The rolling checkpoint travels with the diary it belongs to.
+    (tmp_path / "earlier" / f"{path.stem}.checkpoint").rename(
+        renamed.with_suffix(".checkpoint"))
     # The file named from the diary's stem is not where this diary now looks...
     assert not witness.witness_path(renamed).exists()
     # ...and the identity-keyed file is, because nothing in its name came from the diary.
