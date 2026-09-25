@@ -464,8 +464,13 @@ class BootstrapMixin:
         )
         self.market = JournalProxy(self.market, self.ledger, "market")
         # Time audit T8: the safety path reads wall time between model calls, journaled.
+        # Whether a read is re-executed on replay is a fact about the clock, not the
+        # venue: a simulated world's wall is its event instant, but a world paced by the
+        # wall (an idle-skipping replay included) reads real time, so its reads are
+        # recorded and a replay reads the instants the run read.
         self.wall = JournalProxy(WallClock(lambda: self.tick_clock, self.clock), self.ledger,
-                                 "wall", deterministic=not self.live)
+                                 "wall",
+                                 deterministic=not (self.live or wall_paced(self.tick_clock)))
         self._safety_ns = self.clock.now_ns
         self._safety_stop: str | None = None
         # Uncertain bills settle from the provider's own balance, read through the

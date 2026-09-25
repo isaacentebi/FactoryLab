@@ -204,15 +204,3 @@ def test_a_tape_venue_checkpoints_its_state_and_restores_over_the_same_tape(tape
     twin.__dict__.update(decode(state))
     assert twin.open_orders() == venue.open_orders() and twin.mids() == venue.mids()
     assert twin.tape is tape and twin.name == venue.name
-
-
-def test_a_clock_deadline_ends_the_stream_whatever_the_interval_and_survives_restore():
-    clock = ClockSource(0, 10, 100, deadline_ns=35)
-    assert [e.ts_ns for e in clock.events()] == [0, 10, 20, 30]
-    clock = ClockSource(0, 10, 100, deadline_ns=35)
-    stream = clock.events()
-    next(stream)
-    restored = ClockSource.restore(clock.state())
-    assert restored.deadline_ns == 35
-    assert [e.ts_ns for e in restored.events()] == [10, 20, 30]
-    assert "deadline_ns" not in ClockSource(0, 10, 3).state()  # unchanged when unset

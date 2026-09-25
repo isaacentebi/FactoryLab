@@ -60,10 +60,12 @@ def test_a_scripted_world_runs_on_a_diarys_tape_at_its_own_tick_until_the_tape_e
     assert card["tape"]["venue"] == f"tape:{tape.sha256[:8]}"
     assert launch["ts_ns"] == tape.start_ns
     stamps = [e["ts_ns"] for e in _world_events(events, "Tick")]
-    # The manifest's tick from the tape's first instant, ending with the tape: the
-    # tape is sampled at the world's tick, never looped.
-    assert stamps[0] == tape.start_ns and stamps[-1] <= tape.end_ns
-    assert len(stamps) == (tape.end_ns - tape.start_ns) // TICK + 1
+    # The manifest's tick from the tape's first instant (after the launch's own real
+    # work), ending with the tape: the tape is sampled at the world's tick, never looped.
+    # A scripted world is never busy for a whole tick, so every idle wait is skipped
+    # and every tick fires exactly on its declared instant.
+    assert tape.start_ns <= stamps[0] < tape.start_ns + TICK and stamps[-1] <= tape.end_ns
+    assert len(stamps) == (tape.end_ns - stamps[0]) // TICK + 1
     assert {b - a for a, b in zip(stamps, stamps[1:], strict=False)} == {TICK}
     for mid in _world_events(events, "MarketMid"):
         coin = mid["payload"]["coin"]
@@ -135,6 +137,71 @@ def test_the_fill_band_shows_the_tapes_pnl_beside_a_pessimistic_shadow_of_it():
     assert band["pessimistic_pnl_usd"] == "1.481475"
     assert fastloop.fill_band(events[1:]) is None  # off a tape there is no band
     assert fastloop.scorecard(events)["fill_band"] == band
+
+
+LATENCY = FIXTURES / "longrun1-call-latency-ms.json"
+S = 10**9
+
+
+def test_call_latencies_are_read_from_a_diarys_journaled_wall_reads(tmp_path):
+    """Two wall reads in one event with one model call between them bracket that call."""
+    events = [{"kind": "runtime.input", "seq": 1},
+              {"kind": "io.call", "seq": 2, "name": "wall.now_ns"},
+              {"kind": "io.result", "seq": 3, "call": 2, "result": 100 * S},
+              {"kind": "io.call", "seq": 4, "name": "provider.complete"},
+              {"kind": "io.call", "seq": 5, "name": "wall.now_ns"},
+              {"kind": "io.result", "seq": 6, "call": 5, "result": 106 * S},
+              {"kind": "io.call", "seq": 7, "name": "provider.complete"},
+              {"kind": "io.call", "seq": 8, "name": "provider.complete"},
+              {"kind": "io.call", "seq": 9, "name": "wall.now_ns"},  # two calls: no sample
+              {"kind": "io.result", "seq": 10, "call": 9, "result": 130 * S},
+              {"kind": "runtime.input", "seq": 11}]
+    diary = tmp_path / "events.json"
+    diary.write_text(json.dumps(events))
+    assert fastloop.call_latencies(diary) == [6000]
+    assert len(fastloop.call_latencies(LATENCY)) == 269  # longrun1's, already extracted
+
+
+def test_a_stand_ins_call_takes_a_measured_latency_and_expires_past_its_deadline():
+    from factorylab.runtime.live import IdleSkipClock
+    from factorylab.world.models import ModelRequest
+    from factorylab.world.openai_wire import CALL_EXPIRED
+    from factorylab.world.openrouter import OpenRouterError
+
+    class Answers:
+        def complete(self, req):
+            return "answer"
+
+    clock = IdleSkipClock(10 * S, 5, origin_ns=0, monotonic=lambda: 0)
+    latent = fastloop.Latent(Answers(), [4000], seed=1)
+    latent.clock = clock
+    request = ModelRequest("m", "s", ({"role": "user", "content": "x"},))
+    assert latent.complete(request) == "answer" and clock.modelled_ns == 4 * S
+    with pytest.raises(OpenRouterError, match=CALL_EXPIRED):
+        latent.complete(ModelRequest("m", "s", request.messages, timeout_s=1.5))
+    assert clock.modelled_ns == 4 * S + 1_500_000_000  # the deadline, then it expired
+
+
+@pytest.mark.gate
+def test_a_scripted_latency_model_reproduces_the_paid_runs_delivered_gaps(tmp_path):
+    """Critique C1: a zero-latency stand-in on the idle-skipping clock delivers every tick
+    on time, blind to the lateness the paid run lived with. Given the per-call latencies
+    longrun1's own diary measured, the scripted population on longrun1's tape delivers
+    about the gaps longrun1 delivered (p50 16.1 s, p90 38.3 s over its six hours)."""
+    blind = fastloop.run("scripted", None, WORLD, tmp_path / "blind", cap_usd="2", seed=1,
+                         tape_from=TAPE)
+    assert blind["pace"]["delivered_s"]["p90"] == 10.0 and blind["pace"]["late_share"] == 0
+    card = fastloop.run("scripted", None, WORLD, tmp_path / "paced", cap_usd="2", seed=1,
+                        tape_from=TAPE, latency_from=LATENCY)
+    assert card["status"] == "completed", card.get("error")
+    delivered = card["pace"]["delivered_s"]
+    assert 0.6 * 16.07 <= delivered["p50"] <= 1.4 * 16.07
+    assert 0.6 * 38.30 <= delivered["p90"] <= 1.4 * 38.30
+    assert card["pace"]["late_share"] > 0.3 and card["pace"]["modelled_busy_s"] > 0
+    assert card["pace"]["latency_model"] == str(LATENCY)
+    # A later tick is never earlier: busy time stays real and the tape is never outrun.
+    stamps = [e["ts_ns"] for e in _world_events(_events(card), "Tick")]
+    assert stamps == sorted(set(stamps)) and stamps[-1] <= Tape.load(TAPE).end_ns
 
 
 class _Died(BaseException):

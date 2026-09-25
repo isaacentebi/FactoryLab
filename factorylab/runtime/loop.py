@@ -58,7 +58,7 @@ from factorylab.runtime.feedback import (
     PendingJudgement,
 )
 from factorylab.runtime.governance import GovernanceMixin
-from factorylab.runtime.live import LiveClock, Reconciler
+from factorylab.runtime.live import LiveClock, Reconciler, wall_paced
 from factorylab.runtime.markets import MarketsMixin
 from factorylab.runtime.pricing import PricingMixin
 from factorylab.runtime.resume import decode, encode, runtime_state
@@ -525,15 +525,28 @@ class Runtime(
 
         if self._safety_stop is not None:
             raise UnbilledFailure(f"world is terminal ({self._safety_stop}): no further calls")
-        if not self.live or self.venue is None:
+        if self.live:
+            if self.venue is None:
+                return
+        elif not (wall_paced(self.tick_clock) and getattr(self.exchange, "opens_ns", None)):
+            # A simulated world whose clock does not move inside an event never needs a
+            # pass; one paced by the wall (an idle-skipping replay) does, when its venue
+            # prices by time (a recorded tape) and can be read at any instant.
             return
         now = self.wall.now_ns()
         if now - self._safety_ns < self.wall.tick_ns():
             return
         self._safety_ns = now
         self.clock.now_ns = max(self.clock.now_ns, now)
-        fills = [WorldEvent(WorldEventKind.FILL, max(now, ts), self.exchange.name, payload)
-                 for ts, payload in self.consequence_fills.poll(self.exchange)]
+        if self.live:
+            fills = [WorldEvent(WorldEventKind.FILL, max(now, ts), self.exchange.name, payload)
+                     for ts, payload in self.consequence_fills.poll(self.exchange)]
+        else:
+            # The recorded market moved while a model thought: whatever it filled,
+            # refused or charged by now settles here. Its mids are read afresh by the
+            # next read; as on the live path, the pass delivers no mid of its own.
+            fills = [we for we in self.exchange.advance(now)
+                     if we.kind is not WorldEventKind.MARKET_MID]
         self._settle_exchange_effects(fills)
         self._reconcile_orders()
         self._evaluate_watchers(sweep=f"safety-{now}")
@@ -833,9 +846,13 @@ class Runtime(
         if we.kind is WorldEventKind.TICK:
             self.ticks_consumed += 1
             if isinstance(self.tick_clock, (ClockSource, LiveClock)):
-                if (isinstance(self.tick_clock, LiveClock)
-                        and 0 <= self.tick_clock.last_ns < we.ts_ns):
-                    self.tick_clock.gaps.append(we.ts_ns - self.tick_clock.last_ns)
+                # A clock that measures its delivered gaps (the wall clock, a replay of a
+                # diary's gaps) measures a replayed tick too, so a resumed world converts
+                # ticks at the interval the recording measured (time audit T3).
+                last = self.tick_clock.last_ns
+                gaps = getattr(self.tick_clock, "gaps", None)
+                if gaps is not None and last is not None and 0 <= last < we.ts_ns:
+                    gaps.append(we.ts_ns - last)
                 self.tick_clock.index = self.ticks_consumed
                 self.tick_clock.last_ns = we.ts_ns
         if isinstance(self.tick_clock, ClockSource):

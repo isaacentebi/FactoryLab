@@ -63,9 +63,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from factorylab.runtime.live import IdleSkipClock  # noqa: E402
 from factorylab.runtime.worlds import TapeSpec, load_manifest  # noqa: E402
-from factorylab.world.clock import ClockSource  # noqa: E402
-from factorylab.world.events import WorldEvent, WorldEventKind  # noqa: E402
+from factorylab.world.clock import ReplayClock  # noqa: E402
 from factorylab.world.models import CatalogueEntry, ModelRequest, ModelResponse  # noqa: E402
 from factorylab.world.scripted import (  # noqa: E402
     ScriptedProvider,
@@ -267,40 +267,112 @@ def delivered_gaps(path: Path) -> list[int]:
     return gaps
 
 
-class ReplayClock(ClockSource):
-    """The seeded virtual clock, ticking at a real diary's delivered gaps in order.
+def call_latencies(path: Path) -> list[int]:
+    """Each model call's duration, in milliseconds, as a paid diary measured it.
 
-    It cycles through the recorded gaps, so a run longer than the diary keeps the
-    same distribution. Like the wall clock it reports the mean of its latest
-    delivered gaps as ``measured_interval_ns`` while ``interval_ns`` stays the
-    declared tick, so every conversion sees what a live world would.
+    A paid run reads the wall clock through its journal before every model call (the
+    safety pass, time audit T8), so two consecutive reads inside one event with exactly
+    one call between them bracket that call: the call's real busy time and the kernel's
+    own work around it. ``path`` is a diary (``events.json`` or a directory split by
+    kind) or a JSON list of milliseconds already extracted.
+    """
+    path = Path(path)
+    if path.is_file() and path.read_text()[:64].lstrip().startswith("[") and path.stat(
+            ).st_size < 1 << 20:
+        data = json.loads(path.read_text())
+        if all(type(x) is int for x in data):
+            return data
+    rows = _call_rows(path)
+    out, last, between = [], None, 0
+    for _, kind, value in sorted(rows):
+        if kind == "input":
+            last, between = None, 0
+        elif kind == "call":
+            between += 1
+        else:
+            if last is not None and between == 1 and value > last:
+                out.append((value - last) // 1_000_000)
+            last, between = value, 0
+    if not out:
+        raise ValueError(f"{path} journaled no wall reads around its model calls")
+    return out
+
+
+def _call_rows(path: Path) -> list[tuple[int, str, int]]:
+    """(seq, kind, value) for every event boundary, model call and wall read of a diary."""
+    import re
+
+    from factorylab.world.tape import _array_items
+
+    rows: list[tuple[int, str, int]] = []
+    walls: set[int] = set()
+    if path.is_dir():
+        with open(path / "io.call.jsonl", encoding="utf-8") as handle:
+            for line in handle:
+                item = json.loads(line)
+                if item["name"] == "provider.complete":
+                    rows.append((item["seq"], "call", 0))
+                elif item["name"] == "wall.now_ns":
+                    walls.add(item["seq"])
+        pattern = re.compile(r'^\{"call": (\d+)')
+        with open(path / "io.result.jsonl", encoding="utf-8") as handle:
+            for line in handle:
+                match = pattern.match(line)
+                if match and int(match.group(1)) in walls:
+                    item = json.loads(line)
+                    rows.append((item["seq"], "wall", int(item["result"])))
+        with open(path / "runtime.input.jsonl", encoding="utf-8") as handle:
+            rows.extend((json.loads(line)["seq"], "input", 0) for line in handle)
+        return rows
+    names: dict[int, str] = {}
+    for item in _array_items(path):
+        kind = item.get("kind")
+        if kind == "io.call":
+            names[item["seq"]] = item["name"]
+            if item["name"] == "provider.complete":
+                rows.append((item["seq"], "call", 0))
+        elif kind == "io.result" and names.get(item.get("call")) == "wall.now_ns":
+            rows.append((item["seq"], "wall", int(item["result"])))
+        elif kind == "runtime.input":
+            rows.append((item["seq"], "input", 0))
+    return rows
+
+
+class Latent:
+    """A stand-in provider whose every call takes a latency a paid diary's calls took.
+
+    The latency is modelled busy time on the world's idle-skipping clock, never slept
+    (critique C1: a zero-latency stand-in on a paced clock is the virtual clock again,
+    blind to every timing failure). A call whose drawn latency outlives the deadline
+    the runtime stated for it (``ModelRequest.timeout_s``, time audit T8) takes the
+    deadline and expires, as a real call would. ``clock`` is bound by the harness to
+    the runtime's tick clock once there is one (and again after a restore).
     """
 
-    def __init__(self, start_ns: int, interval_ns: int, count: int, gaps: list[int]) -> None:
-        super().__init__(start_ns, interval_ns, count)
-        self.recorded = list(gaps)
-        self.delivered: list[int] = []
+    def __init__(self, inner: Any, samples_ms: list[int], seed: int) -> None:
+        import random
 
-    def _events(self, drips=None):
-        while self.index < self.count:
-            gap = self.recorded[(self.index - 1) % len(self.recorded)]
-            ts = self.start_ns if self.last_ns is None else self.last_ns + gap
-            if self.last_ns is not None:
-                self.delivered = [*self.delivered[-63:], ts - self.last_ns]
-            self.last_ns = self.last_event_ns = ts
-            i = self.index
-            self.index += 1
-            yield WorldEvent(WorldEventKind.TICK, ts, self.source, {"index": i})
+        if not samples_ms:
+            raise ValueError("a latency model needs at least one measured call")
+        self.inner, self.samples_ms = inner, list(samples_ms)
+        self.rng = random.Random(seed)
+        self.clock: Any = None
 
-    def measured_interval_ns(self) -> int:
-        """The mean of the latest delivered gaps, the declared interval before any."""
-        if not self.delivered:
-            return self.interval_ns
-        return max(1, sum(self.delivered) // len(self.delivered))
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.inner, name)
 
-    def intervals(self) -> dict:
-        return {"declared_ns": self.interval_ns, "measured_ns": self.measured_interval_ns(),
-                "samples": len(self.delivered)}
+    def complete(self, req: ModelRequest) -> ModelResponse:
+        from factorylab.world.openai_wire import CALL_EXPIRED
+        from factorylab.world.openrouter import OpenRouterError
+
+        latency = self.rng.choice(self.samples_ms) * 1_000_000
+        deadline = (None if req.timeout_s is None
+                    else int(Decimal(str(req.timeout_s)) * 1_000_000_000))
+        if deadline is not None and latency > deadline:
+            self.clock.spend(deadline)
+            raise OpenRouterError(None, CALL_EXPIRED)
+        self.clock.spend(latency)
+        return self.inner.complete(req)
 
 
 # --- the scorecard ------------------------------------------------------------------
@@ -389,7 +461,46 @@ def scorecard(events: list[dict[str, Any]]) -> dict[str, Any]:
         "clock": clock(events),
         "tape": tape_card(events),
         "fill_band": fill_band(events),
+        "pace": pace(events),
     }
+
+
+def pace(events: list[dict[str, Any]], tick_clock: Any = None,
+         latency_model: str | None = None) -> dict[str, Any] | None:
+    """How the world kept pace with its own declared tick (Chapter II §IV.c; critique C1).
+
+    From the diary alone: the declared tick, the delivered gaps and the share of ticks
+    that fired late. With the idle-skipping clock that ran it: each tick's busy time
+    (its gap less the idle skipped before it), the share of world time that was idle
+    and skipped, the busy time a latency model contributed, and which model it was
+    (None: a zero-latency stand-in, so the pace measures only the kernel's own work).
+    Observations, never targets.
+    """
+    manifest = _launch_manifest(events) or {}
+    declared = manifest.get("tick_interval_ns")
+    stamps = [int((e.get("event") or {}).get("ts_ns") or 0) for e in events
+              if e.get("kind") == "event" and (e.get("event") or {}).get("kind") == "Tick"]
+    gaps = [b - a for a, b in zip(stamps, stamps[1:], strict=False)]
+    if not declared or not gaps:
+        return None
+    out: dict[str, Any] = {
+        "declared_s": declared / 1e9,
+        "delivered_s": {"p50": round(_pct(gaps, 0.5) / 1e9, 2),
+                        "p90": round(_pct(gaps, 0.9) / 1e9, 2),
+                        "max": round(max(gaps) / 1e9, 2)},
+        "late_share": round(sum(g > declared for g in gaps) / len(gaps), 3)}
+    idle = getattr(tick_clock, "idle", None)
+    if idle is not None and hasattr(tick_clock, "skipped_ns"):
+        # The idle list covers the gaps this process delivered, the latest ones.
+        busy = [g - i for g, i in zip(gaps[-len(idle):] if idle else [], idle, strict=False)]
+        span = stamps[-1] - stamps[0]
+        out.update({
+            "busy_per_tick_s": ({"p50": round(_pct(busy, 0.5) / 1e9, 2),
+                                 "p90": round(_pct(busy, 0.9) / 1e9, 2)} if busy else None),
+            "idle_skipped_share": round(sum(idle) / span, 3) if span else None,
+            "modelled_busy_s": round(tick_clock.modelled_ns / 1e9, 1),
+            "latency_model": latency_model})
+    return out
 
 
 def fill_band(events: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -943,30 +1054,37 @@ def tape_venue(tape: Tape, manifest: Any) -> TapeVenue:
                      start_cash_usd=money_to_usd(manifest.initial_balance_micro))
 
 
-def tape_clock(tape: Tape, manifest: Any, ticks: int | None) -> ClockSource:
+def tape_clock(tape: Tape, manifest: Any, ticks: int | None) -> IdleSkipClock:
     """The world's own clock over a tape: the manifest's tick from the tape's first
-    instant, ending before the first tick past its last (Chapter II §IV.c: the world
-    keeps its own period, and the charter may amend it; the tape is sampled at it)."""
+    instant, idle skipped and busy time real, ending before the first tick past the
+    tape's last (Chapter II §IV.c: the world keeps its own period, which the charter
+    may amend, and is never slower than its environment; the tape is sampled at it)."""
     bound = (tape.end_ns - tape.start_ns) // manifest.clock.min_tick_ns + 1
-    return ClockSource(tape.start_ns, manifest.tick_interval_ns,
-                       bound if ticks is None else min(ticks, bound),
-                       deadline_ns=tape.end_ns + 1)
+    return IdleSkipClock(manifest.tick_interval_ns, bound if ticks is None else min(ticks, bound),
+                         origin_ns=tape.start_ns, deadline_ns=tape.end_ns + 1)
 
 
 def _world_parts(provider_kind: str, world: Path, seed: int, cap_usd: str,
-                 vault_depositor_usd: str | None, tape: Tape | None) -> tuple:
+                 vault_depositor_usd: str | None, tape: Tape | None,
+                 latency_from: Path | None = None) -> tuple:
     manifest = simulation_manifest(world, seed, vault_tools=bool(vault_depositor_usd),
                                    tape=tape)
     admission = rehearsal.Admission(cap_micro=int(Decimal(cap_usd) * 1_000_000),
                                     max_calls=10_000, recover_provider_failures=True)
     inner = (PolicyProvider(world) if provider_kind == "scripted"
              else rehearsal.build_prepaid_provider(manifest))
+    latent = None
+    if latency_from is not None:
+        if provider_kind != "scripted" or tape is None:
+            raise ValueError("--latency-from models a scripted stand-in's calls on a tape's "
+                             "idle-skipping clock; real calls take their real time")
+        inner = latent = Latent(inner, call_latencies(latency_from), seed)
     provider = rehearsal.PrepaidProvider(inner, manifest, admission)
     exchange = None if tape is None else tape_venue(tape, manifest)
-    return manifest, admission, provider, exchange
+    return manifest, admission, provider, exchange, latent
 
 
-def _prepare(runtime: Any, vault_depositor_usd: str | None) -> None:
+def _prepare(runtime: Any, vault_depositor_usd: str | None, latent: Any = None) -> None:
     surface = getattr(runtime, "polymarket", None)
     if surface is not None and not surface.writes:
         # A live-read world's Polymarket reads are answered by the seeded simulated
@@ -977,6 +1095,8 @@ def _prepare(runtime: Any, vault_depositor_usd: str | None) -> None:
     if vault_depositor_usd:
         runtime.exchange.vault_depositor_usd = Decimal(vault_depositor_usd)
         runtime.exchange.vault_depositor_steps = 10
+    if latent is not None:
+        latent.clock = runtime.tick_clock  # the restored clock, after a resume
 
 
 def _finish(card: dict[str, Any], runtime: Any, target: Path, admission: Any,
@@ -986,6 +1106,7 @@ def _finish(card: dict[str, Any], runtime: Any, target: Path, admission: Any,
         events = [i for i in runtime.ledger._recovery_items() if i.get("kind") != "snapshot"]
         (target / "events.json").write_text(json.dumps(events, default=str) + "\n")
         card.update(scorecard(events))
+        card["pace"] = pace(events, runtime.tick_clock, latency_model=card.get("latency_from"))
     card["billed_usd"] = str(Decimal(admission.known_micro) / Decimal(1_000_000))
     card["admission_stop"] = admission.stop_reason
     (target / "scorecard.json").write_text(json.dumps(card, indent=2, default=str) + "\n")
@@ -994,14 +1115,17 @@ def _finish(card: dict[str, Any], runtime: Any, target: Path, admission: Any,
 
 def run(provider_kind: str, ticks: int | None, world: Path, out: Path, cap_usd: str,
         seed: int, vault_depositor_usd: str | None = None,
-        gaps_from: Path | None = None, tape_from: Path | None = None) -> dict[str, Any]:
+        gaps_from: Path | None = None, tape_from: Path | None = None,
+        latency_from: Path | None = None) -> dict[str, Any]:
     """``vault_depositor_usd`` opts the world into the vault surface and scripts one
     outside depositor into every vault the factory creates, who leaves ten steps later;
     the fake's vaults earn nothing on their own, so the depositor pays no commission
     unless a vault's equity moved.
 
-    ``tape_from`` (a diary or a cut tape) replays that recorded market; ``ticks``
-    then bounds the run, which otherwise ends when the tape does."""
+    ``tape_from`` (a diary or a cut tape) replays that recorded market on the
+    idle-skipping clock; ``ticks`` then bounds the run, which otherwise ends when the
+    tape does. ``latency_from`` gives the scripted stand-in the call latencies a paid
+    diary measured, as modelled busy time."""
     from factorylab.runtime.loop import Runtime
 
     if tape_from is not None and gaps_from is not None:
@@ -1010,8 +1134,8 @@ def run(provider_kind: str, ticks: int | None, world: Path, out: Path, cap_usd: 
     target = out / f"{provider_kind}-{stamp}-s{seed}"
     target.mkdir(parents=True, exist_ok=True)
     tape = None if tape_from is None else Tape.load(tape_from)
-    manifest, admission, provider, exchange = _world_parts(
-        provider_kind, world, seed, cap_usd, vault_depositor_usd, tape)
+    manifest, admission, provider, exchange, latent = _world_parts(
+        provider_kind, world, seed, cap_usd, vault_depositor_usd, tape, latency_from)
     started = time.monotonic()
     card: dict[str, Any] = {"provider": provider_kind, "out": str(target)}
     clock_source = None
@@ -1024,13 +1148,16 @@ def run(provider_kind: str, ticks: int | None, world: Path, out: Path, cap_usd: 
         clock_source = tape_clock(tape, manifest, ticks)
         ticks = clock_source.count
         card["tape_from"] = str(tape_from)
+        card["latency_from"] = None if latency_from is None else str(latency_from)
     ticks = 20 if ticks is None else ticks
     # What a resume needs to rebuild this world exactly (``resume``).
     (target / "run.json").write_text(json.dumps({
         "provider": provider_kind, "world": str(world), "seed": seed, "cap_usd": cap_usd,
         "vault_depositor_usd": vault_depositor_usd,
         "tape_from": None if tape_from is None else str(tape_from),
-        "tape_sha256": None if tape is None else tape.sha256}, indent=2) + "\n")
+        "tape_sha256": None if tape is None else tape.sha256,
+        "latency_from": None if latency_from is None else str(latency_from)},
+        indent=2) + "\n")
     runtime = None
     try:
         runtime = Runtime(manifest, events=ticks, seed=manifest.seed,
@@ -1038,7 +1165,7 @@ def run(provider_kind: str, ticks: int | None, world: Path, out: Path, cap_usd: 
                           ledger_path=str(target / "ledger.jsonl"), router_gamma=0.1,
                           provider=provider, exchange=exchange, kill_at_end=True,
                           clock_source=clock_source)
-        _prepare(runtime, vault_depositor_usd)
+        _prepare(runtime, vault_depositor_usd, latent)
         summary = runtime.run()
         card["status"] = "completed"
         card["terminated"] = summary.get("terminated")
@@ -1053,7 +1180,8 @@ def resume(target: Path, tape_from: Path | None = None) -> dict[str, Any]:
 
     Guarantees the tape a tape world resumes on is the one it launched on: its SHA-256
     is compared with the one recorded at launch before the diary is touched, and the
-    runtime compares it again with the manifest's ``[exchange.tape]``.
+    runtime compares it again with the manifest's ``[exchange.tape]``. The clock
+    continues as the clock it was, from the world's saved instant.
     """
     from factorylab.runtime.bootstrap import TapeMismatch
     from factorylab.runtime.resume import resume_runtime
@@ -1064,18 +1192,20 @@ def resume(target: Path, tape_from: Path | None = None) -> dict[str, Any]:
     if (tape and tape.sha256) != spec.get("tape_sha256"):
         raise TapeMismatch(f"tape_mismatch: launched on {str(spec.get('tape_sha256'))[:12]}, "
                            f"resumed on {str(tape and tape.sha256)[:12]}")
-    manifest, admission, provider, exchange = _world_parts(
+    latency_from = spec.get("latency_from") and Path(spec["latency_from"])
+    manifest, admission, provider, exchange, latent = _world_parts(
         spec["provider"], Path(spec["world"]), spec["seed"], spec["cap_usd"],
-        spec.get("vault_depositor_usd"), tape)
+        spec.get("vault_depositor_usd"), tape, latency_from)
     clock_source = None if tape is None else tape_clock(tape, manifest, None)
     started = time.monotonic()
-    card: dict[str, Any] = {"provider": spec["provider"], "out": str(target), "resumed": True}
+    card: dict[str, Any] = {"provider": spec["provider"], "out": str(target), "resumed": True,
+                            "latency_from": spec.get("latency_from")}
     runtime = None
     try:
         runtime = resume_runtime(
             manifest, str(target / "ledger.jsonl"), provider=provider, exchange=exchange,
             clock_source=clock_source,
-            before_replay=lambda rt: _prepare(rt, spec.get("vault_depositor_usd")))
+            before_replay=lambda rt: _prepare(rt, spec.get("vault_depositor_usd"), latent))
         summary = runtime.run()
         card["status"] = "completed"
         card["terminated"] = summary.get("terminated")
@@ -1083,6 +1213,7 @@ def resume(target: Path, tape_from: Path | None = None) -> dict[str, Any]:
         card["status"] = "failed"
         card["error"] = f"{type(exc).__name__}: {exc}"[:500]
     return _finish(card, runtime, target, admission, started)
+
 
 
 def combine(cards: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1180,7 +1311,8 @@ def run_seeds(args: argparse.Namespace, seeds: list[int]) -> dict[str, Any]:
          *(["--vault-depositor-usd", args.vault_depositor_usd]
            if args.vault_depositor_usd else []),
          *(["--gaps-from", str(args.gaps_from)] if args.gaps_from else []),
-         *(["--tape-from", str(args.tape_from)] if args.tape_from else [])],
+         *(["--tape-from", str(args.tape_from)] if args.tape_from else []),
+         *(["--latency-from", str(args.latency_from)] if args.latency_from else [])],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=ROOT) for seed in seeds]
     cards = []
     for seed, proc in zip(seeds, procs, strict=True):
@@ -1216,6 +1348,9 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--tape-from", type=Path, default=None,
                    help="replay the market this diary (events.json, a directory split by "
                         "kind, or a cut tape) recorded; the run ends when the tape does")
+    r.add_argument("--latency-from", type=Path, default=None,
+                   help="on a tape, give the scripted stand-in's calls the latencies this "
+                        "diary's model calls took (or a JSON list of milliseconds)")
     t = sub.add_parser("tape", help="cut a compact tape from a diary and print its identity")
     t.add_argument("diary", type=Path)
     t.add_argument("-o", "--output", type=Path, required=True)
@@ -1241,7 +1376,7 @@ def main(argv: list[str] | None = None) -> int:
         print_card(card)
         return 0 if all(c.get("status") == "completed" for c in card["seeds"]) else 1
     card = run(args.provider, args.ticks, args.world, args.out, args.cap_usd, args.seed,
-               args.vault_depositor_usd, args.gaps_from, args.tape_from)
+               args.vault_depositor_usd, args.gaps_from, args.tape_from, args.latency_from)
     print_card(card)
     return 0 if card.get("status") == "completed" else 1
 

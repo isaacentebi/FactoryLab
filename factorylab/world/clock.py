@@ -8,6 +8,7 @@ keeps the kernel the sole authority on money.
 
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Protocol
@@ -46,10 +47,7 @@ class ClockIterator(Iterator[WorldEvent]):
 class ClockSource:
     """Emits one ``Tick`` per ``interval_ns`` from ``start_ns`` for ``count`` ticks.
 
-    Guarantees strictly increasing timestamps and exactly ``count`` events, or fewer
-    when ``deadline_ns`` is set: the stream then ends before the first tick at or
-    after it, however the interval was amended on the way (a recorded tape's world
-    ends when its tape does, ``factorylab/world/tape.py``).
+    Guarantees strictly increasing timestamps and exactly ``count`` events.
     """
 
     start_ns: int
@@ -59,7 +57,6 @@ class ClockSource:
     index: int = 0
     last_ns: int | None = None
     last_event_ns: int | None = None
-    deadline_ns: int | None = None
 
     def __post_init__(self) -> None:
         self.set_interval(self.interval_ns)
@@ -93,8 +90,6 @@ class ClockSource:
                 self.last_event_ns = drip.ts_ns
                 yield drip
                 drip = next(drips, None)
-            if self.deadline_ns is not None and ts >= self.deadline_ns:
-                return
             self.last_ns = self.last_event_ns = ts
             i = self.index
             self.index += 1
@@ -102,17 +97,67 @@ class ClockSource:
 
     def state(self) -> dict:
         """Retain the amended interval, budget and exact tick/drip continuation point."""
-        # The deadline is carried only when set, so a clock without one checkpoints
-        # exactly as it always has.
         return {"start_ns": self.start_ns, "interval_ns": self.interval_ns,
                 "count": self.count, "source": self.source, "index": self.index,
-                "last_ns": self.last_ns, "last_event_ns": self.last_event_ns,
-                **({"deadline_ns": self.deadline_ns} if self.deadline_ns is not None
-                   else {})}
+                "last_ns": self.last_ns, "last_event_ns": self.last_event_ns}
 
     @classmethod
     def restore(cls, state: dict) -> ClockSource:
         """Continue the saved clock without replaying already delivered ticks."""
+        return cls(**state)
+
+
+class ReplayClock(ClockSource):
+    """The simulated clock, ticking at a real diary's delivered gaps in order.
+
+    It cycles through the recorded gaps, so a run longer than the diary keeps the
+    same distribution. Like the wall clock it reports the mean of its latest
+    delivered gaps as ``measured_interval_ns`` while ``interval_ns`` stays the
+    declared tick, so every conversion sees what a live world would (Chapter II
+    §IV.b-c; time audit T3: the declared tick hid every timing failure the wall
+    clock produced).
+
+    Guarantees its checkpoint carries the recorded gaps and the delivered sample, so
+    a resumed world continues the same gaps at the same place and measures the same
+    interval, never a bare clock at the declared tick.
+    """
+
+    def __init__(self, start_ns: int, interval_ns: int, count: int, recorded: list[int],
+                 *, gaps: Iterator[int] | list[int] = (), **continuation) -> None:
+        super().__init__(start_ns, interval_ns, count, **continuation)
+        self.recorded = list(recorded)
+        if not self.recorded or any(type(g) is not int or g <= 0 for g in self.recorded):
+            raise ValueError("a replay clock needs positive integer recorded gaps")
+        self.gaps: deque[int] = deque(gaps, maxlen=64)
+
+    def _events(self, drips=None):
+        while self.index < self.count:
+            gap = self.recorded[(self.index - 1) % len(self.recorded)]
+            ts = self.start_ns if self.last_ns is None else self.last_ns + gap
+            if self.last_ns is not None:
+                self.gaps.append(ts - self.last_ns)
+            self.last_ns = self.last_event_ns = ts
+            i = self.index
+            self.index += 1
+            yield WorldEvent(WorldEventKind.TICK, ts, self.source, {"index": i})
+
+    def measured_interval_ns(self) -> int:
+        """The mean of the latest delivered gaps, the declared interval before any."""
+        if not self.gaps:
+            return self.interval_ns
+        return max(1, sum(self.gaps) // len(self.gaps))
+
+    def intervals(self) -> dict:
+        return {"declared_ns": self.interval_ns, "measured_ns": self.measured_interval_ns(),
+                "samples": len(self.gaps)}
+
+    def state(self) -> dict:
+        """The simulated clock's continuation, the recorded gaps and the delivered sample."""
+        return {**super().state(), "recorded": list(self.recorded), "gaps": list(self.gaps)}
+
+    @classmethod
+    def restore(cls, state: dict) -> ReplayClock:
+        """Continue the saved replay at its next recorded gap, with its measured sample."""
         return cls(**state)
 
 

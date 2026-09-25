@@ -1678,6 +1678,28 @@ rates and `fee_basis`):
   0.04%). A pair trades on spot rates.
 - Orders in flight hold margin in `collateral_view` as resting orders do.
 
+A tape world runs on the idle-skipping clock (`IdleSkipClock`, `runtime/live.py`), a
+wall-paced clock that compresses only waiting. Its instant is the tape's first
+instant, plus the real time the process has been busy, plus any busy time a stand-in's
+calls were modelled to take, plus every idle wait it skipped. A tick with time to
+spare fires exactly on its declared instant having slept nothing; a tick whose work
+outlasts the interval fires late, exactly as it would live, and the measured interval
+reports the lateness. The harness can give its scripted stand-in the per-call
+latencies a paid diary measured (`fastloop --latency-from`); without them the
+stand-in costs no time and the pace measures only the kernel's own work. Every
+wall-clock reader is keyed on whether the tick clock is paced by the wall
+(`wall_paced`), never on whether the venue is live:
+
+| Reader | Under the idle-skipping clock |
+|---|---|
+| Model-call deadline (`min_ratio` delivered ticks, wall seconds) | Real seconds of busy time, as live; a modelled call past it expires |
+| Safety pass between model calls | Runs once a delivered tick of wall time has passed in an event; it advances the recorded venue to the wall's instant and settles what filled, refused or funded (never a mid) |
+| `wall` journal (`WallClock`) | Recorded, not re-executed, so a replay reads the run's own instants |
+| Checkpoint cost alarm (`checkpoint.slow`) | Measured in real busy time |
+| Tick clock restore | Restored as the clock it was: the saved skipped and modelled time, continuing from the world's saved instant, with the fresh clock's deadline (the tape's end); a replay of a diary's gaps (`--gaps-from`) restores its recorded gaps and measured sample; a restore never changes a clock's kind (`tick_clock_mismatch`) |
+| Resume instant | The world's saved instant |
+| Treasury cap window, venue read share, Polymarket windows, the kernel's ledger and queue | The world's clock, unchanged |
+
 The harness's scorecard carries a `fill_band`: the venue P&L the tape's rules booked,
 and beside it the same recomputed with an extra adverse slippage of half the market's
 stated spread on every fill. Both numbers are always shown. Tape P&L is never evidence
