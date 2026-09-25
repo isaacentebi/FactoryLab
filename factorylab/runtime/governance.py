@@ -1482,17 +1482,30 @@ class GovernanceMixin:
 
         An outcome the world never let anyone observe (a censored payoff) is not a
         settled decision: it qualifies nobody, however many of them a seat has.
+        Guarantees the answer ``_committee_eligible_scan`` gives over every decision
+        the world ever opened, read from the running tally kept at settlement
+        (``SettledMixin._tally_evidence``, wave 17b): a released decision was fully
+        settled, so it can bring no new evidence, and its count stays in the tally.
         """
-        from collections import Counter
-
         from factorylab.charter.committee import experienced
+
+        self._drain_finalized()
+        return experienced({a.spec.id: a.spec.role for a in self.assemblies.values()
+                            if a.spec.id not in self.retired_assemblies},
+                           self.eligibility_tally, self.m.committee.min_settled)
+
+    def _eligibility_scan_pairs(self) -> set[tuple[str, str | None]]:
+        """The evidence pairs the eligibility scan reads, over every retained decision.
+
+        Kept for the tally's own proof (``tests/runtime/test_settled_release.py``)
+        and for a checkpoint older than the tally, which released nothing.
+        """
+        from factorylab.runtime.shared import DEF_EVALUATION
 
         evidence = {(r.handle, self.handle_to_assembly.get(r.handle))
                     for r in self.consequences.table.returns
                     if r.payoff is not None and r.payoff.censored is None
                     and self.queue.get(r.handle).channel in ("verdict", "exposure")}
-        from factorylab.runtime.shared import DEF_EVALUATION
-
         for decision in self.queue.state()["decisions"].values():
             if any(r.status is SettleStatus.SETTLED and r.definition_version == DEF_EVALUATION
                    for r in self.queue.history(decision.handle)):
@@ -1501,7 +1514,15 @@ class GovernanceMixin:
                 if decision.parent_handle:
                     evidence.add((decision.parent_handle, self.handle_to_assembly.get(
                         decision.parent_handle, decision.actor)))
-        settled = Counter(assembly for handle, assembly in evidence
+        return evidence
+
+    def _committee_eligible_scan(self) -> dict[str, str]:
+        """The eligibility the scan over every retained decision and account gives."""
+        from collections import Counter
+
+        from factorylab.charter.committee import experienced
+
+        settled = Counter(assembly for handle, assembly in self._eligibility_scan_pairs()
                           if assembly is not None and self._independent_decision(handle, assembly))
         return experienced({a.spec.id: a.spec.role for a in self.assemblies.values()
                             if a.spec.id not in self.retired_assemblies},
@@ -1683,11 +1704,14 @@ class GovernanceMixin:
                     "charter": self._charter_text(),
                     "actor_context": self._operating_context(assembly_id,
                                                              self._world_block()),
-                    "your_policy_returns": [asdict(lr) for lr in self.queue.returns_for(lid)
-                                            if lr.channel == "policy"],
                 }
-            inputs["your_policy_returns"] = [asdict(lr) for lr in self.queue.returns_for(lid)
+            # The seat's policy returns delivered since its last ballot: each is shown
+            # once, and then released (wave 17b; essay II.IV.c, a verdict "is consumed
+            # as a reward signal ... and then discarded"; II.I.b, the reward line is thin).
+            fresh, delivered = self.queue.returns_since(lid, self.policy_seen.get(lid, 0))
+            inputs["your_policy_returns"] = [asdict(lr) for lr in fresh
                                              if lr.channel == "policy"]
+            self.policy_seen[lid] = delivered
             schema = {
                 "type": "object",
                 "properties": {"vote": {"type": "boolean"}, "reason": {"type": "string"}},

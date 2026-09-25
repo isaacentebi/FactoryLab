@@ -57,6 +57,9 @@ class ForecastBook:
         self.__forecasts: dict[str, Forecast] = {}
         self.__settled: set[str] = set()
         self.__requested: dict[str, int] = {}
+        # Wave 17b: forecasts released from the book, per [evaluator, predicate]: what
+        # ``requested`` still counts once their commitments are gone.
+        self.__released: dict[tuple[str, str], int] = {}
         self.__open_cache: tuple | None = None
 
     def _open(self) -> dict[str, None]:
@@ -141,6 +144,26 @@ class ForecastBook:
         """Return the count of sealed forecasts without a book settlement."""
         return len(self.__forecasts) - len(self.__settled)
 
+    def release(self, handles) -> int:
+        """Forget settled forecasts whose decisions were released; return how many.
+
+        Wave 17b (essay II.IV.c: a verdict is "consumed ... and then discarded"; what
+        persists is aggregates): every reader of the book reads its unsettled
+        forecasts or the per-evaluator counts, which are kept. Guarantees an
+        unsettled forecast is never forgotten (``ValueError``, nothing changes) and
+        that ``due``, ``pending``, ``outstanding`` and ``requested`` answer exactly
+        as before.
+        """
+        gone = [h for h in dict.fromkeys(handles) if h in self.__forecasts]
+        if any(h not in self.__settled for h in gone):
+            raise ValueError("an unsettled forecast is never released")
+        for handle in gone:
+            forecast = self.__forecasts.pop(handle)
+            self.__settled.discard(handle)
+            key = (forecast.evaluator_id, forecast.predicate_id)
+            self.__released[key] = self.__released.get(key, 0) + 1
+        return len(gone)
+
     def requested(self, evaluator_id: str, predicate_id: str | None = None) -> int:
         """Return distinct sealed forecasts for this evaluator, including censored ones.
 
@@ -149,7 +172,7 @@ class ForecastBook:
         _require_id(evaluator_id)
         if predicate_id is None:
             return self.__requested.get(evaluator_id, 0)
-        return sum(
+        return self.__released.get((evaluator_id, predicate_id), 0) + sum(
             f.evaluator_id == evaluator_id and f.predicate_id == predicate_id
             for f in self.__forecasts.values()
         )

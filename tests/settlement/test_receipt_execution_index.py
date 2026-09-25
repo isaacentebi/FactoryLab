@@ -42,3 +42,25 @@ def test_restore_rebuilds_execution_index_without_ledger_entries():
     assert [receipt.id for receipt in restored.executions_since("a", cursor)] == [after]
     with pytest.raises(ValueError, match="outside"):
         restored.executions_since("a", 4)
+
+
+def test_a_release_out_of_record_order_keeps_every_held_receipt_s_position():
+    """Wave 17b releases decisions newest first, so a later receipt can go while an
+    earlier one stays. The held one keeps its position across a checkpoint: a cursor
+    taken past it never reads it again (regression: held receipts were renumbered
+    after the released count, and ``executions_since`` returned A a second time)."""
+    original = ReceiptBook(Ledger())
+    first = _execution(original, "a", 1, "A")
+    _execution(original, "b", 2, "B")
+    cursor = 1  # past A, at B
+    assert original.executions_since("a", cursor) == []
+    original.release(["b"])
+    assert original.execution_ordinals() == {first: 0}
+    restored = ReceiptBook(Ledger())
+    restored.restore(list(original), released_executions=original.released_executions(),
+                     ordinals=original.execution_ordinals())
+    assert restored.execution_count() == original.execution_count() == 2
+    assert restored.executions_since("a", cursor) == []
+    assert [r.id for r in restored.executions_since("a", 0)] == [first]
+    later = _execution(restored, "a", 3, "C")
+    assert [r.id for r in restored.executions_since("a", cursor)] == [later]

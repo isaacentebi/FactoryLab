@@ -75,13 +75,29 @@ def _trail(items):
 
     An inbox body names its evidence by ledger sequence, and a resume adds its own
     items to the diary, so a body put after a resume differs by that pointer alone:
-    a put is compared by kind, owner and size. Every working state, release and
-    collection is compared by its hash.
+    a put is compared by kind, owner and size. An inbox body is released once
+    acknowledged or past its retention horizon (wave 17b); its hash differs after a
+    resume, so the archive may hold it at another position and collect it in
+    another order among the working states: its releases and collections are
+    compared as counts. Every working state, and every release and collection of
+    one, is compared by its hash, in order.
     """
-    return [(i["kind"], i.get("artifact_kind"),
-             None if i["kind"] == "artifact.put" and i.get("artifact_kind") != "working.state"
-             else i.get("sha"), i.get("bytes"), i.get("owner"), i.get("records"))
-            for i in items if i["kind"] in TRAIL]
+    bodies = {i["sha"] for i in items
+              if i["kind"] == "artifact.put" and i.get("artifact_kind") != "working.state"}
+    states = {i["sha"] for i in items
+              if i["kind"] == "artifact.put" and i.get("artifact_kind") == "working.state"}
+
+    def body(i):
+        return (i["kind"] in ("artifact.released", "artifact.collected")
+                and i.get("sha") in bodies and i.get("sha") not in states)
+
+    trail = [(i["kind"], i.get("artifact_kind"),
+              None if i["kind"] == "artifact.put" and i.get("artifact_kind") != "working.state"
+              else i.get("sha"), i.get("bytes"), i.get("owner"), i.get("records"))
+             for i in items if i["kind"] in TRAIL and not body(i)]
+    released = sum(1 for i in items if body(i) and i["kind"] == "artifact.released")
+    collected = sum(1 for i in items if body(i) and i["kind"] == "artifact.collected")
+    return [*trail, ("bodies released", released), ("bodies collected", collected)]
 
 
 def _summary(summary):
@@ -446,12 +462,14 @@ def test_retirement_keeps_the_seat_s_state_in_a_world_run(tmp_path, monkeypatch)
     assert "seed-observer" in rt.retired_assemblies
     assert rt.working_state.head("seed-observer") is not None
     # A head the seat replaced while it served is released as any seat's is; from its
-    # retirement on, nothing of it is.
+    # retirement on, nothing of it is. (Its inbox bodies go as any seat's do, once
+    # acknowledged or past their retention horizon: they are not its state.)
     items = _items(tmp_path / "world.jsonl")
     (retired,) = [i["seq"] for i in items if i["kind"] == "assembly.retired"
                   and i.get("assembly_id") == "seed-observer"]
     assert not [i for i in items if i["kind"] == "artifact.released"
-                and i.get("owner") == "seed-observer" and i["seq"] > retired]
+                and i.get("owner") == "seed-observer" and i["seq"] > retired
+                and i.get("artifact_kind") != "outcome.item"]
 
 
 def test_a_crash_between_an_eviction_s_ledger_line_and_its_index_change_resumes(
