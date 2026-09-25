@@ -52,16 +52,18 @@ DIRECTORY_PAGE = 50
 DIRECTORY_PREVIEW = 10
 INSUFFICIENT = "insufficient history"
 
-#: GPT-6 §9's accounting facts, verbatim. They say what the numbers above them
-#: mean and they hold for every call in this world, so they ride in the prompt's
-#: stable prefix rather than being rewritten per request.
+#: GPT-6 §9's accounting facts. They say what the numbers above them mean and they
+#: hold for every call in this world, so they ride in the prompt's stable prefix
+#: rather than being rewritten per request. §9's "You may revise your subscription,
+#: defer work or decline an unaffordable request" is not here: it named three of a
+#: seat's options and no other, an invitation rather than accounting (rule 1), and the
+#: decline is stated once, as a form of each request's contract (Chapter II §II.b).
 ACCOUNTING_FACTS: tuple[str, ...] = (
     "A paid thought consumes the named budget even when no order is placed.",
     "No new order does not mean the existing portfolio is flat.",
     "Internal payments and endowment releases are not external income.",
     "Before conversion costs, only external net receipts increase total resources.",
     "Trading principal can be converted only through the permitted route and is not earnings.",
-    "You may revise your subscription, defer work or decline an unaffordable request.",
     "No trade, forecast, registration, amendment or novelty quota applies.",
 )
 
@@ -105,12 +107,14 @@ CAPABILITY_HEADER = (
 #: mean. It holds still for the life of a runtime, so it is rendered here, inside
 #: the bytes a provider caches, and nowhere else in the prompt.
 INSTITUTIONS_HEADER = (
-    "INSTITUTIONS\nWhat this world is and how it settles. These facts hold for "
-    "the life of this runtime and are stated here once. What moves is below: "
-    "WORLD UPDATE carries the charter in force and what changed, YOU carries "
-    "your own account and authority, and INPUTS carries this request. Where a "
-    "value here is a committed parameter that the runtime's own adaptation can "
-    "move, it says so and names where the value in force is published.\n"
+    "INSTITUTIONS\nWhat this world is and how it settles, stated here once. These "
+    "facts change only when a registration or retirement is admitted or a charter "
+    "change takes effect. What moves is below: WORLD UPDATE carries the charter in "
+    "force and what changed, YOU carries your own account and authority, REQUEST "
+    "states this request and INPUTS carries its inputs, the world's moving facts "
+    "among them. Where a value here is a committed parameter that the runtime's own "
+    "adaptation can move, it says so and names where the value in force is "
+    "published.\n"
 )
 
 #: Accounting facts stay beside the money they qualify. Action vocabulary and
@@ -118,6 +122,12 @@ INSTITUTIONS_HEADER = (
 #: ``world.read`` handles and retrieve them only when the current decision needs
 #: them. The request's actual outcome schema remains inline on every call.
 INSTITUTION_INLINE_KEYS = frozenset({"accounting_facts"})
+
+#: Institutional sections whose values the runtime moves between requests: ``clock``
+#: carries the measured and derived loop periods (``Clockwork.table``). They stay
+#: retrievable with ``world.read`` and in the world block, and are never rendered
+#: in the prefix, which would then not be stable; ``INPUTS`` renders them instead.
+MOVING_INSTITUTION_KEYS = frozenset({"clock"})
 
 #: Every section name ``_institutional_block`` publishes, and therefore the whole
 #: allowlist a world-reading tool may serve. It is the institutional world only:
@@ -137,15 +147,15 @@ INSTITUTION_SECTIONS = frozenset({
 #: The head of a compact prompt's institutional part: the sections that stayed, and
 #: then the directory of the ones that did not.
 INSTITUTIONS_COMPACT_HEADER = (
-    "INSTITUTIONS\nWhat your resource numbers mean, stated here once for the life "
-    "of this runtime. The rest of this world's reference "
-    "-- its registries, catalogues and settlement rules -- is not carried in this "
-    "prompt. Its sections are listed under sections_not_carried with the route "
-    "that reads them. A section you have not read is unread, not empty, and a "
-    "capability you cannot see the shape of is still listed with its price in "
-    "BASE CAPABILITIES. What moves is below: WORLD UPDATE carries the charter in "
-    "force and what changed, YOU carries your own account and authority, and "
-    "INPUTS carries this request.\n"
+    "INSTITUTIONS\nWhat your resource numbers mean, stated here once. The rest of "
+    "this world's reference -- its registries, catalogues and settlement rules -- is "
+    "not carried in this prompt. Its sections are listed under sections_not_carried "
+    "with the route that reads them. A section you have not read is unread, not "
+    "empty, and a capability you cannot see the shape of is still listed with its "
+    "price in BASE CAPABILITIES. What moves is below: WORLD UPDATE carries the "
+    "charter in force and what changed, YOU carries your own account and authority, "
+    "REQUEST states this request and INPUTS carries its inputs, the world's moving "
+    "facts among them.\n"
 )
 
 
@@ -667,8 +677,11 @@ class SchematicsMixin:
                            "max_bytes": self.m.connectors.max_bytes,
                            "timeout_s": self.m.connectors.timeout_s,
                            "max_calls_per_window": self.m.connectors.max_calls_per_window,
-                           "window_ticks": self.clockwork.period(
-                               "price", default=self.m.timing.min_ratio),
+                           # The price loop's drawn period moves with every fire, so
+                           # it is named, not inlined: this block sits in the prefix.
+                           "window_ticks": "the price loop's period: "
+                                           "world.clock.loops.derived.price.period_ticks, "
+                                           f"{self.m.timing.min_ratio} before its first fire",
                            "origin_denylist": list(self.m.connectors.origin_denylist),
                            "method": "GET",
                            "optional_fields": ["pay", "max_call_usd"],
@@ -903,17 +916,18 @@ class SchematicsMixin:
         return block[name]
 
     def _institutional_directory(self, institutions: dict[str, Any]) -> dict[str, Any]:
-        """The sections a compact prompt did not carry, by exact handle and byte cost.
+        """The sections a compact prompt did not carry, by exact handle.
 
         Guarantees every section held out of the prompt is named here, so
-        compaction hides no institution: a reader can see that a thing exists,
-        how much exact JSON it will retrieve, and how to read it. The handles are the exact names
-        ``institution_section`` accepts, so a seat never has to guess one.
+        compaction hides no institution: a reader can see that a thing exists and
+        how to read it. The handles are the exact names ``institution_section``
+        accepts, so a seat never has to guess one. A section ``INPUTS`` renders
+        (``MOVING_INSTITUTION_KEYS``) is not listed, and no section's size is: sizes
+        move with the registries and the measured loops, and this directory is
+        part of the stable prefix.
         """
-        handles = {
-            key: len(json.dumps(institutions[key], sort_keys=True, indent=2).encode("utf-8"))
-            for key in sorted(set(institutions) - INSTITUTION_INLINE_KEYS)
-        }
+        handles = sorted(set(institutions) - INSTITUTION_INLINE_KEYS
+                         - MOVING_INSTITUTION_KEYS)
         tool = "world.read" if "world.read" in getattr(self, "tool_specs", {}) else None
         return {
             "sections": handles,
@@ -923,17 +937,21 @@ class SchematicsMixin:
                 "are not retrievable here"
             ),
             "authority": "a retrieved section is the same value this world publishes "
-                         "and validates against, not a summary of it",
+                         "and validates against, not a summary of it; a section listed "
+                         "here is not carried in this prompt, and is retrieved whole",
         }
 
     def _institution_text(self, institutions: dict[str, Any]) -> tuple[str, str]:
         """The institutional part of the prefix: its header and its body, by prompt mode.
 
-        Guarantees ``reference`` renders exactly what it rendered before the mode
-        existed, byte for byte, and that ``compact`` renders the inline sections and
-        a directory naming every section it left out. With retrieval disabled,
-        the reference stays inline rather than advertising unreachable sections.
+        Guarantees ``reference`` renders every institutional section inline, and that
+        ``compact`` renders the inline sections and a directory naming every section
+        it left out. With retrieval disabled, the reference stays inline rather than
+        advertising unreachable sections. Neither renders a section whose value
+        moves (``MOVING_INSTITUTION_KEYS``): ``INPUTS`` carries it.
         """
+        institutions = {k: v for k, v in institutions.items()
+                        if k not in MOVING_INSTITUTION_KEYS}
         if self._prompt_mode() != "compact" or self.m.tools.max_tool_calls <= 0:
             return INSTITUTIONS_HEADER, json.dumps(institutions, sort_keys=True, indent=2)
         body = {k: v for k, v in institutions.items() if k in INSTITUTION_INLINE_KEYS}

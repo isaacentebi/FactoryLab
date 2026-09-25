@@ -1117,6 +1117,12 @@ class Runtime(
             self.stats.noops += 1
             ret = Return(handle, {"action": "noop"}, 0, "ok")
         else:
+            # The wake describes itself (Chapter II §I, "the contract has to carry enough
+            # self-description"): what its return is and where each answer's settlement
+            # is published, as facts; no task and no preferred answer.
+            spec = self.assemblies[sample.chosen].spec
+            description += " " + self._wake_contract(
+                {kind: self._return_shape(spec, kind) or "judged" for kind in spec.emits})
             # Physics, not a menu (smuggling A3): the kernel classifies every answer
             # for the ledger; the seat's own action ids stand beside the classes.
             description += (

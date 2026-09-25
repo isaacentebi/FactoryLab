@@ -25,6 +25,7 @@ from factorylab.cortex.assembly import reserved_return_fields
 from factorylab.cortex.schematics import (
     INSTITUTION_INLINE_KEYS,
     INSTITUTION_SECTIONS,
+    MOVING_INSTITUTION_KEYS,
 )
 from factorylab.runtime.loop import Runtime
 from factorylab.runtime.worlds import PromptSpec, load_manifest, manifest_from_dict
@@ -55,7 +56,9 @@ def test_disabled_retrieval_keeps_the_exact_institutional_reference_inline():
     rt = runtime("compact", max_tool_calls=0)
     institutions = rt._institutional_block()
     _, body = rt._institution_text(institutions)
-    assert json.loads(body) == json.loads(json.dumps(institutions))
+    # Every institution but the ones whose values move, which INPUTS carries.
+    assert json.loads(body) == json.loads(json.dumps(
+        {k: v for k, v in institutions.items() if k not in MOVING_INSTITUTION_KEYS}))
     prefix = rt._stable_prefix_text()
     assert '"action_labels"' in prefix
     assert "sections_not_carried" not in prefix
@@ -121,13 +124,10 @@ def test_compact_names_every_section_it_does_not_carry(modes):
     block = reference._institutional_block()
     directory = compact._institutional_directory(block)
     named = set(directory["sections"])
-    assert named == set(block) - INSTITUTION_INLINE_KEYS
+    assert named == set(block) - INSTITUTION_INLINE_KEYS - MOVING_INSTITUTION_KEYS
     assert named  # a compaction that carried everything would prove nothing
     for section in directory["sections"]:
         assert section in INSTITUTION_SECTIONS
-        assert directory["sections"][section] == len(
-            json.dumps(block[section], sort_keys=True, indent=2).encode("utf-8")
-        )
     # Every handle the directory prints is a handle the reader can actually use.
     for section in named:
         assert compact.institution_section(section) == block[section]

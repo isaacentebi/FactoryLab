@@ -100,7 +100,7 @@ def _outcome_id(item: Any) -> Any:
 # committed parameters and names the moving value rather than inlining it.
 STABLE_WORLD_KEYS = frozenset({
     "a_return_may_include", "accounting_facts", "action_labels", "addressing", "assemblies",
-    "catalogue", "charter", "charter_edition", "clock", "committee", "composition",
+    "catalogue", "charter", "charter_edition", "committee", "composition",
     "connectors", "contracts", "event_kinds", "event_schemas", "mechanics", "meta_input",
     "models", "observation_facts", "observations", "population_tools", "prices",
     "proposal_shapes", "reserved_return_fields", "routers", "scoring", "sellers", "tools",
@@ -144,6 +144,9 @@ PREFIX_INDEX_KEYS = frozenset({"tools", "proposal_shapes", "addressing"})
 #   them and a fact is rendered once;
 #   ``venue`` is the venue's own instrument record, re-read once a tick, so it is a
 #   reading of an outside system rather than a constant of this runtime;
+#   ``clock`` carries the measured and derived loop periods, which move with every
+#   loop that fires, so ``INPUTS`` renders it (a prefix that carried it would not
+#   hold still between two requests of one world);
 #   everything with an account, a pot, a price, a position, a timestamp, a count or
 #   a queue in it moves by construction and is named nowhere here.
 #
@@ -156,7 +159,7 @@ PREFIX_INDEX_KEYS = frozenset({"tools", "proposal_shapes", "addressing"})
 # after it.
 PREFIX_CONSTANT_KEYS = frozenset({
     "a_return_may_include", "accounting_facts", "action_labels", "assemblies", "catalogue",
-    "clock", "committee", "composition", "compute_supply", "connectors", "contracts",
+    "committee", "composition", "compute_supply", "connectors", "contracts",
     "event_kinds", "event_schemas", "mechanics", "meta_input", "models",
     "observation_facts", "observations", "population_tools", "prices",
     "reserved_return_fields", "routers", "scoring", "sellers", "trading_markets",
