@@ -13,6 +13,7 @@ from factorylab.kernel.queue import SettleStatus
 from factorylab.runtime.loop import Runtime, run_world
 from factorylab.runtime.resume import (
     ResumeError,
+    checkpoint_state,
     decode,
     encode,
     resume_runtime,
@@ -24,6 +25,7 @@ from factorylab.world.clock import ClockSource
 from factorylab.world.events import WorldEvent, WorldEventKind
 from factorylab.world.exchange import FakeExchange, Order
 from factorylab.world.scripted import ScriptedProvider, _inputs_from_prompt, names_declined_trade
+from tests.helpers import keep_every_checkpoint
 
 pytestmark = pytest.mark.slow
 
@@ -50,6 +52,12 @@ def make_runtime(manifest, path, **kwargs):
 
 def items(path, manifest):
     return Ledger.reopen(path, manifest=json.loads(manifest.canonical_json()))._recovery_items()
+
+
+def state_of(path, manifest, snapshot):
+    """The checkpoint state a snapshot item names, read from beside the diary."""
+    ledger = Ledger.reopen(path, manifest=json.loads(manifest.canonical_json()))
+    return checkpoint_state(ledger, snapshot)
 
 
 @pytest.fixture(scope="module")
@@ -100,7 +108,8 @@ raise AssertionError('kill point was not reached')
         # With the scripted consequence backstop at 20 events the first activation lands
         # before this crash point, so the resume must carry the activated edition forward
         # (the snapshot was taken after the activation, between reserve windows).
-        assert decode(last["state"]["runtime"])["stats"].amendments_activated == 1
+        state = state_of(path, m, last)
+        assert decode(state["runtime"])["stats"].amendments_activated == 1
     resumed = resume_world(m, str(path))
     assert resumed["stats"]["resumes"] == 1
     resumed["stats"]["resumes"] = 0
@@ -177,7 +186,7 @@ raise AssertionError('clock amendment kill point was not reached')
     before = items(path, m)
     assert sum(i["kind"] == "clock.changed" for i in before) == 1
     last = next(i for i in reversed(before) if i["kind"] == "snapshot")
-    assert last["state"]["tick_clock"]["interval_ns"] == (
+    assert state_of(path, m, last)["tick_clock"]["interval_ns"] == (
         2_000_000_000 if stop == "snapshot" else m.tick_interval_ns
     )
     restored = resume_runtime(m, str(path), provider=ClockAmendmentProvider())
@@ -295,12 +304,14 @@ def test_second_resume_replays_the_first_resume_items(tmp_path, scripted_run):
 
 
 def test_resume_before_first_decision_keeps_sample_handle_and_every_summary_field(
-    tmp_path, scripted_run,
+    tmp_path, monkeypatch,
 ):
     m = load_manifest("scripted")
-    record = scripted_run(m, 3, 1)
-    path = record.copy_to(tmp_path / "early")
-    expected = record.summary
+    path = tmp_path / "early" / "scripted.jsonl"
+    path.parent.mkdir()
+    keep_every_checkpoint(monkeypatch)  # the diary is cut back to its launch checkpoint
+    expected = run_world(m, events=3, seed=1, ledger_path=str(path))
+    monkeypatch.undo()
     snapshot = next(i for i in items(path, m) if i["kind"] == "snapshot")
     prefix = b"".join(path.read_bytes().splitlines(keepends=True)[: snapshot["seq"] + 2])
     path.write_bytes(prefix)
