@@ -239,6 +239,18 @@ def test_backup_captures_complete_prefix_and_pipes_to_age_before_upload(world, t
     manifest = root / "repo/worlds/funded.toml"
     manifest.parent.mkdir(parents=True)
     manifest.write_text('name = "funded"\n# exact synthetic launch bytes\n')
+    # The sidecars the diary names by hash (wave 17): the rolling checkpoint, an
+    # artifact and a recorded answer, each beside an in-progress temporary.
+    artifact = b"a seat's kept note"
+    sidecars = {
+        "runs/funded.checkpoint/" + "c" * 64: b"sealed checkpoint",
+        "runs/funded.artifacts/" + hashlib.sha256(artifact).hexdigest(): artifact,
+        "runs/funded.io/" + "d" * 64: b"sealed answer",
+    }
+    for relative, data in sidecars.items():
+        (root / relative).parent.mkdir(exist_ok=True)
+        (root / relative).write_bytes(data)
+        ((root / relative).parent / ".tmp-torn").write_bytes(b"partial")
     # These stand-ins validate orchestration, not age's cryptography or remote connectivity.
     age = bin_path / "age"
     age.write_text('#!/usr/bin/env python3\nimport sys\nfrom pathlib import Path\n'
@@ -264,8 +276,10 @@ def test_backup_captures_complete_prefix_and_pipes_to_age_before_upload(world, t
     with tarfile.open(capture) as archive:
         assert {m.name for m in archive if m.isfile()} == {
             "runs/funded.jsonl", "runs/funded.release.json", "repo/worlds/funded.toml",
-            *relatives}
+            *relatives, *sidecars}
         assert archive.extractfile("runs/funded.jsonl").read() == original
+        for relative, data in sidecars.items():
+            assert archive.extractfile(relative).read() == data
         assert archive.extractfile("repo/worlds/funded.toml").read() == manifest.read_bytes()
         # The release record travels beside the ledger and names the exact bytes archived
         # (C4). This fixture root carries no package, so the digest is declared missing.
@@ -273,4 +287,9 @@ def test_backup_captures_complete_prefix_and_pipes_to_age_before_upload(world, t
         assert record["release_digest"] == "unavailable"
         assert record["ledger"] == {"bytes": len(original),
                                     "sha256": hashlib.sha256(original).hexdigest()}
+        assert record["checkpoint"] == {"count": 1, "bytes": len(b"sealed checkpoint")}
+        assert record["io"] == {"count": 1, "bytes": len(b"sealed answer")}
+        assert record["artifacts"] == {"count": 1, "bytes": len(artifact)}
+    # The pin that kept the sidecars' bytes through the copy is gone.
+    assert not (root / "runs/.backup-pin").exists()
     assert (root / "runs/funded.jsonl").read_bytes() == original + b'{"item":'
