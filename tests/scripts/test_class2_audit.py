@@ -7,6 +7,8 @@ is the operator's; nothing here makes one.
 """
 
 import json
+import os
+import subprocess
 
 import pytest
 
@@ -15,11 +17,76 @@ from scripts import class2_audit as tool
 WORLD = "scripted"
 
 
+def _git(repo, *args):
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
+           "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+    return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True,
+                          text=True, env=env).stdout.strip()
+
+
+def _commit(repo, path, text, message):
+    target = repo / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text)
+    _git(repo, "add", path)
+    _git(repo, "commit", "-q", "-m", message)
+    return _git(repo, "rev-parse", "HEAD")
+
+
+#: A message that justifies a change to seat-visible text by what the seats did: the
+#: behaviour-mix objective AGENTS rule 2 forbids, which the provenance pass must show.
+BEHAVIOUR_MIX = "Soften the hold wording: seats held too much in the last run"
+
+
 @pytest.fixture(scope="module")
-def rendered(tmp_path_factory):
+def history(tmp_path_factory):
+    """A repository with a base, a surface commit justified by a behaviour mix, and a
+    commit that touches no seat-visible surface."""
+    repo = tmp_path_factory.mktemp("repo")
+    _git(repo, "init", "-q")
+    base = _commit(repo, "README.md", "x\n", "base")
+    surface = _commit(repo, "factorylab/cortex/schematics.py", "HOLD = 'hold'\n",
+                      BEHAVIOUR_MIX)
+    head = _commit(repo, "docs/notes.md", "notes\n", "notes only")
+    return repo, base, surface, head
+
+
+@pytest.fixture(scope="module")
+def rendered(tmp_path_factory, history):
+    repo, _base, surface, head = history
     out = tmp_path_factory.mktemp("class2")
-    key = tool.render([WORLD], out, seed=7, rendered=False, essay=None)
+    key = tool.render([WORLD], out, seed=7, rendered=False, essay=None,
+                      release_range=f"{surface}..{head}", repo=repo)
     return out, key
+
+
+def test_the_provenance_pass_shows_a_commit_justified_by_a_behaviour_mix(history, tmp_path):
+    """Codex review: every surface-touching commit in the release range is in the prompt
+    with its message and diff; a commit touching no surface is not."""
+    repo, base, surface, head = history
+    tool.render([WORLD], tmp_path, seed=7, rendered=False, essay=None,
+                release_range=f"{base}..{head}", repo=repo)
+    prompt = (tmp_path / "prompt.md").read_text()
+    section = prompt.split("## Provenance pass", 1)[1].split("## The corpus", 1)[0]
+    assert surface in section and BEHAVIOUR_MIX in section
+    assert "+HOLD = 'hold'" in section
+    assert "notes only" not in section and f"### {head}" not in section
+
+
+def test_a_range_with_no_surface_commit_renders_an_explicit_empty_section(rendered):
+    out, _key = rendered
+    prompt = (out / "prompt.md").read_text()
+    section = prompt.split("## Provenance pass", 1)[1].split("## The corpus", 1)[0]
+    assert "(no commit in this range touched a seat-visible surface)" in section
+    assert BEHAVIOUR_MIX not in section
+
+
+def test_the_release_range_is_base_dot_dot_head(history, tmp_path):
+    repo, _base, _surface, head = history
+    with pytest.raises(ValueError, match="base..head"):
+        tool.render([WORLD], tmp_path, seed=7, rendered=False, essay=None,
+                    release_range=head, repo=repo)
 
 
 def test_the_canary_corpus_has_one_canary_per_question_and_three_mandatory():
@@ -31,12 +98,14 @@ def test_the_canary_corpus_has_one_canary_per_question_and_three_mandatory():
     assert len(spec["control_surfaces"]) == 10
 
 
-def test_render_is_deterministic(rendered, tmp_path):
+def test_render_is_deterministic(rendered, history, tmp_path):
     out, key = rendered
-    again = tool.render([WORLD], tmp_path, seed=7, rendered=False, essay=None)
+    repo, _base, surface, head = history
+    again = tool.render([WORLD], tmp_path, seed=7, rendered=False, essay=None,
+                        release_range=f"{surface}..{head}", repo=repo)
     assert again == key
-    assert (tmp_path / "auditor_input.jsonl").read_bytes() == (
-        out / "auditor_input.jsonl").read_bytes()
+    for name in ("auditor_input.jsonl", "prompt.md"):
+        assert (tmp_path / name).read_bytes() == (out / name).read_bytes()
 
 
 def test_the_key_is_kept_out_of_the_auditors_input(rendered):

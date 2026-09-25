@@ -551,29 +551,50 @@ def sf2_gradient(events: list[Mapping], manifest: Mapping, *, card: str,
 
     Wave 16 D5: "A decision that relieved the card's violation bears 0; every
     non-relieving decision in the window … bears an equal share, frozen at window
-    close." So in each window a reliever's share of ``card`` is 0, every holder's
-    share is ``1 / n_nonrelieving`` of the same window, and Δ is non-decreasing across
-    consecutive flagged windows until the cap.
+    close." So in each window where the card is violated and either arm was priced:
+    both arms were priced (a window that dropped every holder charge is a failure, not
+    a pass), every reliever's share of ``card`` is 0, and every holder's share is
+    ``1 / n_nonrelieving``, where the non-relieving set is complete: every decision
+    priced on the card in that window whose seat is not a reliever, plus every NOOP
+    drawn in that window by a router that drew either arm (R9: an abstention is a
+    non-relieving decision too).
     """
     seats = decision_seats(events)
+    actors = {row["handle"]: row.get("actor") for row in rows_of(events, "decision.open")}
+    opened_in = _decision_windows(events)
     shares: dict[int, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
+    nonrelieving: dict[int, set[str]] = defaultdict(set)
+    routers: set[str] = set()
     for handle, row in penalty_by_handle(events).items():
         seat = seats.get(handle)
         for term in row.get("terms") or ():
-            if term.get("card_id") == card and term.get("violation", 0) > 0:
-                side = ("reliever" if seat in relievers else
-                        "holder" if seat in holders else None)
-                if side is not None:
-                    shares[term["window"]][side].append(float(term["share"]))
+            if term.get("card_id") != card or term.get("violation", 0) <= 0:
+                continue
+            if seat not in relievers:
+                nonrelieving[term["window"]].add(handle)
+            side = ("reliever" if seat in relievers else
+                    "holder" if seat in holders else None)
+            if side is not None:
+                shares[term["window"]][side].append(float(term["share"]))
+                routers.add(actors.get(handle))
     if not shares:
-        return _unsupported("SF-2a", "no violated window priced both arms", card=card)
+        return _unsupported("SF-2a", "no violated window priced either arm", card=card)
+    for row in rows_of(events, "router.abstention_priced"):
+        window = opened_in.get(row["handle"])
+        if window in shares and row.get("router") in routers:
+            nonrelieving[window].add(row["handle"])
     problems = []
     for window, sides in sorted(shares.items()):
+        missing = [side for side in ("reliever", "holder") if not sides.get(side)]
+        if missing:
+            problems.append({"window": window, "missing": missing})
         if any(s != 0.0 for s in sides.get("reliever", ())):
             problems.append({"window": window, "reliever_shares": sides["reliever"][:4]})
-        held = sides.get("holder", ())
-        if held and len(set(held)) != 1:
-            problems.append({"window": window, "holder_shares": sorted(set(held))[:4]})
+        n = len(nonrelieving[window])
+        wrong = [s for s in sides.get("holder", ()) if n == 0 or abs(s - 1 / n) > 1e-9]
+        if wrong:
+            problems.append({"window": window, "holder_shares": sorted(set(wrong))[:4],
+                             "n_nonrelieving": n})
     return _result("SF-2a", not problems, problems=problems[:10], windows=len(shares))
 
 
@@ -1017,17 +1038,22 @@ def of1a_outside_the_loop(events: list[Mapping], manifest: Mapping) -> Result:
 
 def of3a_sampling_behind_return(events: list[Mapping], manifest: Mapping) -> Result:
     """OF-3a: every judge draw on a return is ledgered after that return: the sampling
-    decision stays behind the return, so no seat can alias a sampler it cannot predict."""
+    decision stays behind the return, so no seat can alias a sampler it cannot predict.
+
+    A draw on a ``ProducerReturn`` event comes after both the event that published the
+    return (its own ledger row, carried with its ``about_handle``) and the producer's
+    invocation that made it."""
     returned = {row["handle"]: row["seq"] for row in rows_of(events, "invocation")}
-    about = {row["event"]["id"]: (row["event"].get("payload") or {}).get("about_handle")
-             for row in rows_of(events, "event")
-             if (row.get("event") or {}).get("kind") == "ProducerReturn"}
+    published = {row["event"]["id"]: ((row["event"].get("payload") or {}).get("about_handle"),
+                                      row["seq"])
+                 for row in rows_of(events, "event")
+                 if (row.get("event") or {}).get("kind") == "ProducerReturn"}
     checked, early = 0, []
     for row in rows_of(events, "decision.open"):
-        handle = about.get(row.get("event_id"))
+        handle, event_seq = published.get(row.get("event_id"), (None, None))
         if handle in returned:
             checked += 1
-            if row["seq"] <= returned[handle]:
+            if row["seq"] <= event_seq or row["seq"] <= returned[handle]:
                 early.append(row["handle"])
     if not checked:
         return _unsupported("OF-3a", "no judge draw on a return")
@@ -1137,29 +1163,34 @@ def s5b_observed_neutral(events: list[Mapping], manifest: Mapping) -> Result:
     """S5b / I-2b (wave 16 D4): after a router's first settled round, what nothing
     delivered is credited is the router's observed mean, never the 0.5 prior.
 
-    Reads the priced abstentions and declines: once a router has any settled seat
-    round before the row, its ``neutral`` is not the constant ``NEUTRAL_REWARD``.
+    Reads the priced abstentions and declines against each router's own settled
+    rounds: the raw score of every seat decision it drew that settled with an observed
+    score before the row (``price.penalty`` ``raw``; D4: "keep sums of raw scores, not
+    effective ones"). Once a router has one, its ``neutral`` must equal their mean to
+    1e-9, whatever that mean is (a router whose rounds truly average 0.5 credits 0.5);
+    before the first, the prior stands and the row is not read.
     """
     seats = decision_seats(events)
     actors = {row["handle"]: row.get("actor") for row in rows_of(events, "decision.open")}
-    settled_routers: set[str] = set()
+    raws: dict[str, list[float]] = defaultdict(list)
     bad, checked = [], 0
     for row in events:
         kind = row.get("kind")
-        if kind == "decision.settle":
-            ret = row.get("return") or {}
-            handle = ret.get("handle")
-            if ret.get("status") == "settled" and seats.get(handle) not in (None, "NOOP"):
-                settled_routers.add(actors.get(handle))
+        if kind == "price.penalty":
+            handle = row.get("handle")
+            if row.get("raw") is not None and seats.get(handle) not in (None, "NOOP"):
+                raws[actors.get(handle)].append(float(row["raw"]))
         elif kind in ("router.abstention_priced", "router.decline_priced"):
-            if row.get("router") in settled_routers:
+            observed = raws.get(row.get("router"))
+            if observed:
                 checked += 1
-                if float(row["neutral"]) == 0.5:
-                    bad.append(row["handle"])
+                mean = math.fsum(observed) / len(observed)
+                if abs(float(row["neutral"]) - mean) > 1e-9:
+                    bad.append({"handle": row["handle"], "neutral": row["neutral"],
+                                "observed_mean": mean, "rounds": len(observed)})
     if not checked:
         return _unsupported("S5b", "no abstention was priced after a settled round")
-    return _result("S5b", not bad, checked=checked, at_prior=len(bad),
-                   example=bad[:3])
+    return _result("S5b", not bad, checked=checked, mismatched=len(bad), example=bad[:3])
 
 
 def s7_gain_targets(events: list[Mapping], manifest: Mapping | None = None) -> Result:

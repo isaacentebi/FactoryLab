@@ -145,7 +145,8 @@ the skeleton):
 
 ```
 uv run python scripts/class2_audit.py render --world <world> [--world …] \
-    --out work/class2/<release> --seed <n> [--rendered] [--previous <last triage file>]
+    --out work/class2/<release> --seed <n> --range <last release>..<release> \
+    [--rendered] [--previous <last triage file>]
 # send work/class2/<release>/prompt.md with auditor_input.jsonl to the chosen family,
 # temperature 0, twice, under the prepaid guard; save the union as auditor_output.jsonl
 uv run python scripts/class2_audit.py validate work/class2/<release>/auditor_output.jsonl \

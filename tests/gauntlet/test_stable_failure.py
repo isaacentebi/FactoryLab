@@ -146,8 +146,11 @@ def test_sf1_s3_an_action_label_moves_no_penalty():
 @pytest.mark.xfail(strict=True, raises=AssertionError,
                    reason=f"{W16} D4: after a router's first settled round an "
                    "abstention is credited its observed mean, never the 0.5 prior (I-2b)")
-def test_sf1_s5b_nothing_delivered_is_credited_the_observed_mean(sf1):
-    result = g.s5b_observed_neutral(sf1.events, sf1.manifest)
+def test_s5b_nothing_delivered_is_credited_the_observed_mean(sf2_low):
+    """Read in SF-2's world, whose producers' verdicts (0.5 and 0.5 − δ) do not average
+    0.5: in SF-1 every verdict is 0.5, so the prior and the observed mean coincide and
+    the world cannot tell them apart."""
+    result = g.s5b_observed_neutral(sf2_low.events, sf2_low.manifest)
     assert result.ok, result.evidence
 
 

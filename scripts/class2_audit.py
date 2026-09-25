@@ -11,7 +11,9 @@ does everything around that call, offline:
             clean controls chosen from the smuggling audit's KEEP list. The key (which
             leaves are canaries and controls) is written to a separate file the auditor
             is never given. Also writes ``prompt.md``: the protocol, the rubric, the
-            authority text, the allowlist and last release's triage.
+            authority text, the allowlist, last release's triage and the provenance
+            pass: every commit in --range base..head that touches a seat-visible
+            surface, with its message and diff.
   validate  Score an auditor's JSON Lines output against the key. Valid only when the
             summary's read set covers every leaf the key records as rendered (none
             unread, none unaccounted for), at least 7 of the 8 canaries are
@@ -30,7 +32,7 @@ as JSON Lines and run ``validate``. See ``docs/audits/class2/auditor-protocol.md
 Examples::
 
     uv run python scripts/class2_audit.py render --world edition6-capital-loop \\
-        --out work/class2/2026-10 --seed 7
+        --out work/class2/2026-10 --seed 7 --range <last release>..HEAD
     uv run python scripts/class2_audit.py validate work/class2/2026-10/auditor_output.jsonl \\
         --key work/class2/2026-10/canary_key.json
     uv run python scripts/class2_audit.py triage work/class2/2026-10/auditor_output.jsonl \\
@@ -42,6 +44,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import subprocess
 import sys
 from pathlib import Path
 from random import Random
@@ -168,7 +171,56 @@ def authority_text(essay: Path | None) -> str:
     return "\n".join(lines[head:stop] + ["", "---", ""] + lines[start2:end2])
 
 
-def write_prompt(out: Path, *, essay: Path | None, previous: Path | None) -> Path:
+#: Where seat-visible text is written: every module that renders a request, a tool, a
+#: schematic, a refusal or a charter, and the world files (lenses, seat ids, prompts).
+#: Deliberately wide: a commit touching one of these is read by the provenance pass
+#: whether or not its diff turns out to change a seat-visible string.
+SURFACE_PATHS = ("factorylab/cortex", "factorylab/runtime", "factorylab/settlement",
+                 "factorylab/world", "factorylab/charter", "worlds")
+
+
+def _git(repo: Path, *args: str) -> str:
+    return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True,
+                          text=True).stdout
+
+
+def provenance_commits(repo: Path, release_range: str) -> list[dict]:
+    """Every non-merge commit in ``release_range`` (``base..head``) that touches a
+    seat-visible surface, oldest first, with its full message and its diff to those paths.
+
+    Design B2 input 6: the auditor asks of each message whether it justifies text by a
+    behaviour mix (AGENTS rule 2), which the leaves alone cannot show.
+    """
+    if ".." not in release_range:
+        raise ValueError("the release range is base..head")
+    shas = _git(repo, "rev-list", "--reverse", "--no-merges", release_range, "--",
+                *SURFACE_PATHS).split()
+    commits = []
+    for sha in shas:
+        message = _git(repo, "log", "-1", "--format=%B", sha).strip()
+        diff = _git(repo, "show", "--no-color", "--format=", sha, "--", *SURFACE_PATHS)
+        commits.append({"sha": sha, "message": message, "diff": diff})
+    return commits
+
+
+def provenance_section(release_range: str, commits: list[dict]) -> str:
+    """The prompt's provenance pass: the question, then every commit, or an explicit none."""
+    lines = ["## Provenance pass", "",
+             f"Release range `{release_range}`. Each commit below touched a seat-visible "
+             f"surface ({', '.join(SURFACE_PATHS)}). Answer, for each: does its message "
+             "justify the change by a behaviour mix (what seats did, how often they did it, "
+             "what scores they got)? A yes is a finding (AGENTS rule 2), whatever the diff "
+             "itself says.", ""]
+    if not commits:
+        lines.append("(no commit in this range touched a seat-visible surface)")
+    for commit in commits:
+        lines += [f"### {commit['sha']}", "", "```text", commit["message"], "```", "",
+                  "```diff", commit["diff"].rstrip(), "```", ""]
+    return "\n".join(lines)
+
+
+def write_prompt(out: Path, *, essay: Path | None, previous: Path | None,
+                 provenance: str) -> Path:
     from tests.audit import class2_lexicon as lexicon
 
     agents = (ROOT / "AGENTS.md").read_text()
@@ -197,6 +249,8 @@ def write_prompt(out: Path, *, essay: Path | None, previous: Path | None) -> Pat
         previous.read_text() if previous is not None and previous.exists()
         else "(none: this is the first release audited)",
         "",
+        provenance,
+        "",
         "## The corpus",
         "",
         "One JSON object per line in auditor_input.jsonl: leaf_id, world, path, text, "
@@ -208,9 +262,15 @@ def write_prompt(out: Path, *, essay: Path | None, previous: Path | None) -> Pat
     return path
 
 
-def render(worlds: list[str], out: Path, *, seed: int, rendered: bool,
-           essay: Path | None = None, previous: Path | None = None) -> dict:
-    """Write the auditor's input, its prompt and the separate key; return the key."""
+def render(worlds: list[str], out: Path, *, seed: int, rendered: bool, release_range: str,
+           repo: Path = ROOT, essay: Path | None = None,
+           previous: Path | None = None) -> dict:
+    """Write the auditor's input, its prompt and the separate key; return the key.
+
+    The prompt always carries the provenance pass over ``release_range`` in ``repo``:
+    every surface-touching commit with its message and diff, or an explicit none.
+    """
+    provenance = provenance_section(release_range, provenance_commits(repo, release_range))
     out.mkdir(parents=True, exist_ok=True)
     records = corpus_records(worlds, rendered=rendered)
     planted, key = plant(records, seed=seed, world=worlds[0])
@@ -218,7 +278,7 @@ def render(worlds: list[str], out: Path, *, seed: int, rendered: bool,
         for record in planted:
             handle.write(json.dumps(record, sort_keys=True, ensure_ascii=False) + "\n")
     (out / "canary_key.json").write_text(json.dumps(key, indent=1, sort_keys=True) + "\n")
-    write_prompt(out, essay=essay, previous=previous)
+    write_prompt(out, essay=essay, previous=previous, provenance=provenance)
     return key
 
 
@@ -322,6 +382,8 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--rendered", action="store_true", help="also run each world 60 ticks")
     r.add_argument("--essay", type=Path, default=ROOT / "docs/essay.md")
     r.add_argument("--previous", type=Path, default=None)
+    r.add_argument("--range", required=True,
+                   help="the release range, base..head, read by the provenance pass")
     for name in ("validate", "triage"):
         v = sub.add_parser(name)
         v.add_argument("output", type=Path)
@@ -334,7 +396,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "render":
         key = render(args.world, args.out, seed=args.seed, rendered=args.rendered,
-                     essay=args.essay, previous=args.previous)
+                     release_range=args.range, essay=args.essay,
+                     previous=args.previous)
         print(f"wrote {args.out}/auditor_input.jsonl, prompt.md and canary_key.json "
               f"({len(key['canaries'])} canaries, {len(key['controls'])} controls)")
         return 0

@@ -219,6 +219,27 @@ def test_sf2a_relievers_bear_nothing_and_holders_share_equally():
     assert result.status == g.FAIL
 
 
+def test_sf2a_needs_both_arms_and_the_complete_non_relieving_count():
+    """Codex review: a window that dropped every holder charge fails, uniformly zero
+    holder shares fail, and 1/n counts every non-reliever, a NOOP of the same router
+    included (R9)."""
+    opens = [_open("d1", "rel"), _open("d2", "hold"), _open("d3", "hold")]
+    kw = {"card": "c", "relievers": {"rel"}, "holders": {"hold"}}
+    dropped = g.sf2_gradient(opens + [_penalty("d1", 0.0)], M, **kw)
+    assert dropped.status == g.FAIL
+    assert {"window": 1, "missing": ["holder"]} in dropped.evidence["problems"]
+    zero = opens + [_penalty("d1", 0.0), _penalty("d2", 0.0), _penalty("d3", 0.0)]
+    assert g.sf2_gradient(zero, M, **kw).status == g.FAIL
+    noop = [_open("d4", "NOOP"), {"kind": "router.abstention_priced", "handle": "d4",
+                                  "router": "router:Tick", "neutral": 0.5, "penalty": 0.1,
+                                  "reward": 0.4}]
+    thirds = opens + noop + [_penalty("d1", 0.0), _penalty("d2", 1 / 3),
+                             _penalty("d3", 1 / 3)]
+    assert g.sf2_gradient(thirds, M, **kw).ok
+    halves = opens + noop + [_penalty("d1", 0.0), _penalty("d2", 0.5), _penalty("d3", 0.5)]
+    assert g.sf2_gradient(halves, M, **kw).status == g.FAIL
+
+
 def test_sf2b_shares_are_order_blind_and_the_one_over_rank_shape_fails():
     equal = [_penalty(f"d{i}", 0.25) for i in range(4)]
     assert g.sf2b_order_blind(equal, M, card="c").ok
@@ -400,6 +421,13 @@ def test_of3a_a_judge_is_drawn_only_after_the_return_it_reads():
     early = [{"kind": "decision.open", "handle": "j1", "event_id": "producerreturn-2",
               "seq": 0}, *ok[:2]]
     assert g.of3a_sampling_behind_return(early, M).status == g.FAIL
+    # Codex review: after the invocation but before the ProducerReturn it reads.
+    before_event = [{"kind": "invocation", "handle": "p1", "seq": 1},
+                    {"kind": "decision.open", "handle": "j1",
+                     "event_id": "producerreturn-3", "seq": 2},
+                    _returned_event("e", "p1", 3)]
+    result = g.of3a_sampling_behind_return(before_event, M)
+    assert result.status == g.FAIL and result.evidence["early"] == ["j1"]
 
 
 def test_of2c_the_holdout_part_of_a_violation_is_what_bites():
@@ -459,10 +487,27 @@ def test_s5_and_s5b_abstention_credit():
     assert g.s5_neutral_imputation(ok, M).ok
     bad = [ok[0] | {"reward": 0.5}]
     assert g.s5_neutral_imputation(bad, M).status == g.FAIL
-    settled = [_open("d0", "seat"), {"kind": "decision.settle", "return": {
-        "handle": "d0", "status": "settled", "score": 0.3}}]
-    assert g.s5b_observed_neutral(settled + [ok[0] | {"neutral": 0.31}], M).ok
+    settled = [_open("d0", "seat"), _penalty("d0", 0.0) | {"raw": 0.3}]
+    assert g.s5b_observed_neutral(settled + [ok[0] | {"neutral": 0.3}], M).ok
     assert g.s5b_observed_neutral(settled + ok, M).status == g.FAIL
+    # Before the first settled round the prior stands and is not read.
+    assert g.s5b_observed_neutral(ok + settled, M).status == g.UNSUPPORTED
+
+
+def test_s5b_compares_neutral_with_the_routers_computed_mean():
+    """Codex review: a router whose settled raw scores truly average 0.5 credits 0.5 and
+    passes; one averaging 0.7 that credits 0.5 fails."""
+    def rounds(*raws):
+        rows = []
+        for i, raw in enumerate(raws):
+            rows += [_open(f"s{i}", "seat"), _penalty(f"s{i}", 0.0) | {"raw": raw}]
+        return rows
+    credit = {"kind": "router.abstention_priced", "handle": "z", "router": "router:Tick",
+              "neutral": 0.5, "penalty": 0.0, "reward": 0.5}
+    assert g.s5b_observed_neutral(rounds(0.3, 0.7) + [credit], M).ok
+    wrong = g.s5b_observed_neutral(rounds(0.6, 0.8) + [credit], M)
+    assert wrong.status == g.FAIL and wrong.evidence["mismatched"] == 1
+    assert g.s5b_observed_neutral(rounds(0.6, 0.8) + [credit | {"neutral": 0.7}], M).ok
 
 
 def test_s7_s8_gain_names_routers_and_moves_gamma_by_one_common_step():

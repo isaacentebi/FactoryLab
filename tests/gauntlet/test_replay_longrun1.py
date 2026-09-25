@@ -44,7 +44,7 @@ def test_longrun1_split_a_window_by_settlement_rank_sf2b(diary):
 
 def test_longrun1_credited_nothing_delivered_at_the_prior_i2(diary):
     result = diary[2]["S5b"]
-    assert result.status == g.FAIL and result.evidence["at_prior"] == result.evidence["checked"]
+    assert result.status == g.FAIL and result.evidence["mismatched"] > 0
 
 
 def test_longrun1_reset_a_ratchet_while_its_attractor_held_sf1b(diary):
