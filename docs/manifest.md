@@ -1867,6 +1867,12 @@ rates and `fee_basis`):
   whole recorded lots. Which sides of which tapes can trade, and from when, is in
   `worlds/tapes/library.toml`.
 - Orders in flight hold margin in `collateral_view` as resting orders do.
+- An order that has filled anything is never reported rejected: when its unfilled rest
+  can no longer execute (the account cannot carry a later fill, a spot balance cannot
+  pay for it, an immediate-or-cancel remainder), what it executed stands, the rest is
+  cancelled with one `OrderRejected` naming it (`reason` "remainder cancelled: …",
+  `cancelled_size`), and `lookup` reads it back `cancelled` with its executed size.
+  `lookup` always reports an order's executed size, whatever ended it.
 
 A tape world runs on the idle-skipping clock (`IdleSkipClock`, `runtime/live.py`), a
 wall-paced clock that compresses only waiting. Its instant is the tape's first

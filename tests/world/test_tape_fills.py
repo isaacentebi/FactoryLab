@@ -610,3 +610,64 @@ def test_every_term_the_recording_does_not_state_is_refused_never_the_fakes_cons
     venue._fill("x", _sell("0.1"), Decimal(100), liquidation=True)
     assert venue._fills[-1].fee == (Decimal(10) * Decimal("0.00045")).quantize(
         Decimal("0.000001"))
+
+
+def test_a_half_filled_limit_whose_rest_fails_margin_is_cancelled_with_its_half_booked():
+    """Codex review of #151 (d5b92f7): a resting perp limit that had filled half, whose
+    next maker fill the account could not carry, was marked wholly rejected, and its
+    lookup, reading the rejection before the fills, said nothing filled; a reconciliation
+    of its order then attributed none of it. What it executed stands; its rest is
+    cancelled; it reads back cancelled with the half, and the half is its decision's."""
+    from dataclasses import replace
+    from fractions import Fraction
+
+    from factorylab.runtime.loop import Runtime
+    from factorylab.runtime.worlds import TapeSpec, load_manifest
+    from factorylab.world.scripted import ScriptedProvider
+
+    rows = [(0, "100.5"), (10, "100.5"), (20, "99.9"), (30, "99.9")]
+    tape = _tape({"BTC": rows, "ETH": [(t, 2500) for t, _ in rows]},
+                 books={"BTC": [_level(t, "100.4", "100.6", "0.2") for t in (0, 10)]
+                        + [_level(t, "99.85", "99.95", "0.2") for t in (20, 30)]})
+    base = load_manifest("scripted")
+    manifest = replace(base, exchange=replace(
+        base.exchange, tape=TapeSpec.of(tape, allow_unknown_cutoff=True), spot_pairs=()))
+    venue = TapeVenue(tape, coins=("BTC", "ETH"), start_cash_usd=Decimal(1000))
+    rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
+                 router_gamma=.1, provider=ScriptedProvider(), exchange=venue)
+    book = rt.consequences
+    book.table = book.table.start("d-1", rt.n)
+    book.order_intent("c-1", "d-1", "BTC")
+    rt.order_intents["c-1"] = {"operation": "venue.place_limit", "handle": "d-1",
+                               "args": {"coin": "BTC", "side": "buy", "size": "0.4",
+                                        "price": "100"}, "result": {"status": "uncertain"}}
+
+    def observed(events):
+        for event in events:
+            book.observe(event.kind, dict(event.payload), rt.n)
+        return events
+
+    venue.advance(T0)
+    oid = venue.place(_buy("0.4", limit="100", cid="c-1")).order_id
+    assert _fills(observed(venue.advance(T0 + 10 * S))) == []  # arrived; rests
+    [half] = _fills(observed(venue.advance(T0 + 20 * S)))  # a maker fill of the top 0.2
+    assert Decimal(half["size"]) == Decimal("0.2")
+    venue._cash = Decimal(25)  # the account can carry 0.2 BTC at 1x, not 0.4
+    events = observed(venue.advance(T0 + 30 * S))
+    assert _fills(events) == []
+    [cancel] = _rejections(events)  # one event, naming the unfilled rest
+    assert cancel == {"order_id": oid, "coin": "BTC",
+                      "reason": "remainder cancelled: insufficient margin",
+                      "cancelled_size": "0.2"}
+    looked = venue.lookup("c-1")
+    assert (looked.status, looked.filled_size, looked.avg_px) == (
+        "cancelled", Decimal("0.2"), Decimal(100))
+    assert venue.open_orders() == [] and oid not in venue._rested_ns
+    # Reconciliation: the order, read back, is its decision's, with the half it filled.
+    assert rt._recover_order("c-1")["status"] == "cancelled"
+    rt._confirm_terminal_orders()
+    [order] = [o for o in book.table.orders if o.order_id == oid]
+    assert order.handle == "d-1" and order.executed == order.confirmed == Fraction(1, 5)
+    assert order.remaining == 0
+    [lot] = [lot for lot in book.table.lots if lot.handle == "d-1"]
+    assert lot.size == Fraction(1, 5)

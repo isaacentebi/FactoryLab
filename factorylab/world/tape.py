@@ -1232,10 +1232,34 @@ class TapeVenue(FakeExchange):
             events.extend(self._execute(oid, flight))
         return events
 
-    def _refuse(self, oid: str, order: Order, reason: str) -> list[WorldEvent]:
-        self._rejected[oid] = reason
-        return [WorldEvent(WorldEventKind.ORDER_REJECTED, self._now_ns, self.name,
-                           {"order_id": oid, "coin": order.coin, "reason": reason})]
+    def _executed(self, oid: str) -> Decimal:
+        """What order ``oid`` has filled so far."""
+        return sum((f.size for f in self._fills if f.order_id == oid), Decimal(0))
+
+    def _refuse(self, oid: str, order: Order, reason: str, *,
+                drained: list[WorldEvent] | None = None) -> list[WorldEvent]:
+        """End order ``oid`` for ``reason``, keeping whatever it already executed.
+
+        Guarantees an order that has filled anything is never reported rejected (Codex
+        review of #151, d5b92f7): what it executed stands, only its unfilled rest
+        (``order``, as it now stands) is cancelled, and it reads back ``cancelled``
+        with its executed size, as a venue reports a partly filled order whose rest was
+        cancelled; an order that filled nothing is ``rejected``. Either way exactly one
+        ``OrderRejected`` says so: one the fake's own fill already put in ``drained``
+        for this order is replaced by it.
+        """
+        events = [e for e in drained or () if not (
+            e.kind == WorldEventKind.ORDER_REJECTED and e.payload.get("order_id") == oid)]
+        if self._executed(oid) > 0:
+            self._cancelled.add(oid)
+            payload = {"order_id": oid, "coin": order.coin,
+                       "reason": f"remainder cancelled: {reason}",
+                       "cancelled_size": str(order.size)}
+        else:
+            self._rejected[oid] = reason
+            payload = {"order_id": oid, "coin": order.coin, "reason": reason}
+        return [*events, WorldEvent(WorldEventKind.ORDER_REJECTED, self._now_ns, self.name,
+                                    payload)]
 
     def _execute(self, oid: str, flight: dict) -> list[WorldEvent]:
         order: Order = flight["order"]
@@ -1266,13 +1290,10 @@ class TapeVenue(FakeExchange):
             notional = sum((px * take for px, take in takes), Decimal(0))
             vwap = (notional / filled).quantize(Decimal("1e-10"))
             result = self._fill(oid, replace_size(order, filled), vwap, fee_rate=taker)
-            events.extend(self.drain_events())
             if result.status != "filled":
-                if order.market == "spot":  # the spot book refuses without an event
-                    events.extend(self._refuse(oid, order, result.error or "rejected"))
-                else:
-                    self._rejected[oid] = result.error or "rejected"
-                return events
+                return self._refuse(oid, order, result.error or "rejected",
+                                    drained=events + self.drain_events())
+            events.extend(self.drain_events())
             self._commit(market, snapshot, side, takes)
         remainder = size - filled
         if remainder <= 0:
@@ -1351,15 +1372,20 @@ class TapeVenue(FakeExchange):
             del self._resting[oid]
             result = self._fill(oid, replace_size(order, filled), order.limit_px,
                                 fee_rate=maker)
-            events.extend(self.drain_events())
+            drained = self.drain_events()
             if result.status != "filled":
                 if order.market == "spot":
                     # The spot book refused this fill: the order keeps resting, reserved.
                     self._resting[oid] = order
+                    events.extend(drained)
                     continue
+                # The perp account cannot carry it: what the order filled before stands,
+                # and its unfilled rest (all of ``order`` now) ends here (``_refuse``).
                 self._rested_ns.pop(oid, None)
-                self._rejected[oid] = result.error or "rejected"
+                events = self._refuse(oid, order, result.error or "rejected",
+                                      drained=events + drained)
                 continue
+            events.extend(drained)
             self._commit(order.coin, snapshot, side, [(top_px, filled)])
             if filled < order.size:
                 self._resting[oid] = replace_size(order, order.size - filled)
@@ -1409,8 +1435,11 @@ class TapeVenue(FakeExchange):
         return dict(result)
 
     def lookup(self, client_id: str, *, order_id: str | None = None) -> OrderResult:
-        """What became of an order: in flight or resting, filled, cancelled (with any
-        part filled first), or refused on arrival."""
+        """What became of an order: in flight or resting, filled, cancelled, or refused.
+
+        Guarantees its executed size is reported first, whatever ended it: an order that
+        filled anything and then ended short of its size reads ``cancelled`` with that
+        size, never ``rejected`` with none (Codex review of #151, d5b92f7)."""
         result = self._client_results.get(client_id)
         oid = order_id or (result.order_id if result else None)
         fills = [f for f in self._fills if f.order_id == oid]
@@ -1420,8 +1449,8 @@ class TapeVenue(FakeExchange):
             return OrderResult(oid, "resting", Decimal(0), None)
         if oid in self._resting:
             return OrderResult(oid, "resting", size, avg)
-        if oid in self._cancelled:
-            return OrderResult(oid, "cancelled", size, avg)
+        if oid in self._cancelled or oid in self._rejected and size:
+            return OrderResult(oid, "cancelled", size, avg, self._rejected.get(oid))
         if oid in self._rejected:
             return OrderResult(oid, "rejected", Decimal(0), None, self._rejected[oid])
         if fills:

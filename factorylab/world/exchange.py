@@ -475,16 +475,18 @@ class FakeExchange:
         return dict(result)
 
     def lookup(self, client_id: str, *, order_id: str | None = None) -> OrderResult:
-        """Resolve original order identity without placing or cancelling anything."""
+        """Resolve original order identity without placing or cancelling anything.
+
+        Guarantees a cancelled order reports what it executed before it was cancelled."""
         result = self._client_results.get(client_id)
         oid = order_id or (result.order_id if result else None)
-        if oid in self._cancelled:
-            return OrderResult(oid, "cancelled", Decimal(0), None)
         fills = [f for f in self._fills if f.order_id == oid]
+        size = sum((f.size for f in fills), Decimal(0))
+        avg = sum((f.size * f.px for f in fills), Decimal(0)) / size if size else None
+        if oid in self._cancelled:
+            return OrderResult(oid, "cancelled", size, avg)
         if fills and oid not in self._resting:
-            size = sum((f.size for f in fills), Decimal(0))
-            return OrderResult(oid, "filled", size,
-                               sum((f.size * f.px for f in fills), Decimal(0)) / size)
+            return OrderResult(oid, "filled", size, avg)
         return result or OrderResult(oid, "uncertain", Decimal(0), None, "order not observed")
 
     def fills(self, since_ns: int) -> list[Fill]:
