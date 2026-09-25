@@ -170,7 +170,8 @@ def test_of4_a_holdout_that_constrains_nothing_is_adopted_and_never_binds(of4, o
     assert tight and not all(tight)
 
 
-@pytest.mark.xfail(strict=True, reason="Astra C-3, for the architect: nothing in the kernel "
+@pytest.mark.xfail(strict=True, raises=AssertionError,
+                   reason="Astra C-3, for the architect: nothing in the kernel "
                    "grades a holdout's proposer by realized consequence; the motion costs "
                    "only its trial, and only the ballots are graded (policy.outcome). No "
                    "Chapter II passage has been ruled to price it, so none is built here")

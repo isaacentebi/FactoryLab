@@ -86,7 +86,8 @@ def test_ld1c_the_newcomer_lives_and_is_offered_for_its_patience(ld1):
     assert not [r for r in ld1.rows("assembly.retired") if r["assembly_id"] == "newcomer"]
 
 
-@pytest.mark.xfail(strict=True, reason=f"{W16} R-E (amended): decisions in the unhistoried "
+@pytest.mark.xfail(strict=True, raises=AssertionError,
+                   reason=f"{W16} R-E (amended): decisions in the unhistoried "
                    "niche bear no penalty attribution, including under a stable-failure flag")
 def test_ld1d_niche_decisions_bear_no_penalty_even_while_a_ratchet_runs(ld1):
     assert g.flagged(ld1.events, "stable_failure")
@@ -133,7 +134,8 @@ def test_ld2a_a_producer_is_paid_its_judges_verdict_well_inside_the_discovery_li
     assert lags and max(lags) <= CARRY_LIFETIME_NS // ld1.physics.r
 
 
-@pytest.mark.xfail(strict=True, reason=f"{W16} D2: one grading horizon; the judge's mark and "
+@pytest.mark.xfail(strict=True, raises=AssertionError,
+                   reason=f"{W16} D2: one grading horizon; the judge's mark and "
                    "late verdict re-grades are deleted, and later money books through "
                    "settle_late as money only")
 def test_ld2b_no_verdict_is_graded_twice_by_consequence(ld1):

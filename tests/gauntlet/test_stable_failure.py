@@ -95,14 +95,16 @@ def test_sf1b_negative_control_without_the_reset_the_transient_world_fails():
     assert any("missed_reset" in problem for problem in result.evidence["problems"])
 
 
-@pytest.mark.xfail(strict=True, reason=f"{W16} R-E (amended): the integrator freezes while "
+@pytest.mark.xfail(strict=True, raises=AssertionError,
+                   reason=f"{W16} R-E (amended): the integrator freezes while "
                    "the penalty sits at penalty_cap (anti-windup)")
 def test_sf1c_the_integral_is_frozen_while_the_penalty_sits_at_the_cap(sf1):
     result = g.sf1c_anti_windup(sf1.events, sf1.manifest, card=UPTAKE)
     assert result.ok, result.evidence
 
 
-@pytest.mark.xfail(strict=True, reason=f"{W16} D5/R-E: saturation is ledgered and published "
+@pytest.mark.xfail(strict=True, raises=AssertionError,
+                   reason=f"{W16} D5/R-E: saturation is ledgered and published "
                    "to governance as the card's shadow price at bound")
 def test_sf1d_saturation_is_escalated_with_a_rising_duration(sf1):
     result = g.sf1d_escalation(sf1.events, sf1.manifest, card=UPTAKE)
@@ -141,7 +143,8 @@ def test_sf1_s3_an_action_label_moves_no_penalty():
                for h in one)
 
 
-@pytest.mark.xfail(strict=True, reason=f"{W16} D4: after a router's first settled round an "
+@pytest.mark.xfail(strict=True, raises=AssertionError,
+                   reason=f"{W16} D4: after a router's first settled round an "
                    "abstention is credited its observed mean, never the 0.5 prior (I-2b)")
 def test_sf1_s5b_nothing_delivered_is_credited_the_observed_mean(sf1):
     result = g.s5b_observed_neutral(sf1.events, sf1.manifest)
@@ -178,7 +181,8 @@ def test_sf2_no_force_the_kernel_never_draws_for_the_reliever(sf2_low):
     assert readings["S1"].ok and readings["S1"].evidence["acts"] > 0
 
 
-@pytest.mark.xfail(strict=True, reason=f"{W16} D5: a reliever bears 0 and every non-reliever "
+@pytest.mark.xfail(strict=True, raises=AssertionError,
+                   reason=f"{W16} D5: a reliever bears 0 and every non-reliever "
                    "an equal share frozen at close; today every decision bears 1/n by "
                    "settlement order, so Δ(t) ≡ 0 (the negative control is today's code)")
 def test_sf2a_the_price_gradient_follows_relief(sf2_low):
@@ -187,14 +191,16 @@ def test_sf2a_the_price_gradient_follows_relief(sf2_low):
     assert result.ok, result.evidence
 
 
-@pytest.mark.xfail(strict=True, reason=f"{W16} D5: n_nonrelieving is frozen at the window's "
+@pytest.mark.xfail(strict=True, raises=AssertionError,
+                   reason=f"{W16} D5: n_nonrelieving is frozen at the window's "
                    "close, so shares do not depend on settlement order")
 def test_sf2b_shares_are_blind_to_settlement_order(sf2_low):
     result = g.sf2b_order_blind(sf2_low.events, sf2_low.manifest, card=UPTAKE)
     assert result.ok, result.evidence
 
 
-@pytest.mark.xfail(strict=True, reason=f"{W16} D5: without relief attribution the holder and "
+@pytest.mark.xfail(strict=True, raises=AssertionError,
+                   reason=f"{W16} D5: without relief attribution the holder and "
                    "the reliever bear the same penalty, so no price gradient can reach the "
                    "Tick router's estimate (SF-2c lever; SF-3 in one seat's learner)")
 def test_sf2c_the_lever_the_routers_estimate_follows_the_price(sf2_low):

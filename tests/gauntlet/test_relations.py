@@ -20,7 +20,10 @@ from tests.gauntlet import populations as P
 
 
 def _worlds():
-    return sorted(p.stem for p in (P.ROOT / "worlds").glob("*.toml"))
+    """Every world ``load_manifest`` accepts, outside ``worlds/history``."""
+    from tests.audit.class2_corpus import launchable_worlds
+
+    return launchable_worlds()
 
 
 def _scripted_raw():
@@ -30,7 +33,8 @@ def _scripted_raw():
 # --- SF-0 ------------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="P-1 (Q-G1): no world has integrator headroom at the "
+@pytest.mark.xfail(strict=True, raises=AssertionError,
+                   reason="P-1 (Q-G1): no world has integrator headroom at the "
                    "detection horizon, and no load-time relation refuses or publishes it")
 @pytest.mark.parametrize("name", _worlds())
 def test_sf0_every_loadable_world_has_gain_headroom_at_the_detection_horizon(name):
@@ -50,7 +54,8 @@ def test_sf0_the_relation_discriminates_between_a_saturating_and_a_patient_integ
     assert g.sf0_relation(patient).ok
 
 
-@pytest.mark.xfail(strict=True, reason="P-1 (Q-G1): the load-time refusal (or the published "
+@pytest.mark.xfail(strict=True, raises=pytest.fail.Exception,
+                   reason="P-1 (Q-G1): the load-time refusal (or the published "
                    "gain_headroom_windows fact) is proposed physics awaiting the architect")
 def test_sf0_negative_control_a_saturating_world_is_refused_or_publishes_its_headroom():
     raw = _scripted_raw()
@@ -85,7 +90,8 @@ def _release_lag(saturated_windows):
     return lag
 
 
-@pytest.mark.xfail(strict=True, reason="needs wave 16 R-E (amended): anti-windup at the cap. "
+@pytest.mark.xfail(strict=True, raises=AssertionError,
+                   reason="needs wave 16 R-E (amended): anti-windup at the cap. "
                    "Today the integral keeps winding to lambda_max while the penalty is "
                    "already capped, so release lags grow with saturation's duration")
 def test_i1a_release_after_saturation_is_independent_of_how_long_it_lasted():
@@ -143,7 +149,8 @@ def test_ld3_counter_case_a_world_that_fits_its_repricing_is_viable():
 # --- LD-2c ------------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason=(
+@pytest.mark.xfail(strict=True, raises=pytest.fail.Exception,
+                   reason=(
     "needs wave 16 D2 and R-I Q3. The refusal needs the grading horizon H_f = "
     "world_repricing / min_ratio in venue time (wave 16 D2, not on this branch) and a "
     "patience term (R-I: 'Q3: patience later'). SUNSET: when D2 lands, a world that lists "

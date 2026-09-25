@@ -61,7 +61,8 @@ def test_th1b_negative_control_without_the_thrash_price_it_fails():
     assert g.th1b_duration(mutant.events, mutant.manifest).status == g.FAIL
 
 
-@pytest.mark.xfail(strict=True, reason=f"{W16} R-E (amended): the thrash price's integral "
+@pytest.mark.xfail(strict=True, raises=AssertionError,
+                   reason=f"{W16} R-E (amended): the thrash price's integral "
                    "freezes at the cap, the same anti-windup rule as SF-1c")
 def test_th1b_the_thrash_integral_is_frozen_at_the_cap(th1):
     result = g.th1b2_frozen(th1.events, th1.manifest)

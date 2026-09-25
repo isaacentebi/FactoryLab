@@ -1,0 +1,150 @@
+# The Class 2 auditor: protocol and rubric
+
+This is the release-time reading of every seat-visible string by an independent model
+(phase-2 design B2, as amended by Astra's review H-2). It complements the static audit
+(B1, `tests/audit/test_class2_*.py`), which reads only the surface forms a closed lexicon
+can name. A lexicon cannot read salience, tone, anchoring or a contradiction between two
+surfaces. Chapter II §I.a (Carroll) also warns that detailed rules get gamed, including
+the architect's own rules about prose. So a second reader is added.
+
+The question it answers is Chapter I's. A Class 2 factory "takes objectives (goals,
+limitations) as inputs", and "an objective is nothing more or less than the standard by
+which this or that plan is identified as better". Text that tells a seat what to do, what
+is good, or how cautious to be hands the factory an objective or a plan. AGENTS.md rules
+1–5 state the same thing as design rules.
+
+## Who reads
+
+- One model family that is **neither** among the families that authored kernel text
+  (Claude through Claude Code, GPT through Codex) **nor** among the families seated in
+  the world being released. The roster's families are the audience, and an auditor that
+  shares their priors reads the text as they do.
+- The family is **rotated every release**. This is Chapter II §III's heterogeneity ("a
+  shared foundation model is a forcing function") applied to the auditor. The family used
+  is recorded in the triage file.
+- The call runs through the prepaid guard with a cap, at temperature 0, twice. The union
+  of both samples' findings is kept; a finding only one sample made is marked low
+  confidence.
+
+## What the auditor is given, and nothing else
+
+It never sees behaviour data: no action mixes, no refusal rates, no run results. It
+therefore cannot recommend text that steers (AGENTS rule 2).
+
+1. **The corpus** for each launchable world (`scripts/class2_audit.py render`): the same
+   leaves as B1, each with `surface_kind`, `audience`, `frequency` and `provenance`. The
+   charter's cards and norms are included and tagged "context, not under audit".
+2. **The authority text, verbatim**: Chapter I §I (the three classes and the definition
+   of an objective); Chapter II §I, §I.a (the Carroll paragraph), §I.b (the two channels;
+   minimal sufficient disclosure; the obedience constraint), §II.b (hard casts) and §IV.a
+   (norms, the read-only wall, metrics ceded); AGENTS.md rules 1–5.
+3. **The allowlist** (`tests/audit/class2_allowlist.toml`), with its reasons.
+4. **Last release's triage file**, with each finding's disposition and the reasons for
+   REJECTED findings, so they are not re-litigated unless their text changed.
+5. **The corpus diff** since the last audited release. The audit reads every leaf and
+   reads changed leaves first.
+6. **The provenance pass** (a second prompt, same model): every commit since the last
+   release that touched a seat-visible surface, with its message and its diff to those
+   files. The question: does any message justify text by a behaviour mix ("seats held too
+   much", "judges scored refusals high")? This enforces rule 2 at the point of authorship.
+
+## The rubric: answer each leaf separately
+
+| Q | Question | Finding class if yes |
+|---|---|---|
+| Q1 | Speech act: fact / definition / formula / permission / format / deliverable / **instruction** / **advice** / **evaluation**? | – (classifies) |
+| Q2 | Is the addressee the seat (second person, or a role noun as subject)? | – |
+| Q3 | Instruction or advice to the seat about conduct the kernel **already enforces**? | ANNOUNCED-PHYSICS |
+| Q4 | Instruction or advice about conduct the kernel does **not** enforce: a method, a strategy, caution, an order of operations? | C1 (plan) |
+| Q5 | Does it rank plans, actions or outcomes ("better", "valuable", "appropriate"), unless the ranking *is* a published settlement formula? | C2 (objective) |
+| Q6 | Does it enumerate some of a seat's options and not others, with no structural reason (salience asymmetry)? | C1 (menu) |
+| Q7 | Does it contradict another surface or the published formula? | FALSE-PHYSICS candidate |
+| Q8 | Does an example or default carry decision content (a coin, a side, a q, a predicate, a reason)? | C1 (anchor) |
+| Q9 | Does a judge-visible leaf reveal authorship, or anything that lets a judge infer who wrote the work (rule 5)? | DISCLOSURE |
+| Q10 | Does a seat id, role label or lens carry a role objective or a judging rubric the seat cannot overwrite? | C2 (standing label) |
+| Q11 | Among a role's lenses taken together, is there a net direction (most point one way, with no rival)? | C2 (population objective) |
+| Q12 | For a norm (context only): does it name a predetermined end with a target, an instrumental objective posing as a value? | NORM-OBJECTIVE: reported to the norm house, not fixed in code |
+
+**Severity.** HIGH if the leaf reaches every wake of a role and is Q3, Q4 or Q5. MED if it
+reaches some requests, or is Q6, Q8 or Q10. LOW otherwise.
+
+## Output format
+
+JSON Lines, one object per finding, then one summary object:
+
+```json
+{"finding_id": "sha256(path|quote)[:12]", "leaf_id": "…", "world": "…", "path": "…",
+ "surface_kind": "tool", "audience": ["producer"], "frequency": "on demand",
+ "quote": "≤25 words", "question": "Q4", "class": "C1", "severity": "MED",
+ "passage": "§I.a", "rationale": "≤60 words",
+ "rewrite": "a declarative fact, or \"delete\"", "confidence": 0.8}
+{"summary": true, "leaves_read": 1432, "leaves_total": 1432, "unread": [],
+ "by_class": {"C1": 3, "C2": 1, "ANNOUNCED-PHYSICS": 2}}
+```
+
+A rewrite is a declarative fact or a deletion. It is justified by its rubric question and
+its passage, never by an expected change in behaviour.
+
+## Calibration: the audit is valid only if the auditor can find what is planted
+
+Before the review, `render` plants the canaries of `docs/audits/class2/canaries.json` at
+seeded positions: **one known violation for each of Q3, Q4, Q5, Q6, Q7, Q8, Q9 and Q10**,
+eight in all. It also marks ten clean controls taken from the smuggling audit's D7 KEEP
+list. The key is written to `canary_key.json`, which is never part of the auditor's input.
+
+The audit is **valid** only if all of these hold (`scripts/class2_audit.py validate`):
+
+- the summary is present, `unread` is empty and every leaf was read;
+- at least **7 of the 8** canaries are found under their question or class;
+- each **mandatory** canary is found: **Q6** (salience), **Q9** (disclosure) and **Q10**
+  (standing label). These are the classes the closed lexicon cannot read at all, so they
+  fall entirely on this reader, and a miss there invalidates the audit whatever the
+  overall score (Astra H-2);
+- at most **1 of the 10** controls is flagged.
+
+An invalid audit is rerun with the next family on the rotation. Its findings are not
+triaged. A leaf the auditor did not read is itself a finding.
+
+## Turning findings into fixes
+
+The architect triages; the auditor and the implementer do not. Each finding gets one
+disposition in `docs/audits/class2/<world>.md` (`scripts/class2_audit.py triage` writes
+the skeleton):
+
+- **FIX.** A rewrite or a deletion, plus a regression entry: a lexicon pattern when the
+  finding generalises, or a mutation-test case, so the next B1 run catches the class
+  without a model. A fix to a world file (lens, `system_prompt`, seat id) goes into a
+  **new world file**: it changes the roster digest and forces re-ratification. A
+  kernel-text fix ships at the next world boundary and is never hot-patched into a live
+  world (rule 9). After the fix lands, `scripts/class2_audit.py baseline` rewrites
+  `tests/audit/class2_findings.json`.
+- **ALLOW.** An allowlist entry with a reason, a passage from the closed set and
+  `context_words` (words that must stand within two sentences of the quote; when they
+  drift, the entry stops excusing the finding and it returns as REVIEW).
+- **REJECT.** The auditor is wrong. The finding goes to `rejected.jsonl` with the reason
+  and is input 4 at the next release.
+
+## The release gate
+
+- Zero untriaged HIGH or MED findings.
+- The triage file is committed, recording the family used, the canary score and each
+  finding with its disposition.
+- A charter card flagged by Q10, Q11 or Q12 is **not** the kernel's to fix. It is sent to
+  the charter's next revision as an observation (§IV: "Governance never intervenes in the
+  internal affairs"; the metrics layer is the factory's).
+
+## Operator steps
+
+```
+uv run python scripts/class2_audit.py render --world <world> [--world …] \
+    --out work/class2/<release> --seed <n> [--rendered] [--previous <last triage file>]
+# send work/class2/<release>/prompt.md with auditor_input.jsonl to the chosen family,
+# temperature 0, twice, under the prepaid guard; save the union as auditor_output.jsonl
+uv run python scripts/class2_audit.py validate work/class2/<release>/auditor_output.jsonl \
+    --key work/class2/<release>/canary_key.json
+uv run python scripts/class2_audit.py triage work/class2/<release>/auditor_output.jsonl \
+    --key work/class2/<release>/canary_key.json --world <world> --family <family>
+```
+
+`docs/essay.md` is not checked in. `render` reads it from `--essay` when present and
+otherwise leaves a marked place for the operator to paste the authority text verbatim.

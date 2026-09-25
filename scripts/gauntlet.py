@@ -1250,7 +1250,7 @@ GENERIC: dict[str, Callable[[list[Mapping], Mapping], Result]] = {
     "S1": s1_draw_sovereignty,
     "S4": s4_boundedness,
     "S5": s5_neutral_imputation,
-    "S5b/I-2b": s5b_observed_neutral,
+    "S5b": s5b_observed_neutral,
     "S7": s7_gain_targets,
     "S8": s8_gain_rows_uniform,
 }

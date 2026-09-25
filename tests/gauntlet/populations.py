@@ -88,10 +88,16 @@ class Seat:
     def model_id(self) -> str:
         return self.model or f"fake-{self.id}"
 
+    #: The seat's genesis state (a lens, as the edition-6 roster seeds one), if any.
+    initial_state: dict[str, Any] | None = None
+
     def assembly(self) -> dict[str, Any]:
-        return {"id": self.id, "role": self.role, "model_id": self.model_id,
-                "accepts": list(self.accepts), "emits": list(self.emits),
-                "max_tokens": self.max_tokens}
+        row = {"id": self.id, "role": self.role, "model_id": self.model_id,
+               "accepts": list(self.accepts), "emits": list(self.emits),
+               "max_tokens": self.max_tokens}
+        if self.initial_state is not None:
+            row["initial_state"] = self.initial_state
+        return row
 
 
 def producer(seat_id: str, arm: Arm, *, accepts: Iterable[str] = ("Tick",),
@@ -362,7 +368,7 @@ def _patched(target: Any, name: str, value: Any):
 
 def run(manifest: Any, population: Population, *, events: int = 300, seed: int = 1,
         patches: Iterable[tuple[Any, str, Any]] = (), gamma: float = 0.1,
-        instrument: bool = True) -> Run:
+        instrument: bool = True, ledger_path: str | None = None) -> Run:
     """Run ``population`` in ``manifest`` for ``events`` events and return its evidence.
 
     ``patches`` are ``(target, attribute, value)`` substitutions held for the run: a
@@ -400,7 +406,7 @@ def run(manifest: Any, population: Population, *, events: int = 300, seed: int =
             stack.enter_context(_patched(pricing, "close_window", close))
             stack.enter_context(_patched(immune, "_gain", gain))
         rt = Runtime(manifest, events=events, seed=seed, initial_balance_micro=None,
-                     ledger_path=None, router_gamma=gamma, provider=population)
+                     ledger_path=ledger_path, router_gamma=gamma, provider=population)
         population.bind(rt)
         append = rt.ledger.append
 

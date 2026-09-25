@@ -100,7 +100,8 @@ def ld1(shared_run):
     return shared_run("ld1", lambda: P.run(*P.ld1(at_window=10), events=350))
 
 
-@pytest.mark.xfail(strict=True, reason=f"{W16} R-E (amended), Q-G2: a niche decision bears no "
+@pytest.mark.xfail(strict=True, raises=AssertionError,
+                   reason=f"{W16} R-E (amended), Q-G2: a niche decision bears no "
                    "more penalty than a NOOP of its window; today it bears the generic share")
 def test_i3c_a_niche_decision_is_never_priced_above_a_noop(ld1):
     result = g.i3c_niche_no_worse_than_noop(ld1.events, ld1.manifest)
@@ -132,7 +133,8 @@ def test_i5_an_unmeasured_card_is_never_a_failing_card(i5):
                 if r["card_id"] == "independent-consequence"]
 
 
-@pytest.mark.xfail(strict=True, reason=f"{W16} D5/R-E: saturation is published (SF-1d) before "
+@pytest.mark.xfail(strict=True, raises=AssertionError,
+                   reason=f"{W16} D5/R-E: saturation is published (SF-1d) before "
                    "I-8 can check that publication never shortens the governance period")
 def test_i8_saturation_informs_governance_but_never_shortens_its_period(ld1):
     assert g.sf1d_escalation(ld1.events, ld1.manifest, card="independent-uptake").ok
