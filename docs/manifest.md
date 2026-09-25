@@ -1684,6 +1684,11 @@ What the venue replays, and how:
   the position-hours actually held since the last boundary are charged at the last
   recorded rate and mid, once, before the production mark: the last partial hour is
   never free, and a receipt is never booked for time a position was not held.
+  At the same moment every order still in flight, which no later recorded row can
+  ever deliver, is cancelled (reason "the recorded market ended before the order
+  arrived"; an immediate-or-cancel order no counterparty met) and settled like any
+  venue cancel, and every order sent afterwards is refused ("the recorded market has
+  ended"): the sealed world's venue state is settled, with no order resting forever.
 - The venue is named `tape:<first 8 hex of sha256>`.
 
 Fills are the recording's and never kinder (money path). Every rule below is
@@ -1742,7 +1747,7 @@ wall-clock reader is keyed on whether the tick clock is paced by the wall
 | Safety pass between model calls | Runs once a delivered tick of wall time has passed in an event; it advances the recorded venue to the wall's instant and settles what filled, refused or funded (never a mid) |
 | `wall` journal (`WallClock`) | Recorded, not re-executed, so a replay reads the run's own instants |
 | Checkpoint cost alarm (`checkpoint.slow`) | Measured in real busy time |
-| Tick clock restore | Restored as the clock it was: the saved skipped and modelled time, continuing from the world's saved instant, with the fresh clock's deadline (the tape's end); a replay of a diary's gaps (`--gaps-from`) restores its recorded gaps and measured sample; a restore never changes a clock's kind (`tick_clock_mismatch`) |
+| Tick clock restore | Restored as the clock it was: the saved skipped and modelled time, continuing from the world's saved instant, with the fresh clock's deadline (the tape's end). Each event's `runtime.event_done` records the clock's reading and totals (`clock`), and a replayed event's clock adopts them, so after the replay the clock reads and totals what the recorded run's did, never the checkpoint's stale instant; a replay of a diary's gaps (`--gaps-from`) restores its recorded gaps and measured sample; a restore never changes a clock's kind (`tick_clock_mismatch`) |
 | Resume instant | The world's saved instant |
 | Treasury cap window, venue read share, Polymarket windows, the kernel's ledger and queue | The world's clock, unchanged |
 

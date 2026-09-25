@@ -462,11 +462,30 @@ class Runtime(
         self._settle_composed()
         self.stats.timeouts += len(self.queue.expire_due())
         self._deliver_returns()
-        self.ledger.append({"kind": "runtime.event_done", "n": self.n})
+        self.ledger.append({"kind": "runtime.event_done", "n": self.n, **self._pace_record()})
         self.balance_at.append(self.wallet.balance)
         if previous_window != self.reserve_window_start:
             self._snapshot("reserve_window")
         return True
+
+    def _pace_record(self) -> dict:
+        """What an idle-skipping clock read at the end of this event, for the diary.
+
+        Empty for every other clock, so their diaries are unchanged. On a replay the
+        clock adopts the recorded reading and totals first and the recorded values are
+        written back as they were, so the replayed tail leaves the clock exactly where
+        the recorded run's stood (Chapter II §IV.c: the resumed world keeps the pace
+        it ran at, and never counts replayed busy time as idle).
+        """
+        record = getattr(self.tick_clock, "pace_record", None)
+        if record is None:
+            return {}
+        saved = self.ledger.peek() if getattr(self.ledger, "recovering", False) else None
+        if (saved is not None and saved.get("kind") == "runtime.event_done"
+                and isinstance(saved.get("clock"), dict)):
+            self.tick_clock.adopt(saved["clock"])
+            return {"clock": saved["clock"]}
+        return {"clock": record()}
 
     def _paced(self) -> bool:
         """Whether this world's ticks are paced by an environment whose gaps are measured.

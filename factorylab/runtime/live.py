@@ -197,6 +197,26 @@ class IdleSkipClock(LiveClock):
             self.index += 1
             yield WorldEvent(WorldEventKind.TICK, ts, self.source, {"index": i})
 
+    def pace_record(self) -> dict:
+        """The clock's reading and totals now, for the diary (``runtime.event_done``)."""
+        return {"now_ns": self.now_ns(), "skipped_ns": self.skipped_ns,
+                "modelled_ns": self.modelled_ns}
+
+    def adopt(self, record: dict) -> None:
+        """Take the reading and totals a diary recorded as this clock's own.
+
+        Guarantees, while a resume replays its tail, that the clock evolves as the
+        recorded run's did: at the end of each replayed event it reads what the
+        recorded clock read, with the idle it had skipped and the busy time it had been
+        modelled, and it counts real busy time again from there. So no work after the
+        replay runs against the checkpoint's stale instant, and no replayed gap is
+        counted again as newly skipped idle.
+        """
+        self.skipped_ns = int(record["skipped_ns"])
+        self.modelled_ns = int(record["modelled_ns"])
+        self.origin_ns = int(record["now_ns"]) - self.skipped_ns - self.modelled_ns
+        self._anchor = None
+
     def state(self) -> dict:
         """The live clock's continuation, plus the time skipped and the time modelled."""
         return {**super().state(), "skipped_ns": self.skipped_ns,

@@ -65,26 +65,29 @@ def dead_report() -> dict:
             "exposure_status": UNKNOWN}
 
 
-def settle_accrued_funding(rt) -> None:
-    """A recorded venue's funding for the part of an hour the world held a position.
+def close_recorded_market(rt) -> None:
+    """End a recorded venue's market with its world, and settle what that leaves.
 
     A venue that charges funding only at hour boundaries would leave the last
-    partial hour uncharged when the world ends between two of them, and a replay
-    whose costs are understated is kinder than the market it replays (Chapter II
-    §III.b: the consequence that grades the chain must be the world's). Settled
-    once, before the production mark, like any other venue effect; never raises
-    into a kill. Only a venue that states its accrual (``settle_accrued_funding``, a
-    recorded tape) is asked; every other runtime is untouched.
+    partial hour uncharged when the world ends between two of them, and an order
+    sent after the recording's last row could never arrive and would rest forever as
+    pending exposure: a replay whose costs are understated, or whose venue state is
+    never settled, is kinder than the market it replays (Chapter II §III.b: the
+    consequence that grades the chain must be the world's). The venue's closing
+    effects (``close_recording``: the accrued funding, and every order that can no
+    longer arrive cancelled) settle once, before the production mark, like any other
+    venue effect; never raises into a kill. Only a venue that closes (a recorded tape)
+    is asked; every other runtime is untouched.
     """
     exchange = getattr(rt, "exchange", None)
     if exchange is None or getattr(rt, "live", True) \
-            or not callable(getattr(exchange, "settle_accrued_funding", None)):
+            or not callable(getattr(exchange, "close_recording", None)):
         return
     try:
         rt._settle_exchange_effects(
-            exchange.settle_accrued_funding(rt.clock.now_ns), observe_positions=False)
+            exchange.close_recording(rt.clock.now_ns), observe_positions=False)
     except Exception as exc:  # noqa: BLE001 - nothing may raise into a kill
-        print(f"factorylab kill: accrued funding was not settled ({type(exc).__name__})",
+        print(f"factorylab kill: the recorded market was not closed ({type(exc).__name__})",
               file=sys.stderr)
 
 
@@ -120,7 +123,7 @@ class VenueMixin:
 
         if self.termination.final:
             return getattr(self, "wind_down_report", dead_report())
-        settle_accrued_funding(self)
+        close_recorded_market(self)
         owed = bool(self.m.kill.wind_down)
         report = dead_report()
         try:

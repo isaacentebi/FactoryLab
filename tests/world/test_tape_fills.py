@@ -469,3 +469,18 @@ def test_the_fixture_tape_publishes_its_rules_and_answers_its_own_book():
     assert venue.order_book("BTC", 3)["source"] == "synthetic"
     with pytest.raises(ValueError):
         venue.order_book("BTC", 0)
+
+
+def test_closing_the_recording_cancels_what_can_no_longer_arrive_and_refuses_more():
+    venue = _venue(_tape({"BTC": [(0, 100), (10, 100)]}))
+    venue.advance(T0 + 10 * S)  # the last recorded row
+    ioc = venue.place(_buy("0.2", cid="ioc"))
+    limit = venue.place(_buy("0.2", limit="90", cid="lim"))
+    assert venue.cancel(ioc.order_id)["status"] == "rejected"  # an IOC is not cancellable
+    events = venue.close_recording(T0 + 20 * S)
+    cancels = {payload["order_id"]: payload for payload in _rejections(events)}
+    assert set(cancels) == {ioc.order_id, limit.order_id}
+    assert cancels[ioc.order_id]["reason"] == "the recorded market ended before the order arrived"
+    assert venue.lookup("ioc").status == venue.lookup("lim").status == "cancelled"
+    assert venue.open_orders() == []
+    assert venue.place(_buy("0.2", cid="late")).error == "the recorded market has ended"

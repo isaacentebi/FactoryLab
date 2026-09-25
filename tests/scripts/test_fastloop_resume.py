@@ -162,6 +162,62 @@ def test_a_run_on_a_diarys_gaps_resumes_on_the_same_replay_clock(tmp_path, monke
         [4, 17, 4][i % 3] * 10**9 for i in range(TICKS - 1)]
 
 
+TAPE = Path(__file__).parents[1] / "fixtures" / "tape" / "longrun1-2100.events.json"
+LATENCY = Path(__file__).parents[1] / "fixtures" / "tape" / "longrun1-call-latency-ms.json"
+
+
+@pytest.mark.gate
+def test_a_resumed_idle_skip_clock_stands_where_the_crashed_run_left_it(tmp_path,
+                                                                        monkeypatch):
+    """Codex review of #151 (6a1ac93): a resumed idle-skipping clock was anchored at the
+    checkpoint's instant; the replayed tail moved the runtime's clock but not its own,
+    so work after the replay ran against stale tape time and the next tick counted the
+    replayed gap as idle. After the replay its reading and its skipped and modelled
+    totals are the crashed run's own at the moment it died: the run the resume
+    continues. (A tape run's busy time is real, so a second run is not a reference.)"""
+    crash_at, died, checkpoints = 60, {}, []
+    process_event, snapshot = Runtime._process_event, Runtime._snapshot
+
+    def dies(self, ev):
+        result = process_event(self, ev)
+        if self.n == crash_at:
+            clock = self.tick_clock
+            died.update(now=clock.now_ns(), skipped=clock.skipped_ns,
+                        modelled=clock.modelled_ns, ticks=self.ticks_consumed)
+            raise _Died
+        return result
+
+    def counted(self, boundary):
+        checkpoints.append(self.ticks_consumed)
+        return snapshot(self, boundary)
+
+    monkeypatch.setattr(Runtime, "_process_event", dies)
+    monkeypatch.setattr(Runtime, "_snapshot", counted)
+    with pytest.raises(_Died):
+        fastloop.run("scripted", None, WORLD, tmp_path / "out", cap_usd="2", seed=1,
+                     tape_from=TAPE, latency_from=LATENCY, allow_unknown_cutoff=True)
+    monkeypatch.setattr(Runtime, "_process_event", process_event)
+    monkeypatch.setattr(Runtime, "_snapshot", snapshot)
+    # Ticks were delivered after the last checkpoint: the resume replays them.
+    assert died["ticks"] > checkpoints[-1] and died["modelled"] > 0
+    [target] = (tmp_path / "out").iterdir()
+    resumed, run = {}, Runtime.run
+
+    def observed(self):
+        clock = self.tick_clock
+        resumed.update(now=clock.now_ns(), skipped=clock.skipped_ns,
+                       modelled=clock.modelled_ns)
+        return run(self)
+
+    monkeypatch.setattr(Runtime, "run", observed)
+    card = fastloop.resume(target)
+    assert card["status"] == "completed", card.get("error")
+    assert (resumed["skipped"], resumed["modelled"]) == (died["skipped"], died["modelled"])
+    # The recorded reading at the end of the last event, plus the real busy time since:
+    # microseconds either side of the crashed clock's own last reading.
+    assert abs(resumed["now"] - died["now"]) < 10**9
+
+
 @pytest.mark.gate
 def test_a_refused_resume_then_a_resume_count_a_death_inside_a_call_once(tmp_path,
                                                                           monkeypatch):

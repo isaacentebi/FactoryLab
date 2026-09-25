@@ -170,3 +170,37 @@ def test_a_replay_clock_checkpoints_its_gaps_and_restores_as_itself():
     with pytest.raises(ResumeError) as refused:
         restore_runtime(bare, state)
     assert refused.value.code == "tick_clock_mismatch"
+
+
+def test_a_clock_adopts_a_recorded_reading_and_its_totals():
+    busy = Monotonic()
+    clock = IdleSkipClock(10 * S, 5, origin_ns=100 * S, monotonic=busy)
+    clock.adopt({"now_ns": 500 * S, "skipped_ns": 70 * S, "modelled_ns": 30 * S})
+    assert clock.now_ns() == 500 * S and clock.pace_record() == {
+        "now_ns": 500 * S, "skipped_ns": 70 * S, "modelled_ns": 30 * S}
+    busy.t += 2 * S  # real busy time counts again from the adopted instant
+    assert clock.now_ns() == 502 * S
+
+
+def test_an_order_that_can_no_longer_arrive_is_cancelled_when_the_world_ends():
+    """Codex review of #151 (6a1ac93): a market order sent after the tape's last recorded
+    mid could never arrive, and the wind-down's cancel of an immediate-or-cancel order is
+    refused, so the sealed world kept it forever as pending exposure. Closing the
+    recorded market cancels it, settled like any venue cancel."""
+    rt, tape = _tape_runtime(Monotonic())
+    rt.m = replace(rt.m, kill=replace(rt.m.kill, wind_down=True))
+    rt.exchange.advance(tape.end_ns)  # the last recorded tick
+    rt.clock.now_ns = tape.end_ns
+    sent = rt.exchange.place(Order("BTC", True, Decimal("0.001"), client_id="last"))
+    assert sent.status == "resting" and rt.exchange.open_orders()[0]["in_flight"] is True
+    report = rt.kill("explicit_kill:budget")
+    assert rt.exchange.lookup("last").status == "cancelled"
+    assert rt.exchange.open_orders() == []
+    assert report["residual"]["resting"] == [] and report["exposure_state"] == "flat"
+    items = rt.ledger._recovery_items()
+    [cancel] = [i for i in items if i["kind"] == "consequence.cancel"
+                and i["order_id"] == sent.order_id]
+    kill = next(i["seq"] for i in items if i["kind"] == "kill.production")
+    assert cancel["seq"] < kill  # settled before the production mark
+    after = rt.exchange.target.place(Order("BTC", True, Decimal("0.001"), client_id="late"))
+    assert after.status == "rejected" and after.error == "the recorded market has ended"

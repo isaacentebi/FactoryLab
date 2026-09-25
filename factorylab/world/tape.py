@@ -643,6 +643,28 @@ class TapeVenue(FakeExchange):
         self._accrued = {}
         return events
 
+    def close_recording(self, ts_ns: int) -> list[WorldEvent]:
+        """End the recorded market at ``ts_ns``, when its world ends; its effects, in order.
+
+        Guarantees a sealed world's venue is settled: the funding accrued since the last
+        hour boundary is charged (``settle_accrued_funding``); every order still in
+        flight can no longer arrive, since no later row will ever be recorded, and is
+        cancelled (an immediate-or-cancel order that no counterparty ever met), each
+        with an ``OrderRejected`` the runtime settles like any venue cancel; and every
+        order sent afterwards is refused. Resting limits stay listed, for the wind-down
+        to cancel as it cancels any resting order.
+        """
+        events = self.settle_accrued_funding(ts_ns)
+        for oid, flight in list(self._inflight.items()):
+            del self._inflight[oid]
+            self._cancelled.add(oid)
+            events.append(WorldEvent(WorldEventKind.ORDER_REJECTED, self._now_ns, self.name, {
+                "order_id": oid, "coin": flight["order"].coin,
+                "reason": "the recorded market ended before the order arrived",
+                "cancelled_size": str(flight["order"].size)}))
+        self._closed = True
+        return events
+
     def funding(self) -> list[FundingEvent]:
         """The latest recorded funding rate of each perp at or before the venue's instant."""
         out = []
@@ -791,6 +813,9 @@ class TapeVenue(FakeExchange):
         if order.market == "spot" and (order.size % Decimal("0.000001")
                 or order.limit_px is not None and order.limit_px % Decimal("0.01")):
             return OrderResult(None, "rejected", Decimal(0), None, "invalid spot tick or lot size")
+        if self.__dict__.get("_closed"):
+            return OrderResult(None, "rejected", Decimal(0), None,
+                               "the recorded market has ended")
         read = self._tape.mid_at(order.coin, self._now_ns)
         if read is None:
             return OrderResult(None, "rejected", Decimal(0), None, "no recorded price yet")
