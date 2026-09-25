@@ -191,7 +191,10 @@ sampling_cap = 0.7
 max_leverage = 3
 
 [prices]
-eta = 0.5
+# eta is unstated: it is derived from the SF-0 relation (wave 16), (penalty_cap -
+# kp) / (timing.min_ratio * immune.k), so the price law alone presses a unit
+# violation onto the cap in min_ratio times the windows stable failure is
+# diagnosed in (docs/manifest.md, prices.eta).
 decay = 0.1
 min_window_events = 1
 

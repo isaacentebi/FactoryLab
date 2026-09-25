@@ -23,10 +23,14 @@ EDITION6 = "worlds/edition6-testnet-rehearsal.toml"
 
 
 def _history(path, monkeypatch):
-    """A world file the kernel refuses for its evaluator population, read as history."""
+    """A world file the kernel refuses for its evaluator population (and, since wave 16,
+    for its gains: SF-0), read as history."""
     from factorylab.runtime.worlds import WorldManifest
 
     monkeypatch.setattr(WorldManifest, "_validate_evaluator_population", lambda self: None)
+    monkeypatch.setattr(WorldManifest, "gain_headroom",
+                        lambda self: {"holds": True, "saturation_windows": 0,
+                                      "diagnosis_windows": 0, "min_ratio": 0})
     return load_manifest(path)
 
 

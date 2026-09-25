@@ -365,7 +365,10 @@ class TreasurySpec:
 class PricesSpec:
     """Price controller parameters. Not money: bare rates and bounds."""
 
-    eta: float = 0.5
+    #: The integral gain. Unstated, it is derived from the SF-0 relation (wave 16,
+    #: second addendum Q-G1; ``derived_eta``); here at the defaults (penalty_cap 0.5, kp
+    #: 0, timing.min_ratio 3, immune.k 3).
+    eta: float = 0.5 / 9
     decay: float = 0.1
     min_window_events: int = 1
     penalty_cap: float = 0.5
@@ -686,13 +689,16 @@ class WorldManifest:
         by the ratio ``timing.min_ratio`` (§IV.c: 3:1+), a ratio between two loops
         and no new constant; it also leaves the organ, which acts at most once every
         ``min_ratio`` windows, room to ratchet after its first diagnosis. It is
-        published (``world.mechanics.controller``) and not refused at load: every
-        world in the tree fails it, and a world's gains are the operator's choice.
+        published (``world.mechanics.controller``) and a manifest that fails it is
+        refused at load (wave 16, second addendum, Q-G1). A proportional gain at or
+        above the cap saturates in one window whatever ``eta`` is.
         """
         from math import ceil
 
         p, r = self.prices, self.timing.min_ratio
-        saturation = max(1, ceil((p.penalty_cap - p.kp) / p.eta))
+        # A float quotient a hair above an integer is that integer: eta stated as
+        # (cap - kp) / n saturates in n windows.
+        saturation = max(1, ceil((p.penalty_cap - p.kp) / p.eta - 1e-9))
         diagnosis = self.immune.k
         return {"saturation_windows": saturation, "diagnosis_windows": diagnosis,
                 "min_ratio": r, "holds": saturation >= r * diagnosis}
@@ -1359,6 +1365,20 @@ class WorldManifest:
             if type(value) not in (int, float) or not isfinite(value) or value < 0:
                 raise ValueError(f"prices.{name} must be finite and nonnegative")
         self._validate_evaluator_population()
+        # Essay II.II.b: stable failure is priced by its duration, which exists only
+        # while the price law has not pressed a violation onto the cap before the organ
+        # can see the attractor (wave 16, SF-0; second addendum, Q-G1). Checked last,
+        # so a world refused for another reason is refused for that one.
+        headroom = self.gain_headroom()
+        if not headroom["holds"]:
+            raise ValueError(
+                "prices: no gain headroom for the duration price: the PID alone takes a "
+                f"unit violation's penalty to prices.penalty_cap ({p.penalty_cap}) in "
+                f"{headroom['saturation_windows']} window(s) (the least w >= 1 with kp + "
+                f"w * eta >= penalty_cap; kp {p.kp}, eta {p.eta}); it must take at least "
+                f"timing.min_ratio ({headroom['min_ratio']}) times the "
+                f"{headroom['diagnosis_windows']} windows (immune.k) stable failure is "
+                f"diagnosed in, {headroom['min_ratio'] * headroom['diagnosis_windows']}")
 
 
 def duration_ns(value: Any) -> int:
@@ -1456,6 +1476,27 @@ def _manifest_immune(raw: Any) -> ImmuneSpec:
         raise ValueError("immune.price_step is required: the stable-failure ratchet's "
                          "lambda step per window")
     return ImmuneSpec(**raw)
+
+
+def derived_eta(penalty_cap: object, kp: object, min_ratio: object, k: object) -> float:
+    """The integral gain the SF-0 relation derives, for a manifest that states none.
+
+    Guarantees ``(penalty_cap - kp) / (min_ratio * k)``: the price law alone presses a
+    unit violation's penalty onto the cap in exactly ``timing.min_ratio`` times the
+    ``immune.k`` windows stable failure is diagnosed in (``gain_headroom``), a ratio
+    between two loops and no architect's constant (essay II.IV.c). When ``kp`` already
+    reaches the cap no integral gain can give the relation room; the gain is then
+    ``penalty_cap / (min_ratio * k)`` and the manifest is refused on its headroom, not
+    on a sign. Unusable inputs are left to ``validate`` to refuse.
+    """
+    numbers = (penalty_cap, kp, min_ratio, k)
+    if any(type(v) not in (int, float) or not isfinite(v) for v in numbers):
+        return 0.5 / 9
+    span = min_ratio * k
+    if span <= 0:
+        return 0.5 / 9
+    room = penalty_cap - kp
+    return (room if room > 0 else penalty_cap) / span
 
 
 def _committee(raw: dict) -> CommitteeSpec:
@@ -1700,7 +1741,9 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             # name and no integrator damping; a manifest that says so would lie.
             raise ValueError(f"prices.{key} was removed: the PID is the only price law")
     prices = PricesSpec(
-        eta=float(pr.get("eta", 0.5)),
+        eta=(float(pr["eta"]) if "eta" in pr else derived_eta(
+            pr.get("penalty_cap", 0.5), pr.get("kp", 0.0),
+            (d.get("timing") or {}).get("min_ratio", 3), (d.get("immune") or {}).get("k", 3))),
         decay=float(pr.get("decay", 0.1)),
         min_window_events=int(pr.get("min_window_events", 1)),
         penalty_cap=pr.get("penalty_cap", 0.5),

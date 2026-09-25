@@ -188,7 +188,7 @@ def test_manifest_names_no_law_and_refuses_the_removed_keys():
     from factorylab.runtime.worlds import WORLDS_DIR, load_manifest, manifest_from_dict
 
     seed = load_manifest("scripted")
-    pid = replace(seed, prices=replace(seed.prices, kp=0.5))
+    pid = replace(seed, prices=replace(seed.prices, kp=0.1, eta=0.4 / 9))  # SF-0 holds
     pid.validate()
     assert pid.canonical_json() != seed.canonical_json()
     with pytest.raises(ValueError):

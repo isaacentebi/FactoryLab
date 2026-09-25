@@ -98,21 +98,25 @@ def test_the_load_half_of_the_ratio_rule_refuses_a_horizon_inside_min_ratio_tick
 
 def test_prices_section_defaults_and_validation() -> None:
     m = manifest_from_dict(_base())
+    # Unstated, eta is derived from the SF-0 relation: (cap - kp) / (min_ratio * k).
     assert (m.prices.eta, m.prices.decay, m.prices.penalty_cap, m.prices.min_window_events) == (
-        0.5,
+        0.5 / 9,
         0.1,
         0.5,
         1,
     )
     d = _base()
-    d["prices"] = {"eta": 0.25, "decay": 0.05, "penalty_cap": 0.25, "min_window_events": 3}
+    d["prices"] = {"decay": 0.05, "penalty_cap": 0.25, "min_window_events": 3}
     m2 = manifest_from_dict(d)
     assert m2.prices.penalty_cap == 0.25 and m2.prices.min_window_events == 3
+    assert m2.prices.eta == 0.25 / 9  # derived from its own cap
     assert (
         m2.manifest_hash() != m.manifest_hash()
     )  # the controller's parameters are part of the seed
     for bad in ({"eta": 0}, {"decay": -1}, {"penalty_cap": 0}, {"penalty_cap": 1},
-                {"min_window_events": 0}):
+                {"min_window_events": 0},
+                # SF-0 (wave 16): saturating before the organ can see an attractor.
+                {"eta": 0.5}, {"kp": 0.5}, {"eta": 0.5 / 8}):
         d = _base()
         d["prices"] = bad
         with pytest.raises(ValueError):
@@ -160,7 +164,7 @@ def test_a_manifest_hashes_what_it_says_and_a_default_is_no_exception():
     assert '"chaos":{"connector_timeout":0.0' in scripted.canonical_json()
     assert '"contract":"json_object"' in scripted.canonical_json()
     assert scripted.manifest_hash() == (
-        "95695c3dc81560f7823939283e83cc9e37469d134c338f4407049edc5af64b2a"
+        "3ac63a92403f8c35c0c6bcbfc7e3a065bccaef5e4df49744a618a7c85d6aefff"
     )
 
     implicit = manifest_from_dict(_base())
