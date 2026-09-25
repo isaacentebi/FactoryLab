@@ -135,6 +135,12 @@ section is unchanged. OpenAI-hosted routes stay on the default: their hosts
 refuse a schema whose root is a union, and strict mode would require every
 property and close every object, which is a different contract.
 
+`models[].training_cutoff` is the last UTC day (`"YYYY-MM-DD"`) a model's training
+data may cover, as its provider states it; absent (the default) means unknown. It is
+fixed for the world's life and hashed. It binds only a world that replays a recorded
+tape (`[exchange.tape]`, the look-ahead guard below); no shipped world states one,
+because a cutoff is the provider's statement to record, not the architect's guess.
+
 The deterministic scripted fixture reuses its existing call schedule: the third
 registration slot installs a helper and a producer accepting `ProducerReturn`;
 the fourth tool slot requests helper → grandchild with a catalogue tool; the
@@ -1622,6 +1628,7 @@ architecture. The keys:
 | `start_ns`, `end_ns` | The first and last recorded tick stamps |
 | `markets` | The perps and pairs whose mids the tape recorded |
 | `spread_bps` | Each market's spread as the tape states it: the median recorded top-of-book spread, else the median over the tape's other recorded books, else the fake's own 2 bps |
+| `allow_unknown_cutoff` | Default `false`. Whether the operator admitted models that state no `training_cutoff` (`fastloop --allow-unknown-cutoff`); recorded, since such a model may have been trained on the tape's market |
 
 Load-time invariants: only `exchange.kind = "fake"` replays a tape (a tape world
 never reaches a live adapter, a live rail or a real-money branch); a tape world has
@@ -1630,6 +1637,24 @@ runtime refuses a venue whose tape's SHA-256 is not the manifest's, and a tape v
 under a manifest that names none, at launch and on every resume (`tape_mismatch`).
 Because the key is hashed, the Launch record carries the tape's identity and a
 resume on another tape is a different world.
+
+The look-ahead guard (load-time invariants of a tape world). A replayed market is in
+the past; a model trained on data covering it, or a seat that can read today's web,
+could know the price path it is about to be surprised by, and evaluators graded on a
+consequence the outside already knew would learn to consult it rather than judge
+(Chapter II §III.b):
+
+- Every model on the menu (not only the seed roster: a seat may move to any menu model
+  by proposal) states a `training_cutoff` whose day ends before the tape's first
+  instant. A known cutoff that does not is refused whatever else is set. A model
+  with no stated cutoff is refused unless `allow_unknown_cutoff` is true.
+- Web access is off, not a declared confound: a tape world has no `[web]` search
+  route and lists no `:online` model and no model with a `web` plugin table (the
+  harness removes them from the menu), publishes no `connector.fetch` (a fetch is
+  refused), and admits no live Polymarket reader (`polymarket_live_on_a_tape`; the
+  simulated event markets stay).
+- The scorecard's `tape` block states the cutoffs, the models admitted with none,
+  whether the operator allowed that, and `web: "off"`.
 
 What the venue replays, and how:
 

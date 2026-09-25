@@ -576,11 +576,22 @@ def tape_card(events: list[dict[str, Any]]) -> dict[str, Any] | None:
     tape = (manifest.get("exchange") or {}).get("tape")
     if not isinstance(tape, dict):
         return None
+    models = manifest.get("models") or []
     return {"sha256": tape["sha256"], "venue": f"tape:{tape['sha256'][:8]}",
             "start_ns": tape["start_ns"], "end_ns": tape["end_ns"],
             "hours": round((tape["end_ns"] - tape["start_ns"]) / 3.6e12, 3),
             "markets": tape.get("markets"),
-            "spread_bps": dict(tape.get("spread_bps") or ())}
+            "spread_bps": dict(tape.get("spread_bps") or ()),
+            # The look-ahead guard as the Launch record states it: the cutoffs the
+            # tape postdates, the models admitted with none (only when the operator
+            # allowed it), and the outside the world could read (none: web is off).
+            "training_cutoffs": {m["id"]: m.get("training_cutoff") for m in models
+                                 if m.get("training_cutoff")},
+            "unknown_cutoffs": sorted(m["id"] for m in models if not m.get("training_cutoff")),
+            "allow_unknown_cutoff": bool(tape.get("allow_unknown_cutoff")),
+            "web": ("off" if not (manifest.get("web") or {}).get("search_model")
+                    and not any(m["id"].endswith(":online") or m.get("web") for m in models)
+                    else "on")}
 
 
 def clock(events: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1005,7 +1016,7 @@ def print_card(card: dict[str, Any]) -> None:
 # --- running ------------------------------------------------------------------------
 
 def simulation_manifest(world: Path, seed: int, vault_tools: bool = False,
-                        tape: Tape | None = None) -> Any:
+                        tape: Tape | None = None, allow_unknown_cutoff: bool = False) -> Any:
     """The launch identity with only the venue swapped for the deterministic fake.
 
     ``effective_manifest`` freezes the roster, charter, seed lenses, prompts and
@@ -1018,8 +1029,15 @@ def simulation_manifest(world: Path, seed: int, vault_tools: bool = False,
     With ``tape``, the fake venue replays that recorded market, and the tape's
     identity joins the manifest (``[exchange.tape]``): its SHA-256, span, markets and
     spreads, so the Launch record carries it and a resume on another tape is refused.
+    A tape world reads nothing of today's web (critique C2; the choice is "off", not a
+    declared confound): its ``[web]`` search route and every ``:online`` or
+    search-plugin model leave the menu, and the runtime publishes no connector fetch.
+    Every remaining model must state a training cutoff the tape postdates, unless
+    ``allow_unknown_cutoff`` admits the unknown ones, which the manifest then records.
     """
     from dataclasses import replace
+
+    from factorylab.runtime.worlds import WebSpec
 
     base = load_manifest(world)
     # A hybrid capital-loop world keeps its Venice keys: on the fake venue they select
@@ -1031,17 +1049,21 @@ def simulation_manifest(world: Path, seed: int, vault_tools: bool = False,
     exchange = replace(manifest.exchange, kind="fake", mainnet=False, seed=seed,
                        spot_pairs=(), client_namespace=None,
                        vault_tools=vault_tools or manifest.exchange.vault_tools,
-                       tape=None if tape is None else tape_spec(tape))
+                       tape=None if tape is None else tape_spec(tape, allow_unknown_cutoff))
     manifest = replace(manifest, exchange=exchange, seed=seed)
+    if tape is not None:
+        manifest = replace(manifest, web=WebSpec(), models=tuple(
+            m for m in manifest.models if not (m.id.endswith(":online") or m.web)))
     manifest.validate()
     return manifest
 
 
-def tape_spec(tape: Tape) -> TapeSpec:
+def tape_spec(tape: Tape, allow_unknown_cutoff: bool = False) -> TapeSpec:
     """The manifest's ``[exchange.tape]`` for a tape: its identity, fixed for the world."""
     return TapeSpec(sha256=tape.sha256, start_ns=tape.start_ns, end_ns=tape.end_ns,
                     markets=tape.markets,
-                    spread_bps=tuple((m, str(tape.spread_bps(m)[0])) for m in tape.markets))
+                    spread_bps=tuple((m, str(tape.spread_bps(m)[0])) for m in tape.markets),
+                    allow_unknown_cutoff=allow_unknown_cutoff)
 
 
 def tape_venue(tape: Tape, manifest: Any) -> TapeVenue:
@@ -1066,9 +1088,10 @@ def tape_clock(tape: Tape, manifest: Any, ticks: int | None) -> IdleSkipClock:
 
 def _world_parts(provider_kind: str, world: Path, seed: int, cap_usd: str,
                  vault_depositor_usd: str | None, tape: Tape | None,
-                 latency_from: Path | None = None) -> tuple:
+                 latency_from: Path | None = None,
+                 allow_unknown_cutoff: bool = False) -> tuple:
     manifest = simulation_manifest(world, seed, vault_tools=bool(vault_depositor_usd),
-                                   tape=tape)
+                                   tape=tape, allow_unknown_cutoff=allow_unknown_cutoff)
     admission = rehearsal.Admission(cap_micro=int(Decimal(cap_usd) * 1_000_000),
                                     max_calls=10_000, recover_provider_failures=True)
     inner = (PolicyProvider(world) if provider_kind == "scripted"
@@ -1116,7 +1139,8 @@ def _finish(card: dict[str, Any], runtime: Any, target: Path, admission: Any,
 def run(provider_kind: str, ticks: int | None, world: Path, out: Path, cap_usd: str,
         seed: int, vault_depositor_usd: str | None = None,
         gaps_from: Path | None = None, tape_from: Path | None = None,
-        latency_from: Path | None = None) -> dict[str, Any]:
+        latency_from: Path | None = None,
+        allow_unknown_cutoff: bool = False) -> dict[str, Any]:
     """``vault_depositor_usd`` opts the world into the vault surface and scripts one
     outside depositor into every vault the factory creates, who leaves ten steps later;
     the fake's vaults earn nothing on their own, so the depositor pays no commission
@@ -1125,7 +1149,8 @@ def run(provider_kind: str, ticks: int | None, world: Path, out: Path, cap_usd: 
     ``tape_from`` (a diary or a cut tape) replays that recorded market on the
     idle-skipping clock; ``ticks`` then bounds the run, which otherwise ends when the
     tape does. ``latency_from`` gives the scripted stand-in the call latencies a paid
-    diary measured, as modelled busy time."""
+    diary measured, as modelled busy time. ``allow_unknown_cutoff`` admits models that
+    state no training cutoff onto a tape, and the manifest records that it did."""
     from factorylab.runtime.loop import Runtime
 
     if tape_from is not None and gaps_from is not None:
@@ -1135,7 +1160,8 @@ def run(provider_kind: str, ticks: int | None, world: Path, out: Path, cap_usd: 
     target.mkdir(parents=True, exist_ok=True)
     tape = None if tape_from is None else Tape.load(tape_from)
     manifest, admission, provider, exchange, latent = _world_parts(
-        provider_kind, world, seed, cap_usd, vault_depositor_usd, tape, latency_from)
+        provider_kind, world, seed, cap_usd, vault_depositor_usd, tape, latency_from,
+        allow_unknown_cutoff)
     started = time.monotonic()
     card: dict[str, Any] = {"provider": provider_kind, "out": str(target)}
     clock_source = None
@@ -1156,8 +1182,8 @@ def run(provider_kind: str, ticks: int | None, world: Path, out: Path, cap_usd: 
         "vault_depositor_usd": vault_depositor_usd,
         "tape_from": None if tape_from is None else str(tape_from),
         "tape_sha256": None if tape is None else tape.sha256,
-        "latency_from": None if latency_from is None else str(latency_from)},
-        indent=2) + "\n")
+        "latency_from": None if latency_from is None else str(latency_from),
+        "allow_unknown_cutoff": allow_unknown_cutoff}, indent=2) + "\n")
     runtime = None
     try:
         runtime = Runtime(manifest, events=ticks, seed=manifest.seed,
@@ -1195,7 +1221,8 @@ def resume(target: Path, tape_from: Path | None = None) -> dict[str, Any]:
     latency_from = spec.get("latency_from") and Path(spec["latency_from"])
     manifest, admission, provider, exchange, latent = _world_parts(
         spec["provider"], Path(spec["world"]), spec["seed"], spec["cap_usd"],
-        spec.get("vault_depositor_usd"), tape, latency_from)
+        spec.get("vault_depositor_usd"), tape, latency_from,
+        spec.get("allow_unknown_cutoff", False))
     clock_source = None if tape is None else tape_clock(tape, manifest, None)
     started = time.monotonic()
     card: dict[str, Any] = {"provider": spec["provider"], "out": str(target), "resumed": True,
@@ -1312,7 +1339,8 @@ def run_seeds(args: argparse.Namespace, seeds: list[int]) -> dict[str, Any]:
            if args.vault_depositor_usd else []),
          *(["--gaps-from", str(args.gaps_from)] if args.gaps_from else []),
          *(["--tape-from", str(args.tape_from)] if args.tape_from else []),
-         *(["--latency-from", str(args.latency_from)] if args.latency_from else [])],
+         *(["--latency-from", str(args.latency_from)] if args.latency_from else []),
+         *(["--allow-unknown-cutoff"] if args.allow_unknown_cutoff else [])],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=ROOT) for seed in seeds]
     cards = []
     for seed, proc in zip(seeds, procs, strict=True):
@@ -1351,6 +1379,9 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--latency-from", type=Path, default=None,
                    help="on a tape, give the scripted stand-in's calls the latencies this "
                         "diary's model calls took (or a JSON list of milliseconds)")
+    r.add_argument("--allow-unknown-cutoff", action="store_true",
+                   help="on a tape, admit models that state no training cutoff; the manifest "
+                        "records it (exchange.tape.allow_unknown_cutoff)")
     t = sub.add_parser("tape", help="cut a compact tape from a diary and print its identity")
     t.add_argument("diary", type=Path)
     t.add_argument("-o", "--output", type=Path, required=True)
@@ -1376,7 +1407,8 @@ def main(argv: list[str] | None = None) -> int:
         print_card(card)
         return 0 if all(c.get("status") == "completed" for c in card["seeds"]) else 1
     card = run(args.provider, args.ticks, args.world, args.out, args.cap_usd, args.seed,
-               args.vault_depositor_usd, args.gaps_from, args.tape_from, args.latency_from)
+               args.vault_depositor_usd, args.gaps_from, args.tape_from, args.latency_from,
+               args.allow_unknown_cutoff)
     print_card(card)
     return 0 if card.get("status") == "completed" else 1
 

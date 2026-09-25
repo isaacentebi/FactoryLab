@@ -70,6 +70,9 @@ class TapeSpec:
     # Each market's spread in basis points, as the tape states it (a recorded book's
     # median top-of-book spread, or the fake's own when none was recorded), as text.
     spread_bps: tuple[tuple[str, str], ...] = ()
+    # Whether the operator admitted models whose training cutoff is unknown: recorded,
+    # because such a model may have been trained on the market this tape replays.
+    allow_unknown_cutoff: bool = False
 
 
 @dataclass(frozen=True)
@@ -123,6 +126,10 @@ class ModelTier:
     # "json_schema" hands the contract to the host's constrained decoder. A transport
     # fact about the route, fixed for the world's life.
     contract: str = "json_object"
+    # The last day (UTC, "YYYY-MM-DD") the model's training data may cover, as its
+    # provider states it; None when unknown. A world replaying a recorded tape refuses
+    # a model that may have seen the tape's market (the look-ahead guard).
+    training_cutoff: str | None = None
 
 
 #: The ways a route may carry a request's contract (``ModelTier.contract``).
@@ -1143,6 +1150,38 @@ class WorldManifest:
         missing -= set(tape.markets)
         if missing:
             raise ValueError(f"exchange.tape recorded no mids for {sorted(missing)}")
+        self._validate_look_ahead()
+
+    def _validate_look_ahead(self) -> None:
+        """No model of a tape world can have seen the tape's market (critique C2).
+
+        Guarantees the replayed market postdates the training data of every model on
+        the menu (a seat may move to any of them by proposal, so the roster alone is
+        not the bound), or that the operator admitted an unknown cutoff explicitly and
+        the manifest records it; and that the world has no route to today's web: no
+        ``[web]`` search route, no ``:online`` model and no model's search plugin.
+        Evaluators graded on a consequence the web or the weights already knew would
+        learn to consult them, not to judge (Chapter II §III.b).
+        """
+        tape = self.exchange.tape
+        if type(tape.allow_unknown_cutoff) is not bool:
+            raise ValueError("exchange.tape.allow_unknown_cutoff must be true or false")
+        for model in self.models:
+            if model.training_cutoff is None:
+                if not tape.allow_unknown_cutoff:
+                    raise ValueError(
+                        f"look_ahead: model {model.id!r} states no training_cutoff; a tape "
+                        "world admits it only with exchange.tape.allow_unknown_cutoff")
+            elif cutoff_end_ns(model.training_cutoff) > tape.start_ns:
+                raise ValueError(
+                    f"look_ahead: model {model.id!r} was trained on data through "
+                    f"{model.training_cutoff}, which the tape (from {tape.start_ns} ns) does "
+                    "not postdate")
+        if self.web.search_model is not None:
+            raise ValueError("look_ahead: a tape world has no [web] search route")
+        online = [m.id for m in self.models if m.id.endswith(":online") or m.web]
+        if online:
+            raise ValueError(f"look_ahead: a tape world lists no web route; {online} are")
 
     def validate(self) -> None:
         problem = self.read_share_problem() or self.storage_problem()
@@ -1615,14 +1654,16 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
     tape = ex.get("tape")
     if tape is not None:
         if not isinstance(tape, dict) or set(tape) - {
-                "sha256", "start_ns", "end_ns", "markets", "spread_bps"}:
+                "sha256", "start_ns", "end_ns", "markets", "spread_bps",
+                "allow_unknown_cutoff"}:
             raise ValueError("unknown exchange.tape manifest key")
         spreads = tape.get("spread_bps") or {}
         tape = TapeSpec(
             sha256=tape.get("sha256"), start_ns=tape.get("start_ns"),
             end_ns=tape.get("end_ns"), markets=tuple(tape.get("markets") or ()),
             spread_bps=tuple(sorted((str(k), str(v)) for k, v in (
-                spreads.items() if isinstance(spreads, dict) else spreads))))
+                spreads.items() if isinstance(spreads, dict) else spreads))),
+            allow_unknown_cutoff=tape.get("allow_unknown_cutoff", False))
     exchange = ExchangeSpec(
         kind=ex.get("kind", "fake"),
         tape=tape,
@@ -1651,6 +1692,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             web=tuple(sorted((m.get("web") or {}).items())),
             extra_body=tuple(sorted((m.get("extra_body") or {}).items())),
             contract=_model_contract(m),
+            training_cutoff=_training_cutoff(m),
         )
         for m in d.get("models", [])
     )
@@ -1830,6 +1872,30 @@ def _optional_usd(d: dict, key: str) -> int | None:
     if type(value) not in (str, int):
         raise ValueError(f"treasury.{key} must be exact USD text or integer")
     return usd_to_micro(value, rounding="exact")
+
+
+def _training_cutoff(model: dict) -> str | None:
+    """A model's ``training_cutoff``: a UTC calendar day ``YYYY-MM-DD``, or None."""
+    value = model.get("training_cutoff")
+    if value is None:
+        return None
+    from datetime import date
+
+    try:
+        if not isinstance(value, str | date):
+            raise ValueError
+        return date.fromisoformat(str(value)).isoformat()
+    except ValueError:
+        raise ValueError(f"models.training_cutoff must be a YYYY-MM-DD day; "
+                         f"{model.get('id')!r} has {value!r}") from None
+
+
+def cutoff_end_ns(day: str) -> int:
+    """The first instant after the UTC day ``day``: when a cutoff's data ends."""
+    from datetime import UTC, date, datetime, time, timedelta
+
+    after = datetime.combine(date.fromisoformat(day) + timedelta(days=1), time(), UTC)
+    return int(after.timestamp()) * NS_PER_SECOND
 
 
 def _model_contract(model: dict) -> str:

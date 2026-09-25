@@ -49,7 +49,7 @@ def test_a_scripted_world_runs_on_a_diarys_tape_at_its_own_tick_until_the_tape_e
         tmp_path):
     tape = _short_tape(tmp_path / "short.tape.json", 8)
     card = fastloop.run("scripted", None, WORLD, tmp_path / "out", cap_usd="2", seed=1,
-                        tape_from=tmp_path / "short.tape.json")
+                        tape_from=tmp_path / "short.tape.json", allow_unknown_cutoff=True)
     assert card["status"] == "completed", card.get("error")
     events = _events(card)
     [launch] = _world_events(events, "Launch")
@@ -92,7 +92,7 @@ def test_a_market_decision_fills_a_tick_later_and_is_accounted_to_its_decision(
 
     monkeypatch.setattr(fastloop.PolicyProvider, "_decide_trade", buys_once)
     card = fastloop.run("scripted", None, WORLD, tmp_path / "out", cap_usd="2", seed=1,
-                        tape_from=tmp_path / "short.tape.json")
+                        tape_from=tmp_path / "short.tape.json", allow_unknown_cutoff=True)
     assert card["status"] == "completed", card.get("error")
     events = _events(card)
     [intent] = [e for e in events if e.get("kind") == "order.intent"
@@ -189,10 +189,10 @@ def test_a_scripted_latency_model_reproduces_the_paid_runs_delivered_gaps(tmp_pa
     longrun1's own diary measured, the scripted population on longrun1's tape delivers
     about the gaps longrun1 delivered (p50 16.1 s, p90 38.3 s over its six hours)."""
     blind = fastloop.run("scripted", None, WORLD, tmp_path / "blind", cap_usd="2", seed=1,
-                         tape_from=TAPE)
+                         tape_from=TAPE, allow_unknown_cutoff=True)
     assert blind["pace"]["delivered_s"]["p90"] == 10.0 and blind["pace"]["late_share"] == 0
     card = fastloop.run("scripted", None, WORLD, tmp_path / "paced", cap_usd="2", seed=1,
-                        tape_from=TAPE, latency_from=LATENCY)
+                        tape_from=TAPE, latency_from=LATENCY, allow_unknown_cutoff=True)
     assert card["status"] == "completed", card.get("error")
     delivered = card["pace"]["delivered_s"]
     assert 0.6 * 16.07 <= delivered["p50"] <= 1.4 * 16.07
@@ -223,7 +223,7 @@ def test_a_tape_run_resumes_only_on_the_tape_it_launched_on(tmp_path, monkeypatc
     monkeypatch.setattr(fastloop.PolicyProvider, "complete", dies)
     with pytest.raises(_Died):
         fastloop.run("scripted", None, WORLD, tmp_path / "out", cap_usd="2", seed=1,
-                     tape_from=tmp_path / "short.tape.json")
+                     tape_from=tmp_path / "short.tape.json", allow_unknown_cutoff=True)
     monkeypatch.setattr(fastloop.PolicyProvider, "complete", complete)
     [target] = (tmp_path / "out").iterdir()
     before = (target / "ledger.jsonl").read_bytes()

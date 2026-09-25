@@ -155,8 +155,13 @@ def test_the_funding_read_is_the_latest_recorded_rate_at_or_before_now(tape):
 
 
 def test_the_manifest_fixes_the_tape_and_only_the_fake_venue_replays_one(tape):
+    from factorylab.runtime.worlds import WebSpec
+
     base = load_manifest("scripted")
-    spec = TapeSpec(tape.sha256, tape.start_ns, tape.end_ns, tape.markets)
+    # A tape world lists no web route (tests/runtime/test_look_ahead.py).
+    base = replace(base, web=WebSpec(), models=tuple(replace(m, web=()) for m in base.models))
+    spec = TapeSpec(tape.sha256, tape.start_ns, tape.end_ns, tape.markets,
+                    allow_unknown_cutoff=True)
     taped = replace(base, exchange=replace(base.exchange, tape=spec, spot_pairs=()))
     taped.validate()
     assert tape.sha256 in taped.canonical_json()
@@ -174,7 +179,8 @@ def test_the_manifest_fixes_the_tape_and_only_the_fake_venue_replays_one(tape):
 
 def test_the_runtime_refuses_a_venue_whose_tape_the_manifest_does_not_fix(tape):
     base = load_manifest("scripted")
-    spec = TapeSpec(tape.sha256, tape.start_ns, tape.end_ns, tape.markets)
+    spec = TapeSpec(tape.sha256, tape.start_ns, tape.end_ns, tape.markets,
+                    allow_unknown_cutoff=True)
     taped = replace(base, exchange=replace(base.exchange, tape=spec, spot_pairs=()))
     check_tape(taped, _venue(tape))
     check_tape(base, object())

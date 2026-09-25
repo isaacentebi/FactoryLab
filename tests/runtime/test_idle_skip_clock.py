@@ -100,7 +100,8 @@ def _runtime(clock, **kw):
 def _tape_runtime(busy):
     tape = Tape.load(TAPE)
     base = load_manifest("scripted")
-    spec = TapeSpec(tape.sha256, tape.start_ns, tape.end_ns, tape.markets)
+    spec = TapeSpec(tape.sha256, tape.start_ns, tape.end_ns, tape.markets,
+                    allow_unknown_cutoff=True)
     manifest = replace(base, exchange=replace(base.exchange, tape=spec, spot_pairs=()))
     venue = TapeVenue(tape, coins=manifest.exchange.coins, start_cash_usd=Decimal(1000))
     clock = IdleSkipClock(10 * S, 50, origin_ns=tape.start_ns, monotonic=busy,
