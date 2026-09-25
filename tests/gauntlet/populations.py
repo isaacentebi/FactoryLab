@@ -469,10 +469,12 @@ def assert_prices_not_steers(result: Run, *, s5: bool = True) -> dict[str, gaunt
                                       closes=len(result.closes), foreign=foreign,
                                       touched=touched)
     asymmetric = [g for g in result.gains
-                  if not gauntlet.gain_neutral(g["before"], g["after"]).ok]
-    readings["S8-instrumented"] = gauntlet._result(
+                  if gauntlet.gain_neutral(g["before"], g["after"]).status == gauntlet.FAIL]
+    # (B): with no gain act, the instrumented half read nothing.
+    readings["S8-instrumented"] = (gauntlet._result(
         "S8-instrumented", not asymmetric, acts=len(result.gains),
         bad=[{"router": g["router"], "window": g["window"]} for g in asymmetric][:3])
+        if result.gains else gauntlet._unsupported("S8-instrumented", "no gain act"))
     failed = {name: r for name, r in readings.items() if r.status == gauntlet.FAIL}
     assert not failed, {name: r.evidence for name, r in failed.items()}
     return readings

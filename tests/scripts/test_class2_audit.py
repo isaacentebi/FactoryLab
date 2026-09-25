@@ -67,11 +67,14 @@ def test_the_provenance_pass_shows_a_commit_justified_by_a_behaviour_mix(history
     repo, base, surface, head = history
     tool.render([WORLD], tmp_path, seed=7, rendered=False, essay=None,
                 release_range=f"{base}..{head}", repo=repo)
-    prompt = (tmp_path / "prompt.md").read_text()
-    section = prompt.split("## Provenance pass", 1)[1].split("## The corpus", 1)[0]
+    section = (tmp_path / "provenance_prompt.md").read_text().split("## Provenance pass", 1)[1]
     assert surface in section and BEHAVIOUR_MIX in section
     assert "+HOLD = 'hold'" in section
     assert "notes only" not in section and f"### {head}" not in section
+    # The protocol's second prompt: a commit message may carry behaviour data, which the
+    # corpus prompt never holds ("It never sees behaviour data").
+    prompt = (tmp_path / "prompt.md").read_text()
+    assert BEHAVIOUR_MIX not in prompt and "## Provenance pass" not in prompt
 
 
 def test_a_merge_whose_conflict_resolution_adds_surface_text_is_in_the_provenance_pass(
@@ -107,8 +110,7 @@ def test_a_merge_whose_conflict_resolution_adds_surface_text_is_in_the_provenanc
 
 def test_a_range_with_no_surface_commit_renders_an_explicit_empty_section(rendered):
     out, _key = rendered
-    prompt = (out / "prompt.md").read_text()
-    section = prompt.split("## Provenance pass", 1)[1].split("## The corpus", 1)[0]
+    section = (out / "provenance_prompt.md").read_text().split("## Provenance pass", 1)[1]
     assert "(no commit in this range touched a seat-visible surface)" in section
     assert BEHAVIOUR_MIX not in section
 
@@ -183,16 +185,22 @@ def test_triage_of_an_invalid_audit_writes_nothing_and_exits_nonzero(rendered, t
     monkeypatch.setattr(tool, "TRIAGE_DIR", tmp_path / "triage")
     (tmp_path / "triage").mkdir()
     rows, summary = _output(key, canaries={c["id"] for c in key["canaries"]} - {"canary-q6"})
-    output = tmp_path / "auditor_output.jsonl"
-    output.write_text("\n".join(json.dumps(r) for r in [*rows, summary]) + "\n")
-    argv = ["triage", str(output), "--key", str(out / "canary_key.json"), "--world", WORLD,
-            "--family", "fam-x"]
+    one, two = _sample(tmp_path / "s1.jsonl", rows, summary), tmp_path / "s2.jsonl"
+    two.write_bytes(one.read_bytes())
+    argv = ["triage", str(one), str(two), "--key", str(out / "canary_key.json"),
+            "--world", WORLD, "--family", "fam-x"]
     assert tool.main(argv) == 1
     assert list((tmp_path / "triage").iterdir()) == []
     valid_rows, valid_summary = _output(key)
-    output.write_text("\n".join(json.dumps(r) for r in [*valid_rows, valid_summary]) + "\n")
+    _sample(one, valid_rows, valid_summary)
+    _sample(two, valid_rows, valid_summary)
     assert tool.main(argv) == 0
     assert (tmp_path / "triage" / f"{WORLD}.md").exists()
+
+
+def _sample(path, rows, summary):
+    path.write_text("\n".join(json.dumps(r) for r in [*rows, summary]) + "\n")
+    return path
 
 
 def test_the_canary_corpus_has_one_canary_per_question_and_three_mandatory():
@@ -223,7 +231,7 @@ def test_the_key_is_kept_out_of_the_auditors_input(rendered):
     assert len(key["controls"]) == 10
     # Every record has the same fields, planted or not: nothing marks a canary or control.
     fields = {"leaf_id", "world", "path", "text", "provenance", "surface_kind", "audience",
-              "frequency"}
+              "frequency", "change"}
     assert all(set(r) == fields for r in records)
     assert "canary" not in text and "mandatory" not in text
     prompt = (out / "prompt.md").read_text()
@@ -327,3 +335,162 @@ def test_the_triage_skeleton_records_the_family_and_leaves_out_the_canaries(rend
     text = tool.triage_skeleton(rows, verdict, world=WORLD, family="fam-x", key=key)
     assert "fam-x" in text and "Read it first." in text
     assert not any(c["path"] in text for c in key["canaries"])
+
+
+# --- the sweep against the protocol: inputs 4-6, samples, who reads, the release gate ----------
+
+
+def _diffed(rendered, history, tmp_path):
+    """A release rendered against a previous corpus in which one real leaf had other
+    text and another did not exist yet."""
+    out, _key = rendered
+    repo, _base, surface, head = history
+    previous = [json.loads(line)
+                for line in (out / "release_corpus.jsonl").read_text().splitlines()]
+    kernel = [r for r in previous if r["provenance"] == "kernel"]
+    changed, added = kernel[5], kernel[9]
+    prior = [r | {"text": "The old wording.", "leaf_id": "0" * 12} if r is changed else r
+             for r in previous if r is not added]
+    (tmp_path / "prior.jsonl").write_text("\n".join(json.dumps(r) for r in prior) + "\n")
+    (tmp_path / "rejected.jsonl").write_text(json.dumps(
+        {"finding_id": "f1", "path": changed["path"], "reason": "a formula"}) + "\n")
+    release = tmp_path / "release"
+    tool.render([WORLD], release, seed=7, rendered=False, essay=None,
+                release_range=f"{surface}..{head}", repo=repo,
+                previous_corpus=tmp_path / "prior.jsonl", rejected=tmp_path / "rejected.jsonl")
+    return release, changed, added
+
+
+def test_the_corpus_diff_is_rendered_before_the_triage_and_changed_leaves_lead(
+        rendered, history, tmp_path):
+    """Codex P2 (protocol input 5): the prompt carries the leaf diff against the last
+    audited release's corpus, before last release's triage and rejected findings, and the
+    auditor's input reads the changed leaves first."""
+    release, changed, added = _diffed(rendered, history, tmp_path)
+    prompt = (release / "prompt.md").read_text()
+    diff = prompt.index("## The corpus diff since the last audited release")
+    assert diff < prompt.index("## Last release's triage")
+    assert diff < prompt.index("## Last release's rejected findings")
+    section = prompt[diff:prompt.index("## Last release's triage")]
+    assert f"`{changed['leaf_id']}` changed" in section and "The old wording." in section
+    assert f"`{added['leaf_id']}` added" in section
+    assert '"reason": "a formula"' in prompt  # input 4: the rejected findings
+    records = [json.loads(line)
+               for line in (release / "auditor_input.jsonl").read_text().splitlines()]
+    leading = [r for r in records if r["change"] in ("added", "changed")]
+    assert records[:len(leading)] == leading  # the changed block leads
+    assert {changed["leaf_id"], added["leaf_id"]} <= {r["leaf_id"] for r in leading}
+    unchanged = [r for r in records if r["change"] == "unchanged"]
+    assert unchanged and all(r["provenance"] == "kernel" for r in unchanged)
+
+
+def test_a_canary_reads_like_its_block_and_the_release_corpus_holds_none(
+        rendered, history, tmp_path):
+    release, _changed, _added = _diffed(rendered, history, tmp_path)
+    key = json.loads((release / "canary_key.json").read_text())
+    planted = {c["leaf_id"] for c in key["canaries"]}
+    records = [json.loads(line)
+               for line in (release / "auditor_input.jsonl").read_text().splitlines()]
+    boundary = sum(1 for r in records if r["change"] in ("added", "changed"))
+    for i, record in enumerate(records):
+        if record["leaf_id"] in planted:
+            assert record["change"] == ("added" if i < boundary else "unchanged")
+    corpus = (release / "release_corpus.jsonl").read_text()
+    assert not any(leaf in corpus for leaf in planted)
+
+
+def test_the_first_release_says_it_has_no_previous_corpus(rendered):
+    out, _key = rendered
+    prompt = (out / "prompt.md").read_text()
+    assert "(no previous audited corpus" in prompt
+    records = [json.loads(line) for line in (out / "auditor_input.jsonl").read_text().splitlines()]
+    assert {r["change"] for r in records} <= {"added", "context"}
+
+
+def test_two_samples_are_unioned_and_a_one_sample_finding_is_low_confidence(rendered):
+    """The protocol: the call runs twice; the union is kept; a finding only one sample
+    made is low confidence; each sample's own summary must be complete."""
+    _out, key = rendered
+    rows, summary = _output(key)
+    extra = {"finding_id": "x1", "leaf_id": "x", "path": "p", "question": "Q4", "class": "C1"}
+    verdict = tool.validate_samples([(rows + [extra], summary), (rows, summary)], key)
+    assert verdict["valid"] and verdict["samples"] == 2
+    merged = tool.union([(rows + [extra], summary), (rows, summary)])
+    assert [f["low_confidence"] for f in merged if f.get("finding_id") == "x1"] == [True]
+    assert not any(f["low_confidence"] for f in merged if f.get("finding_id") != "x1")
+    short = {**summary, "read": summary["read"][1:]}
+    verdict = tool.validate_samples([(rows, summary), (rows, short)], key)
+    assert not verdict["valid"]
+    assert any(p.startswith("sample 2: ") for p in verdict["problems"])
+
+
+def test_triage_refuses_one_sample(rendered, tmp_path, monkeypatch):
+    out, key = rendered
+    monkeypatch.setattr(tool, "TRIAGE_DIR", tmp_path)
+    one = _sample(tmp_path / "s1.jsonl", *_output(key))
+    argv = ["triage", str(one), "--key", str(out / "canary_key.json"), "--world", WORLD,
+            "--family", "fam-x"]
+    assert tool.main(argv) == 1 and not (tmp_path / f"{WORLD}.md").exists()
+
+
+@pytest.mark.parametrize("family, why", [
+    ("anthropic/claude-sonnet-5", "authored kernel text"),
+    ("openai/gpt-5.6-luna", "authored kernel text"),
+    ("fake-haiku", "sits in"),
+])
+def test_triage_refuses_an_authoring_or_seated_family(rendered, tmp_path, monkeypatch,
+                                                      capsys, family, why):
+    out, key = rendered
+    monkeypatch.setattr(tool, "TRIAGE_DIR", tmp_path)
+    samples = [_sample(tmp_path / f"s{i}.jsonl", *_output(key)) for i in (1, 2)]
+    argv = ["triage", *map(str, samples), "--key", str(out / "canary_key.json"),
+            "--world", WORLD, "--family", family]
+    assert tool.main(argv) == 1 and why in capsys.readouterr().err
+    assert not (tmp_path / f"{WORLD}.md").exists()
+
+
+def test_triage_rotates_the_family_across_releases(rendered, tmp_path, monkeypatch, capsys):
+    out, key = rendered
+    monkeypatch.setattr(tool, "TRIAGE_DIR", tmp_path)
+    samples = [_sample(tmp_path / f"s{i}.jsonl", *_output(key)) for i in (1, 2)]
+    argv = ["triage", *map(str, samples), "--key", str(out / "canary_key.json"),
+            "--world", WORLD, "--family"]
+    assert tool.main([*argv, "google/gemini-3"]) == 0
+    assert tool.main([*argv, "gemini-3-flash"]) == 1  # the same family, next release
+    assert "rotates" in capsys.readouterr().err
+    assert tool.main([*argv, "mistralai/mistral-large"]) == 0
+
+
+def _triage_file(tmp_path, rows):
+    header = ("# Class 2 audit triage: scripted\n\n- Auditor family: gemini\n"
+              "- Canaries found: 8/8; controls flagged: 0/10; valid: True\n\n"
+              "| id | path | question | class | severity | confidence | quote | disposition "
+              "| reason |\n|---|---|---|---|---|---|---|---|---|\n")
+    path = tmp_path / "triage.md"
+    path.write_text(header + "\n".join(rows) + "\n")
+    return path
+
+
+def test_the_release_gate_refuses_an_untriaged_med_and_a_charter_fix(tmp_path):
+    """The protocol's release gate: zero untriaged HIGH or MED findings; the family and a
+    valid canary score recorded; a charter card is not the kernel's to fix."""
+    done = ["| f1 | `scripted/tools/a` | Q4 | C1 | MED | low | Read it. | FIX |  |",
+            "| f2 | `scripted/tools/b` | Q5 | C2 | HIGH | both samples | Best. | REJECT "
+            "| a formula \\| exact |",
+            "| f3 | `scripted/tools/c` | Q8 | C1 | LOW | low | x |  |  |"]
+    assert tool.release_gate(_triage_file(tmp_path, done).read_text()) == []
+    assert tool.main(["gate", "--world", WORLD,
+                      "--triage", str(_triage_file(tmp_path, done))]) == 0
+    open_med = [done[0].replace("| FIX |", "|  |")]
+    assert any("untriaged MED" in p
+               for p in tool.release_gate(_triage_file(tmp_path, open_med).read_text()))
+    charter = ["| f4 | `scripted/charter/cards/c` | Q10 | C2 | MED | low | x | FIX |  |"]
+    assert any("not the kernel's to fix" in p
+               for p in tool.release_gate(_triage_file(tmp_path, charter).read_text()))
+    unreasoned = ["| f5 | `scripted/tools/a` | Q4 | C1 | MED | low | x | ALLOW |  |"]
+    assert any("without a reason" in p
+               for p in tool.release_gate(_triage_file(tmp_path, unreasoned).read_text()))
+    assert tool.main(["gate", "--world", WORLD,
+                      "--triage", str(_triage_file(tmp_path, open_med))]) == 1
+    unrecorded = _triage_file(tmp_path, done).read_text().replace("valid: True", "valid: False")
+    assert any("canary score" in p for p in tool.release_gate(unrecorded))

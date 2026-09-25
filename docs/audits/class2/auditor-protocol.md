@@ -21,10 +21,11 @@ is good, or how cautious to be hands the factory an objective or a plan. AGENTS.
   shares their priors reads the text as they do.
 - The family is **rotated every release**. This is Chapter II §III's heterogeneity ("a
   shared foundation model is a forcing function") applied to the auditor. The family used
-  is recorded in the triage file.
+  is recorded in the triage file. `triage` refuses an authoring family, a family the
+  world seats or offers, and the family the world's last triage file records.
 - The call runs through the prepaid guard with a cap, at temperature 0, twice. The union
   of both samples' findings is kept; a finding only one sample made is marked low
-  confidence.
+  confidence. `validate` and `triage` take both samples; `triage` refuses one.
 
 ## What the auditor is given, and nothing else
 
@@ -39,11 +40,15 @@ therefore cannot recommend text that steers (AGENTS rule 2).
    minimal sufficient disclosure; the obedience constraint), §II.b (hard casts) and §IV.a
    (norms, the read-only wall, metrics ceded); AGENTS.md rules 1–5.
 3. **The allowlist** (`tests/audit/class2_allowlist.toml`), with its reasons.
-4. **Last release's triage file**, with each finding's disposition and the reasons for
-   REJECTED findings, so they are not re-litigated unless their text changed.
-5. **The corpus diff** since the last audited release. The audit reads every leaf and
-   reads changed leaves first.
-6. **The provenance pass** (a second prompt, same model): every commit since the last
+4. **Last release's triage file** (`render --previous`) and `rejected.jsonl`, with each
+   finding's disposition and the reasons for REJECTED findings, so they are not
+   re-litigated unless their text changed.
+5. **The corpus diff** since the last audited release (`render --previous-corpus`, the
+   last release's `release_corpus.jsonl`), rendered before input 4. The audit reads
+   every leaf and reads changed leaves first: they lead `auditor_input.jsonl`, and each
+   leaf carries its `change`.
+6. **The provenance pass** (a second prompt, same model: `provenance_prompt.md`, since a
+   commit message may carry behaviour data): every commit since the last
    release that touched a seat-visible surface, with its message and its diff to those
    files. The question: does any message justify text by a behaviour mix ("seats held too
    much", "judges scored refusals high")? This enforces rule 2 at the point of authorship.
@@ -131,10 +136,13 @@ the skeleton):
   drift, the entry stops excusing the finding and it returns as REVIEW).
 - **REJECT.** The auditor is wrong. The finding goes to `rejected.jsonl` with the reason
   and is input 4 at the next release.
+- **CHARTER.** A charter card or norm (see the release gate): sent to the charter's next
+  revision as an observation, never fixed in code.
 
 ## The release gate
 
-- Zero untriaged HIGH or MED findings.
+- Zero untriaged HIGH or MED findings, and a reason on every non-FIX disposition
+  (`scripts/class2_audit.py gate`).
 - The triage file is committed, recording the family used, the canary score and each
   finding with its disposition.
 - A charter card flagged by Q10, Q11 or Q12 is **not** the kernel's to fix. It is sent to
@@ -146,14 +154,22 @@ the skeleton):
 ```
 uv run python scripts/class2_audit.py render --world <world> [--world …] \
     --out work/class2/<release> --seed <n> --range <last release>..<release> \
-    [--rendered] [--previous <last triage file>]
+    [--rendered] [--previous <last triage file>] \
+    [--previous-corpus work/class2/<last release>/release_corpus.jsonl]
 # send work/class2/<release>/prompt.md with auditor_input.jsonl to the chosen family,
-# temperature 0, twice, under the prepaid guard; save the union as auditor_output.jsonl
-uv run python scripts/class2_audit.py validate work/class2/<release>/auditor_output.jsonl \
-    --key work/class2/<release>/canary_key.json
-uv run python scripts/class2_audit.py triage work/class2/<release>/auditor_output.jsonl \
-    --key work/class2/<release>/canary_key.json --world <world> --family <family>
+# temperature 0, twice, under the prepaid guard; save the samples as sample1.jsonl and
+# sample2.jsonl. Send provenance_prompt.md to the same model as the second prompt.
+uv run python scripts/class2_audit.py validate work/class2/<release>/sample1.jsonl \
+    work/class2/<release>/sample2.jsonl --key work/class2/<release>/canary_key.json
+uv run python scripts/class2_audit.py triage work/class2/<release>/sample1.jsonl \
+    work/class2/<release>/sample2.jsonl --key work/class2/<release>/canary_key.json \
+    --world <world> --family <family>
+uv run python scripts/class2_audit.py gate --world <world>
 ```
+
+`canary_key.json` and `release_corpus.jsonl` are never part of the auditor's input: the
+key names the canaries, and the unplanted corpus would reveal them by difference. Keep
+`release_corpus.jsonl` as the release artifact the next release diffs against.
 
 `docs/essay.md` is not checked in. `render` reads it from `--essay` when present and
 otherwise leaves a marked place for the operator to paste the authority text verbatim.

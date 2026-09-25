@@ -21,10 +21,19 @@ M = {"prices": {"eta": 0.5, "decay": 0.1, "lambda_max": 1.0, "penalty_cap": 0.5,
 
 
 def _w(index, *, acts=False, sf=False, thrash=False, ld=False, lam=0.0, pen=0.0,
-       profile=None, frontier=()):
+       profile=None, frontier=(), violated=None, unsettled=None, lifespans=()):
+    """An ``immune.window`` row. A stable-failure window names the card it holds (card
+    ``c`` unless ``violated`` says otherwise), as ``versions.diagnose`` does."""
+    if violated is None:
+        violated = ["card:c"] if sf else []
     return {"kind": "immune.window", "window": index, "acts": acts,
             "flags": {"stable_failure": sf, "thrash": thrash, "learning_death": ld},
-            "thrash": {"lambda": lam, "penalty": pen},
+            "thrash": {"lambda": lam, "penalty": pen}, "unsettled": unsettled,
+            "violated_cards": list(violated), "lifespans": list(lifespans),
+            # The organ's learning-death evidence names the routers it read quarantined.
+            "frontier": {"quarantined_routers": sorted(
+                r["router"] for r in frontier if r.get("quarantined") and not r.get("core"))
+                if ld else []},
             "profile": profile or {"access:registration_route": 1.0},
             "frontier_invocation": list(frontier)}
 
@@ -68,8 +77,11 @@ def test_sf0_refuses_a_world_whose_integrator_saturates_before_detection():
 
 def test_release_gain_and_learning_scales():
     ph = g.physics(M)
-    assert g.t_release(ph, 0.5) == 5 and g.t_release(ph, 0.0) == 0
-    assert g.t_gamma(ph, 0.4, 3) == 24
+    # Kernel-exact float loops: 0.5 leaks to exactly 0 in six windows at decay 0.1 (the
+    # fifth leaves 2.8e-17), and 0.4 unwinds in nine gain steps of 0.05.
+    assert g.t_release(ph, 0.5) == 6 and g.t_release(ph, 0.0) == 0
+    assert g.t_gamma(ph, 0.4, 3) == 27
+    assert g.gain_steps(ph, 0.1) == 9 and g.gain_steps(ph, 0.5) == 0
     assert g.t_learn(0.3, 3) == 37
 
 
@@ -98,6 +110,31 @@ def test_sf1a_detection_within_the_horizon_and_its_violation():
     assert g.sf1a_detection([_price_window(1, 0.5)], M, card="c").status == g.UNSUPPORTED
 
 
+def test_sf1a_episodes_reset_on_compliance_and_are_never_summed():
+    """Codex P2: violations separated by measured compliance are separate episodes, each
+    no longer than H, so an unflagged diary of them is no evidence (the kernel's
+    persistence never spans a compliant window); a window that did not measure the card
+    neither ends nor extends an episode."""
+    values = {w: (0.5 if w % 6 == 0 else 0.0) for w in range(1, 31)}  # 5-window episodes
+    rows = [_price_window(w, v) for w, v in values.items()]
+    result = g.sf1a_detection(rows + [_w(i) for i in range(1, 31)], M, card="c")
+    assert result.status == g.UNSUPPORTED and result.evidence["episodes"][0]["onset"] == 1
+    # An unmeasured window inside an episode does not reset it: 1-12 is one episode.
+    gappy = [_price_window(w, 0.0) for w in range(1, 13) if w != 6]
+    assert g.sf1a_detection(gappy + [_w(i) for i in range(1, 13)], M,
+                            card="c").status == g.FAIL
+    # A flag on another card is not a detection of this one.
+    other = [_price_window(w, 0.0) for w in range(1, 15)]
+    flagged_elsewhere = [_w(i, sf=i >= 4, violated=["card:d"]) for i in range(1, 15)]
+    assert g.sf1a_detection(other + flagged_elsewhere, M, card="c").status == g.FAIL
+    # A second episode, detected within H of its own onset, passes.
+    second = {w: (0.0 if w <= 4 or w >= 8 else 0.5) for w in range(1, 25)}
+    rows2 = [_price_window(w, v) for w, v in second.items()]
+    closes = [_w(i, sf=i >= 12) for i in range(1, 25)]
+    result = g.sf1a_detection(rows2 + closes, M, card="c")
+    assert result.ok and result.evidence["detected"][0]["onset"] == 8
+
+
 def _ratchets(*pairs):
     return [{"kind": "immune.price_ratchet", "card_id": "c", "window": w, "duration": d,
              "lambda_after": 1.0} for w, d in pairs]
@@ -117,6 +154,32 @@ def test_sf1b_duration_rises_on_the_acting_grid_and_both_resets_are_caught():
     assert any("missed_reset" in p for p in missed.evidence["problems"])
     unflagged = g.sf1b_ratchet_cadence(gap + _ratchets((6, 1)), M)
     assert unflagged.status == g.FAIL
+
+
+def test_sf1b_holds_per_card_and_needs_a_rise():
+    """The sweep (A, B): a window flagged on another card does not hold this one, so a
+    ratchet there is unflagged and an unratcheted window there is no reset; and first
+    ratchets alone never exercised the duration."""
+    # Card c is measured compliant at window 6, where the flag holds on card d alone.
+    compliant = [_price_window(6, 0.5)]
+    other = compliant + [_w(i, acts=i % 3 == 0, sf=True,
+                            violated=["card:d"] if i == 6 else None) for i in range(1, 13)]
+    assert g.sf1b_ratchet_cadence(other + _ratchets((3, 1), (9, 1), (12, 2)), M).ok
+    misplaced = g.sf1b_ratchet_cadence(other + _ratchets((3, 1), (6, 2), (9, 3)), M)
+    assert misplaced.status == g.FAIL
+    assert {"unflagged_ratchet": 6, "card": "c"} in misplaced.evidence["problems"]
+    closes = [_w(i, acts=i % 3 == 0, sf=True) for i in range(1, 5)]
+    assert g.sf1b_ratchet_cadence(closes + _ratchets((3, 1)), M).status == g.UNSUPPORTED
+
+
+def test_sf1b_an_unmeasured_card_stays_in_its_attractor():
+    """Astra M-6 (longrun1 window 24): a card that leaves ``violated_cards`` only because
+    no window of the tail measured it is still failing; a reset there is a failure."""
+    unmeasured = [_w(i, acts=i % 3 == 0, sf=True, violated=["card:d"] if i == 6 else None)
+                  for i in range(1, 13)]
+    result = g.sf1b_ratchet_cadence(unmeasured + _ratchets((3, 1), (9, 1), (12, 2)), M)
+    assert result.status == g.FAIL
+    assert {"card": "c", "window": 6, "duration_reset": [1, None]} in result.evidence["problems"]
 
 
 def _updates(card, triples):
@@ -170,6 +233,22 @@ def test_sf1d_one_capped_update_then_uncapped_ones_is_not_sustained_saturation()
     assert g.sf1d_escalation(sustained, M, card="c").status == g.FAIL  # nothing published
 
 
+def _saturated(*durations):
+    return [{"kind": "immune.price_ratchet_saturated", "card_id": "c", "duration": d}
+            for d in durations]
+
+
+def test_sf1d_durations_are_read_per_saturation_episode():
+    """The sweep (A): two sustained runs at the cap, each counted from 1, pass; the count
+    may restart only at 1, and every sustained run needs its own episode reaching r."""
+    two = _updates("c", [*[(0.5, 1.0, 0.5)] * 3, (0.2, 1.0, 0.2), *[(0.5, 1.0, 0.5)] * 3])
+    assert g.sf1d_escalation(two + _saturated(1, 2, 3, 1, 2, 3), M, card="c").ok
+    one_episode = g.sf1d_escalation(two + _saturated(1, 2, 3, 4), M, card="c")
+    assert one_episode.status == g.FAIL and one_episode.evidence["reached"] == 1
+    skipped = g.sf1d_escalation(two + _saturated(1, 2, 3, 2, 3, 4), M, card="c")
+    assert skipped.status == g.FAIL and skipped.evidence["malformed"] == [2, 3, 4]
+
+
 def _gain(window, before, after, pathology="stable_failure", router="router:Tick"):
     return {"kind": "immune.gain", "router": router, "window": window,
             "pathology": pathology, "gamma_before": [before], "gamma_after": [after]}
@@ -191,6 +270,24 @@ def test_sf1e_gain_rises_to_its_bound_and_never_unwinds_while_flagged():
     # The bound is fully flagged and the top was never reached: a failure.
     stalled = closes + steps[:3]
     assert g.sf1e_gain(stalled, M).status == g.FAIL
+
+
+def test_sf1e_the_peak_and_the_start_are_the_episodes_own():
+    """Codex P2: a router that reached the top in an earlier episode, unwound after it, and
+    then sat through a whole later episode without climbing back fails; the old reading
+    took the top over every row and passed it."""
+    first = [_w(i, acts=i % 3 == 0, sf=3 <= i <= 30) for i in range(1, 34)]
+    climb = [_gain(w, round(0.1 + 0.05 * n, 2), round(0.15 + 0.05 * n, 2))
+             for n, w in enumerate(range(3, 27, 3))]
+    unwind = [_gain(33, 0.5, 0.45, "cleared")]
+    second = [_w(i, acts=i % 3 == 0, sf=True) for i in range(34, 80)]
+    one_more = [_gain(36, 0.45, 0.5 - 1e-9)]  # never quite back to the top
+    result = g.sf1e_gain(first + second + climb + unwind + one_more, M)
+    assert result.status == g.FAIL
+    assert result.evidence["problems"][0]["episode"] == [34, 79]
+    # The later episode's γ₀ is the latest pre-episode state (0.45): one step to the top.
+    back = [_gain(36, 0.45, 0.5)]
+    assert g.sf1e_gain(first + second + climb + unwind + back, M).ok
 
 
 def _novelty(budget=1_000_000, carried=0, accrued="1/3", cap=None, amount=None, share="0.1"):
@@ -298,6 +395,15 @@ def test_sf2b_shares_are_order_blind_and_the_one_over_rank_shape_fails():
     assert g.sf2b_order_blind(exact, M, card="c").status == g.UNSUPPORTED
 
 
+def test_sf2b_is_unsupported_without_a_comparable_pair():
+    """Codex P2: one decision per (window, role) group compares nothing."""
+    alone = [_penalty("d0", 0.25) | {"terms": [{**_penalty("d0", 0.25)["terms"][0],
+                                                 "window": w}]}
+             for w in (1, 2, 3)]
+    result = g.sf2b_order_blind(alone, M, card="c")
+    assert result.status == g.UNSUPPORTED and result.evidence["groups"] == 3
+
+
 # --- thrash --------------------------------------------------------------------------------
 
 
@@ -347,6 +453,21 @@ def test_th1c_one_of_two_expected_charges_missing_fails():
     assert result.status == g.FAIL and result.evidence["missing"] == ["d3"]
     wrong_amount = [*both[:-1], {**both[-1], "charge": 0.1}]
     assert g.th1c_movement(wrong_amount, M).status == g.FAIL
+
+
+def test_th1c_compares_each_charge_exactly():
+    """The sweep (C): the expectation is ``_record_movement``'s own float arithmetic, so a
+    charge one ulp off is a different charge."""
+    rows = _seq([
+        _w(1, lam=0.4),
+        _open("d1", "a", ids=["a", "NOOP"], probs=[0.8, 0.2]),
+        _open("d2", "a", ids=["a", "NOOP"], probs=[0.1, 0.9]),
+    ])
+    charge = {"kind": "thrash.charged", "handle": "d2", "router": "router:Tick",
+              "charge": 0.4 * 0.7, "reward": 0.4}
+    assert g.th1c_movement(rows + [charge], M).ok
+    off = charge | {"charge": math.nextafter(0.4 * 0.7, 1.0)}
+    assert g.th1c_movement(rows + [off], M).status == g.FAIL
 
 
 def test_th1c_a_duplicate_charge_fails_even_at_the_right_amount():
@@ -399,6 +520,28 @@ def test_th1e_passes_only_on_an_observed_zero_and_is_unsupported_when_the_diary_
     assert g.th1e_release(unclear, M, steady_from=8).status == g.UNSUPPORTED
 
 
+def test_th1a_an_episode_already_flagged_when_the_cycle_starts_is_not_detection():
+    """The sweep (A): the flag counted is an episode's onset at or after the cycle start."""
+    straddle = [_w(i, thrash=i >= 2) for i in range(1, 15)]
+    assert g.th1a_detection(straddle, M, cycle_start=3).status == g.UNSUPPORTED
+    fresh = [_w(i, thrash=i >= 5) for i in range(1, 15)]
+    assert g.th1a_detection(fresh, M, cycle_start=3).ok
+
+
+def test_th1e_the_release_bound_is_the_released_episodes_own_peak():
+    """The sweep (A): an earlier episode's high price does not lengthen a later release.
+    The released episode (6-9) peaks at 0.2: T_rel = 2, bound 3 windows after the clear at
+    10, so a zero first seen at 16 is late; the old global peak (1.0) excused it."""
+    lam = {**{i: 1.0 for i in range(1, 4)}, **{i: 0.2 for i in range(4, 16)}}
+    rows = [_w(i, thrash=i in (1, 2, 3, 6, 7, 8, 9), lam=lam.get(i, 0.0))
+            for i in range(1, 25)]
+    result = g.th1e_release(rows, M, steady_from=8)
+    assert result.status == g.FAIL
+    assert result.evidence["peak"] == 0.2 and result.evidence["episode"] == [6, 9]
+    never = [_w(i, lam=0.0) for i in range(1, 25)]
+    assert g.th1e_release(never, M, steady_from=8).status == g.UNSUPPORTED
+
+
 def test_th1a_is_unsupported_when_the_diary_ends_inside_the_horizon():
     closes = [_w(i) for i in range(1, 6)]
     assert g.th1a_detection(closes, M, cycle_start=3).status == g.UNSUPPORTED
@@ -410,6 +553,8 @@ def test_th1f_thrash_has_priority_over_stable_failure():
     closes = [_w(1, sf=True, thrash=True)]
     assert g.th1f_priority(closes + [_gain(1, 0.2, 0.15, "thrash")], M).ok
     assert g.th1f_priority(closes + [_gain(1, 0.2, 0.25)], M).status == g.FAIL
+    # (B): no gain act in such a window never exercised the priority.
+    assert g.th1f_priority(closes, M).status == g.UNSUPPORTED
 
 
 def test_clopper_pearson_upper_bound_is_exact():
@@ -427,14 +572,29 @@ def test_th4_the_world_null_is_bounded_by_the_synthetic_null():
     assert g.th4_null(noisy, M, synthetic=(18, 600)).status == g.FAIL
 
 
+_LIFESPAN = {"loop": "seat:m", "lifespan_ticks": 2, "latency_ticks": 10, "ratio": 0.2,
+             "tick": 7}
+
+
 def test_th2_a_short_lived_configuration_reads_as_thrash_and_is_never_refused():
-    rows = [{"kind": "config.lifespan", "loop": "seat:m", "ratio": 0.2},
-            _w(1, thrash=True) | {"thrash": {"unsettled": 0.8, "lambda": 0, "penalty": 0}}]
+    rows = _seq([{"kind": "config.lifespan", **_LIFESPAN},
+                 _w(1, thrash=True, unsettled=0.8, lifespans=[_LIFESPAN])])
     assert g.th2_short_lived(rows, M, loop="seat:m").ok
     refused = rows + [{"kind": "registration.rejected", "reason": "too soon after last"}]
     assert g.th2_short_lived(refused, M, loop="seat:m").status == g.FAIL
-    unread = [rows[0], _w(1)]
+    unread = _seq([rows[0], _w(1, unsettled=0.0)])
     assert g.th2_short_lived(unread, M, loop="seat:m").status == g.FAIL
+
+
+def test_th2_reads_the_lifespan_in_the_windows_whose_tail_holds_it():
+    """The sweep (A): the windows that carry the short lifespan must read it; a high
+    reading in a later, unrelated window does not excuse a low one where it was held."""
+    held = [_w(1, unsettled=0.1, lifespans=[_LIFESPAN]), _w(2, unsettled=0.1),
+            _w(3, unsettled=0.1)]
+    later = [_w(i, thrash=True, unsettled=0.9) for i in range(4, 10)]
+    rows = _seq([{"kind": "config.lifespan", **_LIFESPAN}, *held, *later])
+    result = g.th2_short_lived(rows, M, loop="seat:m")
+    assert result.status == g.FAIL and result.evidence["misread"][0]["window"] == 1
 
 
 def _boundary(at, previous, slow=10):
@@ -504,8 +664,13 @@ def test_ld1e_and_ld1f_quarantine_is_flagged_and_gain_holds():
     # The diary ends before H windows after the quarantine began: no evidence either way.
     truncated = [_w(i, frontier=[row]) for i in range(1, 8)]
     assert g.ld1e_detection(truncated, M).status == g.UNSUPPORTED
-    assert g.ld1f_hold(closes + [_gain(6, 0.3, 0.3)], M).ok
-    assert g.ld1f_hold(closes + [_gain(6, 0.3, 0.25, "cleared")], M).status == g.FAIL
+    raised = [_gain(2, 0.25, 0.3)]
+    acting = [_w(i, acts=i == 6, ld=i >= 5, frontier=[row]) for i in range(1, 10)]
+    assert g.ld1f_hold(acting + raised, M).ok
+    assert g.ld1f_hold(acting + raised + [_gain(6, 0.3, 0.25, "cleared")],
+                       M).status == g.FAIL
+    # (B): no acting dead window with γ above its floor never exercised the hold.
+    assert g.ld1f_hold(closes + [_gain(6, 0.3, 0.3)], M).status == g.UNSUPPORTED
 
 
 def test_ld1e_two_routers_alternating_quarantine_is_no_tail():
@@ -522,6 +687,22 @@ def test_ld1e_two_routers_alternating_quarantine_is_no_tail():
     result = g.ld1e_detection(one, M)
     assert result.status == g.FAIL
     assert {run[2] for run in result.evidence["late"]} == {"router:r1"}
+
+
+def test_ld1e_a_flag_naming_another_router_is_not_detection():
+    """The sweep (A): the learning-death flag detects the router its evidence names."""
+    r1 = {"router": "router:r1", "quarantined": True, "core": False}
+    r2 = {"router": "router:r2", "quarantined": True, "core": False}
+    closes = [_w(i, ld=i >= 5, frontier=[r1, r2] if i >= 5 else [r1]) for i in range(1, 15)]
+    for w in closes:
+        w["frontier"] = {"quarantined_routers": ["router:r2"] if w["flags"]["learning_death"]
+                         else []}
+    result = g.ld1e_detection(closes, M)
+    assert result.status == g.FAIL and result.evidence["late"][0][2] == "router:r1"
+
+
+def test_s8_instrumented_with_no_base_is_unsupported():
+    assert g.gain_neutral({"bases": []}, {"bases": []}).status == g.UNSUPPORTED
 
 
 def test_of2d_every_challenge_traces_to_a_seats_return():
@@ -614,6 +795,9 @@ def test_i3c_and_i4a_niche_against_noop_and_the_blind_actuator():
     assert g.i4a_no_blind_step_back(blind, M).status == g.FAIL
     seen = [{"kind": "sampling.lower", "outcome_slope": 0.1, "verdict_slope": -0.1}]
     assert g.i4a_no_blind_step_back(seen, M).ok
+    # (B): raises alone never step back.
+    raises = [{"kind": "sampling.raise", "outcome_slope": None, "verdict_slope": None}]
+    assert g.i4a_no_blind_step_back(raises, M).status == g.UNSUPPORTED
 
 
 # --- pricing, not steering (S1-S8) --------------------------------------------------------------
@@ -654,12 +838,24 @@ def test_s4_bounds_on_penalties_rewards_and_ratchets():
     assert g.s4_boundedness(abstained, M).status == g.FAIL
 
 
+def test_s4_compares_a_clamped_penalty_exactly_and_a_weighted_one_with_an_ulp():
+    """The sweep (C): ``min(total, cap) * share`` never passes the cap, so an ulp over it
+    fails; an abstention's role-weighted sum may carry one ulp, and does not."""
+    ulp = 0.5000000000000001
+    assert g.s4_boundedness([_penalty("d", 1.0) | {"penalty": ulp}], M).status == g.FAIL
+    weighted = {"kind": "router.abstention_priced", "handle": "d", "reward": 0.0,
+                "neutral": 0.5, "penalty": ulp}
+    assert g.s4_boundedness([weighted], M).ok
+
+
 def test_s5_and_s5b_abstention_credit():
     ok = [{"kind": "router.abstention_priced", "handle": "d", "router": "router:Tick",
            "neutral": 0.5, "penalty": 0.2, "reward": 0.3}]
     assert g.s5_neutral_imputation(ok, M).ok
     bad = [ok[0] | {"reward": 0.5}]
     assert g.s5_neutral_imputation(bad, M).status == g.FAIL
+    # (C) exact: the kernel's own clip of the two ledgered values, to the last bit.
+    assert g.s5_neutral_imputation([ok[0] | {"reward": 0.3 + 1e-15}], M).status == g.FAIL
     settled = [_open("d0", "seat"), _penalty("d0", 0.0) | {"raw": 0.3}]
     assert g.s5b_observed_neutral(settled + [ok[0] | {"neutral": 0.3}], M).ok
     assert g.s5b_observed_neutral(settled + ok, M).status == g.FAIL
@@ -686,7 +882,11 @@ def test_s5b_compares_neutral_with_the_routers_computed_mean():
 def test_s7_s8_gain_names_routers_and_moves_gamma_by_one_common_step():
     assert g.s7_gain_targets([_gain(1, 0.1, 0.15)]).ok
     assert g.s7_gain_targets([_gain(1, 0.1, 0.15, router="learner:seat")]).status == g.FAIL
-    assert g.s8_gain_rows_uniform([_gain(1, 0.1, 0.15)], M).ok
+    # (C): the kernel's own step, min(gamma_max, 0.1 + 0.05), to the last bit.
+    assert g.s8_gain_rows_uniform([_gain(1, 0.1, 0.1 + 0.05)], M).ok
+    assert g.s8_gain_rows_uniform([_gain(1, 0.1, 0.15 + 1e-12)], M).status == g.FAIL
+    down = _gain(2, 0.3, 0.3 - 0.05, "cleared")
+    assert g.s8_gain_rows_uniform([down], M).ok
     split = {"kind": "immune.gain", "router": "router:Tick", "window": 1,
              "gamma_before": [0.1, 0.1], "gamma_after": [0.15, 0.2]}
     assert g.s8_gain_rows_uniform([split], M).status == g.FAIL

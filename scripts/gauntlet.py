@@ -182,13 +182,37 @@ def w_sat(ph: Physics, v: float) -> int | None:
 
 
 def t_release(ph: Physics, lam: float) -> int:
-    """Windows for a price ``lam`` to leak to zero at ``decay`` once its violation ends."""
-    return math.ceil(max(0.0, lam) / ph.decay - 1e-12)
+    """Windows for a price ``lam`` to leak to exactly zero once its violation ends.
+
+    Kernel-exact: ``PriceController._pid`` leaks the integral as
+    ``max(0.0, integral − decay)`` a window in floating point, so the count is that
+    loop's, not ``⌈lam / decay⌉`` (0.5 at decay 0.1 takes six windows, not five: the
+    fifth leaves 2.8e-17).
+    """
+    lam, windows = max(0.0, lam), 0
+    while lam > 0.0:
+        lam, windows = max(0.0, lam - ph.decay), windows + 1
+    return windows
 
 
 def t_gamma(ph: Physics, gamma: float, organ_period: int) -> int:
-    """Windows for gain raised to ``gamma`` to unwind: steps back × the organ's period."""
-    return math.ceil(max(0.0, gamma) / ph.gain_step - 1e-12) * organ_period
+    """Windows for gain raised to ``gamma`` to unwind to zero: steps back × the organ's
+    period, the steps counted by ``immune._gain``'s own float loop
+    (``max(floor, old − gain_step)``)."""
+    gamma, steps = max(0.0, gamma), 0
+    while gamma > 0.0:
+        gamma, steps = max(0.0, gamma - ph.gain_step), steps + 1
+    return steps * organ_period
+
+
+def gain_steps(ph: Physics, gamma: float) -> int:
+    """Gain acts to raise ``gamma`` to ``gamma_max``, counted by ``immune._gain``'s own
+    float loop (``min(gamma_max, old + gain_step)``): kernel-exact, never a ceiling of a
+    quotient."""
+    steps = 0
+    while gamma < ph.gamma_max:
+        gamma, steps = min(ph.gamma_max, gamma + ph.gain_step), steps + 1
+    return steps
 
 
 def t_learn(delta: float, arms: int) -> int:
@@ -347,21 +371,65 @@ def card_violations(events: Iterable[Mapping], card: str) -> dict[int, float]:
 # --- stable failure (§3.1) ----------------------------------------------------------------
 
 
+def violation_episodes(violated: Mapping[int, float]) -> list[tuple[int, int]]:
+    """The card's violation episodes as the kernel reads persistence
+    (``live.persistent_violations``): a run of measured violating windows, ended only by a
+    measured compliant window. A window that did not measure the card is missing
+    evidence, not compliance, so it neither ends an episode nor extends it. Each episode
+    is (first, last) measured violating window."""
+    episodes: list[tuple[int, int]] = []
+    start = end = None
+    for window, value in sorted(violated.items()):
+        if value > 0:
+            start = window if start is None else start
+            end = window
+        elif start is not None:
+            episodes.append((start, end))
+            start = None
+    if start is not None:
+        episodes.append((start, end))
+    return episodes
+
+
+def card_flagged(events: Iterable[Mapping], card: str) -> list[int]:
+    """The windows the organ flagged stable failure *on this card*: flagged, with the card
+    among the tail's persistently violated cards (``violated_cards``, the kernel's own
+    per-card reading, ``versions.diagnose``)."""
+    return [w["window"] for w in windows(events)
+            if (w.get("flags") or {}).get("stable_failure")
+            and f"card:{card}" in (w.get("violated_cards") or ())]
+
+
 def sf1a_detection(events: list[Mapping], manifest: Mapping, *, card: str) -> Result:
-    """SF-1a: stable failure is first flagged at most ``H`` windows after the card violates."""
+    """SF-1a: in every violation episode of the card, stable failure is first flagged on
+    it at most ``H`` windows after the episode's onset.
+
+    Episodes are the kernel's (``violation_episodes``): consecutive measured violations,
+    reset by measured compliance, never summed across episodes. Only a flag on this card
+    inside the episode counts. Per episode: a flag within ``H`` detects it; no flag, or a
+    late one, fails once the episode lasted more than ``H`` windows; a shorter unflagged
+    episode is no evidence. ``pass`` needs one detected episode and no failed one.
+    """
     ph = physics(manifest)
-    violated = card_violations(events, card)
-    onset = next((w for w, v in sorted(violated.items()) if v > 0), None)
-    flags = flagged(events, "stable_failure")
-    if onset is None:
+    episodes = violation_episodes(card_violations(events, card))
+    if not episodes:
         return _unsupported("SF-1a", "the card was never violated", card=card)
-    first = min((w for w in flags if w >= onset), default=None)
-    if first is None:
-        span = sum(1 for w, v in violated.items() if w >= onset and v > 0)
-        if span <= ph.H:
-            return _unsupported("SF-1a", "violated for no more than H windows", onset=onset)
-        return _result("SF-1a", False, onset=onset, first_flag=None, H=ph.H)
-    return _result("SF-1a", first <= onset + ph.H, onset=onset, first_flag=first, H=ph.H)
+    flags = card_flagged(events, card)
+    detected, failed, short = [], [], []
+    for start, end in episodes:
+        first = min((w for w in flags if start <= w <= end), default=None)
+        entry = {"onset": start, "last": end, "first_flag": first, "H": ph.H}
+        if first is not None and first <= start + ph.H:
+            detected.append(entry)
+        elif first is not None or end - start + 1 > ph.H:
+            failed.append(entry)
+        else:
+            short.append(entry)
+    if not detected and not failed:
+        return _unsupported("SF-1a", "no episode was violated for more than H windows",
+                            card=card, episodes=short[:5])
+    return _result("SF-1a", not failed, card=card, detected=detected[:5], failed=failed[:5],
+                   short=len(short))
 
 
 def sf1b_ratchet_cadence(events: list[Mapping], manifest: Mapping) -> Result:
@@ -379,23 +447,34 @@ def sf1b_ratchet_cadence(events: list[Mapping], manifest: Mapping) -> Result:
     * **missed reset** — an acting window was not flagged (a transient resolution)
       and the card's next ratchet did not start again at 1.
 
-    Every ratchet sits in an acting, flagged window.
+    Every ratchet sits in an acting window flagged on its own card. The episode is the
+    card's own (A, ``attractor_windows``): it begins where the kernel names the card
+    among a flagged window's ``violated_cards`` and lasts while the flag holds (without
+    thrash) and no measurement shows the card compliant. A window that did not measure
+    the card is missing evidence, not compliance (``live.persistent_violations``), so a
+    card that drops out of ``violated_cards`` only for want of a measurement is still in
+    its attractor, and a reset there is a duration reset (Astra M-6, longrun1 window
+    24). ``pass`` needs one rise observed (a ratchet of duration 2 or more): a run of
+    first ratchets alone never exercised the duration.
     """
     closes = windows(events)
     acting = [w["window"] for w in closes if w.get("acts")]
-    sf = set(flagged(events, "stable_failure"))
     thrash = set(flagged(events, "thrash"))
+    holding = {w["window"]: {c.removeprefix("card:") for c in w.get("violated_cards") or ()}
+               for w in closes if (w.get("flags") or {}).get("stable_failure")
+               and w["window"] not in thrash}
     ratchets = rows_of(events, "immune.price_ratchet")
     if not ratchets:
-        return _unsupported("SF-1b", "no ratchet was issued", flagged=len(sf))
+        return _unsupported("SF-1b", "no ratchet was issued", flagged=len(holding))
     at: dict[tuple[str, int], int] = {(row["card_id"], row["window"]): row["duration"]
                                       for row in ratchets}
     problems = [{"unflagged_ratchet": row["window"], "card": row["card_id"]}
-                for row in ratchets if row["window"] not in sf or row["window"] in thrash]
+                for row in ratchets if row["card_id"] not in holding.get(row["window"], ())]
     for cid in sorted({row["card_id"] for row in ratchets}):
+        attractor = attractor_windows(closes, holding, card_violations(events, cid), cid)
         previous = 0
         for window in acting:
-            held = window in sf and window not in thrash
+            held = window in attractor
             duration = at.get((cid, window))
             if duration is not None and held and duration != previous + 1:
                 kind = "missed_reset" if duration > previous + 1 else "duration_reset"
@@ -404,19 +483,45 @@ def sf1b_ratchet_cadence(events: list[Mapping], manifest: Mapping) -> Result:
                 problems.append({"card": cid, "window": window,
                                  "duration_reset": [previous, None]})
             previous = duration if (held and duration is not None) else 0
+    rose = any(row["duration"] >= 2 for row in ratchets)
+    if not problems and not rose:
+        return _unsupported("SF-1b", "no ratchet followed another: the duration never had "
+                            "a chance to rise", ratchets=len(ratchets))
     return _result("SF-1b", not problems, problems=problems[:20], acting=len(acting),
                    ratchets=len(ratchets))
 
 
+def attractor_windows(closes: list[Mapping], holding: Mapping[int, set[str]],
+                      measured: Mapping[int, float], card: str) -> set[int]:
+    """The windows a card sits in its failing attractor: from a window flagged stable
+    failure without thrash that names it among ``violated_cards``, while the flag holds
+    and until a window measures it compliant (an unmeasured window ends nothing)."""
+    inside, held = False, set()
+    for w in closes:
+        window = w["window"]
+        if window not in holding:
+            inside = False
+        elif card in holding[window]:
+            inside = True
+        elif window in measured and measured[window] <= 0:
+            inside = False
+        if inside:
+            held.add(window)
+    return held
+
+
 def capped_runs(events: list[Mapping], card: str, ph: Physics) -> list[list[Mapping]]:
     """The card's maximal runs of consecutive price updates whose penalty ``λ·v`` sits at
-    ``penalty_cap`` with the violation persisting. Any update below the cap ends a run."""
+    ``penalty_cap`` with the violation persisting. Any update below the cap ends a run.
+
+    "At the cap" is the kernel's own branch, exactly: ``_penalty_for`` bears
+    ``min(λ·v, penalty_cap)``, so the cap binds when ``λ·v >= penalty_cap``."""
     runs: list[list[Mapping]] = []
     current: list[Mapping] = []
     for row in rows_of(events, "price.update"):
         if row.get("card_id") != card:
             continue
-        if row["violation"] > 0 and row["lambda_after"] * row["violation"] >= ph.cap - 1e-12:
+        if row["violation"] > 0 and row["lambda_after"] * row["violation"] >= ph.cap:
             current.append(row)
         else:
             if current:
@@ -455,75 +560,120 @@ def sf1d_escalation(events: list[Mapping], manifest: Mapping, *, card: str) -> R
     Wave 16 R-E: "At saturation, ledger the fact and publish it to governance". Demanded
     only once the penalty has sat at the cap for ``min_ratio`` consecutive updates (the
     same partition as SF-1c: one capped update followed by uncapped ones is not
-    sustained saturation). Then a ``…saturated`` row exists for the card, and consecutive
-    saturated rows carry durations rising by one.
+    sustained saturation). Durations are read per saturation episode (A): an episode
+    starts at duration 1 and each next row is the previous plus one; a new episode may
+    start at 1 after the cap released, never mid-count. Every sustained run needs its
+    own episode that reached ``min_ratio``.
     """
     ph = physics(manifest)
+    sustained = [run for run in capped_runs(events, card, ph) if len(run) >= ph.r]
     longest = max((len(run) for run in capped_runs(events, card, ph)), default=0)
-    if longest < ph.r:
+    if not sustained:
         return _unsupported("SF-1d", "the penalty never sat at the cap for min_ratio "
                             "consecutive updates", card=card, longest_run=longest)
     rows = [row for row in events if str(row.get("kind", "")).endswith("saturated")
             and row.get("card_id") == card]
     durations = [row.get("duration") for row in rows]
-    rising = all(isinstance(d, int) for d in durations) and all(
-        b == a + 1 for a, b in zip(durations, durations[1:], strict=False))
-    return _result("SF-1d", bool(rows) and rising, card=card, saturated_rows=len(rows),
-                   durations=durations[:12], longest_run=longest)
+    episodes: list[list] = []
+    malformed = []
+    current: list | None = None
+    for d in durations:
+        if isinstance(d, int) and not isinstance(d, bool) and d == 1:
+            current = [d]
+            episodes.append(current)
+        elif current is not None and isinstance(d, int) and d == current[-1] + 1:
+            current.append(d)
+        else:
+            # A broken count stays broken until a new episode starts at 1.
+            malformed.append(d)
+            current = None
+    reached = sum(1 for episode in episodes if episode[-1] >= ph.r)
+    return _result("SF-1d", bool(rows) and not malformed and reached >= len(sustained),
+                   card=card, saturated_rows=len(rows), durations=durations[:12],
+                   episodes=len(episodes), reached=reached, sustained_runs=len(sustained),
+                   malformed=malformed[:5], longest_run=longest)
 
 
 def sf1e_gain(events: list[Mapping], manifest: Mapping) -> Result:
-    """SF-1e: γ reaches ``gamma_max`` within ⌈(γmax−γ0)/gain_step⌉·A windows of the flag,
-    and never unwinds while stable failure (without thrash) is flagged.
+    """SF-1e: in each stable-failure episode, γ reaches ``gamma_max`` within
+    ``(steps + 1)·A`` windows of the episode's first window, and never unwinds while
+    stable failure (without thrash) is flagged.
 
-    ``fail`` when a router's bound passed, flagged throughout, without reaching the top,
-    or when γ unwound while flagged; ``unsupported`` when some router's bound lies
-    beyond the flagged evidence (``pending``: the diary or the flag ended first);
-    ``pass`` only when every router that stepped reached the top within its bound.
+    An episode is a run of consecutive windows flagged stable failure and not thrash
+    (``immune.close_window`` raises gain exactly there: thrash takes priority), read
+    from its own start, never across episodes (A). Per router and episode, γ₀ is the
+    router's latest state before the episode (the last earlier gain row's
+    ``gamma_after``, else the first row's ``gamma_before``); ``steps`` is
+    ``gain_steps(γ₀)``, the kernel's own float loop (C); ``A`` is the organ's period, or
+    the router's own gap between raises inside the episode when longer.
+
+    ``fail`` when an episode stayed flagged through a router's bound without that router
+    reaching the top, or γ unwound while flagged; ``unsupported`` when an episode still
+    open at the diary's end has a bound beyond it; ``pass`` needs one (router, episode)
+    that reached the top within its bound (B). An episode that resolved before a
+    router's bound is no evidence for that router.
     """
     ph = physics(manifest)
+    closes = windows(events)
     flags = flagged(events, "stable_failure")
     if not flags:
         return _unsupported("SF-1e", "stable failure was never flagged")
     thrash = set(flagged(events, "thrash"))
+    episodes = _runs([w for w in flags if w not in thrash])
     period = acting_period(events, ph)
-    gains = rows_of(events, "immune.gain")
     by_router: dict[str, list[Mapping]] = defaultdict(list)
-    for row in gains:
+    for row in rows_of(events, "immune.gain"):
         by_router[row["router"]].append(row)
-    problems, reached, pending = [], {}, []
-    first_flag = flags[0]
     flag_set = set(flags)
+    if not by_router:
+        acted = [w["window"] for w in closes if w.get("acts") and w["window"] in flag_set
+                 and w["window"] not in thrash]
+        if acted:
+            return _result("SF-1e", False, why="the organ acted while flagged and no gain "
+                           "row exists", acted=acted[:5])
+        return _unsupported("SF-1e", "the organ never acted while flagged")
+    last = max(w["window"] for w in closes)
+    problems, reached, pending, resolved = [], {}, [], 0
     for router, rows in by_router.items():
-        gamma0 = min(rows[0]["gamma_before"])
-        steps = math.ceil((ph.gamma_max - gamma0) / ph.gain_step - 1e-9)
-        # A router's gain is its own outer loop (time audit T2): at least the organ's
-        # period, and its own measured gap between steps when that is longer.
-        raised = [row["window"] for row in rows
-                  if max(row["gamma_after"]) > max(row["gamma_before"])]
-        own = max([period, *(b - a for a, b in zip(raised, raised[1:], strict=False))])
-        top = next((row["window"] for row in rows
-                    if min(row["gamma_after"]) >= ph.gamma_max - 1e-12), None)
-        reached[router] = {"window": top, "period": own}
-        # The first act after the flag may come up to one period late.
-        bound = first_flag + (steps + 1) * own
-        if top is None or top > bound:
-            if max(flags) >= bound:
-                problems.append({"router": router, "reached_at": top, "steps": steps,
-                                 "period": own, "first_flag": first_flag})
+        for start, end in episodes:
+            prior = [row for row in rows if row["window"] < start]
+            inside = [row for row in rows if start <= row["window"] <= end]
+            gamma0 = min(prior[-1]["gamma_after"]) if prior else min(rows[0]["gamma_before"])
+            steps = gain_steps(ph, gamma0)
+            raised = [row["window"] for row in inside
+                      if max(row["gamma_after"]) > max(row["gamma_before"])]
+            own = max([period, *(b - a for a, b in zip(raised, raised[1:], strict=False))])
+            top = start if steps == 0 else next(
+                (row["window"] for row in inside if min(row["gamma_after"]) >= ph.gamma_max),
+                None)
+            # The first act after the flag may come up to one period late.
+            bound = start + (steps + 1) * own
+            entry = {"router": router, "episode": [start, end], "reached_at": top,
+                     "steps": steps, "period": own, "bound": bound}
+            if top is not None and top <= bound:
+                reached.setdefault(router, {"window": top, "period": own,
+                                            "episode": [start, end]})
+            elif end >= bound:
+                problems.append(entry)
+            elif end == last:
+                pending.append(entry)
             else:
-                pending.append({"router": router, "bound": bound, "last_flag": max(flags)})
+                resolved += 1
         for row in rows:
             if (row["window"] in flag_set and row["window"] not in thrash
                     and max(row["gamma_after"]) < max(row["gamma_before"])):
                 problems.append({"router": router, "unwound_while_flagged": row["window"]})
-    if not by_router:
-        return _result("SF-1e", False, why="no gain row while flagged", first_flag=first_flag)
-    if not problems and pending:
-        return _unsupported("SF-1e", "a router's bound lies beyond the flagged evidence",
-                            pending=pending[:10], reached=reached, organ_period=period)
-    return _result("SF-1e", not problems, problems=problems[:10], reached=reached,
-                   pending=pending[:10], organ_period=period)
+    evidence = {"problems": problems[:10], "reached": reached, "pending": pending[:10],
+                "resolved": resolved, "episodes": episodes[:10], "organ_period": period}
+    if problems:
+        return _result("SF-1e", False, **evidence)
+    if pending:
+        return _unsupported("SF-1e", "an open episode's bound lies beyond the diary",
+                            **evidence)
+    if not reached:
+        return _unsupported("SF-1e", "every episode resolved before a router's bound",
+                            **evidence)
+    return _result("SF-1e", True, **evidence)
 
 
 def novelty_share_ratio(ph: Physics) -> tuple[int, int]:
@@ -646,13 +796,17 @@ def sf2b_order_blind(events: list[Mapping], manifest: Mapping, *, card: str,
             key = (term["window"], role)
             groups[key].add(round(float(term["share"]), 12))
             order[key].append(float(term["share"]))
-    split = {key: sorted(values) for key, values in groups.items() if len(values) > 1}
-    if not groups:
-        return _unsupported("SF-2b", "no violated window priced two decisions", card=card)
+    # An equality needs a pair (B): only a (window, role) group of two or more decisions
+    # can show its shares equal or split.
+    comparable = {key for key, shares in order.items() if len(shares) >= 2}
+    split = {key: sorted(groups[key]) for key in comparable if len(groups[key]) > 1}
+    if not comparable:
+        return _unsupported("SF-2b", "no (window, role) group priced two decisions",
+                            card=card, groups=len(groups))
     # Longrun1's shape: shares falling as 1/rank of settlement in the window.
     rank_shaped = sum(1 for key in split
                       if all(b <= a for a, b in zip(order[key], order[key][1:], strict=False)))
-    return _result("SF-2b", not split, split_windows=len(split), windows=len(groups),
+    return _result("SF-2b", not split, split_windows=len(split), windows=len(comparable),
                    rank_shaped=rank_shaped, example=next(iter(split.items()), None),
                    seats=len(set(seats.values())))
 
@@ -686,9 +840,19 @@ def thrash_series(events: list[Mapping]) -> list[tuple[int, float, float, bool]]
 
 
 def th1a_detection(events: list[Mapping], manifest: Mapping, *, cycle_start: int) -> Result:
-    """TH-1a: thrash is flagged at most ``H`` windows after a cycle starts."""
+    """TH-1a: thrash is flagged at most ``H`` windows after a cycle starts.
+
+    The flag counted is the onset of an episode (a run of consecutive flagged windows,
+    ``versions.pathologies``) at or after the cycle's start (A): an episode already
+    flagged in the window before the cycle started belongs to what came before, and
+    detection cannot be read through it (``unsupported``).
+    """
     ph = physics(manifest)
-    first = min((w for w in flagged(events, "thrash") if w >= cycle_start), default=None)
+    thrash = flagged(events, "thrash")
+    if cycle_start - 1 in set(thrash):
+        return _unsupported("TH-1a", "thrash was already flagged when the cycle started",
+                            cycle_start=cycle_start)
+    first = min((w for w in thrash if w >= cycle_start), default=None)
     last = max((w["window"] for w in windows(events)), default=None)
     if first is None and (last is None or last < cycle_start + ph.H):
         return _unsupported("TH-1a", "the diary ends before H windows after the cycle "
@@ -709,11 +873,12 @@ def th1b_duration(events: list[Mapping], manifest: Mapping) -> Result:
         # The window before the run is the price the thrash started from.
         lams = [by_window[w] for w in range(start - 1, end + 1) if w in by_window]
         for (a, pa), (b, _pb) in zip(lams, lams[1:], strict=False):
-            if pa >= ph.cap - 1e-12:
+            # The kernel's own values, compared exactly: a price that holds is equal.
+            if pa >= ph.cap:
                 break
-            if b < a - 1e-12:
+            if b < a:
                 falls.append({"run": [start, end], "from": a, "to": b})
-            if b > a + 1e-12:
+            if b > a:
                 rose = True
     if not runs:
         return _unsupported("TH-1b", "thrash was never flagged")
@@ -768,7 +933,8 @@ def th1c_movement(events: list[Mapping], manifest: Mapping) -> Result:
     is never charged, and no draw that moved under a price goes uncharged (a mechanism
     that drops some charges fails here). Each such draw is charged exactly once (a
     duplicate charge fails even at the right amount), and each charge equals its
-    expected amount to 1e-12.
+    expected amount exactly: the expectation is ``_record_movement``'s own arithmetic
+    (``fsum`` TV, ``min(cap, λ·min(1, TV))``) on the same floats.
     """
     expected = expected_thrash_charges(events, manifest)
     charged = rows_of(events, "thrash.charged")
@@ -782,7 +948,7 @@ def th1c_movement(events: list[Mapping], manifest: Mapping) -> Result:
     bad = [{"handle": row["handle"], "charge": row["charge"],
             "expected": expected.get(row["handle"])}
            for row in charged
-           if abs(float(row["charge"]) - float(expected.get(row["handle"], 0.0))) > 1e-12]
+           if float(row["charge"]) != float(expected.get(row["handle"], 0.0))]
     return _result("TH-1c", not missing and not unexpected and not bad and not duplicated,
                    charged=len(charged), expected_positive=len(positive),
                    missing=missing[:5], unexpected=unexpected[:5], bad=bad[:5],
@@ -812,24 +978,35 @@ def th1e_release(events: list[Mapping], manifest: Mapping, *, steady_from: int) 
     H and an observed zero price within the bound; ``fail`` when a bound the diary fully
     covers passed without it; ``unsupported`` when the diary ends before a bound it has
     not yet met.
+
+    The peak is the released episode's own (A): the largest price from the window before
+    that episode (the latest pre-episode state) through the clear, never an earlier
+    episode's. The release bound is ``t_release``'s kernel-exact loop and the zero is an
+    exact 0.0 (C). With no thrash episode before the clear there is nothing to release.
     """
     ph = physics(manifest)
-    series = [s for s in thrash_series(events) if s[0] >= steady_from]
+    full = thrash_series(events)
+    series = [s for s in full if s[0] >= steady_from]
     if not series:
         return _unsupported("TH-1e", "no window after the cycle stopped")
-    peak = max((lam for w, lam, _p, _f in thrash_series(events)), default=0.0)
     last = series[-1][0]
     cleared = next((w for w, _lam, _p, flag in series if not flag
                     and all(not f for w2, _l, _pp, f in series if w2 >= w)), None)
-    evidence = {"steady_from": steady_from, "H": ph.H, "peak": peak, "last": last}
+    evidence: dict[str, Any] = {"steady_from": steady_from, "H": ph.H, "last": last}
     if cleared is None or cleared > steady_from + ph.H:
         if cleared is None and last < steady_from + ph.H:
             return _unsupported("TH-1e", "the diary ends before the flag had H windows "
                                 "to clear", **evidence)
         return _result("TH-1e", False, why="the flag did not clear within H", cleared=cleared,
                        **evidence)
+    runs = [r for r in _runs([w for w, _l, _p, flag in full if flag]) if r[1] < cleared]
+    if not runs:
+        return _unsupported("TH-1e", "no thrash episode came before the clear", **evidence)
+    start = runs[-1][0]
+    peak = max(lam for w, lam, _p, _f in full if start - 1 <= w <= cleared)
+    evidence.update(episode=list(runs[-1]), peak=peak)
     bound = t_release(ph, peak) + 1
-    zero = next((w for w, lam, _p, _f in series if w >= cleared and lam <= 1e-12), None)
+    zero = next((w for w, lam, _p, _f in series if w >= cleared and lam == 0.0), None)
     evidence.update(cleared=cleared, zero=zero, bound=bound)
     if zero is not None and zero <= cleared + bound:
         return _result("TH-1e", True, **evidence)
@@ -843,10 +1020,14 @@ def th1f_priority(events: list[Mapping], manifest: Mapping) -> Result:
     both = set(flagged(events, "thrash")) & set(flagged(events, "stable_failure"))
     if not both:
         return _unsupported("TH-1f", "no window was flagged with both")
-    bad = [row for row in rows_of(events, "immune.gain") if row["window"] in both
-           and (row.get("pathology") != "thrash"
-                or max(row["gamma_after"]) > max(row["gamma_before"]))]
-    return _result("TH-1f", not bad, windows=sorted(both)[:10], bad=bad[:3])
+    acts = [row for row in rows_of(events, "immune.gain") if row["window"] in both]
+    bad = [row for row in acts if row.get("pathology") != "thrash"
+           or max(row["gamma_after"]) > max(row["gamma_before"])]
+    if not acts:
+        # (B): with no gain act in such a window the priority was never exercised.
+        return _unsupported("TH-1f", "no gain act in a window flagged with both",
+                            windows=sorted(both)[:10])
+    return _result("TH-1f", not bad, windows=sorted(both)[:10], acts=len(acts), bad=bad[:3])
 
 
 def thrash_rate(events: list[Mapping], manifest: Mapping) -> tuple[int, int]:
@@ -906,20 +1087,44 @@ def th4_null(events: list[Mapping], manifest: Mapping, *, synthetic: tuple[int, 
 def th2_short_lived(events: list[Mapping], manifest: Mapping, *, loop: str) -> Result:
     """TH-2: every refactor of ``loop`` after the first yields a lifespan row, a lifespan
     shorter than its correcting loop is read as thrash with ``unsettled >= 1 − ratio``,
-    and no admitted registration is refused for its speed."""
+    and no admitted registration is refused for its speed.
+
+    The reading is scoped to the windows whose tail holds that lifespan (A): the first
+    ``immune.window`` that carries it in ``lifespans`` and the ``k − 1`` after it, which
+    is where ``versions.diagnose`` reads ``short_lived``. Each supported one of them
+    flags thrash with ``unsettled >= 1 − ratio``, compared exactly (the kernel's own
+    ``1.0 − ratio``). A lifespan no later window carries was never read (``fail``).
+    """
+    ph = physics(manifest)
     rows = [row for row in rows_of(events, "config.lifespan") if row.get("loop") == loop]
     if not rows:
         return _unsupported("TH-2", "the loop was never refactored twice", loop=loop)
-    worst = min(rows, key=lambda row: row["ratio"])
-    readings = [float((w.get("thrash") or {}).get("unsettled") or 0.0)
-                for w in windows(events)]
-    short = worst["ratio"] < 1
-    ok = (not short) or any(u >= 1 - worst["ratio"] - 1e-12 for u in readings)
+    closes = windows(events)
+    unread, misread, checked = [], [], 0
+    for row in rows:
+        if row["ratio"] >= 1:
+            continue
+        carrier = next((i for i, w in enumerate(closes)
+                        if any(item.get("loop") == loop and item.get("tick") == row.get("tick")
+                               for item in w.get("lifespans") or ())), None)
+        if carrier is None:
+            if any(w.get("seq", math.inf) > row.get("seq", -math.inf) for w in closes):
+                unread.append(row.get("tick"))
+            continue
+        tail = [w for w in closes[carrier:carrier + ph.k] if w.get("unsettled") is not None]
+        if tail:
+            checked += 1
+        for w in tail:
+            if not (w.get("flags") or {}).get("thrash") or w["unsettled"] < 1.0 - row["ratio"]:
+                misread.append({"window": w["window"], "ratio": row["ratio"],
+                                "unsettled": w["unsettled"]})
     speed = [row for row in rows_of(events, "registration.rejected")
              if any(word in str(row.get("reason", "")).lower()
                     for word in ("too soon", "too fast", "lifespan", "speed", "rate limit"))]
-    return _result("TH-2", ok and not speed, lifespans=len(rows), worst_ratio=worst["ratio"],
-                   max_unsettled=max(readings, default=None), speed_refusals=len(speed))
+    worst = min(rows, key=lambda row: row["ratio"])
+    return _result("TH-2", not unread and not misread and not speed, lifespans=len(rows),
+                   worst_ratio=worst["ratio"], short_checked=checked, unread=unread[:5],
+                   misread=misread[:5], speed_refusals=len(speed))
 
 
 def th3_governance_gap(events: list[Mapping], manifest: Mapping) -> Result:
@@ -994,7 +1199,9 @@ def ld1e_detection(events: list[Mapping], manifest: Mapping) -> Result:
 
     A tail is one router's own run of k or more consecutive quarantined windows, keyed
     by router identity as the organ's evidence is (same router across the tail): two
-    routers quarantined in alternate windows make no tail.
+    routers quarantined in alternate windows make no tail. Only a flag that names this
+    router (``frontier.quarantined_routers`` or ``uninvoked_routers``, the kernel's
+    ``frontier_evidence``) detects its tail: another router's flag does not (A).
     """
     ph = physics(manifest)
     closes = windows(events)
@@ -1008,8 +1215,15 @@ def ld1e_detection(events: list[Mapping], manifest: Mapping) -> Result:
     if not runs:
         return _unsupported("LD-1e", "no frontier router was quarantined for k windows")
     dead = flagged(events, "learning_death")
+    naming: dict[str, set[int]] = defaultdict(set)
+    for w in closes:
+        if w["window"] in set(dead):
+            frontier = w.get("frontier") or {}
+            for router in [*(frontier.get("quarantined_routers") or ()),
+                           *(frontier.get("uninvoked_routers") or ())]:
+                naming[str(router)].add(w["window"])
     last = max(w["window"] for w in closes)
-    unmet = [r for r in runs if not any(r[0] <= w <= r[0] + ph.H for w in dead)]
+    unmet = [r for r in runs if not any(r[0] <= w <= r[0] + ph.H for w in naming[r[2]])]
     late = [r for r in unmet if last >= r[0] + ph.H]
     if unmet and not late:
         return _unsupported("LD-1e", "the diary ends before H windows after a quarantine "
@@ -1018,13 +1232,35 @@ def ld1e_detection(events: list[Mapping], manifest: Mapping) -> Result:
 
 
 def ld1f_hold(events: list[Mapping], manifest: Mapping) -> Result:
-    """LD-1f: while learning death is flagged, no gain row lowers γ."""
+    """LD-1f: while learning death is flagged, no gain row lowers γ.
+
+    (B) The hold is exercised only at an acting window flagged learning-dead while some
+    router's γ stood above the lowest it was ever seen at (its seed, or near it): there
+    the ``cleared`` step would have lowered it (``immune.close_window``). A diary with no
+    such window is ``unsupported``, never a vacuous pass.
+    """
     dead = set(flagged(events, "learning_death"))
     if not dead:
         return _unsupported("LD-1f", "learning death was never flagged")
-    bad = [row for row in rows_of(events, "immune.gain")
+    gains = rows_of(events, "immune.gain")
+    bad = [row for row in gains
            if row["window"] in dead and max(row["gamma_after"]) < max(row["gamma_before"])]
-    return _result("LD-1f", not bad, flagged=len(dead), bad=bad[:3])
+    by_router: dict[str, list[Mapping]] = defaultdict(list)
+    for row in gains:
+        by_router[row["router"]].append(row)
+    exercised = []
+    for w in windows(events):
+        if w["window"] not in dead or not w.get("acts"):
+            continue
+        for router, rows in by_router.items():
+            floor = min(min(row["gamma_before"] + row["gamma_after"]) for row in rows)
+            prior = [row for row in rows if row["window"] < w["window"]]
+            if prior and max(prior[-1]["gamma_after"]) > floor:
+                exercised.append({"window": w["window"], "router": router})
+    if not bad and not exercised:
+        return _unsupported("LD-1f", "no acting learning-dead window found γ above its floor",
+                            flagged=len(dead))
+    return _result("LD-1f", not bad, flagged=len(dead), exercised=exercised[:5], bad=bad[:3])
 
 
 def i3c_niche_no_worse_than_noop(events: list[Mapping], manifest: Mapping) -> Result:
@@ -1071,10 +1307,11 @@ def i4a_no_blind_step_back(events: list[Mapping], manifest: Mapping) -> Result:
     evidence not compliance" (design I-4, P-3).
     """
     rows = rows_of(events, "sampling.lower", "sampling.raise")
-    if not rows:
-        return _unsupported("I-4a", "the actuator never moved")
-    blind = [row for row in rows if row["kind"] == "sampling.lower"
-             and row.get("outcome_slope") is None]
+    lowers = [row for row in rows if row["kind"] == "sampling.lower"]
+    if not lowers:
+        # (B): a raise never steps back, so only a lower exercises the property.
+        return _unsupported("I-4a", "the actuator never stepped back", moves=len(rows))
+    blind = [row for row in lowers if row.get("outcome_slope") is None]
     return _result("I-4a", not blind, moves=len(rows), blind_lowers=len(blind),
                    example=blind[:2])
 
@@ -1260,6 +1497,10 @@ UNIT_FIELDS: dict[str, tuple[str, ...]] = {
     "uptake.anticipated": ("q",),
     "uptake.forecast": ("q",),
 }
+#: A penalty that is a weighted sum over roles (``_priced_abstention``): its float sum
+#: may pass the cap by an ulp, so it alone is compared with 1e-12 of slack. Every other
+#: capped field is ``min(…, penalty_cap)`` times a share ≤ 1 and is compared exactly.
+WEIGHTED_PENALTY_KINDS = frozenset({"router.abstention_priced", "router.decline_priced"})
 #: The penalty a settlement or an abstention bears is bounded by ``penalty_cap``.
 CAPPED_FIELDS: dict[str, tuple[str, ...]] = {
     "price.penalty": ("penalty",),
@@ -1298,12 +1539,13 @@ def s4_boundedness(events: list[Mapping], manifest: Mapping) -> Result:
         for row in rows_of(events, kind):
             for name in fields:
                 value = _field(row, name)
-                if isinstance(value, int | float) and value > ph.cap + 1e-12:
+                slack = 1e-12 if kind in WEIGHTED_PENALTY_KINDS else 0.0
+                if isinstance(value, int | float) and value > ph.cap + slack:
                     bad.append({"kind": kind, "field": name, "value": value,
                                 "cap": ph.cap, "handle": row.get("handle")})
     for row in rows_of(events, "immune.price_ratchet"):
         checked += 1
-        if row["lambda_after"] > ph.lambda_max + 1e-12:
+        if row["lambda_after"] > ph.lambda_max:  # min(lambda_max, …): exact
             bad.append({"kind": row["kind"], "card": row["card_id"]})
     if not checked:
         return _unsupported("S4", "no row carries a score, a reward or a ratchet")
@@ -1312,13 +1554,14 @@ def s4_boundedness(events: list[Mapping], manifest: Mapping) -> Result:
 
 def s5_neutral_imputation(events: list[Mapping], manifest: Mapping) -> Result:
     """S5: an abstention and a declined commission are credited by one formula:
-    ``clip(neutral − penalty, 0, 1)`` on the router's own neutral (R9, D4)."""
+    ``clip(neutral − penalty, 0, 1)`` on the router's own neutral (R9, D4), exactly as
+    ``_priced_abstention`` computes it from the two values it ledgers."""
     rows = rows_of(events, "router.abstention_priced", "router.decline_priced")
     if not rows:
         return _unsupported("S5", "no abstention or decline was priced")
     bad = [row["handle"] for row in rows
-           if abs(float(row["reward"]) - min(1.0, max(0.0, float(row["neutral"])
-                                                      - float(row["penalty"])))) > 1e-12]
+           if float(row["reward"]) != min(1.0, max(0.0, float(row["neutral"])
+                                                   - float(row["penalty"])))]
     return _result("S5", not bad, priced=len(rows), bad=bad[:5])
 
 
@@ -1376,11 +1619,17 @@ def s8_gain_rows_uniform(events: list[Mapping], manifest: Mapping) -> Result:
         return _unsupported("S8", "no gain row")
     bad = []
     for row in gains:
-        steps = {round(b - a, 12) for a, b in zip(row["gamma_before"], row["gamma_after"],
-                                                  strict=True)}
-        if len(steps) != 1 or abs(next(iter(steps))) > ph.gain_step + 1e-12 \
-                or max(row["gamma_after"]) > ph.gamma_max + 1e-12:
-            bad.append({"router": row["router"], "window": row["window"], "steps": sorted(steps)})
+        pairs = list(zip(row["gamma_before"], row["gamma_after"], strict=True))
+        steps = {b - a for a, b in pairs}
+        # ``immune._gain``'s own step, exactly: up is min(gamma_max, old + gain_step);
+        # down is old − gain_step, or less of a step where the seed floor binds.
+        if row.get("pathology") == "stable_failure":
+            wrong = [b for a, b in pairs if b != max(a, min(ph.gamma_max, a + ph.gain_step))]
+        else:
+            wrong = [b for a, b in pairs if not (a - ph.gain_step <= b <= a)]
+        if len(steps) != 1 or wrong or max(row["gamma_after"]) > ph.gamma_max:
+            bad.append({"router": row["router"], "window": row["window"],
+                        "steps": sorted(steps), "wrong": wrong[:3]})
     return _result("S8", not bad, gains=len(gains), bad=bad[:5])
 
 
@@ -1397,6 +1646,9 @@ def gain_neutral(before: Mapping[str, Any], after: Mapping[str, Any]) -> Result:
     rows_b, rows_a = before.get("bases") or [], after.get("bases") or []
     if len(rows_b) != len(rows_a):
         return _result("S8-instrumented", False, why="the router's rows changed")
+    if not rows_b:
+        # (B): no base, no act to read.
+        return _unsupported("S8-instrumented", "the router saved no base")
     steps = set()
     for b, a in zip(rows_b, rows_a, strict=True):
         wb, wa = _weights(b), _weights(a)
