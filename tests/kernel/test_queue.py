@@ -318,3 +318,140 @@ def test_a_final_decision_s_actions_are_folded_then_forgotten(queue, open_decisi
     queue.record_actions(timed_out, [key])
     queue.time_out([timed_out], 0)
     assert timed_out in queue.state()["actions"]  # a late settlement may still come
+
+
+# ---- wave 17b: a decision is released once no score is owed to it -----------------
+
+
+def _read_all(queue, actor="learner"):
+    queue.release_delivered(actor, queue.delivered_count(actor))
+
+
+def test_a_fully_settled_decision_is_released_to_a_tombstone(queue, open_decision, clock):
+    """Essay II.I.b: the queue holds decisions "awaiting their reward"; one that has
+    all of it, read by its consumer, keeps only its handle's answer."""
+    from factorylab.kernel.queue import Released
+
+    handle = open_decision()
+    clock.now = 150
+    settle(queue, handle, score=0.75)
+    contract = queue.get(handle).propensity.chosen
+    _read_all(queue)
+    assert queue.owed(handle) is None
+    tomb = queue.release(handle, author="seat-a")
+    assert (tomb.handle, tomb.author, tomb.status, tomb.settled_ns) == (
+        handle, "seat-a", SettleStatus.SETTLED, 150)
+    for read in (queue.get, queue.history, queue.propensities, queue.declared_propensity):
+        with pytest.raises(Released) as released:
+            read(handle)
+        assert released.value.tombstone == tomb
+        assert isinstance(released.value, KeyError)  # every tolerant reader tolerates it
+    assert queue.is_released(handle) and queue.tombstone(handle) == tomb
+    assert handle not in queue.retained()
+    # The per-contract history and the delivery count are unchanged.
+    assert queue.has_history(contract)
+    assert queue.delivered_count("learner") == 1
+    assert queue.released_counts() == {"settled": 1}
+
+
+def test_invariant_a_release_never_drops_a_decision_still_owed_a_score(queue, open_decision):
+    """Violation attempts: release a pending decision, a timed-out one (its late
+    settlement keeps its right), a parent whose child is retained, one whose return
+    its consumer has not read, one released already, and a handle never issued."""
+    pending = open_decision()
+    timed_out = open_decision()
+    queue.time_out([timed_out], 0)
+    parent = open_decision()
+    child = open_decision(parent_handle=parent)
+    settle(queue, parent)
+    unread = open_decision()
+    settle(queue, unread)
+    before = queue.state()
+    for handle, debt in ((pending, "pending"), (timed_out, "timed out"),
+                         (parent, "child"), (unread, "not read")):
+        with pytest.raises(ValueError, match=debt):
+            queue.release(handle, author=None)
+    assert queue.state() == before  # a refused release changes nothing
+    with pytest.raises(KeyError):
+        queue.release("decision-999", author=None)
+    # Each debt paid, each release goes through; a second release is refused.
+    settle(queue, pending)
+    settle(queue, timed_out, score=0.9)  # the late settlement's right survived
+    settle(queue, child)
+    _read_all(queue)
+    for handle in (pending, timed_out, unread):
+        queue.release(handle, author=None)
+    with pytest.raises(ValueError, match="child"):
+        queue.release(parent, author=None)
+    queue.release(child, author=None)
+    queue.release(parent, author=None)
+    with pytest.raises(KeyError):
+        queue.release(parent, author=None)
+    assert queue.retained() == []
+
+
+def test_invariant_a_parent_cannot_be_named_once_released(queue, open_decision):
+    """Violation attempt: open a child under a released parent, or settle it again."""
+    parent = open_decision()
+    settle(queue, parent)
+    _read_all(queue)
+    queue.release(parent, author=None)
+    with pytest.raises(ValueError):
+        open_decision(parent_handle=parent)
+    with pytest.raises(KeyError):
+        settle(queue, parent)
+
+
+def test_tombstones_compact_into_counts_and_ranges_past_a_horizon(queue, open_decision,
+                                                                    clock):
+    from factorylab.kernel.queue import Released
+
+    handles = []
+    for at in (10, 20, 30, 40):
+        clock.now = at
+        handle = open_decision(deadline_ns=at + 10)
+        settle(queue, handle, **({"status": "censored"} if at == 30 else {}))
+        handles.append(handle)
+    kept = open_decision(deadline_ns=clock.now + 10)  # a pending decision after them
+    _read_all(queue)
+    for handle in handles:
+        queue.release(handle, author="seat")
+    assert queue.compact_released(25) == 2
+    assert queue.tombstone(handles[0]) is None and queue.tombstone(handles[2]) is not None
+    assert all(queue.is_released(h) for h in handles)
+    assert not queue.is_released(kept) and not queue.is_released("decision-99")
+    assert queue.compact_released(10**9) == 2
+    assert queue.released_counts() == {"settled": 3, "censored": 1}
+    assert queue.state()["compacted_ranges"] == [[0, 3]]
+    assert queue.tombstones() == []
+    with pytest.raises(Released) as released:
+        queue.get(handles[1])
+    assert released.value.tombstone is None
+    assert queue.get(kept).status is SettleStatus.PENDING
+
+
+def test_release_state_survives_a_checkpoint(queue, open_decision):
+    from factorylab.kernel.ledger import Ledger
+    from factorylab.kernel.queue import DecisionQueue
+
+    parent = open_decision()
+    child = open_decision(parent_handle=parent)
+    other = open_decision()
+    settle(queue, child)
+    settle(queue, other)
+    _read_all(queue)
+    queue.release(other, author="seat")
+    settle(queue, parent)  # delivered, not yet read
+    twin = DecisionQueue(Ledger())
+    twin._restore_state(queue.state())
+    assert twin.state() == queue.state()
+    assert twin.tombstone(other) == queue.tombstone(other)
+    # The derived debts are rebuilt: the parent still has its child and its unread return.
+    assert twin.owed(parent) == queue.owed(parent) == "a retained child names it as its parent"
+    twin.release(child, author=None)
+    assert twin.owed(parent) == "a delivered return was not read by its consumer"
+    # A checkpoint written before releases restores with nothing released.
+    older = {k: v for k, v in queue.state().items()
+             if k not in ("closed_ns", "tombstones", "compacted", "compacted_ranges")}
+    twin._restore_state(older)
+    assert twin.tombstones() == [] and twin.released_counts() == {}

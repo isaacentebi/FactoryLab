@@ -68,6 +68,7 @@ from factorylab.runtime.routing import (
     PopulationEvent,
     RoutingMixin,
 )
+from factorylab.runtime.settled import RELEASED_REFUSAL, SettledMixin
 from factorylab.runtime.shared import (
     CH_CONFORMITY,
     CH_EXPOSURE,
@@ -166,6 +167,8 @@ class Runtime(
     PricingMixin,
     FeedbackMixin,
     SummaryMixin,
+    # Release of fully settled decisions (wave 17b) reads every book above it.
+    SettledMixin,
     BootstrapMixin,
     ComputeMixin,
 ):
@@ -682,22 +685,69 @@ class Runtime(
         self._prune_event_log()
         self._slim_return_events()
         self._release_read_deliveries()
+        # Every decision no score is owed to any more (wave 17b, ``SettledMixin``), and
+        # every inbox item acknowledged or past its published retention horizon.
+        self._release_settled()
+        self._release_inbox()
 
     def _release_read_deliveries(self) -> None:
-        """Release, in the kernel queue, every router's deliveries it has already read.
+        """Release, in the kernel queue, every delivery its one reader has already read.
 
         Readers of the deliveries addressed to a router learner (``router:<kind>``
         ids, the keys of ``delivered_seen``): ``_deliver_returns`` reads them from its
         cursor ``delivered_seen[lid]`` on, and ``_retain_router`` and
         ``_prune_price_evidence`` compare their count with that cursor. A cursor
         only advances, and a router id starting at 0 is fresh, never used before
-        (``_fresh_router_id``). Governance reads the deliveries of committee seats,
-        whose ids (``assembly:<id>``) are never router ids and are never released.
-        So every delivery before a router's cursor is unreachable; the kernel keeps
-        its count (``DecisionQueue.release_delivered``) and every decision stays.
+        (``_fresh_router_id``). The deliveries of a seat (``assembly:<id>``: its
+        ballots, testimony, posts and uptake) are read by its next ballot, from its
+        cursor ``policy_seen[lid]`` on (wave 17b), and those delivered longer ago than
+        the published retention are released unread. So every delivery before its
+        reader's cursor is unreachable; the kernel keeps its count
+        (``DecisionQueue.release_delivered``), and a decision whose deliveries are
+        all read may be released once no other score is owed to it (``_score_owed``).
         """
         for lid, seen in self.delivered_seen.items():
             self.queue.release_delivered(lid, seen)
+        # A seat's policy returns are read by its next ballot, once (wave 17b: a
+        # verdict "is consumed as a reward signal ... and then discarded", essay
+        # II.IV.c); ``policy_seen`` is that reader's cursor, and it only advances.
+        for lid, seen in self.policy_seen.items():
+            self.queue.release_delivered(lid, seen)
+        # An actor that is no router and no live seat has no reader now: a forecast's
+        # evaluator id (``open_forecast_decision``), a retired seat. Its deliveries are
+        # discarded as made; the count stays, and a retired seat's cursor moves past
+        # them, so an id versioned again reads on from there.
+        live_seats = {f"assembly:{aid}" for aid in self.assemblies
+                      if aid not in self.retired_assemblies}
+        # A live seat that is not balloted within the published retention
+        # (``outcome_retention_ticks``, the inbox's rule) is not shown the policy
+        # returns delivered to it before then: they are released unread. Each
+        # boundary marks how many had been delivered by its tick; a mark older than
+        # the retention releases everything delivered by it (the inbox's rule).
+        now, retention = self.ticks_consumed, self._inbox_retention_ticks()
+        holding = self.queue.delivery_actors()
+        for actor in holding:
+            if actor in self.delivered_seen:
+                continue
+            count = self.queue.delivered_count(actor)
+            if actor not in live_seats:
+                self.queue.release_delivered(actor, count)
+                if actor.startswith("assembly:"):
+                    # A retired id can be versioned again and inherit its records: its
+                    # next ballot reads on from here, never below what was discarded.
+                    self.policy_seen[actor] = max(self.policy_seen.get(actor, 0), count)
+                continue
+            marks = self.policy_marks.setdefault(actor, [])
+            if not marks or marks[-1][1] != count:
+                marks.append([now, count])
+            due = [mark for mark in marks if mark[0] < now - retention]
+            if due and due[-1][1] > self.policy_seen.get(actor, 0):
+                self.queue.release_delivered(actor, due[-1][1])
+                self.policy_seen[actor] = due[-1][1]
+            marks[:] = [mark for mark in marks if mark[0] >= now - retention]
+        holding = set(self.queue.delivery_actors())
+        for actor in [a for a in self.policy_marks if a not in holding]:
+            del self.policy_marks[actor]
 
     def _slim_return_events(self) -> None:
         """Drop the payload of every published return no judgement can accept any more.
@@ -1166,6 +1216,12 @@ class Runtime(
                 return False
             return True
 
+        if (about != subject and isinstance(about, str) and about != handle
+                and self.queue.is_released(about)):
+            # Wave 17b: a decision no score was owed to any more was released; its
+            # handle still answers, and the answer is that it settled and was released.
+            self._refuse_judgement(handle, RELEASED_REFUSAL, about)
+            return None
         if about != subject and not (isinstance(about, str) and about != handle
                                      and about in self.return_events and addressable(about)):
             # A value that names no return is not a choice of target: the judgement

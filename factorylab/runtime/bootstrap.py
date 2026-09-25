@@ -582,6 +582,22 @@ class BootstrapMixin:
         self.delivered_seen: dict[str, int] = {
             st.learner.id: 0 for st in self._all_router_states()
         }
+        # Wave 17b: each seat's cursor over its own deliveries (``assembly:<id>``), read
+        # by its next ballot; the committee-eligibility tally kept at settlement and
+        # the evidence pairs it counted for retained decisions; and the order intents
+        # of released decisions, as counts (``released_intents``).
+        self.policy_seen: dict[str, int] = {}
+        # Each seat's delivery count at recent boundaries, [[tick, count]], oldest
+        # first: what its deliveries were at a tick, so those older than the
+        # published retention can be released unread (wave 17b).
+        self.policy_marks: dict[str, list[list[int]]] = {}
+        # The venue transactions of released decisions' vault writes, [hash, the clock
+        # when it was released], while a vault lookup's window can still return one
+        # (``_prune_vault_released``): still bound, so no later write takes it.
+        self.vault_released_hashes: list[list] = []
+        self.eligibility_tally: dict[str, int] = {}
+        self.eligibility_evidence: set[tuple[str, str]] = set()
+        self.released_intents: dict[str, int] = {}
         self.vote_handles: dict[str, str] = {}
         self.order_intents: dict[str, dict] = {}
         # The vault surface ([venue] vault_tools): vault writes by client id, the
@@ -655,6 +671,8 @@ class BootstrapMixin:
         self.outcomes.consequences_open = lambda handle: (
             self.consequences.account_open(handle)
             or self.outcomes.seat_of(handle) not in self.retired_assemblies)
+        # Wave 17b: an item's retention horizon counts world ticks.
+        self.outcomes.tick = lambda: self.ticks_consumed
         if not self.ledger.bootstrap:
             # The manifest may hand a seat its first head — a lens, a method, a
             # starting hypothesis. It is the initial value of a pointer the seat

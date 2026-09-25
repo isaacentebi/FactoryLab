@@ -1073,9 +1073,10 @@ class FeedbackMixin:
         stays as it was; only the claim moves.
         """
         for handle, micro in self.consequences.settle_late(self.n).items():
-            owner = self.handle_to_assembly.get(handle) or self.outcomes.seat_of(handle)
+            owner = (self.handle_to_assembly.get(handle) or self.outcomes.seat_of(handle)
+                     or self._released_owner(handle))
             if owner is None or owner not in self.assemblies:
-                self._undeliverable("late_realization", handle, "no live seat owns that decision")
+                self._late_undeliverable(handle, micro)
                 continue
             self._book_consequence(owner, micro, "late_consequence", handle)
             # A realisation after the outcome was fixed is still this seat's news (C1).

@@ -555,10 +555,15 @@ def test_in_a_world_every_unjudged_refusal_and_decline_settles_at_the_abstention
                  ledger_path=None, router_gamma=0.1, provider=Standoff())
     rt.run()
     tick = {s.learner.id for s in rt._all_router_states() if s.kind == "Tick"}
-    drawn = {i["handle"]: i["propensity"]["chosen"] for i in rt.ledger._recovery_items()
+    items = rt.ledger._recovery_items()
+    drawn = {i["handle"]: i["propensity"]["chosen"] for i in items
              if i.get("kind") == "decision.open" and i.get("actor") in tick}
-    outcomes = Counter((drawn[h], lr.status, lr.definition_version)
-                       for h in drawn for lr in rt.queue.history(h))
+    # Every return each decision received, from the diary: a decision fully settled is
+    # released from the queue (wave 17b), and the diary is the record.
+    outcomes = Counter((drawn[i["return"]["handle"]], SettleStatus(i["return"]["status"]),
+                        i["return"]["definition_version"]) for i in items
+                       if i.get("kind") in ("decision.settle", "decision.timeout")
+                       and i["return"]["handle"] in drawn)
     # No refusal escapes into a censored, unpriced settlement.
     assert not any(seat == REFUSER and status is SettleStatus.CENSORED
                    for seat, status, _d in outcomes)
