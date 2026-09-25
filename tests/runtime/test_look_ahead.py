@@ -30,7 +30,7 @@ WORLD = Path(__file__).parents[2] / "worlds" / "edition6-testnet-rehearsal.toml"
 
 def _taped(*, allow=False, cutoffs=None, base=None):
     base = base or load_manifest("scripted")
-    spec = TapeSpec(TAPE.sha256, TAPE.start_ns, TAPE.end_ns, TAPE.markets,
+    spec = TapeSpec.of(TAPE,
                     allow_unknown_cutoff=allow)
     # The scripted world buys web search on one route: a tape world lists none.
     models = tuple(replace(m, web=(), training_cutoff=(cutoffs or {}).get(m.id))

@@ -170,6 +170,40 @@ def test_a_resting_orders_rest_instant_is_dropped_whenever_it_stops_resting():
     assert poor_oid not in poor._rested_ns and poor.open_orders() == []
 
 
+def _spot_crossing(spot_cash):
+    """A spot buy of 4 PURR at 5.01 meeting 2 PURR offered at 5.00 on arrival."""
+    rows = [(0, 5), (10, 5)]
+    purr = [(t, [(Decimal("4.99"), Decimal(2))], [(Decimal(5), Decimal(2))]) for t, _ in rows]
+    venue = _venue(_tape({"BTC": [(0, 100), (10, 100)], "PURR/USDC": rows},
+                         books={"PURR/USDC": purr}))
+    venue.class_transfer(Decimal(spot_cash), to_perp=False)
+    venue.advance(T0)
+    venue.place(_buy("4", limit="5.01", cid="spot", market="spot", coin="PURR/USDC"))
+    return venue, venue.advance(T0 + 10 * S)
+
+
+def test_a_partly_filled_spot_limit_rests_a_remainder_it_can_afford():
+    """Codex review of #151: after a partial crossing fill, affordability was checked on
+    the whole order at the taker rate, so an affordable remainder was refused and the
+    order reported as rejected, zero filled, though its fill had been booked."""
+    venue, events = _spot_crossing("20.05")  # 10 + 0.007 paid; 10.02 + 0.004 rests
+    [fill] = _fills(events)
+    assert Decimal(fill["size"]) == 2 and not _rejections(events)
+    looked = venue.lookup("spot")
+    assert looked.status == "resting" and looked.filled_size == 2
+    assert [o["size"] for o in venue.open_orders()] == [Decimal(2)]
+
+
+def test_an_unaffordable_spot_remainder_is_cancelled_and_the_fill_still_reported():
+    venue, events = _spot_crossing("15")
+    [fill] = _fills(events)
+    [cancel] = _rejections(events)
+    assert cancel["reason"] == "remainder cancelled: insufficient spot balance"
+    looked = venue.lookup("spot")
+    assert looked.status == "cancelled" and looked.filled_size == Decimal(fill["size"]) == 2
+    assert venue.open_orders() == []
+
+
 def test_within_a_tick_the_arriving_taker_is_served_before_the_resting_maker():
     tape = _tape({"BTC": [(0, 100), (10, 100), (20, 100), (30, 99)]},
                  books={"BTC": [_level(10, "99.9", "100.1"), _level(20, "99.9", "100.1"),

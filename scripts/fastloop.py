@@ -392,6 +392,101 @@ class Latent:
         return self.inner.complete(req)
 
 
+#: Where a run keeps, beside its diary, what its provider side must carry across a crash.
+PROVIDER_RECORD = "provider-record.json"
+#: The scripted policy's own counters, which decide what it answers next.
+POLICY_STATE = ("decisions", "proposed", "tool_listed")
+
+
+class RecordedProvider:
+    """The harness's provider, whose spend bound and stand-in state survive any crash.
+
+    Guarantees (Codex review of #151):
+
+    - The admission cap is one bound over the whole run, whatever number of crashes and
+      resumes it takes. Before each call is dispatched the record is written with that
+      call's quote pending; after it returns or fails, with its outcome. A resume
+      restores the totals, and a call whose outcome the record never saw (the process
+      died inside it) is counted at its whole quote as an uncertain bill, never as free.
+    - A resumed scripted run continues the scripted policy's counters and the latency
+      model's random stream where they stood, so it makes the calls the uninterrupted run
+      would have made. A replayed call is answered from the diary and never reaches this
+      object, so nothing is counted or drawn twice.
+
+    Each write is a whole file replaced atomically and flushed to disk before the call
+    it names is dispatched (``_write``).
+    """
+
+    def __init__(self, prepaid: Any, admission: Any, path: Path, *, policy: Any = None,
+                 latent: Any = None) -> None:
+        self.prepaid, self.admission, self.path = prepaid, admission, Path(path)
+        self.policy, self.latent = policy, latent
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.prepaid, name)
+
+    def complete(self, req: ModelRequest) -> ModelResponse:
+        self._write(pending=self.prepaid._ceiling(req))  # written ahead of the dispatch
+        try:
+            return self.prepaid.complete(req)
+        finally:
+            self._write(pending=None)
+
+    def state(self) -> dict[str, Any]:
+        from dataclasses import asdict
+
+        state: dict[str, Any] = {"admission": asdict(self.admission)}
+        if self.policy is not None:
+            state["policy"] = {k: getattr(self.policy, k) for k in POLICY_STATE
+                               if hasattr(self.policy, k)}
+        if self.latent is not None:
+            version, internal, gauss = self.latent.rng.getstate()
+            state["latency_rng"] = [version, list(internal), gauss]
+        return state
+
+    def _write(self, *, pending: int | None) -> None:
+        import os
+
+        data = json.dumps({"format": 1, **self.state(), "pending_quote_micro": pending},
+                          sort_keys=True).encode()
+        tmp = self.path.with_suffix(".tmp")
+        with open(tmp, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, self.path)
+        fd = os.open(self.path.parent, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+    def restore(self) -> dict[str, Any]:
+        """Continue the recorded state; return what the admission holds on resuming."""
+        record = json.loads(self.path.read_text()) if self.path.exists() else {}
+        for name, value in (record.get("admission") or {}).items():
+            if name != "cap_micro":  # the cap is the run's, stated at launch
+                setattr(self.admission, name, value)
+        pending = record.get("pending_quote_micro")
+        if pending is not None:
+            # The process died inside a call: its bill is unknown, so its whole quote
+            # counts against the cap, as a dispatched failure's does.
+            self.admission.attempted += 1
+            self.admission.unknown_bills += 1
+            self.admission.uncertain_bills += 1
+            self.admission.uncertain_micro += int(pending)
+        for name, value in (record.get("policy") or {}).items():
+            setattr(self.policy, name, value)
+        if self.latent is not None and record.get("latency_rng") is not None:
+            version, internal, gauss = record["latency_rng"]
+            self.latent.rng.setstate((version, tuple(internal), gauss))
+        return {"known_micro": self.admission.known_micro,
+                "uncertain_micro": self.admission.uncertain_micro,
+                "remaining_micro": self.admission.remaining_micro,
+                "attempted": self.admission.attempted,
+                "died_inside_a_call": pending is not None}
+
+
 # --- the scorecard ------------------------------------------------------------------
 
 def _pct(values: list[int], q: float) -> int:
@@ -1080,10 +1175,7 @@ def simulation_manifest(world: Path, seed: int, vault_tools: bool = False,
 
 def tape_spec(tape: Tape, allow_unknown_cutoff: bool = False) -> TapeSpec:
     """The manifest's ``[exchange.tape]`` for a tape: its identity, fixed for the world."""
-    return TapeSpec(sha256=tape.sha256, start_ns=tape.start_ns, end_ns=tape.end_ns,
-                    markets=tape.markets,
-                    spread_bps=tuple((m, str(tape.spread_bps(m)[0])) for m in tape.markets),
-                    allow_unknown_cutoff=allow_unknown_cutoff)
+    return TapeSpec.of(tape, allow_unknown_cutoff)  # every field derived from the tape
 
 
 #: The tape library: recorded markets by regime, and the sealed holdouts.
@@ -1145,13 +1237,17 @@ def tape_clock(tape: Tape, manifest: Any, ticks: int | None) -> IdleSkipClock:
 def _world_parts(provider_kind: str, world: Path, seed: int, cap_usd: str,
                  vault_depositor_usd: str | None, tape: Tape | None,
                  latency_from: Path | None = None,
-                 allow_unknown_cutoff: bool = False) -> tuple:
+                 allow_unknown_cutoff: bool = False, record: Path | None = None) -> tuple:
+    """The manifest, admission, provider, venue and latency model of one run.
+
+    With ``record`` the provider is a ``RecordedProvider`` keeping its spend and its
+    stand-in's state in that file, so a resume continues both."""
     manifest = simulation_manifest(world, seed, vault_tools=bool(vault_depositor_usd),
                                    tape=tape, allow_unknown_cutoff=allow_unknown_cutoff)
     admission = rehearsal.Admission(cap_micro=int(Decimal(cap_usd) * 1_000_000),
                                     max_calls=10_000, recover_provider_failures=True)
-    inner = (PolicyProvider(world) if provider_kind == "scripted"
-             else rehearsal.build_prepaid_provider(manifest))
+    inner = policy = (PolicyProvider(world) if provider_kind == "scripted"
+                      else rehearsal.build_prepaid_provider(manifest))
     latent = None
     if latency_from is not None:
         if provider_kind != "scripted" or tape is None:
@@ -1159,6 +1255,10 @@ def _world_parts(provider_kind: str, world: Path, seed: int, cap_usd: str,
                              "idle-skipping clock; real calls take their real time")
         inner = latent = Latent(inner, call_latencies(latency_from), seed)
     provider = rehearsal.PrepaidProvider(inner, manifest, admission)
+    if record is not None:
+        provider = RecordedProvider(
+            provider, admission, record, latent=latent,
+            policy=policy if isinstance(policy, PolicyProvider) else None)
     exchange = None if tape is None else tape_venue(tape, manifest)
     return manifest, admission, provider, exchange, latent
 
@@ -1220,7 +1320,7 @@ def run(provider_kind: str, ticks: int | None, world: Path, out: Path, cap_usd: 
     entry = None if tape is None else library_entry(tape, release_candidate)
     manifest, admission, provider, exchange, latent = _world_parts(
         provider_kind, world, seed, cap_usd, vault_depositor_usd, tape, latency_from,
-        allow_unknown_cutoff)
+        allow_unknown_cutoff, record=target / PROVIDER_RECORD)
     started = time.monotonic()
     card: dict[str, Any] = {"provider": provider_kind, "out": str(target)}
     if tape is not None:
@@ -1244,6 +1344,7 @@ def run(provider_kind: str, ticks: int | None, world: Path, out: Path, cap_usd: 
         "vault_depositor_usd": vault_depositor_usd,
         "tape_from": None if tape_from is None else str(tape_from),
         "tape_sha256": None if tape is None else tape.sha256,
+        "gaps_from": None if gaps_from is None else str(gaps_from),
         "latency_from": None if latency_from is None else str(latency_from),
         "allow_unknown_cutoff": allow_unknown_cutoff,
         "release_candidate": release_candidate}, indent=2) + "\n")
@@ -1287,11 +1388,18 @@ def resume(target: Path, tape_from: Path | None = None) -> dict[str, Any]:
     manifest, admission, provider, exchange, latent = _world_parts(
         spec["provider"], Path(spec["world"]), spec["seed"], spec["cap_usd"],
         spec.get("vault_depositor_usd"), tape, latency_from,
-        spec.get("allow_unknown_cutoff", False))
+        spec.get("allow_unknown_cutoff", False), record=target / PROVIDER_RECORD)
     clock_source = None if tape is None else tape_clock(tape, manifest, None)
+    if spec.get("gaps_from"):
+        # The clock the run checkpointed: a replay of that diary's gaps. The saved state
+        # (its place in the gaps, its sample, its budget) is restored over this one.
+        interval = manifest.tick_interval_ns
+        clock_source = ReplayClock(interval, interval, 1, delivered_gaps(spec["gaps_from"]))
     started = time.monotonic()
     card: dict[str, Any] = {"provider": spec["provider"], "out": str(target), "resumed": True,
-                            "latency_from": spec.get("latency_from")}
+                            "latency_from": spec.get("latency_from"),
+                            # The whole run's spend so far: what the cap still allows.
+                            "admission_at_resume": provider.restore()}
     runtime = None
     try:
         runtime = resume_runtime(

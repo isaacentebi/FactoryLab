@@ -74,6 +74,17 @@ class TapeSpec:
     # because such a model may have been trained on the market this tape replays.
     allow_unknown_cutoff: bool = False
 
+    @classmethod
+    def of(cls, tape: Any, allow_unknown_cutoff: bool = False) -> TapeSpec:
+        """The key for ``tape`` (a ``factorylab.world.tape.Tape``), every field derived
+        from the tape itself and none accepted from a caller; the runtime checks the
+        same derivation again (``bootstrap.check_tape``)."""
+        ident = tape.identity()
+        return cls(sha256=ident["sha256"], start_ns=ident["start_ns"],
+                   end_ns=ident["end_ns"], markets=ident["markets"],
+                   spread_bps=tuple(sorted(ident["spread_bps"].items())),
+                   allow_unknown_cutoff=allow_unknown_cutoff)
+
 
 @dataclass(frozen=True)
 class ExchangeSpec:

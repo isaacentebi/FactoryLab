@@ -160,7 +160,7 @@ def test_the_manifest_fixes_the_tape_and_only_the_fake_venue_replays_one(tape):
     base = load_manifest("scripted")
     # A tape world lists no web route (tests/runtime/test_look_ahead.py).
     base = replace(base, web=WebSpec(), models=tuple(replace(m, web=()) for m in base.models))
-    spec = TapeSpec(tape.sha256, tape.start_ns, tape.end_ns, tape.markets,
+    spec = TapeSpec.of(tape,
                     allow_unknown_cutoff=True)
     taped = replace(base, exchange=replace(base.exchange, tape=spec, spot_pairs=()))
     taped.validate()
@@ -179,11 +179,20 @@ def test_the_manifest_fixes_the_tape_and_only_the_fake_venue_replays_one(tape):
 
 def test_the_runtime_refuses_a_venue_whose_tape_the_manifest_does_not_fix(tape):
     base = load_manifest("scripted")
-    spec = TapeSpec(tape.sha256, tape.start_ns, tape.end_ns, tape.markets,
-                    allow_unknown_cutoff=True)
+    spec = TapeSpec.of(tape, allow_unknown_cutoff=True)
     taped = replace(base, exchange=replace(base.exchange, tape=spec, spot_pairs=()))
     check_tape(taped, _venue(tape))
     check_tape(base, object())
+    # Codex review of #151: the digest alone let a manifest state a false span, markets
+    # or spreads about the tape it names; a later start_ns would feed the look-ahead
+    # guard a false date. Every field must be the tape's own.
+    for field, value in (("start_ns", tape.start_ns + 86_400 * 10**9),
+                         ("end_ns", tape.end_ns + 1), ("markets", ("BTC", "ETH")),
+                         ("spread_bps", (("BTC", "0.01"),))):
+        lying = replace(taped, exchange=replace(taped.exchange,
+                                                tape=replace(spec, **{field: value})))
+        with pytest.raises(TapeMismatch, match=field):
+            check_tape(lying, _venue(tape))
     with pytest.raises(TapeMismatch, match="tape_mismatch"):
         check_tape(taped, TapeVenue(Tape.load(LIVE4), coins=("BTC",)))
     with pytest.raises(TapeMismatch, match="does not name"):

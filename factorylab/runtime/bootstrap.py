@@ -118,6 +118,18 @@ def check_tape(manifest: WorldManifest, exchange: Any) -> None:
     if held != named.sha256:
         raise TapeMismatch(f"tape_mismatch: the manifest fixes tape {named.sha256[:12]}, the "
                            f"venue replays {str(held)[:12]}")
+    # The digest names the tape; the span, markets and spreads the manifest states about
+    # it must be the tape's own. A later start_ns than the recording's would feed the
+    # look-ahead guard a false date and admit a model trained on the replayed market.
+    tape = getattr(getattr(exchange, "target", exchange), "tape", None)
+    identity = tape.identity() if tape is not None else None
+    stated = {"start_ns": named.start_ns, "end_ns": named.end_ns,
+              "markets": tuple(named.markets), "spread_bps": dict(named.spread_bps)}
+    wrong = sorted(key for key, value in stated.items()
+                   if identity is None or identity[key] != value)
+    if wrong:
+        raise TapeMismatch(f"tape_mismatch: the manifest's [exchange.tape] {', '.join(wrong)} "
+                           "is not what the tape it names recorded")
 
 
 class BootstrapMixin:

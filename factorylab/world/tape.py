@@ -416,6 +416,13 @@ class Tape:
                 return Decimal(str(row["min_order_value_usd"]))
         return Decimal(MIN_ORDER_VALUE_USD)
 
+    def identity(self) -> dict:
+        """What a manifest's ``[exchange.tape]`` must say about this tape, all of it
+        derived from the tape itself: its SHA-256, span, markets and stated spreads."""
+        return {"sha256": self.sha256, "start_ns": self.start_ns, "end_ns": self.end_ns,
+                "markets": tuple(self.markets),
+                "spread_bps": {m: str(self.spread_bps(m)[0]) for m in self.markets}}
+
     def summary(self) -> dict:
         """What a scorecard and a Launch record say about this tape."""
         return {"sha256": self.sha256, "venue": self.data.get("venue"),
@@ -861,9 +868,22 @@ class TapeVenue(FakeExchange):
                 return events
             return events + self._refuse(
                 oid, order, "immediate-or-cancel: no liquidity within 5% of the mid sent at")
-        if order.market == "spot" and not self._spot_affordable(order, order.limit_px):
-            return events + self._refuse(oid, order, "insufficient spot balance")
-        self._resting[oid] = replace_size(order, remainder)
+        # What would rest is the remainder, at its price, with the fee a resting (maker)
+        # fill of it would pay: the part already filled has already been paid for.
+        resting = replace_size(order, remainder)
+        if order.market == "spot" and not self._spot_affordable(
+                resting, order.limit_px, fee_rate=self._rates(market)[1]):
+            if filled <= 0:
+                return events + self._refuse(oid, order, "insufficient spot balance")
+            # Part of it filled: that part stands, and only the unaffordable rest is
+            # cancelled, so the order reports what it filled.
+            self._cancelled.add(oid)
+            return events + [WorldEvent(
+                WorldEventKind.ORDER_REJECTED, self._now_ns, self.name,
+                {"order_id": oid, "coin": market,
+                 "reason": "remainder cancelled: insufficient spot balance",
+                 "cancelled_size": str(remainder)})]
+        self._resting[oid] = resting
         self._rested_ns[oid] = self._now_ns
         return events
 
@@ -922,10 +942,12 @@ class TapeVenue(FakeExchange):
                 self._rested_ns.pop(oid, None)
         return events
 
-    def _spot_affordable(self, order: Order, px: Decimal) -> bool:
-        """A spot buy is affordable with its cost and the spot taker fee on it."""
-        taker, _maker = self._rates(order.coin)
-        fee = (order.size * px * taker).quantize(Decimal("0.000001"))
+    def _spot_affordable(self, order: Order, px: Decimal, *,
+                         fee_rate: Decimal | None = None) -> bool:
+        """A spot buy is affordable with its cost and the fee on it: ``fee_rate``, else
+        the spot taker rate."""
+        rate = self._rates(order.coin)[0] if fee_rate is None else fee_rate
+        fee = (order.size * px * rate).quantize(Decimal("0.000001"))
         return ((not order.reduce_only and order.size * px + fee <= self._spot_available("USDC"))
                 if order.is_buy else order.size <= self._spot_available(order.coin))
 
