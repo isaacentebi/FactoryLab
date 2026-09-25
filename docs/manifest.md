@@ -689,6 +689,88 @@ judgements arriving in the same nanosecond are three arrivals
 in an empty window and trigger nothing. Execution facts and safety actions never
 enter the cascade and are never slowed by it.
 
+### Settled decisions are released (wave 17b)
+
+Chapter II §I.b: the return channel keeps "actions addressable over time", "a
+managed queue of outstanding decisions awaiting their reward"; §IV.c: a verdict
+"is consumed as a reward signal ... and then discarded", and what persists is
+aggregates. **A decision stays addressable exactly while a score is still owed to
+it.** It is fully settled (`SettledMixin._score_owed` is `None`) when all hold:
+
+- the kernel owes it nothing (`DecisionQueue.owed`): it is final, not timed out
+  (a late settlement keeps its right), every child it requested is released, and
+  every return delivered for it was read by its one reader (a router's cursor, a
+  seat's next ballot; an actor with no reader, such as a forecast's evaluator id,
+  reads nothing);
+- no retained decision names it as its parent or its judged subject;
+- no live book names it: no event about it waits to be routed, no judge, grade,
+  counter-verdict, forecast, exposure, abstention credit, assembly round, tool
+  hold, uptake, ballot, lambda post, motion or registration still reads it, no
+  cascade window holds or carries a judgement of it to its backstop, and no price,
+  margin or measurement window still measures it; no venue write of it is in
+  flight (a Hyperliquid order intent the venue has not answered, a vault write
+  uncertain or acknowledged and not yet settled from the venue's ledger, a
+  Polymarket write uncertain), and no Polymarket money it realised is unclaimed;
+- its consequence account is closed: outcome fixed, realised money all booked to
+  its owner, no open lot, no live order, no unanswered or unresolved intent, and
+  every order it placed **confirmed terminal by the venue's own order status**:
+  each tick, every order the book holds with no unfilled liability (fully filled
+  as observed, or its cancel acknowledged) is looked up at its venue until the
+  venue answers `filled`, `cancelled` or `rejected`, ledgered
+  `consequence.terminal {order_id, handle, status, filled}`, and no more filled
+  than was accounted. A cancel acknowledgement, a wall clock or a reward-chain
+  horizon is never that word; until the venue gives it, the account is pinned;
+- `consequence_horizon_ticks` have passed since its account opened;
+- no retained `failure_within` window reads an order it placed.
+
+At every checkpoint boundary each fully settled decision is released, newest
+first. The kernel keeps a tombstone (handle, the lineage key of the seat that
+authored it, its final status, when that status was retained); past
+`consequence_backstop_ticks + verdict_timeout_ticks` ticks after settlement a
+tombstone is compacted into a count per final status and a range of ledger
+ordinals, so a released handle still answers that it was released. Its
+propensities, returns, event payload, bindings, kind, author entry, judged
+subject, measured outcomes, forecast, receipts, base-rate questions and order
+intents, venue write intents and Polymarket claim entries are dropped (a vault
+write's venue transaction stays claimed, so no later write binds it); its
+consequence account becomes counts (`consequences.counts()` and the summary answer
+as before), and its orders keep their owner and the seat that authored it for
+`outcome_retention_ticks`. Nothing is appended to the diary: every fact was ledgered when it
+happened, and a replay releases the same decisions at the same boundary. A world
+run with and without release writes the same diary.
+
+A judgement whose `about_handle` names a released decision is refused
+(`return.refused`, `judgement names a decision that settled and was released`). A
+fill the venue still reports on a released account's order (a venue error: the
+venue had confirmed it terminal) is money, and money is always booked: it is
+ledgered `consequence.released_fill {order_id, handle}`, moves the lots as the
+venue's position moved, and what it realises, and what any lot it opened later
+realises, is booked to the seat that authored the decision (or its lineage's root
+when that seat is gone) as a late realization (`consequence.late`, then its venue
+claim), never re-grading the closed outcome. Past `outcome_retention_ticks` the
+order is forgotten, unless its handle still holds a lot or is owed late money; a
+fill on a forgotten order is one no account owns, refused as `fill without an
+open consequence account`, and its money stays in venue custody unattributed, as
+for any order no decision placed. Committee eligibility is a running tally kept
+at settlement, equal to the scan over every decision the world opened. A seat's
+ballot shows the policy returns delivered to it since its last ballot, each once;
+those delivered more than `outcome_retention_ticks` before, without a ballot in
+between, are released unread (the inbox's rule).
+
+Late money keeps its venue: what a released decision realises on a Polymarket
+event lot enters the pot's claim book and is claimed on the pot
+(`polymarket.claim`), never on the Hyperliquid venue claim. When neither the
+authoring seat nor its lineage's root is live, no persistent holder is left: the
+money stays booked in the custody that settled it, unattributed, and is ledgered
+`consequence.late_undeliverable {handle, micro}` beside the inbox's failed
+delivery; no reward credit moves, since the grade was fixed. A released vault
+write's venue transaction stays bound (no later write can claim it) until it is
+older than every window a vault lookup can still read: the earliest write still
+being looked up, less twice `LOOKUP_SKEW_NS`; the retained set is bounded by the
+writes released within that window. An order is confirmed terminal only on an
+answer that states its filled quantity; one that omits it confirms nothing and is
+read again the next tick.
+
 ## Exact measurement
 
 `returns` selects the latest `n` completed invocation responses in each selected
@@ -2189,9 +2271,10 @@ program seat's current private state, at most 64 KiB; every superseded head or
 state until it is collected (see "Collection": at the next reserve-window boundary
 when no checkpoint names it, otherwise at the first boundary after a later
 checkpoint, so at most one more per seat is held a window longer); and every
-outcome body and archived rationale, retained for the world's life and growing
-with decisions, on the order of 0.5 KiB per outcome addressed to a seat (an inbox
-body with its evidence pointer and what the seat said). Retirement is final for a
+outcome body a seat has neither acknowledged nor held past its retention horizon,
+on the order of 0.5 KiB per outcome addressed to a seat (an inbox body with its
+evidence pointer and what the seat said), with the archived rationale of every
+decision not yet released (see "Outcome retention" below). Retirement is final for a
 version, not for an id: a retired id's head and a retired program's private state
 are kept. **A retired id takes its next version only from its owner**, which
 inherits its head (its memory), its inbox and its records; any other proposer is
@@ -2223,8 +2306,9 @@ whether or not another seat holds identical bytes (the disk may still keep one
 copy), so what a seat is told about capacity never depends on another seat's
 bytes. The cap bounds the indexed private state: bytes on disk can exceed it by the
 releases since the last checkpoint, until collection removes them (see
-"Collection"). Outcome bodies and archived rationales are outside the cap, as the
-world's record. A retired id's state is kept until capacity is needed: a head or
+"Collection"). Outcome bodies and archived rationales are outside the cap; the
+diary keeps every `outcome.addressed` item as the world's record. A retired id's
+state is kept until capacity is needed: a head or
 program-state write that would take retained private state over the limit
 releases the kept references of retired ids, oldest retirement first, each through
 the journaled release (`artifact.released` with `cause: "capacity"`, ledgered
@@ -2242,7 +2326,8 @@ for a world without one), read with `shutil.disk_usage`: an admission about the 
 at that moment. The cap is fixed for the world's life, so a resume is never refused
 because the host's free space has changed since. The world block's
 `storage` section publishes it with the rule above. A retired seat's outcome
-bodies and archived rationales are the world's record and stay. Writing a new head
+bodies stay until acknowledged or past their retention horizon, like any seat's.
+Writing a new head
 releases the superseded one's reference (`artifact.released`), and `artifact.get`
 answers `artifact_released` for it to the seat that released it (for its last
 eight releases) and `artifact_private` to every other reader. The world block's
@@ -2516,7 +2601,8 @@ another seat's artifacts (information audit C4).
 **Collection.** `ArtifactStore.collect()` is the one thing that deletes, and it
 can only reach blobs **no reference names** — what a crash
 between the durable write and its ledger item leaves behind, and records whose
-last reference was released (a superseded working-state head or program state;
+last reference was released (a superseded working-state head or program state,
+an acknowledged or expired outcome body, a released decision's archived rationale;
 `ArtifactStore.release`, ledgered `artifact.released` before the index changes).
 A reference names every kind its owner wrote the bytes under, so releasing one
 kind never drops bytes the owner still holds as another, and its `kind` names only
@@ -2613,14 +2699,31 @@ ledgered `outcome.ack {through, handle, cursor}`; it acknowledges only items
 but was never shown acknowledges only as far as its last delivery — and
 everything after stays unread.
 
+**Outcome retention** (wave 17b). An item is held until its seat acknowledges it
+or until `outcome_retention_ticks` world ticks after it was addressed, whichever
+comes first: `timing.min_ratio × (consequence_backstop_ticks +
+verdict_timeout_ticks)`, published in the world block's `storage` section. At the
+next checkpoint boundary it leaves the inbox and its body is released
+(`artifact.released`, `cause: "retention"`) and collected as any released record is.
+Chapter II §IV.c: a verdict "is consumed as a reward signal in the scored agent's
+propensity update and then discarded"; §I.b: the reward line is thin. The inbox is
+that line, not the record: every `outcome.addressed` item stays in the diary.
+`outcome.get` on an id no longer held answers `no outcome addressed to you and still
+held carries that id or handle; an item is released once acknowledged or past its
+retention horizon`. An item carries the world tick it was addressed at; one restored from a
+checkpoint older than this rule carries none, and the restore stamps it with the
+restore tick, so it is held a full `outcome_retention_ticks` from the restore.
+
 What a seat **said** is retained until that decision's last consequence settles
 or the seat retires. Only then, and only over `MAX_SAID`, is the oldest such
 record archived as an artifact (`said.archived {assembly_id, handle, sha}`) and
 dropped from the table; `outcome.get` and the settler read it back from the
-archive, so no decision with open consequences can lose its rationale. Heads,
+archive, so no decision with open consequences can lose its rationale. Once the
+decision is fully settled and released (see "Settled decisions are released"),
+nothing is addressed to it again, and its record and archived rationale go. Heads,
 item indexes, cursors, how far each seat was delivered, the archived-rationale
 index and what each handle said are checkpointed; the bodies are artifacts, and
-`_verify_artifacts` refuses to continue a world whose head or inbox body is
+`_verify_artifacts` refuses to continue a world whose head or held inbox body is
 missing.
 
 ### The metric challenge

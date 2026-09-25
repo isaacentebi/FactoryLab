@@ -1216,8 +1216,34 @@ def tick(rt: Any) -> None:
             continue
         _recover(rt, surface, client_id)
     settle(rt, surface.venue.advance(rt.clock.now_ns))
+    confirm_terminal(rt)
     mark(rt)
     reconcile(rt)
+
+
+def confirm_terminal(rt: Any) -> None:
+    """Read back, from the venue's own order status, every Polymarket order that may be over.
+
+    Wave 17b: the rule ``VenueMixin._confirm_terminal_orders`` keeps for Hyperliquid.
+    Guarantees each order this world placed that the consequence book holds with no
+    unfilled liability and unconfirmed is looked up under its client id until the
+    venue answers ``filled``, ``cancelled`` or ``rejected`` and states its filled
+    size, and that answer and size are recorded; anything else, an answer without
+    the filled size included, leaves its account pinned until the next tick's read.
+    """
+    surface = rt.polymarket
+    for order in rt.consequences.table.orders:
+        client_id = surface.order_ids.get(order.order_id)
+        if client_id is None or order.remaining or order.confirmed is not None:
+            continue
+        try:
+            answer = surface.venue.lookup(client_id)
+        except Exception:  # noqa: BLE001 - an unanswered read confirms nothing
+            continue
+        if (answer.get("status") in ("filled", "cancelled", "rejected")
+                and answer.get("filled_size") is not None):
+            rt.consequences.confirm_terminal(order.order_id, answer["status"],
+                                             str(answer["filled_size"]), rt.n)
 
 
 def mark(rt: Any) -> None:
@@ -1330,11 +1356,14 @@ def _settle_resolution(rt: Any, event: dict) -> None:
     holders = sorted({lot.handle for lot in rt.consequences.table.lots
                       if lot.coin == coin_of(token) and lot.market == "event"
                       and lot.handle is not None})
-    before = {r.handle: r.realized_micro for r in rt.consequences.table.returns}
+    # A lot a released decision's order opened realises into the pot too (wave 17b):
+    # ``realized_by_handle`` counts retained and released handles alike.
+    before = rt.consequences.table.realized_by_handle()
     realized = rt.consequences.redeem(coin_of(token), event["payout"], rt.n, facts)
-    credit_realized(rt, {r.handle: r.realized_micro - before.get(r.handle, 0)
-                         for r in rt.consequences.table.returns
-                         if r.realized_micro != before.get(r.handle, 0)})
+    after = rt.consequences.table.realized_by_handle()
+    credit_realized(rt, {handle: total - before.get(handle, 0)
+                         for handle, total in after.items()
+                         if total != before.get(handle, 0)})
     # The venue's own realised figure for the redemption, booked once in the pot it
     # landed in. Its owner is the one decision that held the token, when only one
     # did; several holders share one unattributed row, and each is told its own
