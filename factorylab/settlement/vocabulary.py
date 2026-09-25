@@ -57,42 +57,18 @@ def commission_block(*, subject: str | None, scope: str, horizon: int, budget_mi
 
     Evaluation is work someone pays for, not an obligation a seat owes the
     world. The commission says what is being asked about, over what evidence, by
-    when, and for how much; the answer may be a verdict or a refusal of the
-    commission itself. There is no kernel list of what may be judged (evaluations
-    S1): what a verdict is scored on is a schematic (world.scoring).
+    when, and for how much. The answer's forms, the decline among them, are the
+    request's outcome schema (``cortex.assembly.judging_contract``), stated there
+    once and not again here (Chapter II §II.b). There is no kernel list of what may
+    be judged (evaluations S1): what a verdict is scored on is a schematic
+    (world.scoring).
     """
     return {
         "subject": subject,
         "scope": scope,
         "horizon_events": int(horizon),
         "budget_micro": int(budget_micro),
-        "you_may": (
-            'answer the commission, or decline it with {"status": "cannot", "reason": ...}'
-        ),
     }
-
-
-def evaluator_answer_schema(forecasts: dict, register: dict) -> dict:
-    """The evaluator answer schema.
-
-    It lives here rather than inline in ``runtime.loop`` so the charter's own
-    vocabulary owns what a judge is asked to say, and the loop names it once.
-
-    Ruling R1: the verdict is itself the prediction the world grades, so there is
-    no separate payoff field to fill; ``status`` lets the same answer decline the
-    commission outright.
-    """
-    properties = {
-        "verdict": {"type": "number", "minimum": 0, "maximum": 1},
-        "status": {"enum": ["cannot"]},
-        "reason": {"type": "string"},
-        "rationale": {"type": "string"},
-        "propensity": {"type": "object"},
-        "forecasts": forecasts,
-        "register": register,
-        "about_handle": {"type": "string"},
-    }
-    return {"type": "object", "properties": properties, "required": ["rationale"]}
 
 
 @dataclass(frozen=True)

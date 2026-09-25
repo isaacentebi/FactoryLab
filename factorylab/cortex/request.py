@@ -234,7 +234,7 @@ WORLD_UPDATE_HEADER = "WORLD UPDATE\n"
 #: were coaching no code read; a forecast's shape is its own schema's. The fidelity
 #: objection and its adjudication were deleted (evaluations U1), so there is no
 #: objection shape to state here or anywhere else.
-OUTCOME_CONTRACT = """OUTCOME CONTRACT
+OUTCOME_CONTRACT_BODY = """OUTCOME CONTRACT
 
 Return the public result required by this request's schema. Optional private
 continuity fields are working_state and ack_through.
@@ -242,9 +242,38 @@ continuity fields are working_state and ack_through.
 Return exactly one JSON object for this turn. To use tools, submit tool_calls
 and end your response; omit final-answer fields you cannot fill yet. Tool
 results arrive in the next request under tool_results; earlier results may
-appear under seen_tool_results.
+appear under seen_tool_results."""
+#: The refusal form, for a schema that does not publish it as a form of its own. A
+#: schema that does (``judging_contract``) states it there, once (Chapter II §II.b).
+OUTCOME_CONTRACT_DECLINE = (
+    '\n\nTo decline the request, return {"status": "cannot", "reason": "<reason>"}.')
+OUTCOME_CONTRACT = OUTCOME_CONTRACT_BODY + OUTCOME_CONTRACT_DECLINE
 
-To decline the request, return {"status": "cannot", "reason": "<reason>"}."""
+
+def publishes_decline_form(schema: Any) -> bool:
+    """Whether ``schema`` is a union with a form of its own that requires ``status``."""
+    alternatives = schema.get("anyOf") if isinstance(schema, dict) else None
+    return isinstance(alternatives, list) and any(
+        isinstance(a, dict) and "status" in (a.get("required") or ()) for a in alternatives)
+
+
+def outcome_contract(schema: Any) -> str:
+    """The OUTCOME CONTRACT for ``schema``: the refusal form stated only where the
+    schema does not already publish it as a form."""
+    return OUTCOME_CONTRACT_BODY if publishes_decline_form(schema) else OUTCOME_CONTRACT
+
+
+#: Where the coalesced world update went when ``INPUTS`` renders the event without
+#: it: a pointer in its place, so the event is never shown hollow.
+COALESCED_UPDATE_POINTER = ("rendered in WORLD UPDATE as "
+                            "changes_since_last_successful_delivery")
+
+#: The header of the block that forwards the propensity of the decision a request
+#: is about: named so it cannot be read as the answer's own ``propensity`` field.
+SUBJECT_PROPENSITY_HEADER = "SUBJECT PROPENSITY"
+
+#: The header of the settlement facts a request carries about its own answer.
+SCORING_HEADER = "SCORING"
 
 #: Every moving block is rendered as compact JSON, like the stable prefix: the
 #: indentation carried no information and cost about an eighth of every prompt.
@@ -343,6 +372,11 @@ class Request:
     # Whatever rebuilds this request keeps the pair — see ``continuation``.
     propensity: dict[str, float] | None = None
     propensity_chosen: str | None = None
+    # How the answer to this request settles, as the world's published scoring
+    # section states it (Chapter II §I.b: "the structures of requests and rewards"
+    # are public): the entries of ``world.scoring`` for this request's kind, verbatim.
+    # Rendered as its own SCORING section; None renders nothing.
+    settlement: dict[str, str] | None = None
 
     def __post_init__(self) -> None:
         if not self.handle:
@@ -600,19 +634,32 @@ class Request:
                   if k not in seat_input_keys and k != RECEIPTS_INPUT_KEY}
         payload = inputs.get("payload")
         if isinstance(payload, dict) and COALESCED_UPDATE in payload:
-            inputs = {**inputs,
-                      "payload": {k: v for k, v in payload.items() if k != COALESCED_UPDATE}}
+            # The fold is rendered once, in WORLD UPDATE; the event keeps a pointer to
+            # it, so INPUTS never shows the event hollow.
+            inputs = {**inputs, "payload": {**payload,
+                                            COALESCED_UPDATE: COALESCED_UPDATE_POINTER}}
         blocks = [
             ("request", f"REQUEST\n{self.description}"),
             ("inputs", f"INPUTS\n{json.dumps(inputs, sort_keys=True, separators=_COMPACT)}"),
         ]
         if self.propensity is not None:
+            subject = self.inputs.get("subject_handle")
+            owner = (f"the decision {subject} this request is about"
+                     if isinstance(subject, str) and subject else
+                     "the decision this request is about")
             blocks.append((
                 "propensity",
-                "PROPENSITY\nThe distribution the deciding agent says it drew from, and the "
-                f"action it took ({self.propensity_chosen}). The roads it did not take are "
-                "here so you can price them.\n"
+                f"{SUBJECT_PROPENSITY_HEADER}\nThe distribution over its own actions that "
+                f"{owner} declared, and the action it took ({self.propensity_chosen}). It "
+                "is that decision's, not a field of this request's answer.\n"
                 f"{json.dumps(self.propensity, sort_keys=True, separators=_COMPACT)}",
+            ))
+        if self.settlement:
+            blocks.append((
+                "scoring",
+                f"{SCORING_HEADER}\nHow the answer to this request settles, as world.scoring "
+                "publishes it.\n"
+                f"{json.dumps(self.settlement, sort_keys=True, separators=_COMPACT)}",
             ))
         shapes = self.outcome_schema.get("anyOf", (self.outcome_schema,))
         tool_call_limits = [
@@ -635,9 +682,9 @@ class Request:
              f"{json.dumps(self.outcome_schema, sort_keys=True, separators=_COMPACT)}"
              f"{tool_call_instruction}"),
             # What every return must satisfy, once per request and immediately
-            # after the schema it is about: the tool-round protocol and the refusal
-            # form (smuggling audit D1).
-            ("outcome_contract", OUTCOME_CONTRACT),
+            # after the schema it is about: the tool-round protocol and, unless the
+            # schema publishes it as a form, the refusal form (smuggling audit D1).
+            ("outcome_contract", outcome_contract(self.outcome_schema)),
             ("completion_criterion", f"COMPLETION CRITERION\n{self.completion_criterion}"),
         ])
         joined = [(name, text + ("\n\n" if index + 1 < len(blocks) else ""))

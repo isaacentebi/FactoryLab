@@ -112,8 +112,14 @@ def test_every_object_the_contract_leaves_open_is_stated_open():
 
     wire = wire_schema(VERDICT, ("Verdict",))
     assert wire["type"] == "object"
-    found = list(objects(wire))
-    assert found and all(o.get("additionalProperties") is True for o in found)
+    # The child outcome schema definition is closed by the kernel's own keyword
+    # whitelist (``child_schema_shape``): not an object the contract leaves open.
+    found = list(objects({k: v for k, v in wire.items() if k != "$defs"}))
+    # Open, or a map whose values the kernel types (a child's propensity), or closed by
+    # the definition it refers to: never closed by a decoder's default.
+    assert found and all(o.get("additionalProperties") is True
+                         or isinstance(o.get("additionalProperties"), dict) or "$ref" in o
+                         for o in found)
     closed = {**VERDICT, "additionalProperties": False}
     assert all(form["additionalProperties"] is False
                for form in wire_schema(closed)["anyOf"])
@@ -129,7 +135,8 @@ def test_the_contract_is_never_mutated():
 
 def test_a_contract_that_forbids_continuing_or_declining_is_carried_as_it_is():
     fields = {**ENVELOPE, "tool_calls": {**ENVELOPE["tool_calls"], "maxItems": 0},
-              "status": {"enum": ["done"]}, "action": {"type": "string"}}
+              "reason": {"type": "string", "enum": ["never given"]},
+              "action": {"type": "string"}}
     contract = {"type": "object", "properties": fields, "required": ["action"]}
     for reply in ({"tool_calls": [CALL]}, {"status": "cannot", "reason": "no"}):
         with pytest.raises(ValueError):
@@ -137,6 +144,17 @@ def test_a_contract_that_forbids_continuing_or_declining_is_carried_as_it_is():
         with pytest.raises(ValueError):
             validate_schema(reply, wire_schema(contract))
     validate_schema({"requests": [CHILD]}, wire_schema(contract))
+
+
+def test_a_contract_whose_status_is_not_the_refusal_flag_has_no_wire():
+    """status says one thing, "cannot" (``reserved_return_fields``): a contract that gives
+    it another meaning contradicts the envelope, and no form is sent looser than that."""
+    contract = {"type": "object", "properties": {**ENVELOPE, "status": {"enum": ["done"]},
+                                                 "action": {"type": "string"}},
+                "required": ["action"]}
+    with pytest.raises(ValueError):
+        _validate_return({"action": "hold", "status": "done"}, contract, None)
+    assert wire_schema(contract) is None
 
 
 def test_a_contract_silent_on_the_envelope_still_carries_its_shape():
@@ -339,7 +357,8 @@ SYNTHETIC = [
 ]
 
 
-def test_wire_valid_replies_are_kernel_valid_and_plain_kernel_valid_ones_are_wire_valid():
+@pytest.mark.parametrize("part", [0, 1])
+def test_wire_valid_replies_are_kernel_valid_and_plain_kernel_valid_ones_are_wire_valid(part):
     """Soundness, and completeness up to the habits the kernel forgives.
 
     Every sample reply the wire admits passes the kernel. Every one the kernel reads
@@ -347,10 +366,11 @@ def test_wire_valid_replies_are_kernel_valid_and_plain_kernel_valid_ones_are_wir
     optional section dropped) is admitted by the wire. The samples stay clear of
     what the wire cannot state: an answer order, a child's semantic checks, and the
     runtime's validator (see ``wire_schema``). The contracts are each seat's base
-    contract and the one its request publishes (``producing_contract``'s union).
+    contract and the one its request publishes (``producing_contract``'s union). The
+    contracts are checked in two alternating halves, each inside the check tier's time.
     """
     checked = admitted = 0
-    for contract, emits in [*_edition6_contracts(), *SYNTHETIC]:
+    for contract, emits in [*_edition6_contracts(), *SYNTHETIC][part::2]:
         wire = wire_schema(contract, emits)
         assert wire is not None
         for reply in _replies(emits):
@@ -369,7 +389,7 @@ def test_wire_valid_replies_are_kernel_valid_and_plain_kernel_valid_ones_are_wir
             assert on_wire or not plain, (emits, reply)
             checked += 1
             admitted += on_wire
-    assert checked > 10_000 and admitted > 1_000, (checked, admitted)
+    assert checked > 5_000 and admitted > 500, (checked, admitted)
 
 
 # --- the counterfactual of a producing kind (essay II.III.b, the priced road not taken)

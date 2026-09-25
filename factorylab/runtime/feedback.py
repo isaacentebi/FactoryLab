@@ -114,6 +114,12 @@ def counter_score(q: float, judged: float, y: float) -> float:
     return 0.5 + 0.5 * ((1 - (q - y) ** 2) - (1 - (judged - y) ** 2))
 
 
+#: Where the published scoring states the formula an inbox consequence item's numbers
+#: come from: a fact the item points to, never restated in it (Chapter II §I.b).
+VERDICT_FORMULA = "world.scoring.verdict_is_a_prediction"
+COUNTER_FORMULA = "world.scoring.counter_return"
+
+
 def consequence_score(brier: float, baseline_brier: float) -> float:
     """The world's grade of one prediction, centred on its base rate, in [0, 1].
 
@@ -1557,7 +1563,9 @@ class FeedbackMixin:
                                       "phase": phase,
                                       "your_verdict_brier": round(brier, 4),
                                       "baseline_brier": round(baseline, 4),
-                                      "consequence_score": round(score, 4)})
+                                      "consequence_score": round(score, 4),
+                                      # Where the numbers above are defined (II.I.b).
+                                      "formula": VERDICT_FORMULA})
         self._count_consequence(rec.evaluator_id)
         if rec.about in self.pending_exposure:
             self.exposure_scores.setdefault(rec.about, []).append([rec.evaluator_id, score])
@@ -1596,7 +1604,8 @@ class FeedbackMixin:
                                  outcome={"judged_outcome": kind, "judged_y": round(y, 4),
                                           "phase": "final",
                                           "your_verdict_brier": round(result.brier, 4),
-                                          "baseline_brier": round(result.baseline_brier, 4)})
+                                          "baseline_brier": round(result.baseline_brier, 4),
+                                          "formula": VERDICT_FORMULA})
 
     def _score_meta(self, rec: PendingJudgement, judged: float | None) -> None:
         """Score a meta's grade against the consequence score of the decision it graded.
@@ -1896,7 +1905,8 @@ class FeedbackMixin:
                 "ts": self.clock.now_ns})
             self.outcomes.append(rec["evaluator_id"], handle=handle, evidence=seq,
                                  outcome={"judged_outcome": kind, "judged_y": round(y, 4),
-                                          "phase": phase, "counter_score": round(score, 4)})
+                                          "phase": phase, "counter_score": round(score, 4),
+                                          "formula": COUNTER_FORMULA})
             self._settle_priced(handle, channel=CH_COUNTER, score=score,
                                 definition_version=DEF_COUNTER, sampling_ref=None,
                                 cards="adversary")

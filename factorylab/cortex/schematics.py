@@ -11,6 +11,7 @@ from typing import Any
 from factorylab.charter.measurement import measurement_catalogue
 from factorylab.cortex.assembly import (
     MAX_PROGRAM_STATE_BYTES,
+    SEED_KIND_LINES,
     SEED_SYSTEM_PROMPT,
     public_description,
     reserved_return_fields,
@@ -204,12 +205,17 @@ class SchematicsMixin:
             "gamma": 0.1,
             "add": False,
         },
-        "retire": {"kind": "retire", "assembly_id": "an id from world.catalogue"},
+        "retire": {"kind": "retire", "assembly_id": "an id from world.catalogue",
+                   "predicted_effect": {"card_id": "a current card id",
+                                        "direction": "increase", "window": 1}},
         "connector": {"kind": "connector", "id": "public-source",
                       "description": "Public information", "origin": "https://example.org",
-                      "preflight_path": "/data", "pay": "x402", "max_call_usd": "0.003"},
-        "market": {"kind": "market", "coin": "listed perp coin; omit when using pair",
-                   "pair": "listed BASE/USDC pair; omit when using coin"},
+                      "preflight_path": "/data", "pay": "x402", "max_call_usd": "0.003",
+                      "predicted_effect": {"card_id": "a current card id",
+                                           "direction": "increase", "window": 1}},
+        # One of coin (a listed perp) or pair (a listed BASE/USDC spot pair), never both.
+        "market": {"kind": "market", "coin": "a listed perp coin; a spot market names "
+                   "pair: a listed BASE/USDC pair, in place of coin"},
         "service": {"kind": "service", "program_id": "id of a tool you registered",
                     "price_micro": 1000, "description": "what a buyer receives"},
         "tool": {
@@ -294,6 +300,8 @@ class SchematicsMixin:
                 "window": {"kind": "returns", "n": 10, "per": "role"},
             },
             "trial_windows": 6,
+            "predicted_effect": {"card_id": "the challenged card id",
+                                 "direction": "decrease", "window": 1},
         },
     }
 
@@ -302,10 +310,10 @@ class SchematicsMixin:
         "kind_fields": (
             "reserved_return_fields is the envelope every return may carry. Each seed kind "
             "also owns fields of its own: ProducerReturn and Exposure own action, "
-            "rationale, coin, side and size (the answer order below); Verdict owns verdict "
-            "and payoff in [0, 1] and rationale; MetaVerdict owns conformity in [0, 1] and "
-            "rationale. A declared kind owns what its schema in event_schemas declares, "
-            "and a field another kind owns has no meaning in it"
+            "rationale, coin, side and size (the answer order below); Verdict and "
+            "CounterVerdict own verdict in [0, 1] and rationale; MetaVerdict owns "
+            "conformity in [0, 1] and rationale. A declared kind owns what its schema in "
+            "event_schemas declares, and a field another kind owns has no meaning in it"
         ),
         "action": (
             'ProducerReturn and Exposure: "noop" | "hold" | "order"; an "order" return '
@@ -335,15 +343,15 @@ class SchematicsMixin:
             "answer order may be placed, an answer order with coin, side and size"
         ),
         "verdict": (
-            "evaluator returns (required): the judged return against the charter, 0 to 1; "
-            "the judged return settles on its judges' mean verdict, and the verdict is "
-            "graded by the tier above and scored against the return's measured outcome "
-            "(see scoring)"
+            "evaluator returns (required in an answer; a decline is its own form): the "
+            "judged return against the charter, 0 to 1; the judged return settles on its "
+            "judges' mean verdict, and the verdict is graded by the tier above and scored "
+            "against the return's measured outcome (see scoring)"
         ),
         "about_handle": (
             "judging returns (optional): the return handle your verdict or conformity is "
-            "about, exactly as it appears in the request (inputs.subject_handle when present, "
-            "otherwise the delivered return); omit it to judge the delivered return. A value "
+            "about, exactly as it appears in the request; inputs.subject_handle names the "
+            "delivered return; omit it to judge the delivered return. A value "
             "you cannot address here — prose, or a handle this judgement may not be about — "
             "is not used: the delivered return is judged instead and the reason reaches "
             "your outcome inbox"
@@ -353,7 +361,9 @@ class SchematicsMixin:
             "choosing among, as {action_id: probability} summing to one and including "
             "the action you took (see action_labels for the shape of an action id; the "
             "action includes what the return executed through venue and treasury tools "
-            "and the children it requested). The action taken needs at least "
+            "and the children it requested; a decline is labelled declined). The "
+            "propensity a request forwards under SUBJECT PROPENSITY is the distribution "
+            "of the decision the request is about, not yours. The action taken needs at least "
             f"{MIN_DECLARED_MASS} mass or is floored to it before it weights a reward. It "
             "travels forward on the request about this return"
         ),
@@ -431,8 +441,11 @@ class SchematicsMixin:
             'Outputs arrive in tool_results as '
             '{"tool":"request:<target>","args":<inputs>,"result":{"outputs":{},'
             '"status":"ok","cost_micro":0}} before your second call. '
-            'Outcome schemas support object/array/scalar types, properties, required, enum, '
-            'minimum, maximum, minItems, maxItems and additionalProperties.'
+            'An outcome schema may use exactly these keywords: type (one of object, array, '
+            'string, boolean, integer, number, null), properties, required, enum, minimum, '
+            'maximum, exclusiveMinimum, exclusiveMaximum, minItems, maxItems, '
+            'additionalProperties, items, anyOf, description, title and default; any other '
+            'keyword refuses the request.'
         ),
     }
 
@@ -1726,8 +1739,8 @@ class SchematicsMixin:
                 "against the pre-activation value. No activation or missing evidence is censored. "
                 "Feedback returns to the voting assembly's durable identity. Retirements and "
                 "connectors are voted when proposed, by a committee drawn the same way; a "
-                "passed retirement takes effect at the next window boundary. With no predicted "
-                "effect in a retire proposal, their ballots are unscored and censored.",
+                "passed retirement takes effect at the next window boundary. A retire or "
+                "connector proposal without a predicted_effect is refused.",
                 "norm_editions": "the charter's norms are written by the norm house, the "
                 "signer the manifest names; a signed norm edition takes effect at a governance "
                 "boundary as the next edition, after each seated delegate's recorded, "
@@ -1837,22 +1850,20 @@ class SchematicsMixin:
 
     @staticmethod
     def _register_schema() -> dict[str, Any]:
-        """Every kind a return may register is a kind the capability index names.
+        """The register list as the kernel admits it: each kind's forms, required fields named.
 
-        The enum is the index's own key set, so neither can list a kind the other
-        refuses: ``program`` is accepted here and registered as an assembly whose
-        model_id is program, and ``predicate`` is published with a shape.
+        Chapter II §II.b (the published contract is the enforced one): the items are
+        ``registration.register_item_schema``, the forms ``validate_proposal`` checks
+        each proposal against before anything else, so a proposal that satisfies the
+        published schema is refused only for what its fields contain, never for a
+        field the schema did not name. The kinds are the capability index's own key
+        set, so neither can list a kind the other refuses.
         """
-        return {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "description": "Retrieve the full shape with catalogue.search using the kind "
-                               "as substring. A kind alone is not a complete proposal.",
-                "properties": {"kind": {"enum": sorted(SchematicsMixin.PROPOSAL_SHAPES)}},
-                "required": ["kind"],
-            },
-        }
+        from factorylab.cortex.registration import register_item_schema
+
+        items = register_item_schema()
+        return {"type": "array", "items": {
+            **items, "description": "each kind's full shape is returned by catalogue.search"}}
 
 
     def _forecast_schema(self) -> dict[str, Any]:
@@ -1873,6 +1884,57 @@ class SchematicsMixin:
             },
         }
 
+
+    #: The ``world.scoring`` entries that state how each judging kind's answer settles:
+    #: its own formula and the consequence score it predicts. The decline's settlement
+    #: is ``world.scoring.malformed_judgement``; the decline itself is stated once, as a
+    #: form of the outcome schema.
+    SETTLEMENT_KEYS: dict[str, tuple[str, ...]] = {
+        "Verdict": ("evaluator_return", "verdict_is_a_prediction"),
+        "MetaVerdict": ("meta_return", "evaluator_return", "verdict_is_a_prediction"),
+        "CounterVerdict": ("counter_return", "verdict_is_a_prediction"),
+    }
+
+    #: The ``world.scoring`` entry each reward shape settles by.
+    SHAPE_SCORING: dict[str, str] = {
+        "judged": "producer_or_custom_return", "exposure": "antagonist_exposure",
+        "conformity": "meta_return", "counter": "counter_return", "forecast": "work",
+    }
+
+    def _wake_contract(self, kinds: dict[str, str]) -> str:
+        """What a wake's return is and how each answer settles: facts, and where they are.
+
+        Chapter II §I ("the contract has to carry enough self-description") and §I.b
+        (the structures of requests and rewards are public). ``kinds`` maps each kind
+        the seat may answer as to its reward shape. Guarantees the text names what the
+        return is, that every answer the outcome schema admits completes it, and, per
+        kind, the published scoring entry it settles by, the decline's included; it
+        names no task, recommends no answer and says nothing about which is better.
+        """
+        rows = []
+        for kind, shape in kinds.items():
+            key = self.SHAPE_SCORING.get(shape, "work")
+            where = "world.work" if key == "work" else f"world.scoring.{key}"
+            rows.append(f"A {kind} is {SEED_KIND_LINES[kind]} ({where})."
+                        if kind in SEED_KIND_LINES else
+                        f"A {kind} settles by its {shape} reward shape ({where}).")
+        return ("A return here is this seat's decision about this event, and every answer "
+                "the outcome schema admits completes it. " + " ".join(rows)
+                + ' A return answering status "cannot" settles declined '
+                "(world.scoring.declined_return). The verdicts on a return are compared "
+                "with its measured outcome (world.scoring.verdict_is_a_prediction).")
+
+    def _settlement_facts(self, kind: str) -> dict[str, str]:
+        """How a judging kind's answer settles: ``world.scoring``'s own entries, verbatim.
+
+        Chapter II §I.b ("the structures of requests and rewards" are public) and
+        §III.b: a judge is graded from above and by realized consequence, and the rule
+        it is graded by travels with the request that asks for the judgement, in every
+        prompt mode, rather than behind ``world.read``. Guarantees the same text
+        ``world.scoring`` publishes, key for key, and nothing else: no advice.
+        """
+        scoring = self._scoring_block()
+        return {key: scoring[key] for key in self.SETTLEMENT_KEYS[kind]}
 
     def _scoring_block(self) -> dict[str, Any]:
         """How decisions settle, stated as facts about the world (schematics are
@@ -1898,7 +1960,7 @@ class SchematicsMixin:
                 "card penalty its role bears"
             ),
             "verdict_is_a_prediction": (
-                "a verdict q is also scored against the judged return's measured outcome y: "
+                "a verdict q is scored against the judged return's measured outcome y: "
                 "for a return that executed venue operations (or earned service income; a "
                 "write the venue rejected executed nothing, one left uncertain counts), "
                 "y = return_paid_off, 1 when its realised or marked P&L exceeds its own "
@@ -1957,6 +2019,15 @@ class SchematicsMixin:
                 "cannot declines the commission: the call is charged, it settles as "
                 "declined, and the router that drew the seat and the seat's own learner are "
                 "credited as for an abstention"
+            ),
+            "counter_return": (
+                "a counter-verdict q' on the return a first-tier verdict q judged, made in "
+                "the tick of that verdict, settles on the adversarial channel when the world "
+                "measures that return's outcome y (the y of verdict_is_a_prediction): "
+                "score = 0.5 + 0.5 * ((1 - (q' - y)^2) - (1 - (q - y)^2)), less the card "
+                "penalty; censored when the return is unmeasured "
+                f"{backstop + ev.verdict_timeout_ticks} ticks after the counter, or when the "
+                "counter read anything but a first-tier verdict in its tick"
             ),
             "antagonist_exposure": (
                 "an Exposure return settles on the exposure channel: the mean over the judges "

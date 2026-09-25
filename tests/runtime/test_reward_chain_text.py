@@ -52,13 +52,17 @@ def test_the_judge_is_told_what_to_give_and_that_it_may_decline(monkeypatch):
     rt._evaluator_step(event, judge, SimpleNamespace(chosen="eval-a"),
                        rt.queue.get(judge).deadline_ns)
     (req,) = captured
-    assert req.description == (
-        "Give verdict 0-1 on the return against the charter; you may decline.")
+    assert req.description == "Give verdict 0-1 on the return against the charter."
     text = json.dumps(req.inputs)
-    for coaching in ("forecast_example", "committed to", "unmeasured", "Name the claim"):
+    for coaching in ("forecast_example", "committed to", "unmeasured", "Name the claim",
+                     "decline"):
         assert coaching not in text and coaching not in req.description
-    schema = req.outcome_schema["properties"]
-    assert schema["status"] == {"enum": ["cannot"]} and "payoff" not in schema
+    answer, decline = req.outcome_schema["anyOf"]
+    schema = answer["properties"]
+    assert "status" not in schema and "payoff" not in schema
+    assert set(answer["required"]) == {"verdict", "rationale"}
+    assert decline["required"] == ["status", "reason"]
+    assert decline["properties"]["status"] == {"enum": ["cannot"]}
     assert "fidelity_objection" not in schema and "realized_consequence" not in schema
 
 
