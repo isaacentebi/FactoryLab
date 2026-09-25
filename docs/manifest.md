@@ -1684,11 +1684,19 @@ What the venue replays, and how:
   the position-hours actually held since the last boundary are charged at the last
   recorded rate and mid, once, before the production mark: the last partial hour is
   never free, and a receipt is never booked for time a position was not held.
-  At the same moment every order still in flight, which no later recorded row can
-  ever deliver, is cancelled (reason "the recorded market ended before the order
-  arrived"; an immediate-or-cancel order no counterparty met) and settled like any
-  venue cancel, and every order sent afterwards is refused ("the recorded market has
-  ended"): the sealed world's venue state is settled, with no order resting forever.
+  The terminal sequence, on every path that ends a tape world (the tape running out,
+  the budget, a termination condition, an explicit kill; a crashed world resumes and
+  ends by the same path): (a) that partial hour's funding is charged; (b) every order
+  still in flight, which no later recorded row can ever deliver, is cancelled (reason
+  "the recorded market ended before the order arrived"; an immediate-or-cancel order
+  no counterparty met), settled like any venue cancel; the production mark is written;
+  (c) the kill's wind-down closes positions and spot balances, each close filling at
+  once against the last recorded book by the same depth rules, the 5% bound and the
+  taker rate, and its fill and realized P&L are booked; (d) only then is the venue
+  sealed, refusing every further order ("the recorded market has ended"); (e) the
+  world is `Terminated`. The operator's `factorylab kill` of a dead simulated world
+  (any fake venue, a tape's included) winds no venue down: its venue state lives only
+  in the process that died.
 - The venue is named `tape:<first 8 hex of sha256>`.
 
 Fills are the recording's and never kinder (money path). Every rule below is
@@ -1747,7 +1755,7 @@ wall-clock reader is keyed on whether the tick clock is paced by the wall
 | Safety pass between model calls | Runs once a delivered tick of wall time has passed in an event; it advances the recorded venue to the wall's instant and settles what filled, refused or funded (never a mid) |
 | `wall` journal (`WallClock`) | Recorded, not re-executed, so a replay reads the run's own instants |
 | Checkpoint cost alarm (`checkpoint.slow`) | Measured in real busy time |
-| Tick clock restore | Restored as the clock it was: the saved skipped and modelled time, continuing from the world's saved instant, with the fresh clock's deadline (the tape's end). Each event's `runtime.event_done` records the clock's reading and totals (`clock`), and a replayed event's clock adopts them, so after the replay the clock reads and totals what the recorded run's did, never the checkpoint's stale instant; a replay of a diary's gaps (`--gaps-from`) restores its recorded gaps and measured sample; a restore never changes a clock's kind (`tick_clock_mismatch`) |
+| Tick clock restore | Restored as the clock it was: the saved skipped and modelled time and its saved paced reading (the one the last event's `runtime.event_done` recorded, so a modelled call inside a tick is not undone and the next tick skips only the remainder), with the fresh clock's deadline (the tape's end). A stand-in's modelled latency rides in its recorded answer and is spent by the provider's observer, live and on replay alike. Each event's `runtime.event_done` records the clock's reading and totals (`clock`), and a replayed event's clock adopts them, so after the replay the clock reads and totals what the recorded run's did, never the checkpoint's stale instant; a replay of a diary's gaps (`--gaps-from`) restores its recorded gaps and measured sample; a restore never changes a clock's kind (`tick_clock_mismatch`) |
 | Resume instant | The world's saved instant |
 | Treasury cap window, venue read share, Polymarket windows, the kernel's ledger and queue | The world's clock, unchanged |
 

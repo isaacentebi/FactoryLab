@@ -646,13 +646,15 @@ class TapeVenue(FakeExchange):
     def close_recording(self, ts_ns: int) -> list[WorldEvent]:
         """End the recorded market at ``ts_ns``, when its world ends; its effects, in order.
 
-        Guarantees a sealed world's venue is settled: the funding accrued since the last
-        hour boundary is charged (``settle_accrued_funding``); every order still in
-        flight can no longer arrive, since no later row will ever be recorded, and is
-        cancelled (an immediate-or-cancel order that no counterparty ever met), each
-        with an ``OrderRejected`` the runtime settles like any venue cancel; and every
-        order sent afterwards is refused. Resting limits stay listed, for the wind-down
-        to cancel as it cancels any resting order.
+        The first half of the terminal sequence (the runtime's ``kill``): the funding
+        accrued since the last hour boundary is charged (``settle_accrued_funding``);
+        every order still in flight can no longer arrive, since no later row will ever
+        be recorded, and is cancelled (an immediate-or-cancel order that no counterparty
+        ever met), each with an ``OrderRejected`` the runtime settles like any venue
+        cancel. From here an order sent (the wind-down's closes) executes at once
+        against the last recorded book, by the same depth rules, at the taker rate:
+        the recording has nothing later to meet it with. ``seal_recording`` then refuses
+        every order. Resting limits stay listed, for the wind-down to cancel.
         """
         events = self.settle_accrued_funding(ts_ns)
         for oid, flight in list(self._inflight.items()):
@@ -662,8 +664,12 @@ class TapeVenue(FakeExchange):
                 "order_id": oid, "coin": flight["order"].coin,
                 "reason": "the recorded market ended before the order arrived",
                 "cancelled_size": str(flight["order"].size)}))
-        self._closed = True
+        self._terminal = True
         return events
+
+    def seal_recording(self) -> None:
+        """The recorded market is over: every order sent from now on is refused."""
+        self._closed = True
 
     def funding(self) -> list[FundingEvent]:
         """The latest recorded funding rate of each perp at or before the venue's instant."""
@@ -827,8 +833,18 @@ class TapeVenue(FakeExchange):
                                "order below the venue minimum value")
         oid = str(self._next_oid)
         self._next_oid += 1
-        self._inflight[oid] = {"order": order, "read_ns": read[0], "read_mid": read[1],
-                               "sent_ns": self._now_ns}
+        flight = {"order": order, "read_ns": read[0], "read_mid": read[1],
+                  "sent_ns": self._now_ns}
+        if self.__dict__.get("_terminal"):
+            # The world is winding down after its recording ended: nothing later will
+            # ever arrive, so the order meets the last recorded book now, by the same
+            # rules as any arrival (depth, the 5% bound, the taker rate), and says what
+            # it did as the venue's own answer.
+            # Executed first: ``_execute`` drains the pending list and replaces it.
+            events = self._execute(oid, flight)
+            self._pending_events.extend(events)
+            return self.lookup("", order_id=oid)
+        self._inflight[oid] = flight
         return OrderResult(oid, "resting", Decimal(0), None)
 
     def _arrive(self) -> list[WorldEvent]:

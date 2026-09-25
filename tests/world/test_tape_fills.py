@@ -483,4 +483,11 @@ def test_closing_the_recording_cancels_what_can_no_longer_arrive_and_refuses_mor
     assert cancels[ioc.order_id]["reason"] == "the recorded market ended before the order arrived"
     assert venue.lookup("ioc").status == venue.lookup("lim").status == "cancelled"
     assert venue.open_orders() == []
+    # Between the close and the seal (the kill's wind-down) an order meets the last
+    # recorded book at once, as an immediate-or-cancel taker; after the seal, nothing.
+    wound = venue.place(_buy("0.2", cid="wind-down"))
+    assert wound.status == "filled" and wound.filled_size == Decimal("0.2")
+    assert Decimal(_fills(venue.drain_events())[0]["px"]) == (
+        Decimal(100) + Decimal(100) * 2 / 20_000).quantize(Decimal("1e-10"))
+    venue.seal_recording()
     assert venue.place(_buy("0.2", cid="late")).error == "the recorded market has ended"

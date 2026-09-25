@@ -162,6 +162,9 @@ class IdleSkipClock(LiveClock):
 
     def __post_init__(self) -> None:
         self._anchor: int | None = None
+        # The latest reading the diary holds (``pace_record`` or ``adopt``): what a
+        # checkpoint carries, so it is the same bytes in a run and in its replay.
+        self._recorded: dict | None = None
         self.now_ns = self._now
         self.sleep = self._refuse_sleep
 
@@ -199,8 +202,9 @@ class IdleSkipClock(LiveClock):
 
     def pace_record(self) -> dict:
         """The clock's reading and totals now, for the diary (``runtime.event_done``)."""
-        return {"now_ns": self.now_ns(), "skipped_ns": self.skipped_ns,
-                "modelled_ns": self.modelled_ns}
+        self._recorded = {"now_ns": self.now_ns(), "skipped_ns": self.skipped_ns,
+                          "modelled_ns": self.modelled_ns}
+        return dict(self._recorded)
 
     def adopt(self, record: dict) -> None:
         """Take the reading and totals a diary recorded as this clock's own.
@@ -216,11 +220,21 @@ class IdleSkipClock(LiveClock):
         self.modelled_ns = int(record["modelled_ns"])
         self.origin_ns = int(record["now_ns"]) - self.skipped_ns - self.modelled_ns
         self._anchor = None
+        self._recorded = {"now_ns": int(record["now_ns"]), "skipped_ns": self.skipped_ns,
+                          "modelled_ns": self.modelled_ns}
 
     def state(self) -> dict:
-        """The live clock's continuation, plus the time skipped and the time modelled."""
+        """The live clock's continuation, the time skipped and modelled, and its reading.
+
+        The reading is the last one the diary holds (the end of the event the
+        checkpoint follows), never a fresh read: a replay that re-takes the checkpoint
+        must write the same bytes. It is what a resume continues from, so a modelled
+        call inside a tick is not undone by the checkpoint.
+        """
+        recorded = self._recorded
         return {**super().state(), "skipped_ns": self.skipped_ns,
-                "modelled_ns": self.modelled_ns}
+                "modelled_ns": self.modelled_ns,
+                "paced_now_ns": None if recorded is None else recorded["now_ns"]}
 
     def resumed(self, state: dict, *, instant_ns: int) -> IdleSkipClock:
         """The saved clock, continuing from the world's saved ``instant_ns``.
@@ -231,10 +245,18 @@ class IdleSkipClock(LiveClock):
         state = dict(state)
         gaps = state.pop("gaps", ())
         skipped, modelled = state.pop("skipped_ns"), state.pop("modelled_ns")
-        return IdleSkipClock(**state, gaps=deque(gaps, maxlen=MEASURED_SAMPLE),
-                             deadline_ns=self.deadline_ns, monotonic=self.monotonic,
-                             origin_ns=instant_ns - skipped - modelled,
-                             skipped_ns=skipped, modelled_ns=modelled)
+        # The checkpoint's own paced reading when it carries one; the world's instant
+        # only for a checkpoint taken before any event recorded a reading.
+        paced = state.pop("paced_now_ns", None)
+        now = instant_ns if paced is None else paced
+        clock = IdleSkipClock(**state, gaps=deque(gaps, maxlen=MEASURED_SAMPLE),
+                              deadline_ns=self.deadline_ns, monotonic=self.monotonic,
+                              origin_ns=now - skipped - modelled,
+                              skipped_ns=skipped, modelled_ns=modelled)
+        if paced is not None:
+            clock._recorded = {"now_ns": paced, "skipped_ns": skipped,
+                               "modelled_ns": modelled}
+        return clock
 
 
 def wall_paced(clock: Any) -> bool:

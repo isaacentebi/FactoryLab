@@ -72,6 +72,7 @@ import json
 import statistics
 import sys
 import time
+from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -355,6 +356,10 @@ def _call_rows(path: Path) -> list[tuple[int, str, int]]:
     return rows
 
 
+#: Where a stand-in's modelled latency rides in its recorded answer (``Latent``).
+MODELLED_LATENCY = "modelled_latency_ns"
+
+
 class Latent:
     """A stand-in provider whose every call takes a latency a paid diary's calls took.
 
@@ -388,8 +393,12 @@ class Latent:
         if deadline is not None and latency > deadline:
             self.clock.spend(deadline)
             raise OpenRouterError(None, CALL_EXPIRED)
-        self.clock.spend(latency)
-        return self.inner.complete(req)
+        response = self.inner.complete(req)
+        # The latency rides in the answer the diary records, and is spent on the clock
+        # by the provider's observer (``_prepare``), live and when a replay returns the
+        # recorded answer alike: a resume re-spends the calls of an event its crash cut
+        # short, as the dead process had.
+        return replace(response, raw={**response.raw, MODELLED_LATENCY: latency})
 
 
 #: Where a run keeps, beside its diary, what its provider side must carry across a crash.
@@ -1285,6 +1294,13 @@ def _prepare(runtime: Any, vault_depositor_usd: str | None, latent: Any = None) 
         runtime.exchange.vault_depositor_steps = 10
     if latent is not None:
         latent.clock = runtime.tick_clock  # the restored clock, after a resume
+
+        def spend(method: str, _args: Any, _kwargs: Any, result: Any) -> None:
+            modelled = (getattr(result, "raw", None) or {}).get(MODELLED_LATENCY)
+            if method == "complete" and modelled:
+                runtime.tick_clock.spend(int(modelled))
+
+        runtime.provider.observer = spend
 
 
 def _finish(card: dict[str, Any], runtime: Any, target: Path, admission: Any,

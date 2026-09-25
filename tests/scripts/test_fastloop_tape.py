@@ -109,7 +109,14 @@ def test_a_market_decision_fills_a_tick_later_and_is_accounted_to_its_decision(
     receipts = [e for e in events if e.get("kind") == "consequence.fill"
                 and e["payload"]["order_id"] == fill["order_id"]]
     assert receipts, "the fill is booked to the decision that sent it"
-    assert card["fill_band"]["fills"] == 1
+    # The world ended holding it: the kill's wind-down closed it at the last recorded
+    # book, and that fill is booked too, so the world seals flat.
+    [close] = [e for e in events if e.get("kind") == "fill.counted"
+               and e["order_id"] != fill["order_id"]]
+    assert close["coin"] == "BTC" and close["is_buy"] is False
+    assert close["ts"] <= tape.end_ns and card["fill_band"]["fills"] == 2
+    [reconciled] = [e for e in events if e.get("kind") == "winddown.reconciliation"]
+    assert reconciled["exposure_state"] == "flat"
     # The tape ended inside an hour with the position still held: the kill charged the
     # position-hours held since the last boundary, so no cost was left uncharged.
     kill = next(e["seq"] for e in events if e.get("kind") == "kill.production")
@@ -190,20 +197,30 @@ def test_call_latencies_are_read_from_a_diarys_journaled_wall_reads(tmp_path):
 
 
 def test_a_stand_ins_call_takes_a_measured_latency_and_expires_past_its_deadline():
+    from types import SimpleNamespace
+
     from factorylab.runtime.live import IdleSkipClock
-    from factorylab.world.models import ModelRequest
+    from factorylab.world.models import ModelRequest, ModelResponse
     from factorylab.world.openai_wire import CALL_EXPIRED
     from factorylab.world.openrouter import OpenRouterError
 
     class Answers:
         def complete(self, req):
-            return "answer"
+            return ModelResponse("m", "answer", 1, 1, "stop")
 
     clock = IdleSkipClock(10 * S, 5, origin_ns=0, monotonic=lambda: 0)
     latent = fastloop.Latent(Answers(), [4000], seed=1)
-    latent.clock = clock
+    runtime = SimpleNamespace(tick_clock=clock, provider=SimpleNamespace(observer=None),
+                              polymarket=None, exchange=None)
+    fastloop._prepare(runtime, None, latent)
     request = ModelRequest("m", "s", ({"role": "user", "content": "x"},))
-    assert latent.complete(request) == "answer" and clock.modelled_ns == 4 * S
+    answer = latent.complete(request)
+    # The latency rides in the recorded answer and is spent by the provider's observer,
+    # which the runtime calls with the live answer and with a replayed one alike.
+    assert answer.text == "answer" and answer.raw[fastloop.MODELLED_LATENCY] == 4 * S
+    assert clock.modelled_ns == 0
+    runtime.provider.observer("complete", (request,), {}, answer)
+    assert clock.modelled_ns == 4 * S
     with pytest.raises(OpenRouterError, match=CALL_EXPIRED):
         latent.complete(ModelRequest("m", "s", request.messages, timeout_s=1.5))
     assert clock.modelled_ns == 4 * S + 1_500_000_000  # the deadline, then it expired

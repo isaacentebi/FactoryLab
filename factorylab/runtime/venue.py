@@ -91,6 +91,32 @@ def close_recorded_market(rt) -> None:
               file=sys.stderr)
 
 
+def seal_recorded_market(rt) -> None:
+    """Book what the wind-down's closes did on a recorded venue, then seal the venue.
+
+    The second half of the terminal sequence: after ``close_recorded_market`` (the
+    accrued funding, the orders that can never arrive), the kill's wind-down closes
+    positions and balances against the last recorded book; their fills and refusals
+    are settled here like any venue effect, so their realized P&L is booked, and only
+    then is the venue sealed against every further order, before ``Terminated``.
+    Idempotent; never raises into a kill; a no-op off a recorded venue.
+    """
+    exchange = getattr(rt, "exchange", None)
+    if exchange is None or getattr(rt, "live", True) \
+            or not callable(getattr(exchange, "seal_recording", None)):
+        return
+    try:
+        rt._settle_exchange_effects(exchange.drain_events(), observe_positions=False)
+    except Exception as exc:  # noqa: BLE001 - nothing may raise into a kill
+        print(f"factorylab kill: the wind-down's fills were not booked ({type(exc).__name__})",
+              file=sys.stderr)
+    try:
+        exchange.seal_recording()
+    except Exception as exc:  # noqa: BLE001
+        print(f"factorylab kill: the recorded market was not sealed ({type(exc).__name__})",
+              file=sys.stderr)
+
+
 class VenueMixin:
     """Preserve runtime state and behavior for venue operations."""
 
@@ -148,9 +174,12 @@ class VenueMixin:
                 report["error"] = "world has no exchange"
             if owed and getattr(getattr(self, "polymarket", None), "writes", False):
                 self._wind_down_polymarket(report)
+            # A recorded venue: book the wind-down's closes, then refuse every order.
+            seal_recorded_market(self)
         except Exception as exc:  # noqa: BLE001 - nothing may raise into a kill
             report["error"] = type(exc).__name__
         finally:
+            seal_recorded_market(self)  # sealed whatever the wind-down did (idempotent)
             # An acknowledgement is not a reconciled flat account.
             report.setdefault("exposure_state", winddown.UNKNOWN)
             report["exposure_status"] = report["exposure_state"]

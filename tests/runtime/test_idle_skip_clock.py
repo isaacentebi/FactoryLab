@@ -204,3 +204,79 @@ def test_an_order_that_can_no_longer_arrive_is_cancelled_when_the_world_ends():
     assert cancel["seq"] < kill  # settled before the production mark
     after = rt.exchange.target.place(Order("BTC", True, Decimal("0.001"), client_id="late"))
     assert after.status == "rejected" and after.error == "the recorded market has ended"
+
+
+def test_the_wind_down_flattens_a_tape_world_at_its_last_recorded_book():
+    """Codex review of #151 (e49955c): the venue was sealed before the kill's wind-down,
+    so every close was refused and the world sealed with pending exposure. The terminal
+    sequence is: accrued funding, orders that can never arrive cancelled, the wind-down's
+    closes filled against the last recorded book (same depth rules, taker rate), their
+    P&L booked, and only then the seal and Terminated."""
+    from factorylab.world.exchange import Position
+
+    tape = Tape.load(TAPE)
+    base = load_manifest("scripted")
+    manifest = replace(base, kill=replace(base.kill, wind_down=True), exchange=replace(
+        base.exchange, tape=TapeSpec.of(tape, allow_unknown_cutoff=True),
+        spot_pairs=("PURR/USDC",)))
+    venue = TapeVenue(tape, coins=manifest.exchange.coins, spot_pairs=("PURR/USDC",),
+                      start_cash_usd=Decimal(1000))
+    rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
+                 router_gamma=.1, provider=ScriptedProvider(), exchange=venue,
+                 clock_source=IdleSkipClock(10 * S, 5, origin_ns=tape.start_ns,
+                                            monotonic=Monotonic()))
+    rt.exchange.advance(tape.end_ns)
+    rt.clock.now_ns = tape.end_ns
+    btc, purr = tape.mid_at("BTC", tape.end_ns)[1], tape.mid_at("PURR/USDC", tape.end_ns)[1]
+    venue._positions["BTC"] = Position("BTC", Decimal("0.01"), Decimal(84000))
+    venue._spot_positions["PURR/USDC"] = Position("PURR/USDC", Decimal(5), Decimal(4))
+    report = rt.kill("explicit_kill:budget")
+    assert report["exposure_state"] == "flat", report.get("residual")
+    assert not venue.account().positions and not venue._spot_positions
+    fills = {f.coin: f for f in venue._fills}
+    for coin, mid in (("BTC", btc), ("PURR/USDC", purr)):
+        half = mid * tape.spread_bps(coin)[0] / 20_000
+        fill = fills[coin]  # sold at the last recorded bid: mid less half the spread
+        assert fill.px == (mid - half).quantize(Decimal("1e-10")) and not fill.is_buy
+    taker = Decimal("0.00045")
+    assert fills["BTC"].fee == (Decimal("0.01") * fills["BTC"].px * taker).quantize(
+        Decimal("0.000001"))
+    items = rt.ledger._recovery_items()
+    [counted] = [i for i in items if i["kind"] == "fill.counted" and i["coin"] == "BTC"]
+    assert counted["realized_micro"] == round((fills["BTC"].px - 84000) * Decimal("0.01")
+                                              * 1_000_000)
+    booked = [i for i in items if i["kind"] == "venue.settled" and i["reason"] == "exchange_pnl"]
+    assert booked, "the close's realized P&L is booked on the venue account"
+    # The order of the terminal sequence: production dies, the closes fill and are
+    # booked, and only then is the world Terminated.
+    seqs = {i["kind"]: i["seq"] for i in items}
+    assert seqs["kill.production"] < counted["seq"] < max(
+        i["seq"] for i in items if (i.get("event") or {}).get("kind") == "Terminated")
+    assert venue.place(Order("BTC", True, Decimal("0.001"))).error == (
+        "the recorded market has ended")
+
+
+def test_a_checkpoint_mid_tick_keeps_the_paced_reading_and_its_totals():
+    """Codex review of #151 (e49955c): a checkpoint with no journal tail rebuilt the
+    clock's origin from the world's instant (the tick), so a 5 s modelled call inside a
+    10 s tick was undone: the resumed clock read 5 s earlier and the next tick skipped
+    the whole interval. The checkpoint carries the recorded paced reading."""
+    busy = Monotonic()
+    clock = IdleSkipClock(10 * S, 5, origin_ns=1_000 * S, monotonic=busy)
+    stream = clock.events()
+    assert next(stream).ts_ns == 1_000 * S
+    busy.t += S // 2  # the kernel's own work
+    clock.spend(5 * S)  # a modelled call inside the tick
+    record = clock.pace_record()  # what the event's runtime.event_done holds
+    assert record["now_ns"] == 1_000 * S + 5 * S + S // 2
+    saved = clock.state()
+    assert saved["paced_now_ns"] == record["now_ns"]
+    busy.t += 7 * S  # a fresh read after the event would differ: the state does not
+    assert clock.state() == saved
+    fresh = IdleSkipClock(10 * S, 5, origin_ns=1_000 * S, monotonic=Monotonic())
+    resumed = _restored_tick_clock(fresh, saved, instant_ns=1_000 * S)  # the tick
+    assert resumed.now_ns() == record["now_ns"]
+    assert (resumed.skipped_ns, resumed.modelled_ns) == (0, 5 * S)
+    assert next(resumed.events()).ts_ns == 1_010 * S  # the next tick, on time
+    assert resumed.idle == [10 * S - record["now_ns"] + 1_000 * S]  # only the remainder
+    assert resumed.skipped_ns == 4 * S + S // 2
