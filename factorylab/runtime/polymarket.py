@@ -1251,8 +1251,8 @@ def reconcile(rt: Any) -> dict[str, Any] | None:
 
     Every fill and resolution the pot settled is ledgered exactly; the venue's
     account is the other side. Guarantees a disagreement larger than one
-    micro-USD is ledgered as ``polymarket.drift``, as the treasury reconciler
-    ledgers ``reconcile.drift``; the first observation is ledgered as the baseline.
+    micro-USD is ledgered as ``polymarket.drift``: like with like, the pot's books
+    against its custodian; the first observation is ledgered as the baseline.
     """
     surface = rt.polymarket
     try:

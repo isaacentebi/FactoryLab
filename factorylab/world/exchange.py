@@ -761,9 +761,14 @@ class FakeExchange:
         self._cash += amount if to_perp else -amount
 
     def instruments(self) -> dict:
-        """Publish deterministic lot and price increments and the venue's order floor."""
+        """Publish deterministic lot and price increments, the venue's order floor and its
+        fee rates: this venue's own ``fee_bps``, as a fraction of notional, which is what
+        every fill it books is charged, maker or taker (Chapter II §I.b: prices are
+        public)."""
+        rate = format((self.fee_bps / Decimal(10_000)).normalize(), "f")
         return {market: [{"coin": c, "lot_size": "0.000001", "tick_size": "0.01",
-                          "min_order_value_usd": str(self.min_order_value_usd)}
+                          "min_order_value_usd": str(self.min_order_value_usd),
+                          "taker_fee_rate": rate, "maker_fee_rate": rate}
                          for c in coins]
                 for market, coins in (
                     ("perp", tuple(dict.fromkeys((*self.coins, *self.listed_coins)))),
@@ -1147,6 +1152,39 @@ class HyperliquidExchange:
         # Hyperliquid accounts are cross-margin unless an instrument was switched
         # to isolated; nothing here switches one, and the mode is reported as read.
         self._account_mode = "cross"
+        # The account's own fee rates, read once with the listing (Chapter II §I.b:
+        # prices are public), never a constant written here.
+        self._fee_rates = self._read_fee_rates()
+
+    #: The venue's ``userFees`` fields for each market's taker and maker rate.
+    FEE_FIELDS = {"perp": ("userCrossRate", "userAddRate"),
+                  "spot": ("userSpotCrossRate", "userSpotAddRate")}
+
+    def _read_fee_rates(self) -> dict[str, dict[str, str]]:
+        """The account's taker and maker rates per market, as the venue states them.
+
+        Guarantees each market's two rates are the venue's own ``userFees`` answer for
+        this account, as decimal fractions of notional, or ``fee_rates: unavailable``
+        with the reason when the venue was not asked (no address), did not answer, or
+        did not state that market's rates: an unread rate is never a number.
+        """
+        answer, reason = None, "no account address to ask the venue for"
+        if self._address:
+            try:
+                answer = self._info.user_fees(self._address)
+                reason = "the venue's userFees answer did not state them"
+            except Exception as exc:  # noqa: BLE001 - an unread rate is unavailable
+                reason = f"the venue's userFees read failed: {type(exc).__name__}"
+        rates: dict[str, dict[str, str]] = {}
+        for market, (taker, maker) in self.FEE_FIELDS.items():
+            try:
+                rates[market] = {"taker_fee_rate": str(Decimal(str(answer[taker]))),
+                                 "maker_fee_rate": str(Decimal(str(answer[maker]))),
+                                 "fee_basis": "fraction of notional, the venue's userFees "
+                                              "for this account"}
+            except (KeyError, TypeError, ArithmeticError, ValueError):
+                rates[market] = {"fee_rates": "unavailable", "reason": reason}
+        return rates
 
     def _configure_spot(self, meta: dict) -> None:
         """Record the venue's whole spot universe, and the wire names of traded pairs."""
@@ -1182,12 +1220,16 @@ class HyperliquidExchange:
         return coin in getattr(self, "_spot_universe", {})
 
     def instruments(self) -> dict:
-        """Expose lot precision, the venue's price precision rule and its order floor."""
+        """Expose lot precision, the venue's price precision rule, its order floor and
+        this account's fee rates for the market, as the venue stated them at start."""
+        fees = getattr(self, "_fee_rates", None) or {}
         return {market: [{"coin": c, "lot_size": str(Decimal(1).scaleb(-self._sz_decimals[c])),
                           "tick_size": str(Decimal(1).scaleb(
                               -(8 if market == "spot" else 6) + self._sz_decimals[c])),
                           "price_significant_figures": 5, "integer_prices_allowed": True,
-                          "min_order_value_usd": MIN_ORDER_VALUE_USD}
+                          "min_order_value_usd": MIN_ORDER_VALUE_USD,
+                          **fees.get(market, {"fee_rates": "unavailable",
+                                              "reason": "the venue was not asked"})}
                          for c in coins]
                 for market, coins in (("perp", getattr(self, "_listed_coins", self.coins)),
                                       ("spot", tuple(getattr(self, "_spot_names", {}))))}

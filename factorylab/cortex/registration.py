@@ -400,6 +400,72 @@ class Rejected:
     reason: str
 
 
+def _kind_shape(kind: str, required: tuple[str, ...], *, closed: tuple[str, ...] = (),
+                pinned: dict[str, Any] | None = None) -> dict[str, Any]:
+    """One register item form: ``kind`` pinned, its required fields named.
+
+    ``closed`` names every optional field a kind that refuses any other may carry;
+    such a kind's form is closed and lists every field it admits. ``pinned`` states a
+    field's own value constraint. An open form names its required fields and nothing
+    else, which is all it constrains: it rides in every outcome schema.
+    """
+    properties: dict[str, Any] = {"kind": {"enum": [kind]}}
+    shape: dict[str, Any] = {"properties": properties, "required": ["kind", *required]}
+    if closed or kind in ("service", "predicate", "challenge", "market"):
+        properties.update({name: {} for name in (*required, *closed)})
+        shape["additionalProperties"] = False
+    properties.update(pinned or {})
+    return shape
+
+
+def proposal_schemas() -> dict[str, list[dict[str, Any]]]:
+    """Each proposal kind's register item forms: the fields the kernel refuses it without.
+
+    Chapter II §II.b (physics is enforced, and the published contract is the enforced
+    one). Guarantees, per kind, the fields whose absence ``parse_proposals`` or the
+    runtime's admission refuses (``_apply_registrations``: a retire's and a
+    connector's predicted_effect, an amendment's id and predicted_effect), and a
+    closed form for each kind that refuses any field it does not name (service,
+    predicate, challenge, market, connector). What the fields must contain (a slug,
+    a known model, a current card) is the admission's, refused with a reason that
+    names the field; this is the shape it checks first (``validate_proposal``).
+    """
+    return {
+        "model": [_kind_shape("model", ("openrouter_id",))],
+        "assembly": [
+            _kind_shape("assembly", ("id", "model_id", "system_prompt", "accepts")),
+            _kind_shape("assembly", ("id", "model_id", "code", "accepts"),
+                        pinned={"model_id": {"enum": ["program"]}}),
+        ],
+        "program": [_kind_shape("program", ("id", "code", "accepts"),
+                                pinned={"model_id": {"enum": ["program"]}})],
+        "router": [_kind_shape("router", ("event_kind", "learner"),
+                               pinned={"learner": {"enum": list(LEARNERS)}})],
+        "retire": [_kind_shape("retire", ("assembly_id", "predicted_effect"))],
+        "connector": [_kind_shape("connector", ("id", "description", "origin",
+                                                "predicted_effect"),
+                                  closed=("preflight_path", "pay", "max_call_usd"))],
+        "market": [_kind_shape("market", ("coin",)), _kind_shape("market", ("pair",))],
+        "service": [_kind_shape("service", ("program_id", "price_micro", "description"))],
+        "tool": [_kind_shape("tool", ("id", "description", "args_schema", "code",
+                                      "timeout_s"))],
+        "observation": [_kind_shape("observation", ("id", "description", "unit", "range",
+                                                    "code"))],
+        "predicate": [_kind_shape("predicate", ("id", "description", "code"))],
+        "learner": [_kind_shape("learner", ("assembly_id", "learner", "actions"),
+                                pinned={"learner": {"enum": list(LEARNERS)}})],
+        "amendment": [_kind_shape("amendment", ("id", "predicted_effect"))],
+        "challenge": [_kind_shape("challenge", ("card_id", "evidence", "replacement",
+                                                "trial_windows", "predicted_effect"))],
+    }
+
+
+def register_item_schema() -> dict[str, Any]:
+    """A register item as the kernel admits it: an object in one of every kind's forms."""
+    return {"type": "object",
+            "anyOf": [form for forms in proposal_schemas().values() for form in forms]}
+
+
 def parse_proposals(
     outputs: dict[str, Any],
     *,

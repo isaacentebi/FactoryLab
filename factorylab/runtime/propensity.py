@@ -242,8 +242,49 @@ def size_band_vocabulary() -> str:
     return f'{edges}, "{SIZE_BAND_MAX}" ({SIZE_BANDS[-1][0]} base units or more)'
 
 
+#: How every role's decline is labelled, published with each vocabulary.
+DECLINED_LABEL_TEXT = (f'a decline (status "cannot") is labelled "{DECLINED}"; '
+                       f'a return the kernel could not use, "{MALFORMED}"')
+
+
 def action_vocabulary() -> dict[str, str]:
-    """The public shape of an action label, stated once for every role."""
+    """The public shape of an action label, stated once for every role.
+
+    Guarantees every role's entry names every label ``action_label`` gives that role,
+    ``declined`` and ``malformed`` included, so a seat can declare its propensity over
+    the actions the kernel will name its answer by.
+    """
+    judged = {
+        "evaluator": '"verdict:<q>" with q the verdict rounded to one decimal, e.g. '
+                     '"verdict:0.8"',
+        "meta": '"conformity:<c>" with c the conformity rounded to one decimal, e.g. '
+                '"conformity:0.6"',
+        "adversary": '"verdict:<q>" with q the counter-verdict rounded to one decimal, '
+                     'e.g. "verdict:0.4"',
+    }
+    return {
+        **{role: f"{text}; {DECLINED_LABEL_TEXT}"
+           for role, text in _producer_vocabulary().items()},
+        **{role: f"{text}; {DECLINED_LABEL_TEXT}" for role, text in judged.items()},
+    }
+
+
+def propensity_field(role: str) -> dict[str, Any]:
+    """The ``propensity`` field an outcome schema publishes for ``role``.
+
+    Chapter II §I.b (the schematics are public, the structures of requests and
+    rewards among them): the field states, where it is defined, the labels the
+    kernel names this role's answer by, generated from ``action_vocabulary``, the
+    single source. It states no reason to declare one.
+    """
+    return {"type": "object",
+            "description": "your own distribution over your own actions, {action_id: "
+                           "probability} summing to one; the kernel labels this "
+                           f"answer's action {action_vocabulary()[role]}"}
+
+
+def _producer_vocabulary() -> dict[str, str]:
+    """The producing roles' labels, before the decline and malformed labels."""
     return {
         "producer": 'hold, investigate (tool calls and no order), build (a '
         "registration), govern (a proposal or a challenge), defer (sleep through "
@@ -257,8 +298,8 @@ def action_vocabulary() -> dict[str, str]:
         "coin, side or size reports that trade, and an answer never places a second "
         'order. The size band '
         'buckets the size you declared, in base units: '
-        f'{size_band_vocabulary()}; "malformed" when the return did not parse or '
-        "named no placeable size. What a return executes before its final answer is "
+        f'{size_band_vocabulary()}; an order that named no placeable size is '
+        '"malformed". What a return executes before its final answer is '
         "part of its action: a venue.place_market or venue.place_limit tool call is "
         'named like an order, venue.close "close:<COIN>", venue.cancel "cancel:<COIN>", '
         'venue.set_leverage "leverage:<COIN>", treasury.transfer "transfer:<direction>", '
@@ -268,9 +309,6 @@ def action_vocabulary() -> dict[str, str]:
         'execution order, and a trade through a tool followed by "hold" is named by '
         "the trade",
         "antagonist": "the same labels as a producer",
-        "evaluator": '"verdict:<q>" with q the verdict rounded to one decimal, e.g. '
-        '"verdict:0.8"',
-        "meta": '"conformity:<c>", rounded the same way',
     }
 
 

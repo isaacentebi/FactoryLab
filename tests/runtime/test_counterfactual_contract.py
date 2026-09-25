@@ -33,11 +33,14 @@ from factorylab.world.scripted import _description_from_prompt
 from tests.runtime.test_loop import _consequence_produce
 from tests.runtime.test_reward_chain import Population, _advance, _judge, _mids, _rows
 
-#: The refusals the published schema itself gives (``validate_schema``), naming what failed.
-ABSENT_ON_SCHEMA = ("no matching alternative: required field absent: counterfactual | "
-                    "required field absent: coin, side, size")
-UNLISTED_ON_SCHEMA = ("no matching alternative: counterfactual: coin: field is outside enum | "
-                      "required field absent: coin, side, size")
+#: The refusals the published schema itself gives (``validate_schema``), naming what failed:
+#: an answer whose action is not "order" is read against the form it chose, not against the
+#: answer order's form, which pins action to "order".
+ABSENT_ON_SCHEMA = "no matching alternative: required field absent: counterfactual"
+#: An answer whose action is "order" is read against both forms.
+ABSENT_ON_ORDER = ("no matching alternative: required field absent: counterfactual | "
+                   "required field absent: coin, side, size")
+UNLISTED_ON_SCHEMA = "no matching alternative: counterfactual: coin: field is outside enum"
 
 
 class Seat(Population):
@@ -160,7 +163,7 @@ def test_an_acting_return_needs_no_counterfactual():
 
     rt = _world({"action": "order"})
     reported, _event = _consequence_produce(rt)
-    assert _returned(rt, reported) == ("malformed", ABSENT_ON_SCHEMA)
+    assert _returned(rt, reported) == ("malformed", ABSENT_ON_ORDER)
 
 
 LIMIT = {"coin": "BTC", "side": "buy", "size": "0.0001", "price": "30000"}
@@ -192,7 +195,7 @@ def test_a_rejected_venue_write_followed_by_a_bare_report_is_malformed(monkeypat
     handle, _event = _consequence_produce(rt)
     assert [row["status"] for row in rt.executed_operations(handle)] == ["rejected"]
     assert not rt._acted(handle)
-    assert _returned(rt, handle) == ("malformed", ABSENT_ON_SCHEMA)
+    assert _returned(rt, handle) == ("malformed", ABSENT_ON_ORDER)
 
 
 def test_a_rejected_venue_write_with_a_counterfactual_is_priced_by_the_named_trade(
@@ -350,7 +353,9 @@ def test_a_producing_request_publishes_the_contract_the_kernel_enforces():
     assert "counterfactual" not in order["required"]
     for seat, asm in rt.assemblies.items():
         contract = rt._contract_schema(seat)
-        shapes = contract.get("anyOf", [contract])
+        # A contract with a judging kind ends with its decline form (DECLINE_FORM).
+        shapes = [s for s in contract.get("anyOf", [contract])
+                  if s.get("required") != ["status"]]
         for kind, shape in zip(asm.spec.emits, shapes, strict=True):
             published = "counterfactual" in shape["properties"]
             assert published == (kind in ("ProducerReturn", "Exposure")), (seat, kind)

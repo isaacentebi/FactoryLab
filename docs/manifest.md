@@ -1522,8 +1522,8 @@ recorded. Zero mass remains a refused declaration.
 
 The declared propensity travels forward on the request about that decision: the
 `ProducerReturn`, `Verdict` and `MetaVerdict` events carry it, and the judge's
-`Request` carries it as a first-class field rendered in its own `PROPENSITY`
-block. This is the essay's single exception to privacy (II.I.b), so nothing else
+`Request` carries it as a first-class field rendered in its own `SUBJECT PROPENSITY`
+block, named apart from the answer's own `propensity` field. This is the essay's single exception to privacy (II.I.b), so nothing else
 of an agent's local state moves with it.
 
 A `{"kind": "learner", "assembly_id", "learner", "actions", "gamma"}`
@@ -3082,7 +3082,7 @@ Every judge, first tier, meta and ballot, reads the same machine view (Chapter I
 (`actor_context`: the capability index without population prose, its own seat row,
 the clock and provider inventory), never the world block. The judged return's
 `description` is the event it answered, with no role clause. Its outputs lose
-`propensity`, which the request's PROPENSITY block renders once. No event payload names its author. A judge is not shown its own
+`propensity`, which the request's SUBJECT PROPENSITY block renders once. The judged return names its own `handle` and its `kernel_status` (not `status`, which in an answer is only the refusal flag). No event payload names its author. A judge is not shown its own
 consequence standing, and `your_action_policy` is absent when a seat has no
 registered learner. When it has one, `your_action_policy` is one draw from that
 learner, `{recommended, p}`, never the distribution (Chapter II rulings R4,

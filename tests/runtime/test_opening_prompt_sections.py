@@ -124,7 +124,7 @@ def test_a_model_request_refused_over_its_ceiling_is_read_by_nobody(monkeypatch)
 
 def test_a_delivered_request_is_a_downstream_reading(monkeypatch):
     rt = runtime()
-    req = _reader(rt, 1_000_000)
+    req = _reader(rt, 2_000_000)
     drive(rt, monkeypatch, [{"action": "hold", "rationale": "done"}])
     ret = rt._invoke(SEAT, req, "evaluator")
     assert ret.status == "ok" and ret.delivered
@@ -147,7 +147,7 @@ def test_a_program_whose_reservation_is_refused_is_read_by_nobody():
     assert refused.status == "failed" and not refused.delivered and wallet.log == []
     # And the runtime files no reading for a return that says it was not delivered.
     rt = runtime()
-    req = _reader(rt, 1_000_000)
+    req = _reader(rt, 2_000_000)
     rt._record_reading(req.handle, replace(refused, handle=req.handle,
                                             prompt_sections={"inputs": 900, "total": 1_000}))
     assert rt.card_samples.readings == [] and rt.window.downstream_read_bytes == 0
@@ -195,7 +195,7 @@ def test_a_ballot_no_assembly_answered_is_no_invocation_in_its_scope_facts(monke
 
 @pytest.mark.parametrize(("ceiling", "replies"), [
     # A working state written in a tool round: the continuation renders the new head.
-    (1_000_000, [{"working_state": {"note": "x" * 3_000},
+    (2_000_000, [{"working_state": {"note": "x" * 3_000},
                   "tool_calls": [{"tool": "outcome.list", "args": {"after": 0, "limit": 8}}]},
                  {"action": "hold", "rationale": "done"}]),
     # One call whose ceiling the wallet caps below the seat's cover before it is
@@ -209,7 +209,7 @@ def test_the_ledgered_sections_are_the_first_requests_the_assembly_was_handed(
     if len(replies) == 1:
         available = rt.wallet.available_for
         monkeypatch.setattr(rt.wallet, "available_for",
-                            lambda handle, reason: min(available(handle, reason), 950_000))
+                            lambda handle, reason: min(available(handle, reason), 1_400_000))
     handed, sent = drive(rt, monkeypatch, replies)
     ret = rt._invoke(SEAT, req, "producer")
     assert len(handed) == len(replies)

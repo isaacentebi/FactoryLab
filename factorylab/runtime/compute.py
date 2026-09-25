@@ -657,7 +657,8 @@ class ComputeMixin:
                 before_call=self._safety_pass, deadline_s=self._call_deadline_s,
                 expired=self._call_expired,
             )
-        asm = Assembly(spec, model, validator=self._validate_output_contract)
+        asm = Assembly(spec, model, validator=self._validate_output_contract,
+                       max_children=self.m.tools.max_children)
         self.assemblies[spec.id] = asm
         self.event_schemas.update(spec.schemas)
         if not self.ledger.bootstrap:
@@ -978,9 +979,28 @@ class ComputeMixin:
 
         self._init_connectors()
         self.tool_specs.setdefault("connector.fetch", connector_spec())
+        self._ensure_treasury_tool()
         self._ensure_web_tool()
         self._ensure_calc_tool()
         self._ensure_directory_tools()
+
+    def _ensure_treasury_tool(self) -> None:
+        """Publish ``treasury.transfer`` as this world's rail admits it, or not at all.
+
+        Chapter II §II.b: guarantees the published enum, examples and description are
+        ``transfer_tool_spec`` of the rail's ``admitted_directions`` now, so a rail a
+        rehearsal wraps after launch to refuse directions publishes only the ones it
+        runs, and a world that admits none publishes no transfer tool.
+        """
+        from factorylab.world.treasury import admitted_directions, transfer_tool_spec
+
+        spec = transfer_tool_spec(
+            admitted_directions(self.treasury.rail),
+            hybrid=getattr(self.m.treasury, "venice_network", None) == "base-mainnet")
+        if spec is None:
+            self.tool_specs.pop("treasury.transfer", None)
+        elif self.tool_specs.get("treasury.transfer") != spec:
+            self.tool_specs["treasury.transfer"] = spec
 
     def _ensure_calc_tool(self) -> None:
         """Publish ``calc`` wherever the fixed primitives are published (R3-E).
@@ -1675,10 +1695,13 @@ class ComputeMixin:
         A shape's kind is the ``emits`` it pins, else the seat's only kind; a shape a
         seat of several kinds may answer as any of them is expanded only when all of
         them produce, so nothing is required of an answer the kernel would not require
-        it of. A policy ballot, a judgement and every other shape are unchanged.
+        it of. A policy ballot's schema is unchanged; every other object answer shape
+        states that a reply's field names are identifiers (``FIELD_NAMES``), which
+        ``_validate_return`` enforces on every reply.
         """
         from factorylab.cortex.assembly import (
             ANSWER_ORDER_KINDS,
+            FIELD_NAMES,
             _answer_shapes,
             producing_contract,
         )
@@ -1691,6 +1714,13 @@ class ComputeMixin:
         acted = self._acted(handle)
         listed = None if acted else [coin for coin, _ in latest_mids(self)]
         writes = not acted and self._may_write(handle)
+
+        def named(shape: Any) -> Any:
+            if (isinstance(shape, dict) and "propertyNames" not in shape
+                    and (shape.get("type") == "object"
+                         or isinstance(shape.get("properties"), dict))):
+                return {**shape, "propertyNames": dict(FIELD_NAMES)}
+            return shape
 
         def expand(shape: Any) -> Any:
             if not isinstance(shape, dict):
@@ -1706,9 +1736,12 @@ class ComputeMixin:
                 answer_order=writes and all(k in ANSWER_ORDER_KINDS for k in kinds))
 
         shapes = _answer_shapes(schema)
-        if len(shapes) == 1 and shapes[0] is schema:
-            return expand(schema)
-        return {"anyOf": [expand(shape) for shape in shapes]}
+        built = (expand(schema) if len(shapes) == 1 and shapes[0] is schema
+                 else {"anyOf": [expand(shape) for shape in shapes]})
+        forms = _answer_shapes(built) if isinstance(built, dict) else [built]
+        if len(forms) == 1 and forms[0] is built:
+            return named(built)
+        return {"anyOf": [named(form) for form in forms]}
 
     def _allowed_tools(self, action_id: str) -> set[str]:
         """Every registered tool is a public primitive; schematics are public.
@@ -3066,8 +3099,13 @@ class ComputeMixin:
         deadline: int,
         channel: str,
         propensity: dict[str, Any] | None = None,
+        settlement: dict[str, str] | None = None,
     ) -> Request:
-        """A request about someone else's decision carries that decision's propensity."""
+        """A request about someone else's decision carries that decision's propensity.
+
+        ``settlement`` is how the answer settles, as ``world.scoring`` states it; the
+        request renders it as its SCORING section (Chapter II §I.b).
+        """
         declared = chosen = None
         if isinstance(propensity, dict) and isinstance(propensity.get("over"), dict):
             declared, chosen = propensity["over"], propensity.get("chosen")
@@ -3085,6 +3123,7 @@ class ComputeMixin:
             resource_liability=handle,
             propensity=declared,
             propensity_chosen=chosen if isinstance(chosen, str) else None,
+            settlement=settlement,
         )
 
     def _public_propensity(self, handle: str) -> dict[str, Any] | None:

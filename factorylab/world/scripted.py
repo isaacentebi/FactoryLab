@@ -314,7 +314,9 @@ class ScriptedProvider:
     @staticmethod
     def _evaluate(req: ModelRequest, inputs: dict[str, Any]) -> dict[str, Any]:
         producer = inputs.get("producer", {})
-        status = producer.get("status")
+        # The judged return's kernel status; a diary recorded before it was renamed
+        # carries it as ``status``.
+        status = producer.get("kernel_status", producer.get("status"))
         action = (producer.get("outputs") or {}).get("action")
         verdict = 1.0 if status == "ok" and action in ("order", "hold") else 0.3
         if action in ("noop", "hold"):
@@ -417,11 +419,13 @@ def _world_from_prompt(text: str) -> dict[str, Any]:
 def _inputs_from_prompt(text: str) -> dict[str, Any]:
     try:
         start = text.index("INPUTS\n") + len("INPUTS\n")
-        # The request renders further sections after the inputs (a propensity
-        # declaration sits between the inputs and the schema); stop at whichever
-        # comes first.
+        # The request renders further sections after the inputs (the subject's
+        # propensity and the scoring facts sit between the inputs and the schema);
+        # stop at whichever comes first.
         end = min(
-            (text.index(header, start) for header in ("\n\nPROPENSITY", "\n\nOUTCOME SCHEMA")
+            (text.index(header, start)
+             for header in ("\n\nSUBJECT PROPENSITY", "\n\nPROPENSITY", "\n\nSCORING",
+                            "\n\nOUTCOME SCHEMA")
              if header in text[start:]),
             default=-1,
         )

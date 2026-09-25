@@ -168,6 +168,23 @@ class LiveRail(ClassTransferRail):
     """Only pinned, receipt-confirmed native USDC transfers advance the treasury's opaque plan."""
 
     name = "hypercore-hyperevm-base-cctp-v2"
+
+    @property
+    def ALLOWED(self) -> tuple[str, ...]:  # noqa: N802 - the rails' shared attribute name
+        """The directions this rail runs: every one but to_venice on a testnet venue,
+        whose preflight always refuses it (Venice is bought with Base mainnet USDC)."""
+        from factorylab.world.treasury import TRANSFER_DIRECTIONS
+
+        return tuple(d for d in TRANSFER_DIRECTIONS
+                     if not (self.testnet and d == "to_venice"))
+
+    #: Each direction whose preflight consults a native gas budget (``remaining``), and
+    #: those budgets: to_reserve's Core-to-EVM charge (hyper) and Base mint (base), and
+    #: to_venue's Base burn and HyperEVM mint. The preflight reads this table for the
+    #: budgets it checks, and ``pots.gas`` publishes it (``treasury.gas_gates``), so the
+    #: published gates are the ones enforced.
+    GAS_BUDGETS: dict[str, tuple[str, ...]] = {"to_reserve": ("hyper", "base"),
+                                                "to_venue": ("base", "hyper")}
     #: A real top-up is submitted once, then only observed (X402Client.top_up's rule for
     #: an unknown outcome): never resent by the retry loop, never replayed on resume.
     poll_only_steps = ("venice_top_up",)
@@ -414,21 +431,41 @@ class LiveRail(ClassTransferRail):
             )
             if disabled or not enabled:
                 raise RailError("CoreDepositWallet cannot currently forward to the perps account")
-            executing = ("base", "hyper")
+            executing = self.GAS_BUDGETS["to_venue"]
         if amount > available:
             raise RailError("amount exceeds available source pot")
-        for key in executing:
+        refusal = self._native_gas_refusal(executing, gas_spent)
+        if refusal is not None:
+            raise RailError(refusal)
+
+    def _native_gas_refusal(self, keys: tuple[str, ...], gas_spent: dict) -> str | None:
+        """Why the reserve's native gas on ``keys`` cannot pay a transaction, or None."""
+        for key in keys:
             chain = self._evm(key)
             if self.remaining(key, gas_spent) <= 0:
-                raise RailError("native gas budget is not configured or is exhausted")
+                return self._budget_refusal(key, gas_spent)
             if chain.balance() == 0:
-                raise RailError(f"reserve requires native {chain.chain.gas_symbol} on {key}")
+                return f"reserve requires native {chain.chain.gas_symbol} on {key}"
+        return None
 
     def _evm(self, key: str) -> EVM:
         return {"base": self.base, "hyper": self.hyper}[key]
 
     def remaining(self, key: str, spent: dict) -> int:
         return self._evm(key).gas_budget_wei - spent.get(key, 0)
+
+    def _budget_refusal(self, key: str, spent: dict, needed: int | None = None) -> str:
+        """Why ``key``'s native gas budget cannot pay, as the facts are: a budget the
+        manifest set to zero reads as zero, never as exhausted; a spent one says what
+        is left and, when known, what the charge needs."""
+        from factorylab.world.treasury import GAS_BUDGET_KEYS
+
+        budget = self._evm(key).gas_budget_wei
+        if budget <= 0:
+            return f"{GAS_BUDGET_KEYS[key]} is 0 in this world's manifest"
+        left = budget - spent.get(key, 0)
+        return (f"{GAS_BUDGET_KEYS[key]} is exhausted: {max(0, left)} wei left of {budget}"
+                + (f", the charge needs {needed}" if needed is not None else ""))
 
     def _core_fee(self, forward: bool = False) -> int:
         """The burn's maxFee as CoreDepositWallet quotes it for this branch, read on-chain."""
@@ -454,7 +491,8 @@ class LiveRail(ClassTransferRail):
         """Reserve the documented Core-to-EVM gas charge against the HyperEVM budget."""
         gas, hype, remaining = self._core_gas(spent)
         if gas <= 0 or gas > remaining:
-            raise RailError("HyperCore transfer gas budget is exhausted")
+            raise RailError("the Core-to-EVM gas charge of to_reserve cannot be paid: "
+                            + self._budget_refusal("hyper", spent, gas))
         if gas > hype:
             raise RailError("venue requires spot HYPE for the Core-to-EVM gas charge")
         return gas
@@ -476,8 +514,11 @@ class LiveRail(ClassTransferRail):
             forward, reason = mode == "always", "manifest"
         else:
             forward = not affordable
+            # A budget the manifest set to zero is zero, not exhausted.
             reason = ("base_eth_available" if affordable
-                      else "no_base_eth" if eth < estimate else "base_gas_budget_exhausted")
+                      else "no_base_eth" if eth < estimate
+                      else "base_gas_budget_zero" if self._evm("base").gas_budget_wei <= 0
+                      else "base_gas_budget_exhausted")
         return {
             "forward": forward,
             "reason": reason,
@@ -506,12 +547,32 @@ class LiveRail(ClassTransferRail):
                     f"forwarding fee quote {fee} exceeds treasury.max_forward_fee_micro")
             return
         if route["base_gas_remaining_wei"] <= 0:
-            raise RailError("native gas budget is not configured or is exhausted")
+            raise RailError("the Base mint of to_reserve cannot be self-paid: "
+                            + self._budget_refusal("base", {"base": self._evm("base")
+                                                            .gas_budget_wei
+                                                            - route["base_gas_remaining_wei"]}))
         if route["base_eth_wei"] == 0:
             raise RailError("reserve requires native ETH on base")
 
     def gas_view(self, gas_spent: dict) -> dict:
-        """Answer "can the population exit to the reserve now, and what will it cost?"."""
+        """The gas position of every direction ``GAS_BUDGETS`` names, keyed by direction.
+
+        Guarantees ``to_reserve`` answers "can the population exit to the reserve now,
+        and what will it cost?" and ``to_venue`` "can the reserve deposit to the venue
+        now?", each with the blocker its own preflight would name, or None. Reads only.
+        """
+        venue_blocked = self._native_gas_refusal(self.GAS_BUDGETS["to_venue"], gas_spent)
+        return {"to_reserve": self._exit_gas_view(gas_spent), "to_venue": {
+            "base_gas_remaining_wei": self.remaining("base", gas_spent),
+            "hyperevm_gas_remaining_wei": self.remaining("hyper", gas_spent),
+            "base_eth_wei": self.base.balance(),
+            "hyperevm_hype_wei": self.hyper.balance(),
+            "refill_ready": venue_blocked is None,
+            "blocked_by": venue_blocked,
+        }}
+
+    def _exit_gas_view(self, gas_spent: dict) -> dict:
+        """The exit route's position: its branch, its fees, and its blocker or None."""
         route = self.gas_route(gas_spent)
         blocked = None
         try:
@@ -1244,6 +1305,8 @@ class HybridRail(LiveRail):
     """
 
     name = "hypercore-testnet-venice-base-mainnet-hybrid"
+    #: Every direction: to_venice here buys real Venice credit from the mainnet reserve.
+    ALLOWED = ("to_reserve", "to_venue", "to_venice", "spot_to_perps", "perps_to_spot")
 
     def __init__(self, exchange: Any, spec: Any, *, transport: Transport = http_request):
         from factorylab.world.x402 import X402Client

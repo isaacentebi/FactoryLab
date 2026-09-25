@@ -76,11 +76,13 @@ def test_one_bad_optional_section_is_dropped_and_the_order_stands(section, bad, 
 def test_only_the_bad_registrations_go_but_a_tool_batch_goes_whole():
     good = {"tool": "catalogue.search", "args": {"substring": "btc"}}
     ret = invoke({**ORDER, "tool_calls": [good, {"tool": 7, "args": {}}],
-                  "register": [{"kind": "router", "event_kind": "Tick"}, {"kind": "wish"}]},
+                  "register": [{"kind": "router", "event_kind": "Tick", "learner": "exp3"},
+                               {"kind": "wish"}]},
                  producer_schema())
     assert ret.status == "ok" and {k: ret.outputs[k] for k in ORDER} == ORDER
     # Registrations are admitted one by one; a tool batch never runs in part.
-    assert ret.outputs["register"] == [{"kind": "router", "event_kind": "Tick"}]
+    assert ret.outputs["register"] == [{"kind": "router", "event_kind": "Tick",
+                                        "learner": "exp3"}]
     assert ret.tool_calls == () and "tool_calls" not in ret.outputs
     assert sections(ret) == [("register", 1), ("tool_calls", None)]
     assert ret.dropped[1]["reason"].startswith("item 1: ")
@@ -289,14 +291,13 @@ def test_in_a_world_the_order_stands_and_the_seat_reads_the_receipt(tmp_path):
 # PR121: four answers were voided for habits that change nothing they said.
 JUDGE = {"type": "object", "properties": {
     "verdict": {"type": "number", "minimum": 0, "maximum": 1},
-    "payoff": {"type": "number"}, "status": {"enum": ["unmeasured", "cannot"]},
+    "payoff": {"type": "number"}, "status": {"enum": ["cannot"]},
     "reason": {"type": "string"}, "rationale": {"type": "string"}},
     "required": ["rationale"]}
 
 
 def test_null_for_an_optional_field_is_the_field_left_out():
-    ret = invoke({"verdict": None, "payoff": None, "status": "unmeasured",
-                  "rationale": "nothing committed"}, JUDGE)
+    ret = invoke({"verdict": None, "payoff": None, "rationale": "nothing committed"}, JUDGE)
     assert ret.status == "ok" and "verdict" not in ret.outputs and "payoff" not in ret.outputs
 
 
@@ -306,6 +307,15 @@ def test_null_in_a_required_field_is_still_malformed():
 
 
 def test_a_reason_stands_for_a_missing_required_rationale():
-    ret = invoke({"status": "unmeasured", "reason": "a hold with no commitment"}, JUDGE)
+    ret = invoke({"reason": "a hold with no commitment"}, JUDGE)
     assert ret.status == "ok" and ret.outputs["rationale"] == "a hold with no commitment"
-    assert invoke({"status": "unmeasured", "reason": "  "}, JUDGE).status == "malformed"
+    assert invoke({"reason": "  "}, JUDGE).status == "malformed"
+
+
+def test_status_is_the_refusal_flag_and_nothing_else():
+    """The envelope's status says one thing, "cannot" (Chapter II §II.b): any other value
+    is refused, whatever a contract of its own declares."""
+    ret = invoke({"status": "unmeasured", "reason": "a hold", "rationale": "r"}, JUDGE)
+    assert ret.status == "malformed" and "status" in ret.outputs["validation_error"]
+    loose = {**JUDGE, "properties": {**JUDGE["properties"], "status": {"type": "string"}}}
+    assert invoke({"status": "ok", "rationale": "r"}, loose).status == "malformed"

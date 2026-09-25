@@ -21,11 +21,11 @@ from dataclasses import replace
 
 import pytest
 
-from factorylab.cortex.assembly import declines, validate_return_sections
+from factorylab.cortex.assembly import declines, judging_contract, validate_return_sections
 from factorylab.cortex.request import Return
 from factorylab.kernel.queue import SettleStatus
 from factorylab.runtime.worlds import load_manifest
-from factorylab.settlement.vocabulary import DECLINED_DEFINITION, evaluator_answer_schema
+from factorylab.settlement.vocabulary import DECLINED_DEFINITION
 from tests.runtime.test_kind_requests import TASK, _children, _world
 from tests.runtime.test_loop import _consequence_decision, _consequence_runtime
 from tests.runtime.test_order_journey import (
@@ -205,14 +205,16 @@ def test_a_decline_in_a_multi_kind_tool_continuation_is_declined_not_malformed(r
 def test_a_decline_is_read_in_the_published_spelling_a_status_enum_admits(reply):
     """A judge's contract pins ``status`` to ``["cannot"]``: a decline in another case,
     or without a reason, is that decline, never a malformed judgement."""
-    schema = evaluator_answer_schema({"type": "array"}, {"type": "array"})
+    schema = judging_contract("Verdict", propensity={"type": "object"},
+                              register={"type": "array"}, forecasts={"type": "array"})
     parsed, dropped = validate_return_sections(dict(reply), schema, kind="Verdict")
     assert parsed["status"] == "cannot" and dropped == ()
     assert declines(parsed)
 
 
 def test_a_decline_whose_reason_is_not_a_string_is_malformed():
-    schema = evaluator_answer_schema({"type": "array"}, {"type": "array"})
+    schema = judging_contract("Verdict", propensity={"type": "object"},
+                              register={"type": "array"}, forecasts={"type": "array"})
     with pytest.raises(ValueError):
         validate_return_sections({"status": "CANNOT", "reason": 3}, schema, kind="Verdict")
 

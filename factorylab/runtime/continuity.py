@@ -78,6 +78,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from decimal import Decimal
 from typing import Any
 
 #: The allowance a seat is told about. Above it the state is accepted anyway.
@@ -235,6 +236,29 @@ class WorkingState:
             return {**view, "loaded": False, "state_not_loaded": STATE_NOT_LOADED,
                     "read_with": {"tool": "artifact.get", "args": {"sha": record["sha"]}}}
         return {**view, "state": state}
+
+
+def _usd_text(micro: int) -> str:
+    """Exact USD text for integer micro-USD."""
+    sign = "-" if micro < 0 else ""
+    return f"{sign}{Decimal(abs(micro)).scaleb(-6):f}"
+
+
+def _with_usd(value: Any) -> Any:
+    """``value`` with ``<stem>_usd`` beside each integer ``<stem>_micro`` (``with_usd``)."""
+    if isinstance(value, list):
+        return [_with_usd(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    out: dict[str, Any] = {}
+    for key, item in value.items():
+        out[key] = _with_usd(item)
+        if (isinstance(key, str) and type(item) is int
+                and (key == "micro" or key.endswith("_micro"))):
+            usd = "usd" if key == "micro" else f"{key[:-len('_micro')]}_usd"
+            if usd not in value:
+                out[usd] = _usd_text(item)
+    return out
 
 
 class OutcomeInbox:
@@ -432,17 +456,31 @@ class OutcomeInbox:
         unread = [r for r in matching if r["seq"] > cursor]
         return (unread or matching or [None])[0]
 
+    def with_usd(self, value: Any) -> Any:
+        """``value`` with an exact USD string beside every integer micro-USD field in it.
+
+        Guarantees every key ending ``_micro`` (or named ``micro``) whose value is an
+        integer, at any depth, gains a sibling ``<stem>_usd`` (``usd``) holding the same
+        amount in dollars as exact decimal text, unless that sibling is already there;
+        nothing else changes. A seat read -77,814 micro-USD as -$77.8: the dollar figure
+        is stated, not left to a reader's conversion (Chapter II §I.b).
+        """
+        return _with_usd(value)
+
     def index_of(self, seat: str, record: dict[str, Any]) -> dict[str, Any]:
         """One item as an address rather than a text: exact identity, timing, amounts.
 
         Guarantees: every field here is copied verbatim off the stored body, none is
-        derived, rounded or written by a model, the body stays whole behind ``sha``,
+        derived (but the exact USD text beside a micro-USD amount), rounded or written
+        by a model, the body stays whole behind ``sha``,
         and the entry is bounded whatever the body contains. It carries what a seat
         needs in order to decide whether to spend a read: the id it must address, the
         decision it answers, when it was observed, the typed outcome (kind, status,
         phase, sender, subject, score, rejection reason and rejected section) where
         the outcome has one, the money, the evidence pointer, and the route to the
         rest.
+
+        Each micro-USD amount carries its exact USD text beside it (``with_usd``).
 
         A typed field is a label, so only a short scalar is carried: a number, a
         boolean, None, or a string within ``MAX_INDEX_FIELD`` bytes. A long string or
@@ -484,7 +522,7 @@ class OutcomeInbox:
             entry["evidence"] = evidence
         elif evidence is not None:
             entry["evidence_not_loaded"] = _shape_of(evidence)
-        return entry
+        return _with_usd(entry)
 
     def unread(self, seat: str) -> dict[str, Any]:
         """Index the oldest and newest unread items; bodies stay archived until asked for.
@@ -583,7 +621,7 @@ class OutcomeInbox:
         if ident != view["outcome_id"]:
             view["note"] = ("a handle can carry several outcomes; this is the oldest you "
                             "have not read. Address one exactly by its outcome_id.")
-        return view
+        return _with_usd(view)
 
     def ack_through(self, seat: str, ident: Any) -> int | None:
         """Acknowledge every item delivered at or before ``ident``; return the new cursor.

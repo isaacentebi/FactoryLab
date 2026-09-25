@@ -466,15 +466,31 @@ class Treasury:
         return booked
 
     def _gas_view(self) -> dict:
-        """The exit route's gas position: never money, so it cannot change completeness."""
+        """The exit route's gas position: never money, so it cannot change completeness.
+
+        Guarantees ``gates`` is ``gas_gates`` of this rail, the directions this world
+        admits whose preflight consults a native gas budget, and the view carries the
+        position of each of them and of no other direction, with its blocker (Chapter
+        II §II.b: the published contract is the enforced one); ``does_not_gate`` says
+        what no gas position governs.
+        """
+        gates = gas_gates(self.rail)
+        view: dict[str, Any] = {"gates": gates, "does_not_gate": NOT_GAS_GATED}
+        if not gates:
+            return view
         try:
-            gas = self.rail.gas_view(dict(self.gas_spent))
+            positions = self.rail.gas_view(dict(self.gas_spent))
         except Exception:
-            return {"refill_ready": False, "blocked_by": "gas position unavailable"}
-        if self._blocking():
-            gas = {**gas, "refill_ready": False, "blocked_by": gas.get("blocked_by")
-                   or TRANSFER_BLOCKED}
-        return gas
+            positions = {}
+        for direction in gates:
+            position = positions.get(direction) if isinstance(positions, dict) else None
+            if not isinstance(position, dict):
+                position = {"refill_ready": False, "blocked_by": "gas position unavailable"}
+            if self._blocking():
+                position = {**position, "refill_ready": False,
+                            "blocked_by": position.get("blocked_by") or TRANSFER_BLOCKED}
+            view[direction] = position
+        return view
 
     def _vault_pot(self) -> int | None:
         """This account's equity across its vaults, in micro-USD, or None when unread.
@@ -1238,6 +1254,112 @@ class Treasury:
             self.rail.hybrid_books = saved["fake_hybrid"]
 
 
+#: Every direction ``treasury.transfer`` names, in the order it publishes them.
+TRANSFER_DIRECTIONS = ("to_reserve", "to_venue", "to_venice", "spot_to_perps", "perps_to_spot")
+
+#: The manifest key that sets each chain's native gas budget.
+GAS_BUDGET_KEYS = {"hyper": "treasury.hyperevm_gas_budget_wei",
+                   "base": "treasury.base_gas_budget_wei"}
+
+#: What the gas position in ``pots.gas`` never gates (Chapter II §II.b: a published
+#: fact names what it governs, and a seat must not have to guess it).
+NOT_GAS_GATED = ("venue orders, cancels, closes and leverage changes, which pay no gas; "
+                 "each fill pays the venue's fee at the rates in world.venue")
+
+
+def gas_gates(rail: Any) -> dict[str, list[str]]:
+    """Each direction this world admits whose preflight consults a native gas budget.
+
+    Guarantees exactly the rail's own ``GAS_BUDGETS`` (the table its preflight reads)
+    for the directions it admits (``admitted_directions``), each budget named by its
+    manifest key: nothing a rail does not check, and nothing it does not run.
+    """
+    table = getattr(rail, "GAS_BUDGETS", None) or {}
+    return {d: [GAS_BUDGET_KEYS[k] for k in table[d]]
+            for d in admitted_directions(rail) if d in table}
+
+
+def venice_conversion_text(hybrid: bool) -> str:
+    """Where a ``to_venice`` conversion's money comes from in this world: one true statement.
+
+    ``hybrid`` is a world whose treasury buys Venice credit on Base mainnet beside a
+    testnet venue (``treasury.venice_network = "base-mainnet"``): the conversion takes
+    $5 from the venue's perps withdrawable and buys the credit with $5 of real Base
+    mainnet USDC (``HybridRail``). Elsewhere it spends $5 of reserve USDC.
+    """
+    if hybrid:
+        return ("to_venice converts a fixed $5 tranche into Venice credit: $5 leaves the "
+                "venue's perps withdrawable, and $5 of Base mainnet USDC from the Venice "
+                "reserve (pots.venice_reserve, held apart from every other pot, paid only "
+                "while it stays above its floor) buys the credit. It converts principal into "
+                "compute and is not income.")
+    return ("to_venice converts a fixed $5 tranche of reserve USDC into Venice credit. It "
+            "converts principal into compute and is not income.")
+
+
+#: What each direction moves, stated once (``transfer_tool_spec``).
+DIRECTION_TEXT = {
+    "to_reserve": "to_reserve moves USDC from the venue to the Base reserve: spot HYPE in "
+                  "the venue account pays the Core gas charge (HYPE trades on HYPE/USDC), "
+                  "and the Base mint is self-paid when the reserve holds ETH, otherwise "
+                  "Circle forwards it for the fee quoted in pots.gas.to_reserve.",
+    "to_venue": "to_venue moves USDC from the Base reserve to the venue, paying gas in "
+                "reserve Base ETH and HyperEVM HYPE.",
+    "spot_to_perps": "spot_to_perps and perps_to_spot move USDC between the venue "
+                     "account's spot and perps classes.",
+}
+
+
+def transfer_tool_spec(directions: tuple[str, ...], *, hybrid: bool) -> dict | None:
+    """The ``treasury.transfer`` contract a world publishes, or None when it admits nothing.
+
+    Chapter II §II.b (the published contract is the enforced one): guarantees the
+    direction enum, the examples and the description name exactly ``directions``,
+    the ones this world's rail admits (``admitted_directions``), each described once
+    and truly for this world (``venice_conversion_text``); a direction the rail
+    refuses before signing is not published as if it could run.
+    """
+    if not directions:
+        return None
+    lines = [DIRECTION_TEXT["spot_to_perps"] if d in ("spot_to_perps", "perps_to_spot")
+             else venice_conversion_text(hybrid) + " Within treasury.max_venice_per_window."
+             if d == "to_venice" else DIRECTION_TEXT[d] for d in directions]
+    described = " ".join(dict.fromkeys(lines))
+    return {
+        "id": "treasury.transfer",
+        "description": f"Move USDC in one of this world's directions: "
+                       f"{', '.join(directions)}. {described} Principal stays held until "
+                       "receipt-confirmed arrival. The result carries references or a "
+                       "refusal reason.",
+        "args_schema": {
+            "type": "object",
+            "properties": {
+                "direction": {"enum": list(directions)},
+                "usd": {"type": ["string", "integer"], "description": "Exact positive USD"},
+                "reason": {"type": "string"},
+            },
+            "required": ["direction", "usd"],
+            # One example per direction, none favoured (smuggling audit D5).
+            "examples": [{"direction": d, "usd": "5"} for d in directions],
+        },
+        "price_micro_per_call": 0,
+        "kind": "treasury",
+    }
+
+
+def admitted_directions(rail: Any) -> tuple[str, ...]:
+    """The ``treasury.transfer`` directions ``rail`` runs, in ``TRANSFER_DIRECTIONS`` order.
+
+    Guarantees the rail's own ``ALLOWED`` (a wrapper that refuses directions before
+    signing declares the ones it admits, and a journal proxy reads its target's), and
+    every direction for a rail that declares none.
+    """
+    allowed = getattr(rail, "ALLOWED", None)
+    if allowed is None:
+        return TRANSFER_DIRECTIONS
+    return tuple(d for d in TRANSFER_DIRECTIONS if d in allowed)
+
+
 class FakeRail:
     """Scripted principal moves only when the next tick confirms, with one fixed declared fee."""
 
@@ -1670,6 +1792,8 @@ class UnconfiguredRail(ClassTransferRail):
     """A world with no reserve address can observe its venue but cannot move treasury money."""
 
     name = "unconfigured"
+    #: Only the venue's own class moves: there is no reserve to move to or from.
+    ALLOWED = ("spot_to_perps", "perps_to_spot")
 
     def __init__(self, exchange):
         self.exchange = exchange

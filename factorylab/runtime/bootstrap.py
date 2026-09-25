@@ -736,35 +736,10 @@ class BootstrapMixin:
         self.venue_readers: list[str | None] = seeds[:manifest.exchange.max_readers]
         self.slot_waiting: list[str] = seeds[manifest.exchange.max_readers:]
 
-        self.tool_specs["treasury.transfer"] = {
-            "id": "treasury.transfer",
-            "description": "Move USDC spot_to_perps or perps_to_spot, between venue and reserve, "
-            "or to_venice from "
-            "reserve in a fixed $5 tranche, within treasury.max_venice_per_window. "
-            "Principal stays held "
-            "until receipt-confirmed arrival. The result carries references or a refusal reason. "
-            "to_reserve needs spot HYPE in the venue account for the Core gas charge (buy it on "
-            "HYPE/USDC); its Base mint is self-paid when the reserve holds ETH, otherwise Circle "
-            "forwards it for the fee quoted in pots.gas.",
-            "args_schema": {
-                "type": "object",
-                "properties": {
-                    "direction": {"enum": ["to_reserve", "to_venue", "to_venice",
-                                           "spot_to_perps", "perps_to_spot"]},
-                    "usd": {"type": ["string", "integer"], "description": "Exact positive USD"},
-                    "reason": {"type": "string"},
-                },
-                "required": ["direction", "usd"],
-            },
-            "price_micro_per_call": 0,
-            "kind": "treasury",
-        }
-        if getattr(manifest.treasury, "venice_network", None) == "base-mainnet":
-            # The population is told where a conversion is paid from in this world: the
-            # description is the only place a seat learns which pot its profit leaves.
-            self.tool_specs["treasury.transfer"]["description"] += (
-                " In this world to_venice pays its $5 from the venue's perps withdrawable "
-                "(no reserve USDC is needed) and buys real Venice credit.")
+        # The directions this world's rail admits, each described once and truly for
+        # this world (``transfer_tool_spec``); ``_ensure_treasury_tool`` re-derives it
+        # when a rehearsal wraps the rail after launch.
+        self._ensure_treasury_tool()
         self.tool_specs["catalogue.search"] = {
             "id": "catalogue.search",
             "description": "Find tools, assemblies, complete proposal shapes and model offers "
@@ -810,9 +785,9 @@ class BootstrapMixin:
             "venue.cancel": [{"coin": coin, "order_id": "1"}],
             "venue.close": [{"coin": coin}, {"coin": coin, "size": None}],
             "venue.set_leverage": [{"coin": coin, "leverage": 1}],
-            # One example per direction, none favoured (smuggling audit D5).
-            "treasury.transfer": [{"direction": direction, "usd": "5"} for direction in (
-                "to_reserve", "to_venue", "to_venice", "spot_to_perps", "perps_to_spot")],
+            # One example per admitted direction, none favoured (smuggling audit D5).
+            **({"treasury.transfer": self.tool_specs["treasury.transfer"]["args_schema"][
+                "examples"]} if "treasury.transfer" in self.tool_specs else {}),
             "catalogue.search": [{"substring": "flash", "limit": 20}],
             "market.discover": [{"query": "inference", "limit": 20}],
             "artifact.get": [{"sha": "0" * 64}],

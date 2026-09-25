@@ -38,13 +38,22 @@ def test_the_producer_request_states_the_ledger_classification_not_a_menu_or_a_s
     assert "The kernel classifies each answer for the ledger" in req.description
     assert "or over your own action ids" in req.description
     assert "Your action is one of" not in req.description
-    assert "score" not in req.description and "neutral" not in req.description
+    assert "neutral" not in req.description
+    # The wake describes itself as facts and points to where each settlement is
+    # published (Chapter II §I), and states no scoring rule of its own.
+    assert "A return here is this seat's decision about this event" in req.description
+    for key in ("producer_or_custom_return", "declined_return", "verdict_is_a_prediction"):
+        assert f"world.scoring.{key}" in req.description
+    stripped = req.description
+    for key in rt._scoring_block():
+        stripped = stripped.replace(f"world.scoring.{key}", "")
+    assert "score" not in stripped and "brier" not in stripped.lower()
     counterfactual = req.outcome_schema["properties"]["counterfactual"]
     assert counterfactual["description"] == "a declined trade, coin and side"
     assert "payoff" not in req.outcome_schema["properties"]
 
 
-def test_the_judge_is_told_what_to_give_and_that_it_may_decline(monkeypatch):
+def test_the_judge_is_told_what_to_give_and_the_decline_is_a_form_of_its_own(monkeypatch):
     rt = _consequence_runtime(provider=Population(verdicts=(0.5,)))
     _producer, event = _unsettled_produce(rt)
     captured = _captured(rt, monkeypatch)
@@ -52,13 +61,17 @@ def test_the_judge_is_told_what_to_give_and_that_it_may_decline(monkeypatch):
     rt._evaluator_step(event, judge, SimpleNamespace(chosen="eval-a"),
                        rt.queue.get(judge).deadline_ns)
     (req,) = captured
-    assert req.description == (
-        "Give verdict 0-1 on the return against the charter; you may decline.")
+    assert req.description == "Give verdict 0-1 on the return against the charter."
     text = json.dumps(req.inputs)
-    for coaching in ("forecast_example", "committed to", "unmeasured", "Name the claim"):
+    for coaching in ("forecast_example", "committed to", "unmeasured", "Name the claim",
+                     "decline"):
         assert coaching not in text and coaching not in req.description
-    schema = req.outcome_schema["properties"]
-    assert schema["status"] == {"enum": ["cannot"]} and "payoff" not in schema
+    answer, decline = req.outcome_schema["anyOf"]
+    schema = answer["properties"]
+    assert "status" not in schema and "payoff" not in schema
+    assert set(answer["required"]) == {"verdict", "rationale"}
+    assert decline["required"] == ["status"]  # a reason is optional (``declines``)
+    assert decline["properties"]["status"] == {"enum": ["cannot"]}
     assert "fidelity_objection" not in schema and "realized_consequence" not in schema
 
 

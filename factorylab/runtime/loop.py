@@ -33,7 +33,12 @@ from collections import deque
 from copy import deepcopy
 from typing import Any
 
-from factorylab.cortex.assembly import COUNTERFACTUAL_FIELD
+from factorylab.cortex.assembly import (
+    COUNTERFACTUAL_FIELD,
+    DECLINE_FORM,
+    FORWARDED_RATIONALE_CHARS,
+    JUDGING_FIELDS,
+)
 from factorylab.cortex.registration import BUILTIN_RETURNS, measured_role
 from factorylab.cortex.request import Return, public_return
 from factorylab.cortex.sandbox import NoJail, jail_probe
@@ -82,10 +87,7 @@ from factorylab.runtime.uptake import UptakeMixin
 from factorylab.runtime.vault import VaultMixin
 from factorylab.runtime.venue import VenueMixin
 from factorylab.runtime.worlds import WorldManifest
-from factorylab.settlement.vocabulary import (
-    commission_block,
-    evaluator_answer_schema,
-)
+from factorylab.settlement.vocabulary import commission_block
 from factorylab.world.clock import ClockSource, merge_sources
 from factorylab.world.events import WorldEvent, WorldEventKind
 from factorylab.world.market import X402Provider
@@ -120,6 +122,27 @@ def judge_view(payload: dict[str, Any]) -> dict[str, Any]:
         if key in ("outputs", "producer_outputs"):
             value = judged_outputs(value)
         out[key] = value
+    return out
+
+
+#: What a judge's INPUTS says in place of the fold the judged decision was shown: the
+#: event is never rendered hollow (Chapter II §I.b, a self-describing request).
+FOLD_WITHHELD = ("not carried to judges: the world changes the deciding seat was shown "
+                 "since its last paid wake")
+
+
+def forwarded_rationale(outputs: Any) -> dict[str, Any]:
+    """A judgement's rationale as its published event carries it, the cut stated.
+
+    Guarantees the first ``FORWARDED_RATIONALE_CHARS`` characters, and, when the
+    rationale was longer, its full length beside them: the limit the judging
+    contract publishes, never applied in silence (Chapter II §II.b).
+    """
+    text = str(outputs.get("rationale", "")) if isinstance(outputs, dict) else ""
+    out: dict[str, Any] = {"rationale": text[:FORWARDED_RATIONALE_CHARS]}
+    if len(text) > FORWARDED_RATIONALE_CHARS:
+        out["rationale_chars"] = len(text)
+        out["rationale_forwarded_chars"] = FORWARDED_RATIONALE_CHARS
     return out
 
 
@@ -878,18 +901,15 @@ class Runtime(
 
         spec = self.assemblies[assembly_id].spec
         schemas = []
-        unit = {"type": "number", "minimum": 0, "maximum": 1}
         for kind in spec.emits:
             if kind in spec.schemas:
                 schema = _to_plain(spec.schemas[kind])
+            elif kind in JUDGING_FIELDS:
+                # A judging kind's answer form, as ``judging_contract`` builds it; its
+                # decline form joins the union once, below.
+                schema = self._judging_contract(kind)["anyOf"][0]
             else:
-                fields = ({"verdict": unit, "payoff": unit,
-                           "rationale": {"type": "string"}, "forecasts": self._forecast_schema()}
-                          if kind == "Verdict" else
-                          {"conformity": unit} if kind == "MetaVerdict" else
-                          {"verdict": unit, "rationale": {"type": "string"}}
-                          if kind == "CounterVerdict" else
-                          {"action": {"type": "string"}})
+                fields = {"action": {"type": "string"}}
                 schema = {"type": "object", "properties": fields, "required": list(fields)}
             # A producing kind's contract carries the declined trade (II.III.b). The
             # field is the kernel's, so it stands over a declaration's own.
@@ -904,6 +924,10 @@ class Runtime(
                 "about_handle": {"type": "string"}, "register": self._register_schema(),
             }, "required": [*schema.get("required", []),
                             *(["emits"] if len(spec.emits) > 1 else [])]})
+        if any(kind in JUDGING_FIELDS for kind in spec.emits):
+            # The judging contract's decline form, published as its request publishes
+            # it: the whole union, never its answer form alone (§II.b).
+            schemas.append(deepcopy(DECLINE_FORM))
         return schemas[0] if len(schemas) == 1 else {"anyOf": schemas}
 
     def _hindsight_reason(self, handle: str, about: str) -> str | None:
@@ -1090,6 +1114,12 @@ class Runtime(
             self.stats.noops += 1
             ret = Return(handle, {"action": "noop"}, 0, "ok")
         else:
+            # The wake describes itself (Chapter II §I, "the contract has to carry enough
+            # self-description"): what its return is and where each answer's settlement
+            # is published, as facts; no task and no preferred answer.
+            spec = self.assemblies[sample.chosen].spec
+            description += " " + self._wake_contract(
+                {kind: self._return_shape(spec, kind) or "judged" for kind in spec.emits})
             # Physics, not a menu (smuggling A3): the kernel classifies every answer
             # for the ledger; the seat's own action ids stand beside the classes.
             description += (
@@ -1260,12 +1290,15 @@ class Runtime(
             )
             return
         inputs = {
+            # The judged return, addressable by its own handle; its kernel status is
+            # named so it cannot be read as the answer's refusal flag (II.I.b).
             "producer": {
+                "handle": about,
                 "description": payload.get("description", f"Return on {ev.kind}"),
                 "inputs": payload.get("inputs", {}),
                 "outputs": judged_outputs(payload.get("outputs", payload)),
                 "cost_micro_usd": payload.get("cost", 0),
-                "status": payload.get("status", "ok"),
+                "kernel_status": payload.get("status", "ok"),
             },
             "charter": self._charter_text(),
             "predicates": [
@@ -1280,14 +1313,16 @@ class Runtime(
             "early_warning": self._early_warning_view(),
             **self._action_policy_input(sample.chosen),  # private
             # Evaluation is a commission, not an obligation (§6.B): a subject, a
-            # scope, an evidence horizon and a budget, which may be declined.
+            # scope, an evidence horizon and a budget. The decline is a form of the
+            # outcome schema, stated there once.
             "commission": commission_block(
                 subject=about,
-                scope=("the public return addressed by about_handle"
+                scope=("the public return named by subject_handle"
                        + ("" if str(ev.kind) in PRODUCING_KINDS else f", judged on {ev.kind}")),
                 horizon=self.ev.forecast_horizon_events,
                 budget_micro=self.queue.get(handle).cost_ceiling,
             ),
+            "subject_handle": about,
         }
         # The two seed producing kinds are judged through one machine view: an
         # Exposure arrives as its own kind (F12), and the kind is routing, never a
@@ -1303,22 +1338,21 @@ class Runtime(
         if isinstance(producer_inputs, dict) and isinstance(
                 producer_inputs.get("payload"), dict):
             inputs["producer"]["inputs"] = {**producer_inputs, "payload": {
-                k: v for k, v in producer_inputs["payload"].items()
-                if k != "since_you_last_woke"}}
+                k: (FOLD_WITHHELD if k == "since_you_last_woke" else v)
+                for k, v in producer_inputs["payload"].items()}}
         inputs["producer"]["executed_operations"] = payload.get("executed_operations", [])
         if generic:
             inputs["event"] = {"kind": str(ev.kind), "payload": judge_view(payload)}
-            inputs["subject_handle"] = about
-        schema = evaluator_answer_schema(self._forecast_schema(), self._register_schema())
-        # The request states what the answer is and what may be done with the
-        # commission; how a verdict is scored is a schematic (world.scoring), and no
+        schema = self._judging_contract("Verdict")
+        # The request states what the answer is; how a verdict settles is a schematic
+        # (world.scoring), carried with the request as its SCORING section, and no
         # rubric says what a good return is (smuggling A7; essay II.III on
         # predefined rubrics).
         instruction = (
             "Give verdict 0-1 on the public return addressed by about_handle "
-            "(subject_handle by default) against the charter; you may decline."
+            "(subject_handle by default) against the charter."
             if generic else
-            "Give verdict 0-1 on the return against the charter; you may decline."
+            "Give verdict 0-1 on the return against the charter."
         )
         req = self._request(
             handle,
@@ -1328,6 +1362,7 @@ class Runtime(
             deadline,
             CH_CONFORMITY,
             propensity=payload.get("propensity"),
+            settlement=self._settlement_facts("Verdict"),
         )
         ret = (returned if returned is not None
                else self._invoke(sample.chosen, req, "evaluator"))
@@ -1389,7 +1424,7 @@ class Runtime(
                 "evaluator_handle": handle,
                 "verdict": verdict,
                 **({"tier": tier} if tier > 1 else {}),
-                "rationale": str(ret.outputs.get("rationale", ""))[:2000],
+                **forwarded_rationale(ret.outputs),
                 "producer_outputs": payload.get("outputs", payload),
                 "propensity": self._public_propensity(handle),
             },
@@ -1457,20 +1492,10 @@ class Runtime(
         generic = ev.kind not in (EventKind.VERDICT, EventKind.META_VERDICT)
         if generic:
             inputs["event"] = {"kind": str(ev.kind), "payload": judge_view(payload)}
-            inputs["subject_handle"] = about
+        inputs["subject_handle"] = about
         # The root judge of the chain this meta reads, carried upward for the record.
         judge_handle = payload.get("evaluator_handle", about)
-        schema = {
-            "type": "object",
-            "properties": {
-                "conformity": {"type": "number"},
-                "rationale": {"type": "string"},
-                "propensity": {"type": "object"},
-                "register": self._register_schema(),
-                "about_handle": {"type": "string"},
-            },
-            "required": ["conformity"],
-        }
+        schema = self._judging_contract("MetaVerdict")
         prompt = (
             "Assess the public return addressed by about_handle for conformity with the charter. "
             "The input's subject_handle is the default when present." if generic else
@@ -1485,6 +1510,7 @@ class Runtime(
             deadline,
             channel,
             propensity=payload.get("propensity"),
+            settlement=self._settlement_facts("MetaVerdict"),
         )
         ret = (returned if returned is not None else self._invoke(sample.chosen, req, "meta"))
         self.consequences.finish(handle, ret.cost)
@@ -1529,7 +1555,7 @@ class Runtime(
                 "by": handle,
                 "evaluator_handle": judge_handle,
                 "propensity": self._public_propensity(handle),
-                "rationale": str(ret.outputs.get("rationale", ""))[:2000],
+                **forwarded_rationale(ret.outputs),
                 **({"about_handle": handle} if emitted != "MetaVerdict" else {}),
             },
         )
@@ -1578,20 +1604,13 @@ class Runtime(
         inputs.update(self._action_policy_input(sample.chosen))  # private
         inputs["your_state"] = self.working_state.render(sample.chosen)
         inputs["unread_outcomes"] = self.outcomes.unread(sample.chosen)
-        unit = {"type": "number", "minimum": 0, "maximum": 1}
-        schema = {
-            "type": "object",
-            "properties": {"verdict": unit, "rationale": {"type": "string"},
-                           "status": {"enum": ["cannot"]}, "reason": {"type": "string"},
-                           "propensity": {"type": "object"},
-                           "register": self._register_schema()},
-            "required": ["rationale"],
-        }
+        schema = self._judging_contract("CounterVerdict")
         req = self._request(
             handle,
             "Give your own verdict 0-1 on the return this verdict judged, against the "
-            "charter; you may decline.",
-            inputs, schema, deadline, channel, propensity=payload.get("propensity"))
+            "charter.",
+            inputs, schema, deadline, channel, propensity=payload.get("propensity"),
+            settlement=self._settlement_facts("CounterVerdict"))
         ret = (returned if returned is not None
                else self._invoke(sample.chosen, req, "adversary"))
         self.consequences.finish(handle, ret.cost)
