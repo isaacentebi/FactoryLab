@@ -54,6 +54,9 @@ def paths(value, prefix="", *, ids=False):
 def real_paths(kind):
     row = REAL["rows"][kind]
     found = paths(row)
+    if kind == "event":
+        # The Launch is an event row too: the diary's binding to its world and seed.
+        found |= paths(REAL["launch"])
     # A list the real row happens to leave empty still has the fields its kind carries.
     if kind == "price.penalty" and not row.get("terms"):
         pytest.fail("the captured price.penalty row has no terms to compare against")
@@ -140,8 +143,8 @@ def test_th3_reads_the_real_boundary_and_cadence_sequence():
 
 def test_the_criteria_read_real_rows_without_error():
     """Every generic criterion over the captured rows returns a status, never raises."""
-    rows = [dict(r, seq=r.get("seq", 0)) for r in REAL["rows"].values()]
-    for result in g.replay(sorted(rows, key=lambda r: r["seq"]), {}):
+    rows = [dict(r, seq=r.get("seq", 0)) for r in [*REAL["rows"].values(), REAL["launch"]]]
+    for result in g.replay(sorted(rows, key=lambda r: r["seq"])):
         assert result.status in (g.PASS, g.FAIL, g.UNSUPPORTED)
 
 

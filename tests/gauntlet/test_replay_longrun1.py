@@ -20,8 +20,31 @@ ROOT = Path(__file__).resolve().parents[2]
 @pytest.fixture(scope="module")
 def diary():
     events = g.load_events(ROOT / "tests/fixtures/longrun1_gauntlet_slice.json")
-    manifest = tomllib.loads((ROOT / "worlds/edition6-capital-loop.toml").read_text())
-    return events, manifest, {r.name: r for r in g.replay(events, manifest)}
+    # The physics the diary launched under, bound by its own Launch row.
+    manifest, _binding = g.bind_diary(events, world=WORLD, seed=3)
+    return events, manifest, {r.name: r for r in g.replay(events, world=WORLD, seed=3)}
+
+
+#: The world longrun1 launched: a rehearsal of edition 6 on its seed.
+WORLD = "edition6-capital-loop-edition4-rehearsal"
+
+
+def test_the_diary_is_bound_to_the_world_and_seed_it_launched(diary):
+    """The sweep (diaries): a criterion reads a diary only under the world and seed its
+    own Launch names; any other claim is refused before a criterion runs."""
+    events, _manifest, results = diary
+    assert results["BIND"].evidence["world"] == WORLD
+    with pytest.raises(g.DiaryInvalid, match="not 'edition6-capital-loop'"):
+        g.replay(events, world="edition6-capital-loop")
+    with pytest.raises(g.DiaryInvalid, match="not 4"):
+        g.replay(events, seed=4)
+    edition6 = tomllib.loads((ROOT / "worlds/edition6-capital-loop.toml").read_text())
+    same_physics = g.physics(edition6) == g.physics(_manifest)
+    if same_physics:
+        assert g.replay(events, edition6)[0].status == g.PASS
+    else:
+        with pytest.raises(g.DiaryInvalid, match="physics"):
+            g.replay(events, edition6)
 
 
 def test_the_replay_needs_no_runtime_and_reads_every_criterion(diary):

@@ -19,39 +19,55 @@ does everything around that call, offline:
             --range base..head that touches a seat-visible surface, with its message and
             diff. Commit messages may carry behaviour data, so they never enter the
             corpus prompt.
-  validate  Score one or more auditor samples (JSON Lines) against the key. Valid only
-            when every sample's summary covers every leaf the key records as rendered
-            (none unread, none unaccounted for), at least 7 of the 8 canaries are found
-            in the samples' union and every mandatory one (Q6, Q9, Q10) is, and at most
+  validate  Score the audit: two corpus samples and two provenance samples (JSON Lines)
+            against the key. Refused unless the key is bound to the corpus beside it.
+            Valid only when every sample echoes its prompt's id (``corpus_sha``,
+            ``provenance_id``) and its sample number (1 and 2, once each); every corpus
+            finding passes its schema (fields, enums, its leaf in the corpus, its class
+            and severity the rubric's); every summary covers every leaf the key records
+            (none unread, none unaccounted for) and counts its findings by class; every
+            provenance sample answers every commit once; at least 7 of the 8 canaries
+            are found in the union and every mandatory one (Q6, Q9, Q10) is; and at most
             1 of 10 controls is flagged. An invalid audit is rerun with the next family.
-  triage    From exactly two samples, write ``docs/audits/class2/<world>.md``: the
-            skeleton the architect fills, one row per finding of the union (a finding
-            one sample alone made is low confidence), with the family and the canary
-            score recorded. Refused, writing nothing, for an invalid audit, for a family
-            that authored kernel text or sits in the world, and for the family the last
-            triage of the world used (rotation).
-  gate      The release gate: the triage file records its family and a valid canary
-            score, every HIGH or MED finding carries a disposition, a non-FIX
-            disposition carries a reason, and no charter card is marked FIX.
+  triage    From a valid audit, write ``docs/audits/class2/<world>.md`` and its findings
+            file ``<world>.findings.jsonl``: that world's findings of the union (a
+            finding one sample alone made is low confidence) and every commit the
+            provenance pass flagged, as HIGH findings. The file records its bindings:
+            the family, the world, the corpus, the range, every sample's sha256 and the
+            findings file's. Refused, writing nothing, for a world the audit did not
+            render, an invalid audit, a family that authored kernel text or sits in the
+            world, and the family the last triage of the world used (rotation).
+  gate      The release gate, bound to the key: the triage file names the world and the
+            key's corpus and range; its rows are exactly its findings file's, each once,
+            with the severity, question and class the finding carries; every HIGH or
+            MED finding has a disposition, a non-FIX disposition a reason, and no
+            charter card is marked FIX.
   baseline  Recompute the static audit's findings and surface registry after the
             architect's triage (tests/audit/class2_findings.json, class2_surfaces.toml).
 
+Every artifact this tool reads is refused (exit 2) unless it passes its schema and is
+bound to its origin: the key to its corpus, a sample to its prompt, a triage file to its
+key and findings file, a previous corpus to its own hashes, rejected findings and a
+previous triage file to their fields.
+
 The model call itself is the operator's: send ``prompt.md`` with ``auditor_input.jsonl``
 to one model family that neither authored kernel text nor sits in the world, at
-temperature 0, twice, under the prepaid guard's cap; save each sample as JSON Lines, and
-send ``provenance_prompt.md`` to the same model. ``validate`` and ``triage`` take both
-samples. See ``docs/audits/class2/auditor-protocol.md``.
+temperature 0, twice, under the prepaid guard's cap; send ``provenance_prompt.md`` to the
+same model twice; save each answer as JSON Lines. See
+``docs/audits/class2/auditor-protocol.md``.
 
 Examples::
 
     uv run python scripts/class2_audit.py render --world edition6-capital-loop \\
         --out work/class2/2026-10 --seed 7 --range <last release>..HEAD
     uv run python scripts/class2_audit.py validate work/class2/2026-10/sample1.jsonl \\
-        work/class2/2026-10/sample2.jsonl --key work/class2/2026-10/canary_key.json
-    uv run python scripts/class2_audit.py triage work/class2/2026-10/sample1.jsonl \\
-        work/class2/2026-10/sample2.jsonl --key work/class2/2026-10/canary_key.json \\
-        --world edition6-capital-loop --family X
-    uv run python scripts/class2_audit.py gate --world edition6-capital-loop
+        work/class2/2026-10/sample2.jsonl --provenance-samples \\
+        work/class2/2026-10/provenance1.jsonl work/class2/2026-10/provenance2.jsonl \\
+        --key work/class2/2026-10/canary_key.json
+    uv run python scripts/class2_audit.py triage <the same samples> \\
+        --key work/class2/2026-10/canary_key.json --world edition6-capital-loop --family X
+    uv run python scripts/class2_audit.py gate --world edition6-capital-loop \\
+        --key work/class2/2026-10/canary_key.json
 """
 
 from __future__ import annotations
@@ -59,6 +75,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -160,11 +177,6 @@ def corpus_records(worlds: list[str], *, rendered: bool) -> list[dict]:
     return records
 
 
-def read_corpus(path: Path) -> list[dict]:
-    """A release corpus as ``render`` wrote it (``release_corpus.jsonl``)."""
-    return [json.loads(line) for line in Path(path).read_text().splitlines() if line.strip()]
-
-
 def corpus_diff(previous: list[dict] | None, records: list[dict]) -> dict[str, Any]:
     """Each kernel leaf's change since the last audited release, and the leaves removed.
 
@@ -207,16 +219,18 @@ def changed_first(records: list[dict], diff: dict[str, Any]) -> tuple[list[dict]
     return first + rest, len(first)
 
 
-def plant(records: list[dict], *, seed: int, world: str,
-          changed: int | None = None) -> tuple[list[dict], dict]:
+def plant(records: list[dict], *, seed: int, world: str, changed: int | None = None,
+          spec: dict | None = None) -> tuple[list[dict], dict]:
     """Insert the canaries at seeded positions and choose the controls; return the key.
 
     ``changed`` is the size of the changed block that leads ``records`` (``changed_first``).
     A canary takes the change tag of the block it lands in, so a planted leaf reads like
     its neighbours: ``added`` inside the changed block, ``unchanged`` after it (and
     ``added`` throughout when no previous corpus was given: ``changed`` is None).
+    Every control surface must name a kernel leaf of ``world``: the calibration bar
+    reads ten controls, never fewer.
     """
-    spec = json.loads(CANARIES.read_text())
+    spec = spec if spec is not None else load_canaries()
     rng = Random(seed)
     out = list(records)
     boundary = changed
@@ -242,8 +256,10 @@ def plant(records: list[dict], *, seed: int, world: str,
         prefix = f"{world}/{surface}"
         match = next((r for r in sorted(records, key=lambda r: r["path"])
                       if r["provenance"] == "kernel" and r["path"].startswith(prefix)), None)
-        if match is not None:
-            key["controls"].append({"leaf_id": match["leaf_id"], "path": match["path"]})
+        if match is None:
+            raise AuditInputInvalid(f"the control surface {surface!r} names no leaf of "
+                                    f"{world}")
+        key["controls"].append({"leaf_id": match["leaf_id"], "path": match["path"]})
     # The trusted record of what is under audit: every leaf the auditor must answer,
     # canaries included. ``validate`` reads the auditor's read set against this, never
     # against counts the auditor reports about itself.
@@ -354,26 +370,39 @@ def _agents_rules() -> str:
     return agents.split("## Chapter II, as design rules", 1)[-1].split("6. **The reward", 1)[0]
 
 
-def write_provenance_prompt(out: Path, provenance: str) -> Path:
+def write_provenance_prompt(out: Path, provenance: str, *, provenance_id: str) -> Path:
     """Protocol input 6, as the protocol orders it: a second prompt to the same model.
-    Commit messages can carry behaviour data, which the corpus prompt never holds."""
+    Commit messages can carry behaviour data, which the corpus prompt never holds. Its
+    answer is read back (``provenance_problems``), so the prompt states the format and
+    the id every answer echoes."""
     rule2 = _agents_rules().split("2. **Robust simplicity", 1)[-1].split("3. **Physics", 1)[0]
     parts = ["# Class 2 audit: provenance pass", "",
-             "AGENTS.md rule 2, Robust simplicity" + rule2.rstrip(), "", provenance]
+             "AGENTS.md rule 2, Robust simplicity" + rule2.rstrip(), "", provenance, "",
+             "## Output format", "",
+             "JSON Lines: one object per commit above, then one summary object.", "",
+             "```json",
+             '{"sha": "<the full commit sha>", "behaviour_mix": true, '
+             '"quote": "<the message\'s own words, when true>", "rationale": "..."}',
+             f'{{"summary": true, "provenance_id": "{provenance_id}", "sample": 1, '
+             '"commits_read": ["<every sha above>"]}',
+             "```", "",
+             f"`provenance_id` is `{provenance_id}`. `sample` is 1 on the first run and "
+             "2 on the second."]
     path = out / "provenance_prompt.md"
     path.write_text("\n".join(parts) + "\n")
     return path
 
 
-def write_prompt(out: Path, *, essay: Path | None, previous: Path | None,
-                 diff: str, rejected: Path | None = None) -> Path:
+def write_prompt(out: Path, *, essay: Path | None, previous_text: str | None,
+                 diff: str, rejected: list[dict], corpus_sha: str) -> Path:
     """The corpus prompt: protocol inputs 1-5, the corpus diff before last release's
-    triage so a rejected finding's leaf can be read against its change."""
+    triage so a rejected finding's leaf can be read against its change, and the corpus
+    id every sample's summary echoes."""
     from tests.audit import class2_lexicon as lexicon
 
     rules = _agents_rules()
-    rejected_text = (rejected.read_text().strip()
-                     if rejected is not None and rejected.exists() else "")
+    rejected_text = "\n".join(json.dumps(r, sort_keys=True, ensure_ascii=False)
+                              for r in rejected)
     parts = [
         "# Class 2 audit: reviewer prompt",
         "",
@@ -397,7 +426,7 @@ def write_prompt(out: Path, *, essay: Path | None, previous: Path | None,
         "",
         "## Last release's triage",
         "",
-        previous.read_text() if previous is not None and previous.exists()
+        previous_text if previous_text is not None
         else "(none: this is the first release audited)",
         "",
         "## Last release's rejected findings, with their reasons",
@@ -411,10 +440,136 @@ def write_prompt(out: Path, *, essay: Path | None, previous: Path | None,
         "surface_kind, audience, frequency, provenance, change. Answer every leaf whose "
         "provenance is `kernel`; read the others as context only. The added and changed "
         "leaves come first.",
+        "",
+        f"The corpus id is `{corpus_sha}`: your summary carries it as `corpus_sha`, and "
+        "`sample` is 1 on the first run and 2 on the second.",
     ]
     path = out / "prompt.md"
     path.write_text("\n".join(parts) + "\n")
     return path
+
+
+class AuditInputInvalid(ValueError):
+    """An artifact the tool consumes is unbound to its origin or fails its schema."""
+
+
+def sha256_file(path: Path) -> str:
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def resolve_range(repo: Path, release_range: str) -> list[str]:
+    """The release range's two ends as commit SHAs; refused unless both resolve."""
+    if ".." not in release_range:
+        raise ValueError("the release range is base..head")
+    base, head = release_range.split("..", 1)
+    shas = []
+    for end in (base, head):
+        try:
+            shas.append(_git(repo, "rev-parse", "--verify", f"{end}^{{commit}}").strip())
+        except subprocess.CalledProcessError as exc:
+            raise ValueError(f"the release range end {end!r} is not a commit") from exc
+    return shas
+
+
+def load_canaries() -> dict:
+    """``canaries.json``, refused unless it is the protocol's calibration set: one canary
+    per question Q3-Q10 with that question's class, Q6/Q9/Q10 and only they mandatory,
+    and ten distinct control surfaces."""
+    spec = json.loads(CANARIES.read_text())
+    problems = []
+    canaries = spec.get("canaries") or []
+    questions = [c.get("question") for c in canaries]
+    if questions != [f"Q{i}" for i in range(3, 11)]:
+        problems.append(f"canary questions {questions} are not Q3-Q10 once each")
+    for c in canaries:
+        if CLASS_OF.get(c.get("question")) != c.get("class"):
+            problems.append(f"{c.get('id')}: class {c.get('class')!r} is not its question's")
+        if not isinstance(c.get("text"), str) or not c["text"].strip():
+            problems.append(f"{c.get('id')}: no text")
+        if not isinstance(c.get("surface"), str) or not c["surface"]:
+            problems.append(f"{c.get('id')}: no surface")
+    if {c.get("question") for c in canaries if c.get("mandatory")} != {"Q6", "Q9", "Q10"}:
+        problems.append("the mandatory canaries are not exactly Q6, Q9 and Q10")
+    surfaces = spec.get("control_surfaces") or []
+    if len(surfaces) != 10 or len(set(surfaces)) != 10:
+        problems.append("the control surfaces are not ten distinct surfaces")
+    if problems:
+        raise AuditInputInvalid("canaries.json: " + "; ".join(problems))
+    return spec
+
+
+def _jsonl(path: Path, what: str) -> list[dict]:
+    rows = []
+    for i, line in enumerate(Path(path).read_text().splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise AuditInputInvalid(f"{what} line {i} is not JSON: {exc}") from exc
+        if not isinstance(row, dict):
+            raise AuditInputInvalid(f"{what} line {i} is not an object")
+        rows.append(row)
+    return rows
+
+
+RECORD_FIELDS = ("leaf_id", "world", "path", "text", "provenance")
+
+
+def read_corpus(path: Path) -> list[dict]:
+    """A release corpus as ``render`` wrote it (``release_corpus.jsonl``), refused unless
+    every record has its fields and its ``leaf_id`` is the hash of its path and text."""
+    records = _jsonl(path, "the previous corpus")
+    for i, r in enumerate(records, 1):
+        missing = [f for f in RECORD_FIELDS if not isinstance(r.get(f), str)]
+        if missing:
+            raise AuditInputInvalid(f"the previous corpus record {i} lacks {missing}")
+        if r["leaf_id"] != leaf_id(r["path"], r["text"]):
+            raise AuditInputInvalid(f"the previous corpus record {i}'s leaf_id is not the "
+                                    "hash of its path and text")
+    return records
+
+
+def read_rejected(path: Path | None) -> list[dict]:
+    """Last release's rejected findings, refused unless each names its finding, its path
+    and a reason."""
+    if path is None or not Path(path).exists():
+        return []
+    rows = _jsonl(path, "rejected.jsonl")
+    for i, row in enumerate(rows, 1):
+        bad = [f for f in ("finding_id", "path", "reason")
+               if not isinstance(row.get(f), str) or not row[f].strip()]
+        if bad:
+            raise AuditInputInvalid(f"rejected.jsonl line {i} lacks {bad}")
+    return rows
+
+
+def triage_header(text: str) -> dict[str, str]:
+    """The ``- Name: value`` lines of a triage file's header."""
+    out = {}
+    for line in text.splitlines():
+        if line.startswith("|"):
+            break
+        if line.startswith("- ") and ":" in line:
+            name, value = line[2:].split(":", 1)
+            out[name.strip()] = value.strip()
+    return out
+
+
+def read_previous_triage(path: Path | None, worlds: list[str]) -> str | None:
+    """Last release's triage file, refused unless it is a triage file of one of the
+    worlds rendered, recording its family and corpus."""
+    if path is None or not Path(path).exists():
+        return None
+    text = Path(path).read_text()
+    header = triage_header(text)
+    first = text.splitlines()[0] if text else ""
+    world = first.removeprefix("# Class 2 audit triage: ").strip()
+    if not first.startswith("# Class 2 audit triage: ") or world not in worlds:
+        raise AuditInputInvalid(f"{path} is not a triage file of {worlds}")
+    if not header.get("Auditor family") or not header.get("Corpus"):
+        raise AuditInputInvalid(f"{path} records no auditor family or corpus")
+    return text
 
 
 def render(worlds: list[str], out: Path, *, seed: int, rendered: bool, release_range: str,
@@ -429,40 +584,289 @@ def render(worlds: list[str], out: Path, *, seed: int, rendered: bool, release_r
     findings, and the auditor's input leads with the added and changed leaves; the
     provenance pass over ``release_range`` in ``repo`` is its own prompt. The release
     corpus holds no canary and, like the key, is never the auditor's input.
+
+    Binding: every input is validated before anything is written, and the key records
+    the origin of everything the audit reads (worlds, seed, the range and its two
+    commits, the corpus, both prompts, the release corpus and the previous one, the
+    essay) and the provenance commits the second prompt asks about. Each prompt names
+    the id its answers must echo (``corpus_sha``, ``provenance_id``).
     """
-    provenance = provenance_section(release_range, provenance_commits(repo, release_range))
+    if not worlds or len(set(worlds)) != len(worlds):
+        raise AuditInputInvalid("the worlds rendered are none, or repeat")
+    missing = [w for w in worlds if not (corpus.WORLDS / f"{w}.toml").exists()]
+    if missing:
+        raise AuditInputInvalid(f"no world file for {missing}")
+    range_shas = resolve_range(repo, release_range)
+    commits = provenance_commits(repo, release_range)
+    provenance = provenance_section(release_range, commits)
+    provenance_id = hashlib.sha256(provenance.encode()).hexdigest()
     prior = read_corpus(previous_corpus) if previous_corpus is not None else None
+    rejected_rows = read_rejected(rejected)
+    previous_text = read_previous_triage(previous, worlds)
+    spec = load_canaries()
     # Rendered before anything is written: a failed render leaves no corpus behind.
     records = corpus_records(worlds, rendered=rendered)
     diff = corpus_diff(prior, records)
     ordered, changed = changed_first(records, diff)
-    out.mkdir(parents=True, exist_ok=True)
     planted, key = plant(ordered, seed=seed, world=worlds[0],
-                         changed=changed if prior is not None else None)
+                         changed=changed if prior is not None else None, spec=spec)
+    out.mkdir(parents=True, exist_ok=True)
     with (out / "auditor_input.jsonl").open("w") as handle:
         for record in planted:
             handle.write(json.dumps(record, sort_keys=True, ensure_ascii=False) + "\n")
     with (out / "release_corpus.jsonl").open("w") as handle:
         for record in records:
             handle.write(json.dumps(record, sort_keys=True, ensure_ascii=False) + "\n")
+    corpus_sha = sha256_file(out / "auditor_input.jsonl")
+    write_prompt(out, essay=essay, previous_text=previous_text,
+                 diff=diff_section(planted, diff), rejected=rejected_rows,
+                 corpus_sha=corpus_sha)
+    write_provenance_prompt(out, provenance, provenance_id=provenance_id)
+    key.update({
+        "schema": KEY_SCHEMA, "worlds": list(worlds), "rendered": rendered,
+        "range": release_range, "range_shas": range_shas, "corpus_sha": corpus_sha,
+        "prompt_sha": sha256_file(out / "prompt.md"),
+        "provenance_prompt_sha": sha256_file(out / "provenance_prompt.md"),
+        "provenance_id": provenance_id,
+        "provenance_commits": [{"sha": c["sha"], "message": c["message"]} for c in commits],
+        "release_corpus_sha": sha256_file(out / "release_corpus.jsonl"),
+        "previous_corpus_sha": (sha256_file(previous_corpus)
+                                if previous_corpus is not None else None),
+        "essay_sha": sha256_file(essay) if essay is not None and essay.exists() else None,
+    })
     (out / "canary_key.json").write_text(json.dumps(key, indent=1, sort_keys=True) + "\n")
-    write_prompt(out, essay=essay, previous=previous, diff=diff_section(planted, diff),
-                 rejected=rejected)
-    write_provenance_prompt(out, provenance)
     return key
 
 
+# --- what the tool reads back: the key, the samples, their schemas ---------------------------
+
+KEY_SCHEMA = 2
+SEVERITIES = ("HIGH", "MED", "LOW")
+#: Each rubric question that yields a finding, and the class it yields (the rubric).
+CLASS_OF = {"Q3": "ANNOUNCED-PHYSICS", "Q4": "C1", "Q5": "C2", "Q6": "C1",
+            "Q7": "FALSE-PHYSICS", "Q8": "C1", "Q9": "DISCLOSURE", "Q10": "C2",
+            "Q11": "C2", "Q12": "NORM-OBJECTIVE"}
+#: The severities the rubric's severity rule admits for each question: HIGH only for
+#: Q3-Q5; Q6, Q8 and Q10 are MED; the rest MED or LOW.
+SEVERITY_OF = {**{q: SEVERITIES for q in ("Q3", "Q4", "Q5")},
+               **{q: ("MED",) for q in ("Q6", "Q8", "Q10")},
+               **{q: ("MED", "LOW") for q in ("Q7", "Q9", "Q11", "Q12")}}
+#: The questions a context leaf (a charter card or norm) may be flagged under.
+CONTEXT_QUESTIONS = frozenset({"Q10", "Q11", "Q12"})
+#: The provenance pass's one question, its class and its severity (AGENTS rule 2 at the
+#: point of authorship reaches every seat the text reaches).
+PROVENANCE = {"question": "P1", "class": "BEHAVIOUR-MIX", "severity": "HIGH"}
+#: A finding's passage names a section of the authority text or an AGENTS rule.
+PASSAGE = re.compile(r"^((Ch\. I )?§(I|II|III|IV)(\.[a-c])?(\(\d\))?|(AGENTS )?rule [1-5])"
+                     r"( .*)?$")
+FINDING_FIELDS: dict[str, type | tuple[type, ...]] = {
+    "finding_id": str, "leaf_id": str, "world": str, "path": str, "surface_kind": str,
+    "audience": list, "frequency": str, "quote": str, "question": str, "class": str,
+    "severity": str, "passage": str, "rationale": str, "rewrite": str,
+    "confidence": (int, float)}
+
+
+def _words(text: str) -> int:
+    return len(text.split())
+
+
+def finding_problems(f: dict, records: dict[str, dict]) -> list[str]:
+    """Why a finding is invalid (none when it is valid): every field of the protocol's
+    output format present and typed; its leaf in the corpus and its world, path and tags
+    that leaf's; its id ``sha256(path|quote)[:12]``; its quote the leaf's own words (at
+    most 25); its class its question's and its severity one the rubric admits; a context
+    leaf flagged only under Q10-Q12 and Q12 only on a norm; a passage from the authority
+    text; a rationale of at most 60 words and a rewrite; a confidence in [0, 1]."""
+    problems = []
+    for name, kind in FINDING_FIELDS.items():
+        value = f.get(name)
+        if not isinstance(value, kind) or isinstance(value, bool):
+            problems.append(f"{name} missing or not {getattr(kind, '__name__', kind)}")
+    if problems:
+        return problems
+    leaf = records.get(f["leaf_id"])
+    if leaf is None:
+        return [f"leaf {f['leaf_id']} is not in the corpus"]
+    for name in ("world", "path", "surface_kind", "audience", "frequency"):
+        if f[name] != leaf.get(name):
+            problems.append(f"{name} {f[name]!r} is not its leaf's {leaf.get(name)!r}")
+    if f["finding_id"] != leaf_id(f["path"], f["quote"]):
+        problems.append("finding_id is not sha256(path|quote)[:12]")
+    if not f["quote"].strip() or f["quote"] not in leaf["text"]:
+        problems.append("the quote is not the leaf's own words")
+    if _words(f["quote"]) > 25:
+        problems.append("the quote is longer than 25 words")
+    question = f["question"]
+    if question not in CLASS_OF:
+        problems.append(f"question {question!r} yields no finding")
+    else:
+        if f["class"] != CLASS_OF[question]:
+            problems.append(f"class {f['class']!r} is not {question}'s {CLASS_OF[question]}")
+        if f["severity"] not in SEVERITY_OF[question]:
+            problems.append(f"severity {f['severity']!r} is not one {question} admits "
+                            f"{SEVERITY_OF[question]}")
+        if leaf["provenance"] != "kernel" and question not in CONTEXT_QUESTIONS:
+            problems.append(f"a context leaf flagged under {question}")
+        if question == "Q12" and "norm" not in leaf["provenance"]:
+            problems.append("Q12 on a leaf that is not a norm")
+    if not PASSAGE.match(f["passage"]):
+        problems.append(f"passage {f['passage']!r} names no authority section or rule")
+    if _words(f["rationale"]) > 60 or not f["rationale"].strip():
+        problems.append("the rationale is empty or longer than 60 words")
+    if not f["rewrite"].strip():
+        problems.append("no rewrite")
+    if not 0 <= f["confidence"] <= 1:
+        problems.append("confidence outside [0, 1]")
+    return problems
+
+
+def load_key(path: Path) -> tuple[dict, list[dict]]:
+    """The key and the corpus it was rendered with, refused unless bound together.
+
+    Guarantees: the key has its schema's fields; the ``auditor_input.jsonl`` beside it
+    hashes to its ``corpus_sha``; every record has its fields and its id is the hash of
+    its path and text; the expected leaves are exactly the corpus's kernel leaves; and
+    every canary and control names a leaf of it.
+    """
+    path = Path(path)
+    key = json.loads(path.read_text())
+    required = {"schema": int, "worlds": list, "range": str, "range_shas": list,
+                "corpus_sha": str, "provenance_id": str, "provenance_commits": list,
+                "canaries": list, "controls": list, "expected_leaves": list,
+                "expected_count": int}
+    bad = [n for n, t in required.items() if not isinstance(key.get(n), t)]
+    if bad or key.get("schema") != KEY_SCHEMA:
+        raise AuditInputInvalid(f"the key is not a schema-{KEY_SCHEMA} key: {bad}")
+    corpus_path = path.parent / "auditor_input.jsonl"
+    if not corpus_path.exists() or sha256_file(corpus_path) != key["corpus_sha"]:
+        raise AuditInputInvalid("the key is not bound to the auditor_input.jsonl beside it")
+    records = _jsonl(corpus_path, "auditor_input.jsonl")
+    for r in records:
+        if any(not isinstance(r.get(f), str) for f in RECORD_FIELDS) \
+                or r["leaf_id"] != leaf_id(r["path"], r["text"]):
+            raise AuditInputInvalid("a corpus record is malformed or its id is not its hash")
+    kernel = sorted({r["leaf_id"] for r in records if r["provenance"] == "kernel"})
+    if kernel != sorted(key["expected_leaves"]) or key["expected_count"] != len(kernel):
+        raise AuditInputInvalid("the key's expected leaves are not the corpus's kernel leaves")
+    ids = {r["leaf_id"] for r in records}
+    if any(c.get("leaf_id") not in ids for c in key["canaries"] + key["controls"]):
+        raise AuditInputInvalid("a canary or control names a leaf the corpus lacks")
+    return key, records
+
+
 def read_output(path: Path) -> tuple[list[dict], dict | None]:
+    """A sample's findings and its one summary (JSON Lines); refused if a line is not a
+    JSON object or two summaries are given."""
     findings, summary = [], None
-    for line in Path(path).read_text().splitlines():
-        if not line.strip():
-            continue
-        row = json.loads(line)
+    for row in _jsonl(path, str(path)):
         if row.get("summary") is True:
+            if summary is not None:
+                raise AuditInputInvalid(f"{path} holds two summaries")
             summary = row
         else:
             findings.append(row)
     return findings, summary
+
+
+def _sample_number(value: Any) -> bool:
+    """A sample id is an integer 1..SAMPLES (never a bool, a float or a string)."""
+    return isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= SAMPLES
+
+
+def _completeness(summary: dict, expected: set[str], all_ids: set[str]) -> list[str]:
+    """Why a sample's summary is not complete against the key (none when it is).
+
+    Judged against the key render wrote, never the numbers the auditor reports about
+    itself: every expected leaf is in the read set or listed unread, and an unread leaf
+    fails the audit.
+    """
+    problems = []
+    read, unread = summary.get("read"), summary.get("unread")
+    if not isinstance(read, list) or not all(isinstance(i, str) for i in read):
+        problems.append("read is not a list of leaf ids")
+        read = []
+    if not isinstance(unread, list) or not all(isinstance(i, str) for i in unread):
+        problems.append("unread is not a list of leaf ids")
+        unread = []
+    read, unread = set(read), set(unread)
+    if (read | unread) - all_ids:
+        problems.append("the summary names leaves the corpus lacks: "
+                        f"{len((read | unread) - all_ids)}")
+    if unread:
+        problems.append(f"unread leaves: {len(unread)}")
+    unaccounted = expected - read - unread
+    if unaccounted:
+        problems.append(f"expected leaves neither read nor listed unread: "
+                        f"{len(unaccounted)}/{len(expected)}")
+    if summary.get("leaves_total") != len(expected):
+        problems.append(f"leaves_total {summary.get('leaves_total')!r} is not the "
+                        f"{len(expected)} leaves rendered")
+    if summary.get("leaves_read") != len(read & expected):
+        problems.append("leaves_read differs from the expected leaves in the read set")
+    return problems
+
+
+def sample_problems(findings: list[dict], summary: dict | None, key: dict,
+                    records: dict[str, dict]) -> list[str]:
+    """Why one corpus sample is invalid (none when it is): its summary is bound to this
+    corpus (``corpus_sha``) and names its sample id, is complete, and counts its own
+    findings by class; every finding is valid (``finding_problems``) and appears once."""
+    if summary is None:
+        return ["no summary object"]
+    problems = []
+    if summary.get("corpus_sha") != key["corpus_sha"]:
+        problems.append("the summary is not bound to this corpus (corpus_sha)")
+    if not _sample_number(summary.get("sample")):
+        problems.append(f"sample id {summary.get('sample')!r} is not 1..{SAMPLES}")
+    problems += _completeness(summary, set(key["expected_leaves"]), set(records))
+    counts: dict[str, int] = {}
+    for i, f in enumerate(findings, 1):
+        for p in finding_problems(f, records):
+            problems.append(f"finding {i} ({f.get('finding_id')}): {p}")
+        if isinstance(f.get("class"), str):
+            counts[f["class"]] = counts.get(f["class"], 0) + 1
+    if summary.get("by_class") != counts:
+        problems.append(f"by_class {summary.get('by_class')!r} is not the findings' {counts}")
+    ids = [f.get("finding_id") for f in findings]
+    if len(ids) != len(set(ids)):
+        problems.append("a finding is given twice")
+    return problems
+
+
+def provenance_problems(rows: list[dict], summary: dict | None, key: dict) -> list[str]:
+    """Why one provenance sample is invalid (none when it is): its summary echoes the
+    prompt's ``provenance_id`` and its sample id and lists every commit asked about;
+    every commit is answered exactly once, ``behaviour_mix`` a boolean, and a yes quotes
+    the commit's own message."""
+    if summary is None:
+        return ["no summary object"]
+    messages = {c["sha"]: c["message"] for c in key["provenance_commits"]}
+    problems = []
+    if summary.get("provenance_id") != key["provenance_id"]:
+        problems.append("the summary is not bound to this provenance prompt (provenance_id)")
+    if not _sample_number(summary.get("sample")):
+        problems.append(f"sample id {summary.get('sample')!r} is not 1..{SAMPLES}")
+    read = summary.get("commits_read")
+    if not isinstance(read, list) or set(read) != set(messages):
+        problems.append("commits_read is not every commit asked about")
+    answered = [row.get("sha") for row in rows]
+    if sorted(a for a in answered if isinstance(a, str)) != sorted(messages) \
+            or len(answered) != len(messages):
+        problems.append("not every commit is answered exactly once")
+    for row in rows:
+        sha = row.get("sha")
+        if sha not in messages:
+            problems.append(f"an answer names a commit not asked about: {sha!r}")
+            continue
+        if not isinstance(row.get("behaviour_mix"), bool):
+            problems.append(f"{sha[:12]}: behaviour_mix is not a boolean")
+        elif row["behaviour_mix"]:
+            quote = row.get("quote")
+            if not isinstance(quote, str) or not quote.strip() or quote not in messages[sha]:
+                problems.append(f"{sha[:12]}: a yes that does not quote the message")
+        if not isinstance(row.get("rationale"), str):
+            problems.append(f"{sha[:12]}: no rationale")
+    return problems
 
 
 def _finding_key(finding: dict) -> tuple:
@@ -491,67 +895,61 @@ def union(samples: list[tuple[list[dict], dict | None]]) -> list[dict]:
     return out
 
 
-def _completeness(summary: dict | None, expected: set[str]) -> list[str]:
-    """Why a sample's summary is not complete against the key (none when it is).
-
-    Judged against the key render wrote, never the numbers the auditor reports about
-    itself: every expected leaf is in the read set or listed unread, and an unread leaf
-    fails the audit.
-    """
-    if summary is None:
-        return ["no summary object"]
-    problems = []
-    read = summary.get("read")
-    read = set(read) if isinstance(read, list) else set()
-    unread = summary.get("unread")
-    unread = set(unread) if isinstance(unread, list) else set()
-    if unread:
-        problems.append(f"unread leaves: {len(unread)}")
-    unaccounted = expected - read - unread
-    if unaccounted:
-        problems.append(f"expected leaves neither read nor listed unread: "
-                        f"{len(unaccounted)}/{len(expected)}")
-    if summary.get("leaves_total") != len(expected):
-        problems.append(f"leaves_total {summary.get('leaves_total')!r} is not the "
-                        f"{len(expected)} leaves rendered")
-    if summary.get("leaves_read") != len(read & expected):
-        problems.append("leaves_read differs from the expected leaves in the read set")
-    return problems
+def provenance_findings(samples: list[tuple[list[dict], dict | None]]) -> list[dict]:
+    """Each commit any sample read as justified by a behaviour mix, once, as a HIGH
+    finding (AGENTS rule 2); low confidence when not every sample said so."""
+    flagged: dict[str, list[dict]] = {}
+    for rows, _summary in samples:
+        for row in rows:
+            if row.get("behaviour_mix") is True:
+                flagged.setdefault(row["sha"], []).append(row)
+    out = []
+    for sha, rows in flagged.items():
+        path = f"commit:{sha}"
+        out.append({"finding_id": leaf_id(path, ""), "leaf_id": None, "world": "*",
+                    "path": path, "quote": rows[0]["quote"], **PROVENANCE,
+                    "rationale": rows[0].get("rationale", ""), "provenance_pass": True,
+                    "samples": len(rows), "low_confidence": len(rows) < len(samples)})
+    return out
 
 
-def validate(findings: list[dict], summary: dict | None, key: dict) -> dict:
-    """Whether a one-sample audit is valid, and why not (``validate_samples``)."""
-    return validate_samples([(findings, summary)], key)
+def _sample_ids(samples: list[tuple[list, dict | None]]) -> list:
+    return [s.get("sample") if isinstance(s, dict) else None for _rows, s in samples]
 
 
-def validate_samples(samples: list[tuple[list[dict], dict | None]], key: dict) -> dict:
+def audit_verdict(samples: list[tuple[list[dict], dict | None]],
+                  provenance: list[tuple[list[dict], dict | None]], key: dict,
+                  records: list[dict]) -> dict:
     """Whether an audit is valid, and why not (design B2 calibration, Astra H-2).
 
-    Every sample's summary is complete against the key on its own; the canaries and
-    controls are scored on the samples' union.
+    Guarantees: exactly ``SAMPLES`` corpus samples and ``SAMPLES`` provenance samples,
+    each set numbered 1..SAMPLES once; every sample valid on its own (bound, complete,
+    schema-valid findings); the canaries and controls scored on the corpus samples'
+    union.
     """
+    by_id = {r["leaf_id"]: r for r in records}
     problems: list[str] = []
-    expected = set(key["expected_leaves"])
-    if len(expected) != key["expected_count"]:
-        problems.append("the key's expected leaf set does not match its count")
-    if not samples:
-        problems.append("no sample")
-    for i, (_findings, summary) in enumerate(samples):
-        prefix = f"sample {i + 1}: " if len(samples) > 1 else ""
-        problems += [prefix + p for p in _completeness(summary, expected)]
+    for name, group in (("corpus", samples), ("provenance", provenance)):
+        if len(group) != SAMPLES:
+            problems.append(f"{len(group)} {name} sample(s): the protocol runs the auditor "
+                            f"{SAMPLES} times")
+        elif sorted(i for i in _sample_ids(group) if isinstance(i, int)) != list(
+                range(1, SAMPLES + 1)):
+            problems.append(f"the {name} samples are not numbered 1..{SAMPLES} once each")
+    for i, (findings, summary) in enumerate(samples, 1):
+        problems += [f"sample {i}: {p}" for p in sample_problems(findings, summary, key, by_id)]
+    for i, (rows, summary) in enumerate(provenance, 1):
+        problems += [f"provenance sample {i}: {p}"
+                     for p in provenance_problems(rows, summary, key)]
     findings = union(samples)
 
     def flagged(target: dict) -> list[dict]:
-        # A finding names its leaf by id; a path alone is read only when it names none,
-        # since a planted leaf may share its path with a real one.
-        return [f for f in findings if f.get("leaf_id") == target["leaf_id"]
-                or (not f.get("leaf_id") and f.get("path") == target["path"])]
+        return [f for f in findings if f.get("leaf_id") == target["leaf_id"]]
 
     found = []
     for canary in key["canaries"]:
-        hits = flagged(canary)
-        if any(h.get("question") == canary["question"] or h.get("class") == canary["class"]
-               for h in hits):
+        if any(h.get("question") == canary["question"] and h.get("class") == canary["class"]
+               for h in flagged(canary)):
             found.append(canary["id"])
     missed = [c for c in key["canaries"] if c["id"] not in found]
     mandatory = [c["id"] for c in missed if c["mandatory"]]
@@ -564,6 +962,7 @@ def validate_samples(samples: list[tuple[list[dict], dict | None]], key: dict) -
         problems.append(f"controls flagged {len(controls)}/{len(key['controls'])} "
                         f"> {MAX_CONTROLS}")
     return {"valid": not problems, "problems": problems, "samples": len(samples),
+            "provenance_samples": len(provenance),
             "canaries_found": f"{len(found)}/{len(key['canaries'])}",
             "missed": [c["id"] for c in missed],
             "controls_flagged": f"{len(controls)}/{len(key['controls'])}"}
@@ -581,10 +980,7 @@ def world_families(world: str) -> set[str]:
 
 def recorded_family(text: str) -> str | None:
     """The auditor family a triage file records, or None."""
-    for line in text.splitlines():
-        if line.startswith("- Auditor family:"):
-            return line.split(":", 1)[1].strip() or None
-    return None
+    return triage_header(text).get("Auditor family") or None
 
 
 def family_refusal(family: str, world: str, previous_triage: Path | None) -> str | None:
@@ -604,14 +1000,26 @@ def family_refusal(family: str, world: str, previous_triage: Path | None) -> str
     return None
 
 
-def triage_skeleton(findings: list[dict], verdict: dict, *, world: str, family: str,
-                    key: dict) -> str:
-    """The architect's triage file: one row per finding that is not a canary."""
+def world_findings(findings: list[dict], provenance: list[dict], key: dict,
+                   world: str) -> list[dict]:
+    """The findings one world's triage owns: that world's non-canary findings, and every
+    provenance finding (a commit's text reaches every world it touches)."""
     planted = {c["leaf_id"] for c in key["canaries"]}
-    rows = [f for f in findings if f.get("leaf_id") not in planted]
+    own = [f for f in findings if f.get("world") == world and f.get("leaf_id") not in planted]
+    return own + provenance
+
+
+def triage_skeleton(rows: list[dict], verdict: dict, *, world: str, family: str,
+                    key: dict, bindings: dict[str, str]) -> str:
+    """The architect's triage file: its bindings, then one row per finding it owns."""
     lines = [f"# Class 2 audit triage: {world}", "",
              f"- Auditor family: {family}",
-             f"- Samples: {verdict.get('samples', 1)}",
+             f"- World: {world}",
+             f"- Corpus: {key['corpus_sha']}",
+             f"- Release range: {key['range']} ({'..'.join(key['range_shas'])})",
+             *(f"- {name}: {value}" for name, value in bindings.items()),
+             f"- Samples: {verdict.get('samples')}; provenance samples: "
+             f"{verdict.get('provenance_samples')}",
              f"- Canaries found: {verdict['canaries_found']}; controls flagged: "
              f"{verdict['controls_flagged']}; valid: {verdict['valid']}",
              "- Dispositions: FIX (a rewrite or deletion, plus a regression entry), ALLOW (an "
@@ -649,20 +1057,9 @@ def _cells(line: str) -> list[str]:
     return parts
 
 
-def release_gate(text: str) -> list[str]:
-    """Why a triage file does not pass the release gate (none when it does).
-
-    The protocol's gate: the file records the family and a valid canary score; zero
-    untriaged HIGH or MED findings; each disposition is one of ``DISPOSITIONS``, and a
-    non-FIX one carries its reason; a charter card or norm is never FIX ("not the
-    kernel's to fix").
-    """
-    problems = []
-    if recorded_family(text) is None:
-        problems.append("the triage file records no auditor family")
-    if "valid: True" not in text:
-        problems.append("the triage file records no valid canary score")
-    header = None
+def table_rows(text: str) -> list[dict[str, str]]:
+    """A triage file's finding rows, by column name."""
+    header, out = None, []
     for line in text.splitlines():
         if not line.startswith("|") or line.startswith("|---"):
             continue
@@ -670,11 +1067,61 @@ def release_gate(text: str) -> list[str]:
         if header is None:
             header = [c.lower() for c in cells]
             continue
-        row = dict(zip(header, cells, strict=False))
+        out.append(dict(zip(header, cells, strict=False)))
+    return out
+
+
+def release_gate(text: str, *, world: str | None = None, key: dict | None = None,
+                 owned: list[dict] | None = None, owned_sha: str | None = None) -> list[str]:
+    """Why a triage file does not pass the release gate (none when it does).
+
+    The protocol's gate: the file records the family and a valid canary score; zero
+    untriaged HIGH or MED findings; each disposition is one of ``DISPOSITIONS`` and a
+    non-FIX one carries its reason; a charter card or norm is never FIX. Bound (when
+    ``key`` is given): the file names ``world``, which the key rendered, the key's corpus
+    and range, and the findings file whose rows (``owned``, hashing to ``owned_sha``) it
+    must list exactly once each, with the severity, question and class they carry.
+    """
+    problems = []
+    header = triage_header(text)
+    if not header.get("Auditor family"):
+        problems.append("the triage file records no auditor family")
+    if "valid: True" not in text:
+        problems.append("the triage file records no valid canary score")
+    if key is not None:
+        if header.get("World") != world or world not in key["worlds"]:
+            problems.append(f"the triage file is of {header.get('World')!r}, not {world!r} "
+                            f"of the rendered worlds {key['worlds']}")
+        if header.get("Corpus") != key["corpus_sha"]:
+            problems.append("the triage file is not bound to the key's corpus")
+        if not str(header.get("Release range", "")).startswith(key["range"] + " "):
+            problems.append("the triage file is not bound to the key's release range")
+        if header.get("Findings") != owned_sha:
+            problems.append("the triage file is not bound to its findings file")
+    rows = table_rows(text)
+    if owned is not None:
+        want = {f["finding_id"]: f for f in owned}
+        seen: dict[str, int] = {}
+        for row in rows:
+            seen[row.get("id", "")] = seen.get(row.get("id", ""), 0) + 1
+            f = want.get(row.get("id", ""))
+            if f is None:
+                problems.append(f"a row names no finding of this audit: {row.get('id')!r}")
+                continue
+            for column in ("severity", "question", "class"):
+                if row.get(column) != f.get(column):
+                    problems.append(f"{row.get('id')}: {column} {row.get(column)!r} is not "
+                                    f"the finding's {f.get(column)!r}")
+        problems += [f"finding {i} has no row" for i in want if i not in seen]
+        problems += [f"finding {i} has {n} rows" for i, n in seen.items() if n > 1]
+    for row in rows:
         disposition = row.get("disposition", "").upper()
         where = f"{row.get('id') or row.get('path')}"
-        if row.get("severity", "").upper() in ("HIGH", "MED") and not disposition:
-            problems.append(f"untriaged {row.get('severity')} finding {where}")
+        severity = row.get("severity", "")
+        if severity not in SEVERITIES:
+            problems.append(f"{where}: severity {severity!r} is not one of {SEVERITIES}")
+        if severity in ("HIGH", "MED") and not disposition:
+            problems.append(f"untriaged {severity} finding {where}")
         if disposition and disposition not in DISPOSITIONS:
             problems.append(f"unknown disposition {disposition!r} on {where}")
         if disposition in DISPOSITIONS - {"FIX"} and not row.get("reason"):
@@ -682,6 +1129,33 @@ def release_gate(text: str) -> list[str]:
         if disposition == "FIX" and "/charter/" in row.get("path", ""):
             problems.append(f"a charter finding is not the kernel's to fix: {where}")
     return problems
+
+
+def gate(world: str, triage: Path, key_path: Path) -> list[str]:
+    """The release gate for ``world``, bound to the audit ``key_path`` names."""
+    if not triage.exists():
+        return [f"no triage file at {triage}"]
+    key, records = load_key(key_path)
+    text = triage.read_text()
+    owned_path = triage.with_suffix(".findings.jsonl")
+    if not owned_path.exists():
+        return [f"no findings file at {owned_path}"]
+    owned = _jsonl(owned_path, str(owned_path))
+    by_id = {r["leaf_id"]: r for r in records}
+    problems = []
+    for f in owned:
+        if f.get("provenance_pass"):
+            if {k: f.get(k) for k in PROVENANCE} != PROVENANCE or str(
+                    f.get("path", "")).removeprefix("commit:") not in {
+                    c["sha"] for c in key["provenance_commits"]}:
+                problems.append(f"provenance finding {f.get('finding_id')} is malformed")
+        else:
+            problems += [f"finding {f.get('finding_id')}: {p}"
+                         for p in finding_problems(f, by_id)]
+            if f.get("world") != world:
+                problems.append(f"finding {f.get('finding_id')} is of another world")
+    return problems + release_gate(text, world=world, key=key, owned=owned,
+                                   owned_sha=sha256_file(owned_path))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -705,16 +1179,27 @@ def main(argv: list[str] | None = None) -> int:
     for name in ("validate", "triage"):
         v = sub.add_parser(name)
         v.add_argument("output", type=Path, nargs="+", help="one JSON Lines file per sample")
+        v.add_argument("--provenance-samples", type=Path, nargs="+", required=True,
+                       help="one JSON Lines file per provenance sample")
         v.add_argument("--key", type=Path, required=True)
         if name == "triage":
             v.add_argument("--world", required=True)
             v.add_argument("--family", required=True)
-    gate = sub.add_parser("gate")
-    gate.add_argument("--world", required=True)
-    gate.add_argument("--triage", type=Path, default=None)
+    g = sub.add_parser("gate")
+    g.add_argument("--world", required=True)
+    g.add_argument("--key", type=Path, required=True)
+    g.add_argument("--triage", type=Path, default=None)
     b = sub.add_parser("baseline")
     b.add_argument("--static-only", action="store_true")
     args = parser.parse_args(argv)
+    try:
+        return _run(args)
+    except AuditInputInvalid as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 2
+
+
+def _run(args: argparse.Namespace) -> int:
     if args.command == "render":
         try:
             key = render(args.world, args.out, seed=args.seed, rendered=args.rendered,
@@ -741,20 +1226,20 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "gate":
         path = args.triage or TRIAGE_DIR / f"{args.world}.md"
-        problems = (release_gate(path.read_text()) if path.exists()
-                    else [f"no triage file at {path}"])
+        problems = gate(args.world, path, args.key)
         for problem in problems:
             print(problem, file=sys.stderr)
         return 1 if problems else 0
+    key, records = load_key(args.key)
     samples = [read_output(path) for path in args.output]
-    key = json.loads(args.key.read_text())
-    verdict = validate_samples(samples, key)
+    provenance = [read_output(path) for path in args.provenance_samples]
+    verdict = audit_verdict(samples, provenance, key, records)
     if args.command == "validate":
         print(json.dumps(verdict, indent=1))
         return 0 if verdict["valid"] else 1
-    if len(samples) != SAMPLES:
-        print(f"no triage: the protocol runs the auditor {SAMPLES} times, and "
-              f"{len(samples)} sample(s) were given", file=sys.stderr)
+    if args.world not in key["worlds"]:
+        print(f"no triage: {args.world} is not a world this audit rendered "
+              f"({key['worlds']})", file=sys.stderr)
         return 1
     if not verdict["valid"]:
         # An invalid audit is rerun with the next family; its findings are not triaged,
@@ -767,10 +1252,17 @@ def main(argv: list[str] | None = None) -> int:
     if refusal is not None:
         print(f"no triage: {refusal}", file=sys.stderr)
         return 1
-    text = triage_skeleton(union(samples), verdict, world=args.world, family=args.family,
-                           key=key)
-    path.write_text(text)
-    print(f"wrote {path}")
+    owned = world_findings(union(samples), provenance_findings(provenance), key, args.world)
+    owned_path = path.with_suffix(".findings.jsonl")
+    owned_path.write_text("".join(json.dumps(f, sort_keys=True, ensure_ascii=False) + "\n"
+                                  for f in owned))
+    bindings = {"Samples sha256": ", ".join(sha256_file(p) for p in args.output),
+                "Provenance samples sha256": ", ".join(sha256_file(p)
+                                                       for p in args.provenance_samples),
+                "Findings": sha256_file(owned_path)}
+    path.write_text(triage_skeleton(owned, verdict, world=args.world, family=args.family,
+                                    key=key, bindings=bindings))
+    print(f"wrote {path} and {owned_path}")
     return 0
 
 if __name__ == "__main__":

@@ -31,6 +31,7 @@ Examples::
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import sys
@@ -288,32 +289,110 @@ def sf0_relation(manifest: Mapping, *, regions: Mapping[str, Mapping] | None = N
 # --- diary access ------------------------------------------------------------------------
 
 
+class DiaryInvalid(ValueError):
+    """A diary that fails its schema, or is not bound to the world and seed it claims."""
+
+
+def _file_kind(stem: str) -> str:
+    # An opened diary splits ``event`` rows by their event kind: event_<Kind>.jsonl.
+    return "event" if stem.startswith("event_") else stem
+
+
 def load_events(path: str | Path, *, kinds: Iterable[str] | None = None,
                 skip: frozenset[str] = HEAVY_KINDS) -> list[dict]:
     """Ledger rows from a diary, in ledger order (``seq``).
 
     ``path`` is an ``events.json`` list, a ``.jsonl`` file, or a directory of
     per-kind ``<kind>.jsonl`` files (an opened diary). ``kinds`` keeps only those
-    kinds; ``skip`` drops heavy kinds from a directory before they are read.
+    kinds; ``skip`` drops heavy kinds from a directory before they are read. Refused
+    (``DiaryInvalid``) unless every row is an object with a ``kind`` and an integer
+    ``seq``, no ``seq`` repeats, and a directory's row sits in its kind's file (an
+    ``event`` row in ``event_<its event kind>.jsonl``).
     """
     path = Path(path)
     wanted = set(kinds) if kinds is not None else None
     rows: list[dict] = []
     if path.is_dir():
         for file in sorted(path.glob("*.jsonl")):
-            kind = file.stem
-            if kind in skip or (wanted is not None and kind not in wanted):
+            kind = _file_kind(file.stem)
+            if file.stem in skip or kind in skip or (wanted is not None
+                                                     and kind not in wanted):
                 continue
             with file.open() as handle:
-                rows.extend(json.loads(line) for line in handle if line.strip())
+                read = [json.loads(line) for line in handle if line.strip()]
+            for row in read:
+                event_kind = (row.get("event") or {}).get("kind") if isinstance(row, dict) \
+                    else None
+                if not isinstance(row, dict) or row.get("kind") != kind or (
+                        kind == "event" and f"event_{event_kind}" != file.stem):
+                    raise DiaryInvalid(f"{file.name} holds a row of another kind")
+            rows.extend(read)
     elif path.suffix == ".jsonl":
         with path.open() as handle:
             rows = [json.loads(line) for line in handle if line.strip()]
     else:
         rows = json.loads(path.read_text())
     if wanted is not None:
-        rows = [row for row in rows if row.get("kind") in wanted]
-    return sorted(rows, key=lambda row: row.get("seq", 0))
+        rows = [row for row in rows if isinstance(row, dict) and row.get("kind") in wanted]
+    bad = [i for i, row in enumerate(rows) if not isinstance(row, dict)
+           or not isinstance(row.get("kind"), str) or not isinstance(row.get("seq"), int)
+           or isinstance(row.get("seq"), bool)]
+    if bad:
+        raise DiaryInvalid(f"{len(bad)} rows lack a kind or an integer seq (first: {bad[0]})")
+    seqs = [row["seq"] for row in rows]
+    if len(seqs) != len(set(seqs)):
+        raise DiaryInvalid("a seq repeats: two rows claim one place in the ledger")
+    return sorted(rows, key=lambda row: row["seq"])
+
+
+def manifest_hash(manifest: Mapping) -> str:
+    """``WorldManifest.manifest_hash`` of a launched manifest's JSON:
+    ``sha256(json.dumps(sort_keys, compact))``."""
+    return hashlib.sha256(json.dumps(manifest, sort_keys=True,
+                                     separators=(",", ":")).encode()).hexdigest()
+
+
+def diary_identity(events: Iterable[Mapping]) -> dict[str, Any]:
+    """The world a diary ran: its Launch event's manifest, verified against the
+    ``manifest_hash`` the Launch ledgered. Refused (``DiaryInvalid``) when the diary has
+    no Launch or two, or the manifest does not hash to its hash."""
+    launches = [row for row in rows_of(events, "event")
+                if (row.get("event") or {}).get("kind") == "Launch"]
+    if len(launches) != 1:
+        raise DiaryInvalid(f"{len(launches)} Launch rows: a diary is bound to one launch")
+    payload = launches[0]["event"].get("payload") or {}
+    manifest = payload.get("manifest")
+    if not isinstance(manifest, dict) or manifest_hash(manifest) != payload.get(
+            "manifest_hash"):
+        raise DiaryInvalid("the Launch manifest does not hash to its manifest_hash")
+    return {"name": manifest.get("name"), "seed": manifest.get("seed"),
+            "manifest_hash": payload["manifest_hash"],
+            "launch_nonce": payload.get("launch_nonce"), "manifest": manifest}
+
+
+def bind_diary(events: list[Mapping], *, world: str | None = None, seed: int | None = None,
+               manifest: Mapping | None = None) -> tuple[Mapping, dict[str, Any]]:
+    """The manifest a diary's criteria read, bound to the world and seed it claims.
+
+    Guarantees: the diary's Launch is intact (``diary_identity``); a claimed ``world``
+    is the launched manifest's name; a claimed ``seed`` is the launched manifest's
+    ``seed`` (the Launch is the ledger's only record of the seed, so a run whose runtime
+    overrode it must launch a manifest carrying it, as ``populations.run`` does); a
+    ``manifest`` given alongside has the launched physics. Returns the launched manifest
+    (the physics the world ran under) and the binding's evidence. Anything else raises
+    ``DiaryInvalid``.
+    """
+    identity = diary_identity(events)
+    launched = identity["manifest"]
+    evidence = {"world": identity["name"], "manifest_hash": identity["manifest_hash"],
+                "seed": identity["seed"]}
+    if world is not None and identity["name"] != world:
+        raise DiaryInvalid(f"the diary launched {identity['name']!r}, not {world!r}")
+    if seed is not None and identity["seed"] != seed:
+        raise DiaryInvalid(f"the diary launched seed {identity['seed']!r}, not {seed}")
+    if manifest is not None and physics(manifest) != physics(launched):
+        raise DiaryInvalid("the manifest given is not the physics the diary launched")
+    return launched, evidence
 
 
 def rows_of(events: Iterable[Mapping], *kinds: str) -> list[Mapping]:
@@ -532,6 +611,16 @@ def capped_runs(events: list[Mapping], card: str, ph: Physics) -> list[list[Mapp
     return runs
 
 
+def update_windows(events: Iterable[Mapping]) -> dict[int, int]:
+    """Each ``price.update`` row's price window, by the row's ``id``: the window whose
+    ``price.window`` row closed at the same ``window_end_event``."""
+    closes = {row.get("window_end_event"): row["window"] for row in card_windows(events)
+              if row.get("window_end_event") is not None}
+    return {id(row): closes[row["window_end_event"]]
+            for row in rows_of(events, "price.update")
+            if row.get("window_end_event") in closes}
+
+
 def sf1c_anti_windup(events: list[Mapping], manifest: Mapping, *, card: str) -> Result:
     """SF-1c: once the penalty sits at ``penalty_cap``, the integral is exactly constant.
 
@@ -561,11 +650,14 @@ def sf1d_escalation(events: list[Mapping], manifest: Mapping, *, card: str) -> R
     only once the penalty has sat at the cap for ``min_ratio`` consecutive updates (the
     same partition as SF-1c: one capped update followed by uncapped ones is not
     sustained saturation). Durations are read per saturation episode (A): an episode
-    starts at duration 1 and each next row is the previous plus one; a new episode may
-    start at 1 after the cap released, never mid-count. Every sustained run needs its
-    own episode that reached ``min_ratio``.
+    starts at duration 1 and each next row is the previous plus one, at the next window;
+    a new episode may start at 1 after the cap released, never mid-count. Episodes are aligned, not
+    counted: every sustained run needs an episode whose windows overlap the run's
+    windows (``update_windows``) and that reached ``min_ratio``; a saturation row names
+    its ``window``.
     """
     ph = physics(manifest)
+    at = update_windows(events)
     sustained = [run for run in capped_runs(events, card, ph) if len(run) >= ph.r]
     longest = max((len(run) for run in capped_runs(events, card, ph)), default=0)
     if not sustained:
@@ -573,24 +665,38 @@ def sf1d_escalation(events: list[Mapping], manifest: Mapping, *, card: str) -> R
                             "consecutive updates", card=card, longest_run=longest)
     rows = [row for row in events if str(row.get("kind", "")).endswith("saturated")
             and row.get("card_id") == card]
-    durations = [row.get("duration") for row in rows]
-    episodes: list[list] = []
+    episodes: list[list[Mapping]] = []
     malformed = []
-    current: list | None = None
-    for d in durations:
-        if isinstance(d, int) and not isinstance(d, bool) and d == 1:
-            current = [d]
+    current: list[Mapping] | None = None
+    for row in rows:
+        d, window = row.get("duration"), row.get("window")
+        if not isinstance(window, int) or isinstance(window, bool):
+            malformed.append({"duration": d, "window": window})
+            current = None
+        elif isinstance(d, int) and not isinstance(d, bool) and d == 1:
+            current = [row]
             episodes.append(current)
-        elif current is not None and isinstance(d, int) and d == current[-1] + 1:
-            current.append(d)
+        elif (current is not None and isinstance(d, int) and not isinstance(d, bool)
+              and d == current[-1]["duration"] + 1 and window == current[-1]["window"] + 1):
+            current.append(row)
         else:
             # A broken count stays broken until a new episode starts at 1.
-            malformed.append(d)
+            malformed.append({"duration": d, "window": window})
             current = None
-    reached = sum(1 for episode in episodes if episode[-1] >= ph.r)
-    return _result("SF-1d", bool(rows) and not malformed and reached >= len(sustained),
-                   card=card, saturated_rows=len(rows), durations=durations[:12],
-                   episodes=len(episodes), reached=reached, sustained_runs=len(sustained),
+    spans = [(min(r["window"] for r in e), max(r["window"] for r in e), e[-1]["duration"])
+             for e in episodes]
+    unmatched = []
+    for run in sustained:
+        windows_of = [at[id(row)] for row in run if id(row) in at]
+        if not windows_of:
+            unmatched.append({"run": None, "why": "the run's windows are not ledgered"})
+            continue
+        lo, hi = min(windows_of), max(windows_of)
+        if not any(a <= hi and lo <= b and top >= ph.r for a, b, top in spans):
+            unmatched.append({"run": [lo, hi]})
+    return _result("SF-1d", bool(rows) and not malformed and not unmatched,
+                   card=card, saturated_rows=len(rows), episodes=spans[:6],
+                   sustained_runs=len(sustained), unmatched=unmatched[:5],
                    malformed=malformed[:5], longest_run=longest)
 
 
@@ -1444,8 +1550,9 @@ def s1_draw_sovereignty(events: list[Mapping], manifest: Mapping | None = None) 
 
     ``Random(rng_seed).choices(action_ids, weights=probs)[0] == chosen`` for every
     sampled ``decision.open`` (``learners.router.Router.route``), the logged
-    distribution sums to 1, and every act a seat's return causes (``ACT_KINDS``) that
-    names a decision names one a seat returned on.
+    distribution sums to 1, and every act row (``ACT_KINDS``) names, in its handle
+    field, a decision a seat returned on. No act row is skipped: one with no handle, or
+    a handle that is not a returned decision, is an act the kernel took for a seat.
     """
     bad, checked = [], 0
     for row in rows_of(events, "decision.open"):
@@ -1460,8 +1567,8 @@ def s1_draw_sovereignty(events: list[Mapping], manifest: Mapping | None = None) 
     returned = returned_handles(events)
     acts = [(row["kind"], row.get(ACT_KINDS[row["kind"]]))
             for row in rows_of(events, *ACT_KINDS)]
-    acts = [(kind, h) for kind, h in acts if isinstance(h, str) and h.startswith("decision-")]
-    unreturned = [h for _kind, h in acts if h not in returned]
+    unreturned = [{"kind": kind, "handle": h} for kind, h in acts
+                  if not isinstance(h, str) or h not in returned]
     if not checked:
         return _unsupported("S1", "no sampled decision")
     return _result("S1", not bad and not unreturned, draws=checked, bad_draws=bad[:5],
@@ -1728,9 +1835,16 @@ PER_CARD: dict[str, Callable[..., Result]] = {
 }
 
 
-def replay(events: list[Mapping], manifest: Mapping) -> list[Result]:
-    """Every generic and per-card criterion over one diary, in a stable order."""
-    results = [Result("SF-0", *_sf0_parts(manifest, events))]
+def replay(events: list[Mapping], manifest: Mapping | None = None, *,
+           world: str | None = None, seed: int | None = None) -> list[Result]:
+    """Every generic and per-card criterion over one diary, in a stable order.
+
+    The diary is bound first (``bind_diary``): the criteria read the physics it
+    launched under, and a claimed world, seed or manifest that is not the diary's
+    raises ``DiaryInvalid`` before any criterion runs. The binding is the first result.
+    """
+    manifest, binding = bind_diary(events, world=world, seed=seed, manifest=manifest)
+    results = [Result("BIND", PASS, binding), Result("SF-0", *_sf0_parts(manifest, events))]
     results += [fn(events, manifest) for fn in GENERIC.values()]
     cards = sorted({row["card_id"] for row in rows_of(events, "price.update")
                     if not str(row["card_id"]).startswith("pathology:")})
@@ -1761,16 +1875,24 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     rp = sub.add_parser("replay", help="run every criterion over a dead diary")
     rp.add_argument("diary")
-    rp.add_argument("--world", help="the world's TOML (or a manifest JSON) for its physics")
+    rp.add_argument("--world", help="the world the diary claims (its launched name)")
+    rp.add_argument("--seed", type=int, help="the seed the diary claims")
+    rp.add_argument("--manifest", help="a world TOML or manifest JSON whose physics must "
+                    "be the diary's")
     rp.add_argument("--json", action="store_true", help="print JSON lines")
     sw = sub.add_parser("sweep", help="run a gauntlet population over several seeds")
     sw.add_argument("--population", required=True)
     sw.add_argument("--seeds", default="1,2,3")
     args = parser.parse_args(argv)
     if args.command == "replay":
-        manifest = _manifest_from(args.world)
-        events = load_events(args.diary)
-        for result in replay(events, manifest):
+        manifest = _manifest_from(args.manifest) if args.manifest else None
+        try:
+            events = load_events(args.diary)
+            results = replay(events, manifest, world=args.world, seed=args.seed)
+        except DiaryInvalid as exc:
+            print(f"refused: {exc}", file=sys.stderr)
+            return 2
+        for result in results:
             if args.json:
                 print(json.dumps({"criterion": result.name, "status": result.status,
                                   "evidence": result.evidence}, default=str))
@@ -1783,9 +1905,21 @@ def main(argv: list[str] | None = None) -> int:
         sys.path.insert(0, str(root))
     from tests.gauntlet import populations  # the only runtime import, and a lazy one
 
+    factory = getattr(populations, args.population, None)
+    if factory is None or args.population not in populations.SWEEPABLE:
+        print(f"no population {args.population!r}: one of {sorted(populations.SWEEPABLE)}",
+              file=sys.stderr)
+        return 2
     for seed in (int(s) for s in args.seeds.split(",")):
-        run = populations.POPULATIONS[args.population](seed=seed)
-        for result in populations.CRITERIA[args.population](run):
+        run = populations.run(*factory(), seed=seed)
+        # The diary each seed's criteria read is bound to that seed and world.
+        try:
+            results = replay(run.events, run.manifest, world=run.manifest.get("name"),
+                             seed=seed)
+        except DiaryInvalid as exc:
+            print(f"refused: seed={seed}: {exc}", file=sys.stderr)
+            return 2
+        for result in results:
             print(f"seed={seed} {result.status:12} {result.name}")
     return 0
 

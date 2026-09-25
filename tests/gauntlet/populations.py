@@ -20,6 +20,7 @@ gain act (S8) are read around the call and the call itself is untouched.
 from __future__ import annotations
 
 import copy
+import dataclasses
 import hashlib
 import json
 import tomllib
@@ -405,6 +406,10 @@ def run(manifest: Any, population: Population, *, events: int = 300, seed: int =
         if instrument:
             stack.enter_context(_patched(pricing, "close_window", close))
             stack.enter_context(_patched(immune, "_gain", gain))
+        # The Launch is the diary's record of its seed: the manifest launched carries
+        # the seed the run draws, so the diary is bound to it (``bind_diary``).
+        if manifest.seed != seed:
+            manifest = dataclasses.replace(manifest, seed=seed)
         rt = Runtime(manifest, events=events, seed=seed, initial_balance_micro=None,
                      ledger_path=ledger_path, router_gamma=gamma, provider=population)
         population.bind(rt)
@@ -425,8 +430,10 @@ def run(manifest: Any, population: Population, *, events: int = 300, seed: int =
     # A request is kept as the labels S2 reads in it; the prompts themselves are large.
     requests = [(seat, form, _diagnosis_labels(text))
                 for seat, form, text in population.requests]
-    return Run(rows, json.loads(manifest.canonical_json()), closes, gains, requests,
-               population.emitted, rt)
+    launched = json.loads(manifest.canonical_json())
+    # The diary every criterion reads is bound to the world and seed it ran (its Launch).
+    gauntlet.bind_diary(rows, world=manifest.name, seed=seed, manifest=launched)
+    return Run(rows, launched, closes, gains, requests, population.emitted, rt)
 
 
 # --- the pricing-not-steering helper (design §1.2, Astra C-2) ------------------------------
@@ -825,3 +832,7 @@ def seat_shares(result: Run, router_kind: str) -> dict[int, Counter]:
                 f"router:{router_kind}"):
             by_window[window + 1][row["propensity"]["chosen"]] += 1
     return by_window
+
+
+#: The populations ``scripts/gauntlet.py sweep`` runs by name, each at its defaults.
+SWEEPABLE = frozenset({"sf1", "th1", "th2", "th3", "th4", "ld1", "of2", "i10"})

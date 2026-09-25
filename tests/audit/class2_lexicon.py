@@ -247,9 +247,44 @@ def finding_id(rule: str, path: str, quote: str) -> str:
     return hashlib.sha256(f"{path}|{rule}|{quote}".encode()).hexdigest()[:12]
 
 
-def load_baseline(path: Path = BASELINE) -> list[dict]:
-    """The findings awaiting the architect's triage, as committed."""
-    return json.loads(path.read_text())["findings"]
+BASELINE_FIELDS = ("id", "world", "surface", "rule", "path", "quote", "design_ref", "status")
+
+
+def allowlist_sha(path: Path = ALLOWLIST) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def load_baseline(path: Path = BASELINE, *, allowlist: Path = ALLOWLIST) -> list[dict]:
+    """The findings awaiting the architect's triage, as committed.
+
+    Refused (``ValueError``) unless bound and well formed: the document names the worlds
+    it read and the allowlist that triaged it, and that allowlist is the one in force
+    (an allowlist edit needs a new baseline); every row has exactly its fields, a known
+    rule, surface and status, a world the document read, a path in that world, and the
+    id ``finding_id(rule, path, quote)``.
+    """
+    document = json.loads(path.read_text())
+    problems = []
+    worlds = document.get("worlds")
+    if not isinstance(worlds, list) or not worlds:
+        problems.append("the baseline names no worlds")
+        worlds = []
+    if document.get("allowlist_sha256") != allowlist_sha(allowlist):
+        problems.append("the baseline was not triaged by the allowlist in force")
+    for i, row in enumerate(document.get("findings") or ()):
+        if not isinstance(row, dict) or tuple(sorted(row)) != tuple(sorted(BASELINE_FIELDS)):
+            problems.append(f"row {i} does not have exactly {BASELINE_FIELDS}")
+            continue
+        if row["rule"] not in RULES or row["surface"] not in ("static", "rendered") \
+                or row["status"] not in ("untriaged", "REVIEW"):
+            problems.append(f"row {i} ({row['id']}): unknown rule, surface or status")
+        if row["world"] not in worlds or not str(row["path"]).startswith(row["world"] + "/"):
+            problems.append(f"row {i} ({row['id']}): not a path of a world the baseline read")
+        if row["id"] != finding_id(row["rule"], row["path"], row["quote"]):
+            problems.append(f"row {i} ({row['id']}): the id is not the finding's")
+    if problems:
+        raise ValueError("class2_findings.json: " + "; ".join(problems[:10]))
+    return document["findings"]
 
 
 def compare(findings: Iterable[Finding], baseline: Iterable[dict]) -> dict[str, list]:

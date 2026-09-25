@@ -57,11 +57,21 @@ def baseline_rows(world: str, surface: str) -> list[dict]:
 SURFACES = lexicon.HERE / "class2_surfaces.toml"
 
 def load_surfaces() -> dict[str, list[str]]:
-    """The registry: the static and rendered surfaces, and the request builders rendered."""
+    """The registry: the static and rendered surfaces, and the request builders rendered.
+
+    Refused (``ValueError``) unless each list is a sorted list of distinct strings, as
+    ``write_baseline`` writes it: a hand edit that duplicates or misorders an entry is
+    not the registry the renders produced."""
     raw = tomllib.loads(SURFACES.read_text())
-    return {"static": list(raw["static"]["surfaces"]),
-            "rendered": list(raw["rendered"]["surfaces"]),
-            "builders": list(raw["builders"]["rendered"])}
+    out = {"static": raw.get("static", {}).get("surfaces"),
+           "rendered": raw.get("rendered", {}).get("surfaces"),
+           "builders": raw.get("builders", {}).get("rendered")}
+    for name, items in out.items():
+        if not isinstance(items, list) or not all(isinstance(i, str) for i in items) \
+                or items != sorted(set(items)):
+            raise ValueError(f"class2_surfaces.toml: {name} is not a sorted list of "
+                             "distinct strings")
+    return out
 
 
 def static_builders(worlds: Iterable[str]) -> set[str]:
@@ -127,6 +137,9 @@ def write_baseline(worlds: Iterable[str], *, rendered: bool = True) -> dict:
         "status": ("Untriaged. The Class 2 audit's findings await the architect's ruling for "
                    "the edition-7 text wave; no seat-visible text is rewritten on the branch "
                    "that found them (phase-2 brief)."),
+        # Bound: the worlds read and the allowlist that triaged them (load_baseline).
+        "worlds": sorted(worlds),
+        "allowlist_sha256": lexicon.allowlist_sha(),
         "findings": sorted(out, key=lambda r: (r["world"], r["surface"], r["rule"],
                                                r["path"], r["quote"])),
     }

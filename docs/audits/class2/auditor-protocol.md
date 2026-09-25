@@ -83,13 +83,21 @@ JSON Lines, one object per finding, then one summary object:
  "quote": "≤25 words", "question": "Q4", "class": "C1", "severity": "MED",
  "passage": "§I.a", "rationale": "≤60 words",
  "rewrite": "a declarative fact, or \"delete\"", "confidence": 0.8}
-{"summary": true, "leaves_read": 1432, "leaves_total": 1432,
+{"summary": true, "corpus_sha": "<the corpus id the prompt names>", "sample": 1,
+ "leaves_read": 1432, "leaves_total": 1432,
  "read": ["<leaf_id>", "…every leaf_id answered…"], "unread": [],
  "by_class": {"C1": 3, "C2": 1, "ANNOUNCED-PHYSICS": 2}}
 ```
 
 `read` lists the `leaf_id` of every leaf the auditor answered, and `unread` every one it
 did not. The counts are checked against those sets, and the sets against the corpus.
+`corpus_sha` is the id the prompt names; `sample` is 1 on the first run and 2 on the
+second. Every field of every finding is checked: its leaf is in the corpus and its
+world, path and tags are that leaf's; its id is `sha256(path|quote)[:12]` and its quote
+the leaf's own words; its class is its question's (the table above) and its severity one
+the severity rule admits (HIGH only for Q3-Q5; Q6, Q8 and Q10 MED); a charter card or
+norm is flagged only under Q10-Q12, and Q12 only on a norm; `by_class` counts the
+sample's own findings. One invalid finding invalidates its sample.
 
 A rewrite is a declarative fact or a deletion. It is justified by its rubric question and
 its passage, never by an expected change in behaviour.
@@ -142,7 +150,11 @@ the skeleton):
 ## The release gate
 
 - Zero untriaged HIGH or MED findings, and a reason on every non-FIX disposition
-  (`scripts/class2_audit.py gate`).
+  (`scripts/class2_audit.py gate --key`). The gate is bound: the triage file names the
+  world, the key's corpus and range, and its findings file (`<world>.findings.jsonl`),
+  whose findings it lists exactly once each with the severity, question and class they
+  carry. A commit the provenance pass flagged is a HIGH finding (P1, BEHAVIOUR-MIX) of
+  every world's triage.
 - The triage file is committed, recording the family used, the canary score and each
   finding with its disposition.
 - A charter card flagged by Q10, Q11 or Q12 is **not** the kernel's to fix. It is sent to
@@ -158,14 +170,21 @@ uv run python scripts/class2_audit.py render --world <world> [--world …] \
     [--previous-corpus work/class2/<last release>/release_corpus.jsonl]
 # send work/class2/<release>/prompt.md with auditor_input.jsonl to the chosen family,
 # temperature 0, twice, under the prepaid guard; save the samples as sample1.jsonl and
-# sample2.jsonl. Send provenance_prompt.md to the same model as the second prompt.
+# sample2.jsonl. Send provenance_prompt.md to the same model twice (the second prompt);
+# save provenance1.jsonl and provenance2.jsonl. Both answers are required inputs.
 uv run python scripts/class2_audit.py validate work/class2/<release>/sample1.jsonl \
-    work/class2/<release>/sample2.jsonl --key work/class2/<release>/canary_key.json
-uv run python scripts/class2_audit.py triage work/class2/<release>/sample1.jsonl \
-    work/class2/<release>/sample2.jsonl --key work/class2/<release>/canary_key.json \
-    --world <world> --family <family>
-uv run python scripts/class2_audit.py gate --world <world>
+    work/class2/<release>/sample2.jsonl --provenance-samples \
+    work/class2/<release>/provenance1.jsonl work/class2/<release>/provenance2.jsonl \
+    --key work/class2/<release>/canary_key.json
+uv run python scripts/class2_audit.py triage <the same four samples> \
+    --key work/class2/<release>/canary_key.json --world <world> --family <family>
+uv run python scripts/class2_audit.py gate --world <world> \
+    --key work/class2/<release>/canary_key.json
 ```
+
+Every file the tool reads is refused (exit 2) unless it passes its schema and is bound
+to its origin: the key to the `auditor_input.jsonl` beside it, a sample to its prompt's
+id, a triage file to its key and findings file, a previous corpus to its own hashes.
 
 `canary_key.json` and `release_corpus.jsonl` are never part of the auditor's input: the
 key names the canaries, and the unplanted corpus would reveal them by difference. Keep

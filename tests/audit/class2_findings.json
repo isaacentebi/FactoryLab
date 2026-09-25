@@ -1,5 +1,15 @@
 {
  "status": "Untriaged. The Class 2 audit's findings await the architect's ruling for the edition-7 text wave; no seat-visible text is rewritten on the branch that found them (phase-2 brief).",
+ "worlds": [
+  "compute-continuity-roster",
+  "edition6-capital-loop",
+  "edition6-testnet-rehearsal",
+  "scripted",
+  "scripted-crash",
+  "testnet",
+  "testnet-10m-roster"
+ ],
+ "allowlist_sha256": "0f6bdadfbec02610a536c33245b2ddc2e12af34d4af6db7d6849d4ebbd5200b6",
  "findings": [
   {
    "id": "baa51cb01209",

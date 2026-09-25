@@ -234,3 +234,42 @@ def test_an_unrendered_or_unregistered_builder_fails_the_check(monkeypatch):
                         corpus.REQUEST_BUILDERS - {"factorylab/runtime/governance.py::_testify"})
     with pytest.raises(AssertionError, match="ignores"):
         test_every_request_builder_in_the_code_is_rendered_by_the_corpus()
+
+
+# --- the baseline and the registry: bound and validated (the class2_audit sweep) ----------
+
+
+def _baseline_copy(tmp_path, change):
+    import json
+
+    document = json.loads(lexicon.BASELINE.read_text())
+    change(document)
+    path = tmp_path / "findings.json"
+    path.write_text(json.dumps(document))
+    return path
+
+
+@pytest.mark.parametrize("change, why", [
+    (lambda d: d["findings"][0].update(quote="edited"), "the id is not the finding's"),
+    (lambda d: d["findings"][0].update(rule="VIBES"), "unknown rule"),
+    (lambda d: d["findings"][0].update(world="elsewhere"), "not a path of a world"),
+    (lambda d: d["findings"][0].pop("status"), "does not have exactly"),
+    (lambda d: d.pop("worlds"), "names no worlds"),
+    (lambda d: d.update(allowlist_sha256="0" * 64), "not triaged by the allowlist in force"),
+])
+def test_a_baseline_that_is_unbound_or_malformed_is_refused(tmp_path, change, why):
+    """The tracked findings are bound to the worlds they read and the allowlist that
+    triaged them, and every row is the finding its id names."""
+    assert lexicon.load_baseline()  # the committed baseline is well formed and bound
+    with pytest.raises(ValueError, match=why):
+        lexicon.load_baseline(_baseline_copy(tmp_path, change))
+
+
+def test_a_hand_edited_surface_registry_is_refused(tmp_path, monkeypatch):
+    text = audit.SURFACES.read_text()
+    first = next(line for line in text.splitlines() if line.startswith('  "'))
+    edited = tmp_path / "surfaces.toml"
+    edited.write_text(text.replace(first, first + "\n" + first, 1))
+    monkeypatch.setattr(audit, "SURFACES", edited)
+    with pytest.raises(ValueError, match="sorted list of distinct strings"):
+        audit.load_surfaces()

@@ -209,15 +209,28 @@ def test_sf1c_reads_only_runs_at_the_cap_and_restarts_across_an_uncapped_interva
     assert g.sf1c_anti_windup(winding, M, card="c").status == g.FAIL
 
 
+def _windowed(card, triples, first=1):
+    """Price updates at consecutive windows from ``first``, each with its window's
+    ``price.window`` row (the two share ``window_end_event``)."""
+    rows = []
+    for n, (lam, v, i) in enumerate(triples):
+        w = first + n
+        rows += [{"kind": "price.update", "card_id": card, "lambda_after": lam,
+                  "violation": v, "i": i, "window_end_event": 10 * w},
+                 {"kind": "price.window", "window": w, "window_end_event": 10 * w}]
+    return rows
+
+
 def test_sf1d_saturation_is_ledgered_with_a_rising_duration():
-    at_cap = _updates("c", [(0.5, 1.0, 0.5)] * 4)
-    rows = at_cap + [{"kind": "immune.price_ratchet_saturated", "card_id": "c",
-                      "duration": d} for d in (1, 2, 3)]
+    at_cap = _windowed("c", [(0.5, 1.0, 0.5)] * 4)
+    rows = at_cap + _saturated((1, 1), (2, 2), (3, 3))
     assert g.sf1d_escalation(rows, M, card="c").ok
     assert g.sf1d_escalation(at_cap, M, card="c").status == g.FAIL
-    stuck = at_cap + [{"kind": "immune.price_ratchet_saturated", "card_id": "c",
-                       "duration": 1}] * 2
+    stuck = at_cap + _saturated((1, 1), (2, 1))
     assert g.sf1d_escalation(stuck, M, card="c").status == g.FAIL
+    unwindowed = at_cap + [{"kind": "immune.price_ratchet_saturated", "card_id": "c",
+                            "duration": d} for d in (1, 2, 3)]
+    assert g.sf1d_escalation(unwindowed, M, card="c").status == g.FAIL
 
 
 def test_sf1d_one_capped_update_then_uncapped_ones_is_not_sustained_saturation():
@@ -233,20 +246,39 @@ def test_sf1d_one_capped_update_then_uncapped_ones_is_not_sustained_saturation()
     assert g.sf1d_escalation(sustained, M, card="c").status == g.FAIL  # nothing published
 
 
-def _saturated(*durations):
-    return [{"kind": "immune.price_ratchet_saturated", "card_id": "c", "duration": d}
-            for d in durations]
+def _saturated(*pairs):
+    """Saturation rows, each ``(window, duration)``."""
+    return [{"kind": "immune.price_ratchet_saturated", "card_id": "c", "window": w,
+             "duration": d} for w, d in pairs]
 
 
 def test_sf1d_durations_are_read_per_saturation_episode():
     """The sweep (A): two sustained runs at the cap, each counted from 1, pass; the count
     may restart only at 1, and every sustained run needs its own episode reaching r."""
-    two = _updates("c", [*[(0.5, 1.0, 0.5)] * 3, (0.2, 1.0, 0.2), *[(0.5, 1.0, 0.5)] * 3])
-    assert g.sf1d_escalation(two + _saturated(1, 2, 3, 1, 2, 3), M, card="c").ok
-    one_episode = g.sf1d_escalation(two + _saturated(1, 2, 3, 4), M, card="c")
-    assert one_episode.status == g.FAIL and one_episode.evidence["reached"] == 1
-    skipped = g.sf1d_escalation(two + _saturated(1, 2, 3, 2, 3, 4), M, card="c")
-    assert skipped.status == g.FAIL and skipped.evidence["malformed"] == [2, 3, 4]
+    two = _windowed("c", [*[(0.5, 1.0, 0.5)] * 3, (0.2, 1.0, 0.2), *[(0.5, 1.0, 0.5)] * 3])
+    both = _saturated((1, 1), (2, 2), (3, 3), (5, 1), (6, 2), (7, 3))
+    assert g.sf1d_escalation(two + both, M, card="c").ok
+    one_episode = g.sf1d_escalation(two + _saturated((1, 1), (2, 2), (3, 3), (5, 4)),
+                                    M, card="c")
+    assert one_episode.status == g.FAIL and one_episode.evidence["unmatched"] == [
+        {"run": [5, 7]}]
+    skipped = g.sf1d_escalation(
+        two + _saturated((1, 1), (2, 2), (3, 3), (5, 2), (6, 3), (7, 4)), M, card="c")
+    assert skipped.status == g.FAIL
+    assert [m["duration"] for m in skipped.evidence["malformed"]] == [2, 3, 4]
+
+
+def test_sf1d_episodes_are_aligned_to_their_runs_not_counted():
+    """Codex P2: capped runs at windows 1-3 and 20-22 need episodes overlapping each;
+    two episodes at 1-3 and 40-42 are two, but the run at 20-22 has none."""
+    rows = (_windowed("c", [(0.5, 1.0, 0.5)] * 3, first=1)
+            + _windowed("c", [(0.2, 1.0, 0.2)], first=10)
+            + _windowed("c", [(0.5, 1.0, 0.5)] * 3, first=20))
+    misaligned = _saturated((1, 1), (2, 2), (3, 3), (40, 1), (41, 2), (42, 3))
+    result = g.sf1d_escalation(rows + misaligned, M, card="c")
+    assert result.status == g.FAIL and result.evidence["unmatched"] == [{"run": [20, 22]}]
+    aligned = _saturated((1, 1), (2, 2), (3, 3), (20, 1), (21, 2), (22, 3))
+    assert g.sf1d_escalation(rows + aligned, M, card="c").ok
 
 
 def _gain(window, before, after, pathology="stable_failure", router="router:Tick"):
@@ -822,6 +854,18 @@ def test_s1_every_draw_replays_from_its_seed_and_every_act_traces_to_a_return():
     assert orphan.status == g.FAIL
 
 
+def test_s1_an_act_whose_handle_is_not_a_returned_decision_fails():
+    """Codex P2: no act row is dropped before the check; a system handle or none fails."""
+    good = [_open("decision-1", "a"), {"kind": "invocation", "handle": "decision-1"}]
+    system = g.s1_draw_sovereignty(good + [{"kind": "order.intent",
+                                            "handle": "system-generated"}])
+    assert system.status == g.FAIL
+    assert system.evidence["unreturned"] == [{"kind": "order.intent",
+                                              "handle": "system-generated"}]
+    nameless = g.s1_draw_sovereignty(good + [{"kind": "treasury.intent"}])
+    assert nameless.status == g.FAIL
+
+
 def test_s4_bounds_on_penalties_rewards_and_ratchets():
     ok = [_penalty("d", 1.0), {"kind": "router.abstention_priced", "handle": "d",
                                "reward": 0.4, "neutral": 0.5, "penalty": 0.1}]
@@ -931,10 +975,73 @@ def test_load_events_reads_a_directory_a_jsonl_file_and_a_json_list(tmp_path):
     assert len(g.load_events(tmp_path / "e.jsonl")) == 3
 
 
+def _launch(manifest=None, *, name="unit", seed=1):
+    """A Launch event row as ``Runtime._launch`` ledgers it: the manifest and its hash."""
+    launched = {**(manifest or M), "name": name, "seed": seed}
+    return {"kind": "event", "event": {"id": "launch", "kind": "Launch", "payload": {
+        "manifest": launched, "manifest_hash": g.manifest_hash(launched),
+        "launch_nonce": "0" * 32}}}
+
+
 def test_replay_reads_every_criterion_over_a_diary_without_a_runtime():
-    rows = _seq([_price_window(1, 0.0), _w(1, acts=True, sf=True),
+    rows = _seq([_launch(), _price_window(1, 0.0), _w(1, acts=True, sf=True),
                  {"kind": "price.update", "card_id": "c", "lambda_after": 0.5, "violation": 1.0,
                   "i": 0.5}])
     results = {r.name: r.status for r in g.replay(rows, M)}
     assert results["SF-0"] == g.FAIL and "SF-1c[c]" in results
     assert set(results.values()) <= {g.PASS, g.FAIL, g.UNSUPPORTED}
+
+
+
+# --- diaries: bound to their world and seed, and well formed ----------------------------------
+
+
+def test_a_diary_is_bound_to_its_launch():
+    """The sweep (diaries): a criterion reads a diary only under the world, seed and
+    physics its own Launch names."""
+    rows = _seq([_launch(name="w", seed=7), _w(1)])
+    manifest, evidence = g.bind_diary(rows, world="w", seed=7, manifest=M)
+    assert evidence["world"] == "w" and evidence["seed"] == 7 and manifest["name"] == "w"
+    with pytest.raises(g.DiaryInvalid, match="not 'x'"):
+        g.bind_diary(rows, world="x")
+    with pytest.raises(g.DiaryInvalid, match="not 8"):
+        g.bind_diary(rows, seed=8)
+    other = {**M, "prices": {**M["prices"], "eta": 0.25}}
+    with pytest.raises(g.DiaryInvalid, match="physics"):
+        g.bind_diary(rows, manifest=other)
+    with pytest.raises(g.DiaryInvalid, match="0 Launch rows"):
+        g.replay(_seq([_w(1)]), M)
+    tampered = _seq([_launch(name="w")])
+    tampered[0]["event"]["payload"]["manifest"]["seed"] = 2
+    with pytest.raises(g.DiaryInvalid, match="does not hash"):
+        g.bind_diary(tampered)
+
+
+def test_a_malformed_diary_is_refused(tmp_path):
+    """(iii) validated: every row has a kind and an integer seq, none repeats, and an
+    opened diary's row sits in its kind's file."""
+    (tmp_path / "rows.json").write_text(json.dumps([{"kind": "a", "seq": 1},
+                                                     {"kind": "b", "seq": 1}]))
+    with pytest.raises(g.DiaryInvalid, match="seq repeats"):
+        g.load_events(tmp_path / "rows.json")
+    (tmp_path / "rows.json").write_text(json.dumps([{"kind": "a"}]))
+    with pytest.raises(g.DiaryInvalid, match="integer seq"):
+        g.load_events(tmp_path / "rows.json")
+    opened = tmp_path / "open"
+    opened.mkdir()
+    (opened / "price.window.jsonl").write_text(json.dumps({"kind": "immune.window",
+                                                          "seq": 1}) + "\n")
+    with pytest.raises(g.DiaryInvalid, match="another kind"):
+        g.load_events(opened)
+    (opened / "price.window.jsonl").unlink()
+    (opened / "event_Launch.jsonl").write_text(json.dumps(
+        {"kind": "event", "seq": 1, "event": {"kind": "Tick"}}) + "\n")
+    with pytest.raises(g.DiaryInvalid, match="another kind"):
+        g.load_events(opened)
+
+
+def test_the_replay_command_refuses_an_unbound_diary(tmp_path, capsys):
+    (tmp_path / "rows.json").write_text(json.dumps(_seq([_launch(name="w"), _w(1)])))
+    assert g.main(["replay", str(tmp_path / "rows.json"), "--world", "v"]) == 2
+    assert "refused" in capsys.readouterr().err
+    assert g.main(["replay", str(tmp_path / "rows.json"), "--world", "w", "--seed", "1"]) == 0
