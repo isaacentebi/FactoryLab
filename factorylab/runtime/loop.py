@@ -553,9 +553,13 @@ class Runtime(
             # prices by time (a recorded tape) and can be read at any instant.
             return
         now = self.wall.now_ns()
-        if now - self._safety_ns < self.wall.tick_ns():
+        ended = self._tape_ended(now)
+        if not ended and now - self._safety_ns < self.wall.tick_ns():
             return
         self._safety_ns = now
+        closes = None if self.live else getattr(self.exchange, "closes_ns", None)
+        if closes is not None:
+            now = min(now, int(closes))  # a recorded world's time ends with its tape
         self.clock.now_ns = max(self.clock.now_ns, now)
         if self.live:
             fills = [WorldEvent(WorldEventKind.FILL, max(now, ts), self.exchange.name, payload)
@@ -572,11 +576,38 @@ class Runtime(
         terminal = self.termination.check(self.wallet, self.clock.now_ns,
                                           cheapest_seat_micro=self._cheapest_seat_micro())
         terminal = terminal if terminal not in (None, DORMANT) else None
+        if terminal is None and ended:
+            from factorylab.world.tape import TAPE_ENDED
+
+            terminal = TAPE_ENDED
         self.ledger.append({"kind": "safety.pass", "fills": len(fills), "tick": self.ticks_consumed,
                             "terminal": terminal, "ts": now})
         if terminal is not None:
             self._safety_stop = terminal
             raise UnbilledFailure(f"world is terminal ({terminal}): no further calls")
+
+    def _tape_ended(self, now: int | None = None) -> bool:
+        """Whether a recorded world's paced clock has reached its tape's end; latched.
+
+        Reads the wall through the journal (a replay reads the same instant). Once it
+        has, the world is terminal (``TAPE_ENDED``): every later model call of the event
+        is refused unbilled, every venue write is refused with the published fact that
+        the recorded market has ended, and the event's termination check kills the
+        world, closing it through the tape's end. Never true for a live world, or for
+        a world whose clock does not move inside an event.
+        """
+        from factorylab.world.tape import TAPE_ENDED
+
+        if self._safety_stop == TAPE_ENDED:
+            return True
+        closes = None if self.live else getattr(self.exchange, "closes_ns", None)
+        if closes is None or not wall_paced(self.tick_clock):
+            return False
+        now = self.wall.now_ns() if now is None else now
+        if now < int(closes):
+            return False
+        self._safety_stop = TAPE_ENDED
+        return True
 
     def _cap_window(self) -> int:
         """The index of the treasury caps' own window: ``treasury.cap_window`` wall time.

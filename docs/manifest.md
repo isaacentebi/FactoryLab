@@ -1684,6 +1684,17 @@ What the venue replays, and how:
   the position-hours actually held since the last boundary are charged at the last
   recorded rate and mid, once, before the production mark: the last partial hour is
   never free, and a receipt is never booked for time a position was not held.
+  The venue's time never passes the recording's end (`closes_ns`, the last recorded
+  tick): an advance to a later instant is an advance to the end, so no fill, mark or
+  funding boundary is invented in time the tape never recorded, and the world's own
+  clock is held there too. When the paced clock reaches the end inside an event (a
+  long call), the world is terminal (`tape_ended`): later calls of the event are
+  refused unbilled, venue writes are refused ("the recorded market has ended"), and
+  the event's termination check ends the world. When the tape ended the run (its
+  clock stopped before its tick budget, or `tape_ended`), the venue is first advanced
+  and settled exactly through the end, so an order in flight meets the tail rows
+  after the world's last tick and funding runs through the end; an explicit, earlier
+  budget or termination closes at the world's own instant.
   The terminal sequence, on every path that ends a tape world (the tape running out,
   the budget, a termination condition, an explicit kill; a crashed world resumes and
   ends by the same path): (a) that partial hour's funding is charged; (b) every order

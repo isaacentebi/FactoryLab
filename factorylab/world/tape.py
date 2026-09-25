@@ -46,6 +46,11 @@ TAPE_FORMAT = "factorylab-tape/1"
 #: recorded fills were charged (0.03814 USD on 84.757 USD of notional).
 PUBLISHED_FEES = {"perp": ("0.00045", "0.00015"), "spot": ("0.0007", "0.0004")}
 
+#: Why an order is refused once the recording has ended (published, never advice).
+MARKET_ENDED = "the recorded market has ended"
+#: The termination reason of a world whose paced clock reached its tape's end.
+TAPE_ENDED = "tape_ended"
+
 #: Why an order on a market the tape recorded no liquidity for is refused.
 NO_LIQUIDITY = "the tape recorded no liquidity for this market"
 
@@ -548,10 +553,13 @@ class TapeVenue(FakeExchange):
         positions held at it, before anything fills at ``ts_ns``), then the fills and
         refusals of orders that arrived (takers first, as on the venue), then those of
         resting orders a recorded mid traded through, then any liquidation. Guarantees
-        time never moves backwards.
+        time never moves backwards, and never past the recording's end
+        (``closes_ns``): an instant after it is the end itself, so nothing is invented
+        in time the tape never recorded (no fill, no funding boundary, no mark).
         """
         if ts_ns < self._now_ns:
             raise ValueError("TapeVenue time cannot move backwards")
+        ts_ns = min(ts_ns, self._tape.end_ns)
         self._now_ns = ts_ns
         self._step += 1
         events: list[WorldEvent] = []
@@ -586,6 +594,7 @@ class TapeVenue(FakeExchange):
 
     def _accrue(self, ts_ns: int) -> None:
         """Add each open perp position's size times the time it was held, up to ``ts_ns``."""
+        ts_ns = min(ts_ns, self._tape.end_ns)  # nothing accrues after the recording
         if ts_ns <= self._accrued_at:
             return
         span = Decimal(ts_ns - self._accrued_at) / NS_PER_HOUR
@@ -635,7 +644,7 @@ class TapeVenue(FakeExchange):
         leaves a cost accrued and uncharged, and never books a receipt for time it did
         not hold a position. What is charged is cleared: nothing is charged twice.
         """
-        ts_ns = max(ts_ns, self._now_ns)
+        ts_ns = min(max(ts_ns, self._now_ns), self._tape.end_ns)
         events = self._settle_funding(ts_ns)
         self._accrue(ts_ns)
         if any(self._accrued.values()):
@@ -820,8 +829,7 @@ class TapeVenue(FakeExchange):
                 or order.limit_px is not None and order.limit_px % Decimal("0.01")):
             return OrderResult(None, "rejected", Decimal(0), None, "invalid spot tick or lot size")
         if self.__dict__.get("_closed"):
-            return OrderResult(None, "rejected", Decimal(0), None,
-                               "the recorded market has ended")
+            return OrderResult(None, "rejected", Decimal(0), None, MARKET_ENDED)
         read = self._tape.mid_at(order.coin, self._now_ns)
         if read is None:
             return OrderResult(None, "rejected", Decimal(0), None, "no recorded price yet")

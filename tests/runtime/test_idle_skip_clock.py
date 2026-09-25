@@ -280,3 +280,75 @@ def test_a_checkpoint_mid_tick_keeps_the_paced_reading_and_its_totals():
     assert next(resumed.events()).ts_ns == 1_010 * S  # the next tick, on time
     assert resumed.idle == [10 * S - record["now_ns"] + 1_000 * S]  # only the remainder
     assert resumed.skipped_ns == 4 * S + S // 2
+
+
+def _ending_runtime(busy):
+    """A tape world at its last world tick, 5 s before the recording's end, holding a
+    long BTC position and a market buy in flight that only the tail row can meet."""
+    from factorylab.world.exchange import Position
+
+    rt, tape = _tape_runtime(busy)
+    last_tick = tape.end_ns - 5 * S  # the tape's span is not a multiple of the tick
+    assert tape.mid_at("BTC", last_tick)[0] < tape.end_ns  # the tail row is later
+    rt.exchange.advance(last_tick)
+    rt.clock.now_ns = rt._safety_ns = last_tick
+    rt.tick_clock.origin_ns, rt.tick_clock._anchor = last_tick, None
+    assert rt.tick_clock.now_ns() == last_tick  # busy time counts from here
+    venue = rt.exchange.target
+    venue._positions["BTC"] = Position("BTC", Decimal("0.01"), Decimal(84000))
+    sent = rt.exchange.place(Order("BTC", True, Decimal("0.001"), client_id="tail"))
+    assert sent.status == "resting"
+    return rt, tape, venue, sent
+
+
+def test_a_world_the_tape_ended_closes_through_the_tapes_end():
+    """Codex review of #151 (51614c7): when the tape's span is not a multiple of the
+    tick, the world's last tick falls short of the recording's end, and the recording
+    closed there: the tail row's fill was cancelled and funding stopped short. When the
+    tape ended the run, the venue is advanced and settled exactly through closes_ns."""
+    rt, tape, venue, sent = _ending_runtime(Monotonic())
+    rt._finish_budget()  # the clock ran out before its tick budget: the tape ended it
+    [fill] = [f for f in venue._fills if f.order_id == sent.order_id]
+    assert fill.ts_ns == tape.end_ns and venue.lookup("tail").status == "filled"
+    items = rt.ledger._recovery_items()
+    assert [i for i in items if i["kind"] == "fill.counted"
+            and i["order_id"] == sent.order_id and i["ts"] == tape.end_ns]
+    [partial] = [p for p in venue.funding_payments(0) if ":partial:" in p.id
+                 and p.coin == "BTC"]
+    assert partial.ts_ns == tape.end_ns  # funding runs through the recording's end
+    assert venue._now_ns == tape.end_ns and rt.clock.now_ns == tape.end_ns
+    # An explicit, earlier budget closes at the world's own instant, as before.
+    early, _tape, early_venue, early_sent = _ending_runtime(Monotonic())
+    early.tick_clock.index = early.tick_clock.count
+    early._finish_budget()
+    assert early_venue.lookup("tail").status == "cancelled"
+    assert early_venue._now_ns == tape.end_ns - 5 * S
+
+
+def test_a_call_past_the_tapes_end_invents_nothing_and_ends_the_world():
+    """Codex review of #151 (51614c7): a model call that ran past closes_ns, then a
+    safety pass, advanced the venue into time the tape never recorded, crossing
+    post-tape funding boundaries at the last mark. The venue's time stops at closes_ns,
+    the pass latches the end, later calls and venue writes are refused, and the world
+    is terminated, closed through the tape's end."""
+    from factorylab.world.metering import UnbilledFailure
+    from factorylab.world.tape import MARKET_ENDED, TAPE_ENDED
+
+    busy = Monotonic()
+    rt, tape, venue, sent = _ending_runtime(busy)
+    busy.t += 3 * 3600 * S  # a call that ran three hours past the recording's end
+    with pytest.raises(UnbilledFailure, match=TAPE_ENDED):
+        rt._safety_pass()
+    assert venue._now_ns == tape.end_ns and rt.clock.now_ns == tape.end_ns
+    with pytest.raises(UnbilledFailure):
+        rt._safety_pass()  # every later call of the event is refused
+    refused = rt._venue_write("h-late", "venue.place_market",
+                              {"coin": "BTC", "side": "buy", "size": "0.001"}, slot="output")
+    assert refused["status"] == "rejected" and refused["error"] == MARKET_ENDED
+    assert rt._check_termination() is True
+    assert rt.termination.final
+    after = [p for p in venue.funding_payments(0) if p.ts_ns > tape.end_ns]
+    assert after == [] and all(f.ts_ns <= tape.end_ns for f in venue._fills)
+    assert venue.lookup("tail").status == "filled"  # the tail row still met it
+    boundaries = {p.ts_ns for p in venue.funding_payments(0)}
+    assert all(ts <= tape.end_ns for ts in boundaries)
