@@ -1240,7 +1240,13 @@ windows in which the PID alone presses a unit violation onto the cap (the least 
 is published and not refused at load: no world in the tree meets it (edition 6:
 1 window against 3, needing 9), and a world's gains are the operator's choice.
 The count restarts once the card leaves the
-attractor (`immune.price_ratchet_ended`). The exploration gain raised for stable
+attractor (`immune.price_ratchet_ended`). An unmeasured card holds its state (wave 16,
+second addendum, M-6): a card of the previous diagnosis's failing set that no window
+of the diagnosis tail measured stays in the failing set (`unmeasured_held` in the
+`pathology.*` and `immune.window` evidence), so its duration is neither reset nor read
+as relief, and with the card gap unreadable and the attractor held only by such cards
+the attractor holds; a card never measured never enters the set, and a card the
+charter dropped is gone, not held. The exploration gain raised for stable
 failure steps back toward each router's seed gamma once a window diagnoses no
 pathology (`immune.gain` with pathology `cleared`); a learning-dead window holds
 it. That state resumes with the controller. (Older worlds halved the violated

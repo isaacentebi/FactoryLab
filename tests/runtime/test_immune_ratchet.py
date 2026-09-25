@@ -124,3 +124,23 @@ def test_price_step_alone_sets_the_ratchet_and_is_part_of_the_identity():
     ratchets = _items(rt, "immune.price_ratchet")
     assert ratchets and [r["step"] for r in ratchets] == pytest.approx(
         [0.02 * r["duration"] for r in ratchets])
+
+
+def test_an_unmeasured_failing_card_holds_its_duration():
+    """Wave 16, second addendum (M-6): windows that measure nothing of a failing card
+    are missing evidence, not relief: its duration is not reset."""
+    rt = _runtime(eta=0.01)
+    for _ in range(4):
+        _close(rt, 0.2)
+    before = rt.controller.snapshot()["cards"]["well_formed_rate"]["failing_windows"]
+    assert before > 0
+    for _ in range(4):  # no invocation: well_formed_rate is unmeasured
+        rt.n += 10
+        rt.ticks_consumed += rt.m.timing.min_ratio
+        rt.clockwork.force("immune", rt.ticks_consumed)
+        rt.window = MeasureWindow(rt.n, rt.wallet.balance, invocations=0, ok=0,
+                                  registrations=1)
+        rt._close_price_window()
+    after = rt.controller.snapshot()["cards"]["well_formed_rate"]["failing_windows"]
+    assert after >= before
+    assert not _items(rt, "immune.price_ratchet_ended")

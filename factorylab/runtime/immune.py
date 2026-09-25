@@ -309,6 +309,9 @@ def close_window(rt, values: dict[str, float]) -> None:
     }
     rt.lifespan_log = []
     windows = [*rt.stats.immune_windows, current][-live.retention(horizon, k):]
+    # The previous diagnosis's failing set: a card in it that this tail leaves
+    # unmeasured holds its state (wave 16, second addendum, M-6).
+    held = list((rt.stats.versions or {}).get("failing", []))
     state, events = live.advance(rt.stats.versions or live.fresh(), windows, k=k,
                                  horizon=horizon, tv_threshold=spec.tv_threshold, **bins)
     for event in events:
@@ -322,7 +325,8 @@ def close_window(rt, values: dict[str, float]) -> None:
                              settled=(state["settled_tick"] is not None
                                       or state["cause"] not in REVISIONS))
     diagnosed = diagnose(windows, state, k=k, tv_threshold=spec.tv_threshold,
-                         gap_threshold=spec.gap_threshold, **bins)
+                         gap_threshold=spec.gap_threshold, held=held, **bins)
+    state["failing"] = list(diagnosed["violated_cards"])
     flags = diagnosed.pop("flags")
     evidence = {"window": current["index"], **diagnosed}
     rt.stats.immune_windows = windows
@@ -369,8 +373,11 @@ def close_window(rt, values: dict[str, float]) -> None:
         # The attractor is left: the exploration the organ added unwinds toward seed.
         # A learning-dead window holds it, since less exploration is the wrong answer.
         _gain(rt, "cleared", current["index"])
+    # An unmeasured failing card holds its duration whatever the flags say (M-6):
+    # missing evidence ends no failure.
+    unmeasured = {cid.removeprefix("card:") for cid in diagnosed.get("unmeasured_held", ())}
     for card_id in rt.controller.card_ids():
-        if card_id not in ratcheted:
+        if card_id not in ratcheted and card_id not in unmeasured:
             rt.controller.end_failure(card_id, window=current["index"])
 
 
