@@ -56,8 +56,8 @@ def test_no_request_leaks_what_the_population_wrote_into_the_lint(world, rendere
 
 def test_rendered_surfaces_match_the_coverage_registry(rendered, allowlist):
     """Every rendered request surface is registered and every registered one is rendered
-    by some world; the forms no 60-tick run reaches are listed as unreached, and reaching
-    one forces its registration."""
+    by some world, and the builders rendered, statically and by the runs together, are
+    exactly the registered ones."""
     seen = set()
     used = set()
     for world in WORLDS:
@@ -68,7 +68,11 @@ def test_rendered_surfaces_match_the_coverage_registry(rendered, allowlist):
     assert seen - registered == set(), "unregistered surfaces"
     assert registered - seen == set(), "registered but not rendered"
     forms = {"/".join(s.split("/")[:2]) for s in seen}
-    assert not forms & set(audit.UNREACHED), "an unreached form is now rendered: register it"
+    builders = audit.static_builders(WORLDS).union(
+        *(_render(rendered, world).builders for world in WORLDS))
+    assert builders == set(audit.load_surfaces()["builders"])
+    assert {"request/vote", "request/testify"} <= forms | {
+        "/".join(s.split("/")[:2]) for s in audit.load_surfaces()["static"]}
     rendered_entries = {i for i, e in enumerate(allowlist["allow"])
                         if "/request/" in e["path"]}
     assert rendered_entries <= used

@@ -349,6 +349,20 @@ def test_th1c_one_of_two_expected_charges_missing_fails():
     assert g.th1c_movement(wrong_amount, M).status == g.FAIL
 
 
+def test_th1c_a_duplicate_charge_fails_even_at_the_right_amount():
+    """Codex P2: exactly one ``thrash.charged`` row per positive expected handle."""
+    rows = _seq([
+        _w(1, lam=0.4),
+        _open("d1", "a", ids=["a", "NOOP"], probs=[0.8, 0.2]),
+        _open("d2", "a", ids=["a", "NOOP"], probs=[0.1, 0.9]),  # moved 0.7
+    ])
+    charge = {"kind": "thrash.charged", "handle": "d2", "router": "router:Tick",
+              "charge": 0.4 * 0.7, "reward": 0.4}
+    assert g.th1c_movement(rows + [charge], M).ok
+    result = g.th1c_movement(rows + [charge, dict(charge)], M)
+    assert result.status == g.FAIL and result.evidence["duplicated"] == ["d2"]
+
+
 def test_th1d_no_charge_reaches_the_frontier_or_the_niche():
     ok = [{"kind": "thrash.charged", "handle": "d1", "router": "router:Tick", "charge": 0.1}]
     assert g.th1d_frontier(ok, M).ok
@@ -494,6 +508,22 @@ def test_ld1e_and_ld1f_quarantine_is_flagged_and_gain_holds():
     assert g.ld1f_hold(closes + [_gain(6, 0.3, 0.25, "cleared")], M).status == g.FAIL
 
 
+def test_ld1e_two_routers_alternating_quarantine_is_no_tail():
+    """Codex P2: r1 and r2 quarantined in alternate windows for 10 windows are not one
+    router quarantined for 10 windows: the runs are keyed by router, as the organ's
+    evidence is."""
+    r1 = {"router": "router:r1", "quarantined": True, "core": False}
+    r2 = {"router": "router:r2", "quarantined": True, "core": False}
+    alternating = [_w(i, frontier=[r1 if i % 2 else r2]) for i in range(1, 11)]
+    assert g.ld1e_detection(alternating, M).status == g.UNSUPPORTED
+    # One router quarantined throughout, the other in alternate windows, unflagged past
+    # H: the one router's tail fails, and it alone.
+    one = [_w(i, frontier=[r1, r2] if i % 2 else [r1]) for i in range(1, 15)]
+    result = g.ld1e_detection(one, M)
+    assert result.status == g.FAIL
+    assert {run[2] for run in result.evidence["late"]} == {"router:r1"}
+
+
 def test_of2d_every_challenge_traces_to_a_seats_return():
     opened = [_open("d1", "adv", actor="router:Verdict")]
     ret = {"kind": "invocation", "handle": "d1", "assembly_id": "adv"}
@@ -524,6 +554,18 @@ def test_of1a_y_is_one_fact_per_return_whatever_the_verdict():
     moved = [_consequence("r1", 0.9, 0.55), _consequence("r1", 0.1, 0.15)]
     assert g.of1a_outside_the_loop(moved, M).status == g.FAIL
     assert g.of1a_outside_the_loop([same[0]], M).status == g.UNSUPPORTED
+
+
+def test_of1a_repetition_is_counted_in_rows_not_in_distinct_verdicts():
+    """Codex P2: two judges with the same q still read one return; a y that differs
+    between them fails."""
+    same_q = [_consequence("r1", 0.5, 0.2), _consequence("r1", 0.5, 0.7)]
+    result = g.of1a_outside_the_loop(same_q, M)
+    assert result.status == g.FAIL and result.evidence["returns"] == 1
+    assert g.of1a_outside_the_loop([same_q[0], dict(same_q[0])], M).ok
+    # Different phases of one return are different facts.
+    phased = [_consequence("r1", 0.5, 0.2), _consequence("r1", 0.5, 0.7, phase="early")]
+    assert g.of1a_outside_the_loop(phased, M).status == g.UNSUPPORTED
 
 
 def _returned_event(handle, about, seq):

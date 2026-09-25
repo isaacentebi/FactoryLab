@@ -165,3 +165,72 @@ def test_the_baseline_names_the_design_findings_it_confirms():
     """The day-one findings the design read from the code are in the baseline."""
     refs = {row["design_ref"] for row in lexicon.load_baseline()}
     assert {"B1-1", "B1-2", "B1-4", "B1-5", "B1-7"} <= refs
+
+
+def _request_builders_in_code() -> dict[str, list[int]]:
+    """Every function in ``factorylab`` that builds a seat request, by ``file::function``:
+    one constructing a ``factorylab.cortex.request.Request``, one calling the runtime's
+    request constructor (``self._request``), or one building a tool-round continuation."""
+    import ast
+
+    found: dict[str, list[int]] = {}
+    for path in sorted((corpus.ROOT / "factorylab").rglob("*.py")):
+        tree = ast.parse(path.read_text())
+        rel = path.relative_to(corpus.ROOT).as_posix()
+        imports_request = any(
+            isinstance(node, ast.ImportFrom) and node.module == "factorylab.cortex.request"
+            and any(alias.name == "Request" for alias in node.names)
+            for node in ast.walk(tree))
+        for fn in ast.walk(tree):
+            if not isinstance(fn, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            for node in ast.walk(fn):
+                if not isinstance(node, ast.Call):
+                    continue
+                f = node.func
+                builds = (
+                    (imports_request and isinstance(f, ast.Name) and f.id == "Request")
+                    or (isinstance(f, ast.Attribute) and f.attr == "continuation")
+                    or (rel.startswith("factorylab/runtime/") and isinstance(f, ast.Attribute)
+                        and f.attr == "_request" and isinstance(f.value, ast.Name)
+                        and f.value.id == "self"))
+                if builds:
+                    found.setdefault(f"{rel}::{fn.name}", []).append(node.lineno)
+    return found
+
+
+def test_every_request_builder_in_the_code_is_rendered_by_the_corpus():
+    """The registry may not accept a seat-visible request builder the corpus never renders:
+    every builder the code holds is registered, and every registered one is rendered
+    (``class2_surfaces.toml [builders]``, which the gate tier checks against the renders)."""
+    in_code = set(_request_builders_in_code()) - corpus.REQUEST_HELPERS
+    assert in_code - corpus.REQUEST_BUILDERS == set(), "a request builder the corpus ignores"
+    assert corpus.REQUEST_BUILDERS - in_code == set(), "a registered builder is gone"
+    assert corpus.REQUEST_BUILDERS - set(audit.load_surfaces()["builders"]) == set(), \
+        "a request builder the corpus never renders"
+
+
+def test_the_committee_requests_are_in_the_static_corpus(static):
+    """The ballots and the testimony no short run reaches are rendered statically, through
+    the real builders (``class2_corpus.render_governance``)."""
+    forms = {"/".join(s.split("/")[:2])
+             for leaves in static.values() for s in audit.surfaces_of(leaves)}
+    assert {"request/vote", "request/testify"} <= forms
+    assert audit.static_builders(WORLDS[:1]) == {
+        "factorylab/runtime/governance.py::_hold_vote",
+        "factorylab/runtime/governance.py::_testify"}
+
+
+def test_an_unrendered_or_unregistered_builder_fails_the_check(monkeypatch):
+    """The builder check bites: a builder the registry says no render reached fails, and
+    so does a builder in the code the corpus does not name."""
+    registry = audit.load_surfaces()
+    dropped = {**registry, "builders": registry["builders"][1:]}
+    monkeypatch.setattr(audit, "load_surfaces", lambda: dropped)
+    with pytest.raises(AssertionError, match="never renders"):
+        test_every_request_builder_in_the_code_is_rendered_by_the_corpus()
+    monkeypatch.setattr(audit, "load_surfaces", lambda: registry)
+    monkeypatch.setattr(corpus, "REQUEST_BUILDERS",
+                        corpus.REQUEST_BUILDERS - {"factorylab/runtime/governance.py::_testify"})
+    with pytest.raises(AssertionError, match="ignores"):
+        test_every_request_builder_in_the_code_is_rendered_by_the_corpus()

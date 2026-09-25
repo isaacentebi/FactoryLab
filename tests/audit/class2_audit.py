@@ -56,19 +56,18 @@ def baseline_rows(world: str, surface: str) -> list[dict]:
 
 SURFACES = lexicon.HERE / "class2_surfaces.toml"
 
-#: Request forms no 60-tick scripted run reaches: a committee boundary comes after the
-#: governance cadence's first period, and the scripted populations request no child
-#: work. Each is listed so reaching it forces its registration (design B1 coverage).
-UNREACHED = {
-    "request/vote": "a committee ballot: the first governance boundary is later than 60 ticks",
-    "request/testify": "a norm-edition testimony: no norm edition is signed in these worlds",
-}
-
-
 def load_surfaces() -> dict[str, list[str]]:
+    """The registry: the static and rendered surfaces, and the request builders rendered."""
     raw = tomllib.loads(SURFACES.read_text())
     return {"static": list(raw["static"]["surfaces"]),
-            "rendered": list(raw["rendered"]["surfaces"])}
+            "rendered": list(raw["rendered"]["surfaces"]),
+            "builders": list(raw["builders"]["rendered"])}
+
+
+def static_builders(worlds: Iterable[str]) -> set[str]:
+    """The request builders the static corpus renders (the committee's, statically)."""
+    return set().union(*(corpus.require_complete(corpus.render_governance(w)).builders
+                         for w in worlds))
 
 
 def surfaces_of(leaves: Iterable[tuple[str, str]]) -> set[str]:
@@ -87,6 +86,9 @@ def write_baseline(worlds: Iterable[str], *, rendered: bool = True) -> dict:
     worlds = list(worlds)
     dynamics = ({world: corpus.require_complete(corpus.render_dynamic(world))
                  for world in worlds} if rendered else {})
+    builders = static_builders(worlds) | set().union(*(d.builders for d in dynamics.values()))
+    if not rendered:
+        builders |= set(load_surfaces()["builders"])
     allowlist = lexicon.load_allowlist()
     out: list[dict] = []
     seen = {"static": set(), "rendered": set()}
@@ -107,15 +109,19 @@ def write_baseline(worlds: Iterable[str], *, rendered: bool = True) -> dict:
     lines = ["# Every seat-visible surface the Class 2 audit reads (phase-2 design B1).",
              "# A rendered surface not listed here fails the audit, which forces its",
              "# classification; a listed surface no run renders fails too: extend the",
-             "# population rather than deleting the entry. Rewritten by",
+             "# population rather than deleting the entry. A request builder the corpus",
+             "# never renders fails the check tier. Rewritten by",
              "# `scripts/class2_audit.py baseline` after the architect's triage.", ""]
     for surface in ("static", "rendered"):
         lines.append(f"[{surface}]")
         lines.append("surfaces = [")
         lines += [f'  "{s}",' for s in sorted(seen[surface])]
         lines += ["]", ""]
-    lines.append("[unreached]")
-    lines += [f'"{k}" = "{v}"' for k, v in UNREACHED.items()]
+    lines.append("[builders]")
+    lines.append("# The request builders (class2_corpus.REQUEST_BUILDERS) the corpus renders.")
+    lines.append("rendered = [")
+    lines += [f'  "{b}",' for b in sorted(builders)]
+    lines += ["]"]
     SURFACES.write_text("\n".join(lines) + "\n")
     document = {
         "status": ("Untriaged. The Class 2 audit's findings await the architect's ruling for "

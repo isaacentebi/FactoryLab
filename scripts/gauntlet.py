@@ -35,7 +35,7 @@ import json
 import math
 import sys
 import tomllib
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -766,23 +766,27 @@ def th1c_movement(events: list[Mapping], manifest: Mapping) -> Result:
     The set of handles charged (``thrash.charged``) equals the set of core draws whose
     expected charge ``min(cap, λ_t·min(1, TV))`` is positive: a draw that did not move
     is never charged, and no draw that moved under a price goes uncharged (a mechanism
-    that drops some charges fails here). Each charge equals its expected amount to
-    1e-12.
+    that drops some charges fails here). Each such draw is charged exactly once (a
+    duplicate charge fails even at the right amount), and each charge equals its
+    expected amount to 1e-12.
     """
     expected = expected_thrash_charges(events, manifest)
     charged = rows_of(events, "thrash.charged")
     positive = {h for h, c in expected.items() if c > 0}
     if not positive and not charged:
         return _unsupported("TH-1c", "no core draw moved under a thrash price")
-    landed = {row["handle"] for row in charged}
+    counts = Counter(row["handle"] for row in charged)
+    landed = set(counts)
+    duplicated = sorted(h for h, n in counts.items() if n > 1)
     missing, unexpected = sorted(positive - landed), sorted(landed - positive)
     bad = [{"handle": row["handle"], "charge": row["charge"],
             "expected": expected.get(row["handle"])}
            for row in charged
            if abs(float(row["charge"]) - float(expected.get(row["handle"], 0.0))) > 1e-12]
-    return _result("TH-1c", not missing and not unexpected and not bad,
+    return _result("TH-1c", not missing and not unexpected and not bad and not duplicated,
                    charged=len(charged), expected_positive=len(positive),
-                   missing=missing[:5], unexpected=unexpected[:5], bad=bad[:5])
+                   missing=missing[:5], unexpected=unexpected[:5], bad=bad[:5],
+                   duplicated=duplicated[:5])
 
 
 def th1d_frontier(events: list[Mapping], manifest: Mapping) -> Result:
@@ -985,13 +989,22 @@ def ld1d_exemption(events: list[Mapping], manifest: Mapping, *, minimum: int = 1
 
 
 def ld1e_detection(events: list[Mapping], manifest: Mapping) -> Result:
-    """LD-1e: a frontier quarantined for a whole tail is flagged learning-dead within H."""
+    """LD-1e: a frontier router quarantined for a whole tail is flagged learning-dead
+    within H.
+
+    A tail is one router's own run of k or more consecutive quarantined windows, keyed
+    by router identity as the organ's evidence is (same router across the tail): two
+    routers quarantined in alternate windows make no tail.
+    """
     ph = physics(manifest)
     closes = windows(events)
-    quarantined = [w["window"] for w in closes
-                   if any(row.get("quarantined") and not row.get("core")
-                          for row in w.get("frontier_invocation") or ())]
-    runs = [r for r in _runs(quarantined) if r[1] - r[0] + 1 >= ph.k]
+    by_router: dict[str, list[int]] = defaultdict(list)
+    for w in closes:
+        for row in w.get("frontier_invocation") or ():
+            if row.get("quarantined") and not row.get("core"):
+                by_router[str(row.get("router"))].append(w["window"])
+    runs = sorted((start, end, router) for router, indexes in by_router.items()
+                  for start, end in _runs(indexes) if end - start + 1 >= ph.k)
     if not runs:
         return _unsupported("LD-1e", "no frontier router was quarantined for k windows")
     dead = flagged(events, "learning_death")
@@ -1096,17 +1109,19 @@ def of1a_outside_the_loop(events: list[Mapping], manifest: Mapping) -> Result:
     every judge that read it: every ``verdict.consequence`` row on one return, in one
     phase, carries the same ``y`` whatever that judge's ``q`` (§III.b: "from outside the
     factory's input"). A ``y`` that moved with a verdict would be the verdict grading
-    itself."""
-    by_return: dict[tuple, set] = defaultdict(set)
-    qs: dict[tuple, set] = defaultdict(set)
+    itself.
+
+    Repetition is the count of consequence rows on one (return, phase): two rows or
+    more are checked, and any difference in ``y`` fails, whether or not their ``q``
+    differ."""
+    by_return: dict[tuple, list] = defaultdict(list)
     for row in rows_of(events, "verdict.consequence"):
-        key = (row["about_handle"], row.get("phase"))
-        by_return[key].add(row.get("y"))
-        qs[key].add(row.get("q"))
-    shared = {key: ys for key, ys in by_return.items() if len(qs[key]) > 1}
+        by_return[(row["about_handle"], row.get("phase"))].append(row.get("y"))
+    shared = {key: ys for key, ys in by_return.items() if len(ys) > 1}
     if not shared:
-        return _unsupported("OF-1a", "no return was judged twice with different verdicts")
-    split = {str(key): sorted(ys, key=str) for key, ys in shared.items() if len(ys) > 1}
+        return _unsupported("OF-1a", "no return carries two consequence rows in one phase")
+    split = {str(key): sorted(set(ys), key=str) for key, ys in shared.items()
+             if len(set(ys)) > 1}
     return _result("OF-1a", not split, returns=len(shared), split=list(split.items())[:5])
 
 

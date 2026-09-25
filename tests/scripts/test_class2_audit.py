@@ -74,6 +74,37 @@ def test_the_provenance_pass_shows_a_commit_justified_by_a_behaviour_mix(history
     assert "notes only" not in section and f"### {head}" not in section
 
 
+def test_a_merge_whose_conflict_resolution_adds_surface_text_is_in_the_provenance_pass(
+        tmp_path):
+    """Codex P2: a merge is a commit; the text its conflict resolution writes is in no
+    parent, so only the merge itself can show it."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    base = _commit(repo, "factorylab/cortex/schematics.py", "HOLD = 'hold'\n", "base")
+    _git(repo, "checkout", "-q", "-b", "side")
+    _commit(repo, "factorylab/cortex/schematics.py", "HOLD = 'keep'\n", "side wording")
+    _git(repo, "checkout", "-q", "main")
+    _commit(repo, "factorylab/cortex/schematics.py", "HOLD = 'stay'\n", "main wording")
+    merged = subprocess.run(["git", "-C", str(repo), "merge", "-q", "side"],
+                            capture_output=True, text=True,
+                            env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull,
+                                 "GIT_CONFIG_NOSYSTEM": "1"})
+    assert merged.returncode != 0, "the fixture needs a conflict"
+    (repo / "factorylab/cortex/schematics.py").write_text(
+        "HOLD = 'you should hold when unsure'\n")
+    _git(repo, "add", "factorylab/cortex/schematics.py")
+    _git(repo, "commit", "-q", "--no-edit", "-m", f"Merge side: {BEHAVIOUR_MIX}")
+    merge = _git(repo, "rev-parse", "HEAD")
+    commits = tool.provenance_commits(repo, f"{base}..{merge}")
+    assert merge in [c["sha"] for c in commits]
+    entry = next(c for c in commits if c["sha"] == merge)
+    assert entry["merge"] and "you should hold when unsure" in entry["diff"]
+    section = tool.provenance_section(f"{base}..{merge}", commits)
+    assert f"### {merge} (merge, combined diff)" in section
+    assert BEHAVIOUR_MIX in section and "you should hold when unsure" in section
+
+
 def test_a_range_with_no_surface_commit_renders_an_explicit_empty_section(rendered):
     out, _key = rendered
     prompt = (out / "prompt.md").read_text()

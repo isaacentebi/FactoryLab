@@ -1,7 +1,8 @@
 # Every seat-visible surface the Class 2 audit reads (phase-2 design B1).
 # A rendered surface not listed here fails the audit, which forces its
 # classification; a listed surface no run renders fails too: extend the
-# population rather than deleting the entry. Rewritten by
+# population rather than deleting the entry. A request builder the corpus
+# never renders fails the check tier. Rewritten by
 # `scripts/class2_audit.py baseline` after the architect's triage.
 
 [static]
@@ -40,6 +41,20 @@ surfaces = [
   "refusal/judging",
   "refusal/registration",
   "refusal/websearch",
+  "request/testify/base_capabilities",
+  "request/testify/completion_criterion",
+  "request/testify/inputs",
+  "request/testify/outcome_contract",
+  "request/testify/outcome_schema",
+  "request/testify/request",
+  "request/testify/system",
+  "request/vote/base_capabilities",
+  "request/vote/completion_criterion",
+  "request/vote/inputs",
+  "request/vote/outcome_contract",
+  "request/vote/outcome_schema",
+  "request/vote/request",
+  "request/vote/system",
   "system",
   "tools/artifact.get",
   "tools/catalogue.search",
@@ -108,6 +123,15 @@ surfaces = [
   "request/produce/you",
 ]
 
-[unreached]
-"request/vote" = "a committee ballot: the first governance boundary is later than 60 ticks"
-"request/testify" = "a norm-edition testimony: no norm edition is signed in these worlds"
+[builders]
+# The request builders (class2_corpus.REQUEST_BUILDERS) the corpus renders.
+rendered = [
+  "factorylab/runtime/composition.py::_invoke_child",
+  "factorylab/runtime/compute.py::_invoke",
+  "factorylab/runtime/governance.py::_hold_vote",
+  "factorylab/runtime/governance.py::_testify",
+  "factorylab/runtime/loop.py::_counter_step",
+  "factorylab/runtime/loop.py::_evaluator_step",
+  "factorylab/runtime/loop.py::_meta_step",
+  "factorylab/runtime/loop.py::_producer_step",
+]

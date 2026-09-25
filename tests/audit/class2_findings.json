@@ -202,6 +202,166 @@
    "status": "untriaged"
   },
   {
+   "id": "88e05a88e7d2",
+   "world": "compute-continuity-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "compute-continuity-roster/request/testify/base_capabilities/#prose",
+   "quote": "do not invent a capability that is not listed here.",
+   "design_ref": "B1-1",
+   "status": "untriaged"
+  },
+  {
+   "id": "1f7fc0249508",
+   "world": "compute-continuity-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "compute-continuity-roster/request/testify/base_capabilities/#prose",
+   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
+   "design_ref": "B1-2",
+   "status": "untriaged"
+  },
+  {
+   "id": "74e79782a239",
+   "world": "compute-continuity-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "compute-continuity-roster/request/testify/base_capabilities/#prose",
+   "quote": "retrieve it with catalogue.search.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "4a06f6dd95e6",
+   "world": "compute-continuity-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "compute-continuity-roster/request/testify/outcome_contract/#prose",
+   "quote": "omit final-answer fields you cannot fill yet.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "11615c6e72e7",
+   "world": "compute-continuity-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "compute-continuity-roster/request/testify/request/#prose",
+   "quote": "testify on a norm edition.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "d4ad5c1013fc",
+   "world": "compute-continuity-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "compute-continuity-roster/request/vote/base_capabilities/#prose",
+   "quote": "do not invent a capability that is not listed here.",
+   "design_ref": "B1-1",
+   "status": "untriaged"
+  },
+  {
+   "id": "3b18bef501b4",
+   "world": "compute-continuity-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "compute-continuity-roster/request/vote/base_capabilities/#prose",
+   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
+   "design_ref": "B1-2",
+   "status": "untriaged"
+  },
+  {
+   "id": "c449de43ca20",
+   "world": "compute-continuity-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "compute-continuity-roster/request/vote/base_capabilities/#prose",
+   "quote": "retrieve it with catalogue.search.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "3929d523222a",
+   "world": "compute-continuity-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "compute-continuity-roster/request/vote/outcome_contract/#prose",
+   "quote": "omit final-answer fields you cannot fill yet.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "18002a056324",
+   "world": "compute-continuity-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "compute-continuity-roster/request/vote/request/#prose",
+   "quote": "vote on a connector registration.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "a6dfe9e0a800",
+   "world": "compute-continuity-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "compute-continuity-roster/request/vote/request/#prose",
+   "quote": "vote on a motion changing the world's tick interval.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "9f437b9872fc",
+   "world": "compute-continuity-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "compute-continuity-roster/request/vote/request/#prose",
+   "quote": "vote on a motion setting lambda on current charter cards.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "494c10c45333",
+   "world": "compute-continuity-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "compute-continuity-roster/request/vote/request/#prose",
+   "quote": "vote on an amendment to the charter's metric cards proposed by a metric challenge:",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "a8dd59d7d0b2",
+   "world": "compute-continuity-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "compute-continuity-roster/request/vote/request/#prose",
+   "quote": "vote on an amendment to the charter's metric cards.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "cf46fd6ef984",
+   "world": "compute-continuity-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "compute-continuity-roster/request/vote/request/#prose",
+   "quote": "vote on appending a holdout to a charter card:",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "dc8e25f0f6e0",
+   "world": "compute-continuity-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "compute-continuity-roster/request/vote/request/#prose",
+   "quote": "vote on retiring the named assembly version.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
    "id": "786e990654e6",
    "world": "compute-continuity-roster",
    "surface": "static",
@@ -589,6 +749,196 @@
    "path": "edition6-capital-loop/institutions/work/reward_shapes.forecast",
    "quote": "return forecasts:",
    "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "21722907f832",
+   "world": "edition6-capital-loop",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-capital-loop/request/testify/base_capabilities/#prose",
+   "quote": "do not invent a capability that is not listed here.",
+   "design_ref": "B1-1",
+   "status": "untriaged"
+  },
+  {
+   "id": "7540541bd95c",
+   "world": "edition6-capital-loop",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-capital-loop/request/testify/base_capabilities/#prose",
+   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
+   "design_ref": "B1-2",
+   "status": "untriaged"
+  },
+  {
+   "id": "77bb9173c7cf",
+   "world": "edition6-capital-loop",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-capital-loop/request/testify/base_capabilities/#prose",
+   "quote": "retrieve it with catalogue.search.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "aa721df83657",
+   "world": "edition6-capital-loop",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-capital-loop/request/testify/outcome_contract/#prose",
+   "quote": "omit final-answer fields you cannot fill yet.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "61567eb60053",
+   "world": "edition6-capital-loop",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-capital-loop/request/testify/request/#prose",
+   "quote": "testify on a norm edition.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "3bfdbf5db077",
+   "world": "edition6-capital-loop",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-capital-loop/request/vote/base_capabilities/#prose",
+   "quote": "do not invent a capability that is not listed here.",
+   "design_ref": "B1-1",
+   "status": "untriaged"
+  },
+  {
+   "id": "d417c515795e",
+   "world": "edition6-capital-loop",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-capital-loop/request/vote/base_capabilities/#prose",
+   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
+   "design_ref": "B1-2",
+   "status": "untriaged"
+  },
+  {
+   "id": "4025e5cb75b0",
+   "world": "edition6-capital-loop",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-capital-loop/request/vote/base_capabilities/#prose",
+   "quote": "retrieve it with catalogue.search.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "0158e689bfd7",
+   "world": "edition6-capital-loop",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-capital-loop/request/vote/inputs/amendment.replace[].description",
+   "quote": "assess only eligible settled outcomes and treat missing evidence as unmeasured.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "dd5cdcaccbe3",
+   "world": "edition6-capital-loop",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-capital-loop/request/vote/inputs/challenge.incumbent.description",
+   "quote": "assess only eligible settled outcomes and treat missing evidence as unmeasured.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "bb8f74f80485",
+   "world": "edition6-capital-loop",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-capital-loop/request/vote/inputs/challenge.replacement.description",
+   "quote": "assess only eligible settled outcomes and treat missing evidence as unmeasured.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "f40731c3f714",
+   "world": "edition6-capital-loop",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-capital-loop/request/vote/outcome_contract/#prose",
+   "quote": "omit final-answer fields you cannot fill yet.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "a582b4d66bbe",
+   "world": "edition6-capital-loop",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-capital-loop/request/vote/request/#prose",
+   "quote": "vote on a connector registration.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "2fff8ac9d40b",
+   "world": "edition6-capital-loop",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-capital-loop/request/vote/request/#prose",
+   "quote": "vote on a motion changing the world's tick interval.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "63beb886f940",
+   "world": "edition6-capital-loop",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-capital-loop/request/vote/request/#prose",
+   "quote": "vote on a motion setting lambda on current charter cards.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "dece07004e65",
+   "world": "edition6-capital-loop",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-capital-loop/request/vote/request/#prose",
+   "quote": "vote on an amendment to the charter's metric cards proposed by a metric challenge:",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "193004301584",
+   "world": "edition6-capital-loop",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-capital-loop/request/vote/request/#prose",
+   "quote": "vote on an amendment to the charter's metric cards.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "81cf7ea5bcdd",
+   "world": "edition6-capital-loop",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-capital-loop/request/vote/request/#prose",
+   "quote": "vote on appending a holdout to a charter card:",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "1e97aa06e88d",
+   "world": "edition6-capital-loop",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-capital-loop/request/vote/request/#prose",
+   "quote": "vote on retiring the named assembly version.",
+   "design_ref": "B1-4",
    "status": "untriaged"
   },
   {
@@ -982,6 +1332,196 @@
    "status": "untriaged"
   },
   {
+   "id": "c0f8331b56d5",
+   "world": "edition6-testnet-rehearsal",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-testnet-rehearsal/request/testify/base_capabilities/#prose",
+   "quote": "do not invent a capability that is not listed here.",
+   "design_ref": "B1-1",
+   "status": "untriaged"
+  },
+  {
+   "id": "c7e26261dcb1",
+   "world": "edition6-testnet-rehearsal",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-testnet-rehearsal/request/testify/base_capabilities/#prose",
+   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
+   "design_ref": "B1-2",
+   "status": "untriaged"
+  },
+  {
+   "id": "b9e34bf74ac0",
+   "world": "edition6-testnet-rehearsal",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-testnet-rehearsal/request/testify/base_capabilities/#prose",
+   "quote": "retrieve it with catalogue.search.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "053184b515d1",
+   "world": "edition6-testnet-rehearsal",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-testnet-rehearsal/request/testify/outcome_contract/#prose",
+   "quote": "omit final-answer fields you cannot fill yet.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "b718095ec087",
+   "world": "edition6-testnet-rehearsal",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-testnet-rehearsal/request/testify/request/#prose",
+   "quote": "testify on a norm edition.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "182ba448e4fe",
+   "world": "edition6-testnet-rehearsal",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-testnet-rehearsal/request/vote/base_capabilities/#prose",
+   "quote": "do not invent a capability that is not listed here.",
+   "design_ref": "B1-1",
+   "status": "untriaged"
+  },
+  {
+   "id": "959c8d481414",
+   "world": "edition6-testnet-rehearsal",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-testnet-rehearsal/request/vote/base_capabilities/#prose",
+   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
+   "design_ref": "B1-2",
+   "status": "untriaged"
+  },
+  {
+   "id": "9c818367a1b5",
+   "world": "edition6-testnet-rehearsal",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-testnet-rehearsal/request/vote/base_capabilities/#prose",
+   "quote": "retrieve it with catalogue.search.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "5f638a9ca0f5",
+   "world": "edition6-testnet-rehearsal",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-testnet-rehearsal/request/vote/inputs/amendment.replace[].description",
+   "quote": "assess only eligible settled outcomes and treat missing evidence as unmeasured.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "3cdcdde5ce73",
+   "world": "edition6-testnet-rehearsal",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-testnet-rehearsal/request/vote/inputs/challenge.incumbent.description",
+   "quote": "assess only eligible settled outcomes and treat missing evidence as unmeasured.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "1a4b0aa0cccb",
+   "world": "edition6-testnet-rehearsal",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-testnet-rehearsal/request/vote/inputs/challenge.replacement.description",
+   "quote": "assess only eligible settled outcomes and treat missing evidence as unmeasured.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "4459ebc0c5dc",
+   "world": "edition6-testnet-rehearsal",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-testnet-rehearsal/request/vote/outcome_contract/#prose",
+   "quote": "omit final-answer fields you cannot fill yet.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "7bf2e6392a43",
+   "world": "edition6-testnet-rehearsal",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-testnet-rehearsal/request/vote/request/#prose",
+   "quote": "vote on a connector registration.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "faec99be48ca",
+   "world": "edition6-testnet-rehearsal",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-testnet-rehearsal/request/vote/request/#prose",
+   "quote": "vote on a motion changing the world's tick interval.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "80c442638852",
+   "world": "edition6-testnet-rehearsal",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-testnet-rehearsal/request/vote/request/#prose",
+   "quote": "vote on a motion setting lambda on current charter cards.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "725b87ea3ca7",
+   "world": "edition6-testnet-rehearsal",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-testnet-rehearsal/request/vote/request/#prose",
+   "quote": "vote on an amendment to the charter's metric cards proposed by a metric challenge:",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "fcb05cc1d837",
+   "world": "edition6-testnet-rehearsal",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-testnet-rehearsal/request/vote/request/#prose",
+   "quote": "vote on an amendment to the charter's metric cards.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "6825ce278b6d",
+   "world": "edition6-testnet-rehearsal",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-testnet-rehearsal/request/vote/request/#prose",
+   "quote": "vote on appending a holdout to a charter card:",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "fc2d32152b84",
+   "world": "edition6-testnet-rehearsal",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-testnet-rehearsal/request/vote/request/#prose",
+   "quote": "vote on retiring the named assembly version.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
    "id": "653f736475cf",
    "world": "edition6-testnet-rehearsal",
    "surface": "static",
@@ -1219,6 +1759,166 @@
    "path": "scripted/institutions/work/reward_shapes.forecast",
    "quote": "return forecasts:",
    "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "6e4839edd635",
+   "world": "scripted",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted/request/testify/base_capabilities/#prose",
+   "quote": "do not invent a capability that is not listed here.",
+   "design_ref": "B1-1",
+   "status": "untriaged"
+  },
+  {
+   "id": "c99cf8bd7aa5",
+   "world": "scripted",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted/request/testify/base_capabilities/#prose",
+   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
+   "design_ref": "B1-2",
+   "status": "untriaged"
+  },
+  {
+   "id": "f090a0254d4a",
+   "world": "scripted",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted/request/testify/base_capabilities/#prose",
+   "quote": "retrieve it with catalogue.search.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "2396b41f383f",
+   "world": "scripted",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted/request/testify/outcome_contract/#prose",
+   "quote": "omit final-answer fields you cannot fill yet.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "9594d6116143",
+   "world": "scripted",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted/request/testify/request/#prose",
+   "quote": "testify on a norm edition.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "f8dc6b1ba469",
+   "world": "scripted",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted/request/vote/base_capabilities/#prose",
+   "quote": "do not invent a capability that is not listed here.",
+   "design_ref": "B1-1",
+   "status": "untriaged"
+  },
+  {
+   "id": "0f7917800bd2",
+   "world": "scripted",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted/request/vote/base_capabilities/#prose",
+   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
+   "design_ref": "B1-2",
+   "status": "untriaged"
+  },
+  {
+   "id": "133d94fbe960",
+   "world": "scripted",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted/request/vote/base_capabilities/#prose",
+   "quote": "retrieve it with catalogue.search.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "ddbd554d1179",
+   "world": "scripted",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted/request/vote/outcome_contract/#prose",
+   "quote": "omit final-answer fields you cannot fill yet.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "ad37ead82c35",
+   "world": "scripted",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted/request/vote/request/#prose",
+   "quote": "vote on a connector registration.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "21aea4e71c5d",
+   "world": "scripted",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted/request/vote/request/#prose",
+   "quote": "vote on a motion changing the world's tick interval.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "6b5f328abb77",
+   "world": "scripted",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted/request/vote/request/#prose",
+   "quote": "vote on a motion setting lambda on current charter cards.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "e19ebd7d8ad5",
+   "world": "scripted",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted/request/vote/request/#prose",
+   "quote": "vote on an amendment to the charter's metric cards proposed by a metric challenge:",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "a3f4882eafeb",
+   "world": "scripted",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted/request/vote/request/#prose",
+   "quote": "vote on an amendment to the charter's metric cards.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "45ce2ab3ff65",
+   "world": "scripted",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted/request/vote/request/#prose",
+   "quote": "vote on appending a holdout to a charter card:",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "98781db32fe3",
+   "world": "scripted",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted/request/vote/request/#prose",
+   "quote": "vote on retiring the named assembly version.",
+   "design_ref": "B1-4",
    "status": "untriaged"
   },
   {
@@ -1462,6 +2162,166 @@
    "status": "untriaged"
   },
   {
+   "id": "42d25672757c",
+   "world": "scripted-crash",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted-crash/request/testify/base_capabilities/#prose",
+   "quote": "do not invent a capability that is not listed here.",
+   "design_ref": "B1-1",
+   "status": "untriaged"
+  },
+  {
+   "id": "5178e622ecd3",
+   "world": "scripted-crash",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted-crash/request/testify/base_capabilities/#prose",
+   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
+   "design_ref": "B1-2",
+   "status": "untriaged"
+  },
+  {
+   "id": "a1c44ff946fd",
+   "world": "scripted-crash",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted-crash/request/testify/base_capabilities/#prose",
+   "quote": "retrieve it with catalogue.search.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "d4c9f1830296",
+   "world": "scripted-crash",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted-crash/request/testify/outcome_contract/#prose",
+   "quote": "omit final-answer fields you cannot fill yet.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "3bb44be03dac",
+   "world": "scripted-crash",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted-crash/request/testify/request/#prose",
+   "quote": "testify on a norm edition.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "d95667330e42",
+   "world": "scripted-crash",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted-crash/request/vote/base_capabilities/#prose",
+   "quote": "do not invent a capability that is not listed here.",
+   "design_ref": "B1-1",
+   "status": "untriaged"
+  },
+  {
+   "id": "219653083df3",
+   "world": "scripted-crash",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted-crash/request/vote/base_capabilities/#prose",
+   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
+   "design_ref": "B1-2",
+   "status": "untriaged"
+  },
+  {
+   "id": "24b970bbe0f4",
+   "world": "scripted-crash",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted-crash/request/vote/base_capabilities/#prose",
+   "quote": "retrieve it with catalogue.search.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "697550ba9698",
+   "world": "scripted-crash",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted-crash/request/vote/outcome_contract/#prose",
+   "quote": "omit final-answer fields you cannot fill yet.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "731b2e3acdef",
+   "world": "scripted-crash",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted-crash/request/vote/request/#prose",
+   "quote": "vote on a connector registration.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "3964ffab78f3",
+   "world": "scripted-crash",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted-crash/request/vote/request/#prose",
+   "quote": "vote on a motion changing the world's tick interval.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "d0bd2e4fe9c7",
+   "world": "scripted-crash",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted-crash/request/vote/request/#prose",
+   "quote": "vote on a motion setting lambda on current charter cards.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "b7f272fc6be4",
+   "world": "scripted-crash",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted-crash/request/vote/request/#prose",
+   "quote": "vote on an amendment to the charter's metric cards proposed by a metric challenge:",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "fce7e0e7a3fb",
+   "world": "scripted-crash",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted-crash/request/vote/request/#prose",
+   "quote": "vote on an amendment to the charter's metric cards.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "a6d095cf735d",
+   "world": "scripted-crash",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted-crash/request/vote/request/#prose",
+   "quote": "vote on appending a holdout to a charter card:",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "d4259fd84369",
+   "world": "scripted-crash",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted-crash/request/vote/request/#prose",
+   "quote": "vote on retiring the named assembly version.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
    "id": "8afdb226351f",
    "world": "scripted-crash",
    "surface": "static",
@@ -1702,6 +2562,166 @@
    "status": "untriaged"
   },
   {
+   "id": "cb06c83aa2b9",
+   "world": "testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet/request/testify/base_capabilities/#prose",
+   "quote": "do not invent a capability that is not listed here.",
+   "design_ref": "B1-1",
+   "status": "untriaged"
+  },
+  {
+   "id": "c8235cb62ce5",
+   "world": "testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet/request/testify/base_capabilities/#prose",
+   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
+   "design_ref": "B1-2",
+   "status": "untriaged"
+  },
+  {
+   "id": "ead8a7fb0734",
+   "world": "testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet/request/testify/base_capabilities/#prose",
+   "quote": "retrieve it with catalogue.search.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "c2f336c542a1",
+   "world": "testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet/request/testify/outcome_contract/#prose",
+   "quote": "omit final-answer fields you cannot fill yet.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "e5f892bc0351",
+   "world": "testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet/request/testify/request/#prose",
+   "quote": "testify on a norm edition.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "6c82326f36d4",
+   "world": "testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet/request/vote/base_capabilities/#prose",
+   "quote": "do not invent a capability that is not listed here.",
+   "design_ref": "B1-1",
+   "status": "untriaged"
+  },
+  {
+   "id": "3c76543c6545",
+   "world": "testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet/request/vote/base_capabilities/#prose",
+   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
+   "design_ref": "B1-2",
+   "status": "untriaged"
+  },
+  {
+   "id": "36005193129d",
+   "world": "testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet/request/vote/base_capabilities/#prose",
+   "quote": "retrieve it with catalogue.search.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "b18b140b73ca",
+   "world": "testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet/request/vote/outcome_contract/#prose",
+   "quote": "omit final-answer fields you cannot fill yet.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "b52d29e432fc",
+   "world": "testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet/request/vote/request/#prose",
+   "quote": "vote on a connector registration.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "b25db0a51477",
+   "world": "testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet/request/vote/request/#prose",
+   "quote": "vote on a motion changing the world's tick interval.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "6ab8e567fab3",
+   "world": "testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet/request/vote/request/#prose",
+   "quote": "vote on a motion setting lambda on current charter cards.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "5eb6f8992cc0",
+   "world": "testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet/request/vote/request/#prose",
+   "quote": "vote on an amendment to the charter's metric cards proposed by a metric challenge:",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "f7d8ce8e8d52",
+   "world": "testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet/request/vote/request/#prose",
+   "quote": "vote on an amendment to the charter's metric cards.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "886c36f8050d",
+   "world": "testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet/request/vote/request/#prose",
+   "quote": "vote on appending a holdout to a charter card:",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "bdfb5d9ac7aa",
+   "world": "testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet/request/vote/request/#prose",
+   "quote": "vote on retiring the named assembly version.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
    "id": "5845cde1eba3",
    "world": "testnet",
    "surface": "static",
@@ -1939,6 +2959,166 @@
    "path": "testnet-10m-roster/institutions/work/reward_shapes.forecast",
    "quote": "return forecasts:",
    "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "50c7bf8f7f5d",
+   "world": "testnet-10m-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet-10m-roster/request/testify/base_capabilities/#prose",
+   "quote": "do not invent a capability that is not listed here.",
+   "design_ref": "B1-1",
+   "status": "untriaged"
+  },
+  {
+   "id": "ae82ec5eefe9",
+   "world": "testnet-10m-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet-10m-roster/request/testify/base_capabilities/#prose",
+   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
+   "design_ref": "B1-2",
+   "status": "untriaged"
+  },
+  {
+   "id": "1bfaac632494",
+   "world": "testnet-10m-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet-10m-roster/request/testify/base_capabilities/#prose",
+   "quote": "retrieve it with catalogue.search.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "c12a8636238f",
+   "world": "testnet-10m-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet-10m-roster/request/testify/outcome_contract/#prose",
+   "quote": "omit final-answer fields you cannot fill yet.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "272b79d53592",
+   "world": "testnet-10m-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet-10m-roster/request/testify/request/#prose",
+   "quote": "testify on a norm edition.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "909e651f2d45",
+   "world": "testnet-10m-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet-10m-roster/request/vote/base_capabilities/#prose",
+   "quote": "do not invent a capability that is not listed here.",
+   "design_ref": "B1-1",
+   "status": "untriaged"
+  },
+  {
+   "id": "791cdaf1f1eb",
+   "world": "testnet-10m-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet-10m-roster/request/vote/base_capabilities/#prose",
+   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
+   "design_ref": "B1-2",
+   "status": "untriaged"
+  },
+  {
+   "id": "4c30b7a10283",
+   "world": "testnet-10m-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet-10m-roster/request/vote/base_capabilities/#prose",
+   "quote": "retrieve it with catalogue.search.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "af857dbd45fd",
+   "world": "testnet-10m-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet-10m-roster/request/vote/outcome_contract/#prose",
+   "quote": "omit final-answer fields you cannot fill yet.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "b2a24b068e2e",
+   "world": "testnet-10m-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet-10m-roster/request/vote/request/#prose",
+   "quote": "vote on a connector registration.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "e5d474342f2f",
+   "world": "testnet-10m-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet-10m-roster/request/vote/request/#prose",
+   "quote": "vote on a motion changing the world's tick interval.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "547013bce620",
+   "world": "testnet-10m-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet-10m-roster/request/vote/request/#prose",
+   "quote": "vote on a motion setting lambda on current charter cards.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "9c6e130fc6c0",
+   "world": "testnet-10m-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet-10m-roster/request/vote/request/#prose",
+   "quote": "vote on an amendment to the charter's metric cards proposed by a metric challenge:",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "633ec4c122fa",
+   "world": "testnet-10m-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet-10m-roster/request/vote/request/#prose",
+   "quote": "vote on an amendment to the charter's metric cards.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "a35e42cabe33",
+   "world": "testnet-10m-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet-10m-roster/request/vote/request/#prose",
+   "quote": "vote on appending a holdout to a charter card:",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "441b7d52589f",
+   "world": "testnet-10m-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet-10m-roster/request/vote/request/#prose",
+   "quote": "vote on retiring the named assembly version.",
+   "design_ref": "B1-4",
    "status": "untriaged"
   },
   {

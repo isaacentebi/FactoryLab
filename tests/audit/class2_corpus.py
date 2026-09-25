@@ -9,6 +9,8 @@ path is stable across calls.
 * ``render_static`` (check tier) reads a world without running it: the system prompts,
   the fixed texts of the stable prefix, every institution section, every published
   tool, the kernel's refusal texts, and each seat's genesis state.
+  It also builds, through the real builders, the committee's ballots and testimony,
+  which no short run reaches (``render_governance``).
 * ``render_dynamic`` (gate tier) runs the launch path on the scripted population
   (``scripts/fastloop.py``) and records every request the seats are sent.
 
@@ -171,6 +173,9 @@ def render_static(name: str, rt=None) -> list[Leaf]:
         leaves.append((f"{name}/refusal/registration/{case}", reason))
     for spec in rt.m.assemblies:
         leaves.extend(flatten(f"{name}/genesis/{spec.id}/", spec.initial_state))
+    # The committee's ballots and testimony, which no short run reaches, built through
+    # the real builders on this world (``render_governance``).
+    leaves.extend(require_complete(render_governance(name)).leaves)
     return [(p, t) for p, t in leaves if isinstance(t, str) and excluded(p) is None]
 
 
@@ -242,6 +247,8 @@ class Rendered:
     leaves: list[Leaf] = field(default_factory=list)
     emitted: set[str] = field(default_factory=set)
     forms: set[str] = field(default_factory=set)
+    #: The request builders (``REQUEST_BUILDERS``) whose requests were rendered.
+    builders: set[str] = field(default_factory=set)
     requests: int = 0
     status: str = "not run"
 
@@ -283,24 +290,8 @@ def render_dynamic(name: str, *, ticks: int = 60) -> Rendered:
     from scripts import fastloop
 
     rendered = Rendered(name)
-    seen: set[Leaf] = set()
-
-    class Recording(fastloop.PolicyProvider):
-        def complete(self, req):
-            text = "\n".join(str(m.get("content", "")) for m in req.messages)
-            form = request_form(req, text, _inputs_from_prompt(text))
-            response = super().complete(req)
-            rendered.requests += 1
-            rendered.forms.add(form)
-            rendered.emitted.update(_strings(json.loads(response.text)))
-            for leaf in [(f"{name}/request/{form}/system", req.system),
-                         *(leaf for header, body in split_request(text).items()
-                           for leaf in section_leaves(f"{name}/request/{form}/{slug(header)}/",
-                                                      body))]:
-                if leaf not in seen:
-                    seen.add(leaf)
-                    rendered.leaves.append(leaf)
-            return response
+    Recording = _recorder(fastloop.PolicyProvider, name, rendered, set(),  # noqa: N806
+                          _inputs_from_prompt, request_form)
 
     from factorylab.runtime.loop import Runtime
 
@@ -323,6 +314,157 @@ def render_dynamic(name: str, *, ticks: int = 60) -> Rendered:
     rendered.leaves = [(p, t) for p, t in rendered.leaves
                        if excluded(p) is None and not _authored(t, rendered.emitted)]
     return rendered
+
+
+def render_governance(name: str) -> Rendered:
+    """The committee's requests, built statically through the real builders.
+
+    A short scripted run never reaches a governance boundary, so the ballot and the
+    testimony a seat is sent (``GovernanceMixin._hold_vote``, ``_testify``) are built
+    here on a world that has run nothing: a committee is seated by the charter book's
+    own sortition, and one motion of each ballot form is put to it (a cards amendment,
+    a lambda motion, a clock motion, a retirement, a connector, a holdout challenge and
+    a metric challenge), then one norm edition is testified on. Every request goes
+    through the recording provider exactly as a run's would.
+    """
+    from dataclasses import replace as dc_replace
+
+    from factorylab.charter.amendment import Amendment, PredictedEffect
+    from factorylab.cortex.registration import ConnectorProposal
+    from factorylab.runtime.governance import Retirement
+    from factorylab.runtime.loop import Runtime
+    from factorylab.world.scripted import _inputs_from_prompt, request_form
+    from scripts import fastloop
+
+    rendered = Rendered(name)
+    recorder = _recorder(fastloop.PolicyProvider, name, rendered, set(), _inputs_from_prompt,
+                         request_form)
+    rt = Runtime(simulated_manifest(name), events=0, seed=1, initial_balance_micro=None,
+                 ledger_path=None, router_gamma=0.1, provider=recorder(WORLDS / f"{name}.toml"))
+    rt._manage_reserve_window()
+    # The one piece of state a fresh world lacks: seats qualify for a committee by
+    # settled experience (``_committee_eligible``), which no run has given them yet.
+    rt.eligibility_tally = {aid: rt.m.committee.min_settled for aid in rt.assemblies}
+    eligible = rt._committee_eligible()
+    card = rt.charter.cards[0]
+    effect = PredictedEffect(card.id, "increase", 1)
+    restated = dc_replace(card, description=f"{card.description} (restated)")
+    base = Amendment(id="class2-cards", proposer_handle="class2", edition_base=rt.charter.edition,
+                     add=(), replace=(restated,), remove=(), predicted_effect=effect)
+    charter_motions = [
+        base,
+        dc_replace(base, id="class2-lambda", replace=(), proposed_prices=((card.id, 0.2),)),
+        dc_replace(base, id="class2-clock", replace=(), tick_interval="20s",
+                   predicted_effect=PredictedEffect(None, "decrease", 1,
+                                                    observation="burn_per_window")),
+        dc_replace(base, id="class2-holdout-challenge"),
+        dc_replace(base, id="class2-metric-challenge"),
+    ]
+    # A challenge-originated motion shows its voters the trial (C7): its record, as
+    # ``_register_challenge`` keeps one, with no trial window measured yet.
+    for motion, holdout in ((charter_motions[3], "class2-predicate@1"),
+                            (charter_motions[4], None)):
+        rt.challenges[motion.id] = {
+            "id": motion.id, "handle": "class2", "card_id": card.id, "evidence": "class2",
+            "incumbent": card, "replacement": restated, "trial_windows": 1,
+            "start_window": rt.window.index, "observations": {}, "series": [],
+            "status": "balloted", "amendment_id": motion.id, "predicted_effect": effect,
+            **({"holdout": holdout} if holdout else {})}
+    try:
+        # Charter motions are proposed to the charter book, so the standing committee
+        # the book seats has them on its agenda, exactly as a boundary would.
+        for motion in charter_motions:
+            rt.charter_book.propose(motion, rt.observations)
+        standing = rt.charter_book.seat(1, eligible, rt.rng, size=rt.m.committee.seats,
+                                        quorum=rt.m.committee.quorum,
+                                        learners=rt._seat_learners(eligible))
+        if standing is None:
+            raise RenderFailed(f"{name}: no committee can be seated in this world")
+        for motion in charter_motions:
+            rt._hold_vote(motion, standing)
+        # Retirements and connectors keep their own per-motion sortition
+        # (``_seat_internal``): the factory's organization, not charter governance.
+        retirement = Retirement("class2-retire", "class2", next(iter(rt.assemblies)), 1, effect)
+        committee = rt._seat_internal(retirement.id, eligible)[0]
+        # The record ``_propose_retirement`` keeps beside its ballot.
+        rt.retirement_proposals[retirement.id] = {"proposal": retirement,
+                                                  "committee": committee, "ballots": {},
+                                                  "status": "voting"}
+        rt._hold_vote(retirement, committee)
+        connector = ConnectorProposal("class2-source", "class2", "https://example.org")
+        rt._hold_vote(dc_replace(base, id="class2-connector"),
+                      rt._seat_internal("class2-connector", eligible)[0], connector=connector)
+        rt._testify({"sequence": 1, "norms": list(rt.charter.norms)}, standing)
+        rendered.status = "completed"
+    except Exception as exc:  # noqa: BLE001 - what rendered before a failure still counts
+        rendered.status = f"failed: {type(exc).__name__}: {exc}"[:300]
+    rendered.leaves = [(p, t) for p, t in rendered.leaves
+                       if excluded(p) is None and not _authored(t, rendered.emitted)]
+    return rendered
+
+
+#: Every kernel function that builds a request a seat is sent, by ``file::function``.
+#: A continuation (a tool round's follow-up call) is built inside ``compute._invoke``
+#: and marked by its ``continuation`` input. ``tests/audit/test_class2_static.py``
+#: scans the code for request builders and fails on one this registry does not name;
+#: the corpus records which of them it actually rendered.
+REQUEST_BUILDERS = frozenset({
+    "factorylab/runtime/loop.py::_producer_step",
+    "factorylab/runtime/loop.py::_evaluator_step",
+    "factorylab/runtime/loop.py::_meta_step",
+    "factorylab/runtime/loop.py::_counter_step",
+    "factorylab/runtime/governance.py::_hold_vote",
+    "factorylab/runtime/governance.py::_testify",
+    "factorylab/runtime/composition.py::_invoke_child",
+    "factorylab/runtime/compute.py::_invoke",
+})
+#: The constructor every builder calls; it states no request of its own.
+REQUEST_HELPERS = frozenset({"factorylab/runtime/compute.py::_request"})
+
+
+def builder_of(inputs: dict) -> str | None:
+    """The registered builder that made the request now being sent, read off the stack:
+    the innermost builder frame (a child request is built inside the step that asked
+    for it), or ``compute._invoke`` for a continuation."""
+    import inspect
+
+    if isinstance(inputs.get("continuation"), str):
+        return "factorylab/runtime/compute.py::_invoke"
+    for frame in inspect.stack(context=0):
+        try:
+            rel = Path(frame.filename).resolve().relative_to(ROOT).as_posix()
+        except ValueError:
+            continue
+        key = f"{rel}::{frame.function}"
+        if key in REQUEST_BUILDERS and key != "factorylab/runtime/compute.py::_invoke":
+            return key
+    return None
+
+
+def _recorder(base, name, rendered, seen, inputs_from_prompt, request_form):
+    """A provider class recording every request it is sent: its leaves, its form, and the
+    builder that made it."""
+    class Recording(base):
+        def complete(self, req):
+            text = "\n".join(str(m.get("content", "")) for m in req.messages)
+            inputs = inputs_from_prompt(text)
+            form = request_form(req, text, inputs)
+            builder = builder_of(inputs)
+            if builder is not None:
+                rendered.builders.add(builder)
+            response = super().complete(req)
+            rendered.requests += 1
+            rendered.forms.add(form)
+            rendered.emitted.update(_strings(json.loads(response.text)))
+            for leaf in [(f"{name}/request/{form}/system", req.system),
+                         *(leaf for header, body in split_request(text).items()
+                           for leaf in section_leaves(f"{name}/request/{form}/{slug(header)}/",
+                                                      body))]:
+                if leaf not in seen:
+                    seen.add(leaf)
+                    rendered.leaves.append(leaf)
+            return response
+    return Recording
 
 
 def _strings(value: Any) -> Iterator[str]:

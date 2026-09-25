@@ -194,21 +194,31 @@ def _git(repo: Path, *args: str) -> str:
 
 
 def provenance_commits(repo: Path, release_range: str) -> list[dict]:
-    """Every non-merge commit in ``release_range`` (``base..head``) that touches a
-    seat-visible surface, oldest first, with its full message and its diff to those paths.
+    """Every commit in ``release_range`` (``base..head``) that touches a seat-visible
+    surface, merges included, oldest first, with its full message and its diff to those
+    paths.
+
+    A merge's diff is its combined diff (``git show --cc``): the hunks it holds that no
+    parent holds, which is where a conflict resolution writes text of its own. A merge
+    with none says so rather than vanishing, since its message still stands.
 
     Design B2 input 6: the auditor asks of each message whether it justifies text by a
     behaviour mix (AGENTS rule 2), which the leaves alone cannot show.
     """
     if ".." not in release_range:
         raise ValueError("the release range is base..head")
-    shas = _git(repo, "rev-list", "--reverse", "--no-merges", release_range, "--",
+    # Full history: no commit on either side of a merge is simplified away.
+    shas = _git(repo, "rev-list", "--reverse", "--full-history", release_range, "--",
                 *SURFACE_PATHS).split()
     commits = []
     for sha in shas:
         message = _git(repo, "log", "-1", "--format=%B", sha).strip()
-        diff = _git(repo, "show", "--no-color", "--format=", sha, "--", *SURFACE_PATHS)
-        commits.append({"sha": sha, "message": message, "diff": diff})
+        merge = len(_git(repo, "rev-list", "--parents", "-n", "1", sha).split()) > 2
+        diff = _git(repo, "show", "--no-color", "--format=", *(["--cc"] if merge else []),
+                    sha, "--", *SURFACE_PATHS)
+        if merge and not diff.strip():
+            diff = "(merge: every surface hunk is one of its parents', shown with that commit)"
+        commits.append({"sha": sha, "message": message, "diff": diff, "merge": merge})
     return commits
 
 
@@ -223,7 +233,9 @@ def provenance_section(release_range: str, commits: list[dict]) -> str:
     if not commits:
         lines.append("(no commit in this range touched a seat-visible surface)")
     for commit in commits:
-        lines += [f"### {commit['sha']}", "", "```text", commit["message"], "```", "",
+        title = f"### {commit['sha']}" + (" (merge, combined diff)" if commit.get("merge")
+                                             else "")
+        lines += [title, "", "```text", commit["message"], "```", "",
                   "```diff", commit["diff"].rstrip(), "```", ""]
     return "\n".join(lines)
 
