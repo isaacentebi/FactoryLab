@@ -923,22 +923,25 @@ class TapeVenue(FakeExchange):
             if filled <= 0:
                 continue
             _taker, maker = self._rates(order.coin)
+            # The order's own reservation is released before it pays for itself: a resting
+            # spot order reserves its cash (or inventory), and weighing its fill against
+            # a balance that still holds that reservation would need it twice over.
+            del self._resting[oid]
             result = self._fill(oid, replace_size(order, filled), order.limit_px,
                                 fee_rate=maker)
             events.extend(self.drain_events())
             if result.status != "filled":
-                del self._resting[oid]
-                self._rested_ns.pop(oid, None)
                 if order.market == "spot":
-                    events.extend(self._refuse(oid, order, result.error or "rejected"))
-                else:
-                    self._rejected[oid] = result.error or "rejected"
+                    # The spot book refused this fill: the order keeps resting, reserved.
+                    self._resting[oid] = order
+                    continue
+                self._rested_ns.pop(oid, None)
+                self._rejected[oid] = result.error or "rejected"
                 continue
             self._commit(order.coin, snapshot, side, [(top_px, filled)])
             if filled < order.size:
                 self._resting[oid] = replace_size(order, order.size - filled)
             else:
-                del self._resting[oid]
                 self._rested_ns.pop(oid, None)
         return events
 

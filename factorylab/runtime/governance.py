@@ -119,6 +119,10 @@ class GovernanceMixin:
                               "below the median of the previous window",
                               "lo": "number, for at least, above and between",
                               "hi": "number, for at most, below and between"}
+        rule = self.m.look_ahead_rule()
+        if rule is not None:
+            # A tape world's model admission rule, published beside the proposal it binds.
+            self.PROPOSAL_SHAPES["model"]["admission"] = rule
         shape["holdout"] = {"card_id": "a current card id",
                             "predicate": "a registered predicate id",
                             "evidence": "why the card needs it, at most 4000 chars",
@@ -794,6 +798,12 @@ class GovernanceMixin:
         if isinstance(prop, ModelProposal):
             if prop.openrouter_id in self.prices.prices:
                 raise ValueError("model version already registered")
+            # The look-ahead guard binds every model admitted after genesis as it bound
+            # the seed menu: a model trained on a replayed market's future is refused
+            # before any trial is charged (critique C2; Chapter II §III.b).
+            refusal = self.m.look_ahead_refusal(prop.openrouter_id)
+            if refusal is not None:
+                raise ValueError(refusal)
             if prop.openrouter_id.startswith("x402:"):
                 price, seller = self._seller_price(prop.openrouter_id)
                 contract = _model_contract(prop.openrouter_id, price, "x402")

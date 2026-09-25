@@ -428,9 +428,14 @@ class RecordedProvider:
     def complete(self, req: ModelRequest) -> ModelResponse:
         self._write(pending=self.prepaid._ceiling(req))  # written ahead of the dispatch
         try:
-            return self.prepaid.complete(req)
-        finally:
-            self._write(pending=None)
+            response = self.prepaid.complete(req)
+        except Exception:
+            self._write(pending=None)  # the admission observed the failure: settled
+            raise
+        # A BaseException (the process going down) writes nothing: the outcome is
+        # unknown, so the pending quote stays for the resume to count.
+        self._write(pending=None)
+        return response
 
     def state(self) -> dict[str, Any]:
         from dataclasses import asdict
@@ -480,6 +485,10 @@ class RecordedProvider:
         if self.latent is not None and record.get("latency_rng") is not None:
             version, internal, gauss = record["latency_rng"]
             self.latent.rng.setstate((version, tuple(internal), gauss))
+        # Consumed exactly once: the pending quote now sits in the uncertain total and the
+        # slot is cleared, durably, before anything that could refuse this resume runs.
+        # A refused resume, or one that makes no call, never counts it a second time.
+        self._write(pending=None)
         return {"known_micro": self.admission.known_micro,
                 "uncertain_micro": self.admission.uncertain_micro,
                 "remaining_micro": self.admission.remaining_micro,

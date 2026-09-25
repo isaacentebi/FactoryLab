@@ -146,3 +146,52 @@ def test_a_tape_world_publishes_no_connector_fetch_and_refuses_one(tmp_path):
                     ledger_path=None, router_gamma=.1, provider=ScriptedProvider())
     plain._ensure_connector_tool()
     assert "connector.fetch" in plain.tool_specs
+
+
+def _tape_runtime(manifest):
+    from decimal import Decimal
+
+    from factorylab.runtime.loop import Runtime
+    from factorylab.world.scripted import ScriptedProvider
+    from factorylab.world.tape import TapeVenue
+
+    rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
+                 router_gamma=.1, provider=ScriptedProvider(),
+                 exchange=TapeVenue(TAPE, coins=manifest.exchange.coins,
+                                    start_cash_usd=Decimal(100)))
+    rt._manage_reserve_window()  # a registration spends the window's novelty receipt
+    return rt
+
+
+@pytest.mark.gate
+def test_a_model_proposed_after_genesis_meets_the_same_cutoff_policy():
+    """Codex review of #151 (ce76eba): the guard covered only the seed menu, and a seat
+    could register any catalogue model or x402 seller after genesis. Every model
+    admitted later meets the menu's policy, and the rule is published with the proposal
+    shape. The late-cutoff menu entry is built without load validation, which would
+    refuse it: the proposal path must refuse it on its own."""
+    from factorylab.cortex.registration import ModelProposal
+    from factorylab.runtime.loop import Runtime
+    from factorylab.world.scripted import ScriptedProvider
+
+    ids = [m.id for m in load_manifest("scripted").models]
+    safe, late = ids[0], ids[1]
+    manifest = _taped(cutoffs={**dict.fromkeys(ids, "2026-01-01"), late: "2026-09-30"})
+    rt = _tape_runtime(manifest)
+    rt._register("h-1", ModelProposal(f"{safe}@low"))  # a safe cutoff: admitted
+    assert f"{safe}@low" in rt.prices.prices
+    for model_id, why in ((f"{late}@low", "was trained on data through 2026-09-30"),
+                          ("vendor/unlisted-model", "states no training_cutoff"),
+                          (f"{safe}:online", "no web route")):
+        with pytest.raises(ValueError, match=why):
+            rt._register("h-1", ModelProposal(model_id))
+        assert model_id not in rt.prices.prices
+    rule = rt.PROPOSAL_SHAPES["model"]["admission"]
+    assert "2026-09-24T" in rule and "no stated cutoff is refused" in rule
+    # The recorded waiver covers a model of unknown cutoff, and the rule says so.
+    waived = _tape_runtime(_taped(allow=True, cutoffs=dict.fromkeys(ids, "2026-01-01")))
+    assert waived.m.look_ahead_refusal("vendor/unlisted-model") is None
+    assert "allow_unknown_cutoff waiver" in waived.PROPOSAL_SHAPES["model"]["admission"]
+    plain = Runtime(load_manifest("scripted"), events=0, seed=1, initial_balance_micro=None,
+                    ledger_path=None, router_gamma=.1, provider=ScriptedProvider())
+    assert "admission" not in plain.PROPOSAL_SHAPES["model"]  # off a tape: unchanged

@@ -204,6 +204,57 @@ def test_an_unaffordable_spot_remainder_is_cancelled_and_the_fill_still_reported
     assert venue.open_orders() == []
 
 
+def _purr(rows):
+    """A PURR/USDC tape whose book is recorded at every row: (t, mid, bid, ask)."""
+    return _tape({"BTC": [(t, 100) for t, *_ in rows],
+                  "PURR/USDC": [(t, Decimal(mid)) for t, mid, _b, _a in rows]},
+                 books={"PURR/USDC": [(t, [(Decimal(b), Decimal(5))], [(Decimal(a), Decimal(5))])
+                                      for t, _m, b, a in rows]})
+
+
+def test_a_resting_spot_buy_with_exactly_its_notional_maker_fills():
+    """Codex review of #151 (ce76eba): a resting spot maker filled while it still held its
+    own reservation, so a valid buy needed its notional twice over."""
+    venue = _venue(_purr([(0, "5.05", "5.04", "5.06"), (10, "5.05", "5.04", "5.06"),
+                          (20, "5.0", "4.99", "5.00")]))
+    notional = Decimal(2) * Decimal("5.01")
+    exact = notional + (notional * Decimal("0.0004")).quantize(Decimal("0.000001"))
+    venue.class_transfer(exact, to_perp=False)  # its notional and its maker fee, no more
+    venue.advance(T0)
+    venue.place(_buy("2", limit="5.01", cid="b", market="spot", coin="PURR/USDC"))
+    assert _fills(venue.advance(T0 + 10 * S)) == []  # arrived below the ask: rests
+    [fill] = _fills(venue.advance(T0 + 20 * S))
+    assert Decimal(fill["px"]) == Decimal("5.01") and Decimal(fill["size"]) == 2
+    assert venue.lookup("b").status == "filled" and venue._spot_cash == 0
+
+
+def test_a_resting_spot_sell_with_exactly_its_inventory_maker_fills():
+    venue = _venue(_purr([(0, "5.0", "4.99", "5.00"), (10, "5.0", "4.99", "5.00"),
+                          (20, "5.0", "4.99", "5.00"), (30, "5.06", "5.055", "5.065")]))
+    venue.class_transfer(Decimal(50), to_perp=False)
+    venue.advance(T0)
+    venue.place(_buy("2", limit="5.02", cid="b", market="spot", coin="PURR/USDC"))
+    assert len(_fills(venue.advance(T0 + 10 * S))) == 1  # two PURR held, no more
+    venue.place(Order("PURR/USDC", False, Decimal(2), OrderKind.LIMIT, Decimal("5.05"), "s",
+                      market="spot"))
+    assert _fills(venue.advance(T0 + 20 * S)) == []  # arrived above the bid: rests
+    [fill] = _fills(venue.advance(T0 + 30 * S))
+    assert Decimal(fill["px"]) == Decimal("5.05") and fill["is_buy"] is False
+    assert venue.lookup("s").status == "filled"
+
+
+def test_a_refused_spot_maker_fill_keeps_its_order_resting_and_reserved():
+    venue = _venue(_purr([(0, "5.05", "5.04", "5.06"), (10, "5.05", "5.04", "5.06"),
+                          (20, "5.0", "4.99", "5.00")]))
+    venue.class_transfer(Decimal(11), to_perp=False)
+    venue.advance(T0)
+    venue.place(_buy("2", limit="5.01", cid="b", market="spot", coin="PURR/USDC"))
+    venue.advance(T0 + 10 * S)
+    venue._spot_cash = Decimal(1)  # its balance fell below the fill's cost while it rested
+    assert _fills(venue.advance(T0 + 20 * S)) == []
+    assert venue.lookup("b").status == "resting" and len(venue.open_orders()) == 1
+
+
 def test_within_a_tick_the_arriving_taker_is_served_before_the_resting_maker():
     tape = _tape({"BTC": [(0, 100), (10, 100), (20, 100), (30, 99)]},
                  books={"BTC": [_level(10, "99.9", "100.1"), _level(20, "99.9", "100.1"),

@@ -113,11 +113,35 @@ def test_a_call_the_process_died_inside_counts_its_whole_quote_on_resume(tmp_pat
     assert restored["died_inside_a_call"] is True
     assert fresh.known_micro == 1234 and fresh.uncertain_micro == quote
     assert restored["remaining_micro"] == 1_000_000 - 1234 - quote
-    assert json.loads(record.read_text())["pending_quote_micro"] == quote
-    with pytest.raises(_Died):  # the real path writes ahead, then records the outcome
+    # Consumed exactly once (Codex review of #151, ce76eba): the restore rewrote the
+    # record with the quote in the uncertain total and the pending slot cleared, so a
+    # resume that then fails, or makes no call, leaves nothing to count a second time.
+    written = json.loads(record.read_text())
+    assert written["pending_quote_micro"] is None
+    assert written["admission"]["uncertain_micro"] == quote
+    for _attempt in range(2):
+        again = rehearsal.Admission(cap_micro=1_000_000, max_calls=10)
+        repeat = fastloop.RecordedProvider(prepaid, again, record).restore()
+        assert repeat["died_inside_a_call"] is False
+        assert again.uncertain_micro == quote and again.attempted == 1
+    # The real path writes ahead; a process going down inside the call leaves the quote
+    # pending (its outcome is unknown), and an ordinary failure is settled by the
+    # admission that observed it.
+    with pytest.raises(_Died):
         provider.complete(request)
-    assert json.loads(record.read_text())["pending_quote_micro"] is None
+    assert json.loads(record.read_text())["pending_quote_micro"] == quote
     assert admission.attempted == 1
+
+    class Fails:
+        def complete(self, req):
+            raise ConnectionError("refused")
+
+    failing = fastloop.RecordedProvider(
+        rehearsal.PrepaidProvider(Fails(), manifest, admission), admission, record)
+    with pytest.raises(ConnectionError):
+        failing.complete(request)
+    assert json.loads(record.read_text())["pending_quote_micro"] is None
+    assert admission.attempted == 2 and admission.uncertain_micro == quote
 
 
 @pytest.mark.gate
@@ -136,3 +160,46 @@ def test_a_run_on_a_diarys_gaps_resumes_on_the_same_replay_clock(tmp_path, monke
     # The recorded gaps, in order and cycled, across the crash.
     assert [b - a for a, b in zip(ticks, ticks[1:], strict=False)] == [
         [4, 17, 4][i % 3] * 10**9 for i in range(TICKS - 1)]
+
+
+@pytest.mark.gate
+def test_a_refused_resume_then_a_resume_count_a_death_inside_a_call_once(tmp_path,
+                                                                          monkeypatch):
+    """Codex review of #151 (ce76eba): the pending quote was added in memory on restore
+    but left on disk, so a resume refused after the restore (a release mismatch, say)
+    made the next resume count it again."""
+    from factorylab.runtime import resume as resume_module
+    from factorylab.runtime.resume import ResumeError
+
+    complete = fastloop.PolicyProvider.complete
+    count = {"n": 0}
+
+    def dies_inside(self, req):
+        count["n"] += 1
+        if count["n"] == 12:
+            raise _Died  # inside the call, after the record named its quote
+        return complete(self, req)
+
+    monkeypatch.setattr(fastloop.PolicyProvider, "complete", dies_inside)
+    with pytest.raises(_Died):
+        fastloop.run("scripted", TICKS, WORLD, tmp_path / "out", cap_usd="2", seed=1)
+    monkeypatch.setattr(fastloop.PolicyProvider, "complete", complete)
+    [target] = (tmp_path / "out").iterdir()
+    pending = json.loads((target / fastloop.PROVIDER_RECORD).read_text())
+    quote = pending["pending_quote_micro"]
+    assert quote and pending["admission"]["uncertain_micro"] == 0
+
+    def refused(*_args, **_kwargs):
+        raise ResumeError("release digest differs from the saved world",
+                          code="release_mismatch")
+
+    monkeypatch.setattr(resume_module, "resume_runtime", refused)
+    first = fastloop.resume(target)
+    assert first["status"] == "failed" and "release digest" in first["error"]
+    assert first["admission_at_resume"]["uncertain_micro"] == quote
+    monkeypatch.undo()
+    second = fastloop.resume(target)
+    assert second["status"] == "completed", second.get("error")
+    at_resume = second["admission_at_resume"]
+    assert at_resume["uncertain_micro"] == quote  # once, not twice
+    assert at_resume["known_micro"] == 11 and at_resume["attempted"] == 12

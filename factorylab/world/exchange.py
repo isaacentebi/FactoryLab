@@ -751,8 +751,12 @@ class FakeExchange:
                              if o.market == "spot" and o.coin == coin and not o.is_buy), Decimal(0))
         return max(Decimal(0), held - committed)
 
-    def _spot_affordable(self, order: Order, px: Decimal) -> bool:
-        fee = (order.size * px * self.fee_bps / 10_000).quantize(Decimal("0.000001"))
+    def _spot_affordable(self, order: Order, px: Decimal, *,
+                         fee_rate: Decimal | None = None) -> bool:
+        """Affordable with its cost and the fee it would pay: ``fee_rate`` of notional,
+        by default the venue's ``fee_bps``."""
+        fee = (order.size * px * self.fee_bps / 10_000 if fee_rate is None
+               else order.size * px * fee_rate).quantize(Decimal("0.000001"))
         return ((not order.reduce_only and order.size * px + fee <= self._spot_available("USDC"))
                 if order.is_buy else order.size <= self._spot_available(order.coin))
 
@@ -784,7 +788,7 @@ class FakeExchange:
         held = pos.size if pos else Decimal(0)
         fee = (order.size * px * self.fee_bps / 10_000 if fee_rate is None
                else order.size * px * fee_rate).quantize(Decimal("0.000001"))
-        if not self._spot_affordable(order, px):
+        if not self._spot_affordable(order, px, fee_rate=fee_rate):
             return OrderResult(oid, "rejected", Decimal(0), None, "insufficient spot balance")
         realized = Decimal(0) if order.is_buy else (px - pos.entry_px) * order.size
         self._spot_cash += (-order.size * px if order.is_buy else order.size * px) - fee

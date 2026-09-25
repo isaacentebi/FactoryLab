@@ -1648,6 +1648,14 @@ consequence the outside already knew would learn to consult it rather than judge
   by proposal) states a `training_cutoff` whose day ends before the tape's first
   instant. A known cutoff that does not is refused whatever else is set. A model
   with no stated cutoff is refused unless `allow_unknown_cutoff` is true.
+- The same policy binds every model admitted after genesis: a model proposal (a
+  catalogue model, a reasoning variant, a `venice:` or `x402:` id) is refused before
+  its trial is charged unless the cutoff this manifest states for its base id ends
+  before the tape's first instant; a model off the menu has no stated cutoff, so it
+  is admitted only under the recorded `allow_unknown_cutoff` waiver; no web route is
+  ever admitted. The rule is published as a fact in `proposal_shapes.model.admission`
+  (`WorldManifest.look_ahead_rule`), and a refusal reaches the proposer as its
+  registration's refusal reason.
 - Web access is off, not a declared confound: a tape world has no `[web]` search
   route and lists no `:online` model and no model with a `web` plugin table (the
   harness removes them from the menu), publishes no `connector.fetch` (a fetch is

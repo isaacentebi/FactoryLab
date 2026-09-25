@@ -1164,6 +1164,51 @@ class WorldManifest:
             raise ValueError(f"exchange.tape recorded no mids for {sorted(missing)}")
         self._validate_look_ahead()
 
+    def look_ahead_refusal(self, model_id: str) -> str | None:
+        """Why a tape world may not call ``model_id``, or None; None in any other world.
+
+        One policy for the seed menu at load and for every model a seat proposes after
+        genesis (a live catalogue model, a reasoning variant, an x402 seller): the
+        model's training cutoff, as this manifest states it for its base id, must end
+        before the tape's first instant; a model with no stated cutoff (every model off
+        the menu) is refused unless the world's recorded ``allow_unknown_cutoff``
+        waiver covers it; a web route (``:online``, a search plugin) is never admitted.
+        """
+        tape = self.exchange.tape
+        if tape is None:
+            return None
+        base = model_id.partition("@")[0]
+        model = next((m for m in self.models if m.id == base), None)
+        if base.endswith(":online") or (model is not None and model.web):
+            return f"look_ahead: a tape world has no web route; {model_id!r} is one"
+        cutoff = None if model is None else model.training_cutoff
+        if cutoff is None:
+            if tape.allow_unknown_cutoff:
+                return None
+            return (f"look_ahead: model {model_id!r} states no training_cutoff; a tape "
+                    "world admits it only with exchange.tape.allow_unknown_cutoff")
+        if cutoff_end_ns(cutoff) > tape.start_ns:
+            return (f"look_ahead: model {model_id!r} was trained on data through {cutoff}, "
+                    f"which the tape (from {tape.start_ns} ns) does not postdate")
+        return None
+
+    def look_ahead_rule(self) -> str | None:
+        """The model admission rule of a tape world, as a published fact; None elsewhere."""
+        tape = self.exchange.tape
+        if tape is None:
+            return None
+        from datetime import UTC, datetime
+
+        start = datetime.fromtimestamp(tape.start_ns // NS_PER_SECOND, UTC).strftime(
+            "%Y-%m-%dT%H:%M:%SZ")
+        unknown = ("is registered: this world's manifest records the "
+                   "allow_unknown_cutoff waiver" if tape.allow_unknown_cutoff else
+                   "is refused")
+        return (f"This world replays a market recorded from {start}. A model id is "
+                "registered only when the training cutoff this world's manifest states for "
+                f"it ends before {start}; a model with no stated cutoff {unknown}. No web "
+                "route (an :online id or a search plugin) is registered.")
+
     def _validate_look_ahead(self) -> None:
         """No model of a tape world can have seen the tape's market (critique C2).
 
@@ -1179,16 +1224,9 @@ class WorldManifest:
         if type(tape.allow_unknown_cutoff) is not bool:
             raise ValueError("exchange.tape.allow_unknown_cutoff must be true or false")
         for model in self.models:
-            if model.training_cutoff is None:
-                if not tape.allow_unknown_cutoff:
-                    raise ValueError(
-                        f"look_ahead: model {model.id!r} states no training_cutoff; a tape "
-                        "world admits it only with exchange.tape.allow_unknown_cutoff")
-            elif cutoff_end_ns(model.training_cutoff) > tape.start_ns:
-                raise ValueError(
-                    f"look_ahead: model {model.id!r} was trained on data through "
-                    f"{model.training_cutoff}, which the tape (from {tape.start_ns} ns) does "
-                    "not postdate")
+            refusal = self.look_ahead_refusal(model.id)
+            if refusal is not None and "web route" not in refusal:
+                raise ValueError(refusal)
         if self.web.search_model is not None:
             raise ValueError("look_ahead: a tape world has no [web] search route")
         online = [m.id for m in self.models if m.id.endswith(":online") or m.web]
