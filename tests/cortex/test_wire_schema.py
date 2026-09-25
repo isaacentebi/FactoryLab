@@ -61,6 +61,8 @@ ACCEPTED = [
     (VERDICT, "Verdict", {"tool_calls": [CALL], "verdict": 0.2}),
     (VERDICT, "Verdict", {"requests": [CHILD]}),
     (VERDICT, "Verdict", {"status": "cannot", "reason": "out of scope"}),
+    # A decline's reason is optional (``declines``): the refusal form requires status.
+    (VERDICT, "Verdict", {"status": "cannot"}),
     (POLY, "ProducerReturn", {"emits": "ProducerReturn", "action": "hold"}),
     (POLY, "Note", {"emits": "Note", "body": "b"}),
     (POLY, None, {"tool_calls": [CALL]}),
@@ -72,7 +74,7 @@ REJECTED = [
     (VERDICT, "Verdict", {k: v for k, v in FINAL.items() if k != "verdict"}),
     (VERDICT, "Verdict", {**FINAL, "verdict": 1.5}),
     (VERDICT, "Verdict", {"tool_calls": [], "verdict": 0.2}),
-    (VERDICT, "Verdict", {"status": "cannot"}),
+    (VERDICT, "Verdict", {"status": "cannot", "reason": 3}),
     (VERDICT, "Verdict", {"status": "pending", "reason": "later"}),
     (POLY, None, {"emits": "ProducerReturn"}),
     (POLY, None, {"action": "hold"}),

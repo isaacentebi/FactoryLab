@@ -523,8 +523,8 @@ class VenueMixin:
         (``_run_tool``, never here). So nothing is placed for a return that is not
         ``ok`` (a malformed or failed reply, or a decline the invocation rewrote to
         ``refused``), nor for one whose outputs decline (``declines``: ``status``
-        reads ``cannot``, whatever order fields sit beside it or whether a
-        ``reason`` came with it), nor for one that is not a dict. Only the
+        reads ``cannot``, whatever order fields sit beside it), nor for one that
+        is not a dict. Only the
         contract's fields are read; the kernel never reads a reply's prose to
         decide what the seat meant (§I.a: it never chooses a seat's action).
 

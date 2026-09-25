@@ -715,11 +715,10 @@ class ComputeMixin:
                 raise SectionError(section, f"more than {limit} {section}", limit)
         validate_schema(live, {"type": "object", "properties": reserved_return_fields(
             max_children=self.m.tools.max_children, max_tool_calls=self.m.tools.max_tool_calls)})
-        # A decline in the published form ({"status": "cannot", "reason": ...}) names no
-        # kind: declining is not one of the contract's returns, so a contract with
-        # several kinds is not asked to pick one before it may decline.
-        declining = ("emits" not in parsed and parsed.get("status") == "cannot"
-                     and isinstance(parsed.get("reason"), str))
+        # A decline (``declines``) names no kind: declining is not one of the
+        # contract's returns, so a contract with several kinds is not asked to pick
+        # one before it may decline.
+        declining = "emits" not in parsed and declines(parsed)
         binding = self.return_bindings.get(req.handle)
         if binding is not None and not declining:
             emits = parsed.get("emits")
@@ -749,7 +748,7 @@ class ComputeMixin:
                      and not (producing and k == "counterfactual")},
                     spec.schemas[emits],
                     partial=bool(parsed.get("requests") or parsed.get("tool_calls")
-                                 or parsed.get("status") == "cannot"),
+                                 or declines(parsed)),
                 )
             if producing and not (parsed.get("requests") or parsed.get("tool_calls")):
                 # A final answer of a kind the world's first-tier verdicts are about.
@@ -2210,8 +2209,7 @@ class ComputeMixin:
         req = replace(req, cost_ceiling=min(req.cost_ceiling, ret.cost + cover))
         dropped = list(ret.dropped)  # optional sections dropped while the answer stood
         self._check_compute_return(req.handle, ret)
-        # A decline is read from ``status`` alone (``declines``): without a string
-        # ``reason`` or in another case it is still a decline, so its tool calls,
+        # A decline is read by ``declines`` alone, in any case, so its tool calls,
         # children and answer order never act (Chapter II §II.b: physics enforced).
         if ret.status == "ok" and declines(ret.outputs):
             ret = replace(ret, status="refused", children=(), tool_calls=())
