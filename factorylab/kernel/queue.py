@@ -158,6 +158,9 @@ class DecisionQueue:
         self.__retired: set[str] = set()
         self.__successors: dict[str, tuple[str, dict[str, str]]] = {}
         self.__deliveries: dict[str, list[LearningReturn]] = {}
+        # actor -> how many of its earliest deliveries were released (wave 17): its
+        # consumer read them, and only the count survives (``release_delivered``).
+        self.__released: dict[str, int] = {}
         self.__returns: dict[str, list[LearningReturn]] = {}
         self.__settled_contracts: set[str] = set()
         # The deciding agent's own distribution over its own actions, recorded
@@ -394,6 +397,10 @@ class DecisionQueue:
         if status == SettleStatus.SETTLED:
             self.__settled_contracts.add(decision.propensity.chosen)
         self._history(handle)
+        # The outcome is final: every later settle, timeout, propensity or action on
+        # this handle is refused before it reads the actions, and ``_history`` has just
+        # folded them into the contract's settled actions. Nothing reads them again.
+        self.__actions.pop(handle, None)
         if actor is not None:
             delivered = replace(original, channel=mapped_channel)
             self.__deliveries.setdefault(actor, []).append(delivered)
@@ -438,8 +445,48 @@ class DecisionQueue:
         return expired
 
     def returns_for(self, actor: str) -> tuple[LearningReturn, ...]:
-        """Return only thin feedback addressed to this actor, in delivery order."""
+        """Return the thin feedback addressed to this actor and not released, in delivery order.
+
+        An actor none of whose deliveries was released gets every one it was sent.
+        """
         return tuple(self.__deliveries.get(actor, ()))
+
+    def delivered_count(self, actor: str) -> int:
+        """How many returns were ever delivered to ``actor``, released ones included."""
+        return self.__released.get(actor, 0) + len(self.__deliveries.get(actor, ()))
+
+    def returns_since(self, actor: str, start: int) -> tuple[tuple[LearningReturn, ...], int]:
+        """``(the deliveries to actor from position start on, delivered_count(actor))``.
+
+        Guarantees a reader never silently skips a return: ``start`` before the
+        released prefix raises, since those returns are gone.
+        """
+        released = self.__released.get(actor, 0)
+        if type(start) is not int or start < released:
+            raise ValueError("returns before the released prefix were released")
+        retained = self.__deliveries.get(actor, ())
+        return tuple(retained[start - released:]), released + len(retained)
+
+    def release_delivered(self, actor: str, through: int) -> int:
+        """Forget the first ``through`` deliveries to ``actor``; return how many are gone.
+
+        The caller is the actor's one consumer and has read them (wave 17: retained
+        state no reader can reach is not kept; essay II.II.b, the disk and memory are
+        a hard cast). Guarantees: nothing is released past what was delivered (that
+        raises), a release never moves back, ``delivered_count`` is unchanged, and
+        every decision, its outcomes and its history stay addressable: only the
+        actor's copy of the thin feedback it already read is dropped.
+        """
+        if type(through) is not int or through < 0:
+            raise ValueError("a release names a nonnegative delivery count")
+        if through > self.delivered_count(actor):
+            raise ValueError("cannot release a return that was never delivered")
+        released = self.__released.get(actor, 0)
+        if through <= released:
+            return released
+        del self.__deliveries[actor][:through - released]
+        self.__released[actor] = through
+        return through
 
     def history(self, handle: str) -> tuple[LearningReturn, ...]:
         """Retain thin original-channel returns, including timeouts and undeliverable history."""
@@ -450,11 +497,12 @@ class DecisionQueue:
         return contract_id in self.__settled_contracts
 
     def state(self) -> dict:
-        """Retain all decisions, outcomes, retirement routes and delivered feedback in order."""
+        """Retain all decisions, outcomes, retirement routes and unreleased feedback in order."""
         return {
             "decisions": dict(self.__decisions), "retired": set(self.__retired),
             "successors": {k: (v[0], dict(v[1])) for k, v in self.__successors.items()},
             "deliveries": {k: list(v) for k, v in self.__deliveries.items()},
+            "released": dict(self.__released),
             "returns": {k: list(v) for k, v in self.__returns.items()},
             "settled_contracts": set(self.__settled_contracts),
             "declared": {k: list(v) for k, v in self.__declared.items()},
@@ -470,6 +518,8 @@ class DecisionQueue:
                      "settled_contracts"):
             setattr(self, f"_DecisionQueue__{name}", state[name])
         self.__declared = state.get("declared", {})
+        # Older checkpoints predate releases: every delivery is still held.
+        self.__released = dict(state.get("released", {}))
         # Older checkpoints predate action history: no action has a trail yet.
         self.__actions = dict(state.get("actions", {}))
         self.__settled_actions = {k: set(v) for k, v in state.get("settled_actions", {}).items()}

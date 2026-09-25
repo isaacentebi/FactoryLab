@@ -219,3 +219,96 @@ def test_time_out_names_its_decisions_and_emits_one_penalty_each(queue, open_dec
         queue.time_out([late], -1)
     settle(queue, early, score=0.9)  # the late settlement's right survives
     assert queue.get(early).status == SettleStatus.SETTLED
+
+
+# ---- wave 17: the retained-feedback bound ------------------------------------------
+
+
+def test_releasing_read_deliveries_keeps_the_count_and_every_decision(queue, open_decision):
+    """A consumer's already-read feedback is released; nothing else is lost."""
+    handles = [open_decision() for _ in range(4)]
+    for handle in handles:
+        settle(queue, handle)
+    assert queue.delivered_count("learner") == 4
+    assert queue.release_delivered("learner", 3) == 3
+    assert [r.handle for r in queue.returns_for("learner")] == handles[3:]
+    assert queue.delivered_count("learner") == 4
+    assert queue.returns_since("learner", 3) == (queue.returns_for("learner"), 4)
+    # Every decision, its outcome and its history stay addressable.
+    for handle in handles:
+        assert queue.get(handle).status is SettleStatus.SETTLED
+        assert len(queue.history(handle)) == 1
+    # A later delivery lands after the released prefix, counted from it.
+    extra = open_decision()
+    settle(queue, extra)
+    assert queue.returns_since("learner", 3)[1] == 5
+    assert [r.handle for r in queue.returns_since("learner", 4)[0]] == [extra]
+
+
+def test_invariant_a_release_never_passes_what_was_delivered(queue, open_decision):
+    """Violation attempt: release a return the actor was never sent."""
+    pending = open_decision()
+    settle(queue, open_decision())
+    with pytest.raises(ValueError):
+        queue.release_delivered("learner", 2)  # only one was delivered; one is pending
+    with pytest.raises(ValueError):
+        queue.release_delivered("absent", 1)
+    with pytest.raises(ValueError):
+        queue.release_delivered("learner", -1)
+    assert queue.delivered_count("learner") == 1
+    assert queue.get(pending).status is SettleStatus.PENDING
+    # Releasing nothing, or less than already released, changes nothing.
+    assert queue.release_delivered("learner", 1) == 1
+    assert queue.release_delivered("learner", 0) == 1
+    assert queue.delivered_count("learner") == 1
+
+
+def test_invariant_a_reader_cannot_silently_skip_a_released_return(queue, open_decision):
+    """Violation attempt: read from a position inside the released prefix."""
+    for _ in range(3):
+        settle(queue, open_decision())
+    queue.release_delivered("learner", 2)
+    with pytest.raises(ValueError):
+        queue.returns_since("learner", 1)
+    with pytest.raises(ValueError):
+        queue.returns_since("learner", 0)
+
+
+def test_the_release_survives_a_checkpoint(queue, open_decision):
+    from factorylab.kernel.ledger import Ledger
+    from factorylab.kernel.queue import DecisionQueue
+
+    for _ in range(3):
+        settle(queue, open_decision())
+    queue.release_delivered("learner", 2)
+    twin = DecisionQueue(Ledger())
+    twin._restore_state(queue.state())
+    assert twin.delivered_count("learner") == 3
+    assert twin.returns_for("learner") == queue.returns_for("learner")
+    with pytest.raises(ValueError):
+        twin.returns_since("learner", 1)
+    # A checkpoint written before releases restores with every delivery it holds.
+    older = {k: v for k, v in queue.state().items() if k != "released"}
+    twin._restore_state(older)
+    assert twin.delivered_count("learner") == 1
+
+
+def test_a_final_decision_s_actions_are_folded_then_forgotten(queue, open_decision):
+    """Actions are read only while a decision is open: once final they are folded into
+    the contract's history and dropped, and the history answers as before."""
+    from factorylab.kernel.queue import action_key
+
+    handle = open_decision()
+    key = action_key(tool="venue.place", kind="venue")
+    queue.record_actions(handle, [key])
+    assert handle in queue.state()["actions"]
+    settle(queue, handle)
+    assert handle not in queue.state()["actions"]
+    assert queue.has_action_history(queue.get(handle).propensity.chosen, key)
+    # Nothing may add to a final decision's actions, so nothing can need them.
+    with pytest.raises(ValueError):
+        queue.record_actions(handle, [key])
+    timed_out = open_decision()
+    queue.record_actions(timed_out, [key])
+    queue.time_out([timed_out], 0)
+    assert timed_out in queue.state()["actions"]  # a late settlement may still come
