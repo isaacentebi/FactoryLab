@@ -700,6 +700,18 @@ def validate_schema(value: Any, schema: dict, *, partial: bool = False) -> None:
             validate_schema(item, schema.get("items", {}))
 
 
+def declines(outputs: Any) -> bool:
+    """Whether a reply is the refusal form: its reserved ``status`` reads ``cannot``.
+
+    Guarantees one answer everywhere a decline is recognised, whatever else the
+    reply carries: ``status`` is the refusal form's field in the universal envelope
+    (``reserved_return_fields``), so its value decides and ``reason`` never does,
+    and case or surrounding space does not turn a decline into an instruction.
+    """
+    return (isinstance(outputs, dict)
+            and str(outputs.get("status", "")).strip().lower() == "cannot")
+
+
 def reserved_return_fields(*, max_children: int | None = None,
                            max_tool_calls: int | None = None) -> dict:
     """Publish the universal envelope: the reserved names and types every return may carry.
@@ -1055,7 +1067,7 @@ def validate_return_sections(parsed: dict, schema: dict, validator=None, req=Non
     # keeps its declared event body atomic rather than laundering it as a draft.
     continuation = bool(parsed.get("tool_calls") or parsed.get("requests"))
     status_shape = declared.get("status") if isinstance(declared, dict) else None
-    if (continuation and "status" in parsed and parsed["status"] != "cannot"
+    if (continuation and "status" in parsed and not declines(parsed)
             and isinstance(status_shape, dict) and "enum" in status_shape
             and parsed["status"] not in status_shape["enum"]):
         # "pending" beside tool calls is a draft of an answer not yet given.

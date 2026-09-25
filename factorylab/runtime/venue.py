@@ -517,6 +517,17 @@ class VenueMixin:
     def _execute_outputs(self, ret: Return, kind: str | None = None) -> None:
         """Place the market order an answer names, at most once, and only a producer kind's.
 
+        Invariant (the one gate an answer's order passes): a venue write happens
+        only from an answer that is a valid, non-declining order of its contract,
+        or from a venue write tool call the seat made and the kernel admitted
+        (``_run_tool``, never here). So nothing is placed for a return that is not
+        ``ok`` (a malformed or failed reply, or a decline the invocation rewrote to
+        ``refused``), nor for one whose outputs decline (``declines``: ``status``
+        reads ``cannot``, whatever order fields sit beside it or whether a
+        ``reason`` came with it), nor for one that is not a dict. Only the
+        contract's fields are read; the kernel never reads a reply's prose to
+        decide what the seat meant (§I.a: it never chooses a seat's action).
+
         Guarantees nothing is placed for a return whose kind does not own the answer
         order (``ANSWER_ORDER_KINDS``; primitive audit F7): a population kind's
         ``action`` is its own word. The kind is ``kind`` when the caller knows it,
@@ -525,11 +536,12 @@ class VenueMixin:
         rule holds: a decision acts once, and an answer never trades in place of a
         refused or dropped write.
         """
-        from factorylab.cortex.assembly import ANSWER_ORDER_KINDS
+        from factorylab.cortex.assembly import ANSWER_ORDER_KINDS, declines
 
         out = ret.outputs
         attempted = self.venue_attempts.pop(ret.handle, None)
-        if self.wallet.dead or ret.status != "ok":
+        if (self.wallet.dead or ret.status != "ok" or not isinstance(out, dict)
+                or declines(out)):
             return
         kind = kind or self.return_kinds.get(ret.handle)
         if kind is None:
