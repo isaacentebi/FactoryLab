@@ -309,3 +309,64 @@ def test_a_return_that_neither_traded_nor_earned_does_not_pay_off():
     table = LotTable().start("idle", 1).finish("idle", 0).resolve(21, 20, {})
     payoff = table.account("idle").payoff
     assert payoff.y == 0 and payoff.earned_micro == 0 and not payoff.marked
+
+
+# --- wave 16, D2 and D7: the horizon on the venue's clock, the liquidation mark ------
+
+TAKER = {"perp": "0.00045", "spot": "0.0007"}
+
+
+def _open_long(px="100", fee="0.045", *, cost=0):
+    """A return that bought one BTC at ``px`` paying ``fee``, opened at venue ns 1000."""
+    table = LotTable().start("opener", 1, ns=1_000).finish("opener", cost)
+    return fill(table, "opener", "1", size="1", px=px, fee=fee)
+
+
+def test_an_open_lot_at_an_unchanged_mid_carries_the_round_trip_and_does_not_pay_off():
+    """D7: marked at its liquidation value, the lot pays its exit fee at the venue's
+    taker rate beside the opening fee it paid, so an unchanged mid is a loss of the
+    whole round trip, exactly the fee a declined trade is charged."""
+    table = _open_long().resolve(2, 20, {"BTC": "100"}, now_ns=1_000 + 60, horizon_ns=60,
+                                 exit_rates=TAKER)
+    payoff = table.account("opener").payoff
+    assert payoff.marked and payoff.y == 0
+    assert payoff.exit_fee_micro == 45_000 and payoff.net_micro == -90_000
+    # Without the exit fee the same mark would read half the round trip.
+    bare = _open_long().resolve(2, 20, {"BTC": "100"}, now_ns=1_060, horizon_ns=60)
+    assert bare.account("opener").payoff.net_micro == -45_000
+    assert bare.account("opener").payoff.exit_fee_micro == 0
+
+
+def test_the_mark_waits_for_the_horizon_on_the_venue_clock_not_for_events_or_ticks():
+    table = _open_long()
+    assert table.resolve(10_000, 20, {"BTC": "100"}, tick=10_000, now_ns=1_059,
+                         horizon_ns=60, exit_rates=TAKER).account("opener").payoff is None
+    assert table.resolve(2, 20, {"BTC": "100"}, tick=2, now_ns=1_060, horizon_ns=60,
+                         exit_rates=TAKER).account("opener").payoff is not None
+
+
+def test_an_open_lot_of_a_market_whose_rate_is_unread_is_not_marked():
+    """An unread rate is never a number: the return waits, as it waits for a mid."""
+    table = _open_long().resolve(2, 20, {"BTC": "100"}, now_ns=1_060, horizon_ns=60,
+                                 exit_rates={"perp": None, "spot": "0.0007"})
+    assert table.account("opener").payoff is None
+    # A market the rates do not list (an event token) carries no exit fee.
+    table = _open_long().resolve(2, 20, {"BTC": "100"}, now_ns=1_060, horizon_ns=60,
+                                 exit_rates={"spot": "0.0007"})
+    assert table.account("opener").payoff.exit_fee_micro == 0
+
+
+def test_the_exit_fee_is_never_booked_as_money_and_the_real_close_is_booked_once():
+    """The mark is not money: a marked outcome books nothing when it is fixed, and the
+    real closing fee the venue charged is booked once, late, with the realised P&L."""
+    table = _open_long().resolve(2, 20, {"BTC": "100"}, now_ns=1_060, horizon_ns=60,
+                                 exit_rates=TAKER)
+    assert table.account("opener").late_micro == 0
+    table, late = table.late_realizations()
+    assert late == {}
+    table = fill(table, "opener", "2", size="1", px="100", buy=False, fee="0.045")
+    table, late = table.late_realizations()
+    assert late == {"opener": -90_000}  # both real fees, once; the estimate never
+    table, late = table.late_realizations()
+    assert late == {}
+    assert table.account("opener").payoff.net_micro == -90_000  # the mark was the truth

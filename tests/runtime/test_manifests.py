@@ -23,6 +23,8 @@ def _base() -> dict:
         "novelty": {"share": 0.1},
         "charter": seed_charter_table(),
         "immune": {"price_step": 0.05},
+        # A world that lists a venue states its repricing period (wave 16, D2).
+        "timing": {"world_repricing": "1h"},
     }
 
 
@@ -79,7 +81,7 @@ def test_the_load_half_of_the_ratio_rule_refuses_a_horizon_inside_min_ratio_tick
     """Time audit T2: a horizon a decision waits on is an outer loop over the tick."""
     for key in ("verdict_timeout_events", "consequence_backstop_events"):
         d = _base()
-        d["evaluation"] = {key: 2, "consequence_horizon_ticks": 1}
+        d["evaluation"] = {key: 2}
         with pytest.raises(ValueError, match="at least timing.min_ratio ticks"):
             manifest_from_dict(d)
     d = _base()
@@ -148,13 +150,16 @@ def test_a_manifest_hashes_what_it_says_and_a_default_is_no_exception():
     (read_requests_per_10s 200, kernel_reserve_per_10s 100) and watcher work gained its
     hard limit ([subscriptions] max_watcher_evaluations_per_sweep), and again when the
     road not taken came to be priced net of the venue's own fee
-    (evaluation.opportunity_scale_bps left; wave 16, D1); each time it is a new v0."""
+    (evaluation.opportunity_scale_bps left; wave 16, D1), and again when the consequence
+    horizon became world_repricing / min_ratio on the venue's clock (the mark's
+    evaluation.consequence_horizon_ticks left, and the scripted world states its
+    timing.world_repricing; wave 16, D2); each time it is a new v0."""
     scripted = load_manifest("scripted")
     assert '"forecast_horizon_events":10' in scripted.canonical_json()
     assert '"chaos":{"connector_timeout":0.0' in scripted.canonical_json()
     assert '"contract":"json_object"' in scripted.canonical_json()
     assert scripted.manifest_hash() == (
-        "14cfd3f116855b601cf3a7e550586f3787f6128d69105ffab8b536888e1557cd"
+        "ed33369bd83a1388316af04a19685fbef7be7f5956269516b2d389b80121e1f4"
     )
 
     implicit = manifest_from_dict(_base())
@@ -183,18 +188,26 @@ def test_the_deleted_reward_chain_keys_are_refused_not_ignored(key, value):
 
 
 def test_clock_bounds_seed_validation_and_hash():
-    """max_tick is derived from the world's repricing period (time audit T7).
+    """max_tick is derived from the consequence horizon (wave 16, D2; time audit T7).
 
-    A governance period is at least min_ratio consequence backstops, so a tick is
-    admissible while that many ticks fit inside the world's repricing period. A
-    world that states no repricing period has no upper bound.
+    The horizon is world_repricing / min_ratio on the venue's clock, and the decision
+    loop settles min_ratio times faster than it, so a tick is admissible while it is at
+    most world_repricing / min_ratio^2. A world that lists no venue states no repricing
+    period and has no upper bound; one that lists a venue must state it.
     """
     d = _base()
     d["clock"] = {"min_tick": "10s"}
     d["tick_interval"] = "10s"
+    d.pop("timing")
+    with pytest.raises(ValueError, match="world_repricing is required"):
+        manifest_from_dict(d)
+    d["exchange"] = {"kind": "fake", "coins": []}
     assert manifest_from_dict(d).max_tick_ns is None
-    d["timing"] = {"world_repricing": "10h"}  # 36,000 s over 3 x 200 backstop ticks
+    assert manifest_from_dict(d).consequence_horizon_ns is None
+    del d["exchange"]
+    d["timing"] = {"world_repricing": "9m"}  # H = 540 s / 3 = 180 s; max tick 180 s / 3
     m = manifest_from_dict(d)
+    assert m.consequence_horizon_ns == 180_000_000_000
     assert m.clock.min_tick_ns == 10_000_000_000
     assert m.max_tick_ns == 60_000_000_000
     assert "max_tick" not in m.canonical_json()

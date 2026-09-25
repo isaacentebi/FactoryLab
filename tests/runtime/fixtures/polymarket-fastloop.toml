@@ -363,6 +363,10 @@ share = 0.1
 cadence_sample = 200
 min_ratio = 3
 jitter_fraction = 0.2
+# This fixture's repricing period: its consequence horizon is world_repricing /
+# min_ratio = 10 minutes of venue time, the 60 ticks its event market is marked at
+# before it resolves (wave 16, D2; essay II.IV.c).
+world_repricing = "30m"
 
 [evaluation]
 consequence_backstop_events = 60

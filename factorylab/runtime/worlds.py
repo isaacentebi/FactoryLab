@@ -388,9 +388,6 @@ class EvaluationSpec:
     min_coverage: float = 0.5
     trial_amount_micro: int = 100_000  # novelty trial paid per registration
     forecast_horizon_events: int = 10
-    #: Anticipatory settlement (essay II.IV.b): world ticks after a judged return opens
-    #: at which its mark settles its judges' consequence reward. At most the backstop.
-    consequence_horizon_ticks: int = 10
     consequence_backstop_events: int = 200
     adversarial_share: float = 0.15  # cap on router mass over antagonist assemblies
     sampling_step: float = 0.1  # consequence-mix step per divergent window
@@ -656,19 +653,36 @@ class WorldManifest:
     # ---- derived
 
     @property
-    def max_tick_ns(self) -> int | None:
-        """The slowest tick at which a governance tier can keep up with the world, or None.
+    def consequence_horizon_ns(self) -> int | None:
+        """H, the one horizon a judged return's outcome is fixed at, on the venue's clock.
 
-        Essay II.IV.c: governance must not lag the world. Its period is at least
-        ``min_ratio`` consequence backstops, so a tick is admissible while that many
-        ticks fit within the world's repricing period. A world that states no
-        repricing period has no upper bound here.
+        Wave 16, D2 and ruling R-C. Realized consequence is the slowest loop, and
+        governance must fit ``min_ratio`` of it inside the world's repricing period
+        (essay II.IV.c: "an inner loop must resolve itself several times faster than
+        the outer loop that commands it, with ratios that start from 3:1"), so the
+        longest horizon the ratio admits is ``timing.world_repricing / timing.min_ratio``.
+        It is counted in venue nanoseconds, never ticks, so the fact a verdict is graded
+        on does not depend on the factory's own latency. None when the world states no
+        repricing period (a world that lists no venue).
         """
         repricing = self.timing.world_repricing_ns
         if repricing is None:
             return None
-        return repricing // (self.timing.min_ratio
-                             * self.evaluation.consequence_backstop_events)
+        return repricing // self.timing.min_ratio
+
+    @property
+    def max_tick_ns(self) -> int | None:
+        """The slowest tick at which the loops a consequence commands can keep up, or None.
+
+        Essay II.IV.c: the decision loop must settle ``min_ratio`` times faster than
+        the consequence horizon it is graded on, so a tick is admissible while it is at
+        most ``consequence_horizon_ns / min_ratio``. A world that states no repricing
+        period has no upper bound here.
+        """
+        horizon = self.consequence_horizon_ns
+        if horizon is None:
+            return None
+        return horizon // self.timing.min_ratio
 
     def price_table(self) -> PriceTable:
         t = PriceTable()
@@ -1223,10 +1237,6 @@ class WorldManifest:
         backstop = self.evaluation.consequence_backstop_events
         if type(backstop) is not int or backstop < 1:
             raise ValueError("consequence_backstop_events must be a positive integer")
-        horizon = self.evaluation.consequence_horizon_ticks
-        if type(horizon) is not int or not 1 <= horizon <= backstop:
-            raise ValueError("evaluation.consequence_horizon_ticks must be an integer in "
-                             "[1, consequence_backstop_ticks]")
         share = self.evaluation.multi_judge_share
         if type(share) not in (int, float) or not isfinite(share) or not 0 <= share <= 1:
             raise ValueError("evaluation.multi_judge_share must be finite and in [0, 1]")
@@ -1259,6 +1269,11 @@ class WorldManifest:
         repricing = self.timing.world_repricing_ns
         if repricing is not None and (type(repricing) is not int or repricing <= 0):
             raise ValueError("timing.world_repricing must be a positive duration")
+        if repricing is None and (self.exchange.coins or self.exchange.spot_pairs):
+            # Wave 16, D2: a world that lists a venue grades its judges at
+            # world_repricing / min_ratio, so it must state the venue's repricing period.
+            raise ValueError("timing.world_repricing is required in a world that lists a "
+                             "venue: the consequence horizon is world_repricing / min_ratio")
         maximum = self.max_tick_ns
         if (type(self.tick_interval_ns) is not int
                 or self.tick_interval_ns < self.clock.min_tick_ns
@@ -1615,6 +1630,12 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             raise ValueError(f"evaluation.{key} was removed (ruling R1): a producer's "
                              "reward is its judges' verdict, and realized consequence "
                              "grades the judges")
+    if "consequence_horizon_ticks" in ev:
+        # Wave 16, D2: one horizon, timing.world_repricing / timing.min_ratio on the
+        # venue's clock, and no mark before it. A mark in ticks is refused (R8).
+        raise ValueError("evaluation.consequence_horizon_ticks was removed (wave 16, D2): "
+                         "a judged return's outcome is fixed once, at timing.world_repricing "
+                         "/ timing.min_ratio on the venue's clock")
     if "opportunity_scale_bps" in ev:
         # Wave 16, D1: the road not taken is a binary money fact, net of the venue's own
         # round-trip fee and funding. A scale no world fact states is refused (R8).
@@ -1632,7 +1653,6 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         min_coverage=float(ev.get("min_coverage", 0.5)),
         trial_amount_micro=usd_to_micro(ev.get("trial_amount_usd", "0.10"), rounding="exact"),
         forecast_horizon_events=int(ev.get("forecast_horizon_events", 10)),
-        consequence_horizon_ticks=ev.get("consequence_horizon_ticks", 10),
         consequence_backstop_events=_tick_horizon(ev, "consequence_backstop", 200),
         adversarial_share=ev.get("adversarial_share", 0.15),
         sampling_step=ev.get("sampling_step", 0.1),

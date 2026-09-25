@@ -457,10 +457,16 @@ stays in [0, 1] and is a proper scoring rule (an affine map of Brier)
 proved right, and one that only repeats the base rate earns 0.5. `y` is:
 
 - for a return that executed venue operations (or earned service income):
-  `return_paid_off`, 0 or 1, fixed when its lots close or marked at the
-  consequence backstop. A venue write counts once the venue accepted it or may
-  have (`uncertain`); a return whose every write the venue rejected executed
-  nothing;
+  `return_paid_off`, 0 or 1, fixed when its lots close or at the consequence
+  horizon `H`, where a lot still open is marked to its liquidation value: the mid
+  less the venue's taker fee rate on its notional (wave 16, D7), so the acting road
+  pays the same round trip as the road not taken. The mark is never money: what the
+  lot realises when it really closes is booked once, late, with the fee the venue
+  charged (`consequence.late`). Funding the venue paid on the lot is in its charges.
+  A venue write counts once the venue accepted it or may have (`uncertain`); a
+  return whose every write the venue rejected executed nothing. A return that acted
+  is measured this way and any counterfactual it named is ignored: one predicate,
+  `_acted`, decides which road measures a return;
 - for a return that executed nothing and named a declined trade
   (`counterfactual {coin, side}`): `declined-trade-net-v1` (wave 16, D1; ruling
   R2: "net of fees, priced ex ante on the named trade"). `net = s * (m1 - m0) / m0
@@ -468,7 +474,10 @@ proved right, and one that only repeats the base rate earns 0.5. `y` is:
   mid the world had broadcast when the return was made, `m1` its mid at the
   horizon, `f` the venue's taker fee rate for the coin's market (the spot schedule
   for a pair, the perp schedule otherwise; ruling R-I) in force when the return was
-  made; `y = 1` when `net <= 0` (declining was right in money), else `0`. The taker
+  made, less `s * sum(rho) * 10^4` for the venue's funding rate `rho` in force at each
+  of its funding times between `m0` and `m1` (perps only; longs pay a positive rate;
+  the rate at a funding time is the venue's latest print at or before it); `y = 1`
+  when `net <= 0` (declining was right in money), else `0`. The taker
   rate is read from the venue's own listing (`instruments`, `taker_fee_rate`) at the
   first broadcast and once per `timing.world_repricing`, and ledgered as
   `venue.fee_schedule` when it changes. A trade whose rate the venue did not state
@@ -518,22 +527,36 @@ are not returns a first-tier verdict judges and carry no such requirement; neith
 declined commission (`status: "cannot"`), which is not a contract return. The
 scoring above is unchanged.
 
-**Anticipatory settlement** (§IV.b: an explorer is compensated sooner than the
-lifetime of what it found). A verdict's reward is scored as soon as its return's
-outcome is fixed, or at the latest `consequence_horizon_ticks` after the return
-opened, on its mark then: the lots marked to the mids then
-(`consequence.marked`), the declined trade priced then
-(`consequence.opportunity_mark`). The final measurement (a fixed payoff, or the
-declined trade priced at the backstop, `consequence.opportunity`) then trains
-the judge's standing and the base rate once (`verdict.consequence_late`) and
-never re-settles the reward. The timing is never a charter price window
-(evaluations P7). A judgement may choose a target other than its delivered
-subject only while that target's outcome is unanswered: not fixed, marked or
-priced, and before its horizon.
+**One horizon, on the venue's clock** (wave 16, D2; ruling R-C; §IV.c: realized
+consequence is the slowest loop, "ultimately dependent on the timescale of
+consequentiality"). A judged return's outcome is fixed once, at
+`H = timing.world_repricing / timing.min_ratio` after the return opened, counted in
+venue nanoseconds and never in ticks, so the fact a verdict is graded on does not
+depend on the factory's own latency: a named trade is priced from its mid when the
+return was made to the first mid timestamped at or after `H`
+(`consequence.opportunity`, `consequence.attempted`, with `open_ns` and
+`resolved_ns`); an acting return is fixed at `H` or when its lots close. Every
+verdict about the return is scored once then, against the base rate as it stood
+before the return's `y` entered it, and that one score is the judge's consequence
+signal, its standing and the base rate's observation, in the same pass. There is no
+earlier mark and no later re-scoring. `H` is the longest horizon the §IV.c ratio
+admits: governance must fit `timing.min_ratio` of it inside the repricing period,
+and the decision loop must settle `timing.min_ratio` times faster than it, so a tick
+is admissible while it is at most `H / timing.min_ratio` (`max_tick`). Anticipatory
+settlement (§IV.b: an explorer is compensated sooner than the lifetime of what it
+found) is the producer's: it is paid its judges' verdicts at once, a forecast of
+the outcome; the judges are forecasters, paid when the horizon closes (ruling R-D).
+A consequence the venue has not given within its **consequence patience**,
+`H + verdict_timeout_ticks` of world time from the judgement (the backstop plus the
+verdict window it replaces), is none; a judgement waits for what it judged to settle
+for one patience per tier at or beneath it. The timing is never a charter price
+window (evaluations P7). A judgement may choose a target other than its delivered
+subject only while that target's outcome is unanswered: not fixed or priced, and
+before its horizon.
 
-`[evaluation] consequence_horizon_ticks` (integer in [1, backstop], default 10) is
-hashed. `opportunity_scale_bps` was removed in wave 16: a manifest that names it is
-refused.
+`[evaluation] consequence_horizon_ticks` and `opportunity_scale_bps` were removed in
+wave 16: a manifest that names either is refused. A world that lists a venue must
+state `timing.world_repricing`.
 
 A declined commission (`status: cannot`) is credited to the router that drew the
 seat as an abstention is, the zero-consequence reward less its role's card
@@ -560,17 +583,17 @@ before the tier above could read the metas (essay II.IV.c: the queue withholds a
 verdict until it settles, at a 3:1 ratio or more; II.III.b: evaluators are graded
 tier upon tier). Before this, 0 to 4 of the 11 to 17 tier-three grades delivered in
 200 events counted on seeds 1 to 5 of the recursive scripted world; every one now
-counts. A judgement held in a window closes at the latest after
-`consequence_backstop_ticks + verdict_timeout_ticks` plus that window's drawn
-duration; one no window took (a judgement a judge chose rather than a routed one)
+counts. A judgement held in a window closes at the latest after its carry patience
+(one consequence patience per tier at or beneath it, on the world's clock) plus that
+window's drawn duration; one no window took (a judgement a judge chose rather than a routed one)
 waits `verdict_timeout_ticks`. A judgement whose decision has not settled when its
 window releases is withheld, not dropped (II.IV.c: "withheld ... until it
 settles"): it is carried into the tier's next window, which opens at the release
 with a duration drawn by the same law (`CascadeGate.carried`, `cascade.carry`),
 keeps its own open time and open grade window, and is read in the first release
 after its decision settles, ahead of that window's own arrivals of equal priority,
-within `meta_read_share`. It is carried until `consequence_backstop_ticks +
-verdict_timeout_ticks` after it was made; past that it is listed under `backstop`
+within `meta_read_share`. It is carried for its carry patience after it was made;
+past that it is listed under `backstop`
 in `cascade.carry` and its grade window closes. A delivered grade that cannot
 count, and a grade window that closes with no grade, are ledgered as
 `evaluator.grade_censored` with the reason (passed over, no grade returned, no
@@ -602,13 +625,14 @@ learners").
 verdict `q` on that return. It is drawn when the verdict is given, in the same tick,
 before the cascade (every other reader of a Verdict is drawn at the cascade's
 release), and it is shown the world exactly as the judge it re-judges was shown it,
-frozen at that verdict; a counter made in a later tick is censored. When the world measures the return (the same mark or
-final measurement its judges are rewarded on), it settles on
+frozen at that verdict; a counter made in a later tick is censored. When the world
+measures the return (the one measurement at the horizon its judges are scored on), it
+settles on
 `0.5 + 0.5 * ((1 - (q - y)^2) - (1 - (v - y)^2))` (`counter-v1`, `counter.settled`),
 `v` the verdict it read: a proper rule in `q`, 0.5 for a counter that repeats the
 verdict. A return the world will not measure is never on an adversary's menu
-(`no world outcome`), and a counter the world leaves unmeasured past the backstop
-settles censored. A counter never touches the judge's or the producer's reward. It is
+(`no world outcome`), and a counter the world leaves unmeasured past its consequence
+patience settles censored. A counter never touches the judge's or the producer's reward. It is
 measured in its own `adversary` scope (a card may answer for `adversary`, and counter
 settlements bear that scope's prices), capped with the antagonists at
 `adversarial_share`, and cannot be commissioned.
@@ -924,9 +948,9 @@ No manifest key: the formulas are published in `world.mechanics.committee` and
   window (`lambda_post.posted`; a refusal is `lambda_post.refused` and reaches the
   poster's inbox). Each post opens its own `policy` decision under
   `assembly:<id>`. A post is a claim about the window it is posted in: once that
-  window's decisions have their world-measured consequences
-  (`consequence_backstop_ticks + verdict_timeout_ticks`, in windows at the tick in
-  force, at least `timing.min_ratio`), the window's shadow price `y` is read: the
+  window's decisions have their world-measured consequences (the consequence
+  patience in ticks plus `verdict_timeout_ticks`, in windows at the tick in force, at
+  least `timing.min_ratio`), the window's shadow price `y` is read: the
   least-squares slope, across the card's scopes (per role or assembly; at least 3,
   with variance in `v`), of each scope's mean consequence (a judgement's
   consequence score, a return's `return_paid_off` or priced declined trade) on its
@@ -1130,8 +1154,8 @@ parameters; the observer never substitutes a second set of thresholds.
 | `timing.cadence_sample` | positive integer | `200` | Yes: retained consequence-latency sample length (latencies in world ticks). |
 | `timing.min_ratio` | integer, at least 3 | `3` | Yes: the one ratio every derived loop keeps to the measured loop it commands (price, immune organ, sampling actuator, cascade tiers, novelty patience, policy grading, governance), and the ratio slack on every decision cutoff. |
 | `timing.jitter_fraction` | finite nonnegative number | `0.2` | Yes: how far each derived loop's own continuous jitter may lengthen its period. |
-| `timing.world_repricing` | Absent, or a positive duration | Absent | Yes: the world's own repricing period, a fact about the venue (Hyperliquid funding settles hourly; edition 6 states `"1h"`). Governance is viable only while `timing.min_ratio` times the slowest loop fits inside it and inside the run's remaining ticks (`governance.nonviable`); `max_tick` is derived from it. |
-| `evaluation.consequence_backstop_events` (or `consequence_backstop_ticks`) | positive integer, in world ticks | `200`; scripted worlds `20`; testnet `60` | Yes: consequence horizon and conservative governance period floor. |
+| `timing.world_repricing` | A positive duration; required in a world that lists a venue | Absent | Yes: the world's own repricing period, a fact about the venue (Hyperliquid funding settles hourly; edition 6 states `"1h"`). The consequence horizon is `world_repricing / min_ratio` on the venue's clock, and `max_tick` is that over `min_ratio` (wave 16, D2). Governance is viable only while `timing.min_ratio` times the slowest loop fits inside it and inside the run's remaining ticks (`governance.nonviable`). |
+| `evaluation.consequence_backstop_events` (or `consequence_backstop_ticks`) | positive integer, in world ticks | `200`; scripted worlds `20`; testnet `60` | Yes: the conservative governance period floor and the tick-counted waits that are not a consequence (a requester's credit, a tool-use window). A judged return's outcome is fixed at the consequence horizon on the venue's clock, not here (wave 16, D2). |
 | `evaluation.verdict_timeout_events` (or `verdict_timeout_ticks`) | positive integer, in world ticks | `20` | Yes: how long a producer return waits for its judges' verdicts before it is censored, and how long an evaluator decision whose judgement no cascade window took waits for a grade. A routed evaluator decision's grade window is its cascade window's read, not this constant (see "The grade window is the read above it"). |
 | `prices.penalty_cap` | finite number strictly between 0 and 1 | `0.5` | Yes: maximum penalty before attribution. |
 | `prices.min_blame_share` | finite number in [0, 1] | `0.1` | Yes: floor on one decision's share of a generic (non-attributable) violation. |
@@ -1279,8 +1303,9 @@ spelled for their unit (a manifest that gives both spellings must give one
 number). The judgement deadlines the decision queue enforces were already
 computed from these numbers times the tick interval, so the two now agree.
 
-The shipped testnet manifest sets `tick_interval = "120s"` and
-`evaluation.consequence_backstop_events = 60`. With `timing.min_ratio = 3`,
+The shipped testnet manifest sets `tick_interval = "120s"` (it ran at 600 s before
+wave 16; a tick must now be at most the consequence horizon over `min_ratio`, 400 s
+at `world_repricing = "1h"`) and `evaluation.consequence_backstop_events = 60`. With `timing.min_ratio = 3`,
 the conservative activation floor is 180 ticks, or six hours at the declared
 tick interval. Both scripted manifests use a 20-tick backstop so the
 500-event demonstration can activate a card amendment and evaluator retirement

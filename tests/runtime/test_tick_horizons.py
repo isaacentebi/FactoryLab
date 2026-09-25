@@ -41,8 +41,12 @@ def test_a_verdict_awaiting_its_meta_outlives_a_burst_of_internal_events():
     assert rt.queue.get(handle).status is SettleStatus.CENSORED
 
 
-def test_the_consequence_backstop_marks_an_open_position_after_ticks_not_events():
+def test_the_consequence_horizon_marks_an_open_position_on_the_venue_clock():
+    """Wave 16, D2: an open position's outcome is fixed at H = world_repricing /
+    min_ratio of venue time after the return opened: not after internal events, and not
+    after ticks consumed, so a slow factory does not change the fact it is graded on."""
     rt = make_runtime()
+    rt._read_fee_schedule()
     prop = PropensityRecord(("seed-decider",), (1.0,), "seed-decider", 0, "router:Tick", "t")
     handle = rt.queue.open(actor="router:Tick", event_id="trade", propensity=prop,
                            channel="verdict", deadline_ns=10**18, parent_handle=None,
@@ -56,7 +60,13 @@ def test_the_consequence_backstop_marks_an_open_position_after_ticks_not_events(
     rt.consequences.finish(handle, 0)
     backstop = rt.ev.consequence_backstop_events
     rt.n += 20 * backstop
+    rt.ticks_consumed += 20 * backstop
     assert all(p.handle != handle for p in rt.consequences.resolve(rt.n))
-    rt.ticks_consumed += backstop
+    rt.clock.now_ns += rt._horizon_ns() - 1
+    assert all(p.handle != handle for p in rt.consequences.resolve(rt.n))
+    rt.clock.now_ns += 1
     (payoff,) = [p for p in rt.consequences.resolve(rt.n) if p.handle == handle]
     assert payoff.marked
+    # Marked to liquidation value: 60 USD of notional at the venue's 3.5 bp taker rate.
+    assert payoff.exit_fee_micro == 21_000 and payoff.net_micro == -21_000 and payoff.y == 0
+

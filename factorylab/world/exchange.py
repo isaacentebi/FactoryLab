@@ -1105,6 +1105,11 @@ class HyperliquidExchange:
     than raising on venue-side rejection.
     """
 
+    #: The venue's funding times: Hyperliquid settles perp funding every hour, on the
+    #: hour. A fact about the venue, read by the price of a named road not taken
+    #: (wave 16, D1), never a setting.
+    funding_interval_ns = NS_PER_HOUR
+
     def __init__(
         self,
         *,

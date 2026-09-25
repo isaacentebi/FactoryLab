@@ -16,6 +16,11 @@ the price is the market's anticipatory settlement of the belief (essay II.IV.b),
 so the decision is scored at the backstop rather than waiting on a resolution
 that may come after its learner has moved on. The resolution itself closes the
 lot later (``redeem``) and its money reaches the owner as a late realization.
+
+A backstop mark values an open lot at what closing it would realise (wave 16, D7):
+the mid less the exit fee at the venue's taker rate for its market, so the acting
+road is charged the same round trip as the road not taken. The mark is never money:
+the real close is booked once, late, with the fee the venue actually charged.
 """
 
 from collections.abc import Mapping
@@ -52,6 +57,9 @@ class Payoff:
     marked: bool = False
     liquidated: bool = False
     earned_micro: int = 0
+    # The exit fee a marked outcome deducted for its open quantity (wave 16, D7): an
+    # estimate at the venue's taker rate, never money.
+    exit_fee_micro: int = 0
     # The documented reason this outcome carries no fact at all (R4-C). A
     # censored outcome closes the account so later returns resolve, but its
     # ``y`` is not an observation: nothing is scored from it and no money moves
@@ -99,6 +107,9 @@ class ReturnAccount:
     # The world tick the return opened at, when the caller keeps a tick clock: the
     # consequence backstop is then counted in ticks, never in internal events.
     opened_at_tick: int | None = None
+    # The venue-clock nanosecond the return opened at, when the caller keeps one: the
+    # consequence horizon is then counted on the venue's clock (wave 16, D2).
+    opened_at_ns: int | None = None
 
 
 @dataclass(frozen=True)
@@ -139,16 +150,20 @@ class LotTable:
             None, coin, True, quantity, price, Fraction(0), "spot",
         )))
 
-    def start(self, handle: str, event: int, tick: int | None = None) -> "LotTable":
+    def start(self, handle: str, event: int, tick: int | None = None,
+              ns: int | None = None) -> "LotTable":
         """Admit a unique return before its orders can produce fills."""
         _require_id(handle)
         _require_event_index(event, "event")
         if tick is not None:
             _require_event_index(tick, "tick")
+        if ns is not None:
+            _require_event_index(ns, "ns")
         if any(r.handle == handle for r in self.returns):
             raise ValueError("return already admitted")
         return replace(self, returns=(*self.returns,
-                                      ReturnAccount(handle, event, opened_at_tick=tick)))
+                                      ReturnAccount(handle, event, opened_at_tick=tick,
+                                                    opened_at_ns=ns)))
 
     def finish(self, handle: str, cost_micro: int) -> "LotTable":
         """Fix a return's nonnegative total compute cost exactly once."""
@@ -432,15 +447,26 @@ class LotTable:
 
     def resolve(self, event: int, backstop: int, mids: Mapping[str, str], *,
                 censored: Mapping[str, str] | None = None,
-                tick: int | None = None) -> "LotTable":
+                tick: int | None = None, now_ns: int | None = None,
+                horizon_ns: int | None = None,
+                exit_rates: Mapping[str, str | None] | None = None) -> "LotTable":
         """Fix ready outcomes once; marks require a valid mid for every remaining coin.
 
         The backstop counts from the return's opening, including any time awaiting
-        a fill: in world ticks when the caller passes ``tick`` and the account
-        recorded the tick it opened at, in the caller's events otherwise. Accepted
+        a fill: on the venue's clock when the caller passes ``now_ns`` and
+        ``horizon_ns`` and the account recorded the nanosecond it opened at (wave 16,
+        D2), else in world ticks when the caller passes ``tick`` and the account
+        recorded the tick it opened at, else in the caller's events. Accepted
         unfilled orders defer early settlement. A return pays off when the realised
         result credited to it, as opener or closer, exceeds its own cost; a no-fill
         return cannot inherit anyone's P&L.
+
+        ``exit_rates`` (market -> the venue's taker rate, a decimal fraction of
+        notional) marks every open lot of a listed market to its liquidation value,
+        the mid less ``mid * size * rate`` (wave 16, D7); an open lot of a listed
+        market whose rate is None cannot be marked, and its return waits, as it
+        waits for a missing mid. A market the mapping does not list carries no exit
+        fee. The deduction is an estimate at the mark, never booked as money.
 
         ``censored`` names returns that also sent an order nobody could observe
         (handle -> documented reason). Such a return resolves on its own schedule
@@ -456,14 +482,24 @@ class LotTable:
                 continue
             lots = [lot for lot in self.lots if lot.handle == account.handle]
             waiting = any(o.handle == account.handle and o.remaining for o in self.orders)
-            age = (tick - account.opened_at_tick
-                   if tick is not None and account.opened_at_tick is not None
-                   else event - account.opened_at_event)
-            if (lots or waiting) and age < backstop:
+            if (now_ns is not None and horizon_ns is not None
+                    and account.opened_at_ns is not None):
+                young = now_ns - account.opened_at_ns < horizon_ns
+            else:
+                age = (tick - account.opened_at_tick
+                       if tick is not None and account.opened_at_tick is not None
+                       else event - account.opened_at_event)
+                young = age < backstop
+            if (lots or waiting) and young:
                 continue
             net = account.realized_micro
+            exit_fee = Fraction(0)
             if lots:
                 if any(lot.coin not in mids for lot in lots):
+                    continue
+                if exit_rates is not None and any(
+                        lot.market in exit_rates and exit_rates[lot.market] is None
+                        for lot in lots):
                     continue
                 for lot in lots:
                     mid = exact(mids[lot.coin])
@@ -472,6 +508,9 @@ class LotTable:
                     net += (mid - lot.px) * lot.size * (
                         1 if lot.is_buy else -1
                     ) * 1_000_000 - lot.charges_micro
+                    if exit_rates is not None and lot.market in exit_rates:
+                        exit_fee += mid * lot.size * exact(exit_rates[lot.market]) * 1_000_000
+                net -= exit_fee
             micro = net.numerator // net.denominator
             # Everything the return cost: its own compute and tools.
             cost = account.cost_micro
@@ -486,6 +525,7 @@ class LotTable:
                 bool(lots),
                 account.liquidated,
                 account.earned_micro,
+                exit_fee_micro=-((-exit_fee.numerator) // exit_fee.denominator),
                 censored=reason,
             )
             # An unmarked outcome is settled money, booked to the owner when it is
@@ -495,37 +535,6 @@ class LotTable:
             updates[account.handle] = replace(account, payoff=outcome,
                                               late_micro=0 if lots else micro)
         return self._accounts(updates)
-
-    def mark(self, handle: str, event: int, mids: Mapping[str, str], *,
-             censored: Mapping[str, str] | None = None) -> Payoff | None:
-        """The outcome this return would be fixed at now, without fixing it.
-
-        Guarantees the same arithmetic ``resolve`` fixes a marked outcome with (lots
-        marked to ``mids``, its own cost, the paid-off rule),
-        and changes nothing. None for a return with no final cost, one whose lots
-        lack a mid, or one with an order nobody could observe. A return already
-        fixed returns its fixed outcome.
-        """
-        account = self.account(handle)
-        if account.payoff is not None:
-            return account.payoff
-        if account.voided or account.cost_micro is None or (censored or {}).get(handle):
-            return None
-        lots = [lot for lot in self.lots if lot.handle == handle]
-        if any(lot.coin not in mids for lot in lots):
-            return None
-        net = account.realized_micro
-        for lot in lots:
-            mid = exact(mids[lot.coin])
-            if mid <= 0:
-                return None
-            net += (mid - lot.px) * lot.size * (1 if lot.is_buy else -1) * 1_000_000 \
-                - lot.charges_micro
-        micro = net.numerator // net.denominator
-        cost = account.cost_micro
-        acted = account.opened_lots > 0 or account.closes > 0 or account.earnings > 0
-        return Payoff(handle, int(acted and micro + account.earned_micro > cost), micro, cost,
-                      event, bool(lots), account.liquidated, account.earned_micro)
 
     def _accounts(self, updates: dict[str, ReturnAccount]) -> "LotTable":
         if not updates:

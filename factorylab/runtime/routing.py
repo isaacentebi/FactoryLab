@@ -1200,8 +1200,10 @@ class RoutingMixin:
                                      CH_COUNTER}:
             # An evaluator decision is graded against its judged decision's measured
             # outcome and an exposure against its judges' (ruling R1), so each lives as
-            # long as the return's backstop, like a forecast.
-            horizon = self.ev.consequence_backstop_ticks
+            # long as the consequence patience on the venue's clock, in delivered ticks
+            # (wave 16, D2), and at least the backstop, like a forecast.
+            horizon = max(self.ev.consequence_backstop_ticks,
+                          self._patience_ticks() + self.ev.verdict_timeout_ticks)
         if CH_CONSEQUENCE in channels.values():
             # A population forecast may select any admitted horizon; its invocation
             # must not be cut off before its predictions come due.

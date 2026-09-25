@@ -137,6 +137,10 @@ share = 0.1
 cadence_sample = 200
 min_ratio = 3
 jitter_fraction = 0.2
+# The world's own repricing period, as this scripted world states it: its consequence
+# horizon is world_repricing / min_ratio = 20 s of venue time, twenty 1 s ticks
+# (wave 16, D2; essay II.IV.c).
+world_repricing = "60s"
 
 [prices]
 eta = 0.5

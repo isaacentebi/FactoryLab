@@ -165,6 +165,8 @@ def test_runtime_runs_a_live_shaped_world_with_stub_venue_and_scripted_models() 
         "seed": 5,
         "initial_balance_usd": "20",
         "tick_interval": "1s",
+        # A world that lists a venue states its repricing period (wave 16, D2).
+        "timing": {"world_repricing": "1h"},
         "exchange": {"kind": "hyperliquid", "mainnet": False, "coins": ["BTC", "ETH"]},
         # Three fake families: a world that seeds judging holds the evaluator population
         # Chapter II requires, and no judge reads its author's family (Wave 5a).

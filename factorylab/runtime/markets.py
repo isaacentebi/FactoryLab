@@ -243,12 +243,12 @@ class MarketsMixin:
     def _margin_horizon(self) -> int:
         """Closed windows until a window's decisions have their world-measured consequences.
 
-        A decision's consequence is fixed by its backstop plus the verdict window at
-        the latest (``evaluation.consequence_backstop_ticks + verdict_timeout_ticks``),
-        converted to closed windows at the price loop's current period in ticks, and
-        never sooner than ``timing.min_ratio`` windows.
+        A decision's consequence is fixed within its consequence patience plus the
+        verdict window at the latest (``_patience_ticks`` + ``verdict_timeout_ticks``;
+        wave 16, D2), converted to closed windows at the price loop's current period
+        in ticks, and never sooner than ``timing.min_ratio`` windows.
         """
-        ticks = self.ev.consequence_backstop_ticks + self.ev.verdict_timeout_ticks
+        ticks = self._patience_ticks() + self.ev.verdict_timeout_ticks
         window = self.clockwork.period("price", default=self.m.timing.min_ratio)
         return max(int(self.m.timing.min_ratio), -(-ticks // window))
 
@@ -448,9 +448,10 @@ class MarketsMixin:
         committee["shadow_prices"] = (
             f"a seat may post a card's lambda p in [0, {lambda_max}] for the reserve window it "
             "posts in. When that window's decisions have their world-measured consequences "
-            "(consequence_backstop_ticks + verdict_timeout_ticks later, at least "
-            "timing.min_ratio windows) the window's shadow price y is read: the least-squares "
-            "slope, across the card's scopes (per role or assembly, at least 3, with "
+            "(the consequence patience, timing.world_repricing / timing.min_ratio plus "
+            "verdict_timeout_ticks, in ticks, plus verdict_timeout_ticks later, at least "
+            "timing.min_ratio windows) the window's shadow price y is read: the "
+            "least-squares slope, across the card's scopes (per role or assembly, at least 3, with "
             "variance in v), of the scope's mean consequence (a judgement's consequence "
             "score, a return's return_paid_off or priced declined trade, in [0, 1]) on its "
             "violation v, clipped to [0, lambda_max]. score = 1 - ((p - y) / lambda_max)^2 "

@@ -551,8 +551,10 @@ class BootstrapMixin:
         self.world_outcomes: dict[str, dict[str, Any]] = {}
         # Anticipatory settlement: each judged return's mark once taken, and the judge
         # decisions rewarded on it whose final measurement is still owed to standing.
-        self.marked_outcomes: dict[str, dict[str, Any]] = {}
-        self.late_verdicts: dict[str, dict[str, Any]] = {}
+        # The venue's clock (wave 16, D2): the latest mid and funding-rate print of each
+        # coin, [ts_ns, value], that a named trade opens from and is measured by.
+        self.venue_marks: dict[str, list] = {}
+        self.funding_prints: dict[str, list] = {}
         self.reference_mids: dict[str, dict[str, Any]] = {}
         self.consequence_mix: float = self.ev.consequence_share  # live sampling actuator
         self.sampling_history: list[dict[str, Any]] = []

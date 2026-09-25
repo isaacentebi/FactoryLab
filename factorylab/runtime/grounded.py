@@ -149,6 +149,50 @@ def _net(open_mids: Iterable[tuple[str, str]], due_mids: Iterable[tuple[str, str
             "_net": net}
 
 
+def advance_funding(state: dict, ts_ns: int, rate: str) -> None:
+    """Assign the rate in force at every funding time a venue rate print has passed.
+
+    ``state`` is ``{"interval", "cursor", "rate", "rates"}``: the venue's funding
+    interval in nanoseconds, the time up to which funding times are assigned, the rate
+    of the latest print at or before it (None before any), and the ``[time, rate]``
+    pairs assigned so far. Guarantees every funding time ``t`` (a multiple of the
+    interval) in ``(cursor, ts_ns]`` is assigned the rate of the latest print at or
+    before ``t``: this print's own rate when ``t == ts_ns``, the previous one's
+    otherwise (None when the world had read none: an unread rate is never a number).
+    """
+    interval = int(state["interval"])
+    tau = (int(state["cursor"]) // interval + 1) * interval
+    while tau <= ts_ns:
+        state["rates"].append([tau, str(rate) if tau == ts_ns else state["rate"]])
+        tau += interval
+    if ts_ns >= int(state["cursor"]):
+        state["cursor"] = int(ts_ns)
+        state["rate"] = str(rate)
+
+
+#: A named trade's funding times not yet all assigned a rate (``funding_due``).
+FUNDING_PENDING = "funding-pending"
+
+
+def funding_due(state: dict | None, open_ns: int, due_ns: int) -> list[str] | str | None:
+    """The rates the named side would have paid at the venue's funding times in
+    ``(open_ns, due_ns]``, in order.
+
+    Guarantees ``[]`` for a coin with no funding (``state`` None: a spot pair) or no
+    funding time in the window, ``FUNDING_PENDING`` while a funding time in the window
+    has not yet been passed by a rate print, and None when one was passed with no
+    rate read before it (an unread rate is never a number).
+    """
+    if state is None:
+        return []
+    interval = int(state["interval"])
+    last = (due_ns // interval) * interval
+    if last > open_ns and last > int(state["cursor"]):
+        return FUNDING_PENDING
+    rates = [rate for tau, rate in state["rates"] if open_ns < tau <= due_ns]
+    return None if any(rate is None for rate in rates) else rates
+
+
 def opportunity_cost(open_mids: Iterable[tuple[str, str]],
                      due_mids: Iterable[tuple[str, str]],
                      taker_rate: Decimal | str | None,

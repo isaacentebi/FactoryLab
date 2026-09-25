@@ -381,6 +381,12 @@ class Runtime(
             dq.append({"t_s": ev.ts_ns // 1_000_000_000, "mid": str(ev.payload.get("mid"))})
             if self._fee_schedule_due():
                 self._read_fee_schedule()
+            # The venue's clock: a named trade is measured at the first mid at or after
+            # its horizon (wave 16, D2).
+            self._observe_mid(coin, ev.ts_ns, str(ev.payload.get("mid")))
+        elif ev.kind is EventKind.FUNDING and ev.payload.get("rate") is not None:
+            self._observe_funding(str(ev.payload.get("coin")), ev.ts_ns,
+                                  str(ev.payload.get("rate")))
 
         # Due tranches are mandatory even while dormant; each released tranche is then
         # classified (C10): base_share across live seats, the remainder unallocated.
@@ -714,16 +720,15 @@ class Runtime(
           kind and published tier alone;
         * the hindsight refusal is permanent: for a judged tier, R's consequence
           score is in (``consequence_scores`` never forgets one); for a return,
-          its account is voided or its consequence horizon, counted in ticks from
-          the tick it opened, has passed (the horizon is the manifest's, fixed for
-          the world's life, and ticks only advance).
+          its account is voided or its consequence horizon, counted on the world's
+          clock from the nanosecond it opened, has passed (the horizon is the
+          manifest's, fixed for the world's life, and the clock only advances).
 
         The key itself stays: a judgement may still name R, and is refused as before.
         """
         from dataclasses import replace
 
         queued = {self._event_subject(ev) for ev in self.internal}
-        horizon = self.ev.consequence_horizon_ticks
         for about, event in self.return_events.items():
             key = {"Verdict": "evaluator_handle", "MetaVerdict": "by"}.get(
                 str(event.kind), "about_handle")
@@ -741,9 +746,7 @@ class Runtime(
                     account = self.consequences.table.account(about)
                 except KeyError:
                     continue
-                if not account.voided and (
-                        account.opened_at_tick is None
-                        or self.ticks_consumed < account.opened_at_tick + horizon):
+                if not account.voided and not self._past_horizon(account):
                     continue
             self.return_events[about] = replace(event, payload=slim)
 
@@ -1073,11 +1076,11 @@ class Runtime(
 
         A prediction precedes its outcome. The router's subject is not chosen, but a
         return that names an older target instead may not name one whose outcome the
-        world has already given: a consequence already fixed, or one past the horizon
-        at which its mark settles its judges (``consequence_horizon_ticks``). The
+        world has already given: a consequence already fixed, or one past the
+        consequence horizon on the venue's clock (``_horizon_ns``; wave 16, D2). The
         judgement's own deadline is not compared: it lives until its target's
-        backstop by construction, and a verdict is scored when the world answers,
-        not when its decision expires. A judgement of an evaluator decision predicts
+        consequence patience by construction, and a verdict is scored when the world
+        answers, not when its decision expires. A judgement of an evaluator decision predicts
         that decision's consequence score (ruling R1), so it may not name one whose
         score is already known; its economic account says nothing about it.
         """
@@ -1094,16 +1097,27 @@ class Runtime(
             return "judgement needs a chosen return a seat authored, not an abstention"
         # A return that acted is answered when its payoff is fixed; one that did not
         # has an account fixed at once that says nothing about it (its measurement, if
-        # any, is its declined trade's price), so only its mark or final price answers.
+        # any, is its declined trade's price), so only its price answers.
         if ((account.payoff is not None and self._acted(about))
-                or about in self.marked_outcomes or about in self.world_outcomes):
+                or about in self.world_outcomes):
             return "judgement needs a chosen return whose consequence is still open"
-        # The horizons count world ticks consumed since the return opened (defect 1).
-        opened = (account.opened_at_tick if account.opened_at_tick is not None
-                  else self.ticks_consumed)
-        if self.ticks_consumed >= opened + self.ev.consequence_horizon_ticks:
+        if self._past_horizon(account):
             return "judgement needs a chosen return before its consequence horizon"
         return None
+
+    def _past_horizon(self, account) -> bool:
+        """Whether a return's consequence horizon has passed on the world's clock.
+
+        Counted from the nanosecond the return opened (wave 16, D2); an account opened
+        without a clock reading is aged in ticks at the delivered interval.
+        """
+        from factorylab.runtime.clockwork import tick_ns
+
+        if account.opened_at_ns is not None:
+            return self.clock.now_ns >= account.opened_at_ns + self._horizon_ns()
+        opened = (account.opened_at_tick if account.opened_at_tick is not None
+                  else self.ticks_consumed)
+        return (self.ticks_consumed - opened) * tick_ns(self.tick_clock) >= self._horizon_ns()
 
     CHILD_SUBJECT_REFUSAL = ("a requested judgement may only address the requesting decision "
                              "or its ancestors; judging anyone else's return is the router's")
@@ -1554,7 +1568,8 @@ class Runtime(
             # same world the verdict was made in, never a later one.
             self.verdict_views[handle] = {
                 "world": {k: v for k, v in inputs["actor_context"].items() if k != "seats"},
-                "early_warning": inputs["early_warning"], "tick": self.ticks_consumed}
+                "early_warning": inputs["early_warning"], "tick": self.ticks_consumed,
+                "ns": self.clock.now_ns}
         self._emit(
             EventKind.VERDICT,
             {
@@ -1783,6 +1798,7 @@ class Runtime(
         self.pending_counters[handle] = {
             "about": about, "q": q, "judge_handle": payload.get("evaluator_handle"),
             "judge_q": judged, "evaluator_id": sample.chosen, "tick": self.ticks_consumed,
+            "ns": self.clock.now_ns,
         }
         self.ledger.append({"kind": "counter.opened", "handle": handle, "about_handle": about,
                             "judge_handle": payload.get("evaluator_handle"), "q": q,

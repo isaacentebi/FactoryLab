@@ -693,10 +693,11 @@ _RUNTIME_FIELDS = (
     # outcomes and the mids declined trades are priced from. Each defaults empty
     # when an older checkpoint lacks it.
     "exposure_scores", "arrived_verdicts", "consequence_scores", "world_outcomes",
-    "reference_mids", "marked_outcomes", "late_verdicts",
-    # Wave 16 (D1): the venue's taker rates as last read. Absent from an older
-    # checkpoint: the next broadcast reads them.
-    "fee_schedule",
+    "reference_mids",
+    # Wave 16 (D1, D2): the venue's taker rates as last read, and the venue's clock:
+    # each coin's latest mid and funding-rate print. Absent from an older checkpoint:
+    # the next broadcast reads them.
+    "fee_schedule", "venue_marks", "funding_prints",
     # Wave 5a (evaluations M1, P5): each judge's ordinary consequence tally, the
     # adversarial judges' open counter-verdicts, and the chaos faults of the tick in
     # progress. Each defaults empty when an older checkpoint lacks it.

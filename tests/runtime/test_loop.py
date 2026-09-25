@@ -44,10 +44,12 @@ def test_crash_world_wipes_its_venue_without_spending_its_compute_authority() ->
 
 def test_determinism_same_seed_same_summary() -> None:
     m = load_manifest("scripted")  # every window is derived from the loops it commands
-    a = run_world(m, events=70, seed=7)
-    b = run_world(m, events=70, seed=7)
-    # Seventy events reach an immune window, a router replacement and a price update: a
-    # card is priced once its sample is in, on its own loop (time audit T1, T2).
+    a = run_world(m, events=80, seed=7)
+    b = run_world(m, events=80, seed=7)
+    # Eighty events reach an immune window, a router replacement and a price update: a
+    # card is priced once its sample is in, on its own loop (time audit T1, T2). A judge
+    # settles at the consequence horizon, never on an earlier mark (wave 16, D2), so its
+    # samples arrive later than the seventy events this took before.
     assert a["stats"]["immune_windows"] and a["stats"]["routers_replaced"]
     assert a["stats"]["price_updates"]
     a.pop("aggregates", None)
@@ -492,6 +494,7 @@ def _market_runtime(market_http, *, provider=None, events=10, treasury=None, see
         "novelty": {"share": 0.5},
         "treasury": treasury or {"insolvency_events": 3},
         "charter": seed_charter_table(), "immune": {"price_step": 0.05},
+        "timing": {"world_repricing": "1h"},
     })
     return Runtime(
         manifest, events=events, seed=1, initial_balance_micro=None, ledger_path=None,

@@ -3,7 +3,9 @@
 name = "testnet"
 seed = 4
 initial_balance_usd = "90"
-tick_interval = "600s"
+# 120 s, not the 600 s this world first ran at: a tick must be at most the consequence
+# horizon (world_repricing / min_ratio = 20 min) over min_ratio (wave 16, D2).
+tick_interval = "120s"
 
 [exchange]
 kind = "hyperliquid"
@@ -166,6 +168,10 @@ share = 0.1
 cadence_sample = 200
 min_ratio = 3
 jitter_fraction = 0.2
+# The world's own repricing period, a fact about the venue: Hyperliquid settles perp
+# funding every hour. The consequence horizon a judged return is graded at is
+# world_repricing / min_ratio on the venue's clock (wave 16, D2; essay II.IV.c).
+world_repricing = "1h"
 
 [evaluation]
 # Two hours of world time (60 events at a 120s tick) for a trade to be judged, so

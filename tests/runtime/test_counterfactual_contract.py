@@ -31,7 +31,7 @@ from factorylab.runtime.grounded import (
 from factorylab.world.models import ModelResponse
 from factorylab.world.scripted import _description_from_prompt
 from tests.runtime.test_loop import _consequence_produce
-from tests.runtime.test_reward_chain import Population, _advance, _judge, _mids, _rows
+from tests.runtime.test_reward_chain import Population, _horizon, _judge, _mids, _rows
 
 #: The refusals the published schema itself gives (``validate_schema``), naming what failed:
 #: an answer whose action is not "order" is read against the form it chose, not against the
@@ -121,11 +121,11 @@ def test_a_counterfactual_that_is_not_a_coin_and_a_side_is_malformed(named):
 
 @pytest.mark.parametrize("named,listed", [("BTC", {"BTC": "100"}),
                                           ("kPEPE", {"kPEPE": "100", "BTC": "5"})])
-def test_a_named_declined_trade_is_priced_at_the_backstop_and_its_judges_are_world_graded(
+def test_a_named_declined_trade_is_priced_at_the_horizon_and_its_judges_are_world_graded(
         named, listed):
-    """A valid counterfactual is priced at the consequence backstop from the mids frozen
+    """A valid counterfactual is priced at the consequence horizon from the mid frozen
     when the return was made, and the verdict about it is scored against that world
-    fact (``opportunity-cost-v2``), never only by the tier above. The coin is matched
+    fact (``declined-trade-net-v1``), never only by the tier above. The coin is matched
     in the world's own spelling, a mixed-case listing included."""
     rt = _world({"action": "hold", "counterfactual": {"coin": named, "side": "buy"}},
                 verdicts=(0.9,), **listed)
@@ -134,11 +134,11 @@ def test_a_named_declined_trade_is_priced_at_the_backstop_and_its_judges_are_wor
     assert rt.reference_mids[producer]["declined"] == {"coin": named, "side": "buy"}
     judge = _judge(rt, event)
     rt._settle_arrived_verdicts()
-    _mids(rt, **{named: "102"})
-    _advance(rt, rt.ev.consequence_backstop_ticks + 1)
+    _horizon(rt, **{named: "102"})
     (priced,) = _rows(rt, "consequence.opportunity", handle=producer)
     assert priced["declined"] == {"coin": named, "side": "buy"}
-    assert priced["horizon_ticks"] == rt.ev.consequence_backstop_ticks
+    assert priced["horizon_ns"] == rt._horizon_ns()
+    assert priced["resolved_ns"] - priced["open_ns"] >= rt._horizon_ns()
     assert rt.world_outcomes[producer]["kind"] == OPPORTUNITY_DEFINITION
     scored = _rows(rt, "verdict.consequence", handle=judge)
     assert scored and scored[0]["outcome"] == OPPORTUNITY_DEFINITION
@@ -210,8 +210,7 @@ def test_a_rejected_venue_write_with_a_counterfactual_is_priced_by_the_named_tra
     assert not rt._acted(producer)
     judge = _judge(rt, event)
     rt._settle_arrived_verdicts()
-    _mids(rt, BTC="99")
-    _advance(rt, rt.ev.consequence_backstop_ticks + 1)
+    _horizon(rt, BTC="99")
     (priced,) = _rows(rt, "consequence.opportunity", handle=producer)
     assert priced["declined"] == {"coin": "BTC", "side": "sell"}
     assert rt.world_outcomes[producer]["kind"] == OPPORTUNITY_DEFINITION
@@ -231,12 +230,11 @@ def test_an_uncertain_venue_write_is_acting_and_needs_no_counterfactual(monkeypa
 
 
 def _attempted_run(rt, gross_to="102", *, verdict_q=0.7):
-    """Judge the one producer return in ``rt``, move BTC, and run past the backstop."""
+    """Judge the one producer return in ``rt``, move BTC, and run past the horizon."""
     producer, event = _consequence_produce(rt)
     judge = _judge(rt, event)
     rt._settle_arrived_verdicts()
-    _mids(rt, BTC=gross_to)
-    _advance(rt, rt.ev.consequence_backstop_ticks + 1)
+    _horizon(rt, BTC=gross_to)
     return producer, judge
 
 
@@ -282,6 +280,27 @@ def test_an_uncertain_answer_order_stays_with_return_paid_off(monkeypatch):
     assert rt._acted(producer)
     assert not _rows(rt, "consequence.attempted", handle=producer)
     assert rt.world_outcomes.get(producer, {}).get("kind") != ATTEMPTED_DEFINITION
+
+
+def test_a_return_that_acted_is_measured_by_return_paid_off_whatever_it_named():
+    """Wave 16, section 9 (D1 and D7 precedence): one predicate, ``_acted``, decides the
+    road. A return whose venue write filled and that also named a counterfactual is
+    measured by ``return_paid_off``; the trade it named is ignored, never priced."""
+    rt = _world({"action": "order", "tool_calls": [{"tool": "venue.place_market", "args": {
+        "coin": "BTC", "side": "buy", "size": "0.0001"}}]},
+        {"action": "hold", "counterfactual": {"coin": "BTC", "side": "sell"}},
+        verdicts=(0.6,))
+    producer, event = _consequence_produce(rt)
+    assert _returned(rt, producer) == ("ok", None)
+    assert rt._acted(producer)
+    assert rt.reference_mids[producer]["declined"] == {"coin": "BTC", "side": "sell"}
+    judge = _judge(rt, event)
+    rt._settle_arrived_verdicts()
+    _horizon(rt, BTC="100")
+    assert rt.world_outcomes[producer]["kind"] == "return_paid_off"
+    assert not _rows(rt, "consequence.opportunity", handle=producer)
+    (scored,) = _rows(rt, "verdict.consequence", handle=judge)
+    assert scored["outcome"] == "return_paid_off"
 
 
 @pytest.mark.parametrize("side", ["buy", "sell"])

@@ -448,12 +448,23 @@ class ContractConsequences(ReturnConsequences):
     """
 
     def __init__(self, ledger, backstop, runtime):
-        super().__init__(ledger, backstop)
+        super().__init__(ledger, backstop, horizon_ns=runtime.m.consequence_horizon_ns)
         self.runtime = runtime
 
     def _tick(self, event: int) -> int:
         """The runtime's world ticks consumed: the unit the backstop counts (defect 1)."""
         return self.runtime.ticks_consumed
+
+    def _now_ns(self) -> int | None:
+        """The world's clock at the event being processed: the venue's clock the
+        consequence horizon is counted on (wave 16, D2), never the factory's ticks."""
+        return self.runtime.clock.now_ns
+
+    def _exit_rates(self) -> dict[str, str | None]:
+        """The venue's taker rate per market as last read (wave 16, D7): an open lot of
+        a market whose rate the venue did not state is not marked."""
+        schedule = self.runtime.fee_schedule or {}
+        return {market: schedule.get(market) for market in ("perp", "spot")}
 
     def observe(self, kind, payload, event):
         if kind != "Fill" or payload.get("market") != "event":

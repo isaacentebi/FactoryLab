@@ -12,10 +12,15 @@ from factorylab.settlement.vocabulary import _require_event_index
 class ReturnConsequences:
     """Every change to attribution, costs, inventory and outcomes has preceding ledger evidence."""
 
-    def __init__(self, ledger: Ledger, backstop: int) -> None:
+    def __init__(self, ledger: Ledger, backstop: int, *, horizon_ns: int | None = None) -> None:
         _require_event_index(backstop, "backstop", positive=True)
+        if horizon_ns is not None:
+            _require_event_index(horizon_ns, "horizon_ns", positive=True)
         self.ledger = ledger
         self.backstop = backstop
+        # The consequence horizon on the venue's clock (wave 16, D2): when set, a
+        # return's backstop is counted in nanoseconds from its opening, not in ticks.
+        self.horizon_ns = horizon_ns
         self.table = LotTable()
         self.mids: dict[str, str] = {}
         self.pending_orders: dict[str, dict] = {}
@@ -103,6 +108,17 @@ class ReturnConsequences:
         keeps world ticks overrides it, so the backstop is counted in ticks."""
         return event
 
+    def _now_ns(self) -> int | None:
+        """The venue clock the horizon counts, or None. A runtime overrides it."""
+        return None
+
+    def _exit_rates(self) -> dict[str, str | None] | None:
+        """The venue's taker rate per market a mark deducts as the exit fee, or None.
+
+        None marks open lots at the mid alone. A runtime overrides it with the rates
+        the venue stated (wave 16, D7)."""
+        return None
+
     def _apply(self, kind: str, evidence: dict, table: LotTable) -> None:
         self.ledger.append({"kind": f"consequence.{kind}", **evidence})
         self.table = table
@@ -110,8 +126,10 @@ class ReturnConsequences:
     def start(self, handle: str, event: int) -> None:
         """Admit the return before any tool can create exposure on its behalf."""
         tick = self._tick(event)
-        self._apply("return", {"handle": handle, "event": event, "tick": tick},
-                    self.table.start(handle, event, tick))
+        ns = self._now_ns()
+        self._apply("return", {"handle": handle, "event": event, "tick": tick,
+                               **({"ns": ns} if ns is not None else {})},
+                    self.table.start(handle, event, tick, ns))
 
     def finish(self, handle: str, cost_micro: int) -> None:
         """Persist the full metered cost before it becomes the payoff threshold."""
@@ -300,22 +318,15 @@ class ReturnConsequences:
         if self.pending_orders:
             return fixed  # Unknown inventory ownership cannot manufacture a no-fill outcome.
         table = self.table.resolve(event, self.backstop, self.mids,
-                                   censored=self._unknown_portions(), tick=self._tick(event))
+                                   censored=self._unknown_portions(), tick=self._tick(event),
+                                   now_ns=self._now_ns(), horizon_ns=self.horizon_ns,
+                                   exit_rates=self._exit_rates())
         for before, after in zip(self.table.returns, table.returns, strict=True):
             if before.payoff is None and after.payoff is not None:
                 self.ledger.append({"kind": "consequence.outcome", **asdict(after.payoff)})
                 fixed.append(after.payoff)
         self.table = table
         return fixed
-
-    def mark(self, handle: str, event: int) -> Payoff | None:
-        """This return's outcome marked to the mids now, without fixing it (``LotTable.mark``).
-
-        None while an order write is unanswered: which lots are whose is unknown.
-        """
-        if self.pending_orders:
-            return None
-        return self.table.mark(handle, event, self.mids, censored=self._unknown_portions())
 
     def payoff(self, handle: str) -> Payoff | None:
         """Return the fixed economic outcome, or None while a known return remains open."""
