@@ -205,7 +205,11 @@ def _scoped_window(rt):
                                  ret=Return(handle, {}, 1, "ok" if ok else "failed"))
         sample = rt._contribution(handle, "evaluator")
         sample.update(invocations=1, ok=int(ok), cost=100)
-        rt.consequence_scores[handle] = (consequence, rt.ticks_consumed)
+        # A measured outcome of the world, never a judgement's consequence score: that
+        # is not priced through lambda (wave 16, section 9).
+        rt.world_outcomes[handle] = {"state": "measured", "y": consequence,
+                                     "kind": "return_paid_off", "tick": rt.ticks_consumed,
+                                     "ns": rt.clock.now_ns}
 
 
 def _to_margin(rt, posted_window):

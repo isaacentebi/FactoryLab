@@ -2047,8 +2047,10 @@ class SchematicsMixin:
             "evaluator_return": (
                 "a judge's decision settles on the conformity channel on two signals: g, the "
                 "mean grade the tier above gave it while its grade window was open, and c, "
-                "its consequence score; score = mean of those that exist, less the card "
-                "penalty; censored when neither exists. Each tier's judgements wait in a "
+                "its consequence score (absent when the outcome was uninformative); score = "
+                "the equal mean of those that exist, less the card penalty; censored when "
+                "neither exists. No consequence score enters a card, a lambda or a posted "
+                "lambda. Each tier's judgements wait in a "
                 "cascade window lasting timing.min_ratio times the measured period in which "
                 "the decisions that tier judges reach a score, lengthened by up to "
                 "timing.jitter_fraction of itself. The window releases at the first "

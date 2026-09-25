@@ -144,7 +144,9 @@ def evaluation_reward(grade: float | None, consequence: float | None) -> float |
     """An evaluator decision's reward: the equal mean of the signals that arrived.
 
     Guarantees a value in [0, 1] when either signal exists, that signal alone when
-    only one does, and None (the decision settles censored) when neither does.
+    only one does, and None (the decision settles censored) when neither does. An
+    outcome its base rate already answered issues no consequence score (wave 16,
+    R-B), so the decision is then worth its tier grade alone.
 
     Why the two combine this way. Essay II.III.b gives an evaluator two rewards and
     ranks neither. It is "graded from above, tier upon tier ... on how compliant
@@ -165,7 +167,18 @@ def evaluation_reward(grade: float | None, consequence: float | None) -> float |
       who does not hold the payoff table has no ground for any other split.
     * One scale. A tier grade is a probability whose uninformed value is 0.5,
       and ``consequence_score`` is centred so the base rate's forecaster also
-      earns 0.5. Neither channel can dominate the mean through its units.
+      earns 0.5. Neither channel can dominate the mean through its units, and,
+      with the road not taken priced as a binary money fact (wave 16, D1), not
+      through its variance either: re-scored on the 6-hour run's own verdicts and
+      grades, the tier-one grade's variance over the consequence score's fell from
+      20.0 to 1.4, and the grade's share of the reward's variance from 0.88 to
+      0.54 (wave 16 design, D6).
+    * One learner input. Chapter II's learners need one reward per round (§I.a,
+      Blum–Mansour), and §III.b names two mechanisms and prescribes no combination
+      beyond both being present (wave 16, section 9: ruling R-A reversed).
+    * Nonfungible. Realized consequence is the "central source of value kept
+      intentionally nonfungible" (§IV.a): it enters this reward and the judge's
+      standing, and never a charter card, a price or a posted λ.
     * Nothing imputed. "Missing facts never become performance": a verdict no
       tier read settles on the world's grade alone, and one the world never
       resolved settles on its compliance grade alone.
@@ -1248,7 +1261,7 @@ class FeedbackMixin:
             )
             if s.brier is None:
                 continue
-            self.window.consequence_scores += 1
+            self.window.consequence_readings += 1
             self._deliver_consequence_to_inbox(s)
 
     # -- the reward chain (ruling R1; essay II.III.b) -------------------------------
@@ -1703,7 +1716,7 @@ class FeedbackMixin:
                                       # Where the numbers above are defined (II.I.b).
                                       "formula": VERDICT_FORMULA})
         self._count_consequence(rec.evaluator_id)
-        self.window.consequence_scores += 1
+        self.window.consequence_readings += 1
         if rec.about in self.pending_exposure:
             self.exposure_scores.setdefault(rec.about, []).append([rec.evaluator_id, score])
         else:
@@ -1770,7 +1783,7 @@ class FeedbackMixin:
                             "baseline_brier": result.baseline_brier, "score": score,
                             "ts": self.clock.now_ns})
         self._count_consequence(rec.evaluator_id)
-        self.window.consequence_scores += 1
+        self.window.consequence_readings += 1
         self._close_consequence(rec.handle, score, rec)
 
     def _close_consequence(self, handle: str, score: float | None,
@@ -2114,8 +2127,9 @@ class FeedbackMixin:
         self.sampling_history.append({
             "window": self.stats.reserve_windows - 1,
             "verdict": values.get("verdict_mean"),
-            # No consequence scored in the window: no reading, never an unchanged one.
-            "consequence": (values.get("forecast_skill")
+            # No consequence scored in the window: no reading, never an unchanged one. The
+            # evaluators' whole skill, verdicts included: the actuator is no price.
+            "consequence": (self._evaluator_skill()
                             if getattr(self, "last_window_consequences", 0) else None),
         })
         k = self.m.immune.k
@@ -2152,6 +2166,18 @@ class FeedbackMixin:
             "ts": self.clock.now_ns,
         })
         self.consequence_mix = after
+
+    def _evaluator_skill(self) -> float | None:
+        """The evaluators' mean consequence skill, forecasts and scored verdicts pooled
+        (``ConsequenceStanding.skill``), or None before any is scored: what the
+        sampling actuator reads, never a charter card (wave 16, section 9)."""
+        from factorylab.cortex.registration import measured_role
+
+        evaluators = {a.spec.id for a in self.assemblies.values()
+                      if measured_role(a.spec.emits) == "evaluator"}
+        skills = [v["skill"] for eid, v in self.standing.snapshot().items()
+                  if eid in evaluators and (v.get("n") or v.get("verdict_n"))]
+        return sum(skills) / len(skills) if skills else None
 
     def _held(self, pend: PendingJudgement) -> bool:
         """Whether a verdict-channel decision waits on a credit beside its verdict (W4)."""

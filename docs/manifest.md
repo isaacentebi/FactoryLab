@@ -580,14 +580,19 @@ penalty (`router.decline_priced`), never the seat's own mean. The meta tier's
 cascade window reads first a verdict on a return with no world outcome, since the
 tier above is that verdict's only grader.
 
-**The judge's reward is both signals.** A judge's decision settles
-(`evaluation-v1`, `evaluator.settled`) on the equal mean of its grade from the
-tier above (the mean of the grades metas gave it while its grade window was
-open, `evaluator.meta_grade`) and its consequence score, whichever exist, less its
+**The judge's reward is both signals** (wave 16, section 9: ruling R-A reversed; D6).
+A judge's decision settles (`evaluation-v1`, `evaluator.settled`) on the equal mean
+of its grade from the tier above (the mean of the grades metas gave it while its
+grade window was open, `evaluator.meta_grade`) and its consequence score, whichever
+exist, and so on its grade alone when the outcome was uninformative, less its
 card penalty; with neither it settles censored (`evaluation-unscored-v1`).
 Neither channel is weighted by the charter. The argument is in
 `runtime/feedback.py: evaluation_reward`. The router that drew the judge learns
-the same reward, so a judge decision's deadline covers the return's backstop.
+the same reward, so a judge decision's deadline covers its consequence patience.
+Realized consequence is nonfungible (essay II.IV.a): a judge's or a meta's
+consequence score enters its reward and its standing, and never a charter card, a
+price or a posted λ. The `forecast_skill` observation reads settled forecasts alone,
+and a λ post's shadow price reads returns' measured outcomes alone.
 
 **The grade window is the read above it.** At every tier, an evaluator decision's
 grade window closes on the tick after the cascade window holding its judgement

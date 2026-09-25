@@ -32,7 +32,7 @@ PRIVATE_WINDOW_FIELDS = ("decisions", "closed_values", "closed_regions", "closed
                          "calls_by_provider", "calls_by_family",
                          # The world's consequence scores in the window: the sampling
                          # actuator's evidence count, not a window observation.
-                         "consequence_scores")
+                         "consequence_readings")
 MAX_WORLD_SAMPLES = 1024
 # Fields holding a public quantity filed under a private identity: a decision
 # handle, an evaluator's assembly id. The quantity is disclosed, the identity is
@@ -192,10 +192,10 @@ CATALOGUE: tuple[Observation, ...] = (
     ),
     Observation(
         "forecast_skill",
-        "Mean cumulative consequence skill of evaluators with settlements: each "
-        "evaluator's mean score 1 - (q - y)^2 over its settled forecasts and scored "
-        "verdicts minus the same score at the pre-outcome base rate; positive when they "
-        "beat the base rate.",
+        "Mean cumulative skill of evaluators with settled forecasts: each evaluator's "
+        "mean score 1 - (q - y)^2 over its settled forecasts minus the same score at the "
+        "pre-outcome base rate; positive when they beat the base rate. A verdict's "
+        "consequence score is never included.",
         "score difference",
         lambda w: _mean(w.forecast_skills),
         (-1.0, 1.0),

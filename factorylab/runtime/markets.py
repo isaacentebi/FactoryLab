@@ -276,19 +276,17 @@ class MarketsMixin:
             "cards": cards}
 
     def _capture_consequences(self) -> None:
-        """Keep each tracked decision's world-measured consequence once the world fixes it.
+        """Keep each tracked return's world-measured outcome once the world fixes it.
 
-        A judgement's consequence score, or a return's measured outcome
-        (``return_paid_off``, a declined trade's priced move): the reward chain's own
-        world signal, in [0, 1]. The chain forgets them after its horizon; the window
-        that owns the decision keeps them until its margin is read.
+        A return's measured outcome (``return_paid_off``, a named trade's net-of-fee
+        fact), in [0, 1]. The consequence score that grades an evaluator's judgement
+        is never read here: realized consequence is not priced or traded through λ
+        (wave 16, section 9; essay II.IV.a). The chain forgets outcomes after its
+        horizon; the window that owns the decision keeps them until its margin is
+        read.
         """
         tracked = {h for row in self.margin_windows.values() for h in row["decisions"]}
         for handle in tracked - set(self.measured_consequences):
-            kept = self.consequence_scores.get(handle)
-            if kept is not None and kept[0] is not None:
-                self.measured_consequences[handle] = float(kept[0])
-                continue
             outcome = self.world_outcomes.get(handle)
             if outcome is not None and outcome.get("state") == "measured":
                 self.measured_consequences[handle] = float(outcome["y"])
@@ -451,9 +449,10 @@ class MarketsMixin:
             "(the consequence patience, timing.world_repricing / timing.min_ratio plus "
             "verdict_timeout_ticks, in ticks, plus verdict_timeout_ticks later, at least "
             "timing.min_ratio windows) the window's shadow price y is read: the "
-            "least-squares slope, across the card's scopes (per role or assembly, at least 3, with "
-            "variance in v), of the scope's mean consequence (a judgement's consequence "
-            "score, a return's return_paid_off or priced declined trade, in [0, 1]) on its "
+            "least-squares slope, across the card's scopes (per role or assembly, at least "
+            "3, with variance in v), of the scope's mean measured outcome (a return's "
+            "return_paid_off or priced named trade, in [0, 1]; never a judgement's "
+            "consequence score) on its "
             "violation v, clipped to [0, lambda_max]. score = 1 - ((p - y) / lambda_max)^2 "
             "on the post's own policy decision; with y unidentified the post is censored. "
             "The posted price of a card is the median of each seat's latest unsettled post "

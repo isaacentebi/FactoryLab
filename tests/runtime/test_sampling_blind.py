@@ -15,8 +15,9 @@ from tests.conftest import make_runtime
 
 def _fire(rt, verdict: float, skill: float | None, scored: int) -> None:
     """Close one window with these readings and let the actuator act on it."""
-    rt.stats.last_window_values = {"verdict_mean": verdict, "forecast_skill": skill}
+    rt.stats.last_window_values = {"verdict_mean": verdict}
     rt.last_window_consequences = scored
+    rt._evaluator_skill = lambda: skill
     rt.clockwork.loops.pop("sampling", None)  # due: the actuator's own loop has come round
     rt._sampling_actuator()
 

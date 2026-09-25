@@ -36,7 +36,7 @@ class MeasureWindow:
     # How many consequence scores the world issued in the window (a verdict's, a meta's,
     # a settled forecast's): zero means the window had no consequence reading at all
     # (wave 16, ruling R-B; the sampling actuator reads it).
-    consequence_scores: int = 0
+    consequence_readings: int = 0
     producer_returns: int = 0
     noop_returns: int = 0
     revision_returns: int = 0
@@ -492,18 +492,20 @@ class PricingMixin:
 
         cost_per_return: mean wallet cost (micro-USD) of well-formed producer
         returns; well_formed_rate: ok returns over all invocations;
-        forecast_skill: mean consequence-standing skill over evaluators with
-        settled forecasts or verdicts the world scored (ruling R1: a verdict is a
-        forecast too); turnover: filled notional over equity at the window
-        start (0 with no fills). A quantity without support is not observed.
+        forecast_skill: mean skill of the settled forecasts of evaluators with any
+        (the forecasts they sealed and the world resolved); turnover: filled notional
+        over equity at the window start (0 with no fills). A quantity without support
+        is not observed.
+
+        The consequence score that grades an evaluator's verdict never enters a card
+        (wave 16, section 9: realized consequence "must never be priced or traded
+        through λ or the charter", the nonfungible core of essay II.IV.a's
+        Kantorovich marketplace): ``forecast_skill`` reads settled forecasts alone.
         """
         evaluators = {a.spec.id for a in self.assemblies.values()
                       if measured_role(a.spec.emits) == "evaluator"}
-        skills = [
-            v["skill"]
-            for eid, v in self.standing.snapshot().items()
-            if eid in evaluators and (v.get("n") or v.get("verdict_n"))
-        ]
+        skills = [v["payoff_skill"] for eid, v in self.standing.snapshot().items()
+                  if eid in evaluators and v.get("n")]
         w = replace(self.window, forecast_skills=skills)
         history, series = self._early_warning_open(w)
         book = self.observations
@@ -600,7 +602,7 @@ class PricingMixin:
                              for cid, value in self.card_samples.medians.items()})
         self._close_policy_window(w.index)  # delayed committee liability
         self.stats.last_window_values = values
-        self.last_window_consequences = w.consequence_scores
+        self.last_window_consequences = w.consequence_readings
         # The window's own blame is settled here, before any amendment can activate at this
         # boundary: the cards it measured and the prices its close left them holding. A verdict
         # or a late settlement from this window is attributed by this edition, never by the one
