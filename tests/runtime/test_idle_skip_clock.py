@@ -26,6 +26,15 @@ S = 10**9
 TAPE = Path(__file__).parents[1] / "fixtures" / "tape" / "longrun1-2100.events.json"
 
 
+def _traded_tape():
+    """longrun1's slice with its account's fee rates in the recorded listing, as a later
+    recording states them (live-4): a tape whose listing states none refuses orders."""
+    tape = Tape.load(TAPE)
+    listing = {kind: [dict(row, taker_fee_rate="0.00045", maker_fee_rate="0.00015")
+                      for row in rows] for kind, rows in tape.data["instruments"].items()}
+    return Tape.from_data(dict(tape.data, instruments=listing))
+
+
 class Monotonic:
     """A monotonic source the test moves: the time the process is busy."""
 
@@ -98,7 +107,7 @@ def _runtime(clock, **kw):
 
 
 def _tape_runtime(busy):
-    tape = Tape.load(TAPE)
+    tape = _traded_tape()
     base = load_manifest("scripted")
     spec = TapeSpec.of(tape,
                     allow_unknown_cutoff=True)
@@ -214,7 +223,7 @@ def test_the_wind_down_flattens_a_tape_world_at_its_last_recorded_book():
     P&L booked, and only then the seal and Terminated."""
     from factorylab.world.exchange import Position
 
-    tape = Tape.load(TAPE)
+    tape = _traded_tape()
     base = load_manifest("scripted")
     manifest = replace(base, kill=replace(base.kill, wind_down=True), exchange=replace(
         base.exchange, tape=TapeSpec.of(tape, allow_unknown_cutoff=True),

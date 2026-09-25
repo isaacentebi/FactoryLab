@@ -7,6 +7,7 @@ keeps the manifest's tick and samples the tape at it; the run ends with the tape
 """
 
 import json
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -22,10 +23,16 @@ OTHER = FIXTURES / "live4-head.events.json"
 TICK = 10 * 10**9
 
 
-def _short_tape(path, ticks):
-    """The fixture tape cut to its first ``ticks`` recorded ticks, written compact."""
+def _short_tape(path, ticks, *, fees=False):
+    """The fixture tape cut to its first ``ticks`` recorded ticks, written compact; with
+    ``fees``, its listing states the account's fee rates as a later recording's does
+    (live-4), since a tape whose listing states none refuses every order."""
     data = Tape.load(TAPE).data
     end = data["ticks"][ticks - 1]
+    if fees:
+        data = {**data, "instruments": {
+            kind: [dict(row, taker_fee_rate="0.00045", maker_fee_rate="0.00015")
+                   for row in rows] for kind, rows in data["instruments"].items()}}
     short = {**data, "ticks": data["ticks"][:ticks],
              "mids": {c: [r for r in rows if r[0] <= end] for c, rows in data["mids"].items()},
              "funding": {c: [r for r in rows if r[0] <= end]
@@ -81,7 +88,7 @@ def test_a_market_decision_fills_a_tick_later_and_is_accounted_to_its_decision(
     """Through the whole runtime: the answer's market order is acknowledged resting, fills
     at a later tick against a newer recorded row than the one its decision was shown,
     at the taker rate, and its fill is booked to the decision that sent it."""
-    tape = _short_tape(tmp_path / "short.tape.json", 12)
+    tape = _short_tape(tmp_path / "short.tape.json", 12, fees=True)
     decide = fastloop.PolicyProvider._decide_trade
 
     def buys_once(self, inputs, n):
@@ -284,7 +291,8 @@ def test_a_tape_run_resumes_only_on_the_tape_it_launched_on(tmp_path, monkeypatc
         "scripted", Path(spec["world"]), 1, "2", None, tape, None, True)
 
     def swaps(rt):
-        rt.exchange = TapeVenue(Tape.load(OTHER), coins=manifest.exchange.coins)
+        rt.exchange = TapeVenue(Tape.load(OTHER), coins=manifest.exchange.coins,
+                                start_cash_usd=Decimal(100))
 
     with pytest.raises(TapeMismatch, match="tape_mismatch"):
         resume_runtime(manifest, str(target / "ledger.jsonl"), provider=provider,

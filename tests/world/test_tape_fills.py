@@ -28,9 +28,25 @@ DEFAULT_BOOK = {"BTC": [(-1, [(Decimal("99.99"), Decimal(1))],
                          [(Decimal("100.01"), Decimal(1))])]}
 
 
+def _listed(coin, lot, tick, taker, maker, floor="10"):
+    return {"coin": coin, "lot_size": lot, "tick_size": tick, "price_significant_figures": 5,
+            "integer_prices_allowed": True, "min_order_value_usd": floor,
+            "taker_fee_rate": taker, "maker_fee_rate": maker}
+
+
+#: The recorded instrument listing the tapes here carry unless a test states another:
+#: lot and tick sizes, the order floor and the account's fee rates, as a live run records
+#: them (``HyperliquidExchange.instruments``). A tape states these or refuses orders.
+DEFAULT_LISTING = {
+    "perp": [_listed("BTC", "0.001", "0.1", "0.00045", "0.00015"),
+             _listed("ETH", "0.0001", "0.01", "0.00045", "0.00015")],
+    "spot": [_listed("PURR/USDC", "1", "0.0001", "0.0007", "0.0004")]}
+
+
 def _tape(mids, books=None, instruments=None, funding=None):
     """A tape of BTC (and PURR/USDC) rows at the given second offsets."""
     books = DEFAULT_BOOK if books is None else books
+    instruments = DEFAULT_LISTING if instruments is None else instruments
     stamps = sorted({t for series in mids.values() for t, _ in series})
     data = {"format": "factorylab-tape/1", "venue": "test", "declared_tick_ns": 10 * S,
             "ticks": [T0 + t * S for t in stamps],
@@ -395,8 +411,8 @@ def test_a_crossing_limit_takes_at_the_books_prices_and_rests_the_rest():
 
 
 def test_the_order_floor_binds_and_comes_from_the_recorded_listing():
-    listing = {"perp": [{"coin": "BTC", "lot_size": "0.00001", "tick_size": "0.1",
-                         "min_order_value_usd": "25"}], "spot": []}
+    listing = {"perp": [_listed("BTC", "0.00001", "0.1", "0.00045", "0.00015", "25")],
+               "spot": []}
     venue = _venue(_tape({"BTC": [(0, 100), (10, 100)]}, instruments=listing))
     venue.advance(T0)
     refused = venue.place(_buy("0.2", cid="small"))  # $20 of notional
@@ -411,9 +427,8 @@ def test_the_order_floor_binds_and_comes_from_the_recorded_listing():
 
 
 def test_fees_are_the_tapes_maker_and_taker_rates_by_market():
-    listing = {"perp": [{"coin": "BTC", "taker_fee_rate": "0.0005", "maker_fee_rate": "0.0001"}],
-               "spot": [{"coin": "PURR/USDC", "taker_fee_rate": "0.0008",
-                         "maker_fee_rate": "0.0003"}]}
+    listing = {"perp": [_listed("BTC", "0.001", "0.1", "0.0005", "0.0001")],
+               "spot": [_listed("PURR/USDC", "1", "0.0001", "0.0008", "0.0003")]}
     tape = _tape({"BTC": [(0, 100), (10, 100)], "PURR/USDC": [(0, 5), (10, 5)]},
                  instruments=listing)
     venue = _venue(tape)
@@ -448,7 +463,8 @@ def test_orders_in_flight_hold_margin_and_reduce_only_is_checked_on_arrival():
     before = venue.collateral_view("BTC")["open_order_holds_usd"]
     venue.place(_sell("0.3", cid="r", reduce_only=True))  # nothing to reduce yet
     venue.place(_buy("0.3", cid="m"))
-    assert venue.collateral_view("BTC")["open_order_holds_usd"] == before + Decimal(10)
+    # At 1x: the recording states no leverage terms, so an order holds its notional.
+    assert venue.collateral_view("BTC")["open_order_holds_usd"] == before + Decimal(30)
     events = venue.advance(T0 + 10 * S)  # orders arrive in the order they were sent
     assert len(_fills(events)) == 1 and _fills(events)[0]["is_buy"] is True
     [refused] = _rejections(events)
@@ -457,7 +473,7 @@ def test_orders_in_flight_hold_margin_and_reduce_only_is_checked_on_arrival():
 
 def test_the_fixture_tape_publishes_its_rules_and_answers_its_own_book():
     tape = Tape.load(LONGRUN)
-    venue = TapeVenue(tape, coins=("BTC", "ETH"))
+    venue = TapeVenue(tape, coins=("BTC", "ETH"), start_cash_usd=Decimal(100))
     venue.advance(tape.ticks[0])
     book = venue.order_book("BTC", 3)
     assert book["source"] == "synthetic" and book["asks"][0]["size"] == tape.level_size("BTC")
@@ -491,3 +507,90 @@ def test_closing_the_recording_cancels_what_can_no_longer_arrive_and_refuses_mor
         Decimal(100) + Decimal(100) * 2 / 20_000).quantize(Decimal("1e-10"))
     venue.seal_recording()
     assert venue.place(_buy("0.2", cid="late")).error == "the recorded market has ended"
+
+
+def test_a_market_is_absent_until_its_first_recorded_row_never_at_an_invented_price():
+    """Codex review of #151 (7b8de4f): a market the tape's first tick did not record got
+    the fake's $100 mid until its first row. It is absent from mids, books and the
+    listing, and orders on it are refused as a fact, until the recording shows it."""
+    from types import SimpleNamespace
+
+    from factorylab.world.tape import NO_RECORDED_MARKET
+    from factorylab.world.venue_tools import seed_markets
+
+    tape = _tape({"BTC": [(0, 100), (10, 100), (20, 100)], "ETH": [(20, "2000.5")]},
+                 books={"BTC": DEFAULT_BOOK["BTC"],
+                        "ETH": [(-1, [(Decimal(2000), Decimal(1))],
+                                 [(Decimal(2001), Decimal(1))])]})
+    venue = TapeVenue(tape, coins=("BTC", "ETH"), start_cash_usd=Decimal(100_000))
+    # The bootstrap's seed of the manifest's markets puts no price on the table either.
+    seed_markets(venue, SimpleNamespace(coins=("BTC", "ETH"), spot_pairs=()))
+    for ts in (T0, T0 + 10 * S):
+        events = venue.advance(ts)
+        assert "ETH" not in venue.mids() and venue.mids()["BTC"] == 100
+        assert [e.payload["coin"] for e in events if e.kind == "MarketMid"] == ["BTC"]
+        assert [r["coin"] for r in venue.instruments()["perp"]] == ["BTC"]
+        for read in (lambda: venue.order_book("ETH", 1), lambda: venue.candles("ETH", "1m", 5),
+                     lambda: venue.funding_history("ETH", 5)):
+            with pytest.raises(ValueError, match=NO_RECORDED_MARKET):
+                read()
+        refused = venue.place(Order("ETH", True, Decimal("0.01"), client_id=f"eth-{ts}"))
+        assert refused.status == "rejected" and refused.error == NO_RECORDED_MARKET
+    assert "an order on a market not listed here is refused" in TapeVenue.EXECUTION
+    # Its first row: it appears at exactly its recorded price, and trades.
+    venue.advance(T0 + 20 * S)
+    assert venue.mids()["ETH"] == Decimal("2000.5")
+    assert [r["coin"] for r in venue.instruments()["perp"]] == ["BTC", "ETH"]
+    book = venue.order_book("ETH", 1)  # its book is older than its mid: a synthetic level
+    assert book["source"] == "synthetic" and book["asks"][0]["price"] > Decimal("2000.5")
+    assert venue.place(Order("ETH", True, Decimal("0.01"), client_id="eth")).status == "resting"
+
+
+def test_every_term_the_recording_does_not_state_is_refused_never_the_fakes_constant():
+    """The class sweep behind Codex's finding (#151, 7b8de4f): the fake's lot and tick,
+    its leverage cap, its fee rate on a liquidation or a resting spot reservation, and
+    its vaults never stand in for what the recording did not state."""
+    from factorylab.world.tape import (
+        NO_RECORDED_LEVERAGE,
+        NO_RECORDED_LISTING,
+        NO_RECORDED_VAULTS,
+    )
+
+    bare = _venue(_tape({"BTC": [(0, 100), (10, 100)]}, instruments={}))
+    bare.advance(T0)
+    assert bare.place(_buy("0.2")).error == NO_RECORDED_LISTING
+    [row] = bare.instruments()["perp"]
+    assert row["lot_size"] is None and row["tick_size"] is None
+    assert row["min_order_value_usd"] is None and row["refused"] == NO_RECORDED_LISTING
+    venue = _venue(_tape({"BTC": [(0, 100), (10, 100)], "PURR/USDC": [(0, 5), (10, 5)]},
+                         books={"BTC": DEFAULT_BOOK["BTC"],
+                                "PURR/USDC": [(-1, [(Decimal("4.99"), Decimal(9))],
+                                               [(Decimal("5.01"), Decimal(9))])]}))
+    venue.advance(T0)
+    # The recorded lot (0.001 BTC, 1 PURR), tick (0.1) and five significant figures: the
+    # fake's 0.000001 lot and 0.01 tick admitted the first three and checked no perp.
+    assert "lot_size" in venue.place(_buy("0.2005")).error
+    assert "lot_size" in venue.place(_buy("2.5", market="spot", coin="PURR/USDC")).error
+    assert "tick_size" in venue.place(_buy("0.2", limit="99.95")).error
+    assert "significant" in venue.place(_buy("0.001", limit="12345.6")).error
+    assert venue.place(_buy("0.001", limit="123456", cid="integer")).status == "resting"
+    assert venue.place(_buy("0.2", limit="99.9")).status == "resting"
+    # No leverage terms recorded: 1x, never the fake's 3x.
+    assert venue.set_leverage("BTC", 3) == {"status": "rejected", "error": NO_RECORDED_LEVERAGE}
+    assert venue.set_leverage("BTC", 1)["status"] == "ok"
+    assert venue.instruments()["perp"][0]["max_leverage"] == 1
+    assert venue.collateral_view("BTC")["leverage_for_instrument"] == 1
+    # No vaults recorded.
+    assert venue.vault_create("v", "d", Decimal(100))["error"] == NO_RECORDED_VAULTS
+    assert venue.vault_transfer("0x" + "0" * 40, True, Decimal(10))["error"] == (
+        NO_RECORDED_VAULTS)
+    # A resting spot buy holds its recorded maker fee, never the fake's own rate.
+    venue.class_transfer(Decimal(100), to_perp=False)
+    venue.place(_buy("3", limit="4", market="spot", coin="PURR/USDC", cid="spot-rest"))
+    venue.advance(T0 + 10 * S)
+    assert venue.lookup("spot-rest").status == "resting"
+    assert venue._spot_available("USDC") == Decimal(100) - 12 * (1 + Decimal("0.0004"))
+    # A liquidation pays the recorded taker rate.
+    venue._fill("x", _sell("0.1"), Decimal(100), liquidation=True)
+    assert venue._fills[-1].fee == (Decimal(10) * Decimal("0.00045")).quantize(
+        Decimal("0.000001"))

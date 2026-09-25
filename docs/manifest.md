@@ -1709,7 +1709,7 @@ architecture. The keys:
 | `sha256` | SHA-256 of the compact tape's canonical JSON: the tape's identity |
 | `start_ns`, `end_ns` | The first and last recorded tick stamps |
 | `markets` | The perps and pairs whose mids the tape recorded |
-| `spread_bps` | Each market's spread as the tape states it: the median recorded top-of-book spread, else the median over the tape's other recorded books, else the fake's own 2 bps |
+| `spread_bps` | Each market's spread as the tape states it: the median recorded top-of-book spread, else the median over the tape's other recorded books; a tape that recorded no book states none (the market is absent here) |
 | `allow_unknown_cutoff` | Default `false`. Whether the operator admitted models that state no `training_cutoff` (`fastloop --allow-unknown-cutoff`); recorded, since such a model may have been trained on the tape's market |
 
 Load-time invariants: only `exchange.kind = "fake"` replays a tape (a tape world
@@ -1824,10 +1824,29 @@ rates and `fee_basis`):
   ones (makers), as on the venue.
 - Size taken from one recorded snapshot is not offered again.
 - Every order below the venue's order floor is refused when sent: the recorded
-  listing's `min_order_value_usd`, else Hyperliquid's 10 USD.
-- Fee rates are the recorded account's (`userFees` in the recorded listing), else
-  Hyperliquid's published base tier (perp 0.045% taker, 0.015% maker; spot 0.07% and
-  0.04%). A pair trades on spot rates.
+  listing's `min_order_value_usd`.
+- Fee rates are the recorded account's (`userFees` in the market's recorded listing
+  row). A pair trades on its own row's (spot) rates.
+- A tape world never exposes a value its recording does not contain (Codex review of
+  #151): where the recording is silent the venue refuses, and says so as a fact, never
+  with the fake's constant in the recording's place. A market is absent from
+  `venue.mids`, `venue.order_book` (and candles and funding history) and the
+  instrument listing until its first recorded mid, and an order on it is refused ("the
+  recording has no market for this coin yet"); the bootstrap seeds no price onto a
+  tape venue. An order is refused on a market whose recorded listing row does not
+  state its lot size, tick size and order floor, or its fee rates; the listing shows
+  those terms as null and the reason as `refused`. An order is held to the recorded
+  precision: a size that is not a multiple of `lot_size`, or a limit price that is not
+  a multiple of `tick_size` or has more than `price_significant_figures` significant
+  figures (an integer price excepted when `integer_prices_allowed`), is refused. The
+  recording states no leverage terms, so no credit is extended: perp positions are
+  margined at 1x (`max_leverage` 1; `set_leverage` above 1 is refused), and positions
+  are closed at the mid, at the recorded taker rate, only when the perps account's
+  equity is below zero. The recording has no vaults: vault writes are refused. A
+  resting spot buy holds its cost and its recorded maker fee. A synthetic level holds
+  whole recorded lots. No tape in the library today has both a listing that states
+  the account's rates and a recorded book (`worlds/tapes/library.toml`), so each
+  replays prices, funding and the clock and refuses every order, saying why.
 - Orders in flight hold margin in `collateral_view` as resting orders do.
 
 A tape world runs on the idle-skipping clock (`IdleSkipClock`, `runtime/live.py`), a

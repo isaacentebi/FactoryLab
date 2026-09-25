@@ -18,9 +18,12 @@
 #   jump          one recorded step moved a coin at least 0.5%
 #   funding_flip  a coin's recorded funding rate changed sign
 #   outage        a delivered tick gap of 300 s or more
-# No tape here has a gap past a position's maintenance buffer (a single step of
-# about 17% at the fake's 3x): the fake venue's scripted shocks remain the stress
-# tape for that regime.
+# On a tape every perp position is margined at 1x (the recording states no leverage
+# terms), so no recorded gap reaches a liquidation: the fake venue's scripted shocks
+# remain the stress tape for that regime. An order needs a recorded listing that states
+# the account's fee rates and a recorded book; no tape here has both (longrun1 read
+# books but its listing states no rates; the others read no book), so each replays
+# prices, funding and the clock and refuses every order, saying why.
 
 [[tape]]
 id = "longrun1"

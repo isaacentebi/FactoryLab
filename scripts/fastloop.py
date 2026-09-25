@@ -68,6 +68,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import copy
 import json
 import statistics
 import sys
@@ -150,7 +151,22 @@ class PolicyProvider(ScriptedProvider):
                 context_length=200_000, max_completion_tokens=100_000))
         return rows
 
+    def stage(self, req: ModelRequest) -> None:
+        """Decide ``req``'s answer now, advancing the counters; ``complete`` returns it.
+
+        The harness's provider stages every call before it writes the call ahead
+        (``RecordedProvider``), so the record it writes holds the counters as they stand
+        after this call, and a death inside the call never makes a resume decide it
+        again."""
+        self._staged = (req, self._answer(req))
+
     def complete(self, req: ModelRequest) -> ModelResponse:
+        staged = self.__dict__.pop("_staged", None)
+        if staged is not None and staged[0] is req:
+            return staged[1]
+        return self._answer(req)
+
+    def _answer(self, req: ModelRequest) -> ModelResponse:
         text = "\n".join(str(m.get("content", "")) for m in req.messages)
         inputs = _inputs_from_prompt(text)
         desc = _description_from_prompt(text)
@@ -383,13 +399,29 @@ class Latent:
     def __getattr__(self, name: str) -> Any:
         return getattr(self.inner, name)
 
+    def draw(self, req: ModelRequest) -> bool:
+        """Draw ``req``'s latency now, advancing the stream; ``complete`` spends it.
+
+        Returns whether the call reaches the stand-in behind this model: False when the
+        drawn latency outlives the call's deadline and it expires. The harness's provider
+        draws every call before it writes the call ahead (``RecordedProvider``)."""
+        self._staged = (req, self.rng.choice(self.samples_ms) * 1_000_000)
+        deadline = self._deadline(req)
+        return deadline is None or self._staged[1] <= deadline
+
+    @staticmethod
+    def _deadline(req: ModelRequest) -> int | None:
+        return (None if req.timeout_s is None
+                else int(Decimal(str(req.timeout_s)) * 1_000_000_000))
+
     def complete(self, req: ModelRequest) -> ModelResponse:
         from factorylab.world.openai_wire import CALL_EXPIRED
         from factorylab.world.openrouter import OpenRouterError
 
-        latency = self.rng.choice(self.samples_ms) * 1_000_000
-        deadline = (None if req.timeout_s is None
-                    else int(Decimal(str(req.timeout_s)) * 1_000_000_000))
+        staged = self.__dict__.pop("_staged", None)
+        latency = (staged[1] if staged is not None and staged[0] is req
+                   else self.rng.choice(self.samples_ms) * 1_000_000)
+        deadline = self._deadline(req)
         if deadline is not None and latency > deadline:
             self.clock.spend(deadline)
             raise OpenRouterError(None, CALL_EXPIRED)
@@ -421,6 +453,14 @@ class RecordedProvider:
       model's random stream where they stood, so it makes the calls the uninterrupted run
       would have made. A replayed call is answered from the diary and never reaches this
       object, so nothing is counted or drawn twice.
+    - Each call draws first, then is written ahead, then is dispatched (Codex review of
+      #151, 7b8de4f): its latency and its scripted decision are drawn before the record
+      naming it is written, and that record holds the state after the draws. So the
+      draws and decisions after any crash are the uninterrupted run's minus the dead
+      call's: a call that died after its record was written drew once and is never drawn
+      again, and one that died before it was never dispatched and drew nothing durable.
+      Every call that reaches this object draws, whether the admission then refuses it
+      or it expires, alike in a run and in its resume.
 
     Each write is a whole file replaced atomically and flushed to disk before the call
     it names is dispatched (``_write``).
@@ -435,28 +475,58 @@ class RecordedProvider:
         return getattr(self.prepaid, name)
 
     def complete(self, req: ModelRequest) -> ModelResponse:
-        self._write(pending=self.prepaid._ceiling(req))  # written ahead of the dispatch
+        before = self.state()
+        try:
+            self._draw(req)
+            self._write(pending=self.prepaid._ceiling(req))  # written ahead of the dispatch
+        except Exception:
+            # Never dispatched: nothing it drew stands, in memory or on disk.
+            self._unstage(before)
+            raise
         try:
             response = self.prepaid.complete(req)
         except Exception:
             self._write(pending=None)  # the admission observed the failure: settled
             raise
+        finally:
+            self._unstage()  # a refused call leaves nothing staged for the next one
         # A BaseException (the process going down) writes nothing: the outcome is
         # unknown, so the pending quote stays for the resume to count.
         self._write(pending=None)
         return response
+
+    def _draw(self, req: ModelRequest) -> None:
+        """The call's latency, then (if it does not expire) its scripted decision."""
+        reaches = True if self.latent is None else self.latent.draw(req)
+        if reaches and self.policy is not None:
+            self.policy.stage(req)
+
+    def _unstage(self, before: dict[str, Any] | None = None) -> None:
+        for part in (self.latent, self.policy):
+            if part is not None:
+                part.__dict__.pop("_staged", None)
+        if before is not None:
+            self._restore_state(before)
 
     def state(self) -> dict[str, Any]:
         from dataclasses import asdict
 
         state: dict[str, Any] = {"admission": asdict(self.admission)}
         if self.policy is not None:
-            state["policy"] = {k: getattr(self.policy, k) for k in POLICY_STATE
+            state["policy"] = {k: copy.deepcopy(getattr(self.policy, k)) for k in POLICY_STATE
                                if hasattr(self.policy, k)}
         if self.latent is not None:
             version, internal, gauss = self.latent.rng.getstate()
             state["latency_rng"] = [version, list(internal), gauss]
         return state
+
+    def _restore_state(self, record: dict[str, Any]) -> None:
+        """Put the stand-in's counters and latency stream back as ``record`` holds them."""
+        for name, value in (record.get("policy") or {}).items():
+            setattr(self.policy, name, copy.deepcopy(value))
+        if self.latent is not None and record.get("latency_rng") is not None:
+            version, internal, gauss = record["latency_rng"]
+            self.latent.rng.setstate((version, tuple(internal), gauss))
 
     def _write(self, *, pending: int | None) -> None:
         import os
@@ -489,11 +559,7 @@ class RecordedProvider:
             self.admission.unknown_bills += 1
             self.admission.uncertain_bills += 1
             self.admission.uncertain_micro += int(pending)
-        for name, value in (record.get("policy") or {}).items():
-            setattr(self.policy, name, value)
-        if self.latent is not None and record.get("latency_rng") is not None:
-            version, internal, gauss = record["latency_rng"]
-            self.latent.rng.setstate((version, tuple(internal), gauss))
+        self._restore_state(record)
         # Consumed exactly once: the pending quote now sits in the uncertain total and the
         # slot is cleared, durably, before anything that could refuse this resume runs.
         # A refused resume, or one that makes no call, never counts it a second time.

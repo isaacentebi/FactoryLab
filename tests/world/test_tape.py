@@ -71,19 +71,32 @@ def test_reads_answer_the_latest_row_at_or_before_and_never_loop(tape):
     assert tape.mid_at("NOT-RECORDED", stamps[5]) is None
 
 
-def test_fees_are_the_recorded_rates_else_the_published_schedule(tape):
-    assert Tape.load(LIVE4).fees("perp") == (Decimal("0.00045"), Decimal("0.00015"), "recorded")
-    assert tape.fees("perp") == (Decimal("0.00045"), Decimal("0.00015"), "published")
-    # The published taker rate is what longrun1's recorded fill was charged.
-    assert (Decimal("0.00045") * Decimal("0.001") * Decimal("84757.0")).quantize(
-        Decimal("0.00001")) == Decimal("0.03814")
+def test_fees_are_the_recorded_rates_or_none_and_none_refuses_every_order(tape):
+    """Codex review of #151 (7b8de4f): a tape never exposes a value its recording does
+    not contain. longrun1's listing states no fee rates, so no published schedule stands
+    in for them: its orders are refused, and its listing says so."""
+    from factorylab.world.exchange import Order
+    from factorylab.world.tape import NO_RECORDED_FEES
+
+    assert Tape.load(LIVE4).fees("BTC") == (Decimal("0.00045"), Decimal("0.00015"))
+    assert Tape.load(LIVE4).fees("PURR/USDC") == (Decimal("0.0007"), Decimal("0.0004"))
+    assert tape.fees("BTC") is None
+    venue = _venue(tape)
+    venue.advance(tape.ticks[0])
+    refused = venue.place(Order("BTC", True, Decimal("0.001")))
+    assert refused.status == "rejected" and refused.error == NO_RECORDED_FEES
+    row = next(r for r in venue.instruments()["perp"] if r["coin"] == "BTC")
+    assert row["taker_fee_rate"] is None and row["maker_fee_rate"] is None
+    assert row["fee_basis"] == "not recorded" and row["refused"] == NO_RECORDED_FEES
 
 
 def test_spreads_come_from_recorded_books_and_say_so(tape):
     assert tape.spread_bps("BTC")[1] == "recorded"
     assert Decimal(0) < tape.spread_bps("BTC")[0] < Decimal(2)
     assert tape.spread_bps("PURR/USDC")[1] == "recorded_other_markets"
-    assert Tape.load(LIVE4).spread_bps("BTC") == (Decimal(2), "assumed")
+    # No recorded book anywhere: no spread is stated, never the fake's own 2 bps.
+    assert Tape.load(LIVE4).spread_bps("BTC") == (None, "none")
+    assert "spread_bps" in tape.identity() and Tape.load(LIVE4).identity()["spread_bps"] == {}
 
 
 def test_the_venue_is_the_fake_named_for_its_tape_and_opens_at_its_start(tape):
@@ -95,7 +108,7 @@ def test_the_venue_is_the_fake_named_for_its_tape_and_opens_at_its_start(tape):
     # A checkpoint carries the venue's state, never a copy of the recording.
     assert "_tape" not in vars(venue) and venue.tape is tape
     with pytest.raises(ValueError, match="recorded no mids"):
-        TapeVenue(tape, coins=("SOL",))
+        TapeVenue(tape, coins=("SOL",), start_cash_usd=Decimal(120))
 
 
 def test_the_venue_samples_the_tape_at_the_worlds_ticks_and_refuses_to_rewind(tape):
@@ -141,7 +154,7 @@ def test_funding_is_charged_once_per_hour_boundary_never_per_recorded_row(tape):
 def test_a_long_gap_settles_every_boundary_it_crossed_once(tape):
     stamps = tape.ticks
     data = dict(tape.data, ticks=[stamps[0], stamps[0] + 3 * NS_PER_HOUR])
-    venue = TapeVenue(Tape.from_data(data), coins=("BTC",))
+    venue = TapeVenue(Tape.from_data(data), coins=("BTC",), start_cash_usd=Decimal(120))
     venue._positions["BTC"] = Position("BTC", Decimal("0.001"), Decimal("84000"))
     events = venue.advance(stamps[0] + 3 * NS_PER_HOUR)
     assert len([e for e in events if e.kind == "Funding" and e.payload["coin"] == "BTC"]) == 3
@@ -194,7 +207,8 @@ def test_the_runtime_refuses_a_venue_whose_tape_the_manifest_does_not_fix(tape):
         with pytest.raises(TapeMismatch, match=field):
             check_tape(lying, _venue(tape))
     with pytest.raises(TapeMismatch, match="tape_mismatch"):
-        check_tape(taped, TapeVenue(Tape.load(LIVE4), coins=("BTC",)))
+        check_tape(taped, TapeVenue(Tape.load(LIVE4), coins=("BTC",),
+                                    start_cash_usd=Decimal(120)))
     with pytest.raises(TapeMismatch, match="does not name"):
         check_tape(base, _venue(tape))
     with pytest.raises(TapeMismatch):
@@ -209,9 +223,17 @@ def test_a_tape_venue_checkpoints_its_state_and_restores_over_the_same_tape(tape
     from factorylab.runtime.resume import decode, encode
     from factorylab.world.exchange import Order, OrderKind
 
+    # longrun1's listing with the account's rates recorded, so an order may rest.
+    listing = {kind: [dict(row, taker_fee_rate="0.00045", maker_fee_rate="0.00015")
+                      for row in rows] for kind, rows in tape.data["instruments"].items()}
+    tape = Tape.from_data(dict(tape.data, instruments=listing))
     venue = _venue(tape)
     venue.advance(tape.ticks[2])
-    venue.place(Order("BTC", True, Decimal("0.001"), OrderKind.LIMIT, Decimal("1000")))
+    placed = venue.place(Order("BTC", True, Decimal("0.001"), OrderKind.LIMIT,
+                               Decimal("10000")))
+    assert placed.status == "resting"
+    venue.advance(tape.ticks[3])
+    assert venue.open_orders()[0].get("in_flight") is None  # arrived: it rests
     state = json.loads(json.dumps(encode(vars(venue))))
     assert tape.sha256 not in json.dumps(state) and len(json.dumps(state)) < 20_000
     twin = _venue(tape)

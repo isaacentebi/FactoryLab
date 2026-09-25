@@ -144,6 +144,57 @@ def test_a_call_the_process_died_inside_counts_its_whole_quote_on_resume(tmp_pat
     assert admission.attempted == 2 and admission.uncertain_micro == quote
 
 
+def _drawing_stack(record):
+    """The harness's scripted provider with a latency model, as ``_world_parts`` builds it."""
+    manifest = fastloop.simulation_manifest(WORLD, 1)
+    policy = fastloop.PolicyProvider(WORLD)
+    latent = fastloop.Latent(policy, [100, 200, 300, 400, 500, 600, 700, 800, 900], seed=1)
+    admission = rehearsal.Admission(cap_micro=1_000_000, max_calls=100)
+    prepaid = rehearsal.PrepaidProvider(latent, manifest, admission)
+    provider = fastloop.RecordedProvider(prepaid, admission, record, policy=policy,
+                                         latent=latent)
+    return provider, manifest.models[0].id
+
+
+def test_a_death_inside_a_call_after_its_draws_is_never_drawn_again(tmp_path, monkeypatch):
+    """Codex review of #151 (7b8de4f): the draws happened after the write-ahead, so a
+    death inside a call left the pre-call latency stream and policy counters on disk,
+    and the resumed next call repeated the dead call's latency and decision. Draw, then
+    write ahead, then dispatch: the call after the dead one is the uninterrupted run's
+    call after it."""
+    from factorylab.world.models import ModelRequest
+
+    def answers(provider, model, indices):
+        out = []
+        for i in indices:
+            req = ModelRequest(model, "s", ({"role": "user", "content": f"tick {i}"},),
+                               max_tokens=100)
+            response = provider.complete(req)
+            out.append((response.raw[fastloop.MODELLED_LATENCY], response.text))
+        return out
+
+    provider, model = _drawing_stack(tmp_path / "ref.json")
+    reference = answers(provider, model, range(6))
+    record = tmp_path / fastloop.PROVIDER_RECORD
+    provider, model = _drawing_stack(record)
+    assert answers(provider, model, range(3)) == reference[:3]
+    complete = fastloop.PolicyProvider.complete
+
+    def dies(self, req):
+        raise _Died  # inside the dispatch: the latency and the decision were drawn
+
+    monkeypatch.setattr(fastloop.PolicyProvider, "complete", dies)
+    with pytest.raises(_Died):
+        answers(provider, model, [3])
+    monkeypatch.setattr(fastloop.PolicyProvider, "complete", complete)
+    resumed, model = _drawing_stack(record)
+    assert resumed.restore()["died_inside_a_call"] is True
+    after = answers(resumed, model, [4, 5])
+    assert after == reference[4:]
+    # Not the dead call's latency or decision again (what the stale record gave).
+    assert after[0][0] != reference[3][0] and after[0][1] != reference[3][1]
+
+
 @pytest.mark.gate
 def test_a_run_on_a_diarys_gaps_resumes_on_the_same_replay_clock(tmp_path, monkeypatch):
     """P2: run.json did not keep --gaps-from, so a resume built a plain clock and the

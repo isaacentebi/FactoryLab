@@ -26,7 +26,6 @@ from typing import Any
 
 from factorylab.world.events import WorldEvent, WorldEventKind
 from factorylab.world.exchange import (
-    MIN_ORDER_VALUE_USD,
     NS_PER_HOUR,
     FakeExchange,
     FundingEvent,
@@ -40,12 +39,6 @@ from factorylab.world.exchange import (
 #: The compact tape's format tag. A tape file carries it; a diary does not.
 TAPE_FORMAT = "factorylab-tape/1"
 
-#: Hyperliquid's published base-tier fee schedule, as fractions of notional (taker,
-#: maker), for a diary whose recorded instrument listing did not state the account's
-#: own rates. Recorded rates always win. The perp taker rate is the one longrun1's
-#: recorded fills were charged (0.03814 USD on 84.757 USD of notional).
-PUBLISHED_FEES = {"perp": ("0.00045", "0.00015"), "spot": ("0.0007", "0.0004")}
-
 #: Why an order is refused once the recording has ended (published, never advice).
 MARKET_ENDED = "the recorded market has ended"
 #: The termination reason of a world whose paced clock reached its tape's end.
@@ -54,9 +47,22 @@ TAPE_ENDED = "tape_ended"
 #: Why an order on a market the tape recorded no liquidity for is refused.
 NO_LIQUIDITY = "the tape recorded no liquidity for this market"
 
-#: The fake venue's own spread, used only for a coin no recorded book ever priced
-#: (and no other coin's book either). The tape says so: ``spread_source`` "assumed".
-ASSUMED_SPREAD_BPS = Decimal(2)
+# A tape world never exposes a value the recording does not contain (Codex review of
+# #151, 7b8de4f; Chapter II §II.b, the hard cast): where the recording is silent the
+# venue refuses, and says why, as a fact. Never a constant in the recording's place.
+
+#: Why a market is absent, and an order on it refused, before its first recorded mid.
+NO_RECORDED_MARKET = "the recording has no market for this coin yet"
+#: Why an order is refused on a market whose recorded listing lacks its lot size, tick
+#: size or order floor.
+NO_RECORDED_LISTING = ("the recording states no lot size, tick size or order floor for "
+                       "this market")
+#: Why an order is refused on a market whose recorded listing states no fee rates.
+NO_RECORDED_FEES = "the recording states no fee rates for this market"
+#: Why leverage above 1x is refused: the recording states none, so no credit is extended.
+NO_RECORDED_LEVERAGE = "the recording states no leverage terms: positions are margined at 1x"
+#: Why a vault write is refused: the recording holds no vault.
+NO_RECORDED_VAULTS = "the recording has no vaults"
 
 
 # --------------------------------------------------------------------------- reading
@@ -354,14 +360,22 @@ class Tape:
         listing = self.data.get("instruments") or {}
         return [dict(row) for row in listing.get(market, [])]
 
-    def fees(self, market: str) -> tuple[Decimal, Decimal, str]:
-        """(taker, maker, source): the recorded account rates, else the published ones."""
-        for row in self.instrument_rows(market):
-            if "taker_fee_rate" in row and "maker_fee_rate" in row:
-                return (Decimal(str(row["taker_fee_rate"])),
-                        Decimal(str(row["maker_fee_rate"])), "recorded")
-        taker, maker = PUBLISHED_FEES[market]
-        return Decimal(taker), Decimal(maker), "published"
+    def listing(self, market: str) -> dict | None:
+        """``market``'s own row of the recorded instrument listing, or None."""
+        kind = "spot" if "/" in market else "perp"
+        for row in self.instrument_rows(kind):
+            if row.get("coin") == market:
+                return row
+        return None
+
+    def fees(self, market: str) -> tuple[Decimal, Decimal] | None:
+        """(taker, maker) as fractions of notional: the recorded account's rates for
+        ``market`` (``userFees`` in its recorded listing row), or None when the
+        recording states none. Never a published schedule in their place."""
+        row = self.listing(market) or {}
+        if row.get("taker_fee_rate") is None or row.get("maker_fee_rate") is None:
+            return None
+        return Decimal(str(row["taker_fee_rate"])), Decimal(str(row["maker_fee_rate"]))
 
     def _book_spreads_bps(self, coin: str) -> list[Decimal]:
         out = []
@@ -373,16 +387,17 @@ class Tape:
                     out.append((ask - bid) / ((ask + bid) / 2) * 10_000)
         return out
 
-    def spread_bps(self, coin: str) -> tuple[Decimal, str]:
+    def spread_bps(self, coin: str) -> tuple[Decimal | None, str]:
         """(bps, source): the median recorded top-of-book spread for ``coin``; else the
-        median over every recorded book on the tape; else the fake's own, ``assumed``."""
+        median over every recorded book on the tape; else (None, "none"): the tape
+        recorded no book, states no spread, and no synthetic level exists."""
         own = self._book_spreads_bps(coin)
         if own:
             return _median(own).quantize(Decimal("0.0001")), "recorded"
         every = [s for c in self.data.get("books", {}) for s in self._book_spreads_bps(c)]
         if every:
             return _median(every).quantize(Decimal("0.0001")), "recorded_other_markets"
-        return ASSUMED_SPREAD_BPS, "assumed"
+        return None, "none"
 
     def level_size(self, market: str, ts_ns: int | None = None) -> Decimal | None:
         """The size of one synthetic level of ``market`` (``TapeVenue._book``); never unbounded.
@@ -413,20 +428,24 @@ class Tape:
             return "smallest_recorded_level_on_the_tape"
         return "none"
 
-    def min_order_value(self, market: str) -> Decimal:
-        """The venue's order floor for ``market``: the recorded listing's, else Hyperliquid's."""
-        kind = "spot" if "/" in market else "perp"
-        for row in self.instrument_rows(kind):
-            if row.get("coin") == market and row.get("min_order_value_usd") is not None:
-                return Decimal(str(row["min_order_value_usd"]))
-        return Decimal(MIN_ORDER_VALUE_USD)
+    def terms(self, market: str) -> tuple[Decimal, Decimal, Decimal] | None:
+        """(lot size, tick size, order floor) as ``market``'s recorded listing row states
+        them, or None when the recording does not state all three."""
+        row = self.listing(market) or {}
+        fields = [row.get(k) for k in ("lot_size", "tick_size", "min_order_value_usd")]
+        if any(v is None for v in fields):
+            return None
+        lot, tick, floor = (Decimal(str(v)) for v in fields)
+        return (lot, tick, floor) if lot > 0 and tick > 0 else None
 
     def identity(self) -> dict:
         """What a manifest's ``[exchange.tape]`` must say about this tape, all of it
-        derived from the tape itself: its SHA-256, span, markets and stated spreads."""
+        derived from the tape itself: its SHA-256, span, markets and the spreads it
+        states (none for a market when the tape recorded no book at all)."""
+        spreads = {m: self.spread_bps(m)[0] for m in self.markets}
         return {"sha256": self.sha256, "start_ns": self.start_ns, "end_ns": self.end_ns,
                 "markets": tuple(self.markets),
-                "spread_bps": {m: str(self.spread_bps(m)[0]) for m in self.markets}}
+                "spread_bps": {m: str(bps) for m, bps in spreads.items() if bps is not None}}
 
     def summary(self) -> dict:
         """What a scorecard and a Launch record say about this tape."""
@@ -457,10 +476,10 @@ class TapeVenue(FakeExchange):
     current when it was sent; the book it meets is the recorded one when that is at
     least as recent as the recorded mid, otherwise one level each side at the mid plus
     or minus half the tape's spread, as deep as the recorded books' median top level
-    (unbounded when the tape recorded none); a market order is immediate-or-cancel
-    within Hyperliquid's 5% of the mid it was sent at, and what it cannot fill is
-    cancelled; a limit that crosses on arrival takes at the book's prices, at the taker
-    rate, and rests the remainder; a resting limit fills only when a recorded mid after
+    (no level, and every order refused, when the tape recorded none); a market order is
+    immediate-or-cancel within Hyperliquid's 5% of the mid it was sent at, and what it
+    cannot fill is cancelled; a limit that crosses on arrival takes at the book's prices,
+    at the taker rate, and rests the remainder; a resting limit fills only when a recorded mid after
     it rested is strictly through its price (a trade-through, never a book level that
     merely sits past it) and the opposite top of book has reached it, at its price,
     at the maker rate, up to what the top level of the book on that side still
@@ -471,6 +490,14 @@ class TapeVenue(FakeExchange):
     venue's order floor; funding accrued since the last hour boundary is charged pro
     rata when the world ends (``settle_accrued_funding``). The rules are published with
     the instrument listing (``instruments``) as facts.
+
+    It never exposes a value its recording does not contain (Codex review of #151,
+    7b8de4f): a market is absent from mids, books and the listing until its first
+    recorded row; an order is refused on a market whose recorded listing does not state
+    its lot, tick, order floor and fee rates, and is held to that recorded precision; no
+    leverage terms are recorded, so none is extended (1x); no vault is recorded, so none
+    can be made. None of the fake's own terms (its 100 mid, spread, fee, funding rate,
+    lot and tick, 3x) is ever read.
 
     The tape itself is held outside the instance dictionary, so a checkpoint carries
     the venue's state and not a copy of the recording: a resume rebuilds the venue
@@ -484,26 +511,32 @@ class TapeVenue(FakeExchange):
     __slots__ = ("_tape",)
 
     def __init__(self, tape: Tape, *, coins: tuple[str, ...] = ("BTC", "ETH"),
-                 spot_pairs: tuple[str, ...] = (), start_cash_usd: Decimal = Decimal("100"),
+                 spot_pairs: tuple[str, ...] = (), start_cash_usd: Decimal,
                  seed: int = 0) -> None:
         missing = [m for m in (*coins, *spot_pairs) if m not in tape.markets]
         if missing:
             raise ValueError(f"the tape recorded no mids for {missing}")
         self._tape = tape
-        taker, _maker, _source = tape.fees("perp")
-        spread = tape.spread_bps(coins[0] if coins else tape.markets[0])[0]
-        start = {m: tape.mid_at(m, tape.start_ns) for m in tape.markets}
+        # The fake's own terms are never read here, and are set so that none could leak
+        # if one were (Codex review of #151, 7b8de4f): every fee is the recorded rate
+        # (``_rates``), every book and fill the tape's (``_book``, ``_place``), every
+        # funding rate recorded (``_charge``). What the recording states nothing about
+        # is refused: no leverage terms, so no credit (1x, and a position is closed
+        # only when the perps account's equity is below zero), and no vaults.
         super().__init__(
             name=f"tape:{tape.sha256[:8]}", seed=seed, start_cash_usd=Decimal(start_cash_usd),
-            coins=tuple(coins), spot_pairs=tuple(spot_pairs),
-            start_prices={m: row[1] for m, row in start.items() if row is not None},
-            spread_bps=spread, fee_bps=taker * 10_000,
+            coins=tuple(coins), spot_pairs=tuple(spot_pairs), start_prices={},
+            spread_bps=Decimal(0), fee_bps=Decimal(0), funding_rate=Decimal(0),
+            step_bps=Decimal(0), max_leverage=Decimal(1), maintenance_fraction=Decimal(0),
             listed_coins=tape.perps, listed_spot_pairs=tape.pairs)
-        for market, row in start.items():
+        # Only what the recording shows at its first instant: a market with no row yet
+        # has no mid, no book and no listing until its first row (never the fake's 100).
+        self._mids = {}
+        for market in tape.markets:
+            row = tape.mid_at(market, tape.start_ns)
             if row is not None:
-                self._mids[market] = row[1]
-                if "/" in market:  # the fake keeps a pair's base at the pair's mid
-                    self._mids[market.split("/")[0]] = row[1]
+                self._set_mid(market, row[1])
+        self._mid_history = {market: [] for market in self._mids}
         self._now_ns = tape.start_ns
         self._last_funding_ns = tape.start_ns - tape.start_ns % NS_PER_HOUR
         # Orders sent and not yet arrived: id -> the order, the recorded row its sender
@@ -545,6 +578,55 @@ class TapeVenue(FakeExchange):
             (*self.coins, *self.listed_coins, *self.spot_pairs, *self.listed_spot_pairs))
             if m in self._tape.markets)
 
+    def _set_mid(self, market: str, mid: Decimal) -> None:
+        self._mids[market] = mid
+        base = market.split("/")[0]
+        if "/" in market and base not in self._tape.markets:
+            # The fake keeps a pair's base at the pair's mid; never over a recorded perp.
+            self._mids[base] = mid
+
+    def _recorded(self, market: str) -> tuple[int, Decimal] | None:
+        """``market``'s latest recorded mid at or before the venue's instant, or None."""
+        return self._tape.mid_at(market, self._now_ns)
+
+    def mids(self) -> dict[str, Decimal]:
+        """Each market's latest recorded mid as the venue last read it (and a pair's base
+        at the pair's); a market with no recorded row yet is absent, whatever else put
+        a price in the fake's table."""
+        out: dict[str, Decimal] = {}
+        for market in self._quoted():
+            if market in self._mids and self._recorded(market) is not None:
+                out[market] = self._mids[market]
+                base = market.split("/")[0]
+                if "/" in market and base not in self._tape.markets:
+                    out[base] = self._mids[market]
+        return out
+
+    def candles(self, coin: str, interval: str, n: int) -> list[dict]:
+        if self._recorded(coin) is None:
+            raise ValueError(NO_RECORDED_MARKET)
+        return super().candles(coin, interval, n)
+
+    def funding_history(self, coin: str, n: int) -> list[FundingEvent]:
+        if self._recorded(coin) is None:
+            raise ValueError(NO_RECORDED_MARKET)
+        return super().funding_history(coin, n)
+
+    def set_leverage(self, coin: str, leverage: int, *, market: str = "perp") -> dict:
+        """1x only: the recording states no leverage terms, so no credit is extended."""
+        if (market != "spot" and coin in self.coins and type(leverage) is int
+                and leverage > 1):
+            return {"status": "rejected", "error": NO_RECORDED_LEVERAGE}
+        return super().set_leverage(coin, leverage, market=market)
+
+    def vault_create(self, name: str, description: str, usd: Decimal, *,
+                     client_id: str | None = None) -> dict:
+        return {"status": "rejected", "error": NO_RECORDED_VAULTS}
+
+    def vault_transfer(self, vault: str, is_deposit: bool, usd: Decimal, *,
+                       client_id: str | None = None) -> dict:
+        return {"status": "rejected", "error": NO_RECORDED_VAULTS}
+
     def advance(self, ts_ns: int) -> list[WorldEvent]:
         """Move the venue to ``ts_ns`` and answer what the tape recorded up to it.
 
@@ -568,9 +650,7 @@ class TapeVenue(FakeExchange):
             if row is None:
                 continue
             mid = row[1]
-            self._mids[market] = mid
-            if "/" in market:
-                self._mids[market.split("/")[0]] = mid
+            self._set_mid(market, mid)
             self._mid_history.setdefault(market, []).append((ts_ns, mid))
             events.append(WorldEvent(WorldEventKind.MARKET_MID, ts_ns, self.name,
                                      {"coin": market, "mid": str(mid)}))
@@ -605,7 +685,19 @@ class TapeVenue(FakeExchange):
     def _fill(self, oid, order, px, *, liquidation=False, fee_rate=None):
         # A position changes here: what the old one accrued is counted first.
         self._accrue(self._now_ns)
+        if fee_rate is None:  # a liquidation: the recorded taker rate, never the fake's
+            fee_rate = self._rates(order.coin)[0]
         return super()._fill(oid, order, px, liquidation=liquidation, fee_rate=fee_rate)
+
+    def _spot_available(self, coin: str) -> Decimal:
+        """As the fake's, a resting spot buy holding its cost and the recorded maker fee
+        it would pay (the fake holds its own ``fee_bps``, which a tape never charges)."""
+        if coin != "USDC":
+            return super()._spot_available(coin)
+        committed = sum((o.size * o.limit_px * (1 + self._rates(o.coin)[1])
+                         for o in self._resting.values() if o.market == "spot" and o.is_buy),
+                        Decimal(0))
+        return max(Decimal(0), self._spot_cash - committed)
 
     def _fund(self, boundary: int) -> list[WorldEvent]:
         """The hour's funding on the position held at ``boundary`` (the venue's rule)."""
@@ -692,64 +784,108 @@ class TapeVenue(FakeExchange):
     # ---- the venue's terms, published as facts (Chapter II §I.b)
 
     def _rates(self, market: str) -> tuple[Decimal, Decimal]:
-        """(taker, maker) for an order on ``market`` (a pair trades on spot rates)."""
-        taker, maker, _source = self._tape.fees("spot" if "/" in market else "perp")
-        return taker, maker
+        """(taker, maker) for an order on ``market``: the recorded rates. Only a market
+        whose recording states them ever fills (``_place`` refuses the rest)."""
+        rates = self._tape.fees(market)
+        if rates is None:
+            raise ValueError(NO_RECORDED_FEES)
+        return rates
+
+    def _level_size(self, market: str) -> Decimal | None:
+        """One synthetic level of ``market``, in whole recorded lots; None when the tape
+        recorded no liquidity for it (or less than one lot of it)."""
+        size = self._tape.level_size(market, self._now_ns)
+        terms = self._tape.terms(market)
+        if size is not None and terms is not None:
+            size = size // terms[0] * terms[0]
+        return size if size else None
+
+    def _refusal(self, market: str) -> str | None:
+        """Why every order on ``market`` is refused now, or None: the recording is silent
+        on something an order here needs (Codex review of #151, 7b8de4f)."""
+        if self.__dict__.get("_closed"):
+            return MARKET_ENDED
+        if self._recorded(market) is None:
+            return NO_RECORDED_MARKET
+        if self._tape.terms(market) is None:
+            return NO_RECORDED_LISTING
+        if self._tape.fees(market) is None:
+            return NO_RECORDED_FEES
+        if self._level_size(market) is None:
+            return NO_LIQUIDITY
+        return None
 
     def instruments(self) -> dict:
-        """Each listed market's record as the recording's listing stated it (lot and tick
-        sizes, the order floor), with the fee rates every fill here is charged, the
-        spread and book the tape states, and the rules its fills follow."""
+        """Each market the recording shows by now, as its recorded listing stated it (lot
+        and tick sizes, price precision, the order floor, the account's fee rates),
+        with the spread and book the tape states and the rules its fills follow; a
+        term the recording does not state is null and named in ``refused``. A market
+        with no recorded row yet is absent (``NO_RECORDED_MARKET``)."""
         out: dict[str, list[dict]] = {}
         for kind, markets in (("perp", dict.fromkeys((*self.coins, *self.listed_coins))),
                               ("spot", dict.fromkeys((*self.spot_pairs,
                                                       *self.listed_spot_pairs)))):
-            recorded = {row.get("coin"): row for row in self._tape.instrument_rows(kind)}
-            taker, maker, source = self._tape.fees(kind)
             rows = []
             for market in markets:
-                row = dict(recorded.get(market) or {"coin": market, "lot_size": "0.000001",
-                                                    "tick_size": "0.01"})
-                # A recording that could not read its account's rates said so; the rates
-                # this venue charges are stated below, so that note no longer applies.
+                if self._recorded(market) is None:
+                    continue
+                row = dict(self._tape.listing(market) or {"coin": market})
+                # A recording that could not read its account's rates said so; the fields
+                # below state what this venue has, so that note no longer applies.
                 row.pop("fee_rates", None)
                 row.pop("reason", None)
+                terms, rates = self._tape.terms(market), self._tape.fees(market)
                 spread, spread_source = self._tape.spread_bps(market)
-                depth = self._tape.level_size(market, self._now_ns)
+                depth = self._level_size(market)
                 if depth is None:
                     row["liquidity"] = NO_LIQUIDITY
                 row.update({
-                    "min_order_value_usd": str(self._tape.min_order_value(market)),
-                    "taker_fee_rate": str(taker), "maker_fee_rate": str(maker),
+                    "lot_size": None if terms is None else str(terms[0]),
+                    "tick_size": None if terms is None else str(terms[1]),
+                    "min_order_value_usd": None if terms is None else str(terms[2]),
+                    "taker_fee_rate": None if rates is None else str(rates[0]),
+                    "maker_fee_rate": None if rates is None else str(rates[1]),
                     "fee_basis": ("fraction of notional, the recorded account's userFees"
-                                  if source == "recorded" else
-                                  "fraction of notional, Hyperliquid's published base tier"),
-                    "spread_bps": str(spread), "spread_source": spread_source,
+                                  if rates is not None else "not recorded"),
+                    "spread_bps": None if spread is None else str(spread),
+                    "spread_source": spread_source,
                     "synthetic_level_size": None if depth is None else str(depth),
                     "synthetic_level_source": self._tape.depth_source(market),
+                    "refused": self._refusal(market),
                     "execution": self.EXECUTION})
+                if kind == "perp":
+                    row["max_leverage"] = 1
                 rows.append(row)
             out[kind] = rows
         return out
 
     #: The fill rules, as facts about this venue (never advice).
     EXECUTION = (
-        "A recorded market. An order is acknowledged as resting and executes when the "
+        "A recorded market. A market appears in mids, books and this listing from its "
+        "first recorded mid; an order on a market not listed here is refused. Every "
+        "order on a market whose refused is not null is refused, for that reason: the "
+        "recording states no lot size, tick size, order floor or fee rates for it, or "
+        "no liquidity. An order whose size is not a multiple of lot_size, whose limit "
+        "price is not a multiple of tick_size or has more than price_significant_figures "
+        "significant figures (an integer price excepted when integer_prices_allowed), or "
+        "whose value is below min_order_value_usd, is refused. "
+        "An order is acknowledged as resting and executes when the "
         "recording first shows its market after the instant it was sent. The book is "
         "the recorded order book when it is at least as recent as the recorded mid, "
         "otherwise one level each side at the mid plus or minus half of spread_bps, "
-        "holding synthetic_level_size; a market whose synthetic_level_size is null "
-        "refuses every order. A market order is immediate-or-cancel within 5% of the mid "
-        "when it was sent; any part not filled is cancelled. A limit order that crosses "
-        "on arrival fills at the book's prices at taker_fee_rate and rests the rest. "
-        "Within one tick arriving orders are matched before resting ones. A resting "
-        "limit fills only when a recorded mid after it rested is strictly beyond its "
-        "price and the opposite top of book is at or through its price, at its price, "
-        "at maker_fee_rate, up to what the top level on that side still holds. "
+        "holding synthetic_level_size. A market order is immediate-or-cancel within 5% "
+        "of the mid when it was sent; any part not filled is cancelled. A limit order "
+        "that crosses on arrival fills at the book's prices at taker_fee_rate and rests "
+        "the rest. Within one tick arriving orders are matched before resting ones. A "
+        "resting limit fills only when a recorded mid after it rested is strictly beyond "
+        "its price and the opposite top of book is at or through its price, at its "
+        "price, at maker_fee_rate, up to what the top level on that side still holds. "
         "Size taken from one recorded snapshot is not offered again. "
         "Funding settles at each UTC hour on the position then held, at the last "
         "recorded rate and mid, and pro rata for the part of an hour when the world "
-        "ends.")
+        "ends. The recording states no leverage terms: perp positions are margined at "
+        "1x, and are closed at the mid, at taker_fee_rate, when the perps account's "
+        "equity is below zero. The recording has no vaults.")
 
     # ---- the book an arriving or resting order meets
 
@@ -760,20 +896,21 @@ class TapeVenue(FakeExchange):
         already taken from it. No level is unbounded; a market the tape recorded no
         liquidity for has none.
         """
-        mid_row = self._tape.mid_at(market, self._now_ns)
+        mid_row = self._recorded(market)
         if mid_row is None:
-            raise ValueError(f"the tape has recorded no price for {market} yet")
+            raise ValueError(NO_RECORDED_MARKET)
         recorded = self._tape.book_at(market, self._now_ns)
         if recorded is not None and recorded[0] >= mid_row[0]:
             snapshot, bids, asks = recorded
             source = "recorded"
         else:
             snapshot, mid = mid_row
-            half = mid * self._tape.spread_bps(market)[0] / 20_000
-            size = self._tape.level_size(market, self._now_ns)
+            size = self._level_size(market)
             if size is None:  # never unbounded: no recorded liquidity, no level
                 bids, asks, source = [], [], "none"
             else:
+                # A level exists only where some book was recorded, so a spread is stated.
+                half = mid * self._tape.spread_bps(market)[0] / 20_000
                 bids, asks, source = [(mid - half, size)], [(mid + half, size)], "synthetic"
         # Keys of older snapshots can never be met again: the tape only moves forward.
         for key in [k for k in self._taken if k[0] == market and k[1] != snapshot]:
@@ -825,18 +962,20 @@ class TapeVenue(FakeExchange):
         """Refuse what the venue refuses now; send the rest, acknowledged as resting."""
         if order.coin not in (self.spot_pairs if order.market == "spot" else self.coins):
             return OrderResult(None, "rejected", Decimal(0), None, "unknown coin")
-        if order.market == "spot" and (order.size % Decimal("0.000001")
-                or order.limit_px is not None and order.limit_px % Decimal("0.01")):
-            return OrderResult(None, "rejected", Decimal(0), None, "invalid spot tick or lot size")
-        if self.__dict__.get("_closed"):
-            return OrderResult(None, "rejected", Decimal(0), None, MARKET_ENDED)
-        read = self._tape.mid_at(order.coin, self._now_ns)
-        if read is None:
-            return OrderResult(None, "rejected", Decimal(0), None, "no recorded price yet")
-        if self._tape.level_size(order.coin, self._now_ns) is None:
-            return OrderResult(None, "rejected", Decimal(0), None, NO_LIQUIDITY)
+        refusal = self._refusal(order.coin)
+        if refusal is not None:
+            return OrderResult(None, "rejected", Decimal(0), None, refusal)
+        read = self._recorded(order.coin)
+        lot, tick, floor = self._tape.terms(order.coin)
+        # The recorded listing's precision, as the venue enforces it: never the fake's.
+        if order.size <= 0 or order.size % lot:
+            return OrderResult(None, "rejected", Decimal(0), None,
+                               "size is not a positive multiple of the recorded lot_size")
+        if order.limit_px is not None and not self._price_ok(order.coin, order.limit_px, tick):
+            return OrderResult(None, "rejected", Decimal(0), None,
+                               "price is off the recorded tick_size or significant figures")
         px = order.limit_px if order.limit_px is not None else read[1]
-        if order.size * px < self._tape.min_order_value(order.coin):
+        if order.size * px < floor:
             return OrderResult(None, "rejected", Decimal(0), None,
                                "order below the venue minimum value")
         oid = str(self._next_oid)
@@ -854,6 +993,18 @@ class TapeVenue(FakeExchange):
             return self.lookup("", order_id=oid)
         self._inflight[oid] = flight
         return OrderResult(oid, "resting", Decimal(0), None)
+
+    def _price_ok(self, market: str, px: Decimal, tick: Decimal) -> bool:
+        """``px`` is a price the recorded listing admits: positive, a multiple of its
+        tick size, and within its significant figures (an integer price excepted where
+        the listing allows integers). A term the listing does not state is not applied."""
+        if not px.is_finite() or px <= 0 or px % tick:
+            return False
+        row = self._tape.listing(market) or {}
+        figures = row.get("price_significant_figures")
+        if figures is None or row.get("integer_prices_allowed") and px == px.to_integral():
+            return True
+        return len(px.normalize().as_tuple().digits) <= int(figures)
 
     def _arrive(self) -> list[WorldEvent]:
         """Execute every order whose market the recording has shown anew since it was sent."""
