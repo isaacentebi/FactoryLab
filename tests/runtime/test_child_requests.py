@@ -8,7 +8,7 @@ from factorylab.world.models import ModelResponse
 from tests.conftest import make_runtime
 
 
-def parent_request(rt, ceiling=1000000):
+def parent_request(rt, ceiling=2_000_000):
     lid = 'parent-router'
     h = rt.queue.open(actor=lid, event_id='parent',
                       propensity=PropensityRecord(('seed-decider',), (1.,), 'seed-decider',

@@ -73,7 +73,6 @@ def test_both_legs_confirm_and_the_wallet_pots_and_credit_agree():
     treasury, wallet, exchange, ledger = hybrid()
     books = treasury.rail.hybrid_books
     before, balance = treasury.pots(), wallet.balance
-    drift = Reconciler.snapshot(balance, None, exchange, pots_view=before)["discrepancy_micro"]
     submitted = treasury.transfer("to_venice", "5", handle="seat-profit", now_ns=1)
     assert submitted["status"] == "submitted"
     # The shadow leg goes first; no real authorization exists until it has confirmed.
@@ -99,10 +98,11 @@ def test_both_legs_confirm_and_the_wallet_pots_and_credit_agree():
     financing = kinds(ledger, "treasury.financing")
     assert [(f["source"], f["paid_from"], f["shadow_sink"]) for f in financing] == [
         ("venue_perps", "base_mainnet_reserve", SINK)]
-    # The reconciler moves by the financing alone, as it does for any conversion.
-    moved = Reconciler.snapshot(wallet.balance, None, exchange,
-                                pots_view=after)["discrepancy_micro"] - drift
-    assert moved == FIVE
+    # The reconciler reads the pots, unchanged in total; the authority moved by the
+    # financing alone, beside them and never compared with them.
+    snap = Reconciler.snapshot(wallet.balance, None, exchange, pots_view=after)
+    assert snap["pots_micro"] == before["total_micro"]
+    assert snap["wallet_micro"] == balance + FIVE
     assert wallet.check_conservation() and not wallet.dead
     assert treasury.stranded == [] and not after["pending"]
 

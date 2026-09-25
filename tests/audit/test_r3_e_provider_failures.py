@@ -49,10 +49,10 @@ def test_provider_failure_billing_and_identity_survive_replay(provider_type, fai
     ledger = Ledger(clock_ns=lambda: 0)
     journal = RecoveryJournal(ledger, lambda: 0)
     journal.active = True
-    req = Request("caller", "test", {}, {}, {}, 100, 10000, None, "JSON", "test", "caller")
+    req = Request("caller", "test", {}, {}, {}, 100, 20000, None, "JSON", "test", "caller")
 
     def invoke():
-        wallet = Wallet(10000, Ledger())
+        wallet = Wallet(20000, Ledger())
         model = MeteredModel(JournalProxy(provider, journal, "provider"),
                              PriceTable({model_id: TokenPrice(1, 1)}), Meter(wallet))
         assembly = Assembly(AssemblySpec("assembly", 1, model_id, max_tokens=16), model)
@@ -61,7 +61,7 @@ def test_provider_failure_billing_and_identity_survive_replay(provider_type, fai
         assert error_name in ret.outputs["reason"]
         assert wallet.state()["reservations"] == []
         assert wallet.check_conservation()
-        assert wallet.balance == wallet.available == 10000 - ret.cost
+        assert wallet.balance == wallet.available == 20000 - ret.cost
         assert (ret.cost == 0) if failure in UNBILLED else (ret.cost > 0)
         return ret
 

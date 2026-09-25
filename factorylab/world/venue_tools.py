@@ -151,6 +151,11 @@ REQUEST_ITEMS_PER_WEIGHT = {"candles": 60, "funding_history": 20, "user_funding"
                             "user_fills_by_time": 20, "non_funding_ledger": 20}
 
 
+#: What a venue write costs besides its fill, as a fact (Chapter II §I.b): no gas.
+NO_GAS = ("It pays no gas; a fill pays the venue's fee at the rates world.venue lists "
+          "(taker_fee_rate, maker_fee_rate).")
+
+
 def request_weight(what: str, result: Any = None) -> int:
     """The documented weight of one venue request named ``what``; items counted when known."""
     weight = REQUEST_WEIGHT.get(what, 20)
@@ -285,25 +290,26 @@ class VenueTools:
             ("positions", "Open signed positions and entry prices for the account.", {}, []),
             (
                 "place_market",
-                "Place a market buy or sell; optionally reduce only.",
+                "Place a market buy or sell; optionally reduce only. " + NO_GAS,
                 trade,
                 ["coin", "side", "size"],
             ),
             (
                 "place_limit",
-                "Place a good-until-cancelled limit order; optionally reduce only.",
+                "Place a good-until-cancelled limit order; optionally reduce only. " + NO_GAS,
                 {**trade, "price": positive},
                 ["coin", "side", "size", "price"],
             ),
             (
                 "cancel",
-                "Cancel a resting order on its coin.",
+                "Cancel a resting order on its coin. " + NO_GAS,
                 {"coin": coin, "order_id": {"type": "string", "minLength": 1}},
                 ["coin", "order_id"],
             ),
             (
                 "close",
-                "Reduce a position by size, or close it fully when size is omitted or null.",
+                "Reduce a position by size, or close it fully when size is omitted or null. "
+                + NO_GAS,
                 {
                     "coin": coin,
                     "market": market,
@@ -313,7 +319,7 @@ class VenueTools:
             ),
             (
                 "set_leverage",
-                "Set cross-margin leverage for a coin.",
+                "Set cross-margin leverage for a coin. " + NO_GAS,
                 {
                     "coin": coin,
                     "market": market,
@@ -342,9 +348,10 @@ class VenueTools:
         # carries only the trading markets' records, so this description is what
         # tells an assembly the rest of the listing is one call away.
         listings = {
-            "instruments": "Every market the venue lists, with its lot size, tick size and "
-                           "minimum order value. world.venue carries these records for the "
-                           "world's trading_markets only; this read returns the full listing.",
+            "instruments": "Every market the venue lists, with its lot size, tick size, "
+                           "minimum order value and this account's taker and maker fee "
+                           "rates. world.venue carries these records for the world's "
+                           "trading_markets only; this read returns the full listing.",
             "mids": "Public venue mids for all listed markets.",
             "funding": "Public venue funding for all listed markets.",
         }

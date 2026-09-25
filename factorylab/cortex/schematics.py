@@ -10,8 +10,11 @@ from typing import Any
 
 from factorylab.charter.measurement import measurement_catalogue
 from factorylab.cortex.assembly import (
+    JUDGING_FIELDS,
     MAX_PROGRAM_STATE_BYTES,
+    SEED_KIND_LINES,
     SEED_SYSTEM_PROMPT,
+    judging_contract,
     public_description,
     reserved_return_fields,
 )
@@ -21,10 +24,15 @@ from factorylab.runtime.cadence import tick_intervals
 from factorylab.runtime.continuity import HARD_STATE_BYTES
 from factorylab.runtime.custody import UNAVAILABLE
 from factorylab.runtime.observations import window_fact_names
-from factorylab.runtime.propensity import MIN_DECLARED_MASS, action_vocabulary
+from factorylab.runtime.propensity import (
+    MIN_DECLARED_MASS,
+    action_vocabulary,
+    propensity_field,
+)
 from factorylab.runtime.shared import work_disclosure
 from factorylab.runtime.summary import _duration_str, _price_str
 from factorylab.settlement.vocabulary import COMMISSIONED_JUDGE_REFUSAL
+from factorylab.world.treasury import admitted_directions, venice_conversion_text
 
 _ADDRESSING = (
     "inputs.you is your own assembly id. catalogue lists every live assembly "
@@ -51,16 +59,18 @@ DIRECTORY_PAGE = 50
 DIRECTORY_PREVIEW = 10
 INSUFFICIENT = "insufficient history"
 
-#: GPT-6 §9's accounting facts, verbatim. They say what the numbers above them
-#: mean and they hold for every call in this world, so they ride in the prompt's
-#: stable prefix rather than being rewritten per request.
+#: GPT-6 §9's accounting facts. They say what the numbers above them mean and they
+#: hold for every call in this world, so they ride in the prompt's stable prefix
+#: rather than being rewritten per request. §9's "You may revise your subscription,
+#: defer work or decline an unaffordable request" is not here: it named three of a
+#: seat's options and no other, an invitation rather than accounting (rule 1), and the
+#: decline is stated once, as a form of each request's contract (Chapter II §II.b).
 ACCOUNTING_FACTS: tuple[str, ...] = (
     "A paid thought consumes the named budget even when no order is placed.",
     "No new order does not mean the existing portfolio is flat.",
     "Internal payments and endowment releases are not external income.",
     "Before conversion costs, only external net receipts increase total resources.",
     "Trading principal can be converted only through the permitted route and is not earnings.",
-    "You may revise your subscription, defer work or decline an unaffordable request.",
     "No trade, forecast, registration, amendment or novelty quota applies.",
 )
 
@@ -104,12 +114,14 @@ CAPABILITY_HEADER = (
 #: mean. It holds still for the life of a runtime, so it is rendered here, inside
 #: the bytes a provider caches, and nowhere else in the prompt.
 INSTITUTIONS_HEADER = (
-    "INSTITUTIONS\nWhat this world is and how it settles. These facts hold for "
-    "the life of this runtime and are stated here once. What moves is below: "
-    "WORLD UPDATE carries the charter in force and what changed, YOU carries "
-    "your own account and authority, and INPUTS carries this request. Where a "
-    "value here is a committed parameter that the runtime's own adaptation can "
-    "move, it says so and names where the value in force is published.\n"
+    "INSTITUTIONS\nWhat this world is and how it settles, stated here once. These "
+    "facts change only when a registration or retirement is admitted or a charter "
+    "change takes effect. What moves is below: WORLD UPDATE carries the charter in "
+    "force and what changed, YOU carries your own account and authority, REQUEST "
+    "states this request and INPUTS carries its inputs, the world's moving facts "
+    "among them. Where a value here is a committed parameter that the runtime's own "
+    "adaptation can move, it says so and names where the value in force is "
+    "published.\n"
 )
 
 #: Accounting facts stay beside the money they qualify. Action vocabulary and
@@ -117,6 +129,12 @@ INSTITUTIONS_HEADER = (
 #: ``world.read`` handles and retrieve them only when the current decision needs
 #: them. The request's actual outcome schema remains inline on every call.
 INSTITUTION_INLINE_KEYS = frozenset({"accounting_facts"})
+
+#: Institutional sections whose values the runtime moves between requests: ``clock``
+#: carries the measured and derived loop periods (``Clockwork.table``). They stay
+#: retrievable with ``world.read`` and in the world block, and are never rendered
+#: in the prefix, which would then not be stable; ``INPUTS`` renders them instead.
+MOVING_INSTITUTION_KEYS = frozenset({"clock"})
 
 #: Every section name ``_institutional_block`` publishes, and therefore the whole
 #: allowlist a world-reading tool may serve. It is the institutional world only:
@@ -136,15 +154,15 @@ INSTITUTION_SECTIONS = frozenset({
 #: The head of a compact prompt's institutional part: the sections that stayed, and
 #: then the directory of the ones that did not.
 INSTITUTIONS_COMPACT_HEADER = (
-    "INSTITUTIONS\nWhat your resource numbers mean, stated here once for the life "
-    "of this runtime. The rest of this world's reference "
-    "-- its registries, catalogues and settlement rules -- is not carried in this "
-    "prompt. Its sections are listed under sections_not_carried with the route "
-    "that reads them. A section you have not read is unread, not empty, and a "
-    "capability you cannot see the shape of is still listed with its price in "
-    "BASE CAPABILITIES. What moves is below: WORLD UPDATE carries the charter in "
-    "force and what changed, YOU carries your own account and authority, and "
-    "INPUTS carries this request.\n"
+    "INSTITUTIONS\nWhat your resource numbers mean, stated here once. The rest of "
+    "this world's reference -- its registries, catalogues and settlement rules -- is "
+    "not carried in this prompt. Its sections are listed under sections_not_carried "
+    "with the route that reads them. A section you have not read is unread, not "
+    "empty, and a capability you cannot see the shape of is still listed with its "
+    "price in BASE CAPABILITIES. What moves is below: WORLD UPDATE carries the "
+    "charter in force and what changed, YOU carries your own account and authority, "
+    "REQUEST states this request and INPUTS carries its inputs, the world's moving "
+    "facts among them.\n"
 )
 
 
@@ -204,12 +222,17 @@ class SchematicsMixin:
             "gamma": 0.1,
             "add": False,
         },
-        "retire": {"kind": "retire", "assembly_id": "an id from world.catalogue"},
+        "retire": {"kind": "retire", "assembly_id": "an id from world.catalogue",
+                   "predicted_effect": {"card_id": "a current card id",
+                                        "direction": "increase", "window": 1}},
         "connector": {"kind": "connector", "id": "public-source",
                       "description": "Public information", "origin": "https://example.org",
-                      "preflight_path": "/data", "pay": "x402", "max_call_usd": "0.003"},
-        "market": {"kind": "market", "coin": "listed perp coin; omit when using pair",
-                   "pair": "listed BASE/USDC pair; omit when using coin"},
+                      "preflight_path": "/data", "pay": "x402", "max_call_usd": "0.003",
+                      "predicted_effect": {"card_id": "a current card id",
+                                           "direction": "increase", "window": 1}},
+        # One of coin (a listed perp) or pair (a listed BASE/USDC spot pair), never both.
+        "market": {"kind": "market", "coin": "a listed perp coin; a spot market names "
+                   "pair: a listed BASE/USDC pair, in place of coin"},
         "service": {"kind": "service", "program_id": "id of a tool you registered",
                     "price_micro": 1000, "description": "what a buyer receives"},
         "tool": {
@@ -294,6 +317,8 @@ class SchematicsMixin:
                 "window": {"kind": "returns", "n": 10, "per": "role"},
             },
             "trial_windows": 6,
+            "predicted_effect": {"card_id": "the challenged card id",
+                                 "direction": "decrease", "window": 1},
         },
     }
 
@@ -302,10 +327,10 @@ class SchematicsMixin:
         "kind_fields": (
             "reserved_return_fields is the envelope every return may carry. Each seed kind "
             "also owns fields of its own: ProducerReturn and Exposure own action, "
-            "rationale, coin, side and size (the answer order below); Verdict owns verdict "
-            "and payoff in [0, 1] and rationale; MetaVerdict owns conformity in [0, 1] and "
-            "rationale. A declared kind owns what its schema in event_schemas declares, "
-            "and a field another kind owns has no meaning in it"
+            "rationale, coin, side and size (the answer order below); Verdict and "
+            "CounterVerdict own verdict in [0, 1] and rationale; MetaVerdict owns "
+            "conformity in [0, 1] and rationale. A declared kind owns what its schema in "
+            "event_schemas declares, and a field another kind owns has no meaning in it"
         ),
         "action": (
             'ProducerReturn and Exposure: "noop" | "hold" | "order"; an "order" return '
@@ -335,15 +360,15 @@ class SchematicsMixin:
             "answer order may be placed, an answer order with coin, side and size"
         ),
         "verdict": (
-            "evaluator returns (required): the judged return against the charter, 0 to 1; "
-            "the judged return settles on its judges' mean verdict, and the verdict is "
-            "graded by the tier above and scored against the return's measured outcome "
-            "(see scoring)"
+            "evaluator returns (required in an answer; a decline is its own form): the "
+            "judged return against the charter, 0 to 1; the judged return settles on its "
+            "judges' mean verdict, and the verdict is graded by the tier above and scored "
+            "against the return's measured outcome (see scoring)"
         ),
         "about_handle": (
             "judging returns (optional): the return handle your verdict or conformity is "
-            "about, exactly as it appears in the request (inputs.subject_handle when present, "
-            "otherwise the delivered return); omit it to judge the delivered return. A value "
+            "about, exactly as it appears in the request; inputs.subject_handle names the "
+            "delivered return; omit it to judge the delivered return. A value "
             "you cannot address here — prose, or a handle this judgement may not be about — "
             "is not used: the delivered return is judged instead and the reason reaches "
             "your outcome inbox"
@@ -353,7 +378,9 @@ class SchematicsMixin:
             "choosing among, as {action_id: probability} summing to one and including "
             "the action you took (see action_labels for the shape of an action id; the "
             "action includes what the return executed through venue and treasury tools "
-            "and the children it requested). The action taken needs at least "
+            "and the children it requested; a decline is labelled declined). The "
+            "propensity a request forwards under SUBJECT PROPENSITY is the distribution "
+            "of the decision the request is about, not yours. The action taken needs at least "
             f"{MIN_DECLARED_MASS} mass or is floored to it before it weights a reward. It "
             "travels forward on the request about this return"
         ),
@@ -431,8 +458,11 @@ class SchematicsMixin:
             'Outputs arrive in tool_results as '
             '{"tool":"request:<target>","args":<inputs>,"result":{"outputs":{},'
             '"status":"ok","cost_micro":0}} before your second call. '
-            'Outcome schemas support object/array/scalar types, properties, required, enum, '
-            'minimum, maximum, minItems, maxItems and additionalProperties.'
+            'An outcome schema may use exactly these keywords: type (one of object, array, '
+            'string, boolean, integer, number, null), properties, required, enum, minimum, '
+            'maximum, exclusiveMinimum, exclusiveMaximum, minItems, maxItems, '
+            'additionalProperties, items, anyOf, description, title and default; any other '
+            'keyword refuses the request.'
         ),
     }
 
@@ -624,10 +654,15 @@ class SchematicsMixin:
             "compute_supply": {
                 "openrouter": "Prepaid credit on the OpenRouter account. No tool tops it up; "
                               "when it is gone, OpenRouter model ids cannot be called.",
-                "venice": "Credit on a separate Venice account. Base USDC and Venice credit "
-                          "are different pots: treasury.transfer with direction to_venice "
-                          "converts $5 of reserve USDC into Venice credit, which converts "
-                          "principal into compute and is not income.",
+                # The one statement treasury.transfer also makes, for this world's rail
+                # (Chapter II §II.b: a published fact is the enforced one).
+                "venice": "Credit on a separate Venice account; USDC and Venice credit are "
+                          "different pots. " + (
+                              venice_conversion_text(getattr(
+                                  self.m.treasury, "venice_network", None) == "base-mainnet")
+                              if "to_venice" in admitted_directions(self.treasury.rail)
+                              else "No treasury.transfer direction converts to Venice credit "
+                                   "in this world."),
                 "discovery": "catalogue.search returns model prices per million tokens, and "
                              "the full args_schema of any registered tool and the full shape "
                              "of any proposal kind; world.tools and world.proposal_shapes "
@@ -654,8 +689,11 @@ class SchematicsMixin:
                            "max_bytes": self.m.connectors.max_bytes,
                            "timeout_s": self.m.connectors.timeout_s,
                            "max_calls_per_window": self.m.connectors.max_calls_per_window,
-                           "window_ticks": self.clockwork.period(
-                               "price", default=self.m.timing.min_ratio),
+                           # The price loop's drawn period moves with every fire, so
+                           # it is named, not inlined: this block sits in the prefix.
+                           "window_ticks": "the price loop's period: "
+                                           "world.clock.loops.derived.price.period_ticks, "
+                                           f"{self.m.timing.min_ratio} before its first fire",
                            "origin_denylist": list(self.m.connectors.origin_denylist),
                            "method": "GET",
                            "optional_fields": ["pay", "max_call_usd"],
@@ -712,7 +750,11 @@ class SchematicsMixin:
                 for a in sorted(self.assemblies.values(), key=lambda a: a.spec.id)
                 if a.spec.id not in self.retired_assemblies
             ],
-            "event_schemas": dict(self.event_schemas),
+            # The seed judging kinds' contracts, the very objects their requests
+            # carry, beside every population-declared kind's schema (II.II.b).
+            "event_schemas": {**{kind: self._judging_contract(kind)
+                                 for kind in JUDGING_FIELDS},
+                              **dict(self.event_schemas)},
             "routers": [
                 {"event_kind": kind, "count": len(states)}
                 for kind, states in sorted(self.routers.items())
@@ -890,17 +932,18 @@ class SchematicsMixin:
         return block[name]
 
     def _institutional_directory(self, institutions: dict[str, Any]) -> dict[str, Any]:
-        """The sections a compact prompt did not carry, by exact handle and byte cost.
+        """The sections a compact prompt did not carry, by exact handle.
 
         Guarantees every section held out of the prompt is named here, so
-        compaction hides no institution: a reader can see that a thing exists,
-        how much exact JSON it will retrieve, and how to read it. The handles are the exact names
-        ``institution_section`` accepts, so a seat never has to guess one.
+        compaction hides no institution: a reader can see that a thing exists and
+        how to read it. The handles are the exact names ``institution_section``
+        accepts, so a seat never has to guess one. A section ``INPUTS`` renders
+        (``MOVING_INSTITUTION_KEYS``) is not listed, and no section's size is: sizes
+        move with the registries and the measured loops, and this directory is
+        part of the stable prefix.
         """
-        handles = {
-            key: len(json.dumps(institutions[key], sort_keys=True, indent=2).encode("utf-8"))
-            for key in sorted(set(institutions) - INSTITUTION_INLINE_KEYS)
-        }
+        handles = sorted(set(institutions) - INSTITUTION_INLINE_KEYS
+                         - MOVING_INSTITUTION_KEYS)
         tool = "world.read" if "world.read" in getattr(self, "tool_specs", {}) else None
         return {
             "sections": handles,
@@ -910,17 +953,21 @@ class SchematicsMixin:
                 "are not retrievable here"
             ),
             "authority": "a retrieved section is the same value this world publishes "
-                         "and validates against, not a summary of it",
+                         "and validates against, not a summary of it; a section listed "
+                         "here is not carried in this prompt, and is retrieved whole",
         }
 
     def _institution_text(self, institutions: dict[str, Any]) -> tuple[str, str]:
         """The institutional part of the prefix: its header and its body, by prompt mode.
 
-        Guarantees ``reference`` renders exactly what it rendered before the mode
-        existed, byte for byte, and that ``compact`` renders the inline sections and
-        a directory naming every section it left out. With retrieval disabled,
-        the reference stays inline rather than advertising unreachable sections.
+        Guarantees ``reference`` renders every institutional section inline, and that
+        ``compact`` renders the inline sections and a directory naming every section
+        it left out. With retrieval disabled, the reference stays inline rather than
+        advertising unreachable sections. Neither renders a section whose value
+        moves (``MOVING_INSTITUTION_KEYS``): ``INPUTS`` carries it.
         """
+        institutions = {k: v for k, v in institutions.items()
+                        if k not in MOVING_INSTITUTION_KEYS}
         if self._prompt_mode() != "compact" or self.m.tools.max_tool_calls <= 0:
             return INSTITUTIONS_HEADER, json.dumps(institutions, sort_keys=True, indent=2)
         body = {k: v for k, v in institutions.items() if k in INSTITUTION_INLINE_KEYS}
@@ -1477,31 +1524,26 @@ class SchematicsMixin:
                         "before the release changes the divisor"}
 
     def _provider_inventory(self) -> dict[str, Any]:
-        """Each rail's inventory: what the manifest committed, and what was last observed.
+        """Each rail's inventory, as last observed.
 
-        Guarantees the prompt builder performs no network I/O: the observed
-        numbers come from ``Treasury.pots``, the cached read the treasury
-        refreshed on its own schedule, and an unobserved balance is published as
-        ``None`` rather than as zero. The committed side is the manifest's
-        ``[providers]`` block (edition 3, C5), which is what the world was funded
-        with; the two are shown apart because they answer different questions and
-        because neither rail's balance can refill the other.
+        Guarantees the prompt builder performs no network I/O: the numbers come
+        from ``Treasury.pots``, the cached read the treasury refreshed on its own
+        schedule, and an unobserved balance is published as ``None`` rather than as
+        zero. The manifest's ``[providers]`` block is not published beside them: it
+        states what a world was meant to be funded with, not what a rail holds, and a
+        live world showed a Venice $80 there while the account held $0.098 (a false
+        published fact; Chapter II §II.b). What a rail held when the world first read
+        it is the treasury's ``subsidy`` record, observed, not declared.
         """
         pots = self.wallet.pots()
         sellers = pots.get("sellers") or {}
-        providers = getattr(self.m, "providers", None)
         return {"openrouter_usd": _usd(pots.get("seed")),
                 "venice_usd": _usd(sellers.get("venice")),
                 "x402_sellers_usd": {name: _usd(value) for name, value in sorted(sellers.items())
                                      if name != "venice"},
-                "committed_at_launch": {
-                    "openrouter_usd": _usd(getattr(providers, "openrouter_micro", None)),
-                    "venice_usd": _usd(getattr(providers, "venice_micro", None)),
-                },
                 "complete": bool(pots.get("complete")),
                 "as_of": "observed values are the runtime's last treasury read; the prompt "
-                         "reads no rail. Committed values are the manifest's [providers] "
-                         "block. An OpenRouter balance cannot pay for a Venice model."}
+                         "reads no rail. An OpenRouter balance cannot pay for a Venice model."}
 
     def _world_resources(self) -> dict[str, Any]:
         """The factory's money, by class, with principal and income kept apart."""
@@ -1726,8 +1768,8 @@ class SchematicsMixin:
                 "against the pre-activation value. No activation or missing evidence is censored. "
                 "Feedback returns to the voting assembly's durable identity. Retirements and "
                 "connectors are voted when proposed, by a committee drawn the same way; a "
-                "passed retirement takes effect at the next window boundary. With no predicted "
-                "effect in a retire proposal, their ballots are unscored and censored.",
+                "passed retirement takes effect at the next window boundary. A retire or "
+                "connector proposal without a predicted_effect is refused.",
                 "norm_editions": "the charter's norms are written by the norm house, the "
                 "signer the manifest names; a signed norm edition takes effect at a governance "
                 "boundary as the next edition, after each seated delegate's recorded, "
@@ -1797,8 +1839,9 @@ class SchematicsMixin:
                          "Base. Spot HYPE in the venue account pays the Core gas charge: buy it "
                          "on HYPE/USDC; HYPE spent as that charge is not a fill. The mint is "
                          "self-paid when the reserve holds Base ETH; otherwise Circle forwards "
-                         "it for the on-chain fee quoted in pots.gas, bounded per transfer and "
-                         "per cap_window. pots.gas names the branch and any blocker. A "
+                         "it for the on-chain fee quoted in pots.gas.to_reserve, bounded per "
+                         "transfer and per cap_window. pots.gas.to_reserve names the branch "
+                         "and any blocker; pots.gas.gates names every direction gas gates. A "
                          "forwarded mint unobserved for forward_wait_ticks world ticks (or the "
                          "capital loop's measured p90 conversion, if longer) "
                          "strands recoverably (pots.stranded): its burned principal stays "
@@ -1837,22 +1880,20 @@ class SchematicsMixin:
 
     @staticmethod
     def _register_schema() -> dict[str, Any]:
-        """Every kind a return may register is a kind the capability index names.
+        """The register list as the kernel admits it: each kind's forms, required fields named.
 
-        The enum is the index's own key set, so neither can list a kind the other
-        refuses: ``program`` is accepted here and registered as an assembly whose
-        model_id is program, and ``predicate`` is published with a shape.
+        Chapter II §II.b (the published contract is the enforced one): the items are
+        ``registration.register_item_schema``, the forms ``validate_proposal`` checks
+        each proposal against before anything else, so a proposal that satisfies the
+        published schema is refused only for what its fields contain, never for a
+        field the schema did not name. The kinds are the capability index's own key
+        set, so neither can list a kind the other refuses.
         """
-        return {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "description": "Retrieve the full shape with catalogue.search using the kind "
-                               "as substring. A kind alone is not a complete proposal.",
-                "properties": {"kind": {"enum": sorted(SchematicsMixin.PROPOSAL_SHAPES)}},
-                "required": ["kind"],
-            },
-        }
+        from factorylab.cortex.registration import register_item_schema
+
+        items = register_item_schema()
+        return {"type": "array", "items": {
+            **items, "description": "each kind's full shape is returned by catalogue.search"}}
 
 
     def _forecast_schema(self) -> dict[str, Any]:
@@ -1873,6 +1914,70 @@ class SchematicsMixin:
             },
         }
 
+
+    #: The ``world.scoring`` entries that state how each judging kind's answer settles:
+    #: its own formula and the consequence score it predicts. The decline's settlement
+    #: is ``world.scoring.malformed_judgement``; the decline itself is stated once, as a
+    #: form of the outcome schema.
+    SETTLEMENT_KEYS: dict[str, tuple[str, ...]] = {
+        "Verdict": ("evaluator_return", "verdict_is_a_prediction"),
+        "MetaVerdict": ("meta_return", "evaluator_return", "verdict_is_a_prediction"),
+        "CounterVerdict": ("counter_return", "verdict_is_a_prediction"),
+    }
+
+    #: The ``world.scoring`` entry each reward shape settles by.
+    SHAPE_SCORING: dict[str, str] = {
+        "judged": "producer_or_custom_return", "exposure": "antagonist_exposure",
+        "conformity": "meta_return", "counter": "counter_return", "forecast": "work",
+    }
+
+    def _wake_contract(self, kinds: dict[str, str]) -> str:
+        """What a wake's return is and how each answer settles: facts, and where they are.
+
+        Chapter II §I ("the contract has to carry enough self-description") and §I.b
+        (the structures of requests and rewards are public). ``kinds`` maps each kind
+        the seat may answer as to its reward shape. Guarantees the text names what the
+        return is, that every answer the outcome schema admits completes it, and, per
+        kind, the published scoring entry it settles by, the decline's included; it
+        names no task, recommends no answer and says nothing about which is better.
+        """
+        rows = []
+        for kind, shape in kinds.items():
+            key = self.SHAPE_SCORING.get(shape, "work")
+            where = "world.work" if key == "work" else f"world.scoring.{key}"
+            rows.append(f"A {kind} is {SEED_KIND_LINES[kind]} ({where})."
+                        if kind in SEED_KIND_LINES else
+                        f"A {kind} settles by its {shape} reward shape ({where}).")
+        return ("A return here is this seat's decision about this event, and every answer "
+                "the outcome schema admits completes it. " + " ".join(rows)
+                + ' A return answering status "cannot" settles declined '
+                "(world.scoring.declined_return). The verdicts on a return are compared "
+                "with its measured outcome (world.scoring.verdict_is_a_prediction).")
+
+    #: The role whose action vocabulary each judging kind's answer is labelled in.
+    JUDGING_ROLES: dict[str, str] = {"Verdict": "evaluator", "MetaVerdict": "meta",
+                                     "CounterVerdict": "adversary"}
+
+    def _judging_contract(self, kind: str) -> dict[str, Any]:
+        """A judging kind's contract in this world: the one object its request carries
+        and ``world.event_schemas`` publishes (``judging_contract``; Chapter II §II.b)."""
+        return judging_contract(
+            kind, propensity=propensity_field(self.JUDGING_ROLES[kind]),
+            register=self._register_schema(),
+            forecasts=self._forecast_schema() if kind == "Verdict" else None,
+            about_handle=kind != "CounterVerdict")
+
+    def _settlement_facts(self, kind: str) -> dict[str, str]:
+        """How a judging kind's answer settles: ``world.scoring``'s own entries, verbatim.
+
+        Chapter II §I.b ("the structures of requests and rewards" are public) and
+        §III.b: a judge is graded from above and by realized consequence, and the rule
+        it is graded by travels with the request that asks for the judgement, in every
+        prompt mode, rather than behind ``world.read``. Guarantees the same text
+        ``world.scoring`` publishes, key for key, and nothing else: no advice.
+        """
+        scoring = self._scoring_block()
+        return {key: scoring[key] for key in self.SETTLEMENT_KEYS[kind]}
 
     def _scoring_block(self) -> dict[str, Any]:
         """How decisions settle, stated as facts about the world (schematics are
@@ -1898,7 +2003,7 @@ class SchematicsMixin:
                 "card penalty its role bears"
             ),
             "verdict_is_a_prediction": (
-                "a verdict q is also scored against the judged return's measured outcome y: "
+                "a verdict q is scored against the judged return's measured outcome y: "
                 "for a return that executed venue operations (or earned service income; a "
                 "write the venue rejected executed nothing, one left uncertain counts), "
                 "y = return_paid_off, 1 when its realised or marked P&L exceeds its own "
@@ -1957,6 +2062,15 @@ class SchematicsMixin:
                 "cannot declines the commission: the call is charged, it settles as "
                 "declined, and the router that drew the seat and the seat's own learner are "
                 "credited as for an abstention"
+            ),
+            "counter_return": (
+                "a counter-verdict q' on the return a first-tier verdict q judged, made in "
+                "the tick of that verdict, settles on the adversarial channel when the world "
+                "measures that return's outcome y (the y of verdict_is_a_prediction): "
+                "score = 0.5 + 0.5 * ((1 - (q' - y)^2) - (1 - (q - y)^2)), less the card "
+                "penalty; censored when the return is unmeasured "
+                f"{backstop + ev.verdict_timeout_ticks} ticks after the counter, or when the "
+                "counter read anything but a first-tier verdict in its tick"
             ),
             "antagonist_exposure": (
                 "an Exposure return settles on the exposure channel: the mean over the judges "

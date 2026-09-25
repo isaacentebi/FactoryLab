@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import KW_ONLY, dataclass, field, replace
@@ -149,6 +150,9 @@ class Assembly:
     memory: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     child_factory: Callable[[Request, dict[str, Any], int], Request] | None = None
     validator: Callable[[dict[str, Any], Request], None] | None = None
+    # The world's bound on one return's children, which the wire states (None when
+    # the assembly runs outside a world that sets one).
+    max_children: int | None = None
 
     def build_model_request(self, req: Request) -> ModelRequest:
         """Render the exact prompt this assembly will be billed for.
@@ -193,7 +197,8 @@ class Assembly:
             effort=self.spec.effort,
             json_object=True,
             response_schema=wire_schema(req.outcome_schema, self.spec.emits,
-                                        policy=req.scoring_channel == "policy"),
+                                        policy=req.scoring_channel == "policy",
+                                        max_children=self.max_children),
         )
 
     def invoke(self, req: Request) -> Return:
@@ -639,65 +644,138 @@ def _finite_json(value: Any) -> None:
             _finite_json(item)
 
 
-def validate_schema(value: Any, schema: dict, *, partial: bool = False) -> None:
-    """Enforce the supported JSON-schema types, required fields, enums and numeric bounds.
+def _discriminator_miss(value: Any, alternative: Any) -> bool:
+    """Whether ``alternative`` pins a field ``value`` carries to one other value.
+
+    Such an alternative is another member of a discriminated union (a register item
+    of another kind): its failure says nothing about the value, so a refusal does
+    not name it.
+    """
+    if not isinstance(value, dict) or not isinstance(alternative, dict):
+        return False
+    properties = alternative.get("properties")
+    if not isinstance(properties, dict):
+        return False
+    for key, item in value.items():
+        shape = properties.get(key)
+        enum = shape.get("enum") if isinstance(shape, dict) else None
+        if (isinstance(enum, list) and len(enum) == 1
+                and not (type(item) is type(enum[0]) and item == enum[0])):
+            return True
+    return False
+
+
+_TYPES: dict[str, Any] = {"object": dict, "array": list, "string": str, "boolean": bool,
+                          "integer": int, "number": (int, float), "null": type(None)}
+
+
+def _resolve(schema: dict, root: dict) -> dict:
+    """The schema a local ``$ref`` (``#/$defs/<name>``) names in ``root``."""
+    ref = schema.get("$ref")
+    prefix = "#/$defs/"
+    defs = root.get("$defs") if isinstance(root, dict) else None
+    if (not isinstance(ref, str) or not ref.startswith(prefix) or not isinstance(defs, dict)
+            or not isinstance(defs.get(ref[len(prefix):]), dict)):
+        raise ValueError(f"unresolved schema reference {str(ref)[:64]}")
+    return defs[ref[len(prefix):]]
+
+
+def validate_schema(value: Any, schema: dict, *, partial: bool = False,
+                    _root: dict | None = None) -> None:
+    """Enforce the supported JSON-schema types, required fields, enums, bounds, field
+    names (``propertyNames``, its ``pattern`` included), property counts, dependent
+    fields (``dependentRequired``) and local references (``#/$defs/<name>``).
 
     Guarantees a refusal names what failed: an absent required field by name, and a
     value no alternative admits by each alternative's own reason, so a refused
-    answer reads against the published schema it failed.
+    answer reads against the published schema it failed. An alternative that pins a
+    field of the value to another single value (another member of a discriminated
+    union, such as a register item of another kind) is not named, unless every
+    alternative is.
     """
     if not isinstance(schema, dict):
         raise ValueError("schema must be an object")
+    root = schema if _root is None else _root
+    if "$ref" in schema:
+        # A reference and its siblings both bind (JSON Schema 2019-09 and later).
+        validate_schema(value, _resolve(schema, root), partial=partial, _root=root)
+        schema = {k: v for k, v in schema.items() if k != "$ref"}
+
     if "anyOf" in schema:
-        reasons = []
+        failures = []
         for alternative in schema["anyOf"]:
             try:
-                validate_schema(value, alternative, partial=partial)
+                validate_schema(value, alternative, partial=partial, _root=root)
                 break
             except (ValueError, TypeError) as exc:
-                reasons.append(str(exc) or type(exc).__name__)
+                failures.append((alternative, str(exc) or type(exc).__name__))
         else:
-            raise ValueError("no matching alternative: " + " | ".join(reasons))
+            reasons = [r for a, r in failures if not _discriminator_miss(value, a)]
+            raise ValueError("no matching alternative: " + " | ".join(
+                reasons or [r for _a, r in failures]))
     kind = schema.get("type")
-    types = {"object": dict, "array": list, "string": str, "boolean": bool,
-             "integer": int, "number": (int, float), "null": type(None)}
-    kinds = kind if isinstance(kind, list) else [kind]
-    if kind is not None and not any(
-        isinstance(k, str) and k in types and isinstance(value, types[k])
-        and not (k in ("number", "integer") and isinstance(value, bool)) for k in kinds
-    ):
-        raise ValueError("wrong field type")
+    if kind is not None:
+        kinds = kind if isinstance(kind, list) else (kind,)
+        if not any(isinstance(k, str) and k in _TYPES and isinstance(value, _TYPES[k])
+                   and not (k in ("number", "integer") and isinstance(value, bool))
+                   for k in kinds):
+            raise ValueError("wrong field type")
     if "enum" in schema and not any(type(value) is type(v) and value == v
                                     for v in schema["enum"]):
         raise ValueError("field is outside enum")
     if type(value) in (int, float):
-        for key, invalid in (("minimum", lambda b: value < b),
-                             ("maximum", lambda b: value > b),
-                             ("exclusiveMinimum", lambda b: value <= b),
-                             ("exclusiveMaximum", lambda b: value >= b)):
-            if key in schema and invalid(schema[key]):
-                raise ValueError("number out of range")
+        if (("minimum" in schema and value < schema["minimum"])
+                or ("maximum" in schema and value > schema["maximum"])
+                or ("exclusiveMinimum" in schema and value <= schema["exclusiveMinimum"])
+                or ("exclusiveMaximum" in schema and value >= schema["exclusiveMaximum"])):
+            raise ValueError("number out of range")
     if isinstance(value, dict):
+        names = schema.get("propertyNames")
+        if isinstance(names, dict):
+            # A field name's pattern is checked here, and only here: a string value's
+            # own ``pattern`` is its tool's to check, with its tool's reason.
+            pattern = names.get("pattern")
+            rest = {k: v for k, v in names.items() if k != "pattern"}
+            for key in value:
+                try:
+                    # JSON Schema's pattern is an unanchored search; the published
+                    # one anchors.
+                    if isinstance(pattern, str) and re.search(pattern, str(key)) is None:
+                        raise ValueError(f"does not match pattern {pattern}")
+                    if rest:
+                        validate_schema(key, rest, _root=root)
+                except ValueError as exc:
+                    raise ValueError(f"field name {str(key)[:64]!r} {exc}") from None
+        if (len(value) < schema.get("minProperties", 0)
+                or len(value) > schema.get("maxProperties", len(value))):
+            raise ValueError("object size out of range")
         absent = [k for k in schema.get("required", []) if k not in value] if not partial else []
         if absent:
             raise ValueError("required field absent: " + ", ".join(map(str, absent)))
+        dependent = schema.get("dependentRequired")
+        if isinstance(dependent, dict) and not partial:
+            for key, needs in dependent.items():
+                missing = [n for n in needs if key in value and n not in value]
+                if missing:
+                    raise ValueError(f"{key} needs {', '.join(map(str, missing))}")
         properties = schema.get("properties", {})
         for key, item in value.items():
             if key in properties:
                 try:
-                    validate_schema(item, properties[key])
+                    validate_schema(item, properties[key], _root=root)
                 except ValueError as exc:
                     raise ValueError(f"{key}: {exc}") from None
             elif schema.get("additionalProperties") is False:
                 raise ValueError(f"unexpected field: {key}")
             elif isinstance(schema.get("additionalProperties"), dict):
-                validate_schema(item, schema["additionalProperties"])
+                validate_schema(item, schema["additionalProperties"], _root=root)
     if isinstance(value, list):
         if (len(value) < schema.get("minItems", 0)
                 or len(value) > schema.get("maxItems", len(value))):
             raise ValueError("array length out of range")
+        items = schema.get("items", {})
         for item in value:
-            validate_schema(item, schema.get("items", {}))
+            validate_schema(item, items, _root=root)
 
 
 def declines(outputs: Any) -> bool:
@@ -729,9 +807,13 @@ def reserved_return_fields(*, max_children: int | None = None,
     No venue's order semantics and no seed role's fields: those belong to the
     kinds that own them (``kind_return_fields``), so a population kind may give
     ``action`` or ``verdict`` its own meaning.
+
+    ``status`` is the refusal flag and nothing else: its one value is ``"cannot"``,
+    and a reply carrying it is a decline whatever else it carries (``declines``;
+    Chapter II §II.b, the published contract is the enforced one).
     """
-    properties = {k: {"type": "string"} for k in ("reason", "status", "emits",
-                                                  "about_handle")}
+    properties = {k: {"type": "string"} for k in ("reason", "emits", "about_handle")}
+    properties["status"] = {"type": "string", "enum": ["cannot"]}
     properties.update({
         **CONTINUITY_RETURN_FIELDS,  # working_state and ack_through (C1)
         # The deciding agent's own distribution over its own actions.
@@ -771,15 +853,144 @@ ANSWER_ORDER_KINDS = frozenset({"ProducerReturn", "Exposure"})
 _ORDER_FIELDS = {"action": {"type": "string"}, "rationale": {"type": "string"},
                  "coin": {"type": "string"}, "side": {"type": "string"}}
 #: The fields each seed kind owns, with their types (primitive audit F7): the
-#: producer kinds own the answer order, a Verdict its verdict and payoff, a
-#: MetaVerdict its conformity. A population kind owns what its schema declares.
+#: producer kinds own the answer order, a Verdict its verdict, a MetaVerdict its
+#: conformity. A population kind owns what its schema declares. Ruling R1 removed
+#: the Verdict's separate payoff: the verdict is itself the prediction the world
+#: scores, so no kind owns a payoff field.
 KIND_RETURN_FIELDS: dict[str, dict[str, dict]] = {
     "ProducerReturn": _ORDER_FIELDS,
     "Exposure": _ORDER_FIELDS,
-    "Verdict": {"verdict": _UNIT, "payoff": _UNIT, "rationale": {"type": "string"}},
+    "Verdict": {"verdict": _UNIT, "rationale": {"type": "string"}},
     "MetaVerdict": {"conformity": _UNIT, "rationale": {"type": "string"}},
     "CounterVerdict": {"verdict": _UNIT, "rationale": {"type": "string"}},
 }
+
+#: A reply's field names: identifiers. A key that swallowed its own delimiter
+#: (``"propensity{"``) names no field, so the reply is refused naming it rather than
+#: losing the field in silence (Chapter II §II.b: physics is enforced, both sides).
+FIELD_NAME_PATTERN = "^[A-Za-z_][A-Za-z0-9_]*$"
+FIELD_NAMES: dict[str, str] = {"pattern": FIELD_NAME_PATTERN}
+
+#: The field each judging kind answers with, in [0, 1].
+JUDGING_FIELDS: dict[str, str] = {"Verdict": "verdict", "CounterVerdict": "verdict",
+                                  "MetaVerdict": "conformity"}
+#: How much of a judgement's rationale travels with the published judgement to the
+#: tier above; the rest stays in the judge's own return (Chapter II §II.b: a limit
+#: is published, never applied in silence).
+FORWARDED_RATIONALE_CHARS = 2000
+
+#: The decline, stated once as its own answer form (Chapter II §II.b): ``declines``,
+#: the one definition of a decline, as a schema. ``status`` decides; a ``reason`` is
+#: optional and, when present, a string.
+DECLINE_FORM: dict[str, Any] = {
+    "type": "object",
+    "description": 'a decline: a reply whose status is "cannot" is a decline, whatever '
+                   "else it carries; reason is optional",
+    "properties": {"status": {"enum": ["cannot"]}, "reason": {"type": "string"}},
+    "required": ["status"],
+    "propertyNames": dict(FIELD_NAMES),
+}
+
+
+def judging_contract(kind: str, *, propensity: dict, register: dict,
+                     forecasts: dict | None = None, about_handle: bool = True) -> dict:
+    """The answers a judging kind's reply admits, as the kernel enforces them.
+
+    Chapter II §II.b: physics is enforced, not announced, and the published contract
+    is the enforced one. The one builder of a Verdict's, a MetaVerdict's and a
+    CounterVerdict's contract, the pattern of ``producing_contract``: the request
+    publishes it, the kernel validates the reply against it (a judgement with no
+    value in [0, 1] is censored, so the value is required) and ``wire_schema``
+    carries it.
+
+    Guarantees ``{"anyOf": [answer, DECLINE_FORM]}``. The answer requires the kind's
+    field (``JUDGING_FIELDS``) in [0, 1], and ``rationale`` for a Verdict and a
+    CounterVerdict, as the kernel always has; ``propensity`` is the given field,
+    whose description names this role's action labels. The answer carries no
+    ``status``: the decline is its own form, published once. Each form states that
+    field names are identifiers (``FIELD_NAMES``), as the kernel enforces on every reply.
+    """
+    field = JUDGING_FIELDS[kind]
+    rationale = {"type": "string",
+                 "description": f"the first {FORWARDED_RATIONALE_CHARS} characters travel "
+                                "with the published judgement"}
+    properties: dict[str, Any] = {field: dict(_UNIT), "rationale": rationale,
+                                  "propensity": deepcopy(propensity)}
+    if forecasts is not None:
+        properties["forecasts"] = deepcopy(forecasts)
+    properties["register"] = deepcopy(register)
+    if about_handle:
+        properties["about_handle"] = {"type": "string"}
+    required = [field] if kind == "MetaVerdict" else [field, "rationale"]
+    answer = {"type": "object", "properties": properties, "required": required,
+              "propertyNames": dict(FIELD_NAMES)}
+    return {"anyOf": [answer, deepcopy(DECLINE_FORM)]}
+
+
+_CHILD_SCHEMA_TYPES = ["object", "array", "string", "boolean", "integer", "number", "null"]
+#: Where the wire defines a child outcome schema, which refers to itself.
+CHILD_SCHEMA_DEF = "child_outcome_schema"
+CHILD_SCHEMA_REF = f"#/$defs/{CHILD_SCHEMA_DEF}"
+#: Where the wire defines a register item, stated once for every answer form.
+REGISTER_ITEM_DEF = "register_item"
+
+
+def child_schema_shape() -> dict:
+    """``_schema_definition``'s keyword whitelist as a schema, nested through itself.
+
+    Guarantees a child ``outcome_schema`` satisfies it exactly when it passes the
+    kernel's own check (``_schema_definition``), at every depth: the same keywords,
+    the same seven types, the same bound and list types, each nested schema under
+    ``properties``, ``items``, ``additionalProperties`` and ``anyOf`` checked by the
+    same definition (``CHILD_SCHEMA_REF``, defined under ``$defs`` at the wire's root).
+    """
+    ref = {"$ref": CHILD_SCHEMA_REF}
+    bounds = {k: {"type": "number"} for k in ("minimum", "maximum", "exclusiveMinimum",
+                                                "exclusiveMaximum")}
+    counts = {k: {"type": "integer", "minimum": 0} for k in ("minItems", "maxItems")}
+    return {"type": "object", "additionalProperties": False, "properties": {
+        "type": {"enum": list(_CHILD_SCHEMA_TYPES)},
+        "properties": {"type": "object", "additionalProperties": dict(ref)},
+        "required": {"type": "array", "items": {"type": "string"}},
+        "enum": {"type": "array"},
+        **bounds, **counts,
+        "additionalProperties": {"anyOf": [{"type": "boolean"}, dict(ref)]},
+        "items": dict(ref),
+        "anyOf": {"type": "array", "minItems": 1, "items": dict(ref)},
+        "description": {}, "title": {}, "default": {},
+    }}
+
+
+def child_requests_shape(max_children: int | None = None) -> dict:
+    """The syntax ``_check_child`` and the runtime refuse a child request for, as a schema.
+
+    Guarantees, for a non-empty list of children: at most ``max_children`` of them
+    (the runtime refuses the batch over it); each ``outcome_schema`` meeting
+    ``child_schema_shape``; a ``propensity`` that is a non-empty object of at most
+    ``MAX_DECLARED_ACTIONS`` probabilities in [0, 1], never without ``chosen`` and
+    ``chosen`` never without it. That the distribution sums to one and gives
+    ``chosen`` positive mass stays the kernel's (``_check_child``).
+    """
+    from factorylab.cortex.request import MAX_DECLARED_ACTIONS
+
+    # A child's reply is a reply: its outcome schema names only identifier fields
+    # (``_schema_definition``), at its top level and in its top-level alternatives.
+    names = {"properties": {"type": "object", "propertyNames": dict(FIELD_NAMES)},
+             "required": {"type": "array", "items": {"type": "string", **FIELD_NAMES}}}
+    reply = {"$ref": CHILD_SCHEMA_REF, "properties": {
+        **names, "anyOf": {"type": "array", "items": {"properties": names}}}}
+    shape: dict[str, Any] = {"minItems": 1, "items": {
+        "properties": {
+            "outcome_schema": reply,
+            "propensity": {"type": "object", "minProperties": 1,
+                           "maxProperties": MAX_DECLARED_ACTIONS,
+                           "additionalProperties": {"type": "number", "minimum": 0,
+                                                    "maximum": 1}},
+            "chosen": {"type": "string"}},
+        "dependentRequired": {"propensity": ["chosen"], "chosen": ["propensity"]}}}
+    if max_children is not None:
+        shape["maxItems"] = max_children
+    return shape
 
 
 #: The trade a return declined, as the contracts of the judged and exposure kinds
@@ -974,13 +1185,19 @@ def validate_return_sections(parsed: dict, schema: dict, validator=None, req=Non
     """
     parsed = dict(parsed)
     required = schema.get("required", ()) if isinstance(schema, dict) else ()
+    # A rationale any answer form requires: a union's (``judging_contract``) as much
+    # as a single shape's.
+    answers = _answer_shapes(schema) if isinstance(schema, dict) else ()
+    rationale_required = any("rationale" in (shape.get("required") or ())
+                             for shape in answers)
     # Two habits every model has, neither of which changes what an answer says:
     # ``null`` for a field it is leaving out, and its explanation under ``reason``
     # when the contract names it ``rationale``. A null optional field is absent; a
-    # missing required rationale is read from a string reason. Nothing else is
-    # coerced, and a null in a required field still fails.
+    # missing required rationale is read from a string reason, except in a decline,
+    # where ``reason`` is the decline's own. Nothing else is coerced, and a null in a
+    # required field still fails.
     parsed = {k: v for k, v in parsed.items() if v is not None or k in required}
-    if ("rationale" in required and "rationale" not in parsed
+    if (rationale_required and "rationale" not in parsed and not declines(parsed)
             and isinstance(parsed.get("reason"), str) and parsed["reason"].strip()):
         parsed["rationale"] = parsed["reason"]
     # A decline is read by ``declines`` alone, so its status is read in the published
@@ -1075,11 +1292,11 @@ def validate_return_sections(parsed: dict, schema: dict, validator=None, req=Non
     # fields and order size still validate atomically, and an explicit ``emits``
     # keeps its declared event body atomic rather than laundering it as a draft.
     continuation = bool(parsed.get("tool_calls") or parsed.get("requests"))
-    status_shape = declared.get("status") if isinstance(declared, dict) else None
-    if (continuation and "status" in parsed and not declines(parsed)
-            and isinstance(status_shape, dict) and "enum" in status_shape
-            and parsed["status"] not in status_shape["enum"]):
-        # "pending" beside tool calls is a draft of an answer not yet given.
+    if continuation and "status" in parsed and not declines(parsed):
+        # "pending" beside tool calls is a draft of an answer not yet given: status
+        # says one thing, "cannot" (``reserved_return_fields``; ``declines``), and a
+        # continuation is not a decline, so any other value is dropped rather than
+        # voiding the turn.
         drop("status", f"unfinished continuation field: {parsed['status']!r}")
         del parsed["status"]
     if continuation and "emits" not in parsed:
@@ -1140,9 +1357,11 @@ def _declared_fields(schema: Any) -> dict:
     """The field shapes a contract declares for every answer of one kind.
 
     Guarantees a plain object contract's own properties, and, for a union of answers
-    of one kind (``producing_contract``: every alternative pins the same ``emits``, or
-    none does), the properties every alternative declares identically; {} for a union
-    over several kinds, whose alternatives each declare their own.
+    of one kind (``producing_contract``, ``judging_contract``: every alternative pins
+    the same ``emits``, or none does), each property every alternative that names it
+    declares identically, so a field only the answer names (a judgement's register)
+    is declared as the answer declares it; {} for a union over several kinds, whose
+    alternatives each declare their own.
     """
     if not isinstance(schema, dict):
         return {}
@@ -1155,9 +1374,12 @@ def _declared_fields(schema: Any) -> dict:
     pins = {json.dumps(s["properties"].get("emits"), sort_keys=True) for s in shapes}
     if len(pins) != 1:
         return {}
-    first = shapes[0]["properties"]
-    return {k: v for k, v in first.items()
-            if all(s["properties"].get(k) == v for s in shapes[1:])}
+    declared: dict[str, Any] = {}
+    for key in dict.fromkeys(k for s in shapes for k in s["properties"]):
+        named = [s["properties"][key] for s in shapes if key in s["properties"]]
+        if all(shape == named[0] for shape in named[1:]):
+            declared[key] = named[0]
+    return declared
 
 
 def _check_child(child: dict) -> None:
@@ -1194,8 +1416,12 @@ def _validate_return(parsed: dict, schema: dict, kind: str | None = None) -> Non
     (``kind_return_fields``) on a reply of that kind: the answer-order rules apply
     to the producer kinds alone (``ANSWER_ORDER_KINDS``), so an ``action`` of
     ``"order"`` in any other kind's reply is that kind's word, never a trade.
+
+    Guarantees every field name is an identifier (``FIELD_NAMES``): a reply with any
+    other key is refused, the key named, whether or not its contract says so.
     """
-    validate_schema(parsed, {"type": "object", "properties": reserved_return_fields()})
+    validate_schema(parsed, {"type": "object", "propertyNames": FIELD_NAMES,
+                             "properties": reserved_return_fields()})
     validate_schema(parsed, {"type": "object", "properties": kind_return_fields(kind)})
     # "order" is both an instruction and the name of a trade already made through a
     # tool. An answer carrying any order field is an instruction and validates
@@ -1224,11 +1450,13 @@ def _validate_return(parsed: dict, schema: dict, kind: str | None = None) -> Non
         _check_child(child)
 
 
-def wire_schema(schema: Any, emits: Any = None, *, policy: bool = False) -> dict | None:
+def wire_schema(schema: Any, emits: Any = None, *, policy: bool = False,
+                max_children: int | None = None) -> dict | None:
     """The contract as a provider's constrained decoder carries it, or None for no schema.
 
     ``emits`` is the executing seat's emitted kinds and ``policy`` marks a policy
-    ballot, exactly as ``answer_kind`` reads them.
+    ballot, exactly as ``answer_kind`` reads them. ``max_children`` is the world's
+    bound on one return's children (``[tools] max_children``), when the caller knows it.
 
     Guarantees, for the answer forms ``_validate_return`` distinguishes (the final
     answer, a continuation through a non-empty ``tool_calls`` or ``requests``, and
@@ -1252,12 +1480,21 @@ def wire_schema(schema: Any, emits: Any = None, *, policy: bool = False) -> dict
       JSON-schema default), so a decoder whose default is closed cannot forbid a
       field the kernel accepts, such as ``working_state``;
     - a contract that is a union of answers is carried as those answers: a producing
-      kind's union (``producing_contract``) reaches the decoder as the same forms the
-      request publishes and the kernel validates, never rebuilt here.
+      kind's union (``producing_contract``) and a judging kind's (``judging_contract``)
+      reach the decoder as the same forms the request publishes and the kernel
+      validates, never rebuilt here;
+    - the syntax the kernel checks is never looser here: ``status`` is ``"cannot"``
+      or absent in every form (``reserved_return_fields``), every field name is an
+      identifier (``FIELD_NAMES``, as ``propertyNames`` at the root), and in the
+      continuation through ``requests`` each child's ``outcome_schema`` meets
+      ``_schema_definition``'s keyword whitelist (``child_schema_shape``) to the
+      depth a schema without references can state.
 
     What the wire cannot state stays the kernel's alone, and a wire-valid reply may
     still fail it there: the answer-order rules of the producer kinds, a child
-    request's semantic checks (``_check_child``), and the runtime's own validator.
+    request's semantic checks (``_check_child``: its propensity naming the chosen
+    action, and its outcome schema below the stated depth), and the runtime's own
+    validator.
     The kernel also accepts a few habits the wire does not produce: a null optional
     field, ``reason`` read as a missing ``rationale``, a decline's ``status`` in
     any case (``declines``), and an invalid optional section it drops.
@@ -1273,6 +1510,7 @@ def wire_schema(schema: Any, emits: Any = None, *, policy: bool = False) -> dict
     kinds = tuple(emits or ())
     reserved = reserved_return_fields()
     forms: list[dict] = []
+    referenced = False  # whether a form refers to the child outcome schema definition
     for shape in _answer_shapes(schema):
         named = shape.get("properties")
         named = named if isinstance(named, dict) else {}
@@ -1308,8 +1546,15 @@ def wire_schema(schema: Any, emits: Any = None, *, policy: bool = False) -> dict
             if key not in properties:
                 continue  # a closed contract without ``key``: the kernel refuses it
             listed = _intersect(properties[key], {"minItems": 1})
+            if listed is not None and key == "requests":
+                # A continuation through children is refused whole when one child
+                # fails ``_check_child``'s syntax or the batch is over the bound, so
+                # here the wire states them (elsewhere the kernel drops the section
+                # and the answer stands).
+                listed = _intersect(listed, child_requests_shape(max_children))
             if listed is None or listed.get("maxItems", 1) == 0:
                 continue  # this contract admits no continuation through ``key``
+            referenced = referenced or key == "requests"
             partial = _partial(merged)
             partial["properties"] = {**properties, key: listed}
             partial["required"] = [key]
@@ -1322,12 +1567,38 @@ def wire_schema(schema: Any, emits: Any = None, *, policy: bool = False) -> dict
             continue  # the contract's own status or reason cannot say it
         refusal = _partial(merged)
         refusal["properties"] = {**properties, "status": status, "reason": reason}
+        if isinstance(properties.get("requests"), dict):
+            # A decline's children never run, and the kernel drops a list of them
+            # that fails ``_check_child``: the wire admits only children that pass it.
+            children = {k: v for k, v in child_requests_shape(max_children).items()
+                        if k != "minItems"}
+            listed = _intersect(properties["requests"], children)
+            if listed is None:
+                continue
+            refusal["properties"]["requests"] = listed
+            referenced = True
         refusal["required"] = ["status"]  # a reason is optional (``declines``)
         forms.append(refusal)
     if not forms:
         return None
-    # Every reply is an object (``_validate_return``'s envelope), so the root says so.
-    return deepcopy(_open({"type": "object", "anyOf": forms}))
+    # Every reply is an object whose field names are identifiers (``_validate_return``'s
+    # envelope), so the root says so.
+    root = _open({"type": "object", "propertyNames": dict(FIELD_NAMES), "anyOf": forms})
+    defs: dict[str, Any] = {}
+    if referenced:
+        defs[CHILD_SCHEMA_DEF] = child_schema_shape()
+    # The register item forms are the largest thing a contract repeats in every answer
+    # form; the wire states them once and refers to them.
+    registers = [form["properties"]["register"] for form in root["anyOf"]
+                 if isinstance((form.get("properties") or {}).get("register"), dict)]
+    items = [r.get("items") for r in registers]
+    if items and isinstance(items[0], dict) and all(i == items[0] for i in items):
+        defs[REGISTER_ITEM_DEF] = items[0]
+        for register in registers:
+            register["items"] = {"$ref": f"#/$defs/{REGISTER_ITEM_DEF}"}
+    if defs:
+        root["$defs"] = defs
+    return deepcopy(root)
 
 
 def _shape_kinds(shape: dict, kinds: tuple[str, ...], policy: bool) -> tuple[str, ...]:
@@ -1349,8 +1620,8 @@ def _shape_kinds(shape: dict, kinds: tuple[str, ...], policy: bool) -> tuple[str
     return kinds
 
 
-_LOWER_BOUNDS = ("minimum", "exclusiveMinimum", "minItems")
-_UPPER_BOUNDS = ("maximum", "exclusiveMaximum", "maxItems")
+_LOWER_BOUNDS = ("minimum", "exclusiveMinimum", "minItems", "minProperties")
+_UPPER_BOUNDS = ("maximum", "exclusiveMaximum", "maxItems", "maxProperties")
 #: Keywords that only describe, never constrain: either side's is kept.
 _ANNOTATIONS = ("description", "title")
 
@@ -1489,13 +1760,26 @@ def _open(schema: Any) -> Any:
             out[key] = value
     kind = out.get("type")
     if (kind == "object" or (isinstance(kind, list) and "object" in kind)
-            or "properties" in out) and "additionalProperties" not in out:
+            or "properties" in out) and "additionalProperties" not in out and "$ref" not in out:
+        # A reference states its own openness; a sibling here would read as a second
+        # constraint to one decoder and as noise to another.
         out["additionalProperties"] = True
     return out
 
 
 def validate_proposal(proposal: dict) -> None:
-    """Reject malformed proposal fields before any registration effect."""
+    """Reject malformed proposal fields before any registration effect.
+
+    Guarantees a proposal of a published kind is checked first against that kind's
+    register item forms (``registration.proposal_schemas``), the schema every
+    request publishes for ``register``, so an absent field is refused by name.
+    """
+    from factorylab.cortex.registration import proposal_schemas
+
+    if isinstance(proposal, dict) and isinstance(proposal.get("kind"), str):
+        forms = proposal_schemas().get(proposal["kind"])
+        if forms:
+            validate_schema(proposal, forms[0] if len(forms) == 1 else {"anyOf": forms})
     fields = {k: {"type": "string"} for k in (
         "kind", "id", "model_id", "openrouter_id", "role", "system_prompt", "effort",
         "event_kind", "learner", "description", "code", "tick_interval",
@@ -1550,8 +1834,16 @@ def positive_wire_decimal(value: Any) -> None:
         raise ValueError("decimal amount out of range")
 
 
-def _schema_definition(schema: Any) -> None:
-    """Composition schemas are type-checked and cannot silently request unsupported constraints."""
+def _schema_definition(schema: Any, *, answer: bool = True) -> None:
+    """Composition schemas are type-checked and cannot silently request unsupported constraints.
+
+    Guarantees, where ``schema`` is a reply's own shape (``answer``: the schema itself
+    and each alternative of its top-level ``anyOf``), that every property it names
+    and every field it requires is an identifier (``FIELD_NAMES``): a reply carrying
+    any other key is malformed (``_validate_return``), so a schema naming one would
+    admit no reply, and it is refused here, the field named. Nested schemas describe
+    values, whose keys are the value's own.
+    """
     if not isinstance(schema, dict):
         raise ValueError("schema must be an object")
     allowed = {"type", "properties", "required", "enum", "minimum", "maximum", "minItems",
@@ -1578,13 +1870,18 @@ def _schema_definition(schema: Any) -> None:
         if not isinstance(schema["properties"], dict):
             raise ValueError("schema properties must be an object")
         for prop in schema["properties"].values():
-            _schema_definition(prop)
+            _schema_definition(prop, answer=False)
+    if answer:
+        for name in [*schema.get("properties", {}), *schema.get("required", ())]:
+            if not isinstance(name, str) or re.fullmatch(FIELD_NAME_PATTERN, name) is None:
+                raise ValueError(f"field name {str(name)[:64]!r} is not an identifier "
+                                 f"({FIELD_NAME_PATTERN}): no reply could carry it")
     if "items" in schema:
-        _schema_definition(schema["items"])
+        _schema_definition(schema["items"], answer=False)
     if "additionalProperties" in schema and type(schema["additionalProperties"]) is not bool:
-        _schema_definition(schema["additionalProperties"])
+        _schema_definition(schema["additionalProperties"], answer=False)
     if "anyOf" in schema:
         if not isinstance(schema["anyOf"], list) or not schema["anyOf"]:
             raise ValueError("anyOf must contain schemas")
         for alternative in schema["anyOf"]:
-            _schema_definition(alternative)
+            _schema_definition(alternative, answer=answer)
