@@ -582,9 +582,10 @@ class BootstrapMixin:
         # first: what its deliveries were at a tick, so those older than the
         # published retention can be released unread (wave 17b).
         self.policy_marks: dict[str, list[list[int]]] = {}
-        # The venue transactions of released decisions' vault writes: still bound, so
-        # no later write can take one as its own (``_vault_claimed``).
-        self.vault_released_hashes: list[str] = []
+        # The venue transactions of released decisions' vault writes, [hash, the clock
+        # when it was released], while a vault lookup's window can still return one
+        # (``_prune_vault_released``): still bound, so no later write takes it.
+        self.vault_released_hashes: list[list] = []
         self.eligibility_tally: dict[str, int] = {}
         self.eligibility_evidence: set[tuple[str, str]] = set()
         self.released_intents: dict[str, int] = {}

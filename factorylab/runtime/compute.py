@@ -462,11 +462,14 @@ class ContractConsequences(ReturnConsequences):
 
         # What an event fill realises is the polymarket pot's, kept apart from the
         # venue's (runtime/polymarket.py); a deferred fill replays through here too.
-        before = {r.handle: r.realized_micro for r in self.table.returns}
+        # A released decision's realisation (wave 17b) is the pot's as much as a
+        # retained one's: ``realized_by_handle`` counts both.
+        before = self.table.realized_by_handle()
         super().observe(kind, payload, event)
+        after = self.table.realized_by_handle()
         credit_realized(self.runtime, {
-            r.handle: r.realized_micro - before.get(r.handle, 0)
-            for r in self.table.returns if r.realized_micro != before.get(r.handle, 0)})
+            handle: total - before.get(handle, 0) for handle, total in after.items()
+            if total != before.get(handle, 0)})
 
     def resolve(self, event):
         resolved = super().resolve(event)

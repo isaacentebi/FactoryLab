@@ -211,30 +211,44 @@ class ReceiptBook:
         self.__released_executions = 0
         self.__execution_by_handle: dict[str, list[tuple[int, str]]] = {}
 
-    def _index_execution(self, identity: str, receipt: _Receipt) -> None:
-        """Append one execution receipt to the derived global and per-handle indexes."""
+    def _index_execution(self, identity: str, receipt: _Receipt,
+                         ordinal: int | None = None) -> None:
+        """Append one execution receipt to the derived global and per-handle indexes,
+        at the next position, or at ``ordinal`` when a restore names the one it had."""
         if not isinstance(receipt, ExecutionReceipt):
             return
-        ordinal = self.__executions
+        if ordinal is None:
+            ordinal = self.__executions
         self.__executions += 1
         self.__execution_by_handle.setdefault(receipt.handle, []).append((ordinal, identity))
 
-    def restore(self, receipts: Iterable[_Receipt], *, released_executions: int = 0) -> None:
+    def restore(self, receipts: Iterable[_Receipt], *, released_executions: int = 0,
+                ordinals: Mapping[str, int] | None = None) -> None:
         """Restore record order and rebuild derived execution indexes in one pass.
 
         ``released_executions`` is how many execution receipts were released before
-        the checkpoint (``released_executions()``); an older checkpoint released none.
-        Guarantees ``execution_count`` equals the recording book's, so every receipt
-        recorded after the checkpoint takes the position it took there, and a cursor
-        taken at the checkpoint or later reads exactly what it read there. Held
-        receipts are numbered after the released ones, in record order.
+        the checkpoint (``released_executions()``), and ``ordinals`` the position each
+        held execution receipt had in the recording book (``execution_ordinals()``);
+        an older checkpoint released none, and its positions are its record order.
+        Guarantees ``execution_count`` and every held receipt's position equal the
+        recording book's, whichever receipts were released and in whatever order, so
+        a cursor taken before the checkpoint reads after it exactly what it read
+        before, and every receipt recorded later takes the position it took there.
         """
         self.__by_id = {receipt.id: receipt for receipt in receipts}
         self.__released_executions = released_executions
-        self.__executions = released_executions
+        self.__executions = released_executions if ordinals is None else 0
         self.__execution_by_handle = {}
         for identity, receipt in self.__by_id.items():
-            self._index_execution(identity, receipt)
+            self._index_execution(identity, receipt,
+                                  None if ordinals is None else ordinals[identity])
+        if ordinals is not None:
+            self.__executions += released_executions
+
+    def execution_ordinals(self) -> dict[str, int]:
+        """Each held execution receipt's position in the global cursor, by id."""
+        return {identity: ordinal for rows in self.__execution_by_handle.values()
+                for ordinal, identity in rows}
 
     def release(self, handles) -> int:
         """Forget every receipt about the released ``handles``; return how many.

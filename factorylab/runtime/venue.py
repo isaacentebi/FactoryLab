@@ -956,10 +956,11 @@ class VenueMixin:
         order is terminal (``LotTable.closed``). Guarantees each Hyperliquid order the
         consequence book holds with no unfilled liability (fully filled as observed,
         or its cancel acknowledged) and not yet confirmed is looked up once per tick
-        until the venue answers ``filled``, ``cancelled`` or ``rejected``; that answer
-        and the size it reports filled are recorded (``confirm_terminal``). Any other
-        answer, or none, leaves the order unconfirmed and its account pinned. The
-        read is a lookup: it places, cancels and moves nothing.
+        until the venue answers ``filled``, ``cancelled`` or ``rejected`` and states the
+        quantity it filled; that answer and that quantity are recorded
+        (``confirm_terminal``). Any other answer, one that omits the filled quantity,
+        or none, leaves the order unconfirmed and its account pinned, and it is read
+        again the next tick. The read is a lookup: it places, cancels and moves nothing.
         """
         waiting = [o.order_id for o in self.consequences.table.orders
                    if o.remaining == 0 and o.confirmed is None]
@@ -976,9 +977,10 @@ class VenueMixin:
                 answer = _to_plain(vars(self.exchange.lookup(client_id, order_id=order_id)))
             except Exception:  # noqa: BLE001 - an unanswered read confirms nothing
                 continue
-            if answer.get("status") in ("filled", "cancelled", "rejected"):
+            if (answer.get("status") in ("filled", "cancelled", "rejected")
+                    and answer.get("filled_size") is not None):
                 self.consequences.confirm_terminal(
-                    order_id, answer["status"], str(answer.get("filled_size") or 0), self.n)
+                    order_id, answer["status"], str(answer["filled_size"]), self.n)
 
     def _order_collateral(
         self, handle: str, coin: str, size: Decimal, is_buy: bool,

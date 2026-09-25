@@ -217,3 +217,115 @@ def test_a_retired_seat_versioned_again_ballots_past_what_was_discarded():
     later = policy(twin, 0.3)
     returns, delivered = twin.queue.returns_since(lid, twin.policy_seen[lid])
     assert [r.handle for r in returns] == [later] and delivered == 3
+
+
+def test_a_lookup_that_omits_the_filled_quantity_confirms_nothing(monkeypatch):
+    """A venue answer ``{"status": "cancelled"}`` without its filled quantity is not the
+    venue's word on what filled: the order stays unconfirmed and its account pinned,
+    and the next read confirms it (regression: 0 filled was assumed, and the account
+    released while fills were still arriving)."""
+    from types import SimpleNamespace
+
+    from tests.helpers import collateral_decision
+    from tests.runtime.test_loop import _consequence_runtime
+
+    rt = _consequence_runtime()
+    handle = collateral_decision(rt)
+    placed = rt._run_tool("seed-decider", handle, {"tool": "venue.place_limit", "args": {
+        "coin": "BTC", "side": "buy", "size": "0.001", "price": "1"}}, slot="tool:0")[0]
+    rt._run_tool("seed-decider", handle, {"tool": "venue.cancel", "args": {
+        "coin": "BTC", "order_id": str(placed["order_id"])}}, slot="tool:1")
+    lookup = rt.exchange.target.lookup
+    monkeypatch.setattr(rt.exchange.target, "lookup",
+                        lambda *_a, **_k: SimpleNamespace(status="cancelled"))
+    rt._reconcile_orders()
+    assert not [i for i in rt.ledger._recovery_items() if i["kind"] == "consequence.terminal"]
+    assert all(o.confirmed is None for o in rt.consequences.table.orders)
+    monkeypatch.setattr(rt.exchange.target, "lookup", lookup)
+    rt._reconcile_orders()
+    assert [i["status"] for i in rt.ledger._recovery_items()
+            if i["kind"] == "consequence.terminal"] == ["cancelled"]
+
+
+def test_a_released_polymarket_order_s_late_proceeds_are_claimed_on_the_pot():
+    """A released Polymarket order fills (a venue error) and the lot it opens resolves:
+    the proceeds are the released decision's owner's, booked late, and claimed on the
+    Polymarket pot, never as a Hyperliquid venue claim (regression: they bypassed the
+    pot's claim book and landed on the venue claim)."""
+    from factorylab.runtime import polymarket
+    from tests.helpers import collateral_decision
+    from tests.runtime.test_polymarket_surface import advance, buy, token, world
+
+    rt = world()
+    handle = collateral_decision(rt)
+    placed = buy(rt, handle, price="0.30")  # resting
+    oid = placed["order_id"]
+    rt._run_tool("seed-decider", handle, {"tool": "polymarket.cancel",
+                                          "args": {"order_id": oid}}, slot="tool:1")
+    rt.consequences.finish(handle, 0)
+    advance(rt, rt.ev.consequence_horizon_ticks + 1)
+    rt.queue.settle(handle, channel="verdict", score=0.5, status=SettleStatus.SETTLED,
+                    definition_version="probe", sampling_ref=None)
+    rt._release_read_deliveries()
+    assert handle in rt._release_settled()
+    tok = token(rt)
+    venue_claims = dict(rt.budget.venue_claims())
+    polymarket.settle(rt, [{"kind": "fill", "order_id": oid, "token_id": tok,
+                            "market_id": "fake-1", "is_buy": True, "size": "10",
+                            "px": "0.30", "fee_usd": "0", "realized_usd": "0",
+                            "ts_ns": rt.clock.now_ns}])
+    assert any(lot.handle == handle for lot in rt.consequences.table.lots)
+    polymarket.settle(rt, [{"kind": "resolution", "market_id": "fake-1",
+                            "condition_id": "c", "token_id": tok, "outcome_index": 0,
+                            "outcome_name": "YES", "payout": "1", "size": "10",
+                            "realized_usd": "7", "ts_ns": rt.clock.now_ns}])
+    rt._settle_late()
+    assert rt.polymarket.claims.get("seed-decider") == 7_000_000
+    assert dict(rt.budget.venue_claims()) == venue_claims
+    rt._release_settled()
+    assert handle not in rt.polymarket.realized  # claimed in full, then forgotten
+
+
+def test_released_vault_transactions_stay_bound_only_within_the_lookup_window():
+    """Every released vault write keeps its transaction bound while a lookup can still
+    return it, and no longer (regression: the set grew with every write ever made)."""
+    from factorylab.runtime.vault import LOOKUP_SKEW_NS
+    from tests.conftest import make_runtime
+
+    rt = make_runtime()
+    for n in range(500):
+        rt.clock.now_ns = n * 10 * LOOKUP_SKEW_NS
+        rt.vault_intents = {f"h{n}:v": {"handle": f"h{n}", "since_ns": rt.clock.now_ns,
+                                        "result": {"status": "ok", "hash": f"0x{n}"},
+                                        "settled": True}}
+        rt._drop_released([f"h{n}"])
+        rt._prune_vault_released()
+        assert len(rt.vault_released_hashes) <= 1
+    assert "0x499" in rt._vault_claimed("other")  # inside the window: never rebound
+    # A write still being looked up holds the window open for what it could be offered.
+    rt.vault_intents = {"late:v": {"handle": "late", "since_ns": 0,
+                                   "result": {"status": "uncertain"}}}
+    rt.vault_released_hashes = [["0xold", LOOKUP_SKEW_NS]]
+    rt._prune_vault_released()
+    assert rt.vault_released_hashes == [["0xold", LOOKUP_SKEW_NS]]
+
+
+def test_late_money_no_live_seat_can_take_is_ledgered_with_its_amount():
+    """A released decision's seat and its lineage's root are both retired: the late
+    money stays booked in custody, unattributed, and is on the record with its amount."""
+    from dataclasses import replace
+
+    from tests.conftest import make_runtime
+
+    rt = make_runtime()
+    table = rt.consequences.table
+    rt.consequences.table = replace(
+        table, released_orders=(("o", "decision-9", 0, "seed-decider"),),
+        released_late=(("decision-9", Fraction(5_000_000), 0),))
+    rt.retired_assemblies.add("seed-decider")
+    claims = dict(rt.budget.venue_claims())
+    rt._settle_late()
+    [row] = [i for i in rt.ledger._recovery_items()
+             if i["kind"] == "consequence.late_undeliverable"]
+    assert (row["handle"], row["micro"]) == ("decision-9", 5_000_000)
+    assert dict(rt.budget.venue_claims()) == claims

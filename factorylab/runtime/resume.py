@@ -978,8 +978,12 @@ def runtime_state(rt) -> Checkpoint:
         "treasury": encode(rt.treasury.snapshot()),
         "receipts": encode(receipts),
         # Wave 17b: execution receipts each book released with their decisions, so the
-        # restored cursor counts them. Present only once a book has released one.
-        **({"receipts_released": released}
+        # restored cursor counts them, and each held execution receipt's position,
+        # which a release out of record order leaves with gaps below it. Present only
+        # once a book has released one.
+        **({"receipts_released": released,
+            "receipts_ordinals": {path: _resolve(rt, path).execution_ordinals()
+                                  for path in released}}
            if (released := {path: _resolve(rt, path).released_executions()
                             for path in _RECEIPT_BOOKS
                             if _resolve(rt, path).released_executions()}) else {}),
@@ -1139,10 +1143,12 @@ def restore_runtime(rt, state: dict) -> None:
     rt.treasury.restore(decode(state["treasury"]))
     # Older checkpoints predate the receipt books; theirs start empty, as they did.
     released_receipts = state.get("receipts_released") or {}
+    ordinals = state.get("receipts_ordinals") or {}
     for path, saved in decode(state.get("receipts") or {}).items():
         # A retired receipt kind (an adjudication) decodes to None and is dropped.
         _resolve(rt, path).restore((r for r in saved if r is not None),
-                                   released_executions=released_receipts.get(path, 0))
+                                   released_executions=released_receipts.get(path, 0),
+                                   ordinals=ordinals.get(path))
     for name, prefix, names in _COMPONENT_FIELDS:
         for field in names:
             if (name == "controller" and field in ("kp", "kd")

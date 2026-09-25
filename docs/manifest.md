@@ -757,6 +757,20 @@ ballot shows the policy returns delivered to it since its last ballot, each once
 those delivered more than `outcome_retention_ticks` before, without a ballot in
 between, are released unread (the inbox's rule).
 
+Late money keeps its venue: what a released decision realises on a Polymarket
+event lot enters the pot's claim book and is claimed on the pot
+(`polymarket.claim`), never on the Hyperliquid venue claim. When neither the
+authoring seat nor its lineage's root is live, no persistent holder is left: the
+money stays booked in the custody that settled it, unattributed, and is ledgered
+`consequence.late_undeliverable {handle, micro}` beside the inbox's failed
+delivery; no reward credit moves, since the grade was fixed. A released vault
+write's venue transaction stays bound (no later write can claim it) until it is
+older than every window a vault lookup can still read: the earliest write still
+being looked up, less twice `LOOKUP_SKEW_NS`; the retained set is bounded by the
+writes released within that window. An order is confirmed terminal only on an
+answer that states its filled quantity; one that omits it confirms nothing and is
+read again the next tick.
+
 ## Exact measurement
 
 `returns` selects the latest `n` completed invocation responses in each selected

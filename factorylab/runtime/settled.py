@@ -256,12 +256,28 @@ class SettledMixin:
 
     def _released_owner(self, handle: str) -> str | None:
         """The seat a released decision's late money is booked to: the seat that
-        authored it, or its lineage's root when that seat is gone (wave 17b)."""
+        authored it while it is live, else its lineage's root while that is live, else
+        None (wave 17b): no persistent holder is left, ``_late_undeliverable``."""
         seat = self.consequences.table.released_author(handle)
-        if seat is None or seat in self.assemblies:
-            return seat
-        lineage = self.budget.lineage(seat)
-        return lineage if lineage in self.assemblies else seat
+        if seat is None:
+            return None
+        for candidate in (seat, self.budget.lineage(seat)):
+            if candidate in self.assemblies and candidate not in self.retired_assemblies:
+                return candidate
+        return None
+
+    def _late_undeliverable(self, handle: str, micro: int) -> None:
+        """Late money no live seat can be credited with, on the record with its amount.
+
+        Guarantees the venue custody that booked the money (``venue.settled``) keeps
+        it, unattributed, so custody conserves; ``consequence.late_undeliverable``
+        names the decision and the amount, and the inbox's failed delivery is
+        ledgered as before. No reward credit moves: the decision's grade was fixed.
+        """
+        self.ledger.append({"kind": "consequence.late_undeliverable", "handle": handle,
+                            "micro": micro, "reason": "no live seat owns that decision",
+                            "ts": self.clock.now_ns})
+        self._undeliverable("late_realization", handle, "no live seat owns that decision")
 
     # -- release -------------------------------------------------------------------
 
@@ -313,11 +329,53 @@ class SettledMixin:
         # still booked to that owner (``LotTable.fill``).
         self.consequences.forget_released_orders(
             self.ticks_consumed - self._inbox_retention_ticks())
+        self._prune_vault_released()
+        self._forget_claimed_polymarket()
         # A very late fill on a released order is booked at the venue under its owner
         # (``_order_owner``), which reopens a custody-delta entry nothing reads again.
         for handle in [h for h in self.venue_deltas if self.queue.is_released(h)]:
             del self.venue_deltas[handle]
         return released
+
+    def _prune_vault_released(self) -> None:
+        """Keep a released vault write's transaction only while a lookup can return it.
+
+        Guarantees the retained set is bounded by the writes released within the
+        lookup window: a vault lookup reads the venue's ledger from its earliest
+        still-unbound peer's submission less ``LOOKUP_SKEW_NS`` (``_vault_lookup``),
+        and every write still looking up was submitted at or before now. A
+        transaction was on the venue's ledger by the time its write was released, at
+        most ``LOOKUP_SKEW_NS`` of clock skew later; once that is before every window
+        a lookup can still open, no lookup can offer it, so none can bind it again.
+        """
+        from factorylab.runtime.vault import LOOKUP_SKEW_NS
+
+        if not self.vault_released_hashes:
+            return
+        looking = [int(i["since_ns"]) for i in getattr(self, "vault_intents", {}).values()
+                   if not i.get("unresolved") and (
+                       i["result"].get("status") == "uncertain"
+                       or (i["result"].get("status") == "ok" and not i.get("settled")))]
+        earliest = min([self.clock.now_ns, *looking]) - LOOKUP_SKEW_NS
+        self.vault_released_hashes = [[transaction, ns] for transaction, ns
+                                      in self.vault_released_hashes
+                                      if ns + LOOKUP_SKEW_NS >= earliest]
+
+    def _forget_claimed_polymarket(self) -> None:
+        """Drop a released decision's Polymarket claim entries once all of it is claimed.
+
+        A released decision's late realisation (wave 17b) re-opens its entry in the
+        pot's claim book (``credit_realized``); once its owner has claimed it
+        (``claim_share``), nothing reads the entry again.
+        """
+        surface = getattr(self, "polymarket", None)
+        if surface is None:
+            return
+        for handle in [h for h, exact in surface.realized.items()
+                       if self.queue.is_released(h)
+                       and exact.numerator // exact.denominator == surface.claimed.get(h, 0)]:
+            surface.realized.pop(handle, None)
+            surface.claimed.pop(handle, None)
 
     def _release_one(self, handle: str, live: dict[str, Any]) -> None:
         """Release one decision from the kernel queue and the consequence table.
@@ -366,7 +424,7 @@ class SettledMixin:
         for client_id in [c for c, i in (vault or {}).items() if i.get("handle") in gone]:
             transaction = vault.pop(client_id)["result"].get("hash")
             if transaction:
-                self.vault_released_hashes.append(transaction)
+                self.vault_released_hashes.append([transaction, self.clock.now_ns])
         surface = getattr(self, "polymarket", None)
         if surface is not None:
             dropped = {c for c, i in surface.intents.items() if i.get("handle") in gone}

@@ -686,6 +686,16 @@ class LotTable:
                                for o in self.orders if o.handle in gone)),
         )
 
+    def realized_by_handle(self) -> dict[str, Fraction]:
+        """What each handle has realised so far, exactly: a retained account's total,
+        and a released handle's since its release (``released_late``). A caller that
+        attributes realised money by venue diffs this around one operation, so money a
+        released decision realises keeps its venue as a retained one's does."""
+        realized = {r.handle: r.realized_micro for r in self.returns}
+        for handle, total, _booked in self.released_late:
+            realized[handle] = realized.get(handle, Fraction(0)) + total
+        return realized
+
     def released_counts(self) -> dict[str, int]:
         """The counts of every released account, by ``RELEASED_COUNTS`` name."""
         values = self.released or (0,) * len(RELEASED_COUNTS)
