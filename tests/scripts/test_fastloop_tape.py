@@ -110,6 +110,13 @@ def test_a_market_decision_fills_a_tick_later_and_is_accounted_to_its_decision(
                 and e["payload"]["order_id"] == fill["order_id"]]
     assert receipts, "the fill is booked to the decision that sent it"
     assert card["fill_band"]["fills"] == 1
+    # The tape ended inside an hour with the position still held: the kill charged the
+    # position-hours held since the last boundary, so no cost was left uncharged.
+    kill = next(e["seq"] for e in events if e.get("kind") == "kill.production")
+    partial = [e for e in events if e.get("kind") == "consequence.funding"
+               and e["seq"] < kill and e["payload"]["coin"] == "BTC"
+               and float(e["payload"]["paid_usd"]) != 0]
+    assert partial and card["fill_band"]["funding_usd"] != "0.000000"
 
 
 def test_the_fill_band_shows_the_tapes_pnl_beside_a_pessimistic_shadow_of_it():
@@ -126,8 +133,8 @@ def test_the_fill_band_shows_the_tapes_pnl_beside_a_pessimistic_shadow_of_it():
          "notional_micro": 5_500_000, "realized_micro": 500_000, "fee_micro": 2_475},
         {"kind": "event", "event": {"kind": "MarketMid", "payload": {"coin": "BTC",
                                                                       "mid": "120"}}},
-        {"kind": "event", "event": {"kind": "Funding", "payload": {"coin": "BTC",
-                                                                    "paid_usd": "0.01"}}},
+        {"kind": "venue.settled", "reason": "funding", "amount": -10_000,
+         "custody": "venue_perps"},
     ]
     band = fastloop.fill_band(events)
     # 0.5 realized - 0.006975 fees - 0.01 funding + 0.05 x (120 - 100) still open.
@@ -250,6 +257,22 @@ def test_a_tape_run_resumes_only_on_the_tape_it_launched_on(tmp_path, monkeypatc
     with pytest.raises(TapeMismatch, match="tape_mismatch"):
         fastloop.resume(target, OTHER)
     assert (target / "ledger.jsonl").read_bytes() == before  # refused before any append
+    # A before_replay hook binds stand-ins; one that swaps the venue is refused.
+    from factorylab.runtime.resume import resume_runtime
+    from factorylab.world.tape import TapeVenue
+
+    spec = json.loads((target / "run.json").read_text())
+    tape = Tape.load(tmp_path / "short.tape.json")
+    manifest, _admission, provider, exchange, _latent = fastloop._world_parts(
+        "scripted", Path(spec["world"]), 1, "2", None, tape, None, True)
+
+    def swaps(rt):
+        rt.exchange = TapeVenue(Tape.load(OTHER), coins=manifest.exchange.coins)
+
+    with pytest.raises(TapeMismatch, match="tape_mismatch"):
+        resume_runtime(manifest, str(target / "ledger.jsonl"), provider=provider,
+                       exchange=exchange, clock_source=fastloop.tape_clock(tape, manifest, None),
+                       before_replay=swaps)
     card = fastloop.resume(target)
     assert card["status"] == "completed", card.get("error")
     tape = Tape.load(tmp_path / "short.tape.json")

@@ -46,6 +46,9 @@ TAPE_FORMAT = "factorylab-tape/1"
 #: recorded fills were charged (0.03814 USD on 84.757 USD of notional).
 PUBLISHED_FEES = {"perp": ("0.00045", "0.00015"), "spot": ("0.0007", "0.0004")}
 
+#: Why an order on a market the tape recorded no liquidity for is refused.
+NO_LIQUIDITY = "the tape recorded no liquidity for this market"
+
 #: The fake venue's own spread, used only for a coin no recorded book ever priced
 #: (and no other coin's book either). The tape says so: ``spread_source`` "assumed".
 ASSUMED_SPREAD_BPS = Decimal(2)
@@ -376,12 +379,34 @@ class Tape:
             return _median(every).quantize(Decimal("0.0001")), "recorded_other_markets"
         return ASSUMED_SPREAD_BPS, "assumed"
 
-    def level_size(self, market: str) -> Decimal | None:
-        """The median top-of-book size the recorded books showed for ``market``, or None
-        when none was recorded: the size of one synthetic level (``TapeVenue._book``)."""
+    def level_size(self, market: str, ts_ns: int | None = None) -> Decimal | None:
+        """The size of one synthetic level of ``market`` (``TapeVenue._book``); never unbounded.
+
+        The median top-of-book size the recorded books showed for ``market`` itself;
+        else the smallest-notional top-of-book level recorded for any market on the
+        tape, converted to ``market``'s units at its mid at or before ``ts_ns`` (the
+        tape's first instant when None); else None: the tape recorded no liquidity for
+        this market, and an order on it is refused.
+        """
         sizes = [Decimal(side[0][1]) for row in self.data.get("books", {}).get(market, [])
                  for side in (row[1], row[2]) if side]
-        return _median(sizes) if sizes else None
+        if sizes:
+            return _median(sizes)
+        notionals = [Decimal(side[0][0]) * Decimal(side[0][1])
+                     for rows in self.data.get("books", {}).values() for row in rows
+                     for side in (row[1], row[2]) if side]
+        mid = self.mid_at(market, self.start_ns if ts_ns is None else ts_ns)
+        if not notionals or mid is None or mid[1] <= 0:
+            return None
+        return min(notionals) / mid[1]
+
+    def depth_source(self, market: str) -> str:
+        """Where one synthetic level's size comes from (``level_size``)."""
+        if self.data.get("books", {}).get(market):
+            return "recorded"
+        if any(self.data.get("books", {}).values()):
+            return "smallest_recorded_level_on_the_tape"
+        return "none"
 
     def min_order_value(self, market: str) -> Decimal:
         """The venue's order floor for ``market``: the recorded listing's, else Hyperliquid's."""
@@ -423,11 +448,16 @@ class TapeVenue(FakeExchange):
     (unbounded when the tape recorded none); a market order is immediate-or-cancel
     within Hyperliquid's 5% of the mid it was sent at, and what it cannot fill is
     cancelled; a limit that crosses on arrival takes at the book's prices, at the taker
-    rate, and rests the remainder; a resting limit fills only when the book trades
-    through its price (a level strictly better), at its price, at the maker rate, up
-    to that level's size; liquidity taken from one recorded snapshot is not offered
-    again; every order is refused below the venue's order floor. The rules are
-    published with the instrument listing (``instruments``) as facts.
+    rate, and rests the remainder; a resting limit fills only when a recorded mid after
+    it rested is strictly through its price (a trade-through, never a book level that
+    merely sits past it), at its price, at the maker rate, up to what the top level of
+    the book on that side still holds; within one tick arriving takers are matched
+    before resting makers, as on the venue; liquidity taken from one recorded snapshot
+    is not offered again; a synthetic level is never unbounded, and a market the tape
+    recorded no liquidity for refuses every order; every order is refused below the
+    venue's order floor; funding accrued since the last hour boundary is charged pro
+    rata when the world ends (``settle_accrued_funding``). The rules are published with
+    the instrument listing (``instruments``) as facts.
 
     The tape itself is held outside the instance dictionary, so a checkpoint carries
     the venue's state and not a copy of the recording: a resume rebuilds the venue
@@ -471,6 +501,13 @@ class TapeVenue(FakeExchange):
         self._taken: dict[tuple[str, int, str, str], Decimal] = {}
         # Orders the venue refused on arrival, with the reason it gave.
         self._rejected: dict[str, str] = {}
+        # When each resting order began to rest: only a recorded mid after it trades
+        # through it.
+        self._rested_ns: dict[str, int] = {}
+        # Each perp's signed position-hours since the last funding settlement, and the
+        # instant they were accrued to: what a partial hour owes when the world ends.
+        self._accrued: dict[str, Decimal] = {}
+        self._accrued_at = self._last_funding_ns
 
     @property
     def tape(self) -> Tape:
@@ -501,8 +538,9 @@ class TapeVenue(FakeExchange):
         Returns a ``MarketMid`` per recorded market (its latest row at or before
         ``ts_ns``), a ``Funding`` per perp for each hour boundary crossed (on the
         positions held at it, before anything fills at ``ts_ns``), then the fills and
-        refusals of resting orders the book traded through, then those of orders that
-        arrived, then any liquidation. Guarantees time never moves backwards.
+        refusals of orders that arrived (takers first, as on the venue), then those of
+        resting orders a recorded mid traded through, then any liquidation. Guarantees
+        time never moves backwards.
         """
         if ts_ns < self._now_ns:
             raise ValueError("TapeVenue time cannot move backwards")
@@ -521,8 +559,8 @@ class TapeVenue(FakeExchange):
             events.append(WorldEvent(WorldEventKind.MARKET_MID, ts_ns, self.name,
                                      {"coin": market, "mid": str(mid)}))
         events.extend(self._settle_funding(ts_ns))
-        events.extend(self._cross_resting())
         events.extend(self._arrive())
+        events.extend(self._cross_resting())
         events.extend(self._liquidate_if_needed())
         if self.__dict__.get("_vaults"):
             self._advance_vaults()
@@ -538,25 +576,63 @@ class TapeVenue(FakeExchange):
             boundary += NS_PER_HOUR
         return events
 
+    def _accrue(self, ts_ns: int) -> None:
+        """Add each open perp position's size times the time it was held, up to ``ts_ns``."""
+        if ts_ns <= self._accrued_at:
+            return
+        span = Decimal(ts_ns - self._accrued_at) / NS_PER_HOUR
+        for coin, pos in self._positions.items():
+            self._accrued[coin] = self._accrued.get(coin, Decimal(0)) + pos.size * span
+        self._accrued_at = ts_ns
+
+    def _fill(self, oid, order, px, *, liquidation=False, fee_rate=None):
+        # A position changes here: what the old one accrued is counted first.
+        self._accrue(self._now_ns)
+        return super()._fill(oid, order, px, liquidation=liquidation, fee_rate=fee_rate)
+
     def _fund(self, boundary: int) -> list[WorldEvent]:
+        """The hour's funding on the position held at ``boundary`` (the venue's rule)."""
+        # The boundary settles the hour whatever was held inside it: nothing accrued
+        # before it is owed again.
+        self._accrued, self._accrued_at = {}, boundary
+        return self._charge(boundary, {c: p.size for c, p in self._positions.items()},
+                            f"{boundary}")
+
+    def _charge(self, instant: int, sizes: dict[str, Decimal], ident: str) -> list[WorldEvent]:
+        """Charge ``sizes`` (signed, in position-hours) at the recorded rate and mid."""
         events: list[WorldEvent] = []
         for coin in dict.fromkeys((*self.coins, *self.listed_coins)):
-            rate_row = self._tape.funding_at(coin, boundary)
-            mark_row = self._tape.mid_at(coin, boundary)
+            rate_row = self._tape.funding_at(coin, instant)
+            mark_row = self._tape.mid_at(coin, instant)
             if rate_row is None or mark_row is None:
                 continue  # no rate recorded yet: nothing is known to charge
             _ts, rate, premium = rate_row
-            self._funding_history.append(FundingEvent(coin, rate, premium, boundary))
-            pos = self._positions.get(coin)
-            paid = Decimal(0)
-            if pos is not None:
-                # Longs pay a positive rate: size times the mark at the boundary.
-                paid = pos.size * mark_row[1] * rate
-                self._cash -= paid
-            self._funding_payments.append(
-                FundingPayment(f"{boundary}:{coin}", coin, paid, rate, boundary))
+            self._funding_history.append(FundingEvent(coin, rate, premium, instant))
+            # Longs pay a positive rate: size times the mark times the rate.
+            paid = sizes.get(coin, Decimal(0)) * mark_row[1] * rate
+            self._cash -= paid
+            self._funding_payments.append(FundingPayment(f"{ident}:{coin}", coin, paid, rate,
+                                                         instant))
             events.append(WorldEvent(WorldEventKind.FUNDING, self._now_ns, self.name,
                                      {"coin": coin, "rate": str(rate), "paid_usd": str(paid)}))
+        return events
+
+    def settle_accrued_funding(self, ts_ns: int) -> list[WorldEvent]:
+        """Charge, at ``ts_ns``, the funding accrued since the last hour boundary.
+
+        Called when the world ends (the tape ran out, the budget did, or a kill). Each
+        perp is charged the hour's last recorded rate at or before ``ts_ns`` on the
+        position-hours it actually held since the boundary: every position it held,
+        for as long as it held it, and nothing for a time it was flat. So a replay never
+        leaves a cost accrued and uncharged, and never books a receipt for time it did
+        not hold a position. What is charged is cleared: nothing is charged twice.
+        """
+        ts_ns = max(ts_ns, self._now_ns)
+        events = self._settle_funding(ts_ns)
+        self._accrue(ts_ns)
+        if any(self._accrued.values()):
+            events.extend(self._charge(ts_ns, self._accrued, f"{ts_ns}:partial"))
+        self._accrued = {}
         return events
 
     def funding(self) -> list[FundingEvent]:
@@ -594,7 +670,9 @@ class TapeVenue(FakeExchange):
                 row.pop("fee_rates", None)
                 row.pop("reason", None)
                 spread, spread_source = self._tape.spread_bps(market)
-                depth = self._tape.level_size(market)
+                depth = self._tape.level_size(market, self._now_ns)
+                if depth is None:
+                    row["liquidity"] = NO_LIQUIDITY
                 row.update({
                     "min_order_value_usd": str(self._tape.min_order_value(market)),
                     "taker_fee_rate": str(taker), "maker_fee_rate": str(maker),
@@ -603,6 +681,7 @@ class TapeVenue(FakeExchange):
                                   "fraction of notional, Hyperliquid's published base tier"),
                     "spread_bps": str(spread), "spread_source": spread_source,
                     "synthetic_level_size": None if depth is None else str(depth),
+                    "synthetic_level_source": self._tape.depth_source(market),
                     "execution": self.EXECUTION})
                 rows.append(row)
             out[kind] = rows
@@ -614,14 +693,17 @@ class TapeVenue(FakeExchange):
         "recording first shows its market after the instant it was sent. The book is "
         "the recorded order book when it is at least as recent as the recorded mid, "
         "otherwise one level each side at the mid plus or minus half of spread_bps, "
-        "holding synthetic_level_size (unbounded when null). A market order is "
-        "immediate-or-cancel within 5% of the mid when it was sent; any part not filled "
-        "is cancelled. A limit order that crosses on arrival fills at the book's prices "
-        "at taker_fee_rate and rests the rest; a resting limit fills only when a level "
-        "is strictly better than its price, at its price, at maker_fee_rate, up to that "
-        "level's size. Size taken from one recorded snapshot is not offered again. "
+        "holding synthetic_level_size; a market whose synthetic_level_size is null "
+        "refuses every order. A market order is immediate-or-cancel within 5% of the mid "
+        "when it was sent; any part not filled is cancelled. A limit order that crosses "
+        "on arrival fills at the book's prices at taker_fee_rate and rests the rest. "
+        "Within one tick arriving orders are matched before resting ones. A resting "
+        "limit fills only when a recorded mid after it rested is strictly beyond its "
+        "price, at its price, at maker_fee_rate, up to what the top level on that side "
+        "still holds. Size taken from one recorded snapshot is not offered again. "
         "Funding settles at each UTC hour on the position then held, at the last "
-        "recorded rate and mid.")
+        "recorded rate and mid, and pro rata for the part of an hour when the world "
+        "ends.")
 
     # ---- the book an arriving or resting order meets
 
@@ -629,7 +711,8 @@ class TapeVenue(FakeExchange):
         """(snapshot instant, bids, asks, source) at the venue's instant, best first.
 
         Each level is ``[price, available]``: what the snapshot offered less what was
-        already taken from it, ``None`` for a synthetic level of unbounded size.
+        already taken from it. No level is unbounded; a market the tape recorded no
+        liquidity for has none.
         """
         mid_row = self._tape.mid_at(market, self._now_ns)
         if mid_row is None:
@@ -641,8 +724,11 @@ class TapeVenue(FakeExchange):
         else:
             snapshot, mid = mid_row
             half = mid * self._tape.spread_bps(market)[0] / 20_000
-            size = self._tape.level_size(market)
-            bids, asks, source = [(mid - half, size)], [(mid + half, size)], "synthetic"
+            size = self._tape.level_size(market, self._now_ns)
+            if size is None:  # never unbounded: no recorded liquidity, no level
+                bids, asks, source = [], [], "none"
+            else:
+                bids, asks, source = [(mid - half, size)], [(mid + half, size)], "synthetic"
         # Keys of older snapshots can never be met again: the tape only moves forward.
         for key in [k for k in self._taken if k[0] == market and k[1] != snapshot]:
             del self._taken[key]
@@ -651,7 +737,7 @@ class TapeVenue(FakeExchange):
             out = []
             for px, size in levels:
                 taken = self._taken.get((market, snapshot, side, str(px)), Decimal(0))
-                out.append([px, None if size is None else max(Decimal(0), size - taken)])
+                out.append([px, max(Decimal(0), size - taken)])
             return out
 
         return snapshot, left("bid", bids), left("ask", asks), source
@@ -676,7 +762,7 @@ class TapeVenue(FakeExchange):
                 px > limit if strict else px >= limit)
             if remaining <= 0 or not inside:
                 break
-            take = remaining if available is None else min(remaining, available)
+            take = min(remaining, available)
             if take > 0:
                 takes.append((px, take))
                 remaining -= take
@@ -699,6 +785,8 @@ class TapeVenue(FakeExchange):
         read = self._tape.mid_at(order.coin, self._now_ns)
         if read is None:
             return OrderResult(None, "rejected", Decimal(0), None, "no recorded price yet")
+        if self._tape.level_size(order.coin, self._now_ns) is None:
+            return OrderResult(None, "rejected", Decimal(0), None, NO_LIQUIDITY)
         px = order.limit_px if order.limit_px is not None else read[1]
         if order.size * px < self._tape.min_order_value(order.coin):
             return OrderResult(None, "rejected", Decimal(0), None,
@@ -774,18 +862,34 @@ class TapeVenue(FakeExchange):
         if order.market == "spot" and not self._spot_affordable(order, order.limit_px):
             return events + self._refuse(oid, order, "insufficient spot balance")
         self._resting[oid] = replace_size(order, remainder)
+        self._rested_ns[oid] = self._now_ns
         return events
 
     def _cross_resting(self) -> list[WorldEvent]:
-        """Fill resting limits the book trades through, at their price, at the maker rate."""
+        """Fill resting limits a recorded mid has traded through, at their price, as makers.
+
+        A resting buy fills only when a mid recorded after it began resting is strictly
+        below its price (a sell: strictly above): a trade happened through it. A book
+        level that merely sits past its price is not a trade and fills nothing. The
+        fill is at the order's price, at the maker rate, capped by what the top level
+        of the book on that side still holds after this tick's arriving takers, and
+        what it takes is not offered again.
+        """
         events: list[WorldEvent] = []
         for oid, order in list(self._resting.items()):
             assert order.limit_px is not None
+            row = self._tape.mid_at(order.coin, self._now_ns)
+            if row is None or row[0] <= self._rested_ns.get(oid, self._now_ns):
+                continue  # no mid recorded since it rested
+            through = row[1] < order.limit_px if order.is_buy else row[1] > order.limit_px
+            if not through:
+                continue
             snapshot, bids, asks, _source = self._book(order.coin)
             side, levels = ("ask", asks) if order.is_buy else ("bid", bids)
-            takes = self._walk(levels, order.size, order.limit_px, buy=order.is_buy,
-                               strict=True)
-            filled = sum((take for _px, take in takes), Decimal(0))
+            if not levels:
+                continue
+            top_px, available = levels[0]
+            filled = min(order.size, available)
             if filled <= 0:
                 continue
             _taker, maker = self._rates(order.coin)
@@ -799,7 +903,7 @@ class TapeVenue(FakeExchange):
                 else:
                     self._rejected[oid] = result.error or "rejected"
                 continue
-            self._commit(order.coin, snapshot, side, takes)
+            self._commit(order.coin, snapshot, side, [(top_px, filled)])
             if filled < order.size:
                 self._resting[oid] = replace_size(order, order.size - filled)
             else:

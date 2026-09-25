@@ -65,6 +65,29 @@ def dead_report() -> dict:
             "exposure_status": UNKNOWN}
 
 
+def settle_accrued_funding(rt) -> None:
+    """A recorded venue's funding for the part of an hour the world held a position.
+
+    A venue that charges funding only at hour boundaries would leave the last
+    partial hour uncharged when the world ends between two of them, and a replay
+    whose costs are understated is kinder than the market it replays (Chapter II
+    §III.b: the consequence that grades the chain must be the world's). Settled
+    once, before the production mark, like any other venue effect; never raises
+    into a kill. Only a venue that states its accrual (``settle_accrued_funding``, a
+    recorded tape) is asked; every other runtime is untouched.
+    """
+    exchange = getattr(rt, "exchange", None)
+    if exchange is None or getattr(rt, "live", True) \
+            or not callable(getattr(exchange, "settle_accrued_funding", None)):
+        return
+    try:
+        rt._settle_exchange_effects(
+            exchange.settle_accrued_funding(rt.clock.now_ns), observe_positions=False)
+    except Exception as exc:  # noqa: BLE001 - nothing may raise into a kill
+        print(f"factorylab kill: accrued funding was not settled ({type(exc).__name__})",
+              file=sys.stderr)
+
+
 class VenueMixin:
     """Preserve runtime state and behavior for venue operations."""
 
@@ -97,6 +120,7 @@ class VenueMixin:
 
         if self.termination.final:
             return getattr(self, "wind_down_report", dead_report())
+        settle_accrued_funding(self)
         owed = bool(self.m.kill.wind_down)
         report = dead_report()
         try:

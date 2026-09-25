@@ -548,8 +548,11 @@ def fill_band(events: list[dict[str, Any]]) -> dict[str, Any] | None:
             payload = event.get("payload") or {}
             if event.get("kind") == "MarketMid":
                 last_mid[payload["coin"]] = Decimal(str(payload["mid"]))
-            elif event.get("kind") == "Funding" and payload.get("paid_usd") is not None:
-                funding += usd_to_micro(str(payload["paid_usd"]), rounding="nearest")
+            continue
+        if kind == "venue.settled" and e.get("reason") == "funding":
+            # The settled funding, the world's end's partial hour included (it is booked
+            # but, the world being over, never delivered as an event).
+            funding -= int(e.get("amount") or 0)
             continue
         if kind != "fill.counted":
             continue

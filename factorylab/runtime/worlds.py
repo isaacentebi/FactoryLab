@@ -739,9 +739,10 @@ class WorldManifest:
     def canonical_json(self) -> str:
         """Guarantees the manifest hashes every key the world runs under, at any value.
 
-        R8 and versioning S1: no key is dropped at its default so that an older world
-        keeps its hash. A kernel change that adds a key renames every world, because a
-        world whose physics changed is a new world that starts again from v0. Only
+        R8 and versioning S1: no key is dropped at its default, not even to let an older
+        world keep its hash. A kernel change that adds a key renames every world,
+        deliberately, because a world whose physics changed is a new world that starts
+        again from v0. Only
         admission provenance is left out: the ratification digests and the digest of
         the loaded cards say how identical cards were admitted, not what world they make.
         """

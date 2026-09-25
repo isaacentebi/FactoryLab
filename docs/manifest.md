@@ -1672,7 +1672,10 @@ What the venue replays, and how:
   first tick past its last.
 - Funding is charged once per hour boundary of tape time, on the position held at
   the boundary, at the last recorded rate and mid at or before it: never once per
-  recorded row.
+  recorded row. When the world ends (the tape ran out, the budget did, or a kill),
+  the position-hours actually held since the last boundary are charged at the last
+  recorded rate and mid, once, before the production mark: the last partial hour is
+  never free, and a receipt is never booked for time a position was not held.
 - The venue is named `tape:<first 8 hex of sha256>`.
 
 Fills are the recording's and never kinder (money path). Every rule below is
@@ -1685,16 +1688,23 @@ rates and `fee_basis`):
   against the book or mid its sender was shown.
 - The book it meets is the recorded order book when that is at least as recent as the
   recorded mid; otherwise one level each side at the mid plus or minus half the tape's
-  spread, as deep as the recorded books' median top level for that market (unbounded
-  when the tape recorded no book for it). `venue.order_book` answers this same book.
+  spread. No level is ever unbounded. The synthetic level holds the market's own
+  median recorded top-of-book size; else the smallest-notional top-of-book level
+  recorded for any market on the tape, converted to this market's units at its mid
+  (`synthetic_level_source`); else there is no level, and every order on the market is
+  refused: "the tape recorded no liquidity for this market", published as the
+  instrument record's `liquidity`. `venue.order_book` answers this same book.
 - A market order is immediate-or-cancel within 5% of the mid it was sent at
   (Hyperliquid's market order); what it cannot fill is cancelled (`OrderRejected`,
   reason `immediate-or-cancel remainder cancelled`), never rested. An
   immediate-or-cancel order in flight cannot be cancelled; a limit in flight can.
 - A limit order that crosses on arrival fills at the book's prices at the taker rate
-  and rests the remainder. A resting limit fills only when a level is strictly better
-  than its price (a trade-through, never a touch), at its own price, at the maker
-  rate, up to that level's size.
+  and rests the remainder. A resting limit fills only when a recorded mid after it
+  began resting is strictly through its price (a trade happened through it); a book
+  level that merely sits past its price is a quote, not a trade, and fills nothing.
+  It fills at its own price, at the maker rate, up to what the top level on that side
+  still holds. Within one tick, arriving orders (takers) are matched before resting
+  ones (makers), as on the venue.
 - Size taken from one recorded snapshot is not offered again.
 - Every order below the venue's order floor is refused when sent: the recorded
   listing's `min_order_value_usd`, else Hyperliquid's 10 USD.

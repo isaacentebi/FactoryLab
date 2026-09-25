@@ -1383,7 +1383,11 @@ def resume_runtime(manifest, ledger_path: str, *, provider=None, market=None, ex
 
     ``before_replay``, when given, is called with the restored runtime before any
     reader is admitted or any recorded item replayed: an offline harness binds its
-    stand-ins there (``scripts/fastloop.py``), exactly where a launch binds them.
+    stand-ins there (``scripts/fastloop.py``), exactly where a launch binds them. Its
+    contract: it may bind offline answerers of reads (a simulated Polymarket reader)
+    and harness-side observers, and it must not replace the world's exchange, provider,
+    clock or manifest. The tape identity is checked again after it returns
+    (``check_tape``, ``tape_mismatch``), so a hook that swaps the venue is refused.
     """
     lock = _lock or LedgerLock(ledger_path)
     try:
@@ -1509,7 +1513,11 @@ def _resume_runtime(manifest, ledger_path, *, provider, market, exchange, clock_
     from factorylab.runtime import polymarket
 
     if before_replay is not None:
+        from factorylab.runtime.bootstrap import check_tape
+
         before_replay(rt)
+        # The hook binds stand-ins; it never changes the world's venue.
+        check_tape(rt.m, rt.exchange)
     # A live Polymarket reader is admitted, and holds the host's IP, before the replay:
     # the tail's last event runs on past the diary's end and may read the network.
     polymarket.arm(rt)
