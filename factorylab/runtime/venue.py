@@ -163,6 +163,54 @@ class VenueMixin:
         self.terminal_reconciliation = report
         self.kill("explicit_kill:budget")
 
+    def _read_fee_schedule(self) -> None:
+        """Read the venue's taker rate per market and ledger it as a world fact.
+
+        Wave 16, D1 and ruling R-I: the road not taken is priced net of the venue's
+        own round trip, taker because a named counterfactual has no limit price, the
+        spot schedule for a spot coin. Guarantees each market's rate is the one the
+        venue's listing states (``instruments``: ``taker_fee_rate``, a fraction of
+        notional), or None when the listing states none or disagrees with itself: an
+        unread rate is never a number. Read at the first broadcast and again once per
+        ``timing.world_repricing``; a venue that re-reads its account's rates is asked
+        to first. A change is ledgered as ``venue.fee_schedule``.
+        """
+        refresh = getattr(self.exchange, "refresh_fee_rates", None)
+        if callable(refresh):
+            try:
+                refresh()
+            except Exception:  # noqa: BLE001 - an unanswered read keeps the last rates
+                pass
+        try:
+            listing = self.exchange.instruments()
+        except Exception:  # noqa: BLE001 - an unanswered listing states no rate
+            listing = {}
+        schedule: dict = {}
+        for market in ("perp", "spot"):
+            rates = {str(row.get("taker_fee_rate")) for row in (listing.get(market) or [])
+                     if isinstance(row, dict) and row.get("taker_fee_rate") is not None}
+            schedule[market] = rates.pop() if len(rates) == 1 else None
+        previous = self.fee_schedule
+        self.fee_schedule = {**schedule, "read_ns": self.clock.now_ns}
+        if previous is None or any(previous.get(m) != schedule[m] for m in schedule):
+            self.ledger.append({"kind": "venue.fee_schedule", **schedule,
+                                "basis": "the venue's taker_fee_rate per market, a "
+                                         "fraction of notional",
+                                "ts": self.clock.now_ns})
+
+    def _fee_schedule_due(self) -> bool:
+        """Whether the venue's fee schedule is unread, or a repricing period old."""
+        if self.fee_schedule is None:
+            return True
+        period = self.m.timing.world_repricing_ns
+        return period is not None and self.clock.now_ns - self.fee_schedule["read_ns"] >= period
+
+    def _taker_rate(self, coin: str) -> str | None:
+        """The taker rate in force for ``coin``'s market: spot for a pair, perp otherwise."""
+        if self.fee_schedule is None:
+            return None
+        return self.fee_schedule.get("spot" if "/" in coin else "perp")
+
     def _trading_markets(self) -> tuple[str, ...]:
         """Return the markets this world trades: the manifest seed plus every registration.
 

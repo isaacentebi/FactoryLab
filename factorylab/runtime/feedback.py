@@ -1368,16 +1368,19 @@ class FeedbackMixin:
     def _price_declined(self, about: str, frozen: dict) -> tuple[dict[str, Any] | None, str]:
         """The frozen named trade priced from its frozen mids to the mids now, and its kind.
 
-        Guarantees ``attempted-trade-v1`` (``attempted_cost``) for the trade a refused
-        answer order named, and ``opportunity-cost-v2`` (``opportunity_cost``, ruling R2)
-        for a declined one; the same mids and horizon for both.
+        Guarantees ``attempted-trade-net-v1`` (``attempted_cost``) for the trade a
+        refused answer order named, and ``declined-trade-net-v1`` (``opportunity_cost``,
+        ruling R2) for a declined one: the same mids, horizon and money terms for both,
+        at the venue's taker rate frozen with the trade (ex ante, the schedule in force
+        when the return was made). A trade frozen with no rate is not priced.
         """
         opened = tuple(tuple(m) for m in frozen["mids"])
+        rate = frozen.get("taker_rate")
         if frozen.get("attempted") is not None:
-            return (attempted_cost(opened, latest_mids(self), self.ev.opportunity_scale_bps,
-                                   frozen["attempted"]), ATTEMPTED_DEFINITION)
-        return (opportunity_cost(opened, latest_mids(self), self.ev.opportunity_scale_bps,
-                                 frozen["declined"]), OPPORTUNITY_DEFINITION)
+            return (attempted_cost(opened, latest_mids(self), rate, frozen["attempted"]),
+                    ATTEMPTED_DEFINITION)
+        return (opportunity_cost(opened, latest_mids(self), rate, frozen["declined"]),
+                OPPORTUNITY_DEFINITION)
 
     def _final_outcome(self, about: str) -> tuple[str, float | None, str | None]:
         """The final measured outcome of a judged return: ``(state, y, kind)``.
@@ -1390,15 +1393,17 @@ class FeedbackMixin:
           realized or marked P&L net of its compute and tool cost, as 0 or 1, once the
           consequence book fixes it (at its backstop at the latest);
         * a return that executed nothing and named the trade it declined is measured
-          by that trade's gross move at the consequence backstop (ruling R2,
+          by whether that trade would have beaten the venue's round-trip fee at the
+          consequence backstop, 1 when it would not (ruling R2, wave 16 D1,
           ``opportunity_cost``), from the mids frozen when the return was made; the
           contract of a producing kind requires the name whenever the world lists a
           coin (``ComputeMixin._counterfactual_refusal``);
         * a return whose answer order was refused (by the collateral check, the
           venue, or a terminal error) and that executed nothing else is measured by
-          the order's own named trade for its side, from the same frozen mids at the
-          same horizons (``attempted-trade-v1``, ``attempted_cost``); a write left
-          uncertain is acting, and stays with ``return_paid_off``;
+          the order's own named trade for its side, 1 when it would have beaten the
+          round trip, from the same frozen mids at the same horizons
+          (``attempted-trade-net-v1``, ``attempted_cost``); a write left uncertain is
+          acting, and stays with ``return_paid_off``;
         * anything else (a return made while the world listed no coin, a declined
           commission, or a named coin whose prices are missing at the horizon) has
           no world outcome, and only the tier above grades a verdict about it.
@@ -1448,6 +1453,10 @@ class FeedbackMixin:
                                                    else "opportunity_cost"),
                                           "score": priced["score"], **named,
                                           "gross_bps": priced["gross_bps"],
+                                          "round_trip_fee_bps":
+                                              priced["round_trip_fee_bps"],
+                                          "funding_bps": priced["funding_bps"],
+                                          "net_bps": priced["net_bps"],
                                           "moves": priced["moves"]})
         return self._keep_outcome(self.world_outcomes, about, "measured",
                                   float(priced["score"]), definition)
@@ -1506,11 +1515,12 @@ class FeedbackMixin:
         """Freeze the mids a named trade is priced from, when the return names one.
 
         Guarantees the benchmark is fixed ex ante, from the mids the world had
-        already broadcast when the return was made (ruling R2). The trade is the
+        already broadcast when the return was made (ruling R2), with the venue's
+        taker rate for the named coin's market then (wave 16, D1). The trade is the
         answer order's own when the return's kind owns the answer order and its
-        answer is one (``attempted-trade-v1``, priced only when nothing the decision
-        wrote executed, ``_acted``); otherwise the declined trade it names
-        (``opportunity-cost-v2``). Either coin is in the world's own spelling.
+        answer is one (``attempted-trade-net-v1``, priced only when nothing the
+        decision wrote executed, ``_acted``); otherwise the declined trade it names
+        (``declined-trade-net-v1``). Either coin is in the world's own spelling.
         """
         from factorylab.cortex.assembly import ANSWER_ORDER_KINDS
 
@@ -1528,8 +1538,12 @@ class FeedbackMixin:
         declined = None if attempted is not None else declined_trade(outputs, listed)
         if attempted is None and declined is None:
             return
+        named = attempted or declined
         self.reference_mids[handle] = {"declined": declined, "mids": [list(m) for m in mids],
                                        "tick": self.ticks_consumed,
+                                       # The venue's taker rate for the named coin's
+                                       # market, frozen ex ante (wave 16, D1).
+                                       "taker_rate": self._taker_rate(named["coin"]),
                                        **({"attempted": attempted} if attempted else {})}
 
     def _score_verdict(self, rec: PendingJudgement, y: float, kind: str, phase: str) -> None:

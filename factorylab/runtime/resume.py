@@ -694,6 +694,9 @@ _RUNTIME_FIELDS = (
     # when an older checkpoint lacks it.
     "exposure_scores", "arrived_verdicts", "consequence_scores", "world_outcomes",
     "reference_mids", "marked_outcomes", "late_verdicts",
+    # Wave 16 (D1): the venue's taker rates as last read. Absent from an older
+    # checkpoint: the next broadcast reads them.
+    "fee_schedule",
     # Wave 5a (evaluations M1, P5): each judge's ordinary consequence tally, the
     # adversarial judges' open counter-verdicts, and the chaos faults of the tick in
     # progress. Each defaults empty when an older checkpoint lacks it.

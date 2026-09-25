@@ -391,9 +391,6 @@ class EvaluationSpec:
     #: Anticipatory settlement (essay II.IV.b): world ticks after a judged return opens
     #: at which its mark settles its judges' consequence reward. At most the backstop.
     consequence_horizon_ticks: int = 10
-    #: The scale, in basis points, of a declined trade's gross move in
-    #: ``opportunity-cost-v2``: y = 0.5 - 0.5 * tanh(gross_bps / scale).
-    opportunity_scale_bps: float = 50.0
     consequence_backstop_events: int = 200
     adversarial_share: float = 0.15  # cap on router mass over antagonist assemblies
     sampling_step: float = 0.1  # consequence-mix step per divergent window
@@ -1230,9 +1227,6 @@ class WorldManifest:
         if type(horizon) is not int or not 1 <= horizon <= backstop:
             raise ValueError("evaluation.consequence_horizon_ticks must be an integer in "
                              "[1, consequence_backstop_ticks]")
-        scale = self.evaluation.opportunity_scale_bps
-        if type(scale) not in (int, float) or not isfinite(scale) or scale <= 0:
-            raise ValueError("evaluation.opportunity_scale_bps must be a positive number")
         share = self.evaluation.multi_judge_share
         if type(share) not in (int, float) or not isfinite(share) or not 0 <= share <= 1:
             raise ValueError("evaluation.multi_judge_share must be finite and in [0, 1]")
@@ -1621,6 +1615,12 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             raise ValueError(f"evaluation.{key} was removed (ruling R1): a producer's "
                              "reward is its judges' verdict, and realized consequence "
                              "grades the judges")
+    if "opportunity_scale_bps" in ev:
+        # Wave 16, D1: the road not taken is a binary money fact, net of the venue's own
+        # round-trip fee and funding. A scale no world fact states is refused (R8).
+        raise ValueError("evaluation.opportunity_scale_bps was removed (wave 16, D1): a "
+                         "declined trade is priced net of the venue's round-trip fee, as "
+                         "1 when it would not have beaten it and 0 otherwise")
     if "sibling_share" in ev:
         # Evaluations U2: an unread verdict borrows no grade from the one a meta read.
         raise ValueError("evaluation.sibling_share was removed (evaluations U2): an "
@@ -1633,7 +1633,6 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         trial_amount_micro=usd_to_micro(ev.get("trial_amount_usd", "0.10"), rounding="exact"),
         forecast_horizon_events=int(ev.get("forecast_horizon_events", 10)),
         consequence_horizon_ticks=ev.get("consequence_horizon_ticks", 10),
-        opportunity_scale_bps=ev.get("opportunity_scale_bps", 50.0),
         consequence_backstop_events=_tick_horizon(ev, "consequence_backstop", 200),
         adversarial_share=ev.get("adversarial_share", 0.15),
         sampling_step=ev.get("sampling_step", 0.1),

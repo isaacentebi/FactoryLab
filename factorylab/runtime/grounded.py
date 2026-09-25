@@ -1,12 +1,12 @@
 """The priced road not taken: a world measurement of a declined trade (ruling R2).
 
 A decision that names the trade it declined, and executes nothing at the venue,
-has an outcome the world writes: which way the trade it named moved over the
-consequence horizon. It is "a fact about the world ...
-priced ex ante on the named trade", so it is a legitimate realized-consequence
-measurement (essay II.III.b: "a judgment of whether a given verdict predicted
-real downstream outcomes"). It grades the verdicts on that decision. It never
-replaces a verdict as the producer's own score (R2).
+has an outcome the world writes: whether the trade it named would have made money
+over the consequence horizon, net of the venue's own round-trip fee and funding. It
+is "a fact about the world ... priced ex ante on the named trade", so it is a
+legitimate realized-consequence measurement (essay II.III.b: "a judgment of whether
+a given verdict predicted real downstream outcomes"). It grades the verdicts on that
+decision. It never replaces a verdict as the producer's own score (R2).
 
 Naming it is part of the I/O contract of every return the world's first-tier
 verdicts are about (the judged and exposure kinds) whenever that return executes no
@@ -17,15 +17,17 @@ outcome leaves its judges graded by other models' readings alone.
 
 from __future__ import annotations
 
-import math
 from collections.abc import Iterable, Mapping
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-#: The definition an opportunity price is recorded under.
-OPPORTUNITY_DEFINITION = "opportunity-cost-v2"
+#: The definition a declined trade's price is recorded under (wave 16, D1).
+OPPORTUNITY_DEFINITION = "declined-trade-net-v1"
 #: The definition a refused answer order's own named trade is priced under.
-ATTEMPTED_DEFINITION = "attempted-trade-v1"
+ATTEMPTED_DEFINITION = "attempted-trade-net-v1"
+#: Definitions earlier worlds priced these roads under, kept as names only so their
+#: diaries stay readable: gross tanh scores on a manifest scale, no fee, no funding.
+RETIRED_DEFINITIONS = ("opportunity-cost-v2", "attempted-trade-v1")
 
 
 def latest_mids(runtime: Any) -> tuple[tuple[str, str], ...]:
@@ -101,24 +103,18 @@ def counterfactual_refusal(outputs: Mapping, listed: Iterable[str]) -> str | Non
     return None
 
 
-def opportunity_cost(open_mids: Iterable[tuple[str, str]],
-                     due_mids: Iterable[tuple[str, str]],
-                     scale_bps: Decimal | int | float,
-                     declined: Mapping[str, str] | None) -> dict[str, Any] | None:
-    """Price the road not taken: the trade the decision itself said it declined.
+def _net(open_mids: Iterable[tuple[str, str]], due_mids: Iterable[tuple[str, str]],
+         taker_rate: Decimal | str | None, named: Mapping[str, str] | None,
+         funding_rates: Iterable[Decimal | str]) -> dict[str, Any] | None:
+    """The named trade's move over the horizon, net of the venue's round trip and funding.
 
-    ``opportunity-cost-v2`` (the architect's ruling on the #128 review). Guarantees
-    ``y = 0.5 - 0.5 * tanh(gross_bps / scale_bps)``, where ``gross_bps`` is the named
-    trade's gross return over the horizon, signed by its side and excluding fees:
-    0.5 at no move, toward 1 as the named side moves against the trade (declining it
-    was right), toward 0 as it moves for it. The function is symmetric and monotone,
-    so without directional skill a hold earns 0.5 in expectation whatever trade it
-    names, and naming a dull coin buys nothing (the fee-netted v1 paid about 1 for
-    any trade that did not beat its fees). The benchmark is chosen ex ante, on the
-    named trade, never in hindsight. Returns None when no trade is named or its
-    prices are missing: a bare hold has no world outcome.
+    Guarantees ``net_bps = s * (due - open) / open * 10^4 - 2 * taker_rate * 10^4 - s *
+    sum(funding_rates) * 10^4`` in exact decimals, ``s`` = +1 for a buy and -1 for a
+    sell (longs pay a positive funding rate), or None when no trade is named, a price
+    is missing or unusable, or the venue's taker rate was never read (an unread rate
+    is never a number).
     """
-    if declined is None:
+    if named is None or taker_rate is None:
         return None
     opened = dict(open_mids)
     due = dict(due_mids)
@@ -129,17 +125,54 @@ def opportunity_cost(open_mids: Iterable[tuple[str, str]],
         except (InvalidOperation, ValueError):
             continue
         if before > 0 and after > 0:
-            moves[coin] = ((after - before) / before * Decimal(10_000)).quantize(
-                Decimal("0.01"))
-    move = moves.get(declined["coin"])
-    if move is None:
+            moves[coin] = (after - before) / before * Decimal(10_000)
+    move = moves.get(named["coin"])
+    try:
+        rate = Decimal(str(taker_rate))
+        rates = [Decimal(str(r)) for r in funding_rates]
+    except (InvalidOperation, ValueError):
         return None
-    gross = move if declined["side"] == "buy" else -move
-    scale = float(scale_bps)
-    return {"moves": [{"coin": c, "move_bps": str(m)} for c, m in moves.items()],
-            "declined": dict(declined), "gross_bps": str(gross), "scale_bps": scale,
-            "score": round(0.5 - 0.5 * math.tanh(float(gross) / scale), 6),
-            "basis": "the named declined trade's gross move, marked to the horizon"}
+    if move is None or not rate.is_finite() or rate < 0 or not all(r.is_finite() for r in rates):
+        return None
+    sign = 1 if named["side"] == "buy" else -1
+    gross = sign * move
+    fee = 2 * rate * Decimal(10_000)
+    funding = -sign * sum(rates, Decimal(0)) * Decimal(10_000)
+    net = gross - fee + funding
+    return {"moves": [{"coin": c, "move_bps": str(m.quantize(Decimal("0.01")))}
+                      for c, m in moves.items()],
+            "gross_bps": str(gross.quantize(Decimal("0.01"))),
+            "round_trip_fee_bps": str(fee.normalize()),
+            "funding_bps": str(funding.quantize(Decimal("0.0001"))),
+            "funding_payments": len(rates),
+            "net_bps": str(net.quantize(Decimal("0.0001"))),
+            "_net": net}
+
+
+def opportunity_cost(open_mids: Iterable[tuple[str, str]],
+                     due_mids: Iterable[tuple[str, str]],
+                     taker_rate: Decimal | str | None,
+                     declined: Mapping[str, str] | None,
+                     funding_rates: Iterable[Decimal | str] = ()) -> dict[str, Any] | None:
+    """Price the road not taken: the trade the decision itself said it declined.
+
+    ``declined-trade-net-v1`` (wave 16, D1; ruling R2: "what the declined trade did,
+    net of fees, priced ex ante on the named trade"). Guarantees ``y = 1`` when the
+    named trade would not have beaten the venue's round trip over the horizon
+    (``net_bps <= 0``, declining was right in money) and ``y = 0`` otherwise, with
+    ``net_bps`` from ``_net``: the gross move signed by the named side, less twice the
+    venue's taker rate, less the funding the named side would have paid at the
+    venue's funding times inside the horizon. Every term is a money fact the venue
+    states; no scale is an architect's. Returns None when no trade is named, a price
+    is missing or the taker rate is unread: a bare hold has no world outcome.
+    """
+    priced = _net(open_mids, due_mids, taker_rate, declined, funding_rates)
+    if priced is None:
+        return None
+    net = priced.pop("_net")
+    return {**priced, "declined": dict(declined), "score": 1.0 if net <= 0 else 0.0,
+            "basis": "the named declined trade's move over the horizon, net of the venue's "
+                     "round-trip taker fee and funding"}
 
 
 def attempted_trade(outputs: Mapping, listed: Iterable[str]) -> dict[str, str] | None:
@@ -158,25 +191,23 @@ def attempted_trade(outputs: Mapping, listed: Iterable[str]) -> dict[str, str] |
 
 def attempted_cost(open_mids: Iterable[tuple[str, str]],
                    due_mids: Iterable[tuple[str, str]],
-                   scale_bps: Decimal | int | float,
-                   attempted: Mapping[str, str] | None) -> dict[str, Any] | None:
+                   taker_rate: Decimal | str | None,
+                   attempted: Mapping[str, str] | None,
+                   funding_rates: Iterable[Decimal | str] = ()) -> dict[str, Any] | None:
     """Price the road a refused order tried to take: the trade it named, for its side.
 
-    ``attempted-trade-v1`` (the architect's ruling on wave 13). An answer order names
-    its trade ex ante; when nothing the decision wrote executed, the world measures
-    that trade over the same horizon, from the same frozen mids, as
-    ``opportunity_cost``. Guarantees ``y = 0.5 + 0.5 * tanh(gross_bps / scale_bps)``,
-    ``gross_bps`` the named trade's gross move signed by the ordered side, excluding
-    fees: the mirror of the declined form, 0.5 at no move, toward 1 as the market
-    moves for the ordered side. It is symmetric and monotone, so without directional
-    skill it is 0.5 in expectation. Returns None when no trade is named or its prices
-    are missing.
+    ``attempted-trade-net-v1`` (wave 16, D1). An answer order names its trade ex ante;
+    when nothing the decision wrote executed, the world measures that trade over the
+    same horizon, from the same frozen mids and the same money terms as
+    ``opportunity_cost``. Guarantees the complement of the declined form: ``y = 1``
+    when the attempted trade would have beaten the venue's round trip
+    (``net_bps > 0``) and ``y = 0`` otherwise. Returns None when no trade is named, a
+    price is missing or the taker rate is unread.
     """
-    priced = opportunity_cost(open_mids, due_mids, scale_bps, attempted)
+    priced = _net(open_mids, due_mids, taker_rate, attempted, funding_rates)
     if priced is None:
         return None
-    return {"moves": priced["moves"], "attempted": priced["declined"],
-            "gross_bps": priced["gross_bps"], "scale_bps": priced["scale_bps"],
-            "score": round(0.5 + 0.5 * math.tanh(float(priced["gross_bps"])
-                                                 / priced["scale_bps"]), 6),
-            "basis": "the refused order's named trade's gross move, marked to the horizon"}
+    net = priced.pop("_net")
+    return {**priced, "attempted": dict(attempted), "score": 1.0 if net > 0 else 0.0,
+            "basis": "the refused order's named trade's move over the horizon, net of the "
+                     "venue's round-trip taker fee and funding"}

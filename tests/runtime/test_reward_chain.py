@@ -55,8 +55,12 @@ class Population(ScriptedProvider):
 
 
 def _mids(rt, **prices):
+    """Broadcast ``prices`` as the world's latest mids, as a MarketMid event does: the
+    venue's fee schedule is read at the first broadcast (wave 16, D1)."""
     for coin, mid in prices.items():
         rt.recent_mids.setdefault(coin, deque(maxlen=20)).append({"t_s": 0, "mid": mid})
+    if rt._fee_schedule_due():
+        rt._read_fee_schedule()
 
 
 def _runtime(**provider):
@@ -207,11 +211,12 @@ def test_a_verdict_on_a_declined_trade_is_scored_against_its_opportunity_price()
     rewarded at the horizon's mark (anticipatory settlement) and scored once more, late,
     at the backstop, for standing only."""
     rt, producer, (wrong, right) = _declined_trade_run((0.9, 0.1))
-    price = opportunity_cost([("BTC", "100")], [("BTC", "101")], rt.ev.opportunity_scale_bps,
+    price = opportunity_cost([("BTC", "100")], [("BTC", "101")], rt._taker_rate("BTC"),
                              {"coin": "BTC", "side": "buy"})["score"]
+    assert price == 0.0  # the rally beat the round trip: declining it was wrong
     scored = {row["handle"]: row for row in _rows(rt, "verdict.consequence")}
     assert scored[wrong]["y"] == scored[right]["y"] == pytest.approx(price)
-    assert scored[wrong]["outcome"] == "opportunity-cost-v2"
+    assert scored[wrong]["outcome"] == "declined-trade-net-v1"
     assert scored[wrong]["phase"] == "mark"
     # Both judges read one return and are scored against one base rate.
     assert scored[wrong]["baseline_brier"] == scored[right]["baseline_brier"]

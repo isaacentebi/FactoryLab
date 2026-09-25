@@ -379,6 +379,8 @@ class Runtime(
             coin = str(ev.payload.get("coin"))
             dq = self.recent_mids.setdefault(coin, deque(maxlen=20))
             dq.append({"t_s": ev.ts_ns // 1_000_000_000, "mid": str(ev.payload.get("mid"))})
+            if self._fee_schedule_due():
+                self._read_fee_schedule()
 
         # Due tranches are mandatory even while dormant; each released tranche is then
         # classified (C10): base_share across live seats, the remainder unallocated.

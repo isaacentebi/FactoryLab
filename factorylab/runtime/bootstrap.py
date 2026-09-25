@@ -591,6 +591,9 @@ class BootstrapMixin:
 
         # world memory (public facts) and assembly memory (private to each assembly)
         self.recent_mids: dict[str, deque[dict[str, Any]]] = {}
+        # The venue's taker rate per market and when it was read (wave 16, D1): what a
+        # named road not taken pays for its round trip. None until the first broadcast.
+        self.fee_schedule: dict[str, Any] | None = None
         self.realized_to_date = 0
         self.fees_to_date = 0
         self.funding_to_date = 0

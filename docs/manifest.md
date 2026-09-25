@@ -462,20 +462,26 @@ proved right, and one that only repeats the base rate earns 0.5. `y` is:
   have (`uncertain`); a return whose every write the venue rejected executed
   nothing;
 - for a return that executed nothing and named a declined trade
-  (`counterfactual {coin, side}`): `opportunity-cost-v2`,
-  `y = 0.5 - 0.5 * tanh(g / opportunity_scale_bps)` with `g` the trade's gross
-  move in bp, signed by its side and excluding fees, from the mids the world had
-  broadcast when the return was made (ruling R2). It is symmetric and monotone,
-  so a hold without directional skill earns 0.5 whatever trade it names;
+  (`counterfactual {coin, side}`): `declined-trade-net-v1` (wave 16, D1; ruling
+  R2: "net of fees, priced ex ante on the named trade"). `net = s * (m1 - m0) / m0
+  * 10^4 - 2 * f * 10^4` bp, `s` = +1 for a buy and -1 for a sell, `m0` the coin's
+  mid the world had broadcast when the return was made, `m1` its mid at the
+  horizon, `f` the venue's taker fee rate for the coin's market (the spot schedule
+  for a pair, the perp schedule otherwise; ruling R-I) in force when the return was
+  made; `y = 1` when `net <= 0` (declining was right in money), else `0`. The taker
+  rate is read from the venue's own listing (`instruments`, `taker_fee_rate`) at the
+  first broadcast and once per `timing.world_repricing`, and ledgered as
+  `venue.fee_schedule` when it changes. A trade whose rate the venue did not state
+  has no `y`. The retired `opportunity-cost-v2` (a gross tanh on
+  `opportunity_scale_bps`) remains a name in old diaries only;
 - for a return whose answer order (`{"action": "order", coin, side, size}`) was
   refused (by the collateral check, the venue, or a terminal error) and that
-  executed nothing else: `attempted-trade-v1`,
-  `y = 0.5 + 0.5 * tanh(g / opportunity_scale_bps)` with `g` the ordered coin's
-  gross move in bp, signed by the ordered side and excluding fees, from the same
-  frozen mids and horizons as the declined form, of which it is the mirror: 0.5 at
-  no move, toward 1 as the market moves for the ordered side. It is ledgered as
-  `consequence.attempted_mark` and `consequence.attempted`. An order left
-  `uncertain` is acting, and is measured by `return_paid_off`;
+  executed nothing else: `attempted-trade-net-v1`, the same `net` on the ordered
+  side, from the same frozen mids, rate and horizons, and `y = 1` when `net > 0`
+  (the attempted trade would have beaten the round trip), else `0`: the complement
+  of the declined form. It is ledgered as `consequence.attempted_mark` and
+  `consequence.attempted`. An order left `uncertain` is acting, and is measured by
+  `return_paid_off`;
 - for anything else (a return made while the world listed no coin, a declined
   commission, or a named coin with no mid at the horizon): nothing. Only the tier
   above grades it.
@@ -525,8 +531,9 @@ never re-settles the reward. The timing is never a charter price window
 subject only while that target's outcome is unanswered: not fixed, marked or
 priced, and before its horizon.
 
-`[evaluation] consequence_horizon_ticks` (integer in [1, backstop], default 10)
-and `opportunity_scale_bps` (positive number, default 50) are hashed.
+`[evaluation] consequence_horizon_ticks` (integer in [1, backstop], default 10) is
+hashed. `opportunity_scale_bps` was removed in wave 16: a manifest that names it is
+refused.
 
 A declined commission (`status: cannot`) is credited to the router that drew the
 seat as an abstention is, the zero-consequence reward less its role's card

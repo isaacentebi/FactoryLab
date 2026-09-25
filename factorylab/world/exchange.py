@@ -1186,6 +1186,16 @@ class HyperliquidExchange:
                 rates[market] = {"fee_rates": "unavailable", "reason": reason}
         return rates
 
+    def refresh_fee_rates(self) -> None:
+        """Read this account's fee rates again, keeping a market's last stated rates when
+        the venue does not state them now (wave 16, D1: the schedule a named road not
+        taken is priced at is re-read once per world repricing). Nothing is written."""
+        fresh = self._read_fee_rates()
+        previous = getattr(self, "_fee_rates", None) or {}
+        self._fee_rates = {market: (row if "taker_fee_rate" in row
+                                    else previous.get(market, row))
+                           for market, row in fresh.items()}
+
     def _configure_spot(self, meta: dict) -> None:
         """Record the venue's whole spot universe, and the wire names of traded pairs."""
         tokens = {t["index"]: t for t in meta["tokens"]}
