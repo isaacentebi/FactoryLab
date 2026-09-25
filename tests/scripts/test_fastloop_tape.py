@@ -25,14 +25,14 @@ TICK = 10 * 10**9
 
 def _short_tape(path, ticks, *, fees=False):
     """The fixture tape cut to its first ``ticks`` recorded ticks, written compact; with
-    ``fees``, its listing states the account's fee rates as a later recording's does
-    (live-4), since a tape whose listing states none refuses every order."""
+    ``fees``, its venue states the account's fee rates at its first instant as a later
+    recording's does (live-4), since a tape that states none refuses every order."""
     data = Tape.load(TAPE).data
     end = data["ticks"][ticks - 1]
     if fees:
-        data = {**data, "instruments": {
-            kind: [dict(row, taker_fee_rate="0.00045", maker_fee_rate="0.00015")
-                   for row in rows] for kind, rows in data["instruments"].items()}}
+        from tests.world.test_tape import with_read_fees
+
+        data = with_read_fees(Tape.from_data(data)).data
     short = {**data, "ticks": data["ticks"][:ticks],
              "mids": {c: [r for r in rows if r[0] <= end] for c, rows in data["mids"].items()},
              "funding": {c: [r for r in rows if r[0] <= end]

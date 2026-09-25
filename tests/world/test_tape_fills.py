@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from factorylab.world.exchange import Order, OrderKind
-from factorylab.world.tape import Tape, TapeVenue
+from factorylab.world.tape import TAPE_FORMAT, Tape, TapeVenue
 
 T0 = 1_790_000_000 * 10**9
 S = 10**9
@@ -43,12 +43,27 @@ DEFAULT_LISTING = {
     "spot": [_listed("PURR/USDC", "1", "0.0001", "0.0007", "0.0004")]}
 
 
-def _tape(mids, books=None, instruments=None, funding=None):
-    """A tape of BTC (and PURR/USDC) rows at the given second offsets."""
+def _read_fees(listing, at_ns):
+    """The fee rates a listing states, as the venue's own read of them at ``at_ns``."""
+    out = {}
+    for rows in listing.values():
+        for row in rows:
+            for side in ("taker", "maker"):
+                if row.get(f"{side}_fee_rate") is not None:
+                    out.setdefault(row["coin"], {}).setdefault("venue_read", {})[side] = [
+                        [at_ns, row[f"{side}_fee_rate"], ["exchange.instruments call 1"]]]
+    return out
+
+
+def _tape(mids, books=None, instruments=None, funding=None, fees=None):
+    """A tape of BTC (and PURR/USDC) rows at the given second offsets. Its fee rates
+    are the listing's, read by the venue a second before the tape starts, unless
+    ``fees`` states them."""
     books = DEFAULT_BOOK if books is None else books
     instruments = DEFAULT_LISTING if instruments is None else instruments
     stamps = sorted({t for series in mids.values() for t, _ in series})
-    data = {"format": "factorylab-tape/1", "venue": "test", "declared_tick_ns": 10 * S,
+    fees = _read_fees(instruments, T0 + (stamps[0] - 1) * S) if fees is None else fees
+    data = {"format": TAPE_FORMAT, "venue": "test", "declared_tick_ns": 10 * S, "fees": fees,
             "ticks": [T0 + t * S for t in stamps],
             "mids": {c: [[T0 + t * S, str(px)] for t, px in rows] for c, rows in mids.items()},
             "funding": funding or {},
@@ -443,7 +458,8 @@ def test_fees_are_the_tapes_maker_and_taker_rates_by_market():
                                         * Decimal("0.0008")).quantize(Decimal("0.000001"))
     row = venue.instruments()["perp"][0]
     assert (row["taker_fee_rate"], row["maker_fee_rate"]) == ("0.0005", "0.0001")
-    assert "userFees" in row["fee_basis"] and row["execution"] == TapeVenue.EXECUTION
+    assert row["taker_fee_source"] == row["maker_fee_source"] == "venue_read"
+    assert row["execution"] == TapeVenue.EXECUTION
 
 
 def test_an_immediate_or_cancel_in_flight_cannot_be_cancelled_a_limit_can():

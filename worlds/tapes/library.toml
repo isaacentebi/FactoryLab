@@ -20,15 +20,20 @@
 #   outage        a delivered tick gap of 300 s or more
 # On a tape every perp position is margined at 1x (the recording states no leverage
 # terms), so no recorded gap reaches a liquidation: the fake venue's scripted shocks
-# remain the stress tape for that regime. An order needs a recorded listing that states
-# the account's fee rates and a recorded book; no tape here has both (longrun1 read
-# books but its listing states no rates; the others read no book), so each replays
-# prices, funding and the clock and refuses every order, saying why.
+# remain the stress tape for that regime.
+#
+# `trades` says which sides of which markets can take an order, from which instant (UTC
+# on the tape's day) and on which fee source (docs/manifest.md, recorded tapes): a
+# market order needs a recorded taker rate and a limit a recorded maker rate, each
+# usable from the instant the diary recorded it, and an order needs a recorded book
+# (or a book recorded on another market of the tape). An empty list: the tape replays
+# prices, funding and the clock, and refuses every order, saying why.
 
 [[tape]]
 id = "longrun1"
 source = "work/capital-loop/longrun1-open"
-sha256 = "94040e5c1d902ffdd2367b759aab361987b837c2b3092aa991bdc624ca262db8"
+sha256 = "3e2e38fe9655a3111c06fd3356081369998324f74e50fc48007cf4e9f6cb53ac"
+trades = ["BTC taker 0.00045 from 19:42:03Z (fills)", "ETH taker 0.00045 from 19:42:03Z (fills_pooled)"]
 start_utc = "2026-09-24T19:31:33Z"
 hours = 6.087
 ticks = 925
@@ -39,7 +44,8 @@ facts = { btc_move_pct = -0.163, eth_move_pct = -0.194, eth_max_step_pct = 0.693
 [[tape]]
 id = "run3"
 source = "work/capital-loop/run3/events.json"
-sha256 = "ff069cbbb60e01f8163b2b9f639592466c46e693ffabebc8a911e3577f1cb9eb"
+sha256 = "ab8778860c75ab2a184c76f40f02c98fc770e736c3e0fc1c7f7c43a9c206d040"
+trades = []
 start_utc = "2026-09-24T12:07:54Z"
 hours = 2.481
 ticks = 453
@@ -50,7 +56,8 @@ facts = { btc_move_pct = 0.617, eth_move_pct = 1.801, eth_max_step_pct = 0.359, 
 [[tape]]
 id = "live-1"
 source = "work/merged/live-1/events.json"
-sha256 = "c0994a16505dc377d62b680ed7beb7b3cb1126b2c64a4b004b2fae024471df2b"
+sha256 = "abf56eb68fcc69f7880f73330e262c950f774633287762732c12e9d2d8eff413"
+trades = []
 start_utc = "2026-09-24T11:39:45Z"
 hours = 0.4
 ticks = 81
@@ -61,7 +68,8 @@ facts = { btc_move_pct = -0.974, eth_move_pct = 0.049, btc_max_step_pct = 0.95, 
 [[tape]]
 id = "live-2"
 source = "work/merged/live-2/events.json"
-sha256 = "ccf03380b33de29a61e7503086a0e381871208c846a320a5b0e05889399480e9"
+sha256 = "78b0ed8140a05778bb6ddb9ae25f5f03f167d30b3a8ff29a4908cd14212621af"
+trades = []
 start_utc = "2026-09-24T18:06:15Z"
 hours = 0.247
 ticks = 21
@@ -72,7 +80,8 @@ facts = { btc_move_pct = 0.396, eth_move_pct = 0.539, max_gap_s = 335.5, books =
 [[tape]]
 id = "live-4"
 source = "work/merged/live-4/events.json"
-sha256 = "83598333bb7e018b53d82b55205bbccfe805046d681f378c4f4d1c693f46938d"
+sha256 = "1f053bab80b06a6ab3172703598c11425a080aa1974d421f6ab460929a86a65e"
+trades = []
 start_utc = "2026-09-25T07:17:16Z"
 hours = 0.271
 ticks = 50
@@ -85,7 +94,8 @@ facts = { btc_move_pct = -0.078, eth_move_pct = 0.081, max_gap_s = 76.3, books =
 [[tape]]
 id = "pr121"
 source = "work/population-pr121/live/events.json"
-sha256 = "101b852e6eb5b6ea49871a4ab0a42d32034368e1801ff9b0efbe607c748559e8"
+sha256 = "934e4ad457fb4f9b8881211b605452556d39ab5e5e04c4812f145c7d71725607"
+trades = []
 start_utc = "2026-09-21T18:05:20Z"
 hours = 1.601
 ticks = 240
@@ -96,7 +106,8 @@ facts = { btc_move_pct = 0.925, eth_move_pct = 0.937, eth_funding_sign_flips = 2
 [[tape]]
 id = "live-3"
 source = "work/merged/live-3/events.json"
-sha256 = "906d3c2a978ae31122e4f0b1a7e64568f14c59adff0178a170230d6aa91e31a0"
+sha256 = "b5f851411e4da44ec20385abe1a992f8cae0839385cb62c465a44b7eace3203f"
+trades = []
 start_utc = "2026-09-24T18:55:45Z"
 hours = 0.405
 ticks = 45

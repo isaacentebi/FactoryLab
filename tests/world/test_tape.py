@@ -71,23 +71,40 @@ def test_reads_answer_the_latest_row_at_or_before_and_never_loop(tape):
     assert tape.mid_at("NOT-RECORDED", stamps[5]) is None
 
 
-def test_fees_are_the_recorded_rates_or_none_and_none_refuses_every_order(tape):
-    """Codex review of #151 (7b8de4f): a tape never exposes a value its recording does
-    not contain. longrun1's listing states no fee rates, so no published schedule stands
-    in for them: its orders are refused, and its listing says so."""
-    from factorylab.world.exchange import Order
-    from factorylab.world.tape import NO_RECORDED_FEES
+def with_read_fees(tape, taker="0.00045", maker="0.00015"):
+    """``tape`` as if its venue had stated the account's rates at its first instant (a
+    diary written since live-4 reads them with the instrument listing)."""
+    fees = {market: {"venue_read": {"taker": [[tape.start_ns, taker, ["test read"]]],
+                                    "maker": [[tape.start_ns, maker, ["test read"]]]}}
+            for market in tape.markets}
+    return Tape.from_data(dict(tape.data, fees=fees))
 
-    assert Tape.load(LIVE4).fees("BTC") == (Decimal("0.00045"), Decimal("0.00015"))
-    assert Tape.load(LIVE4).fees("PURR/USDC") == (Decimal("0.0007"), Decimal("0.0004"))
-    assert tape.fees("BTC") is None
+
+def test_fees_are_recorded_rates_usable_from_their_instant_and_none_refuses(tape):
+    """Codex review of #151 (7b8de4f) and the ruling on it: a tape never exposes a fee
+    rate its recording does not contain, and a recorded one only from the instant it
+    was recorded. live-4's venue stated the account's rates with its first tick;
+    this longrun1 slice holds no fill and no venue read of them, so it refuses."""
+    from factorylab.world.exchange import Order, OrderKind
+    from factorylab.world.tape import NO_MAKER_RATE, NO_TAKER_RATE
+
+    live4 = Tape.load(LIVE4)
+    first = live4.start_ns
+    assert live4.fees("BTC", first) == (Decimal("0.00045"), Decimal("0.00015"))
+    assert live4.fees("PURR/USDC", first) == (Decimal("0.0007"), Decimal("0.0004"))
+    assert live4.fees("BTC", first - 1) == (None, None)
+    assert live4.fee_at("BTC", "taker", first) == (
+        Decimal("0.00045"), "venue_read", first, ["exchange.instruments call 208"])
+    assert tape.data["fees"] == {}
     venue = _venue(tape)
     venue.advance(tape.ticks[0])
-    refused = venue.place(Order("BTC", True, Decimal("0.001")))
-    assert refused.status == "rejected" and refused.error == NO_RECORDED_FEES
+    assert venue.place(Order("BTC", True, Decimal("0.001"))).error == NO_TAKER_RATE
+    assert venue.place(Order("BTC", True, Decimal("0.001"), OrderKind.LIMIT,
+                             Decimal("80000"))).error == NO_MAKER_RATE
     row = next(r for r in venue.instruments()["perp"] if r["coin"] == "BTC")
     assert row["taker_fee_rate"] is None and row["maker_fee_rate"] is None
-    assert row["fee_basis"] == "not recorded" and row["refused"] == NO_RECORDED_FEES
+    assert row["market_orders_refused"] == NO_TAKER_RATE
+    assert row["limit_orders_refused"] == NO_MAKER_RATE and row["refused"] is None
 
 
 def test_spreads_come_from_recorded_books_and_say_so(tape):
@@ -223,10 +240,7 @@ def test_a_tape_venue_checkpoints_its_state_and_restores_over_the_same_tape(tape
     from factorylab.runtime.resume import decode, encode
     from factorylab.world.exchange import Order, OrderKind
 
-    # longrun1's listing with the account's rates recorded, so an order may rest.
-    listing = {kind: [dict(row, taker_fee_rate="0.00045", maker_fee_rate="0.00015")
-                      for row in rows] for kind, rows in tape.data["instruments"].items()}
-    tape = Tape.from_data(dict(tape.data, instruments=listing))
+    tape = with_read_fees(tape)  # so an order may rest
     venue = _venue(tape)
     venue.advance(tape.ticks[2])
     placed = venue.place(Order("BTC", True, Decimal("0.001"), OrderKind.LIMIT,
@@ -241,3 +255,115 @@ def test_a_tape_venue_checkpoints_its_state_and_restores_over_the_same_tape(tape
     twin.__dict__.update(decode(state))
     assert twin.open_orders() == venue.open_orders() and twin.mids() == venue.mids()
     assert twin.tape is tape and twin.name == venue.name
+
+
+T, S = 1_790_000_000 * 10**9, 10**9
+
+
+def _diary(path, *, fills=(), reads=(), orders=()):
+    """A live venue's diary: BTC and ETH mids and a BTC book every 10 s tick from ``T``,
+    a listing that states no fee rates, and the given fills, fee reads and orders (each
+    at a tick index)."""
+    import json
+
+    items = [{"kind": "event", "event": {"kind": "Launch", "ts_ns": T, "payload": {
+        "manifest": {"tick_interval_ns": 10 * S,
+                     "exchange": {"kind": "hyperliquid", "coins": ["BTC", "ETH"]}}}}}]
+    listing = {"perp": [{"coin": c, "lot_size": lot, "tick_size": "0.1",
+                         "min_order_value_usd": "10", "fee_rates": "unavailable"}
+                        for c, lot in (("BTC", "0.00001"), ("ETH", "0.0001"))], "spot": []}
+    seq = 100
+    for i in range(6):
+        ts = T + i * 10 * S
+        items.append({"kind": "event", "event": {"kind": "Tick", "ts_ns": ts, "payload": {}}})
+        for coin, mid in (("BTC", "84757"), ("ETH", "2500")):
+            items.append({"kind": "event", "event": {"kind": "MarketMid", "ts_ns": ts,
+                                                     "source": "hyperliquid",
+                                                     "payload": {"coin": coin, "mid": mid}}})
+        book = {"coin": "BTC", "ts_ns": ts, "bids": [{"price": "84756", "size": "1"}],
+                "asks": [{"price": "84758", "size": "1"}]}
+        answers = [("exchange.order_book", book)]
+        answers += [("exchange.instruments", listing)] if i == 0 else []
+        answers += [("exchange.instruments", read) for at, read in reads if at == i]
+        for name, result in answers:
+            seq += 2
+            items += [{"kind": "io.call", "seq": seq, "name": name, "ts": ts},
+                      {"kind": "io.result", "seq": seq + 1, "call": seq, "ts": ts,
+                       "result": result}]
+        for at, client_id, operation, ack in orders:
+            if at == i:
+                items += [{"kind": "order.intent", "client_id": client_id,
+                           "operation": operation, "ts": ts},
+                          {"kind": "order.acknowledged", "client_id": client_id,
+                           "result": ack, "ts": ts}]
+        items += [{"kind": "event", "event": {"kind": "Fill", "ts_ns": ts,
+                                              "source": "hyperliquid", "payload": payload}}
+                  for at, payload in fills if at == i]
+    path.write_text(json.dumps(items))
+
+
+def _fill(order_id, size, px, fee):
+    return {"coin": "BTC", "order_id": order_id, "size": size, "px": px, "fee_usd": fee,
+            "is_buy": True, "liquidation": False, "market": "perp"}
+
+
+def test_a_tape_with_only_crossed_fills_takes_at_their_rate_from_their_instant_only(tmp_path):
+    """The ruling on Codex's #151 finding: the rate a recorded fill states is this
+    account's, usable from the instant the diary recorded it, on the side the fill was
+    on. A market order's fills took liquidity, so the tape has a taker rate and no maker
+    rate: a market order is taken at the recorded rate and a resting limit is refused,
+    and before the fill was recorded a market order is refused too."""
+    from factorylab.world.exchange import Order, OrderKind
+    from factorylab.world.tape import NO_MAKER_RATE, NO_TAKER_RATE
+
+    _diary(tmp_path / "events.json",
+           orders=[(2, "d-1", "venue.place_market",
+                    {"order_id": "77", "status": "filled", "filled_size": "0.00112"})],
+           # Two fills of one order. The second's fee, rounded by the venue to its last
+           # place, states 0.00044990...; within that place the rate is 0.00045.
+           fills=[(2, _fill("77", "0.001", "84757", "0.03814")),
+                  (2, _fill("77", "0.00012", "84700", "0.004573"))])
+    tape = Tape.load(tmp_path / "events.json")
+    fill_at = T + 20 * S
+    # Provenance: the fills the rate came from, by order id, instant and position.
+    assert tape.data["fees"] == {"BTC": {"fills": {"taker": [
+        [fill_at, "0.00045", [f"fill 77@{fill_at}#1", f"fill 77@{fill_at}#2"]]]}}}
+    venue = TapeVenue(tape, coins=("BTC", "ETH"), start_cash_usd=Decimal(1000))
+    venue.advance(T + 10 * S)  # the fill is recorded at 20 s: its rate is not usable yet
+    assert venue.place(Order("BTC", True, Decimal("0.001"))).error == NO_TAKER_RATE
+    venue.advance(fill_at)
+    assert venue.place(Order("BTC", True, Decimal("0.001"), client_id="m")).status == "resting"
+    limit = Order("BTC", True, Decimal("0.001"), OrderKind.LIMIT, Decimal("84000"))
+    assert venue.place(limit).error == NO_MAKER_RATE
+    [fill] = [e.payload for e in venue.advance(T + 30 * S) if e.kind == "Fill"]
+    assert Decimal(fill["fee_usd"]) == (Decimal("84.758") * Decimal("0.00045")).quantize(
+        Decimal("0.000001"))
+    btc, eth = venue.instruments()["perp"]
+    assert (btc["taker_fee_rate"], btc["taker_fee_source"], btc["taker_fee_since_ns"]) == (
+        "0.00045", "fills", fill_at)
+    assert btc["maker_fee_rate"] is None and btc["limit_orders_refused"] == NO_MAKER_RATE
+    assert btc["market_orders_refused"] is None
+    # ETH recorded no fill: BTC's rate, pooled across the venue's perps, and said so.
+    assert (eth["taker_fee_rate"], eth["taker_fee_source"]) == ("0.00045", "fills_pooled")
+
+
+def test_a_resting_limits_later_fills_state_the_maker_rate_and_a_venue_read_comes_first(
+        tmp_path):
+    """A limit the venue acknowledged resting with nothing filled, then hit, provided
+    liquidity: its fill states the maker rate. The venue's own statement of the rates,
+    once recorded, is the primary source; before it the fills stand."""
+    read = {"perp": [{"coin": "BTC", "taker_fee_rate": "0.0004", "maker_fee_rate": "0.0001",
+                      "fee_basis": "fraction of notional, the venue's userFees for this "
+                                   "account"}]}
+    _diary(tmp_path / "events.json",
+           orders=[(1, "d-2", "venue.place_limit",
+                    {"order_id": "88", "status": "resting", "filled_size": "0"})],
+           fills=[(2, _fill("88", "0.001", "84757", "0.012713"))], reads=[(4, read)])
+    tape = Tape.load(tmp_path / "events.json")
+    assert tape.fee_at("BTC", "maker", T + 30 * S)[:3] == (Decimal("0.00015"), "fills",
+                                                            T + 20 * S)
+    assert tape.fee_at("BTC", "taker", T + 30 * S) is None
+    assert tape.fees("BTC", T + 40 * S) == (Decimal("0.0004"), Decimal("0.0001"))
+    rate, source, since, [provenance] = tape.fee_at("BTC", "maker", T + 40 * S)
+    assert (source, since) == ("venue_read", T + 40 * S)
+    assert provenance.startswith("exchange.instruments call ")

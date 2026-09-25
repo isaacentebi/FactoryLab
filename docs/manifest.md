@@ -1751,7 +1751,7 @@ What the venue replays, and how:
 - The tape holds what the diary recorded and nothing else: the delivered tick
   stamps; each market's mids and each perp's funding-rate observations, stamped as
   delivered; the order books the run happened to read, stamped with the venue's own
-  book time; its first instrument listing. A funding row that moved money was the
+  book time; its first instrument listing; the account's fee rates (below). A funding row that moved money was the
   recording account's payment, not market data, and is left out.
 - Every read answers the latest recorded row at or before the venue's instant, and
   nothing before a series' first row. Past the last row the last row holds; the tape
@@ -1825,8 +1825,28 @@ rates and `fee_basis`):
 - Size taken from one recorded snapshot is not offered again.
 - Every order below the venue's order floor is refused when sent: the recorded
   listing's `min_order_value_usd`.
-- Fee rates are the recorded account's (`userFees` in the market's recorded listing
-  row). A pair trades on its own row's (spot) rates.
+- Fee rates are this account's, as the recording stood at the venue's instant: a
+  step function of tape time, each rate usable only from the instant the diary
+  recorded it, never averaged across the future. The primary source is the venue's
+  own statement of the rates (`userFees`, read with each instrument listing since
+  live-4: `venue_read`). Else the rate the latest recorded fill on this market stated
+  (`fills`); else the latest fill on the venue's other markets of the same class,
+  perp or spot, whose rates are separate schedules (`fills_pooled`). A fill states its
+  rate only to within one unit of its fee's last recorded place, so its rate is the
+  simplest decimal in that interval. The diary does not record the venue's `crossed`
+  flag, so a fill's side is read off its recorded order: every fill of an
+  immediate-or-cancel order (`venue.place_market`, `venue.close`) and of a limit the
+  venue acknowledged filled took liquidity (taker); a fill of a limit acknowledged
+  resting with nothing filled, observed after that acknowledgement, provided it
+  (maker); any other fill (a limit acknowledged resting part-filled, a liquidation, an
+  order the diary does not name) states no side and is not used. The tape carries
+  each rate with its provenance (the fills by order id, instant and position, or the
+  instrument read's call). A side never recorded by an instant stays refused then: a
+  market order needs the taker rate, a limit the maker rate, and a limit that would
+  cross on arrival with no taker rate is refused on arrival. The listing publishes
+  each side's rate, `taker_fee_source` / `maker_fee_source`, the instant each was
+  recorded (`*_fee_since_ns`), and `market_orders_refused` / `limit_orders_refused`.
+  Only a diary of a live venue states fee rates. A pair trades on its own (spot) rates.
 - A tape world never exposes a value its recording does not contain (Codex review of
   #151): where the recording is silent the venue refuses, and says so as a fact, never
   with the fake's constant in the recording's place. A market is absent from
@@ -1834,19 +1854,18 @@ rates and `fee_basis`):
   instrument listing until its first recorded mid, and an order on it is refused ("the
   recording has no market for this coin yet"); the bootstrap seeds no price onto a
   tape venue. An order is refused on a market whose recorded listing row does not
-  state its lot size, tick size and order floor, or its fee rates; the listing shows
-  those terms as null and the reason as `refused`. An order is held to the recorded
+  state its lot size, tick size and order floor; the listing shows those terms as
+  null and the reason as `refused`. An order is held to the recorded
   precision: a size that is not a multiple of `lot_size`, or a limit price that is not
   a multiple of `tick_size` or has more than `price_significant_figures` significant
   figures (an integer price excepted when `integer_prices_allowed`), is refused. The
   recording states no leverage terms, so no credit is extended: perp positions are
   margined at 1x (`max_leverage` 1; `set_leverage` above 1 is refused), and positions
-  are closed at the mid, at the recorded taker rate, only when the perps account's
-  equity is below zero. The recording has no vaults: vault writes are refused. A
+  are closed at the mid, at the recorded taker rate (the maker rate while no taker
+  rate is recorded), only when the perps account's equity is below zero. The recording has no vaults: vault writes are refused. A
   resting spot buy holds its cost and its recorded maker fee. A synthetic level holds
-  whole recorded lots. No tape in the library today has both a listing that states
-  the account's rates and a recorded book (`worlds/tapes/library.toml`), so each
-  replays prices, funding and the clock and refuses every order, saying why.
+  whole recorded lots. Which sides of which tapes can trade, and from when, is in
+  `worlds/tapes/library.toml`.
 - Orders in flight hold margin in `collateral_view` as resting orders do.
 
 A tape world runs on the idle-skipping clock (`IdleSkipClock`, `runtime/live.py`), a

@@ -20,7 +20,7 @@ import json
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
-from decimal import Decimal
+from decimal import ROUND_CEILING, Decimal
 from pathlib import Path
 from typing import Any
 
@@ -37,7 +37,7 @@ from factorylab.world.exchange import (
 )
 
 #: The compact tape's format tag. A tape file carries it; a diary does not.
-TAPE_FORMAT = "factorylab-tape/1"
+TAPE_FORMAT = "factorylab-tape/2"
 
 #: Why an order is refused once the recording has ended (published, never advice).
 MARKET_ENDED = "the recorded market has ended"
@@ -57,8 +57,18 @@ NO_RECORDED_MARKET = "the recording has no market for this coin yet"
 #: size or order floor.
 NO_RECORDED_LISTING = ("the recording states no lot size, tick size or order floor for "
                        "this market")
-#: Why an order is refused on a market whose recorded listing states no fee rates.
-NO_RECORDED_FEES = "the recording states no fee rates for this market"
+#: Why an order that takes liquidity (a market order, a limit crossing on arrival) is
+#: refused: no taker fee rate of this account was recorded by now.
+NO_TAKER_RATE = ("the recording states no taker fee rate for this market by now: orders "
+                 "that take liquidity are refused")
+#: Why an order that can rest (a limit) is refused: no maker fee rate recorded by now.
+NO_MAKER_RATE = ("the recording states no maker fee rate for this market by now: orders "
+                 "that can rest are refused")
+#: Where a fee rate on the tape came from (``Tape.fee_at``): the venue's own statement
+#: of this account's rates (``userFees``, read with the instrument listing), the fills
+#: the venue booked on this market, or the fills it booked on the venue's other markets
+#: of the same class (perp or spot), pooled.
+FEE_SOURCES = ("venue_read", "fills", "fills_pooled")
 #: Why leverage above 1x is refused: the recording states none, so no credit is extended.
 NO_RECORDED_LEVERAGE = "the recording states no leverage terms: positions are margined at 1x"
 #: Why a vault write is refused: the recording holds no vault.
@@ -141,8 +151,9 @@ def _split_items(directory: Path) -> Iterator[dict]:
     ``io.result.jsonl`` runs to hundreds of megabytes of recorded answers; only the
     answers to the venue reads a tape keeps are parsed.
     """
-    for name in ("Launch", "Tick", "MarketMid", "Funding"):
-        path = directory / f"event_{name}.jsonl"
+    for name in ("event_Launch", "event_Tick", "event_MarketMid", "event_Funding",
+                 "event_Fill", "order.intent", "order.acknowledged"):
+        path = directory / f"{name}.jsonl"
         if path.exists():
             with open(path, encoding="utf-8") as handle:
                 yield from (json.loads(line) for line in handle if line.strip())
@@ -175,16 +186,130 @@ def _nonzero(text: Any) -> bool:
         return True
 
 
+def _simplest(lo: Decimal, hi: Decimal) -> Decimal:
+    """The decimal with the fewest significant digits in ``[lo, hi]`` (``lo <= hi``)."""
+    if lo <= 0 <= hi:
+        return Decimal(0)
+    if hi < 0:
+        return -_simplest(-hi, -lo)
+    k = hi.adjusted()
+    while True:
+        quantum = Decimal(1).scaleb(k)
+        n = max((lo / quantum).to_integral_value(rounding=ROUND_CEILING), Decimal(1))
+        if n * quantum <= hi:
+            return (n * quantum).normalize()
+        k -= 1
+
+
+def fill_rate(fee_usd: Any, px: Any, size: Any) -> Decimal | None:
+    """The fee rate one recorded fill states, as a fraction of its notional.
+
+    The venue rounds a fee to the places it records, so a fill states its rate only to
+    within one unit of the fee's last recorded place either side, whatever the rounding
+    rule; the rate is the simplest decimal in that interval (the one with the fewest
+    significant digits), a function of this fill alone. None for a fill with no notional.
+    """
+    fee, notional = Decimal(str(fee_usd)), Decimal(str(px)) * Decimal(str(size))
+    if not fee.is_finite() or not notional.is_finite() or notional <= 0:
+        return None
+    unit = Decimal(1).scaleb(fee.as_tuple().exponent)
+    return _simplest((fee - unit) / notional, (fee + unit) / notional)
+
+
+#: The operations whose orders the venue executes immediately or cancels, never resting
+#: (``HyperliquidExchange``: a market order and a close are immediate-or-cancel limits).
+_IMMEDIATE = frozenset({"venue.place_market", "venue.close"})
+
+
+def _fill_side(fill_ts: int, payload: dict, orders: dict) -> str | None:
+    """Whether a recorded fill took liquidity ("taker") or provided it ("maker"), from
+    what the diary recorded of its order, or None where that does not settle it.
+
+    The diary does not record the venue's ``crossed`` flag, so the side is read off the
+    order: every fill of an immediate-or-cancel order took liquidity; so did every fill
+    of a limit the venue acknowledged as filled; a fill of a limit the venue
+    acknowledged as resting with nothing filled, observed after that acknowledgement,
+    met it on the book, so it provided liquidity. A limit acknowledged resting with a
+    part already filled, a liquidation, and a fill whose order the diary does not name
+    are left out: their side is not recorded.
+    """
+    order = orders.get(str(payload.get("order_id")))
+    if order is None or payload.get("liquidation"):
+        return None
+    operation, status, filled, ack_ts = order
+    if operation in _IMMEDIATE:
+        return "taker"
+    if operation == "venue.place_limit":
+        if status == "filled":
+            return "taker"
+        if status == "resting" and filled == 0 and fill_ts > ack_ts:
+            return "maker"
+    return None
+
+
+def _steps(observations: list[tuple[int, str, str]], *, every: bool) -> list[list]:
+    """A rate as a step function of tape time: ``[instant, rate, provenance]`` rows, a
+    row wherever the rate changes. With ``every`` a step names every observation it
+    holds (fills); otherwise only the first (a venue read repeated each tick)."""
+    steps: list[list] = []
+    for ts, rate, source in sorted(observations, key=lambda o: o[0]):
+        if steps and steps[-1][1] == rate:
+            if every:
+                steps[-1][2].append(source)
+            continue
+        steps.append([ts, rate, [source]])
+    return steps
+
+
+def _fee_record(kept: list[str], reads: list, fills: list, orders: dict) -> dict:
+    """Each kept market's fee rates as the diary recorded them, by source and side."""
+    observed: dict[tuple[str, str, str], list] = {}
+    for ts, call, listing in reads:
+        if not isinstance(listing, dict):
+            continue
+        for kind in ("perp", "spot"):
+            for row in listing.get(kind) or ():
+                if (not isinstance(row, dict) or row.get("coin") not in kept
+                        or "userFees" not in str(row.get("fee_basis", ""))):
+                    continue
+                for side in ("taker", "maker"):
+                    rate = row.get(f"{side}_fee_rate")
+                    if rate is not None:
+                        observed.setdefault((row["coin"], "venue_read", side), []).append(
+                            (ts, str(Decimal(str(rate)).normalize()),
+                             f"exchange.instruments call {call}"))
+    seen: dict[tuple[str, int], int] = {}
+    for ts, payload in fills:
+        market = str(payload.get("coin"))
+        side = _fill_side(ts, payload, orders)
+        rate = fill_rate(payload.get("fee_usd"), payload.get("px"), payload.get("size"))
+        if market not in kept or side is None or rate is None:
+            continue
+        key = (str(payload["order_id"]), ts)
+        seen[key] = seen.get(key, 0) + 1
+        observed.setdefault((market, "fills", side), []).append(
+            (ts, str(rate), f"fill {key[0]}@{ts}#{seen[key]}"))
+    out: dict[str, dict] = {}
+    for (market, source, side), rows in sorted(observed.items()):
+        out.setdefault(market, {}).setdefault(source, {})[side] = _steps(
+            rows, every=source == "fills")
+    return out
+
+
 def cut(path: str | Path) -> dict:
     """The compact tape of a diary: ``events.json`` or a directory split by kind.
 
     Guarantees the tape holds only what the diary recorded, for the markets its
     Launch manifest named: the delivered tick stamps; each market's mids and each
     perp's funding-rate observations, stamped as delivered; the recorded order books,
-    stamped with the venue's own book time; and the first recorded instrument listing.
-    A funding row that moved money (``paid_usd`` non-zero) is an account payment of the
-    run that recorded it, not market data, and is left out: a replay's payments are
-    computed from its own positions (Chapter II §II.b).
+    stamped with the venue's own book time; the first recorded instrument listing; and
+    the account's fee rates, each stamped with the instant the diary recorded it and
+    naming what it was read from (``_fee_record``): the venue's own statement of them
+    with each instrument read, and the fills the venue booked. A funding row that
+    moved money (``paid_usd`` non-zero) is an account payment of the run that recorded
+    it, not market data, and is left out: a replay's payments are computed from its
+    own positions (Chapter II §II.b). Only a diary of a live venue states fee rates: a
+    simulated venue's are its own constants, never the world's.
     """
     path = Path(path)
     items = _split_items(path) if path.is_dir() else _array_items(path)
@@ -196,17 +321,29 @@ def cut(path: str | Path) -> dict:
     books: dict[str, dict[int, list]] = {}
     instruments = None
     names: dict[int, str] = {}
+    reads: list[tuple[int, int, Any]] = []
+    fills: list[tuple[int, dict]] = []
+    intents: dict[str, str] = {}
+    acks: dict[str, tuple[dict, int]] = {}
     for item in items:
         kind = item.get("kind")
         if kind == "io.call":
             names[item["seq"]] = item.get("name")
             continue
+        if kind == "order.intent":
+            intents[str(item.get("client_id"))] = str(item.get("operation"))
+            continue
+        if kind == "order.acknowledged":
+            acks[str(item.get("client_id"))] = (item.get("result") or {}, int(item["ts"]))
+            continue
         if kind == "io.result":
             name = names.get(item.get("call"))
             if "result" not in item:
                 continue  # an answer kept beside its diary: not part of this cut
-            if name == "exchange.instruments" and instruments is None:
-                instruments = _decode(item["result"])
+            if name == "exchange.instruments":
+                listing = _decode(item["result"])
+                instruments = listing if instruments is None else instruments
+                reads.append((int(item.get("ts") or 0), item.get("call"), listing))
             elif name == "exchange.order_book":
                 book = _decode(item["result"])
                 if isinstance(book, dict) and book.get("ts_ns"):
@@ -226,6 +363,8 @@ def cut(path: str | Path) -> dict:
         elif event.get("kind") == "MarketMid":
             venue = venue or event.get("source")
             mids.setdefault(str(payload["coin"]), {})[ts] = str(payload["mid"])
+        elif event.get("kind") == "Fill":
+            fills.append((ts, payload))
         elif event.get("kind") == "Funding" and not _nonzero(payload.get("paid_usd", "0")):
             funding.setdefault(str(payload["coin"]), {})[ts] = [
                 str(payload["rate"]),
@@ -235,6 +374,14 @@ def cut(path: str | Path) -> dict:
     kept = [m for m in (markets or sorted(mids)) if m in mids]
     if not ticks or not kept:
         raise ValueError(f"{path} recorded no ticks or no mids for its markets")
+    orders: dict[str, tuple] = {}
+    for client_id, (result, ack_ts) in acks.items():
+        if result.get("order_id") is not None and client_id in intents:
+            orders[str(result["order_id"])] = (
+                intents[client_id], result.get("status"),
+                Decimal(str(result.get("filled_size") or 0)), ack_ts)
+    live = exchange.get("kind") == "hyperliquid"
+    fees = _fee_record(kept, reads, fills, orders) if live else {}
     listing = None
     if isinstance(instruments, dict):
         listing = {market: [row for row in rows if isinstance(row, dict)
@@ -251,6 +398,7 @@ def cut(path: str | Path) -> dict:
         "books": {c: [[ts, *sides] for ts, sides in sorted(books[c].items())]
                   for c in kept if c in books},
         "instruments": listing,
+        "fees": fees,
     }
 
 
@@ -286,6 +434,10 @@ class Tape:
         for series in ("mids", "funding", "books"):
             for coin, rows in data.get(series, {}).items():
                 tape._index[(series, coin)] = [int(row[0]) for row in rows]
+        for market, sources in data.get("fees", {}).items():
+            for source, sides in sources.items():
+                for side, steps in sides.items():
+                    tape._index[("fees", market, source, side)] = [int(r[0]) for r in steps]
         return tape
 
     @classmethod
@@ -368,14 +520,42 @@ class Tape:
                 return row
         return None
 
-    def fees(self, market: str) -> tuple[Decimal, Decimal] | None:
-        """(taker, maker) as fractions of notional: the recorded account's rates for
-        ``market`` (``userFees`` in its recorded listing row), or None when the
-        recording states none. Never a published schedule in their place."""
-        row = self.listing(market) or {}
-        if row.get("taker_fee_rate") is None or row.get("maker_fee_rate") is None:
+    def _step(self, market: str, source: str, side: str, ts_ns: int) -> list | None:
+        stamps = self._index.get(("fees", market, source, side))
+        if not stamps:
             return None
-        return Decimal(str(row["taker_fee_rate"])), Decimal(str(row["maker_fee_rate"]))
+        i = bisect.bisect_right(stamps, ts_ns) - 1
+        return None if i < 0 else self.data["fees"][market][source][side][i]
+
+    def fee_at(self, market: str, side: str, ts_ns: int) -> tuple | None:
+        """(rate, source, since_ns, provenance): the account's ``side`` ("taker" or
+        "maker") fee rate on ``market`` as the recording stood at ``ts_ns``, or None.
+
+        A step function of tape time, read strictly at or before ``ts_ns``: a rate is
+        usable only from the instant it was recorded, never averaged across the future.
+        The venue's own statement of the rate (``venue_read``) is the primary source;
+        else the latest rate this market's fills stated (``fills``); else the latest
+        stated by fills on the venue's other markets of the same class (perp or spot),
+        which is said (``fills_pooled``). Never a published schedule or a constant.
+        """
+        for source in ("venue_read", "fills"):
+            step = self._step(market, source, side, ts_ns)
+            if step is not None:
+                return Decimal(step[1]), source, int(step[0]), list(step[2])
+        spot = "/" in market
+        pooled = [step for other in self.data.get("fees", {})
+                  if other != market and ("/" in other) == spot
+                  for step in [self._step(other, "fills", side, ts_ns)] if step is not None]
+        if not pooled:
+            return None
+        step = max(pooled, key=lambda row: int(row[0]))
+        return Decimal(step[1]), "fills_pooled", int(step[0]), list(step[2])
+
+    def fees(self, market: str, ts_ns: int) -> tuple[Decimal | None, Decimal | None]:
+        """(taker, maker) rates on ``market`` at ``ts_ns`` (``fee_at``); None for a side
+        the recording had not stated by then."""
+        taker, maker = (self.fee_at(market, side, ts_ns) for side in ("taker", "maker"))
+        return (None if taker is None else taker[0]), (None if maker is None else maker[0])
 
     def _book_spreads_bps(self, coin: str) -> list[Decimal]:
         out = []
@@ -685,16 +865,29 @@ class TapeVenue(FakeExchange):
     def _fill(self, oid, order, px, *, liquidation=False, fee_rate=None):
         # A position changes here: what the old one accrued is counted first.
         self._accrue(self._now_ns)
-        if fee_rate is None:  # a liquidation: the recorded taker rate, never the fake's
-            fee_rate = self._rates(order.coin)[0]
+        if fee_rate is None:
+            # A liquidation takes liquidity: the recorded taker rate, never the fake's.
+            # A position the recording let open only as a maker, before any taker rate
+            # was recorded, is closed at its own recorded maker rate: the only rate of
+            # this account the recording states by then.
+            taker, maker = self._rates(order.coin)
+            fee_rate = taker if taker is not None else maker
         return super()._fill(oid, order, px, liquidation=liquidation, fee_rate=fee_rate)
+
+    def _resting_maker(self, market: str) -> Decimal:
+        """The maker rate an order resting on ``market`` pays: recorded before it could
+        rest (``_side_refusal``), and a recorded rate never ceases to be one."""
+        maker = self._rates(market)[1]
+        if maker is None:
+            raise ValueError(NO_MAKER_RATE)
+        return maker
 
     def _spot_available(self, coin: str) -> Decimal:
         """As the fake's, a resting spot buy holding its cost and the recorded maker fee
         it would pay (the fake holds its own ``fee_bps``, which a tape never charges)."""
         if coin != "USDC":
             return super()._spot_available(coin)
-        committed = sum((o.size * o.limit_px * (1 + self._rates(o.coin)[1])
+        committed = sum((o.size * o.limit_px * (1 + self._resting_maker(o.coin))
                          for o in self._resting.values() if o.market == "spot" and o.is_buy),
                         Decimal(0))
         return max(Decimal(0), self._spot_cash - committed)
@@ -783,13 +976,21 @@ class TapeVenue(FakeExchange):
 
     # ---- the venue's terms, published as facts (Chapter II §I.b)
 
-    def _rates(self, market: str) -> tuple[Decimal, Decimal]:
-        """(taker, maker) for an order on ``market``: the recorded rates. Only a market
-        whose recording states them ever fills (``_place`` refuses the rest)."""
-        rates = self._tape.fees(market)
-        if rates is None:
-            raise ValueError(NO_RECORDED_FEES)
-        return rates
+    def _rates(self, market: str) -> tuple[Decimal | None, Decimal | None]:
+        """(taker, maker) on ``market`` as the recording stood at the venue's instant
+        (``Tape.fee_at``); None for a side not recorded by then, which no order pays:
+        ``_place`` and ``_execute`` refuse what would need it."""
+        return self._tape.fees(market, self._now_ns)
+
+    def _side_refusal(self, market: str, kind: OrderKind) -> str | None:
+        """Why an order of ``kind`` is refused on ``market`` now for want of a fee rate:
+        an immediate-or-cancel order takes liquidity and needs the taker rate; a limit
+        can rest and needs the maker rate (and, if it crosses on arrival, the taker rate
+        then, ``_execute``)."""
+        taker, maker = self._rates(market)
+        if kind is OrderKind.MARKET:
+            return NO_TAKER_RATE if taker is None else None
+        return NO_MAKER_RATE if maker is None else None
 
     def _level_size(self, market: str) -> Decimal | None:
         """One synthetic level of ``market``, in whole recorded lots; None when the tape
@@ -809,8 +1010,6 @@ class TapeVenue(FakeExchange):
             return NO_RECORDED_MARKET
         if self._tape.terms(market) is None:
             return NO_RECORDED_LISTING
-        if self._tape.fees(market) is None:
-            return NO_RECORDED_FEES
         if self._level_size(market) is None:
             return NO_LIQUIDITY
         return None
@@ -834,7 +1033,9 @@ class TapeVenue(FakeExchange):
                 # below state what this venue has, so that note no longer applies.
                 row.pop("fee_rates", None)
                 row.pop("reason", None)
-                terms, rates = self._tape.terms(market), self._tape.fees(market)
+                terms = self._tape.terms(market)
+                taker, maker = (self._tape.fee_at(market, side, self._now_ns)
+                                for side in ("taker", "maker"))
                 spread, spread_source = self._tape.spread_bps(market)
                 depth = self._level_size(market)
                 if depth is None:
@@ -843,10 +1044,15 @@ class TapeVenue(FakeExchange):
                     "lot_size": None if terms is None else str(terms[0]),
                     "tick_size": None if terms is None else str(terms[1]),
                     "min_order_value_usd": None if terms is None else str(terms[2]),
-                    "taker_fee_rate": None if rates is None else str(rates[0]),
-                    "maker_fee_rate": None if rates is None else str(rates[1]),
-                    "fee_basis": ("fraction of notional, the recorded account's userFees"
-                                  if rates is not None else "not recorded"),
+                    "taker_fee_rate": None if taker is None else str(taker[0]),
+                    "maker_fee_rate": None if maker is None else str(maker[0]),
+                    "fee_basis": "fraction of notional, this account's recorded rate",
+                    "taker_fee_source": None if taker is None else taker[1],
+                    "taker_fee_since_ns": None if taker is None else taker[2],
+                    "maker_fee_source": None if maker is None else maker[1],
+                    "maker_fee_since_ns": None if maker is None else maker[2],
+                    "market_orders_refused": self._side_refusal(market, OrderKind.MARKET),
+                    "limit_orders_refused": self._side_refusal(market, OrderKind.LIMIT),
                     "spread_bps": None if spread is None else str(spread),
                     "spread_source": spread_source,
                     "synthetic_level_size": None if depth is None else str(depth),
@@ -864,8 +1070,16 @@ class TapeVenue(FakeExchange):
         "A recorded market. A market appears in mids, books and this listing from its "
         "first recorded mid; an order on a market not listed here is refused. Every "
         "order on a market whose refused is not null is refused, for that reason: the "
-        "recording states no lot size, tick size, order floor or fee rates for it, or "
-        "no liquidity. An order whose size is not a multiple of lot_size, whose limit "
+        "recording states no lot size, tick size or order floor for it, or no "
+        "liquidity. Fee rates are this account's as the recording stood at the venue's "
+        "instant: the venue's own statement of them (taker_fee_source venue_read), else "
+        "the rate the latest recorded fill on this market stated (fills), else on the "
+        "venue's other markets of its class (fills_pooled), each usable only from the "
+        "instant it was recorded (taker_fee_since_ns, maker_fee_since_ns). A market "
+        "order needs taker_fee_rate and a limit order maker_fee_rate: while either is "
+        "null those orders are refused (market_orders_refused, limit_orders_refused), "
+        "and a limit that would cross on arrival with no taker_fee_rate is refused "
+        "then. An order whose size is not a multiple of lot_size, whose limit "
         "price is not a multiple of tick_size or has more than price_significant_figures "
         "significant figures (an integer price excepted when integer_prices_allowed), or "
         "whose value is below min_order_value_usd, is refused. "
@@ -884,7 +1098,8 @@ class TapeVenue(FakeExchange):
         "Funding settles at each UTC hour on the position then held, at the last "
         "recorded rate and mid, and pro rata for the part of an hour when the world "
         "ends. The recording states no leverage terms: perp positions are margined at "
-        "1x, and are closed at the mid, at taker_fee_rate, when the perps account's "
+        "1x, and are closed at the mid, at taker_fee_rate (maker_fee_rate while no "
+        "taker rate is recorded), when the perps account's "
         "equity is below zero. The recording has no vaults.")
 
     # ---- the book an arriving or resting order meets
@@ -962,7 +1177,7 @@ class TapeVenue(FakeExchange):
         """Refuse what the venue refuses now; send the rest, acknowledged as resting."""
         if order.coin not in (self.spot_pairs if order.market == "spot" else self.coins):
             return OrderResult(None, "rejected", Decimal(0), None, "unknown coin")
-        refusal = self._refusal(order.coin)
+        refusal = self._refusal(order.coin) or self._side_refusal(order.coin, order.kind)
         if refusal is not None:
             return OrderResult(None, "rejected", Decimal(0), None, refusal)
         read = self._recorded(order.coin)
@@ -1041,10 +1256,15 @@ class TapeVenue(FakeExchange):
         takes = self._walk(levels, size, bound, buy=buy, strict=False)
         filled = sum((take for _px, take in takes), Decimal(0))
         events: list[WorldEvent] = []
+        taker, maker = self._rates(market)
+        if filled > 0 and taker is None:
+            # It would take liquidity, and no taker rate of this account was recorded by
+            # this instant: a limit that crosses on arrival is refused, never charged
+            # a rate the recording does not state.
+            return self._refuse(oid, order, NO_TAKER_RATE)
         if filled > 0:
             notional = sum((px * take for px, take in takes), Decimal(0))
             vwap = (notional / filled).quantize(Decimal("1e-10"))
-            taker, _maker = self._rates(market)
             result = self._fill(oid, replace_size(order, filled), vwap, fee_rate=taker)
             events.extend(self.drain_events())
             if result.status != "filled":
@@ -1072,7 +1292,7 @@ class TapeVenue(FakeExchange):
         # fill of it would pay: the part already filled has already been paid for.
         resting = replace_size(order, remainder)
         if order.market == "spot" and not self._spot_affordable(
-                resting, order.limit_px, fee_rate=self._rates(market)[1]):
+                resting, order.limit_px, fee_rate=maker):
             if filled <= 0:
                 return events + self._refuse(oid, order, "insufficient spot balance")
             # Part of it filled: that part stands, and only the unaffordable rest is
@@ -1123,6 +1343,8 @@ class TapeVenue(FakeExchange):
             if filled <= 0:
                 continue
             _taker, maker = self._rates(order.coin)
+            if maker is None:  # rested under a maker rate; the tape only moves forward
+                continue
             # The order's own reservation is released before it pays for itself: a resting
             # spot order reserves its cash (or inventory), and weighing its fill against
             # a balance that still holds that reservation would need it twice over.
@@ -1150,6 +1372,8 @@ class TapeVenue(FakeExchange):
         """A spot buy is affordable with its cost and the fee on it: ``fee_rate``, else
         the spot taker rate."""
         rate = self._rates(order.coin)[0] if fee_rate is None else fee_rate
+        if rate is None:  # never charged a rate the recording does not state
+            raise ValueError(NO_TAKER_RATE)
         fee = (order.size * px * rate).quantize(Decimal("0.000001"))
         return ((not order.reduce_only and order.size * px + fee <= self._spot_available("USDC"))
                 if order.is_buy else order.size <= self._spot_available(order.coin))

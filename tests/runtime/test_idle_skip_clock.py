@@ -27,12 +27,11 @@ TAPE = Path(__file__).parents[1] / "fixtures" / "tape" / "longrun1-2100.events.j
 
 
 def _traded_tape():
-    """longrun1's slice with its account's fee rates in the recorded listing, as a later
-    recording states them (live-4): a tape whose listing states none refuses orders."""
-    tape = Tape.load(TAPE)
-    listing = {kind: [dict(row, taker_fee_rate="0.00045", maker_fee_rate="0.00015")
-                      for row in rows] for kind, rows in tape.data["instruments"].items()}
-    return Tape.from_data(dict(tape.data, instruments=listing))
+    """longrun1's slice as if its venue had stated the account's fee rates at its first
+    instant, as a later recording does (live-4): a tape that states none refuses."""
+    from tests.world.test_tape import with_read_fees
+
+    return with_read_fees(Tape.load(TAPE))
 
 
 class Monotonic:
