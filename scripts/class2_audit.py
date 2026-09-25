@@ -95,8 +95,18 @@ def describe(path: str) -> dict[str, Any]:
     return {"surface_kind": kind, "audience": [], "frequency": "unknown"}
 
 
+class RenderFailed(RuntimeError):
+    """A world's requests could not be rendered completely: no audit can be produced."""
+
+
 def corpus_records(worlds: list[str], *, rendered: bool) -> list[dict]:
-    """Every leaf the auditor reads, tagged; charter cards and norms as context."""
+    """Every leaf the auditor reads, tagged; charter cards and norms as context.
+
+    Guarantees a rendered world contributes leaves only from a completed run that sent
+    requests: the key's ``expected_leaves`` is the trusted record of what is under
+    audit, and a partial render would make it silently short. A failed or empty render
+    raises ``RenderFailed`` naming the world and the failure.
+    """
     from tests.audit import class2_corpus as corpus
 
     records: list[dict] = []
@@ -104,7 +114,12 @@ def corpus_records(worlds: list[str], *, rendered: bool) -> list[dict]:
     for world in worlds:
         leaves = corpus.render_static(world)
         if rendered:
-            leaves += corpus.render_dynamic(world).leaves
+            dynamic = corpus.render_dynamic(world)
+            if dynamic.status != "completed" or not dynamic.requests or not dynamic.leaves:
+                raise RenderFailed(f"{world}: the rendered run did not complete "
+                                   f"({dynamic.status}; {dynamic.requests} requests); "
+                                   "no audit is produced from a partial corpus")
+            leaves += dynamic.leaves
         for path, text in leaves:
             key = leaf_id(path, text)
             if key not in seen:
@@ -271,8 +286,9 @@ def render(worlds: list[str], out: Path, *, seed: int, rendered: bool, release_r
     every surface-touching commit with its message and diff, or an explicit none.
     """
     provenance = provenance_section(release_range, provenance_commits(repo, release_range))
-    out.mkdir(parents=True, exist_ok=True)
+    # Rendered before anything is written: a failed render leaves no corpus behind.
     records = corpus_records(worlds, rendered=rendered)
+    out.mkdir(parents=True, exist_ok=True)
     planted, key = plant(records, seed=seed, world=worlds[0])
     with (out / "auditor_input.jsonl").open("w") as handle:
         for record in planted:
@@ -384,6 +400,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--previous", type=Path, default=None)
     r.add_argument("--range", required=True,
                    help="the release range, base..head, read by the provenance pass")
+    r.add_argument("--repo", type=Path, default=ROOT, help="the repository the range is in")
     for name in ("validate", "triage"):
         v = sub.add_parser(name)
         v.add_argument("output", type=Path)
@@ -395,9 +412,13 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("--static-only", action="store_true")
     args = parser.parse_args(argv)
     if args.command == "render":
-        key = render(args.world, args.out, seed=args.seed, rendered=args.rendered,
-                     release_range=args.range, essay=args.essay,
-                     previous=args.previous)
+        try:
+            key = render(args.world, args.out, seed=args.seed, rendered=args.rendered,
+                         release_range=args.range, repo=args.repo, essay=args.essay,
+                         previous=args.previous)
+        except RenderFailed as exc:
+            print(f"no audit: {exc}", file=sys.stderr)
+            return 2
         print(f"wrote {args.out}/auditor_input.jsonl, prompt.md and canary_key.json "
               f"({len(key['canaries'])} canaries, {len(key['controls'])} controls)")
         return 0

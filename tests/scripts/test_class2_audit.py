@@ -89,6 +89,36 @@ def test_the_release_range_is_base_dot_dot_head(history, tmp_path):
                     release_range=head, repo=repo)
 
 
+def test_a_render_whose_world_raises_midway_writes_no_corpus_and_exits_nonzero(
+        history, tmp_path, monkeypatch, capsys):
+    """Codex review: a rendered world that fails partway is refused, naming the failure;
+    its partial requests never become the key's trusted expected leaves."""
+    from factorylab.runtime.loop import Runtime
+
+    repo, _base, surface, head = history
+    original, calls = Runtime._process_event, {"n": 0}
+
+    def fails_midway(self, ev):
+        calls["n"] += 1
+        if calls["n"] >= 8:
+            raise RuntimeError("world raised midway")
+        return original(self, ev)
+
+    monkeypatch.setattr(Runtime, "_process_event", fails_midway)
+    out = tmp_path / "audit"
+    code = tool.main(["render", "--world", WORLD, "--out", str(out), "--seed", "7",
+                      "--rendered", "--range", f"{surface}..{head}", "--repo", str(repo),
+                      "--essay", str(tmp_path / "absent.md")])
+    assert code != 0 and calls["n"] >= 8
+    assert not out.exists()
+    err = capsys.readouterr().err
+    assert "world raised midway" in err and WORLD in err
+    with pytest.raises(tool.RenderFailed):
+        tool.render([WORLD], out, seed=7, rendered=True, essay=None,
+                    release_range=f"{surface}..{head}", repo=repo)
+    assert not out.exists()
+
+
 def test_the_canary_corpus_has_one_canary_per_question_and_three_mandatory():
     spec = json.loads(tool.CANARIES.read_text())
     questions = [c["question"] for c in spec["canaries"]]

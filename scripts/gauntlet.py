@@ -406,12 +406,23 @@ def sf1b_ratchet_cadence(events: list[Mapping], manifest: Mapping) -> Result:
                    ratchets=len(ratchets))
 
 
-def _saturated_updates(events: list[Mapping], card: str, ph: Physics) -> list[Mapping]:
-    """The card's price updates from the first whose penalty reached ``penalty_cap`` on."""
-    updates = [row for row in rows_of(events, "price.update") if row.get("card_id") == card]
-    first = next((i for i, row in enumerate(updates)
-                  if row["lambda_after"] * row["violation"] >= ph.cap - 1e-12), None)
-    return [] if first is None else updates[first:]
+def capped_runs(events: list[Mapping], card: str, ph: Physics) -> list[list[Mapping]]:
+    """The card's maximal runs of consecutive price updates whose penalty ``λ·v`` sits at
+    ``penalty_cap`` with the violation persisting. Any update below the cap ends a run."""
+    runs: list[list[Mapping]] = []
+    current: list[Mapping] = []
+    for row in rows_of(events, "price.update"):
+        if row.get("card_id") != card:
+            continue
+        if row["violation"] > 0 and row["lambda_after"] * row["violation"] >= ph.cap - 1e-12:
+            current.append(row)
+        else:
+            if current:
+                runs.append(current)
+            current = []
+    if current:
+        runs.append(current)
+    return runs
 
 
 def sf1c_anti_windup(events: list[Mapping], manifest: Mapping, *, card: str) -> Result:
@@ -419,24 +430,13 @@ def sf1c_anti_windup(events: list[Mapping], manifest: Mapping, *, card: str) -> 
 
     Wave 16 R-E (amended): "while the penalty sits at penalty_cap, λ's integrator
     does not integrate (it is frozen)". Read only on runs of consecutive updates whose
-    penalty ``λ·v`` is at the cap: within each run the integral is equal, not merely
-    close, from one update to the next. A run ends at any update below the cap (the
-    violation eased, and the integral may then legitimately move) and a new run starts
-    at the next capped update.
+    penalty ``λ·v`` is at the cap (``capped_runs``): within each run the integral is
+    equal, not merely close, from one update to the next. A run ends at any update below
+    the cap (the violation eased, and the integral may then legitimately move) and a new
+    run starts at the next capped update.
     """
     ph = physics(manifest)
-    updates = [row for row in rows_of(events, "price.update") if row.get("card_id") == card]
-    runs: list[list[Mapping]] = []
-    current: list[Mapping] = []
-    for row in updates:
-        if row["violation"] > 0 and row["lambda_after"] * row["violation"] >= ph.cap - 1e-12:
-            current.append(row)
-        else:
-            if len(current) >= 2:
-                runs.append(current)
-            current = []
-    if len(current) >= 2:
-        runs.append(current)
+    runs = [run for run in capped_runs(events, card, ph) if len(run) >= 2]
     if not runs:
         return _unsupported("SF-1c", "the penalty never sat at the cap for two updates",
                             card=card)
@@ -448,23 +448,26 @@ def sf1c_anti_windup(events: list[Mapping], manifest: Mapping, *, card: str) -> 
 
 
 def sf1d_escalation(events: list[Mapping], manifest: Mapping, *, card: str) -> Result:
-    """SF-1d: saturation is ledgered and its duration rises by one per window.
+    """SF-1d: sustained saturation is ledgered and its duration rises by one per window.
 
-    Wave 16 R-E: "At saturation, ledger the fact and publish it to governance". After
-    ``min_ratio`` consecutive windows at the cap, a ``…saturated`` row exists for the
-    card, and consecutive saturated rows carry durations rising by one.
+    Wave 16 R-E: "At saturation, ledger the fact and publish it to governance". Demanded
+    only once the penalty has sat at the cap for ``min_ratio`` consecutive updates (the
+    same partition as SF-1c: one capped update followed by uncapped ones is not
+    sustained saturation). Then a ``…saturated`` row exists for the card, and consecutive
+    saturated rows carry durations rising by one.
     """
     ph = physics(manifest)
-    after = _saturated_updates(events, card, ph)
-    if len(after) < ph.r:
-        return _unsupported("SF-1d", "fewer than min_ratio updates at the cap", card=card)
+    longest = max((len(run) for run in capped_runs(events, card, ph)), default=0)
+    if longest < ph.r:
+        return _unsupported("SF-1d", "the penalty never sat at the cap for min_ratio "
+                            "consecutive updates", card=card, longest_run=longest)
     rows = [row for row in events if str(row.get("kind", "")).endswith("saturated")
             and row.get("card_id") == card]
     durations = [row.get("duration") for row in rows]
     rising = all(isinstance(d, int) for d in durations) and all(
         b == a + 1 for a, b in zip(durations, durations[1:], strict=False))
     return _result("SF-1d", bool(rows) and rising, card=card, saturated_rows=len(rows),
-                   durations=durations[:12])
+                   durations=durations[:12], longest_run=longest)
 
 
 def sf1e_gain(events: list[Mapping], manifest: Mapping) -> Result:
@@ -869,29 +872,47 @@ def th2_short_lived(events: list[Mapping], manifest: Mapping, *, loop: str) -> R
 
 
 def th3_governance_gap(events: list[Mapping], manifest: Mapping) -> Result:
-    """TH-3: charter activations stand at least ``min_ratio`` × the slowest loop apart.
+    """TH-3: charter revisions stand at least ``min_ratio`` × the slowest loop apart.
 
     Chapter II §IV.c: "an inner loop must resolve itself several times faster than the
-    outer loop that commands it". Each ``charter.cadence`` row states the earliest next
-    activation; every later activation is at or after it.
+    outer loop that commands it". Read on the kernel's own rows (``GovernanceCadence``):
+    a ``charter.boundary`` row records ``boundary_ns``, the anchor it was measured from
+    (``previous_ns``: the launch or the previous boundary) and ``slowest_period_ns``;
+    every passed motion activates at a boundary, in a ``charter.cadence`` row whose
+    ``previous_activation_ns`` is that boundary's anchor and whose ``earliest_ns`` is
+    the *next* threshold. So:
+
+    * every boundary stands ``min_ratio`` × its slowest period after its anchor;
+    * every activation instant is a boundary instant, and distinct activation instants
+      stand ``min_ratio`` × the later one's slowest period apart;
+    * no activation is earlier than its own anchor.
     """
     ph = physics(manifest)
+    boundaries = rows_of(events, "charter.boundary")
     cadence = rows_of(events, "charter.cadence")
-    activations = rows_of(events, "charter.activate")
-    if len(activations) < 2:
-        return _unsupported("TH-3", "fewer than two activations", activations=len(activations))
+    instants = sorted({row["activation_ns"] for row in cadence})
+    if not boundaries and len(instants) < 2:
+        return _unsupported("TH-3", "no governance boundary and fewer than two activation "
+                            "instants", activations=len(cadence))
     bad = []
-    for row in cadence:
-        later = [c for c in cadence if c["activation_ns"] > row["activation_ns"]]
-        nxt = min(later, key=lambda c: c["activation_ns"], default=None)
-        if nxt is not None and nxt["activation_ns"] < row["earliest_ns"]:
-            bad.append({"at": row["activation_ns"], "next": nxt["activation_ns"],
-                        "earliest": row["earliest_ns"]})
-        span = row["earliest_ns"] - row["activation_ns"]
-        if row.get("slowest_period_ns") and span < ph.r * row["slowest_period_ns"]:
-            bad.append({"at": row["activation_ns"], "span": span,
+    for row in boundaries:
+        gap = row["boundary_ns"] - row["previous_ns"]
+        if gap < ph.r * row["slowest_period_ns"]:
+            bad.append({"boundary_ns": row["boundary_ns"], "gap": gap,
                         "required": ph.r * row["slowest_period_ns"]})
-    return _result("TH-3", not bad, activations=len(activations), bad=bad[:5])
+    at_boundary = {row["boundary_ns"] for row in boundaries}
+    slowest = {row["activation_ns"]: row["slowest_period_ns"] for row in cadence}
+    for row in cadence:
+        if boundaries and row["activation_ns"] not in at_boundary:
+            bad.append({"activation_ns": row["activation_ns"], "not_at_a_boundary": True})
+        if row["activation_ns"] < row["previous_activation_ns"]:
+            bad.append({"activation_ns": row["activation_ns"], "before_its_anchor": True})
+    for earlier, later in zip(instants, instants[1:], strict=False):
+        if later - earlier < ph.r * slowest[later]:
+            bad.append({"activations": [earlier, later], "gap": later - earlier,
+                        "required": ph.r * slowest[later]})
+    return _result("TH-3", not bad, boundaries=len(boundaries), activations=len(cadence),
+                   instants=len(instants), bad=bad[:5])
 
 
 # --- learning death (§3.4) -------------------------------------------------------------------
@@ -1117,10 +1138,14 @@ def s1_draw_sovereignty(events: list[Mapping], manifest: Mapping | None = None) 
         if drawn != prop["chosen"] or abs(math.fsum(probs) - 1.0) > 1e-9:
             bad.append(row["handle"])
     returned = returned_handles(events)
-    acts = [row for row in events if str(row.get("kind", "")).startswith(
-        ("order.intent", "registry.register", "charter.propose"))
-        and isinstance(row.get("handle"), str) and row["handle"].startswith("decision-")]
-    unreturned = [row["handle"] for row in acts if row["handle"] not in returned]
+    # The deciding handle, under the field each emitting row names it: an order and a
+    # registration carry ``handle``; a charter proposal carries the amendment's own
+    # ``proposer_handle`` (``CharterBook.propose`` ledgers the Amendment as it is).
+    acts = [(row["kind"], row.get("proposer_handle" if row["kind"] == "charter.propose"
+                                  else "handle"))
+            for row in rows_of(events, "order.intent", "registry.register", "charter.propose")]
+    acts = [(kind, h) for kind, h in acts if isinstance(h, str) and h.startswith("decision-")]
+    unreturned = [h for _kind, h in acts if h not in returned]
     if not checked:
         return _unsupported("S1", "no sampled decision")
     return _result("S1", not bad and not unreturned, draws=checked, bad_draws=bad[:5],

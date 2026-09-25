@@ -156,6 +156,19 @@ def test_sf1d_saturation_is_ledgered_with_a_rising_duration():
     assert g.sf1d_escalation(stuck, M, card="c").status == g.FAIL
 
 
+def test_sf1d_one_capped_update_then_uncapped_ones_is_not_sustained_saturation():
+    """Codex review: SF-1d uses SF-1c's partition. One capped update followed by
+    min_ratio − 1 uncapped ones demands no escalation; min_ratio consecutive capped ones
+    do, and a gap of one uncapped update restarts the count."""
+    one = _updates("c", [(0.5, 1.0, 0.5), (0.2, 1.0, 0.2), (0.2, 1.0, 0.2)])
+    assert g.sf1d_escalation(one, M, card="c").status == g.UNSUPPORTED
+    broken = _updates("c", [(0.5, 1.0, 0.5), (0.5, 1.0, 0.5), (0.2, 1.0, 0.2),
+                            (0.5, 1.0, 0.5), (0.5, 1.0, 0.5)])
+    assert g.sf1d_escalation(broken, M, card="c").status == g.UNSUPPORTED
+    sustained = _updates("c", [(0.2, 1.0, 0.2), *[(0.5, 1.0, 0.5)] * 3])
+    assert g.sf1d_escalation(sustained, M, card="c").status == g.FAIL  # nothing published
+
+
 def _gain(window, before, after, pathology="stable_failure", router="router:Tick"):
     return {"kind": "immune.gain", "router": router, "window": window,
             "pathology": pathology, "gamma_before": [before], "gamma_after": [after]}
@@ -351,15 +364,50 @@ def test_th2_a_short_lived_configuration_reads_as_thrash_and_is_never_refused():
     assert g.th2_short_lived(unread, M, loop="seat:m").status == g.FAIL
 
 
-def test_th3_activations_respect_the_cascade_ratio():
-    def cadence(at, slow=10):
-        return {"kind": "charter.cadence", "activation_ns": at, "earliest_ns": at + 3 * slow,
-                "slowest_period_ns": slow}
-    acts = [{"kind": "charter.activate"}] * 2
-    assert g.th3_governance_gap(acts + [cadence(0), cadence(30)], M).ok
-    assert g.th3_governance_gap(acts + [cadence(0), cadence(20)], M).status == g.FAIL
-    short = acts + [{**cadence(0), "earliest_ns": 10}]
-    assert g.th3_governance_gap(short, M).status == g.FAIL
+def _boundary(at, previous, slow=10):
+    """A ``charter.boundary`` row as ``GovernanceCadence.boundary`` writes it."""
+    return {"kind": "charter.boundary", "boundary_ns": at, "previous_ns": previous,
+            "slowest_period_ns": slow}
+
+
+def _cadence(at, slow=10):
+    """A ``charter.cadence`` row as ``GovernanceCadence.activated`` writes it at a boundary:
+    the boundary has already anchored the cadence at ``at``, so the previous activation is
+    ``at`` and ``earliest_ns`` is the next threshold."""
+    return {"kind": "charter.cadence", "activation_ns": at, "previous_activation_ns": at,
+            "slowest_period_ns": slow, "earliest_ns": at + 3 * slow}
+
+
+def test_th3_boundaries_and_activations_respect_the_cascade_ratio():
+    ok = [_boundary(30, 0), _cadence(30), _cadence(30), _boundary(60, 30), _cadence(60)]
+    assert g.th3_governance_gap(ok, M).ok
+    early = [_boundary(30, 0), _cadence(30), _boundary(50, 30), _cadence(50)]
+    result = g.th3_governance_gap(early, M)
+    assert result.status == g.FAIL and result.evidence["bad"][0]["gap"] == 20
+    off_boundary = [_boundary(30, 0), _cadence(30), _cadence(45)]
+    assert g.th3_governance_gap(off_boundary, M).status == g.FAIL
+    assert g.th3_governance_gap([_cadence(30)], M).status == g.UNSUPPORTED
+
+
+def test_th3_reads_the_kernels_own_cadence_rows():
+    """Codex review: the rows ``GovernanceCadence`` itself writes, read by the predicate."""
+    from factorylab.kernel.ledger import Ledger
+    from factorylab.runtime.cadence import GovernanceCadence
+
+    ledger = Ledger(None)
+    cadence = GovernanceCadence(ledger, min_ratio=3, backstop=10, sample=20)
+    tick = 1_000_000_000
+    cadence.launch(0)
+    for boundary, now_event in ((1, 30), (2, 60)):
+        cadence.advance(now_event)
+        now = now_event * tick
+        assert cadence.ready(now_ns=now, tick_interval_ns=tick, window=boundary)
+        cadence.boundary(boundary, window=boundary, now_ns=now, tick_interval_ns=tick)
+        cadence.activated(f"m{boundary}", now, tick)
+    rows = [row for row in ledger._recovery_items()
+            if row["kind"] in ("charter.boundary", "charter.cadence")]
+    assert {r["kind"] for r in rows} == {"charter.boundary", "charter.cadence"}
+    assert g.th3_governance_gap(rows, M).ok
 
 
 # --- learning death, overfitting ---------------------------------------------------------------
@@ -470,6 +518,12 @@ def test_s1_every_draw_replays_from_its_seed_and_every_act_traces_to_a_return():
     assert g.s1_draw_sovereignty(forced).status == g.FAIL
     kernel_order = [_open("decision-1", "a"), {"kind": "order.intent", "handle": "decision-1"}]
     assert g.s1_draw_sovereignty(kernel_order).status == g.FAIL
+    # A charter proposal names its decision as ``proposer_handle`` (CharterBook.propose).
+    proposal = {"kind": "charter.propose", "id": "m", "proposer_handle": "decision-1"}
+    traced = g.s1_draw_sovereignty(good + [proposal])
+    assert traced.ok and traced.evidence["acts"] == 2
+    orphan = g.s1_draw_sovereignty([_open("decision-1", "a"), proposal])
+    assert orphan.status == g.FAIL
 
 
 def test_s4_bounds_on_penalties_rewards_and_ratchets():
