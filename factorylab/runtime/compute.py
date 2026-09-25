@@ -998,7 +998,12 @@ class ComputeMixin:
         from factorylab.cortex.tools import connector_spec
 
         self._init_connectors()
-        self.tool_specs.setdefault("connector.fetch", connector_spec())
+        if self.m.exchange.tape is None:
+            self.tool_specs.setdefault("connector.fetch", connector_spec())
+        else:
+            # A world replaying a recorded market reads nothing of today's outside:
+            # a fetch could read the future of the market it replays (critique C2).
+            self.tool_specs.pop("connector.fetch", None)
         self._ensure_treasury_tool()
         self._ensure_web_tool()
         self._ensure_calc_tool()
@@ -1171,6 +1176,9 @@ class ComputeMixin:
         from factorylab.cortex.tools import _validate_args, connector_spec
         from factorylab.world.connector import ConnectorRefused
 
+        if self.m.exchange.tape is not None:
+            return self._connector_refused(
+                handle, "this world replays a recorded market and has no connector reads")
         error = _validate_args(connector_spec()["args_schema"], args)
         if error:
             return self._connector_refused(handle, error)

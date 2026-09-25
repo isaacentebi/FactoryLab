@@ -475,16 +475,18 @@ class FakeExchange:
         return dict(result)
 
     def lookup(self, client_id: str, *, order_id: str | None = None) -> OrderResult:
-        """Resolve original order identity without placing or cancelling anything."""
+        """Resolve original order identity without placing or cancelling anything.
+
+        Guarantees a cancelled order reports what it executed before it was cancelled."""
         result = self._client_results.get(client_id)
         oid = order_id or (result.order_id if result else None)
-        if oid in self._cancelled:
-            return OrderResult(oid, "cancelled", Decimal(0), None)
         fills = [f for f in self._fills if f.order_id == oid]
+        size = sum((f.size for f in fills), Decimal(0))
+        avg = sum((f.size * f.px for f in fills), Decimal(0)) / size if size else None
+        if oid in self._cancelled:
+            return OrderResult(oid, "cancelled", size, avg)
         if fills and oid not in self._resting:
-            size = sum((f.size for f in fills), Decimal(0))
-            return OrderResult(oid, "filled", size,
-                               sum((f.size * f.px for f in fills), Decimal(0)) / size)
+            return OrderResult(oid, "filled", size, avg)
         return result or OrderResult(oid, "uncertain", Decimal(0), None, "order not observed")
 
     def fills(self, since_ns: int) -> list[Fill]:
@@ -610,10 +612,13 @@ class FakeExchange:
         return events
 
     def _fill(
-        self, oid: str, order: Order, px: Decimal, *, liquidation: bool = False
+        self, oid: str, order: Order, px: Decimal, *, liquidation: bool = False,
+        fee_rate: Decimal | None = None,
     ) -> OrderResult:
+        """``fee_rate`` is the fraction of notional this fill is charged; by default the
+        venue's single ``fee_bps``. A venue with a maker and a taker rate names one."""
         if order.market == "spot":
-            return self._fill_spot(oid, order, px)
+            return self._fill_spot(oid, order, px, fee_rate=fee_rate)
         if order.reduce_only:
             pos = self._positions.get(order.coin)
             if pos is None or (pos.size > 0) == order.is_buy:
@@ -628,7 +633,8 @@ class FakeExchange:
                 return OrderResult(oid, "rejected", Decimal(0), None, "not reducing position")
             order = replace(order, size=min(order.size, abs(pos.size)))
         notional = order.size * px
-        fee = (notional * self.fee_bps / Decimal(10_000)).quantize(Decimal("0.000001"))
+        fee = (notional * self.fee_bps / Decimal(10_000) if fee_rate is None
+               else notional * fee_rate).quantize(Decimal("0.000001"))
         signed = order.size if order.is_buy else -order.size
         pos = self._positions.get(order.coin)
         new_size = (pos.size if pos else Decimal(0)) + signed
@@ -747,8 +753,12 @@ class FakeExchange:
                              if o.market == "spot" and o.coin == coin and not o.is_buy), Decimal(0))
         return max(Decimal(0), held - committed)
 
-    def _spot_affordable(self, order: Order, px: Decimal) -> bool:
-        fee = (order.size * px * self.fee_bps / 10_000).quantize(Decimal("0.000001"))
+    def _spot_affordable(self, order: Order, px: Decimal, *,
+                         fee_rate: Decimal | None = None) -> bool:
+        """Affordable with its cost and the fee it would pay: ``fee_rate`` of notional,
+        by default the venue's ``fee_bps``."""
+        fee = (order.size * px * self.fee_bps / 10_000 if fee_rate is None
+               else order.size * px * fee_rate).quantize(Decimal("0.000001"))
         return ((not order.reduce_only and order.size * px + fee <= self._spot_available("USDC"))
                 if order.is_buy else order.size <= self._spot_available(order.coin))
 
@@ -774,11 +784,13 @@ class FakeExchange:
                     ("perp", tuple(dict.fromkeys((*self.coins, *self.listed_coins)))),
                     ("spot", tuple(dict.fromkeys((*self.spot_pairs, *self.listed_spot_pairs)))))}
 
-    def _fill_spot(self, oid: str, order: Order, px: Decimal) -> OrderResult:
+    def _fill_spot(self, oid: str, order: Order, px: Decimal,
+                   fee_rate: Decimal | None = None) -> OrderResult:
         pos = self._spot_positions.get(order.coin)
         held = pos.size if pos else Decimal(0)
-        fee = (order.size * px * self.fee_bps / 10_000).quantize(Decimal("0.000001"))
-        if not self._spot_affordable(order, px):
+        fee = (order.size * px * self.fee_bps / 10_000 if fee_rate is None
+               else order.size * px * fee_rate).quantize(Decimal("0.000001"))
+        if not self._spot_affordable(order, px, fee_rate=fee_rate):
             return OrderResult(oid, "rejected", Decimal(0), None, "insufficient spot balance")
         realized = Decimal(0) if order.is_buy else (px - pos.entry_px) * order.size
         self._spot_cash += (-order.size * px if order.is_buy else order.size * px) - fee

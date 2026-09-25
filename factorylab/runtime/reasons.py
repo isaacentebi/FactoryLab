@@ -79,6 +79,8 @@ class Reason(StrEnum):
     POLYMARKET_IP_IN_USE = "polymarket_ip_in_use"
     POLYMARKET_LIVE_REQUIRES_A_LEDGER = "polymarket_live_requires_a_ledger"
     POLYMARKET_LIVE_REQUIRES_THE_WALL_CLOCK = "polymarket_live_requires_the_wall_clock"
+    # A world replaying a recorded tape reads no live event market (look-ahead guard).
+    POLYMARKET_LIVE_ON_A_TAPE = "polymarket_live_on_a_tape"
 
 
 class CredentialMissing(RuntimeError):

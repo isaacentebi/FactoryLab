@@ -158,13 +158,18 @@ def test_a_manifest_hashes_what_it_says_and_a_default_is_no_exception():
     (evaluation.opportunity_scale_bps left; wave 16, D1), and again when the consequence
     horizon became world_repricing / min_ratio on the venue's clock (the mark's
     evaluation.consequence_horizon_ticks left, and the scripted world states its
-    timing.world_repricing; wave 16, D2); each time it is a new v0."""
+    timing.world_repricing; wave 16, D2), and again when a fake venue could replay a
+    recorded tape ([exchange.tape], absent by default), and again when each model came
+    to state its training cutoff (models.training_cutoff, unknown by default; the
+    look-ahead guard of a tape world); each time it is a new v0."""
     scripted = load_manifest("scripted")
     assert '"forecast_horizon_events":10' in scripted.canonical_json()
     assert '"chaos":{"connector_timeout":0.0' in scripted.canonical_json()
     assert '"contract":"json_object"' in scripted.canonical_json()
+    assert '"tape":null' in scripted.canonical_json()
+    assert '"training_cutoff":null' in scripted.canonical_json()
     assert scripted.manifest_hash() == (
-        "3ac63a92403f8c35c0c6bcbfc7e3a065bccaef5e4df49744a618a7c85d6aefff"
+        "c5e9be550f27b1a4aecd8399e288d7a1c39c5d5f051200a5fdcea9f4ca0d1480"
     )
 
     implicit = manifest_from_dict(_base())

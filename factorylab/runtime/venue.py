@@ -65,10 +65,75 @@ def dead_report() -> dict:
             "exposure_status": UNKNOWN}
 
 
+def close_recorded_market(rt, *, through_tape_end: bool = False) -> None:
+    """End a recorded venue's market with its world, and settle what that leaves.
+
+    A venue that charges funding only at hour boundaries would leave the last
+    partial hour uncharged when the world ends between two of them, and an order
+    sent after the recording's last row could never arrive and would rest forever as
+    pending exposure: a replay whose costs are understated, or whose venue state is
+    never settled, is kinder than the market it replays (Chapter II §III.b: the
+    consequence that grades the chain must be the world's). The venue's closing
+    effects (``close_recording``: the accrued funding, and every order that can no
+    longer arrive cancelled) settle once, before the production mark, like any other
+    venue effect; never raises into a kill. Only a venue that closes (a recorded tape)
+    is asked; every other runtime is untouched.
+
+    The instant it closes at never passes the recording's end (``closes_ns``). When
+    the tape itself ended the run (``through_tape_end``: its clock ran out before its
+    tick budget, or the paced clock reached the end, ``TAPE_ENDED``), the venue is
+    first advanced and settled exactly through the end: orders in flight meet every
+    recorded row up to it and funding runs through it. When an earlier budget or a
+    termination ended the run, it closes at the world's instant.
+    """
+    from factorylab.world.tape import TAPE_ENDED
+
+    exchange = getattr(rt, "exchange", None)
+    if exchange is None or getattr(rt, "live", True) \
+            or not callable(getattr(exchange, "close_recording", None)):
+        return
+    try:
+        closes = int(exchange.closes_ns)
+        if through_tape_end or getattr(rt, "_safety_stop", None) == TAPE_ENDED:
+            rt._settle_exchange_effects(exchange.advance(closes), observe_positions=False)
+            rt.clock.now_ns = max(rt.clock.now_ns, closes)
+        rt._settle_exchange_effects(
+            exchange.close_recording(min(rt.clock.now_ns, closes)), observe_positions=False)
+    except Exception as exc:  # noqa: BLE001 - nothing may raise into a kill
+        print(f"factorylab kill: the recorded market was not closed ({type(exc).__name__})",
+              file=sys.stderr)
+
+
+def seal_recorded_market(rt) -> None:
+    """Book what the wind-down's closes did on a recorded venue, then seal the venue.
+
+    The second half of the terminal sequence: after ``close_recorded_market`` (the
+    accrued funding, the orders that can never arrive), the kill's wind-down closes
+    positions and balances against the last recorded book; their fills and refusals
+    are settled here like any venue effect, so their realized P&L is booked, and only
+    then is the venue sealed against every further order, before ``Terminated``.
+    Idempotent; never raises into a kill; a no-op off a recorded venue.
+    """
+    exchange = getattr(rt, "exchange", None)
+    if exchange is None or getattr(rt, "live", True) \
+            or not callable(getattr(exchange, "seal_recording", None)):
+        return
+    try:
+        rt._settle_exchange_effects(exchange.drain_events(), observe_positions=False)
+    except Exception as exc:  # noqa: BLE001 - nothing may raise into a kill
+        print(f"factorylab kill: the wind-down's fills were not booked ({type(exc).__name__})",
+              file=sys.stderr)
+    try:
+        exchange.seal_recording()
+    except Exception as exc:  # noqa: BLE001
+        print(f"factorylab kill: the recorded market was not sealed ({type(exc).__name__})",
+              file=sys.stderr)
+
+
 class VenueMixin:
     """Preserve runtime state and behavior for venue operations."""
 
-    def kill(self, reason: str) -> dict:
+    def kill(self, reason: str, *, through_tape_end: bool = False) -> dict:
         """End this world: production dies first, and only then is the venue wound down.
 
         The single kill path inside a living runtime: the duration kill through
@@ -97,6 +162,7 @@ class VenueMixin:
 
         if self.termination.final:
             return getattr(self, "wind_down_report", dead_report())
+        close_recorded_market(self, through_tape_end=through_tape_end)
         owed = bool(self.m.kill.wind_down)
         report = dead_report()
         try:
@@ -121,9 +187,12 @@ class VenueMixin:
                 report["error"] = "world has no exchange"
             if owed and getattr(getattr(self, "polymarket", None), "writes", False):
                 self._wind_down_polymarket(report)
+            # A recorded venue: book the wind-down's closes, then refuse every order.
+            seal_recorded_market(self)
         except Exception as exc:  # noqa: BLE001 - nothing may raise into a kill
             report["error"] = type(exc).__name__
         finally:
+            seal_recorded_market(self)  # sealed whatever the wind-down did (idempotent)
             # An acknowledgement is not a reconciled flat account.
             report.setdefault("exposure_state", winddown.UNKNOWN)
             report["exposure_status"] = report["exposure_state"]
@@ -161,7 +230,12 @@ class VenueMixin:
             self._settle_exchange_effects(observed, observe_positions=False)
         self.ledger.append({"kind": "venue.terminal_reconciliation", **report})
         self.terminal_reconciliation = report
-        self.kill("explicit_kill:budget")
+        # A recorded tape's clock stops before its tick budget only at the tape's end:
+        # the world then closes through that end, not at its last tick (world/tape.py).
+        clock = self.tick_clock
+        ran_out = (getattr(self.exchange, "closes_ns", None) is not None
+                   and getattr(clock, "index", 0) < getattr(clock, "count", 0))
+        self.kill("explicit_kill:budget", through_tape_end=ran_out)
 
     def _read_fee_schedule(self) -> None:
         """Read the venue's taker rate per market and ledger it as a world fact.
@@ -806,6 +880,10 @@ class VenueMixin:
         """Every venue write has a durable intent and a stable identity before submission."""
         if self._class_transfer_pending() and operation != "venue.cancel":
             return self._refuse_order(handle, "class transfer awaiting receipt")
+        if self._tape_ended():
+            from factorylab.world.tape import MARKET_ENDED
+
+            return self._refuse_order(handle, MARKET_ENDED)
         client_id = handle if slot == "output" else f"{handle}:{slot}"
         if client_id not in self.order_intents:
             blocked = self._spot_shortfall(operation, args)
