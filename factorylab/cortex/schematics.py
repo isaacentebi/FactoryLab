@@ -31,6 +31,11 @@ from factorylab.runtime.propensity import (
 )
 from factorylab.runtime.shared import work_disclosure
 from factorylab.runtime.summary import _duration_str, _price_str
+from factorylab.settlement.scoring import (
+    UNINFORMATIVE_HIGH,
+    UNINFORMATIVE_LOW,
+    UNINFORMATIVE_SUPPORT,
+)
 from factorylab.settlement.vocabulary import COMMISSIONED_JUDGE_REFUSAL
 from factorylab.world.treasury import admitted_directions, venice_conversion_text
 
@@ -1871,6 +1876,9 @@ class SchematicsMixin:
         thrash = getattr(self, "stats", None) and self.stats.thrash or {}
         return {
             "consequence_mix": getattr(self, "consequence_mix", self.ev.consequence_share),
+            # Whether the sampling actuator holds the mix for want of consequence
+            # readings (wave 16, R-B): {supported, needed, window}, or None.
+            "sampling_blind": getattr(self, "sampling_blind", None),
             # The thrash price in force (world.mechanics.thrash_price): it moves each window.
             "thrash_price": {"lambda": thrash.get("lambda", 0.0),
                              "penalty": thrash.get("penalty", 0.0)},
@@ -2025,9 +2033,16 @@ class SchematicsMixin:
                 "not state, or that the venue did not price within its consequence "
                 "patience, H + verdict_timeout_ticks of world time, has no y; any other "
                 "return has no y. brier = "
-                "1 - (q - y)^2; base = 1 - (b - y)^2, b the base rate of that kind of y "
-                "before this return's entered it; consequence score = 0.5 + 0.5 * "
-                "(brier - base), a proper score in [0, 1]"
+                "1 - (q - y)^2; base = 1 - (b - y)^2, b the base rate of y for the same "
+                "definition, coin, side and horizon (verdict:<definition>:<coin>:<side>:"
+                "<H in ns>; an acting return's first venue write names its coin and side) "
+                "before this return's entered it, 0.5 before any; consequence score = 0.5 "
+                "+ 0.5 * (brier - base), a proper score in [0, 1]. When that base rate "
+                f"rests on at least {UNINFORMATIVE_SUPPORT} outcomes and is at least "
+                f"{UNINFORMATIVE_HIGH} or at most {UNINFORMATIVE_LOW}, the outcome is "
+                "uninformative: no consequence score is issued at all "
+                "(consequence.uninformative, with the base rate), the verdict trains no "
+                "standing, and y still enters the base rate"
             ),
             "evaluator_return": (
                 "a judge's decision settles on the conformity channel on two signals: g, the "
@@ -2057,7 +2072,9 @@ class SchematicsMixin:
             "meta_return": (
                 "a meta's conformity k is also a prediction of the consequence score s of the "
                 "decision it graded: c = 0.5 + 0.5 * ((1 - (k - s)^2) - (1 - (b - s)^2)), "
-                "b the base rate of those scores; no s, no c. A meta settles like a judge on "
+                "b the base rate of those scores at the meta's own tier "
+                "(evaluation_consequence:<tier>), under the same uninformative rule as a "
+                "verdict's; no s, no c. A meta settles like a judge on "
                 "the grade from a tier above, when one exists, and on c; a top-tier meta on "
                 "c alone"
             ),
@@ -2130,7 +2147,10 @@ class SchematicsMixin:
                 "learned selection; when the verdict mean "
                 f"rises while consequence skill falls over {self.m.immune.k} windows the mix "
                 f"rises by {ev.sampling_step} for the next window, capped at "
-                f"{ev.sampling_cap}, and steps back otherwise"
+                f"{ev.sampling_cap}, and steps back otherwise; a window that scored no "
+                "consequence has no skill reading, and while fewer than "
+                f"{self.m.immune.k} of the last {self.m.immune.k} windows have one the mix "
+                "holds (world.adaptive_scoring.sampling_blind)"
             ),
             "card_penalty": (
                 "v_j = distance outside card j's inclusive region / observation.scale; "

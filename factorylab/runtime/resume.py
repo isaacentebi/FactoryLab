@@ -676,6 +676,9 @@ _RUNTIME_FIELDS = (
     # the cursor of the venue's vault ledger rows already read.
     "vault_intents", "vault_book", "vault_ledger_cursor_ns", "vault_ledger_seen",
     "consequence_mix", "sampling_history",
+    # Wave 16 (R-B): the last closed window's consequence count and the actuator's
+    # blindness. An older checkpoint has neither: no reading, not blind yet.
+    "last_window_consequences", "sampling_blind",
     # Time audit T14: each loop's last configuration change and the lifespans not yet
     # read by the immune organ. An older checkpoint has neither: no lifespan yet.
     "config_ticks", "lifespan_log",
@@ -872,7 +875,7 @@ _COMPONENT_FIELDS = (
                        # censored one and the capital loop. An older checkpoint has none.
                        "settling", "unsettled", "censored", "capital")),
     ("standing", "_ConsequenceStanding__", ("min_coverage", "evaluators")),
-    ("settler", "_Settler__", ("snapshots", "recorded")),
+    ("settler", "_Settler__", ("snapshots", "recorded", "retired")),
     ("charter_book", "_CharterBook__", (
         "editions", "proposals", "committees", "ballots", "activated", "activations",
         "bindings",
@@ -1140,6 +1143,10 @@ def restore_runtime(rt, state: dict) -> None:
                     and field not in components[name]):
                 # Older checkpoints predate the standing committee and the norm
                 # edition: none was seated, deferred or applied.
+                continue
+            if name == "settler" and field == "retired" and field not in components[name]:
+                # Older checkpoints predate the easy-question rule on verdicts (wave 16,
+                # D3): no question was answered by its base rate.
                 continue
             if name == "artifacts" and name not in components:
                 # Older checkpoints predate the artifact archive; it starts empty.

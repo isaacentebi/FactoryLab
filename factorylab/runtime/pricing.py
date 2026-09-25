@@ -33,6 +33,10 @@ class MeasureWindow:
     ok: int = 0
     notional_micro: int = 0  # filled size × price, summed
     forecast_skills: list[float] = field(default_factory=list)
+    # How many consequence scores the world issued in the window (a verdict's, a meta's,
+    # a settled forecast's): zero means the window had no consequence reading at all
+    # (wave 16, ruling R-B; the sampling actuator reads it).
+    consequence_scores: int = 0
     producer_returns: int = 0
     noop_returns: int = 0
     revision_returns: int = 0
@@ -596,6 +600,7 @@ class PricingMixin:
                              for cid, value in self.card_samples.medians.items()})
         self._close_policy_window(w.index)  # delayed committee liability
         self.stats.last_window_values = values
+        self.last_window_consequences = w.consequence_scores
         # The window's own blame is settled here, before any amendment can activate at this
         # boundary: the cards it measured and the prices its close left them holding. A verdict
         # or a late settlement from this window is attributed by this edition, never by the one

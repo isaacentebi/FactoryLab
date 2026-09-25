@@ -29,7 +29,10 @@ PRIVATE_WINDOW_FIELDS = ("decisions", "closed_values", "closed_regions", "closed
                          "series_discarded", "ews_variance", "ews_autocorrelation",
                          # The provider and family names are text; the observations
                          # below publish their concentration, not the names.
-                         "calls_by_provider", "calls_by_family")
+                         "calls_by_provider", "calls_by_family",
+                         # The world's consequence scores in the window: the sampling
+                         # actuator's evidence count, not a window observation.
+                         "consequence_scores")
 MAX_WORLD_SAMPLES = 1024
 # Fields holding a public quantity filed under a private identity: a decision
 # handle, an evaluator's assembly id. The quantity is disclosed, the identity is

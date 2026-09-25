@@ -557,6 +557,10 @@ class BootstrapMixin:
         self.funding_prints: dict[str, list] = {}
         self.reference_mids: dict[str, dict[str, Any]] = {}
         self.consequence_mix: float = self.ev.consequence_share  # live sampling actuator
+        # The consequence scores the last closed window issued, and whether the actuator
+        # is blind for want of them (wave 16, ruling R-B).
+        self.last_window_consequences: int = 0
+        self.sampling_blind: dict[str, int] | None = None
         self.sampling_history: list[dict[str, Any]] = []
         # The niche for unhistoried actions (ruling R5): per open invocation, the
         # unhistoried tool action whose result its next model round reads. Emptied

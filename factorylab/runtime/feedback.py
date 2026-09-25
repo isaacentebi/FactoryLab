@@ -77,9 +77,10 @@ def _priced(neutral: float | None, lr: LearningReturn | None) -> float | None:
 CENSORED_JUDGEMENT = "judgement-censored-v1"
 #: A decision whose tier grade and world outcome both failed to arrive.
 EVALUATION_UNSCORED = "evaluation-unscored-v1"
-#: The base rates a verdict is scored against, per kind of measured outcome, and
-#: the base rate a meta's conformity is scored against (the evaluator
-#: consequence scores it predicted).
+#: The base rates a verdict is scored against, keyed per (kind of measured outcome,
+#: coin, side, horizon): ``verdict:<definition>:<coin>:<side>:<horizon ns>`` (wave 16,
+#: D3), and the base rate a meta's conformity is scored against, per tier:
+#: ``evaluation_consequence:<tier>`` (the evaluator consequence scores it predicted).
 VERDICT_BASE = "verdict:"
 EVALUATION_BASE = "evaluation_consequence"
 _CARDS_FOR_CHANNEL = {CH_VERDICT: "producer", CH_CONFORMITY: "evaluator",
@@ -1247,6 +1248,7 @@ class FeedbackMixin:
             )
             if s.brier is None:
                 continue
+            self.window.consequence_scores += 1
             self._deliver_consequence_to_inbox(s)
 
     # -- the reward chain (ruling R1; essay II.III.b) -------------------------------
@@ -1533,7 +1535,8 @@ class FeedbackMixin:
             if payoff.censored is not None:
                 return self._keep_outcome(self.world_outcomes, about, "none", None, None)
             return self._keep_outcome(self.world_outcomes, about, "measured",
-                                      float(payoff.y), RETURN_PAID_OFF.id)
+                                      float(payoff.y), RETURN_PAID_OFF.id,
+                                      subject=self._acted_trade(about))
         frozen = self.reference_mids.get(about)
         if frozen is None:
             return self._keep_outcome(self.world_outcomes, about, "none", None, None)
@@ -1570,14 +1573,51 @@ class FeedbackMixin:
                                           "net_bps": priced["net_bps"],
                                           "moves": priced["moves"]})
         return self._keep_outcome(self.world_outcomes, about, "measured",
-                                  float(priced["score"]), definition)
+                                  float(priced["score"]), definition,
+                                  subject=priced["attempted" if attempted else "declined"])
 
     def _keep_outcome(self, kept: dict, about: str, state: str, y: float | None,
-                      kind: str | None) -> tuple[str, float | None, str | None]:
-        """Keep a measurement so every verdict about the return reads the same one."""
+                      kind: str | None, *, subject: dict | None = None
+                      ) -> tuple[str, float | None, str | None]:
+        """Keep a measurement so every verdict about the return reads the same one.
+
+        ``subject`` is the trade it measured, ``{coin, side}``: what its verdicts'
+        base rate is keyed by (wave 16, D3).
+        """
         kept[about] = {"state": state, "y": y, "kind": kind, "tick": self.ticks_consumed,
-                       "ns": self.clock.now_ns}
+                       "ns": self.clock.now_ns, **({"subject": dict(subject)} if subject else {})}
         return state, y, kind
+
+    def _acted_trade(self, about: str) -> dict[str, str]:
+        """The trade an acting return took, ``{coin, side}``: its first venue write the
+        venue did not refuse. A return that earned without a venue write (a service
+        receipt) names none."""
+        try:
+            operations = self.executed_operations(about)
+        except (AttributeError, KeyError):
+            operations = []
+        for row in operations:
+            if row.get("status") in self.REFUSED_WRITES:
+                continue
+            args = row.get("args") or {}
+            side = args.get("side")
+            if side is None and isinstance(args.get("is_buy"), bool):
+                side = "buy" if args["is_buy"] else "sell"
+            return {"coin": str(args.get("coin", "-")), "side": str(side or row["operation"])}
+        return {"coin": "-", "side": "-"}
+
+    def _verdict_key(self, about: str, kind: str) -> str:
+        """The base rate a verdict on ``about`` is scored against (wave 16, D3).
+
+        ``verdict:<definition>:<coin>:<side>:<horizon ns>``: per kind of measured
+        outcome, per named or taken trade, per horizon. A judge that knows only which
+        coins or sides the world usually proves right knows the base rate, and earns
+        exactly its score, 0.5, and nothing else (section 1: a pooled key paid
+        predictable prevalence).
+        """
+        subject = (self.world_outcomes.get(about) or {}).get("subject") or {}
+        return (f"{VERDICT_BASE}{kind}:{subject.get('coin', '-')}:{subject.get('side', '-')}:"
+                f"{self._horizon_ns()}")
 
     def _freeze_declined_trade(self, handle: str, outputs: Any) -> None:
         """Freeze the mids a named trade is priced from, when the return names one.
@@ -1634,15 +1674,19 @@ class FeedbackMixin:
 
         The verdict is a prediction: it is scored by Brier (higher is better,
         ``settle.normative_brier``) against y, beside the base rate of that kind of
-        outcome before this return's own entered it. The consequence score is the
-        judge's own reward on its second signal and the judge is told, privately. It
-        is scored once, at the horizon the outcome is fixed at (wave 16, D2: there is
-        no earlier mark), and trains the judge's standing and the base rate in the
-        same pass.
+        outcome, coin, side and horizon (``_verdict_key``) before this return's own
+        entered it. The consequence score is the judge's own reward on its second
+        signal and the judge is told, privately. It is scored once, at the horizon the
+        outcome is fixed at (wave 16, D2: there is no earlier mark), and trains the
+        judge's standing and the base rate in the same pass. An outcome whose base
+        rate already answered it issues no score at all (``_close_uninformative``).
         """
-        key = f"{VERDICT_BASE}{kind}"
+        key = self._verdict_key(rec.about, kind)
         result = self.settler.settle_verdict(
             evaluator_id=rec.evaluator_id, about_handle=rec.about, q=rec.q, outcome=y, key=key)
+        if result.uninformative:
+            self._close_uninformative(rec, result, key, kind)
+            return
         brier, baseline = result.brier, result.baseline_brier
         score = consequence_score(brier, baseline)
         seq = self.ledger.append({
@@ -1659,6 +1703,7 @@ class FeedbackMixin:
                                       # Where the numbers above are defined (II.I.b).
                                       "formula": VERDICT_FORMULA})
         self._count_consequence(rec.evaluator_id)
+        self.window.consequence_scores += 1
         if rec.about in self.pending_exposure:
             self.exposure_scores.setdefault(rec.about, []).append([rec.evaluator_id, score])
         else:
@@ -1669,13 +1714,41 @@ class FeedbackMixin:
             tally[1] += 1
         self._close_consequence(rec.handle, score, rec)
 
+    def _close_uninformative(self, rec: PendingJudgement, result: Any, key: str,
+                             kind: str) -> None:
+        """Close a verdict whose outcome its base rate already answered: no score.
+
+        Wave 16, D3 and ruling R-B: realized consequence is sparse. An outcome the
+        key's own prevalence predicts (support of ``UNINFORMATIVE_SUPPORT`` and a rate
+        at or beyond ``UNINFORMATIVE_LOW`` / ``UNINFORMATIVE_HIGH``) predicts nothing
+        a verdict could be right about, so the verdict's consequence closes empty:
+        not 0.5, absent. The fact is ledgered as ``consequence.uninformative`` with the
+        base rate, and the judge is told; the outcome has entered the base rate, so
+        the key can come back when the world changes. The judge's reward is then its
+        tier grade alone (``evaluation_reward``).
+        """
+        seq = self.ledger.append({
+            "kind": "consequence.uninformative", "handle": rec.handle,
+            "about_handle": rec.about, "evaluator_id": rec.evaluator_id, "key": key,
+            "base_rate": result.base_rate, "support": result.support, "y": result.outcome,
+            "outcome": kind, "q": rec.q, "ts": self.clock.now_ns})
+        if rec.tier == 1:
+            self.outcomes.append(rec.evaluator_id, handle=rec.handle, evidence=seq,
+                                 outcome={"judged_outcome": kind,
+                                          "judged_y": round(result.outcome, 4),
+                                          "uninformative": True,
+                                          "base_rate": round(result.base_rate, 4),
+                                          "formula": VERDICT_FORMULA})
+        self._close_consequence(rec.handle, None, rec)
+
     def _score_meta(self, rec: PendingJudgement, judged: float | None) -> None:
         """Score a meta's grade against the consequence score of the decision it graded.
 
         Essay II.III.b: the metas are graded by the world too. A meta's conformity is
         a prediction of the graded decision's consequence score (``consequence_score``
         of a judge's verdict, or of a lower meta's grade), scored by Brier beside the
-        base rate of those scores. When the graded decision has no world outcome,
+        base rate of those scores at the meta's tier (wave 16, D3: tiers score
+        different random variables). When the graded decision has no world outcome,
         neither has the meta's grade.
         """
         if rec.consequence_closed:
@@ -1683,9 +1756,13 @@ class FeedbackMixin:
         if judged is None:
             self._close_consequence(rec.handle, None, rec)
             return
+        key = f"{EVALUATION_BASE}:{rec.tier}"
         result = self.settler.settle_verdict(
             evaluator_id=rec.evaluator_id, about_handle=rec.about, q=rec.q, outcome=judged,
-            key=EVALUATION_BASE)
+            key=key)
+        if result.uninformative:
+            self._close_uninformative(rec, result, key, "consequence_score")
+            return
         score = consequence_score(result.brier, result.baseline_brier)
         self.ledger.append({"kind": "meta.consequence", "handle": rec.handle,
                             "about_handle": rec.about, "conformity": rec.q,
@@ -1693,6 +1770,7 @@ class FeedbackMixin:
                             "baseline_brier": result.baseline_brier, "score": score,
                             "ts": self.clock.now_ns})
         self._count_consequence(rec.evaluator_id)
+        self.window.consequence_scores += 1
         self._close_consequence(rec.handle, score, rec)
 
     def _close_consequence(self, handle: str, score: float | None,
@@ -2017,6 +2095,14 @@ class FeedbackMixin:
         divergence it steps back toward the manifest's ``consequence_share``. Every
         change is a ledger item.
 
+        Realized consequence is sparse (wave 16, ruling R-B): a window that scored no
+        consequence at all has no consequence reading, and absence is not evidence of
+        calm (the fidelity norm: missing measurement alone is not evidence). While
+        fewer than ``immune.k`` of the last ``immune.k`` windows scored one, the
+        actuator is blind: it holds the mix where it is, neither raising nor stepping
+        it back, and ledgers ``sampling.blind`` with its support, which
+        ``world.adaptive_scoring`` publishes.
+
         Every closed window is read; the mix moves only on the actuator's own loop
         (time audit T1, T2): at least ``min_ratio`` measured consequence periods
         apart, with its own jitter, because a mix change returns as forecast skill
@@ -2028,7 +2114,9 @@ class FeedbackMixin:
         self.sampling_history.append({
             "window": self.stats.reserve_windows - 1,
             "verdict": values.get("verdict_mean"),
-            "consequence": values.get("forecast_skill"),
+            # No consequence scored in the window: no reading, never an unchanged one.
+            "consequence": (values.get("forecast_skill")
+                            if getattr(self, "last_window_consequences", 0) else None),
         })
         k = self.m.immune.k
         del self.sampling_history[:-k]
@@ -2039,6 +2127,14 @@ class FeedbackMixin:
                           inner_loop="consequence")
         base, step, cap = self.ev.consequence_share, self.ev.sampling_step, self.ev.sampling_cap
         before = self.consequence_mix
+        supported = sum(1 for w in self.sampling_history if w["consequence"] is not None)
+        if supported < k:
+            self.sampling_blind = {"supported": supported, "needed": k,
+                                   "window": self.stats.reserve_windows - 1}
+            self.ledger.append({"kind": "sampling.blind", **self.sampling_blind,
+                                "mix": before, "ts": self.clock.now_ns})
+            return
+        self.sampling_blind = None
         verdict_slope = outcome_slope = None
         if len(self.sampling_history) == k:
             verdict_slope = slope([w["verdict"] for w in self.sampling_history])

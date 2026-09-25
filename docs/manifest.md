@@ -347,7 +347,7 @@ carry case of `scripts/calibrate_seats.py` exactly.
 |---|---|---|---|---|
 | `consequence_share` | float in [0, 1) | 0.3 | hard | Base weight of payoff standing in evaluator selection; the live actuator starts here. |
 | `adversarial_share` | float in [0, 1] | 0.15 | hard | Cap on the router's probability mass over antagonist assemblies (A5). The essay's "minority" is a constraint, not a prize. |
-| `sampling_step` | float in [0, 1] | 0.1 | hard | Step by which the consequence mix rises per divergent window and steps back otherwise (A14, the live sampling-rate actuator). |
+| `sampling_step` | float in [0, 1] | 0.1 | hard | Step by which the consequence mix rises per divergent window and steps back otherwise (A14, the live sampling-rate actuator); it holds while fewer than `immune.k` of its last `immune.k` windows scored any consequence (wave 16, R-B). |
 | `sampling_cap` | float in [consequence_share, 1) | 0.7 | hard | Ceiling of the raised consequence mix (A14). |
 | `multi_judge_share` | float in [0, 1] | 0.3 | hard | Share of judged returns drawn again until `multi_judge_count` judges read them (Wave 5a; evaluations P6, M2). Drawn once per judged return from the runtime's seeded stream; 0 draws nothing. |
 | `multi_judge_count` | int in [2, 5] | 2 | hard | Draws a multi-judged return receives. Each further draw is an ordinary routed decision from the kind's first router, over its menu less every seat drawn for the return and every seat on a drawn seat's family (`route.multi_judge`). |
@@ -450,11 +450,27 @@ done, so every judge a draw woke on a return counts and none alone
 **A verdict is also a prediction.** When the world resolves the judged return,
 the kernel scores the verdict `q` against a measured outcome `y`:
 `brier = 1 - (q - y)^2`, `base = 1 - (b - y)^2` with `b` the base rate of that
-kind of outcome before this return's own entered it (once per return, however
-many judges read it), and `consequence score = 0.5 + 0.5 * (brier - base)`, which
-stays in [0, 1] and is a proper scoring rule (an affine map of Brier)
-(`verdict.consequence`). A judge the world proved wrong earns less than one it
-proved right, and one that only repeats the base rate earns 0.5. `y` is:
+kind of outcome, for the same named or taken coin, side and horizon, before this
+return's own entered it (once per return, however many judges read it; the key is
+`verdict:<definition>:<coin>:<side>:<horizon ns>`, wave 16 D3, so a judge that knows
+only which coins or sides the world usually proves right earns 0.5 and no more), and
+`consequence score = 0.5 + 0.5 * (brier - base)`, which stays in [0, 1] and is a
+proper scoring rule (an affine map of Brier) (`verdict.consequence`). A judge the
+world proved wrong earns less than one it proved right, and one that only repeats
+the base rate earns 0.5.
+
+**Realized consequence is sparse** (wave 16, D3 and ruling R-B). The easy-question
+rule forecasts obey applies to verdicts: when the key's base rate, as it stood before
+this return's outcome entered it, rests on at least 20 outcomes and is at least 0.95
+or at most 0.05 (`settlement.scoring.UNINFORMATIVE_*`), the outcome predicts nothing a
+verdict could be right about. No consequence score is issued at all, not 0.5: the
+verdict closes `consequence.uninformative` with the base rate and its support, the
+judge is told, no standing is trained, and the judge's reward is its tier grade alone.
+The outcome still enters the base rate, so a key the world changes comes back. The
+sampling actuator reads a window that scored no consequence as no reading: while
+fewer than `immune.k` of its last `immune.k` windows have one it holds the
+consequence mix and ledgers `sampling.blind` (published in
+`world.adaptive_scoring.sampling_blind`); absence is not evidence of calm. `y` is:
 
 - for a return that executed venue operations (or earned service income):
   `return_paid_off`, 0 or 1, fixed when its lots close or at the consequence
@@ -601,7 +617,9 @@ read, or backstop); nothing is dropped unseen.
 
 **Metas are graded by the world too.** A meta's conformity `k` is a prediction of
 the consequence score `s` of the decision it graded, scored the same way against
-the base rate of those scores (`meta.consequence`); a meta of a verdict the world
+the base rate of those scores at the meta's own tier (`evaluation_consequence:<tier>`;
+tiers score different random variables) under the same uninformative rule
+(`meta.consequence`); a meta of a verdict the world
 never resolved has none. A top-tier meta settles on that alone, a lower tier on it
 and the grade from the tier above. A meta reads what the cascade window released
 to it: the representative and, up to `meta_read_share` of the window's completed
