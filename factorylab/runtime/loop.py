@@ -705,9 +705,10 @@ class Runtime(
         # II.IV.c); ``policy_seen`` is that reader's cursor, and it only advances.
         for lid, seen in self.policy_seen.items():
             self.queue.release_delivered(lid, seen)
-        # An actor that is no router and no live seat has no reader at all: a
-        # forecast's evaluator id (``open_forecast_decision``), a retired seat. Its
-        # deliveries are unreachable the moment they are made; the count stays.
+        # An actor that is no router and no live seat has no reader now: a forecast's
+        # evaluator id (``open_forecast_decision``), a retired seat. Its deliveries are
+        # discarded as made; the count stays, and a retired seat's cursor moves past
+        # them, so an id versioned again reads on from there.
         live_seats = {f"assembly:{aid}" for aid in self.assemblies
                       if aid not in self.retired_assemblies}
         # A live seat that is not balloted within the published retention
@@ -723,6 +724,10 @@ class Runtime(
             count = self.queue.delivered_count(actor)
             if actor not in live_seats:
                 self.queue.release_delivered(actor, count)
+                if actor.startswith("assembly:"):
+                    # A retired id can be versioned again and inherit its records: its
+                    # next ballot reads on from here, never below what was discarded.
+                    self.policy_seen[actor] = max(self.policy_seen.get(actor, 0), count)
                 continue
             marks = self.policy_marks.setdefault(actor, [])
             if not marks or marks[-1][1] != count:

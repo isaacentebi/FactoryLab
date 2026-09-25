@@ -707,12 +707,14 @@ class OutcomeInbox:
 
         An item copies ``said`` into its body when it is addressed, and a released
         decision is addressed nothing more, so nothing reads its record again; an
-        archived record's artifact is released with it.
+        archived record's artifact is released with it, unless another decision's
+        archived record is the same bytes (the archive stores them once, under one
+        reference per owner): the reference goes only with the last record using it.
         """
         for handle in handles:
             self.said.pop(handle, None)
             sha = self.archived_said.pop(handle, None)
-            if sha is not None:
+            if sha is not None and sha not in self.archived_said.values():
                 record = self.artifacts.index.get(sha) or {}
                 for owner, reference in dict(record.get("refs") or {}).items():
                     if "said.archived" in reference.get("kinds", [reference.get("kind")]):
