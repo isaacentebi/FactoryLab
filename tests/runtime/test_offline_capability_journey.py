@@ -28,7 +28,11 @@ from factorylab.runtime.worlds import PromptSpec, load_manifest
 from factorylab.world.events import WorldEvent, WorldEventKind
 from factorylab.world.exchange import FakeExchange
 from factorylab.world.models import ModelRequest, ModelResponse
-from factorylab.world.scripted import _description_from_prompt, _inputs_from_prompt
+from factorylab.world.scripted import (
+    _description_from_prompt,
+    _inputs_from_prompt,
+    request_form,
+)
 
 ARTIFACT_ID = "journey-verifier"
 ARTIFACT_SCHEMA = {
@@ -103,13 +107,14 @@ class JourneyProvider:
         text = "\n".join(str(message.get("content", "")) for message in request.messages)
         inputs = _inputs_from_prompt(text)
         description = _description_from_prompt(text)
-        reply = self._reply(description, inputs)
+        reply = (self._judge(inputs) if request_form(request, text, inputs) == "judge"
+                 else self._reply(description, inputs))
         self.turns.append({"description": description, "inputs": inputs, "reply": reply})
         return ModelResponse(request.model_id, json.dumps(reply), 10, 10, "stop")
 
     def _reply(self, description: str, inputs: dict[str, Any]) -> dict[str, Any]:
-        if description.startswith("Give verdict"):
-            return self._judge(inputs)
+        # A judge is told apart by structure in ``complete``; this description is the
+        # one this test population wrote itself.
         if description.startswith("Independently discover"):
             return self._caller(inputs)
         return self._maker(inputs)

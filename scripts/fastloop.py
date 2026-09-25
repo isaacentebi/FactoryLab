@@ -55,6 +55,7 @@ from factorylab.world.scripted import (  # noqa: E402
     _description_from_prompt,
     _inputs_from_prompt,
     names_declined_trade,
+    request_form,
 )
 from scripts import edition4_rehearsal as rehearsal  # noqa: E402
 
@@ -117,27 +118,30 @@ class PolicyProvider(ScriptedProvider):
     def complete(self, req: ModelRequest) -> ModelResponse:
         text = "\n".join(str(m.get("content", "")) for m in req.messages)
         inputs = _inputs_from_prompt(text)
+        # The description is read only for the task this population wrote itself
+        # (CHILD_TASK); the world's requests are told apart by structure.
         desc = _description_from_prompt(text)
-        if desc.startswith(("Give verdict", "Evaluate")):
+        form = request_form(req, text, inputs)
+        if form == "judge":
             reply = self._judge(inputs, req.model_id)
             if f'"tool:{HALF_SPREAD["id"]}"' in text:
                 # Plumbing (time audit T18): a judge forecasts the scripted tool's uptake
                 # while it is open on world.uptake, so anticipatory settlement is reached.
                 reply["uptake_forecasts"] = [{"registration": f"tool:{HALF_SPREAD['id']}",
                                               "q": 0.6}]
-        elif desc.startswith("Give your own verdict"):
+        elif form == "counter":
             # Plumbing (Wave 5a): an adversarial judge's counter-verdict, one step off
             # the verdict it read, so both the counter and its settlement are reached.
             read = (inputs.get("verdict") or {}).get("verdict")
             q = 0.3 if not isinstance(read, int | float) or read >= 0.5 else 0.7
             reply = {"verdict": q, "rationale": "scripted counter"}
-        elif desc.startswith("Assess"):
+        elif form == "meta":
             reply = {"conformity": 0.8, "rationale": "scripted meta"}
-        elif desc.startswith("Vote"):
+        elif form == "vote":
             # Plumbing: a motion named for rejection is voted down, every other up.
             motion = str((inputs.get("amendment") or {}).get("id", ""))
             reply = {"vote": not motion.endswith("reject"), "reason": "scripted ballot"}
-        elif desc.startswith("Testify"):
+        elif form == "testify":
             reply = {"assessment": "scripted testimony"}
         elif desc == CHILD_TASK:
             reply = {"summary": "scripted summary", "action": "hold"}

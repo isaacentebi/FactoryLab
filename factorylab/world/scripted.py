@@ -47,7 +47,10 @@ class ScriptedProvider:
     def complete(self, req: ModelRequest) -> ModelResponse:
         text = "\n".join(str(m.get("content", "")) for m in req.messages)
         inputs = _inputs_from_prompt(text)
+        # The only descriptions read are the ones this population wrote itself (its
+        # child requests). The world's own requests are told apart by structure.
         desc = _description_from_prompt(text)
+        form = request_form(req, text, inputs)
         if desc == "A1 helper":
             reply = ({"emits": "Finding", "answer": 1} if "tool_results" in inputs else {
                 "emits": "Finding", "requests": [{
@@ -58,18 +61,18 @@ class ScriptedProvider:
             reply = ({"action": "hold"} if "tool_results" in inputs else {
                 "tool_calls": [{"tool": "catalogue.search",
                                 "args": {"substring": "fake", "limit": 1}}]})
-        elif desc.startswith(("Give verdict", "Evaluate")):
+        elif form == "judge":
             reply = self._evaluate(req, inputs)
-        elif desc.startswith("Give your own verdict"):
+        elif form == "counter":
             # An adversarial judge's counter-verdict: the other side of what it read.
             read = (inputs.get("verdict") or {}).get("verdict")
             q = 1 - read if isinstance(read, int | float) else 0.5
             reply = {"verdict": q, "rationale": "scripted counter"}
-        elif desc.startswith("Assess"):
+        elif form == "meta":
             reply = self._meta(inputs)
-        elif desc.startswith("Vote"):
+        elif form == "vote":
             reply = {"vote": True, "reason": "scripted yes"}
-        elif desc.startswith("Testify"):
+        elif form == "testify":
             reply = {"assessment": "scripted testimony"}
         else:
             reply = self._produce(desc, inputs)
@@ -105,7 +108,7 @@ class ScriptedProvider:
     def _produce(self, desc: str, inputs: dict[str, Any]) -> dict[str, Any]:
         self._producer_calls += 1
         reply: dict[str, Any] = {"action": "hold", "payoff": 0.1}
-        if "event Tick" in desc:
+        if inputs.get("kind") == "Tick":
             try:
                 payload = inputs["payload"]
                 # Edition 3 (C4) removed the root-wallet-only impression: what a
@@ -378,6 +381,62 @@ def names_declined_trade(reply: dict[str, Any], text: str, inputs: dict[str, Any
     if coin is None:
         return reply
     return {**reply, "counterfactual": {"coin": coin, "side": "buy" if n % 2 else "sell"}}
+
+
+#: The forms of request a scripted seat answers differently, read from structure.
+REQUEST_FORMS = ("judge", "counter", "meta", "vote", "testify", "produce")
+
+
+def outcome_required(req: ModelRequest | None, text: str) -> frozenset[str]:
+    """Every field some admitted answer shape requires, read from the request's contract.
+
+    Guarantees the fields come from the rendered ``OUTCOME SCHEMA`` section (a JSON
+    schema, possibly ``anyOf`` shapes), falling back to the request's wire
+    ``response_schema``; never from the request's prose. A request with neither
+    reads as requiring nothing.
+    """
+    schema: Any = None
+    marker = "OUTCOME SCHEMA\n"
+    if marker in text:
+        line = text.split(marker, 1)[1].split("\n", 1)[0]
+        try:
+            schema = json.loads(line)
+        except (ValueError, json.JSONDecodeError):
+            schema = None
+    if not isinstance(schema, dict) and req is not None:
+        schema = req.response_schema
+    if not isinstance(schema, dict):
+        return frozenset()
+    shapes = schema.get("anyOf") or schema.get("oneOf") or (schema,)
+    return frozenset(field for shape in shapes if isinstance(shape, dict)
+                     for field in shape.get("required", ()) if isinstance(field, str))
+
+
+def request_form(req: ModelRequest | None, text: str, inputs: dict[str, Any]) -> str:
+    """Which of ``REQUEST_FORMS`` a request is, from its structure alone.
+
+    Guarantees the form is a function of the outcome contract's required fields
+    and the shape of the inputs, never of the request's description, so rewording
+    a commission cannot turn a judge into a producer (Chapter II §I.b: the request
+    is self-describing; the scripted seat reads the description only where the
+    population wrote it). A verdict requested about a verdict the inputs carry is a
+    counter-verdict; one without is a first-tier judgement. A wake (inputs carrying
+    the accepted event's ``kind`` and ``payload``) is always ``produce``, whatever
+    kinds its contract may emit: a seat registered to emit a Verdict is still woken
+    on an event.
+    """
+    if isinstance(inputs.get("kind"), str) and "payload" in inputs:
+        return "produce"
+    required = outcome_required(req, text)
+    if "conformity" in required:
+        return "meta"
+    if "vote" in required:
+        return "vote"
+    if "assessment" in required:
+        return "testify"
+    if "verdict" in required:
+        return "counter" if isinstance(inputs.get("verdict"), dict) else "judge"
+    return "produce"
 
 
 def _description_from_prompt(text: str) -> str:

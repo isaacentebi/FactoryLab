@@ -29,7 +29,7 @@ from factorylab.runtime.grounded import (
     opportunity_cost,
 )
 from factorylab.world.models import ModelResponse
-from factorylab.world.scripted import _description_from_prompt
+from factorylab.world.scripted import _inputs_from_prompt, request_form
 from tests.runtime.test_loop import _consequence_produce
 from tests.runtime.test_reward_chain import Population, _advance, _judge, _mids, _rows
 
@@ -53,7 +53,7 @@ class Seat(Population):
 
     def complete(self, req):
         text = "\n".join(str(m.get("content", "")) for m in req.messages)
-        if not _description_from_prompt(text).startswith("Respond to event"):
+        if request_form(req, text, _inputs_from_prompt(text)) != "produce":
             return super().complete(req)
         self.prompts.append(text)
         return ModelResponse(req.model_id, json.dumps(self.replies.popleft()),
@@ -401,7 +401,7 @@ class Literal(Seat):
 
     def complete(self, req):
         text = "\n".join(str(m.get("content", "")) for m in req.messages)
-        if not _description_from_prompt(text).startswith("Respond to event"):
+        if request_form(req, text, _inputs_from_prompt(text)) != "produce":
             return Population.complete(self, req)
         self.prompts.append(text)
         return ModelResponse(req.model_id, json.dumps(_minimal(_published(text))),
