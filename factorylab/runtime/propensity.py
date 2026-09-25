@@ -31,6 +31,7 @@ from decimal import Decimal
 from types import MappingProxyType
 from typing import Any
 
+from factorylab.cortex.assembly import declines
 from factorylab.cortex.request import validate_propensity
 from factorylab.kernel.queue import PropensityRecord
 
@@ -168,7 +169,7 @@ def action_label(role: str, outputs: dict[str, Any], status: str,
     """
     if not isinstance(outputs, dict):
         return MALFORMED
-    if status == "refused" and outputs.get("status") == "cannot":
+    if status == "refused" and declines(outputs):
         # Declining paid work is a decision, not a failure to parse (R3-F). A seat
         # that answers ``cannot`` on a judge or meta commission has said something
         # nameable, and a learner that cannot hold an arm for declining cannot
