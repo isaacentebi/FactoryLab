@@ -100,6 +100,7 @@ def _record_types() -> dict[str, type]:
         FundingEvent,
         FundingPayment,
         Order,
+        OrderKind,
         OrderResult,
         Position,
         SpotBalance,
@@ -121,6 +122,9 @@ def _record_types() -> dict[str, type]:
         Lot,
         LotOrder, LotTable, Payoff, ReturnAccount, _Standing, WorldEvent, WorldEventKind,
         AccountState, Fill, FundingEvent, FundingPayment, Order, OrderResult, Position,
+        # An order the simulated venue holds resting carries its kind: without it a
+        # fake world checkpointed with a resting order could not be restored.
+        OrderKind,
         SpotBalance, SellerModel, Commitment, ExecutionReceipt, LearningReceipt,
         CatalogueEntry, ModelRequest, ModelResponse, TokenPrice, PaymentQuote, Clockwork,
     )
@@ -1017,6 +1021,51 @@ def runtime_state(rt) -> Checkpoint:
     return state
 
 
+def _saved_clock_kind(saved: dict) -> str:
+    """Which clock a checkpoint's ``tick_clock`` continues, from its own keys."""
+    if "recorded" in saved:
+        return "replay"
+    if "skipped_ns" in saved:
+        return "idle-skip"
+    return "simulated" if "start_ns" in saved else "wall"
+
+
+def _running_clock_kind(clock) -> str | None:
+    """The kind of a clock a restore must continue in kind, or None for the plain ones."""
+    from factorylab.runtime.live import IdleSkipClock
+    from factorylab.world.clock import ReplayClock
+
+    if isinstance(clock, ReplayClock):
+        return "replay"
+    if isinstance(clock, IdleSkipClock):
+        return "idle-skip"
+    return None
+
+
+def _restored_tick_clock(running, saved: dict, *, instant_ns: int):
+    """The saved tick clock, continued as the clock it was (time audit T3).
+
+    A replay of a diary's gaps continues those gaps with its measured sample; an
+    idle-skipping clock continues from the world's saved instant with the time it
+    skipped and modelled; a plain simulated or wall clock restores as before. A
+    restore never turns one kind into another (``tick_clock_mismatch``, checked
+    before anything is assigned).
+    """
+    from factorylab.runtime.live import LiveClock, wall_paced
+    from factorylab.world.clock import ClockSource, ReplayClock
+
+    kind = _saved_clock_kind(saved)
+    if kind == "replay":
+        return ReplayClock.restore(saved)
+    if kind == "idle-skip":
+        return running.resumed(saved, instant_ns=max(instant_ns, saved.get("last_ns", -1)))
+    if kind == "simulated":
+        return ClockSource.restore(saved)
+    callbacks = ({"now_ns": running.now_ns, "sleep": running.sleep}
+                 if wall_paced(running) else {})
+    return LiveClock.restore(saved, **callbacks)
+
+
 def restore_runtime(rt, state: dict) -> None:
     """Restore only authenticated matching-format state, rebinding dependencies to this process.
 
@@ -1028,7 +1077,7 @@ def restore_runtime(rt, state: dict) -> None:
     therefore leaves the runtime exactly as it was, rather than half a dead
     world's memory inside a live one.
     """
-    from factorylab.runtime.live import LiveClock, wall_paced
+    from factorylab.runtime.live import LiveClock
     from factorylab.runtime.routing import RouterState
     from factorylab.world.clock import ClockSource
 
@@ -1051,6 +1100,16 @@ def restore_runtime(rt, state: dict) -> None:
         # checkpoint to restore: refused, never resumed without it.
         raise ResumeError(f"the tick clock is wrapped ({type(rt.tick_clock).__name__}); "
                           "a restore would drop the wrapper", code="wrapped_tick_clock")
+    saved_kind = _saved_clock_kind(state["tick_clock"])
+    running_kind = _running_clock_kind(rt.tick_clock)
+    if (saved_kind in ("replay", "idle-skip") or running_kind is not None) and (
+            saved_kind != running_kind):
+        # A replay's gaps, or an idle-skipping clock's skipped and modelled time, are
+        # the world's own clock: continuing it as another kind would silently change
+        # the pace it ran at (the bug that restored a replay as a bare clock).
+        raise ResumeError(f"the saved tick clock is a {saved_kind} clock; this runtime's is "
+                          f"{running_kind or type(rt.tick_clock).__name__}",
+                          code="tick_clock_mismatch")
     saved_runtime = decode(state["runtime"])
     running_digest = getattr(rt, "release_digest", None)  # read before the saved fields land
     running_facilitator = getattr(rt, "facilitator_url", None)
@@ -1128,12 +1187,8 @@ def restore_runtime(rt, state: dict) -> None:
         rt.price_windows[rt.window.index] = rt.window
     rt.clock.now_ns = state["clock_ns"]
     saved_clock = state["tick_clock"]
-    if "start_ns" in saved_clock:
-        rt.tick_clock = ClockSource.restore(saved_clock)
-    else:
-        callbacks = ({"now_ns": rt.tick_clock.now_ns, "sleep": rt.tick_clock.sleep}
-                     if wall_paced(rt.tick_clock) else {})
-        rt.tick_clock = LiveClock.restore(saved_clock, **callbacks)
+    rt.tick_clock = _restored_tick_clock(rt.tick_clock, saved_clock,
+                                         instant_ns=state["clock_ns"])
     if rt.clock_source is not None:
         rt.clock_source = rt.tick_clock
     for name in _KERNEL_FIELDS:
@@ -1363,20 +1418,29 @@ def checkpoint_state(ledger, snapshot: dict) -> dict:
 
 
 def resume_runtime(manifest, ledger_path: str, *, provider=None, market=None, exchange=None,
-                   clock_source=None, now_ns=None, _lock=None):
-    """Hold exclusive ownership before reading recovery evidence or contacting a provider."""
+                   clock_source=None, now_ns=None, before_replay=None, _lock=None):
+    """Hold exclusive ownership before reading recovery evidence or contacting a provider.
+
+    ``before_replay``, when given, is called with the restored runtime before any
+    reader is admitted or any recorded item replayed: an offline harness binds its
+    stand-ins there (``scripts/fastloop.py``), exactly where a launch binds them. Its
+    contract: it may bind offline answerers of reads (a simulated Polymarket reader)
+    and harness-side observers, and it must not replace the world's exchange, provider,
+    clock or manifest. The tape identity is checked again after it returns
+    (``check_tape``, ``tape_mismatch``), so a hook that swaps the venue is refused.
+    """
     lock = _lock or LedgerLock(ledger_path)
     try:
         return _resume_runtime(manifest, ledger_path, provider=provider, market=market,
                                exchange=exchange, clock_source=clock_source, now_ns=now_ns,
-                               lock=lock)
+                               lock=lock, before_replay=before_replay)
     except BaseException:
         lock.close()
         raise
 
 
 def _resume_runtime(manifest, ledger_path, *, provider, market, exchange, clock_source,
-                    now_ns, lock):
+                    now_ns, lock, before_replay=None):
     """Authenticate, restore, replay and reconcile before admitting another world event."""
     from factorylab.runtime.loop import Runtime
     from factorylab.runtime.shared import SimClock
@@ -1488,6 +1552,12 @@ def _resume_runtime(manifest, ledger_path, *, provider, market, exchange, clock_
     journal.bootstrap = False
     from factorylab.runtime import polymarket
 
+    if before_replay is not None:
+        from factorylab.runtime.bootstrap import check_tape
+
+        before_replay(rt)
+        # The hook binds stand-ins; it never changes the world's venue.
+        check_tape(rt.m, rt.exchange)
     # A live Polymarket reader is admitted, and holds the host's IP, before the replay:
     # the tail's last event runs on past the diary's end and may read the network.
     polymarket.arm(rt)

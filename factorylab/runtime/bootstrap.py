@@ -96,6 +96,42 @@ class MainnetRailRequiresALedger(ValueError):
     """A live world with a mainnet treasury rail was given no ledger: nothing started."""
 
 
+class TapeMismatch(ValueError):
+    """The venue's recorded tape is not the one the manifest names: nothing started."""
+
+
+def check_tape(manifest: WorldManifest, exchange: Any) -> None:
+    """The venue replays exactly the tape the manifest fixes, or no tape at all.
+
+    Guarantees, at launch and on every resume (both build the runtime here), that a
+    world whose manifest names a tape runs on a venue whose tape has that SHA-256,
+    and that a venue replaying a tape runs only under a manifest that names it: the
+    tape is part of the world's identity (``[exchange.tape]``), never a swappable input.
+    """
+    named = manifest.exchange.tape
+    held = getattr(getattr(exchange, "target", exchange), "tape_sha256", None)
+    if named is None and held is None:
+        return
+    if named is None:
+        raise TapeMismatch("tape_mismatch: the venue replays a tape this manifest does not "
+                           "name ([exchange.tape])")
+    if held != named.sha256:
+        raise TapeMismatch(f"tape_mismatch: the manifest fixes tape {named.sha256[:12]}, the "
+                           f"venue replays {str(held)[:12]}")
+    # The digest names the tape; the span, markets and spreads the manifest states about
+    # it must be the tape's own. A later start_ns than the recording's would feed the
+    # look-ahead guard a false date and admit a model trained on the replayed market.
+    tape = getattr(getattr(exchange, "target", exchange), "tape", None)
+    identity = tape.identity() if tape is not None else None
+    stated = {"start_ns": named.start_ns, "end_ns": named.end_ns,
+              "markets": tuple(named.markets), "spread_bps": dict(named.spread_bps)}
+    wrong = sorted(key for key, value in stated.items()
+                   if identity is None or identity[key] != value)
+    if wrong:
+        raise TapeMismatch(f"tape_mismatch: the manifest's [exchange.tape] {', '.join(wrong)} "
+                           "is not what the tape it names recorded")
+
+
 class BootstrapMixin:
     """Preserve runtime state and behavior for bootstrap operations."""
 
@@ -138,6 +174,7 @@ class BootstrapMixin:
             problem = manifest.host_disk_problem(ledger_path)
         if problem is not None:
             raise ValueError(problem)
+        check_tape(manifest, exchange)
         if self.live and not ledger_path and _journal is None and mainnet_rail(manifest):
             # Every reserve-key entry of a world names its diary: without one, a used
             # authorization could never be shown booked (a false recovery), and a
@@ -192,6 +229,11 @@ class BootstrapMixin:
                 self.tick_clock.now_ns() if wall_paced(self.tick_clock)
                 else self.tick_clock.start_ns
             )
+        elif _journal is None and getattr(exchange, "opens_ns", None) is not None:
+            # A recorded market opens when its recording starts: the world launches
+            # there, so launch-anchored schedules (releases, fill cursors) count from
+            # the tape's first instant, never from the epoch (world/tape.py).
+            self.clock.now_ns = int(exchange.opens_ns)
         self.stats = RunStats()
         self.ev = manifest.evaluation
         self.charter: Charter = manifest.charter
@@ -434,8 +476,13 @@ class BootstrapMixin:
         )
         self.market = JournalProxy(self.market, self.ledger, "market")
         # Time audit T8: the safety path reads wall time between model calls, journaled.
+        # Whether a read is re-executed on replay is a fact about the clock, not the
+        # venue: a simulated world's wall is its event instant, but a world paced by the
+        # wall (an idle-skipping replay included) reads real time, so its reads are
+        # recorded and a replay reads the instants the run read.
         self.wall = JournalProxy(WallClock(lambda: self.tick_clock, self.clock), self.ledger,
-                                 "wall", deterministic=not self.live)
+                                 "wall",
+                                 deterministic=not (self.live or wall_paced(self.tick_clock)))
         self._safety_ns = self.clock.now_ns
         self._safety_stop: str | None = None
         # Uncertain bills settle from the provider's own balance, read through the

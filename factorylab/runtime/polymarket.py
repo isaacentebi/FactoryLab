@@ -302,6 +302,7 @@ def simulate_reads(rt: Any) -> None:
 IP_IN_USE = "polymarket_ip_in_use"
 LIVE_REQUIRES_A_LEDGER = "polymarket_live_requires_a_ledger"
 LIVE_REQUIRES_THE_WALL_CLOCK = "polymarket_live_requires_the_wall_clock"
+LIVE_ON_A_TAPE = "polymarket_live_on_a_tape"
 #: The host-wide lock's name, in the operator's lock directory.
 IP_LOCK_NAME = "polymarket-ip"
 
@@ -356,6 +357,10 @@ def arm(rt: Any) -> None:
     if (surface is None or getattr(rt, "_polymarket_ip_lock", None) is not None
             or not isinstance(surface.venue.target, PolymarketReader)):
         return
+    if rt.m.exchange.tape is not None:
+        # Today's event markets are the future of a recorded market: a replay reads
+        # them only from the simulated venue (``simulate_reads``; critique C2).
+        raise LiveReaderRefused(LIVE_ON_A_TAPE)
     if not getattr(rt, "ledger_path", None):
         raise LiveReaderRefused(LIVE_REQUIRES_A_LEDGER)
     if not wall_paced(rt.tick_clock):  # a LiveClock, or a wrapper declaring one
