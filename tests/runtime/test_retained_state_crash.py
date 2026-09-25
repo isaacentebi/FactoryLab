@@ -74,13 +74,18 @@ def _trail(items):
     """The artifact trail: every put, release, collection and size, in order.
 
     An inbox body names its evidence by ledger sequence, and a resume adds its own
-    items to the diary, so a body put after a resume differs by that pointer alone:
-    a put is compared by kind, owner and size. Every working state, release and
-    collection is compared by its hash.
+    items to the diary, so a body put after a resume differs by that pointer alone,
+    and its size by the pointer's digits when the shift carries it across a power of
+    ten (9995 against 10001): such a put is compared by kind and owner, and a retained
+    total, which sums such bodies, by its record count. Every working state, release
+    and collection is compared by its hash and size.
     """
-    return [(i["kind"], i.get("artifact_kind"),
-             None if i["kind"] == "artifact.put" and i.get("artifact_kind") != "working.state"
-             else i.get("sha"), i.get("bytes"), i.get("owner"), i.get("records"))
+    def pointed(i):
+        return ((i["kind"] == "artifact.put" and i.get("artifact_kind") != "working.state")
+                or i["kind"] == "artifact.retained")
+
+    return [(i["kind"], i.get("artifact_kind"), None if pointed(i) else i.get("sha"),
+             None if pointed(i) else i.get("bytes"), i.get("owner"), i.get("records"))
             for i in items if i["kind"] in TRAIL]
 
 
