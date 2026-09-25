@@ -468,23 +468,29 @@ class Treasury:
     def _gas_view(self) -> dict:
         """The exit route's gas position: never money, so it cannot change completeness.
 
-        Guarantees the view names exactly the transfer its gas gates and what it does
-        not gate (``GAS_SCOPE``), and, when this world does not admit that transfer at
-        all, says so as its blocker (Chapter II §II.b: the published contract is the
-        enforced one).
+        Guarantees ``gates`` is ``gas_gates`` of this rail, the directions this world
+        admits whose preflight consults a native gas budget, and the view carries the
+        position of each of them and of no other direction, with its blocker (Chapter
+        II §II.b: the published contract is the enforced one); ``does_not_gate`` says
+        what no gas position governs.
         """
-        scope = dict(GAS_SCOPE)
-        if "to_reserve" not in admitted_directions(self.rail):
-            return {**scope, "refill_ready": False,
-                    "blocked_by": "this world does not admit treasury.transfer to_reserve"}
+        gates = gas_gates(self.rail)
+        view: dict[str, Any] = {"gates": gates, "does_not_gate": NOT_GAS_GATED}
+        if not gates:
+            return view
         try:
-            gas = self.rail.gas_view(dict(self.gas_spent))
+            positions = self.rail.gas_view(dict(self.gas_spent))
         except Exception:
-            return {**scope, "refill_ready": False, "blocked_by": "gas position unavailable"}
-        if self._blocking():
-            gas = {**gas, "refill_ready": False, "blocked_by": gas.get("blocked_by")
-                   or TRANSFER_BLOCKED}
-        return {**scope, **gas}
+            positions = {}
+        for direction in gates:
+            position = positions.get(direction) if isinstance(positions, dict) else None
+            if not isinstance(position, dict):
+                position = {"refill_ready": False, "blocked_by": "gas position unavailable"}
+            if self._blocking():
+                position = {**position, "refill_ready": False,
+                            "blocked_by": position.get("blocked_by") or TRANSFER_BLOCKED}
+            view[direction] = position
+        return view
 
     def _vault_pot(self) -> int | None:
         """This account's equity across its vaults, in micro-USD, or None when unread.
@@ -1251,14 +1257,26 @@ class Treasury:
 #: Every direction ``treasury.transfer`` names, in the order it publishes them.
 TRANSFER_DIRECTIONS = ("to_reserve", "to_venue", "to_venice", "spot_to_perps", "perps_to_spot")
 
-#: What the gas position in ``pots.gas`` is about (Chapter II §II.b: a published fact
-#: names what it governs, and a seat must not have to guess it).
-GAS_SCOPE = {
-    "gates": "treasury.transfer direction to_reserve only: its Core-to-EVM gas charge "
-             "and its Base mint",
-    "does_not_gate": "venue orders, cancels, closes and leverage changes, which pay no "
-                     "gas; each fill pays the venue's fee at the rates in world.venue",
-}
+#: The manifest key that sets each chain's native gas budget.
+GAS_BUDGET_KEYS = {"hyper": "treasury.hyperevm_gas_budget_wei",
+                   "base": "treasury.base_gas_budget_wei"}
+
+#: What the gas position in ``pots.gas`` never gates (Chapter II §II.b: a published
+#: fact names what it governs, and a seat must not have to guess it).
+NOT_GAS_GATED = ("venue orders, cancels, closes and leverage changes, which pay no gas; "
+                 "each fill pays the venue's fee at the rates in world.venue")
+
+
+def gas_gates(rail: Any) -> dict[str, list[str]]:
+    """Each direction this world admits whose preflight consults a native gas budget.
+
+    Guarantees exactly the rail's own ``GAS_BUDGETS`` (the table its preflight reads)
+    for the directions it admits (``admitted_directions``), each budget named by its
+    manifest key: nothing a rail does not check, and nothing it does not run.
+    """
+    table = getattr(rail, "GAS_BUDGETS", None) or {}
+    return {d: [GAS_BUDGET_KEYS[k] for k in table[d]]
+            for d in admitted_directions(rail) if d in table}
 
 
 def venice_conversion_text(hybrid: bool) -> str:
@@ -1284,7 +1302,7 @@ DIRECTION_TEXT = {
     "to_reserve": "to_reserve moves USDC from the venue to the Base reserve: spot HYPE in "
                   "the venue account pays the Core gas charge (HYPE trades on HYPE/USDC), "
                   "and the Base mint is self-paid when the reserve holds ETH, otherwise "
-                  "Circle forwards it for the fee quoted in pots.gas.",
+                  "Circle forwards it for the fee quoted in pots.gas.to_reserve.",
     "to_venue": "to_venue moves USDC from the Base reserve to the venue, paying gas in "
                 "reserve Base ETH and HyperEVM HYPE.",
     "spot_to_perps": "spot_to_perps and perps_to_spot move USDC between the venue "

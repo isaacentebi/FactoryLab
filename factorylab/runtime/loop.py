@@ -35,8 +35,9 @@ from typing import Any
 
 from factorylab.cortex.assembly import (
     COUNTERFACTUAL_FIELD,
+    DECLINE_FORM,
     FORWARDED_RATIONALE_CHARS,
-    judging_contract,
+    JUDGING_FIELDS,
 )
 from factorylab.cortex.registration import BUILTIN_RETURNS, measured_role
 from factorylab.cortex.request import Return, public_return
@@ -59,7 +60,6 @@ from factorylab.runtime.governance import GovernanceMixin
 from factorylab.runtime.live import LiveClock, Reconciler
 from factorylab.runtime.markets import MarketsMixin
 from factorylab.runtime.pricing import PricingMixin
-from factorylab.runtime.propensity import propensity_field
 from factorylab.runtime.resume import decode, encode, runtime_state
 from factorylab.runtime.routing import (
     JUDGING_SHAPES,
@@ -904,17 +904,10 @@ class Runtime(
         for kind in spec.emits:
             if kind in spec.schemas:
                 schema = _to_plain(spec.schemas[kind])
-            elif kind in ("Verdict", "MetaVerdict", "CounterVerdict"):
-                # A judging kind's answer form, as ``judging_contract`` builds it; the
-                # decline is the envelope's refusal form here, as for every kind of a
-                # polymorphic contract.
-                schema = judging_contract(
-                    kind, propensity=propensity_field(
-                        {"Verdict": "evaluator", "MetaVerdict": "meta"}.get(kind,
-                                                                            "adversary")),
-                    register=self._register_schema(),
-                    forecasts=self._forecast_schema() if kind == "Verdict" else None,
-                )["anyOf"][0]
+            elif kind in JUDGING_FIELDS:
+                # A judging kind's answer form, as ``judging_contract`` builds it; its
+                # decline form joins the union once, below.
+                schema = self._judging_contract(kind)["anyOf"][0]
             else:
                 fields = {"action": {"type": "string"}}
                 schema = {"type": "object", "properties": fields, "required": list(fields)}
@@ -931,6 +924,10 @@ class Runtime(
                 "about_handle": {"type": "string"}, "register": self._register_schema(),
             }, "required": [*schema.get("required", []),
                             *(["emits"] if len(spec.emits) > 1 else [])]})
+        if any(kind in JUDGING_FIELDS for kind in spec.emits):
+            # The judging contract's decline form, published as its request publishes
+            # it: the whole union, never its answer form alone (§II.b).
+            schemas.append(deepcopy(DECLINE_FORM))
         return schemas[0] if len(schemas) == 1 else {"anyOf": schemas}
 
     def _hindsight_reason(self, handle: str, about: str) -> str | None:
@@ -1346,9 +1343,7 @@ class Runtime(
         inputs["producer"]["executed_operations"] = payload.get("executed_operations", [])
         if generic:
             inputs["event"] = {"kind": str(ev.kind), "payload": judge_view(payload)}
-        schema = judging_contract("Verdict", propensity=propensity_field("evaluator"),
-                                  register=self._register_schema(),
-                                  forecasts=self._forecast_schema())
+        schema = self._judging_contract("Verdict")
         # The request states what the answer is; how a verdict settles is a schematic
         # (world.scoring), carried with the request as its SCORING section, and no
         # rubric says what a good return is (smuggling A7; essay II.III on
@@ -1500,8 +1495,7 @@ class Runtime(
         inputs["subject_handle"] = about
         # The root judge of the chain this meta reads, carried upward for the record.
         judge_handle = payload.get("evaluator_handle", about)
-        schema = judging_contract("MetaVerdict", propensity=propensity_field("meta"),
-                                  register=self._register_schema())
+        schema = self._judging_contract("MetaVerdict")
         prompt = (
             "Assess the public return addressed by about_handle for conformity with the charter. "
             "The input's subject_handle is the default when present." if generic else
@@ -1610,8 +1604,7 @@ class Runtime(
         inputs.update(self._action_policy_input(sample.chosen))  # private
         inputs["your_state"] = self.working_state.render(sample.chosen)
         inputs["unread_outcomes"] = self.outcomes.unread(sample.chosen)
-        schema = judging_contract("CounterVerdict", propensity=propensity_field("adversary"),
-                                  register=self._register_schema(), about_handle=False)
+        schema = self._judging_contract("CounterVerdict")
         req = self._request(
             handle,
             "Give your own verdict 0-1 on the return this verdict judged, against the "

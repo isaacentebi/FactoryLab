@@ -106,8 +106,13 @@ def test_every_object_the_contract_leaves_open_is_stated_open():
         if isinstance(node, dict):
             if node.get("type") == "object" or "properties" in node:
                 yield node
-            for value in node.values():
-                yield from objects(value)
+            for key, value in node.items():
+                if key == "properties" and isinstance(value, dict):
+                    # A map of field names to schemas: its values are the schemas.
+                    for sub in value.values():
+                        yield from objects(sub)
+                else:
+                    yield from objects(value)
         elif isinstance(node, list):
             for value in node:
                 yield from objects(value)

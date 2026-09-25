@@ -405,3 +405,106 @@ def test_the_longrun1_minimax_replies_the_kernel_refused_are_refused_on_the_wire
     assert len(replies) == 60
     wire = _constructor_wire()
     assert [i for i, reply in enumerate(replies) if admitted(reply, wire)] == []
+
+
+# --- a declared kind can only be one some reply could satisfy ----------------------
+
+
+@pytest.mark.parametrize("field", ["my-field", "2factor"])
+def test_registering_a_kind_whose_fields_no_reply_could_carry_is_refused(field):
+    """_validate_return refuses a reply with a non-identifier key, so a kind naming one
+    would admit no reply: registration refuses it first, naming the field."""
+    from factorylab.cortex.registration import output_contracts, parse_proposals
+
+    for schema in ({"type": "object", "properties": {field: {"type": "number"}}},
+                   {"type": "object", "properties": {"ok": {"type": "number"}},
+                    "required": [field]},
+                   {"type": "object", "anyOf": [{"properties": {field: {}}}]}):
+        with pytest.raises(ValueError, match=f"field name '{field}' is not an identifier"):
+            output_contracts(["Finding"], {"Finding": schema})
+    _accepted, rejected = parse_proposals(
+        {"register": [{"kind": "assembly", "id": "finder", "model_id": "m",
+                       "system_prompt": "p", "accepts": ["Tick"], "emits": ["Finding"],
+                       "schemas": {"Finding": {"type": "object", "properties": {
+                           field: {"type": "number"}}}}}]},
+        event_kinds=frozenset({"Tick"}), known_models=frozenset({"m"}),
+        known_assemblies=frozenset(), tool_jail=True)
+    assert len(rejected) == 1 and field in rejected[0].reason
+    # A value's own keys are the value's: nested names are not reply fields.
+    output_contracts(["Finding"], {"Finding": {"type": "object", "properties": {
+        "table": {"type": "object", "properties": {field: {"type": "number"}}}}}})
+
+
+@pytest.mark.parametrize("field", ["my-field", "2factor"])
+def test_a_child_schema_no_reply_could_satisfy_is_refused_on_both_sides(field):
+    child = {**CHILD, "outcome_schema": {"type": "object",
+                                         "properties": {field: {"type": "number"}}}}
+    with pytest.raises(ValueError, match=field):
+        _check_child(child)
+    wire = wire_schema({"type": "object", "properties": {"action": {"type": "string"}},
+                        "required": ["action"]}, ("ProducerReturn",))
+    assert not admitted({"requests": [child]}, wire)
+
+
+# --- world.event_schemas publishes the contract a judge's request carries ------------
+
+
+def _judging_requests(monkeypatch):
+    from dataclasses import replace
+
+    from factorylab.runtime.shared import CH_COUNTER
+    from factorylab.runtime.worlds import AssemblySeed, load_manifest
+
+    base = load_manifest("scripted")
+    adversary = AssemblySeed(id="adv-a", model_id="fake-sonnet", accepts=("Verdict",),
+                             role="adversary", max_tokens=128)
+    rt = _consequence_runtime(provider=Population(verdicts=(0.5,)),
+                              manifest=replace(base, assemblies=(*base.assemblies, adversary)))
+    producer, event = _unsettled_produce(rt)
+    captured = {}
+    request = rt._request
+
+    def capture(handle, *args, **kwargs):
+        req = request(handle, *args, **kwargs)
+        captured[rt.handle_to_assembly.get(handle, handle)] = req
+        return req
+
+    monkeypatch.setattr(rt, "_request", capture)
+    judge = _consequence_decision(rt, "eval-a", CH_CONFORMITY)
+    rt.handle_to_assembly[judge] = "eval-a"
+    rt._evaluator_step(event, judge, SimpleNamespace(chosen="eval-a"),
+                       rt.queue.get(judge).deadline_ns)
+    verdict = Event("v", EventKind.VERDICT, rt.clock.now_ns,
+                    {"about_handle": producer, "evaluator_handle": judge, "verdict": 0.5,
+                     "rationale": "r", "producer_outputs": {}, "propensity": None}, "kernel")
+    meta = _consequence_decision(rt, "meta-a", CH_CONFORMITY)
+    rt.handle_to_assembly[meta] = "meta-a"
+    rt._meta_step(verdict, meta, SimpleNamespace(chosen="meta-a"), rt.queue.get(meta).deadline_ns)
+    counter = _consequence_decision(rt, "adv-a", CH_COUNTER)
+    rt.handle_to_assembly[counter] = "adv-a"
+    rt._counter_step(verdict, counter, SimpleNamespace(chosen="adv-a"),
+                     rt.queue.get(counter).deadline_ns)
+    return rt, {"Verdict": captured["eval-a"], "MetaVerdict": captured["meta-a"],
+                "CounterVerdict": captured["adv-a"]}
+
+
+def test_event_schemas_publish_the_judging_contract_the_request_carries(monkeypatch):
+    rt, requests = _judging_requests(monkeypatch)
+    published = rt._world_block()["event_schemas"]
+    for kind, req in requests.items():
+        assert published[kind] == req.outcome_schema, kind
+        assert published[kind]["anyOf"][-1]["required"] == ["status"]  # the decline form
+        seat = {"Verdict": "eval-a", "MetaVerdict": "meta-a", "CounterVerdict": "adv-a"}[kind]
+        # The schema the prompt prints (``_published_contract``) is that same object.
+        assert rt._published_contract(seat, req.handle, req.outcome_schema,
+                                      req.scoring_channel) == published[kind]
+
+
+def test_a_polymorphic_contract_with_a_judging_kind_carries_its_decline_form():
+    from dataclasses import replace
+
+    rt = _consequence_runtime(provider=Population())
+    spec = rt.assemblies["eval-a"].spec
+    rt.assemblies["eval-a"].spec = replace(spec, emits=("Verdict", "ProducerReturn"))
+    contract = rt._contract_schema("eval-a")
+    assert contract["anyOf"][-1] == DECLINE_FORM

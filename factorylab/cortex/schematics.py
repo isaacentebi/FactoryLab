@@ -10,9 +10,11 @@ from typing import Any
 
 from factorylab.charter.measurement import measurement_catalogue
 from factorylab.cortex.assembly import (
+    JUDGING_FIELDS,
     MAX_PROGRAM_STATE_BYTES,
     SEED_KIND_LINES,
     SEED_SYSTEM_PROMPT,
+    judging_contract,
     public_description,
     reserved_return_fields,
 )
@@ -22,7 +24,11 @@ from factorylab.runtime.cadence import tick_intervals
 from factorylab.runtime.continuity import HARD_STATE_BYTES
 from factorylab.runtime.custody import UNAVAILABLE
 from factorylab.runtime.observations import window_fact_names
-from factorylab.runtime.propensity import MIN_DECLARED_MASS, action_vocabulary
+from factorylab.runtime.propensity import (
+    MIN_DECLARED_MASS,
+    action_vocabulary,
+    propensity_field,
+)
 from factorylab.runtime.shared import work_disclosure
 from factorylab.runtime.summary import _duration_str, _price_str
 from factorylab.settlement.vocabulary import COMMISSIONED_JUDGE_REFUSAL
@@ -744,7 +750,11 @@ class SchematicsMixin:
                 for a in sorted(self.assemblies.values(), key=lambda a: a.spec.id)
                 if a.spec.id not in self.retired_assemblies
             ],
-            "event_schemas": dict(self.event_schemas),
+            # The seed judging kinds' contracts, the very objects their requests
+            # carry, beside every population-declared kind's schema (II.II.b).
+            "event_schemas": {**{kind: self._judging_contract(kind)
+                                 for kind in JUDGING_FIELDS},
+                              **dict(self.event_schemas)},
             "routers": [
                 {"event_kind": kind, "count": len(states)}
                 for kind, states in sorted(self.routers.items())
@@ -1829,8 +1839,9 @@ class SchematicsMixin:
                          "Base. Spot HYPE in the venue account pays the Core gas charge: buy it "
                          "on HYPE/USDC; HYPE spent as that charge is not a fill. The mint is "
                          "self-paid when the reserve holds Base ETH; otherwise Circle forwards "
-                         "it for the on-chain fee quoted in pots.gas, bounded per transfer and "
-                         "per cap_window. pots.gas names the branch and any blocker. A "
+                         "it for the on-chain fee quoted in pots.gas.to_reserve, bounded per "
+                         "transfer and per cap_window. pots.gas.to_reserve names the branch "
+                         "and any blocker; pots.gas.gates names every direction gas gates. A "
                          "forwarded mint unobserved for forward_wait_ticks world ticks (or the "
                          "capital loop's measured p90 conversion, if longer) "
                          "strands recoverably (pots.stranded): its burned principal stays "
@@ -1942,6 +1953,19 @@ class SchematicsMixin:
                 + ' A return answering status "cannot" settles declined '
                 "(world.scoring.declined_return). The verdicts on a return are compared "
                 "with its measured outcome (world.scoring.verdict_is_a_prediction).")
+
+    #: The role whose action vocabulary each judging kind's answer is labelled in.
+    JUDGING_ROLES: dict[str, str] = {"Verdict": "evaluator", "MetaVerdict": "meta",
+                                     "CounterVerdict": "adversary"}
+
+    def _judging_contract(self, kind: str) -> dict[str, Any]:
+        """A judging kind's contract in this world: the one object its request carries
+        and ``world.event_schemas`` publishes (``judging_contract``; Chapter II §II.b)."""
+        return judging_contract(
+            kind, propensity=propensity_field(self.JUDGING_ROLES[kind]),
+            register=self._register_schema(),
+            forecasts=self._forecast_schema() if kind == "Verdict" else None,
+            about_handle=kind != "CounterVerdict")
 
     def _settlement_facts(self, kind: str) -> dict[str, str]:
         """How a judging kind's answer settles: ``world.scoring``'s own entries, verbatim.

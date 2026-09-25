@@ -888,6 +888,7 @@ DECLINE_FORM: dict[str, Any] = {
                    "else it carries; reason is optional",
     "properties": {"status": {"enum": ["cannot"]}, "reason": {"type": "string"}},
     "required": ["status"],
+    "propertyNames": dict(FIELD_NAMES),
 }
 
 
@@ -906,7 +907,8 @@ def judging_contract(kind: str, *, propensity: dict, register: dict,
     field (``JUDGING_FIELDS``) in [0, 1], and ``rationale`` for a Verdict and a
     CounterVerdict, as the kernel always has; ``propensity`` is the given field,
     whose description names this role's action labels. The answer carries no
-    ``status``: the decline is its own form, published once.
+    ``status``: the decline is its own form, published once. Each form states that
+    field names are identifiers (``FIELD_NAMES``), as the kernel enforces on every reply.
     """
     field = JUDGING_FIELDS[kind]
     rationale = {"type": "string",
@@ -920,7 +922,8 @@ def judging_contract(kind: str, *, propensity: dict, register: dict,
     if about_handle:
         properties["about_handle"] = {"type": "string"}
     required = [field] if kind == "MetaVerdict" else [field, "rationale"]
-    answer = {"type": "object", "properties": properties, "required": required}
+    answer = {"type": "object", "properties": properties, "required": required,
+              "propertyNames": dict(FIELD_NAMES)}
     return {"anyOf": [answer, deepcopy(DECLINE_FORM)]}
 
 
@@ -970,9 +973,15 @@ def child_requests_shape(max_children: int | None = None) -> dict:
     """
     from factorylab.cortex.request import MAX_DECLARED_ACTIONS
 
+    # A child's reply is a reply: its outcome schema names only identifier fields
+    # (``_schema_definition``), at its top level and in its top-level alternatives.
+    names = {"properties": {"type": "object", "propertyNames": dict(FIELD_NAMES)},
+             "required": {"type": "array", "items": {"type": "string", **FIELD_NAMES}}}
+    reply = {"$ref": CHILD_SCHEMA_REF, "properties": {
+        **names, "anyOf": {"type": "array", "items": {"properties": names}}}}
     shape: dict[str, Any] = {"minItems": 1, "items": {
         "properties": {
-            "outcome_schema": {"$ref": CHILD_SCHEMA_REF},
+            "outcome_schema": reply,
             "propensity": {"type": "object", "minProperties": 1,
                            "maxProperties": MAX_DECLARED_ACTIONS,
                            "additionalProperties": {"type": "number", "minimum": 0,
@@ -1825,8 +1834,16 @@ def positive_wire_decimal(value: Any) -> None:
         raise ValueError("decimal amount out of range")
 
 
-def _schema_definition(schema: Any) -> None:
-    """Composition schemas are type-checked and cannot silently request unsupported constraints."""
+def _schema_definition(schema: Any, *, answer: bool = True) -> None:
+    """Composition schemas are type-checked and cannot silently request unsupported constraints.
+
+    Guarantees, where ``schema`` is a reply's own shape (``answer``: the schema itself
+    and each alternative of its top-level ``anyOf``), that every property it names
+    and every field it requires is an identifier (``FIELD_NAMES``): a reply carrying
+    any other key is malformed (``_validate_return``), so a schema naming one would
+    admit no reply, and it is refused here, the field named. Nested schemas describe
+    values, whose keys are the value's own.
+    """
     if not isinstance(schema, dict):
         raise ValueError("schema must be an object")
     allowed = {"type", "properties", "required", "enum", "minimum", "maximum", "minItems",
@@ -1853,13 +1870,18 @@ def _schema_definition(schema: Any) -> None:
         if not isinstance(schema["properties"], dict):
             raise ValueError("schema properties must be an object")
         for prop in schema["properties"].values():
-            _schema_definition(prop)
+            _schema_definition(prop, answer=False)
+    if answer:
+        for name in [*schema.get("properties", {}), *schema.get("required", ())]:
+            if not isinstance(name, str) or re.fullmatch(FIELD_NAME_PATTERN, name) is None:
+                raise ValueError(f"field name {str(name)[:64]!r} is not an identifier "
+                                 f"({FIELD_NAME_PATTERN}): no reply could carry it")
     if "items" in schema:
-        _schema_definition(schema["items"])
+        _schema_definition(schema["items"], answer=False)
     if "additionalProperties" in schema and type(schema["additionalProperties"]) is not bool:
-        _schema_definition(schema["additionalProperties"])
+        _schema_definition(schema["additionalProperties"], answer=False)
     if "anyOf" in schema:
         if not isinstance(schema["anyOf"], list) or not schema["anyOf"]:
             raise ValueError("anyOf must contain schemas")
         for alternative in schema["anyOf"]:
-            _schema_definition(alternative)
+            _schema_definition(alternative, answer=answer)

@@ -353,7 +353,9 @@ def test_a_producing_request_publishes_the_contract_the_kernel_enforces():
     assert "counterfactual" not in order["required"]
     for seat, asm in rt.assemblies.items():
         contract = rt._contract_schema(seat)
-        shapes = contract.get("anyOf", [contract])
+        # A contract with a judging kind ends with its decline form (DECLINE_FORM).
+        shapes = [s for s in contract.get("anyOf", [contract])
+                  if s.get("required") != ["status"]]
         for kind, shape in zip(asm.spec.emits, shapes, strict=True):
             published = "counterfactual" in shape["properties"]
             assert published == (kind in ("ProducerReturn", "Exposure")), (seat, kind)

@@ -23,11 +23,14 @@ from factorylab.runtime.continuity import OutcomeInbox
 from factorylab.world.evm import RailError
 from factorylab.world.exchange import FakeExchange, HyperliquidExchange
 from factorylab.world.treasury import (
-    GAS_SCOPE,
+    GAS_BUDGET_KEYS,
     TRANSFER_DIRECTIONS,
+    FakeHybridRail,
+    FakeRail,
     Treasury,
     UnconfiguredRail,
     admitted_directions,
+    gas_gates,
     transfer_tool_spec,
     venice_conversion_text,
 )
@@ -61,17 +64,91 @@ def test_a_zero_gas_budget_reads_as_zero_never_as_exhausted():
         spent._core_gas_bound({"hyper": spent.hyper.gas_budget_wei})
 
 
-def test_the_gas_position_names_the_transfer_it_gates_and_what_it_does_not():
+class Consulted(dict):
+    """A gas_spent map that records every budget key a preflight reads from it: the one
+    way a rail consults a native gas budget (``LiveRail.remaining``)."""
+
+    def __init__(self):
+        super().__init__()
+        self.read: list[str] = []
+
+    def get(self, key, default=None):
+        self.read.append(key)
+        return super().get(key, default)
+
+    def __getitem__(self, key):
+        self.read.append(key)
+        return super().__getitem__(key)
+
+
+def _live():
+    from factorylab.runtime.worlds import TreasurySpec
+
+    rail = live_rail()
+    # The self-mint branch reaches every budget check the exit makes.
+    rail.spec = TreasurySpec(reserve_address=rail.reserve_address, cctp_forwarding="never")
+    rail.exchange._exchange = None  # no signer: a class move is refused before signing
+    return rail
+
+
+def _hybrid():
+    rail = HybridRail.__new__(HybridRail)
+    rail.__dict__.update(_live().__dict__)
+    return rail
+
+
+def _rails():
+    wallet = Wallet(100_000_000, Ledger(clock_ns=lambda: 0), clock_ns=lambda: 0)
+    exchange = FakeExchange(start_cash_usd=Decimal("50"))
+    return {"live": _live(), "hybrid": _hybrid(),
+            "unconfigured": UnconfiguredRail(SimpleNamespace(_exchange=None)),
+            "fake": FakeRail(wallet, exchange=exchange),
+            "fake-hybrid": FakeHybridRail(wallet, sink="0x" + "d" * 40, exchange=exchange)}
+
+
+@pytest.mark.parametrize("name", ["live", "hybrid", "unconfigured", "fake", "fake-hybrid"])
+def test_the_published_gas_gates_are_the_directions_whose_preflight_consults_a_budget(name):
+    """For every rail type, pots.gas.gates names exactly the admitted directions whose
+    preflight reads a native gas budget, and exactly the budgets it reads."""
+    rail = _rails()[name]
+    consulted = {}
+    for direction in admitted_directions(rail):
+        spent = Consulted()
+        try:
+            rail.preflight(direction, 10_000_000, spent)
+        except (RailError, ValueError):
+            pass  # a refusal after the budget check still consulted it
+        if spent.read:
+            consulted[direction] = sorted({GAS_BUDGET_KEYS[k] for k in spent.read})
+    assert {d: sorted(keys) for d, keys in gas_gates(rail).items()} == consulted
+    if name in ("live", "hybrid"):
+        assert set(consulted) == {"to_reserve", "to_venue"}
+
+
+def test_the_gas_position_covers_every_gated_direction_and_no_other():
     ledger = Ledger(clock_ns=lambda: 0)
     wallet = Wallet(100_000_000, ledger, clock_ns=lambda: 0)
-    treasury = Treasury(ledger, wallet, live_rail(), clock_ns=lambda: 0)
+    rail = _live()
+    treasury = Treasury(ledger, wallet, rail, clock_ns=lambda: 0)
     view = treasury._gas_view()
-    assert view["gates"] == GAS_SCOPE["gates"] and "to_reserve" in view["gates"]
+    assert set(view["gates"]) == {"to_reserve", "to_venue"}
     assert "no gas" in view["does_not_gate"] and "closes" in view["does_not_gate"]
-    treasury.rail = Denying(live_rail(), ("to_venice",))
+    for direction in view["gates"]:
+        assert {"refill_ready", "blocked_by"} <= set(view[direction])
+    # The to_venue blocker is the one its own preflight names.
+    rail.hyper.gas_budget_wei = 0
     view = treasury._gas_view()
-    assert view["blocked_by"] == "this world does not admit treasury.transfer to_reserve"
-    assert view["refill_ready"] is False
+    with pytest.raises(RailError) as refused:
+        rail.preflight("to_venue", 10_000_000, {})
+    assert view["to_venue"]["blocked_by"] == str(refused.value)
+    assert view["to_venue"]["refill_ready"] is False
+    # A direction this world does not admit is neither gated nor reported.
+    treasury.rail = Denying(_live(), ("to_venue", "to_venice"))
+    view = treasury._gas_view()
+    assert set(view["gates"]) == {"to_venue"} and "to_reserve" not in view
+    treasury.rail = Denying(_live(), ("to_venice",))
+    view = treasury._gas_view()
+    assert view["gates"] == {} and "to_reserve" not in view and "to_venue" not in view
 
 
 def test_venue_writes_state_that_they_pay_no_gas():
