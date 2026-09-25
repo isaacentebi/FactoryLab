@@ -1216,8 +1216,32 @@ def tick(rt: Any) -> None:
             continue
         _recover(rt, surface, client_id)
     settle(rt, surface.venue.advance(rt.clock.now_ns))
+    confirm_terminal(rt)
     mark(rt)
     reconcile(rt)
+
+
+def confirm_terminal(rt: Any) -> None:
+    """Read back, from the venue's own order status, every Polymarket order that may be over.
+
+    Wave 17b: the rule ``VenueMixin._confirm_terminal_orders`` keeps for Hyperliquid.
+    Guarantees each order this world placed that the consequence book holds with no
+    unfilled liability and unconfirmed is looked up under its client id until the
+    venue answers ``filled``, ``cancelled`` or ``rejected``, and that answer and its
+    filled size are recorded; anything else leaves its account pinned.
+    """
+    surface = rt.polymarket
+    for order in rt.consequences.table.orders:
+        client_id = surface.order_ids.get(order.order_id)
+        if client_id is None or order.remaining or order.confirmed is not None:
+            continue
+        try:
+            answer = surface.venue.lookup(client_id)
+        except Exception:  # noqa: BLE001 - an unanswered read confirms nothing
+            continue
+        if answer.get("status") in ("filled", "cancelled", "rejected"):
+            rt.consequences.confirm_terminal(order.order_id, answer["status"],
+                                             str(answer.get("filled_size") or 0), rt.n)
 
 
 def mark(rt: Any) -> None:

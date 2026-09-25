@@ -36,8 +36,9 @@ pytestmark = pytest.mark.gate
 EVENTS = 150
 
 
-def _world(events=EVENTS, path=None, **kwargs):
-    return Runtime(load_manifest("scripted"), events=events, seed=1, initial_balance_micro=None,
+def _world(events=EVENTS, path=None, seed=1, **kwargs):
+    return Runtime(load_manifest("scripted"), events=events, seed=seed,
+                   initial_balance_micro=None,
                    ledger_path=None if path is None else str(path), router_gamma=.1, **kwargs)
 
 
@@ -76,6 +77,12 @@ def test_release_changes_nothing_any_reader_sees(monkeypatch):
     last = [i for i in released.ledger._recovery_items() if i["kind"] == "snapshot"][-1]
     heavy = [i for i in kept.ledger._recovery_items() if i["kind"] == "snapshot"][-1]
     assert last["bytes"] < heavy["bytes"] / 2
+    # Every order a released account placed was confirmed terminal by the venue's own
+    # order status before its release.
+    confirmed = {i["order_id"] for i in released.ledger._recovery_items()
+                 if i["kind"] == "consequence.terminal"}
+    orders = {row[0] for row in released.consequences.table.released_orders}
+    assert orders and orders <= confirmed
 
 
 def _record_eligibility(monkeypatch, read):
@@ -91,24 +98,36 @@ def _record_eligibility(monkeypatch, read):
     return rows
 
 
-def test_the_eligibility_tally_equals_the_scan_on_every_event(monkeypatch):
-    """Committee eligibility is a running tally kept at settlement (wave 17b). Side by
-    side over a scripted world: the tally with release live equals, on every event,
-    the scan over every decision and account of the same world run without release."""
+def _tally_equals_scan(monkeypatch, events, seed):
     tallied = _record_eligibility(monkeypatch, lambda rt: rt._committee_eligible())
-    live = _world()
+    live = _world(events, seed=seed)
     live.run()
     monkeypatch.undo()
     assert _released(live) > 0
     _no_release(monkeypatch)
     scanned = _record_eligibility(
         monkeypatch, lambda rt: (rt._committee_eligible(), rt._committee_eligible_scan()))
-    kept = _world()
+    kept = _world(events, seed=seed)
     kept.run()
+    monkeypatch.undo()
     assert len(tallied) == len(scanned) == kept.n
     for n, (tally, (kept_tally, scan)) in enumerate(zip(tallied, scanned, strict=True), 1):
-        assert tally == kept_tally == scan, n
+        assert tally == kept_tally == scan, (seed, n)
     assert any(tallied), "the world never qualified a seat: the comparison is empty"
+
+
+def test_the_eligibility_tally_equals_the_scan_on_every_event(monkeypatch):
+    """Committee eligibility is a running tally kept at settlement (wave 17b). Side by
+    side over a scripted world: the tally with release live equals, on every event,
+    the scan over every decision and account of the same world run without release."""
+    _tally_equals_scan(monkeypatch, EVENTS, 1)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("seed", [1, 2, 3])
+def test_the_eligibility_tally_equals_the_scan_over_three_seeds(monkeypatch, seed):
+    """The same side-by-side proof, 500 world events on each of three seeds."""
+    _tally_equals_scan(monkeypatch, 500, seed)
 
 
 def test_an_older_checkpoint_rebuilds_the_tally_from_the_scan(monkeypatch):
@@ -172,7 +191,8 @@ def test_invariant_a_release_never_drops_a_decision_still_owed_a_score(unrelease
     lot = Lot(holding, "BTC", True, Fraction(1), Fraction(100), Fraction(0))
     accounts = tuple(replace(r, opened_at_tick=rt.ticks_consumed) if r.handle == young else r
                      for r in table.returns)
-    order = LotOrder("probe-order", rejected, Fraction(0), Fraction(1), Fraction(1))
+    order = LotOrder("probe-order", rejected, Fraction(0), Fraction(1), Fraction(1),
+                     confirmed=Fraction(1))
     rt.consequences.table = replace(table, lots=(*table.lots, lot), returns=accounts,
                                     orders=(*table.orders, order))
     rt.events_log.append({"kind": str(EventKind.ORDER_REJECTED),
@@ -275,3 +295,139 @@ def test_a_crash_in_a_release_pass_resumes_to_the_uninterrupted_run(whole, tmp_p
     assert summary == expected_summary
     assert _final_queue(path) == expected_queue
     assert _settlements(path) == expected_settlements
+
+
+# ---- venue-confirmed terminal orders, venue books, seat deliveries, legacy inbox ----------
+
+
+def test_a_cancelled_order_is_released_only_once_the_venue_reads_it_back_terminal():
+    """A resting order is cancelled and the cancel acknowledged: that is not the venue's
+    word that it can fill no more. The next reconciliation reads the order back; only the
+    venue's own status (``cancelled``) confirms it, and only then may its account go."""
+    from tests.helpers import collateral_decision
+    from tests.runtime.test_loop import _consequence_runtime
+
+    rt = _consequence_runtime()
+    handle = collateral_decision(rt)
+    placed = rt._run_tool("seed-decider", handle, {"tool": "venue.place_limit", "args": {
+        "coin": "BTC", "side": "buy", "size": "0.001", "price": "1"}}, slot="tool:0")[0]
+    assert placed["status"] == "resting"
+    order_id = str(placed["order_id"])
+    cancelled = rt._run_tool("seed-decider", handle, {"tool": "venue.cancel", "args": {
+        "coin": "BTC", "order_id": order_id}}, slot="tool:1")[0]
+    assert cancelled["status"] == "cancelled"
+    rt.consequences.finish(handle, 0)
+    rt.ticks_consumed += 10**6  # any horizon, however long, has passed
+    rt.consequences.table = rt.consequences.table.resolve(rt.n, 1, {}, tick=rt.ticks_consumed)
+    [order] = [o for o in rt.consequences.table.orders if o.order_id == order_id]
+    assert order.remaining == 0 and order.confirmed is None
+    assert not rt.consequences.releasable(handle)
+    rt._reconcile_orders()
+    [row] = [i for i in rt.ledger._recovery_items() if i["kind"] == "consequence.terminal"]
+    assert (row["order_id"], row["status"], row["handle"]) == (order_id, "cancelled", handle)
+    assert rt.consequences.releasable(handle)
+
+
+def test_terminal_venue_writes_pin_nothing_and_leave_with_their_decision():
+    """Vault and Polymarket writes name their decision while in flight only, and a
+    Polymarket decision while its realised money is unclaimed; a released decision's
+    writes leave with it, and a vault write's transaction stays claimed."""
+    from types import SimpleNamespace
+
+    from tests.conftest import make_runtime
+
+    rt = make_runtime()
+    rt.vault_intents = {
+        "h1:v": {"handle": "h1", "result": {"status": "ok", "hash": "0xa"}, "settled": True},
+        "h2:v": {"handle": "h2", "result": {"status": "ok", "hash": "0xb"}},
+        "h3:v": {"handle": "h3", "result": {"status": "uncertain"}},
+        "h4:v": {"handle": "h4", "result": {"status": "uncertain"}, "unresolved": True},
+    }
+    rt.polymarket = SimpleNamespace(
+        intents={"h5": {"handle": "h5", "result": {"status": "filled", "order_id": "pm-1"}},
+                 "h6": {"handle": "h6", "result": {"status": "uncertain"}}},
+        order_ids={"pm-1": "h5"},
+        realized={"h5": Fraction(3_000_001, 2), "h7": Fraction(7)},
+        claimed={"h5": 1_500_000, "h7": 3})
+    named = settled._names_in(rt._live_venue_books(),
+                              {"h1", "h2", "h3", "h4", "h5", "h6", "h7"})
+    assert set(named) == {"h2", "h3", "h6", "h7"}
+    rt._drop_released(["h1", "h5"])
+    assert set(rt.vault_intents) == {"h2:v", "h3:v", "h4:v"}
+    assert "0xa" in rt._vault_claimed("h2:v")
+    assert set(rt.polymarket.intents) == {"h6"} and rt.polymarket.order_ids == {}
+    assert "h5" not in rt.polymarket.realized and "h5" not in rt.polymarket.claimed
+
+
+def test_a_polymarket_decision_is_released_once_resolved_confirmed_and_claimed():
+    from tests.helpers import collateral_decision
+    from tests.runtime.test_polymarket_surface import advance, buy, still_fake, world
+
+    rt = world(fake=still_fake(resolutions={"fake-1": (10**12, 0)}))
+    handle = collateral_decision(rt)
+    assert buy(rt, handle)["status"] == "filled"
+    rt.consequences.finish(handle, 0)
+    rt.clock.now_ns = 10**12
+    advance(rt, rt.ev.consequence_horizon_ticks + 1)
+    rt.queue.settle(handle, channel="verdict", score=0.5, status=SettleStatus.SETTLED,
+                    definition_version="probe", sampling_ref=None)
+    rt._release_read_deliveries()
+    assert any(i["kind"] == "consequence.terminal" for i in rt.ledger._recovery_items())
+    assert rt.polymarket.realized[handle] and rt._live_venue_books()[-1] == []
+    assert handle in rt._release_settled()
+    assert not any(i["handle"] == handle for i in rt.polymarket.intents.values())
+    assert handle not in rt.polymarket.realized
+
+
+def test_a_seat_not_balloted_within_the_retention_has_its_returns_released_unread():
+    from factorylab.kernel.queue import PropensityRecord
+    from tests.conftest import make_runtime
+
+    rt = make_runtime()
+    lid = "assembly:seed-decider"
+    handle = rt.queue.queue.open(
+        actor=lid, event_id="probe", propensity=PropensityRecord(
+            ("seed-decider",), (1.,), "seed-decider", 0, lid, "probe"),
+        channel="policy", deadline_ns=rt.clock.now_ns + 10**12, parent_handle=None,
+        cost_ceiling=0)
+    rt.queue.queue.settle(handle, channel="policy", score=1.0, status=SettleStatus.SETTLED,
+                          definition_version="probe", sampling_ref=None)
+    retention = rt._inbox_retention_ticks()
+    rt._release_read_deliveries()
+    assert rt.queue.owed(handle) == "a delivered return was not read by its consumer"
+    rt.ticks_consumed += retention
+    rt._release_read_deliveries()
+    assert rt.queue.owed(handle) is not None  # held the whole retention
+    rt.ticks_consumed += 1
+    rt._release_read_deliveries()
+    assert rt.queue.owed(handle) is None and rt.policy_seen[lid] == 1
+    assert rt.queue.returns_since(lid, rt.policy_seen[lid]) == ((), 1)  # a ballot reads on
+    assert lid not in rt.policy_marks
+
+
+def test_an_older_checkpoint_s_inbox_items_are_held_a_full_horizon_from_the_restore():
+    """Items addressed before item ticks existed carry none: a restore stamps them with
+    the restore tick, so they are held the whole retention from there, never released
+    at once as though addressed at tick 0."""
+    from factorylab.runtime.resume import restore_runtime, runtime_state
+
+    rt = _world(40)
+    rt.run()
+    rows = [row for rows in rt.outcomes.items.values() for row in rows]
+    assert rows
+    for row in rows:
+        row.pop("tick")
+    state = runtime_state(rt)
+    twin = Runtime(rt.m, ledger_path=None, **state["config"])
+    restore_runtime(twin, state)
+    held = [row for rows in twin.outcomes.items.values() for row in rows]
+    assert {row["tick"] for row in held} == {twin.ticks_consumed}
+    before = len(held)
+    twin.ticks_consumed += twin._inbox_retention_ticks()
+    for seat in twin.outcomes.cursors:
+        twin.outcomes.cursors[seat] = 0  # nothing acknowledged: only age could release
+    twin._release_inbox()
+    assert sum(len(r) for r in twin.outcomes.items.values()) == before
+    twin.ticks_consumed += 1
+    twin._release_inbox()
+    assert sum(len(r) for r in twin.outcomes.items.values()) == 0

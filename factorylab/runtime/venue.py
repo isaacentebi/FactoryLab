@@ -945,8 +945,40 @@ class VenueMixin:
                 self._give_up_on_order(client_id)
                 continue
             self._recover_order(client_id)
+        self._confirm_terminal_orders()
         if getattr(self, "vault_intents", None):
             self._reconcile_vault_intents(final=final)
+
+    def _confirm_terminal_orders(self) -> None:
+        """Read back, from the venue's own order status, every order that may be over.
+
+        Wave 17b: an order's account is released only once the venue itself says the
+        order is terminal (``LotTable.closed``). Guarantees each Hyperliquid order the
+        consequence book holds with no unfilled liability (fully filled as observed,
+        or its cancel acknowledged) and not yet confirmed is looked up once per tick
+        until the venue answers ``filled``, ``cancelled`` or ``rejected``; that answer
+        and the size it reports filled are recorded (``confirm_terminal``). Any other
+        answer, or none, leaves the order unconfirmed and its account pinned. The
+        read is a lookup: it places, cancels and moves nothing.
+        """
+        waiting = [o.order_id for o in self.consequences.table.orders
+                   if o.remaining == 0 and o.confirmed is None]
+        if not waiting:
+            return
+        clients = {str(i["result"]["order_id"]): client_id
+                   for client_id, i in self.order_intents.items()
+                   if i["operation"] != "venue.cancel" and i["result"].get("order_id") is not None}
+        for order_id in waiting:
+            client_id = clients.get(order_id)
+            if client_id is None:
+                continue  # not this venue's order (a Polymarket one is read by its own)
+            try:
+                answer = _to_plain(vars(self.exchange.lookup(client_id, order_id=order_id)))
+            except Exception:  # noqa: BLE001 - an unanswered read confirms nothing
+                continue
+            if answer.get("status") in ("filled", "cancelled", "rejected"):
+                self.consequences.confirm_terminal(
+                    order_id, answer["status"], str(answer.get("filled_size") or 0), self.n)
 
     def _order_collateral(
         self, handle: str, coin: str, size: Decimal, is_buy: bool,

@@ -786,6 +786,7 @@ _RUNTIME_FIELDS = (
     # intents as counts. An older checkpoint has none: its seats have read nothing, its
     # tally is rebuilt from the scan (nothing was released), and no intent was folded.
     "policy_seen", "eligibility_tally", "eligibility_evidence", "released_intents",
+    "policy_marks", "vault_released_hashes",
 )
 # Runtime fields read through a property with no setter, and the attribute behind it.
 _RUNTIME_BACKING = {
@@ -1241,6 +1242,12 @@ def restore_runtime(rt, state: dict) -> None:
         # A checkpoint older than the tally released nothing: the scan it replaced
         # still sees every decision, once.
         rt._rebuild_eligibility_tally()
+    # An inbox item from a checkpoint older than item ticks (wave 17b) was addressed
+    # at a tick nobody recorded: it is held a full retention horizon from this
+    # restore, never released at once as though it had been addressed at tick 0.
+    for rows in rt.outcomes.items.values():
+        for row in rows:
+            row.setdefault("tick", rt.ticks_consumed)
 
 
 def check_witness_identity(saved_runtime: dict) -> None:

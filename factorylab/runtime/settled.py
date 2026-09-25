@@ -57,8 +57,8 @@ LIVE_BOOKS = (
     "registered_observations", "registered_predicates",  # registrations' provenance
     "price_windows", "price_origins", "window",  # the price loop's open measurement
     "margin_windows", "measured_consequences",   # the charter's margin windows (M5)
-    "vault_intents",          # venue writes a vault reconciliation still reads
 )
+# The venue books are live only where they are not terminal (``_live_venue_books``).
 # Not live books, though they name handles: ``card_samples`` rows carry their own
 # measured values and use a handle only to join a row to another row of the same
 # samples (``charter.measurement``), never to read a decision; ``vote_handles`` is read
@@ -140,9 +140,7 @@ class SettledMixin:
         snapshot = getattr(treasury, "snapshot", None)
         if snapshot is not None:
             roots.append(snapshot())
-        polymarket = getattr(self, "polymarket", None)
-        if polymarket is not None:
-            roots.append(polymarket.state())
+        roots.extend(self._live_venue_books())
         # Unsettled forecasts: the decision that sealed each, and what each is about
         # (its card forecast reads the about's kind and author, charter.measurement).
         roots.append([(f.handle, f.about_handle) for f in self.book.pending()])
@@ -151,9 +149,6 @@ class SettledMixin:
         roots.append([getattr(self.charter_book, f"_CharterBook__{name}", None)
                       for name in ("proposals", "committees", "ballots", "activations",
                                    "bindings", "sittings", "deferrals", "voters")])
-        # Order intents the venue has not answered (reconciled every tick).
-        roots.append([intent for intent in self.order_intents.values()
-                      if (intent.get("result") or {}).get("status") == "uncertain"])
         named = _names_in(roots, handles)
         subjects = self.decision_subjects
         referrers: Counter = Counter()
@@ -176,6 +171,35 @@ class SettledMixin:
                 if owner is not None:
                     owners.add(owner)
         return {"named": named, "referrers": referrers, "order_owners": owners}
+
+    def _live_venue_books(self) -> list[Any]:
+        """The venue writes still in flight, and the money still to be claimed.
+
+        Guarantees: a Hyperliquid order intent while the venue has not answered it; a
+        vault write while it is uncertain, or acknowledged and not yet settled from
+        the venue's own ledger (``_reconcile_vault_intents``), unless given up; a
+        Polymarket write while uncertain and not given up; and a Polymarket
+        decision's realised P&L while part of it is unclaimed (``claim_share``). A
+        terminal write names its decision nowhere a reader will look again: its
+        fills and its lots are the consequence book's, which pins by itself.
+        """
+        books: list[Any] = [
+            [intent for intent in self.order_intents.values()
+             if (intent.get("result") or {}).get("status") == "uncertain"],
+            [intent for intent in getattr(self, "vault_intents", {}).values()
+             if not intent.get("unresolved") and (
+                 intent["result"].get("status") == "uncertain"
+                 or (intent["result"].get("status") == "ok" and not intent.get("settled")))],
+        ]
+        surface = getattr(self, "polymarket", None)
+        if surface is not None:
+            books.append([intent for intent in surface.intents.values()
+                          if intent["result"].get("status") == "uncertain"
+                          and not intent.get("unresolved")])
+            books.append([handle for handle, exact in surface.realized.items()
+                          if exact.numerator // exact.denominator
+                          != surface.claimed.get(handle, 0)])
+        return books
 
     def _score_owed(self, handle: str, live: dict[str, Any]) -> str | None:
         """Why a score is still owed to ``handle``, or None: it is fully settled.
@@ -201,9 +225,9 @@ class SettledMixin:
           observations and the wake read those windows);
         * its consequence account is closed (``ReturnConsequences.releasable``): its
           outcome is fixed, its realised money is all booked to its owner, it owns no
-          open lot and no order that could still fill (a live one, or one cancelled
-          less than the release horizon ago: a fill that executed before the cancel
-          took effect may still arrive), and no intent it sent is unanswered;
+          open lot, every order it placed was confirmed terminal by the venue's own
+          order status (``confirm_terminal``), with nothing filled beyond what was
+          accounted, and no intent it sent is unanswered;
         * its realized-consequence horizon has passed (``consequence_horizon_ticks``
           since its account opened), so a judgement naming it could no longer be a
           prediction (``_hindsight_reason``);
@@ -216,8 +240,7 @@ class SettledMixin:
             return "a retained decision names it as its parent or judged subject"
         if handle in live["named"]:
             return "a live book still reads it"
-        if not self.consequences.releasable(handle, tick=self.ticks_consumed,
-                                            patience=self._release_horizon_ticks()):
+        if not self.consequences.releasable(handle):
             return "its consequence account is open"
         try:
             account = self.consequences.table.account(handle)
@@ -231,11 +254,20 @@ class SettledMixin:
             return "a retained forecast window reads an order it placed"
         return None
 
+    def _released_owner(self, handle: str) -> str | None:
+        """The seat a released decision's late money is booked to: the seat that
+        authored it, or its lineage's root when that seat is gone (wave 17b)."""
+        seat = self.consequences.table.released_author(handle)
+        if seat is None or seat in self.assemblies:
+            return seat
+        lineage = self.budget.lineage(seat)
+        return lineage if lineage in self.assemblies else seat
+
     # -- release -------------------------------------------------------------------
 
     def _release_horizon_ticks(self) -> int:
-        """How long a tombstone and a released order are kept: the reward chain's own
-        horizon, past which "nothing opens on these any more" (``_settle_evaluations``)."""
+        """How long a tombstone is kept: the reward chain's own horizon, past which
+        "nothing opens on these any more" (``_settle_evaluations``)."""
         return self.ev.consequence_backstop_ticks + self.ev.verdict_timeout_ticks
 
     def _inbox_retention_ticks(self) -> int:
@@ -276,7 +308,11 @@ class SettledMixin:
 
         before_ns = self.clock.now_ns - horizon * tick_ns(self.tick_clock)
         self.queue.compact_released(before_ns)
-        self.consequences.forget_released_orders(self.ticks_consumed - horizon)
+        # A released order is venue-confirmed terminal; it keeps its owner for the
+        # published retention anyway, so a fill the venue reports on it in error is
+        # still booked to that owner (``LotTable.fill``).
+        self.consequences.forget_released_orders(
+            self.ticks_consumed - self._inbox_retention_ticks())
         # A very late fill on a released order is booked at the venue under its owner
         # (``_order_owner``), which reopens a custody-delta entry nothing reads again.
         for handle in [h for h in self.venue_deltas if self.queue.is_released(h)]:
@@ -298,8 +334,7 @@ class SettledMixin:
         # The tombstone keeps the lineage of the seat that authored it; a router
         # abstention or a forecast bucket was authored by no seat.
         author = self.handle_to_assembly.get(handle)
-        self.consequences.release([handle], self.ticks_consumed,
-                                  patience=self._release_horizon_ticks())
+        self.consequences.release([handle], self.ticks_consumed, authors={handle: author})
         self.queue.release(handle, author=self.budget.lineage(author) if author else None)
         if decision.parent_handle is not None:
             live["referrers"][decision.parent_handle] -= 1
@@ -325,6 +360,22 @@ class SettledMixin:
             folded["intents"] = folded.get("intents", 0) + 1
             status = (intent.get("result") or {}).get("status")
             folded[f"status:{status}"] = folded.get(f"status:{status}", 0) + 1
+        # Terminal venue writes (``_live_venue_books``): a vault write's venue
+        # transaction stays claimed, so no later write can bind it again.
+        vault = getattr(self, "vault_intents", None)
+        for client_id in [c for c, i in (vault or {}).items() if i.get("handle") in gone]:
+            transaction = vault.pop(client_id)["result"].get("hash")
+            if transaction:
+                self.vault_released_hashes.append(transaction)
+        surface = getattr(self, "polymarket", None)
+        if surface is not None:
+            dropped = {c for c, i in surface.intents.items() if i.get("handle") in gone}
+            for client_id in dropped:
+                del surface.intents[client_id]
+            surface.order_ids = {o: c for o, c in surface.order_ids.items() if c not in dropped}
+            for handle in handles:
+                surface.realized.pop(handle, None)
+                surface.claimed.pop(handle, None)
         self.book.release(handles)
         self.book.receipts.release(handles)
         self.consequences.receipts.release(handles)

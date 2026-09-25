@@ -578,6 +578,13 @@ class BootstrapMixin:
         # the evidence pairs it counted for retained decisions; and the order intents
         # of released decisions, as counts (``released_intents``).
         self.policy_seen: dict[str, int] = {}
+        # Each seat's delivery count at recent boundaries, [[tick, count]], oldest
+        # first: what its deliveries were at a tick, so those older than the
+        # published retention can be released unread (wave 17b).
+        self.policy_marks: dict[str, list[list[int]]] = {}
+        # The venue transactions of released decisions' vault writes: still bound, so
+        # no later write can take one as its own (``_vault_claimed``).
+        self.vault_released_hashes: list[str] = []
         self.eligibility_tally: dict[str, int] = {}
         self.eligibility_evidence: set[tuple[str, str]] = set()
         self.released_intents: dict[str, int] = {}

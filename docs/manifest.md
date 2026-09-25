@@ -707,12 +707,19 @@ it.** It is fully settled (`SettledMixin._score_owed` is `None`) when all hold:
   counter-verdict, forecast, exposure, abstention credit, assembly round, tool
   hold, uptake, ballot, lambda post, motion or registration still reads it, no
   cascade window holds or carries a judgement of it to its backstop, and no price,
-  margin or measurement window still measures it;
+  margin or measurement window still measures it; no venue write of it is in
+  flight (a Hyperliquid order intent the venue has not answered, a vault write
+  uncertain or acknowledged and not yet settled from the venue's ledger, a
+  Polymarket write uncertain), and no Polymarket money it realised is unclaimed;
 - its consequence account is closed: outcome fixed, realised money all booked to
   its owner, no open lot, no live order, no unanswered or unresolved intent, and
-  every order it placed either executed its whole size or was cancelled at least
-  `consequence_backstop_ticks + verdict_timeout_ticks` ticks ago (a fill that
-  executed before a cancel took effect is still accepted up to the order's size);
+  every order it placed **confirmed terminal by the venue's own order status**:
+  each tick, every order the book holds with no unfilled liability (fully filled
+  as observed, or its cancel acknowledged) is looked up at its venue until the
+  venue answers `filled`, `cancelled` or `rejected`, ledgered
+  `consequence.terminal {order_id, handle, status, filled}`, and no more filled
+  than was accounted. A cancel acknowledgement, a wall clock or a reward-chain
+  horizon is never that word; until the venue gives it, the account is pinned;
 - `consequence_horizon_ticks` have passed since its account opened;
 - no retained `failure_within` window reads an order it placed.
 
@@ -724,21 +731,31 @@ tombstone is compacted into a count per final status and a range of ledger
 ordinals, so a released handle still answers that it was released. Its
 propensities, returns, event payload, bindings, kind, author entry, judged
 subject, measured outcomes, forecast, receipts, base-rate questions and order
-intents are dropped; its consequence account becomes counts (`consequences.counts()`
-and the summary answer as before), and its orders keep their owner for the same
-horizon. Nothing is appended to the diary: every fact was ledgered when it
+intents, venue write intents and Polymarket claim entries are dropped (a vault
+write's venue transaction stays claimed, so no later write binds it); its
+consequence account becomes counts (`consequences.counts()` and the summary answer
+as before), and its orders keep their owner and the seat that authored it for
+`outcome_retention_ticks`. Nothing is appended to the diary: every fact was ledgered when it
 happened, and a replay releases the same decisions at the same boundary. A world
 run with and without release writes the same diary.
 
 A judgement whose `about_handle` names a released decision is refused
 (`return.refused`, `judgement names a decision that settled and was released`). A
-fill on a released account's order moves no lot and is ledgered
-`consequence.refused` with the owning handle and the reason `the order's return
-was settled and released`; after the horizon it is an order no account owns,
-refused as `fill without an open consequence account`. Committee eligibility is a
-running tally kept at settlement, equal to the scan over every decision the world
-opened. A seat's ballot shows the policy returns delivered to it since its last
-ballot, each once.
+fill the venue still reports on a released account's order (a venue error: the
+venue had confirmed it terminal) is money, and money is always booked: it is
+ledgered `consequence.released_fill {order_id, handle}`, moves the lots as the
+venue's position moved, and what it realises, and what any lot it opened later
+realises, is booked to the seat that authored the decision (or its lineage's root
+when that seat is gone) as a late realization (`consequence.late`, then its venue
+claim), never re-grading the closed outcome. Past `outcome_retention_ticks` the
+order is forgotten, unless its handle still holds a lot or is owed late money; a
+fill on a forgotten order is one no account owns, refused as `fill without an
+open consequence account`, and its money stays in venue custody unattributed, as
+for any order no decision placed. Committee eligibility is a running tally kept
+at settlement, equal to the scan over every decision the world opened. A seat's
+ballot shows the policy returns delivered to it since its last ballot, each once;
+those delivered more than `outcome_retention_ticks` before, without a ballot in
+between, are released unread (the inbox's rule).
 
 ## Exact measurement
 
@@ -2677,10 +2694,11 @@ next checkpoint boundary it leaves the inbox and its body is released
 Chapter II §IV.c: a verdict "is consumed as a reward signal in the scored agent's
 propensity update and then discarded"; §I.b: the reward line is thin. The inbox is
 that line, not the record: every `outcome.addressed` item stays in the diary.
-`outcome.get` on an id no longer held answers `no outcome addressed to you is held
-under that id: an item is released once acknowledged or past its retention
-horizon`, and `ack_through` on such an id acknowledges through it as far as the
-seat was delivered.
+`outcome.get` on an id no longer held answers `no outcome addressed to you and still
+held carries that id or handle; an item is released once acknowledged or past its
+retention horizon`. An item carries the world tick it was addressed at; one restored from a
+checkpoint older than this rule carries none, and the restore stamps it with the
+restore tick, so it is held a full `outcome_retention_ticks` from the restore.
 
 What a seat **said** is retained until that decision's last consequence settles
 or the seat retires. Only then, and only over `MAX_SAID`, is the oldest such

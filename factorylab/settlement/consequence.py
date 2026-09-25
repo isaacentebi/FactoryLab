@@ -211,8 +211,22 @@ class ReturnConsequences:
 
     def cancel(self, order_id: str, event: int) -> None:
         """Release only the unfilled liability of an acknowledged cancellation or rejection."""
-        self._apply("cancel", {"order_id": order_id, "event": event},
-                    self.table.cancel(order_id, self._tick(event)))
+        self._apply("cancel", {"order_id": order_id, "event": event}, self.table.cancel(order_id))
+
+    def confirm_terminal(self, order_id: str, status: str, filled: str, event: int) -> None:
+        """Record, with its evidence first, the venue's own word that an order is terminal.
+
+        Wave 17b: only an order its venue confirmed filled, cancelled or rejected, by
+        reading back its own order status, can no longer fill; until then its
+        account is never released (``LotTable.closed``). An order this book does not
+        hold, or holds confirmed already, writes nothing.
+        """
+        order = next((o for o in self.table.orders if o.order_id == order_id), None)
+        if order is None or order.confirmed is not None:
+            return
+        self._apply("terminal", {"order_id": order_id, "handle": order.handle,
+                                 "status": status, "filled": str(filled), "event": event},
+                    self.table.confirm(order_id, str(filled)))
 
     def observe(self, kind: str, payload: dict, event: int) -> None:
         """Only observed fills and signed funding payments change lot economics."""
@@ -247,23 +261,21 @@ class ReturnConsequences:
                                         "order_id": str(payload["order_id"]),
                                         "reason": str(exc), "payload": dict(payload)})
                     return
-                if RELEASED_ORDER in str(exc):
-                    # A very late fill on an order whose return was closed, fully
-                    # settled and released (wave 17b): its outcome and its money were
-                    # fixed, so the fill is a ledgered fact naming the owner, and moves
-                    # no lot. Never pooled, never dropped unseen.
-                    owner = self.table.order_owner(str(payload["order_id"]))
-                    self.ledger.append({"kind": "consequence.refused", "event": event,
-                                        "order_id": str(payload["order_id"]),
-                                        "handle": owner, "reason": RELEASED_ORDER,
-                                        "payload": dict(payload)})
-                    return
                 if "open consequence account" not in str(exc):
                     raise
                 # A fill nobody with an account ordered never enters the shared FIFO.
                 self.ledger.append({"kind": "consequence.refused", "event": event,
                                     "order_id": str(payload["order_id"]), "reason": str(exc)})
                 return
+            released = next((row[1] for row in self.table.released_orders
+                             if row[0] == str(payload["order_id"])), None)
+            if released is not None:
+                # A fill on an order the venue had confirmed terminal, whose account was
+                # then released (wave 17b): a venue error, and real money. It is its
+                # owner's late realization (``LotTable.fill``), booked, never graded.
+                self.ledger.append({"kind": "consequence.released_fill", "event": event,
+                                    "order_id": str(payload["order_id"]), "handle": released,
+                                    "reason": RELEASED_ORDER})
             self._apply("fill", {"event": event, "payload": dict(payload)}, table)
             order = next((o for o in table.orders if o.order_id == str(payload["order_id"])), None)
             handle = order.handle if order is not None else self.table.service_return(
@@ -362,15 +374,16 @@ class ReturnConsequences:
             + released["closes_credited"],
         }
 
-    def releasable(self, handle: str, *, tick: int | None = None, patience: int = 0) -> bool:
+    def releasable(self, handle: str) -> bool:
         """Whether ``handle``'s account is closed and nothing held here still names it.
 
-        Guarantees False while its account is open or owns a lot or a live order
-        (``LotTable.closed``), while an intent it sent is unacknowledged
-        (``pending_orders``) or unresolved (``unresolved_orders``: the venue may
-        still admit to an order that is its), and while any fill or funding payment
-        waits in ``deferred_events`` (whose order's owner is not known yet). A
-        handle with no account at all is releasable here: nothing here owes it.
+        Guarantees False while its account is open, owns a lot, or has an order its
+        venue has not confirmed terminal (``LotTable.closed``), while an intent it
+        sent is unacknowledged (``pending_orders``) or unresolved
+        (``unresolved_orders``: the venue may still admit to an order that is its),
+        and while any fill or funding payment waits in ``deferred_events`` (whose
+        order's owner is not known yet). A handle with no account at all is
+        releasable here: nothing here owes it.
         """
         if self.deferred_events:
             return False
@@ -382,24 +395,25 @@ class ReturnConsequences:
             self.table.account(handle)
         except KeyError:
             return True
-        return self.table.closed(handle, tick=tick, patience=patience)
+        return self.table.closed(handle)
 
-    def release(self, handles, mark: int, *, patience: int = 0) -> None:
+    def release(self, handles, mark: int, *, authors=None) -> None:
         """Release closed accounts into the table's counts.
 
         Guarantees every handle is ``releasable`` (otherwise ``ValueError`` and
         nothing changes). Every fact a released account holds is already ledgered
         (its admission, cost, orders, fills and outcome), and a release changes no
-        attribution: its orders keep their owner (``LotTable.order_owner``), so no
-        new evidence precedes it. Handles with no account are skipped.
+        attribution: its orders keep their owner (``LotTable.order_owner``) and the
+        seat that authored it (``authors``), so no new evidence precedes it. Handles
+        with no account are skipped.
         """
         owned = [h for h in dict.fromkeys(handles) if self._has_account(h)]
         if not owned:
             return
         for handle in owned:
-            if not self.releasable(handle, tick=mark, patience=patience):
+            if not self.releasable(handle):
                 raise ValueError(f"account {handle} is not closed and cannot be released")
-        self.table = self.table.release(owned, mark, patience=patience)
+        self.table = self.table.release(owned, mark, authors=authors)
 
     def _has_account(self, handle: str) -> bool:
         try:

@@ -224,7 +224,9 @@ class VaultMixin:
     def _vault_claimed(self, client_id: str) -> frozenset[str]:
         """The venue transactions other vault writes are already bound to."""
         return frozenset(i["result"]["hash"] for cid, i in self.vault_intents.items()
-                         if cid != client_id and i["result"].get("hash"))
+                         if cid != client_id and i["result"].get("hash")) | frozenset(
+            # Transactions of released decisions' writes stay bound (wave 17b).
+            getattr(self, "vault_released_hashes", ()))
 
     def _vault_lookup(self, client_id: str) -> dict:
         """Ask the venue's ledger which row is this write's; never resubmit anything.

@@ -692,7 +692,8 @@ class Runtime(
         only advances, and a router id starting at 0 is fresh, never used before
         (``_fresh_router_id``). The deliveries of a seat (``assembly:<id>``: its
         ballots, testimony, posts and uptake) are read by its next ballot, from its
-        cursor ``policy_seen[lid]`` on (wave 17b). So every delivery before its
+        cursor ``policy_seen[lid]`` on (wave 17b), and those delivered longer ago than
+        the published retention are released unread. So every delivery before its
         reader's cursor is unreachable; the kernel keeps its count
         (``DecisionQueue.release_delivered``), and a decision whose deliveries are
         all read may be released once no other score is owed to it (``_score_owed``).
@@ -709,9 +710,31 @@ class Runtime(
         # deliveries are unreachable the moment they are made; the count stays.
         live_seats = {f"assembly:{aid}" for aid in self.assemblies
                       if aid not in self.retired_assemblies}
-        for actor in self.queue.delivery_actors():
-            if actor not in self.delivered_seen and actor not in live_seats:
-                self.queue.release_delivered(actor, self.queue.delivered_count(actor))
+        # A live seat that is not balloted within the published retention
+        # (``outcome_retention_ticks``, the inbox's rule) is not shown the policy
+        # returns delivered to it before then: they are released unread. Each
+        # boundary marks how many had been delivered by its tick; a mark older than
+        # the retention releases everything delivered by it (the inbox's rule).
+        now, retention = self.ticks_consumed, self._inbox_retention_ticks()
+        holding = self.queue.delivery_actors()
+        for actor in holding:
+            if actor in self.delivered_seen:
+                continue
+            count = self.queue.delivered_count(actor)
+            if actor not in live_seats:
+                self.queue.release_delivered(actor, count)
+                continue
+            marks = self.policy_marks.setdefault(actor, [])
+            if not marks or marks[-1][1] != count:
+                marks.append([now, count])
+            due = [mark for mark in marks if mark[0] < now - retention]
+            if due and due[-1][1] > self.policy_seen.get(actor, 0):
+                self.queue.release_delivered(actor, due[-1][1])
+                self.policy_seen[actor] = due[-1][1]
+            marks[:] = [mark for mark in marks if mark[0] >= now - retention]
+        holding = set(self.queue.delivery_actors())
+        for actor in [a for a in self.policy_marks if a not in holding]:
+            del self.policy_marks[actor]
 
     def _slim_return_events(self) -> None:
         """Drop the payload of every published return no judgement can accept any more.

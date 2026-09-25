@@ -667,18 +667,21 @@ class OutcomeInbox:
         acknowledges it or its retention horizon passes, whichever is first (the
         runtime passes the horizon it publishes, ``storage`` in the world's
         schematics). Guarantees: an unacknowledged item addressed at or after
-        ``before_tick`` stays (an item from a checkpoint older than item ticks counts
-        as addressed at tick 0); a released item's body is released from the archive
-        (``artifact.released``, then collected once no durable checkpoint names it)
-        unless another item this seat still holds carries the same body; the
-        cursors never move; delivery bookkeeping keeps only held items' ids.
+        ``before_tick`` stays, and so does one that carries no tick (an inbox with no
+        tick clock expires nothing; a restore stamps an older checkpoint's items with
+        the restore tick, so they are held a full horizon from it); a released item's
+        body is released from the archive (``artifact.released``, then collected
+        once no durable checkpoint names it) unless another item this seat still
+        holds carries the same body; the cursors never move; delivery bookkeeping
+        keeps only held items' ids.
         """
         released = 0
         for seat, rows in self.items.items():
             cursor = self.cursors.get(seat, 0)
 
             def expired(record, cursor=cursor):
-                return record["seq"] <= cursor or record.get("tick", 0) < before_tick
+                tick = record.get("tick")
+                return record["seq"] <= cursor or (tick is not None and tick < before_tick)
 
             gone = [r for r in rows if expired(r)]
             if not gone:
