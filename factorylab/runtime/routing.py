@@ -2,29 +2,65 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
+from types import MappingProxyType
 from typing import Any
 
 from factorylab.cortex.assembly import PROGRAM_MODEL_ID
-from factorylab.cortex.registration import reward_contracts
+from factorylab.cortex.registration import measured_role, reward_contracts
 from factorylab.kernel.events import Event, EventKind
-from factorylab.kernel.queue import PropensityRecord, SettleStatus
+from factorylab.kernel.queue import PropensityRecord, SettleStatus, action_key
 from factorylab.kernel.registry import Contract
-from factorylab.learners.base import ObservedRewards
+from factorylab.learners.base import NEUTRAL_REWARD, ObservedRewards
 from factorylab.learners.exp3 import EXP3
 from factorylab.learners.router import Router, Sample
-from factorylab.runtime.immune import gamma
+from factorylab.runtime.families import model_family
+from factorylab.runtime.immune import configuration_changed
 from factorylab.runtime.shared import (
+    CH_CONFORMITY,
     CH_CONSEQUENCE,
+    CH_COUNTER,
+    CH_EXPOSURE,
     CH_FAST,
     CH_VERDICT,
+    DEF_COMPOSED,
+    DEF_COUNTER,
+    DEF_EVALUATION,
+    DEF_EXPOSURE,
+    DEF_VERDICT,
+    MAX_FORECAST_HORIZON,
     NOOP,
+    REQUEST_ROUTER,
     assembly_rewards,
     return_channel,
 )
 from factorylab.runtime.subscriptions import is_routine
 from factorylab.world.models import ModelRequest
+
+#: The reward shapes of a contract that reads its subject as a judgement: a verdict
+#: (``forecast``), a grade of the tier below (``conformity``), or a counter-verdict
+#: against another judge (``counter``).
+JUDGING_SHAPES = frozenset({"forecast", "conformity", "counter"})
+#: The adversarial layer's reward shapes (essay II.III.b): an antagonist's exposure
+#: and an adversarial judge's counter-verdict. Their routing mass is capped at
+#: ``evaluation.adversarial_share`` (the majority of evaluations stay
+#: non-adversarial), and neither may be hired by a requester.
+ADVERSARIAL_SHAPES = frozenset({"exposure", "counter"})
+#: Why a judging seat is barred from this subject by family: it shares a family with
+#: an author in the chain it would judge, or with a judge already drawn for it. A draw
+#: whose every seat is barred opens nothing and is counted (``route.barred``).
+BARRED = frozenset({"same-family", "family already drawn for this return"})
+#: Why a seat is off this draw's menu by the draw's own structure: it is not in this
+#: subject's universe, was already drawn for it, would re-judge a return the world
+#: will not measure, or reads this verdict in the other phase (``_route``).
+STRUCTURAL = frozenset({"self-judgement", "already drawn for this return", "no world outcome",
+                        "read at emission", "read at release"})
+#: How many authors of the chain being judged a judging seat's family must avoid: the
+#: author of its subject and the author of that subject's own subject
+#: (``RoutingMixin._chain_families`` argues the depth).
+CHAIN_DEPTH = 2
 
 
 @dataclass(frozen=True)
@@ -59,13 +95,34 @@ class ContractQueue:
     def __getattr__(self, name):
         return getattr(self.queue, name)
 
-    def open(self, *, return_channels=None, **kwargs):
-        """Every possible variant is declared before the first metered call."""
+    def open(self, *, return_channels=None, horizon_ticks=None, deadline_tick=None, **kwargs):
+        """Every possible variant is declared before the first metered call.
+
+        A decision's cutoff is counted in world ticks (essay II.IV.b-c; time audit
+        T3): ``horizon_ticks`` is the loop it waits on and the cutoff adds a ratio
+        slack to it (``clockwork.deadline_ticks``); ``deadline_tick`` states an
+        absolute cutoff tick (a child inheriting its parent's). The kernel's
+        ``deadline_ns`` is the same cutoff converted at the delivered tick, shown to
+        the seat and never compared: only the tick cutoff times a decision out. A
+        caller that still states a wall-clock deadline has it converted once, here.
+        """
+        from factorylab.runtime.clockwork import deadline_ticks, tick_ns, ticks_for
+
+        rt = self.runtime
+        now_tick, now_ns = rt.ticks_consumed, rt.clock.now_ns
+        interval = tick_ns(rt.tick_clock)
+        if horizon_ticks is not None:
+            deadline_tick = now_tick + deadline_ticks(horizon_ticks, rt.m.timing.min_ratio)
+        if deadline_tick is not None:
+            kwargs["deadline_ns"] = now_ns + max(0, deadline_tick - now_tick) * interval
+        else:
+            deadline_tick = now_tick + ticks_for(kwargs["deadline_ns"] - now_ns, rt.tick_clock)
         if return_channels:
             return_channels = dict(return_channels)
             if len(set(return_channels.values())) > 1:
                 kwargs["channel"] = "emits"
         handle = self.queue.open(**kwargs)
+        rt.decision_ticks[handle] = [now_tick, deadline_tick]
         if return_channels:
             self.runtime.ledger.append({"kind": "decision.contract", "handle": handle,
                                         "return_channels": return_channels})
@@ -105,14 +162,90 @@ class ContractQueue:
         decision = self.queue.get(handle)
         return replace(decision, channel=self._channel(handle, decision.channel))
 
+    def opened_tick(self, handle: str) -> int | None:
+        """The world tick a decision opened at, or None for one opened before the tick record."""
+        clock = self.runtime.decision_ticks.get(handle)
+        return None if clock is None else clock[0]
+
+    def deadline_tick(self, handle: str) -> int | None:
+        """The world tick a decision is cut off at, or None for one without a tick cutoff."""
+        clock = self.runtime.decision_ticks.get(handle)
+        return None if clock is None else clock[1]
+
+    def expire_due(self) -> list[str]:
+        """Time out every pending decision whose tick cutoff has passed (time audit T3).
+
+        Guarantees a cutoff is reached by ticks consumed, never by wall time: a
+        stalled loop or a slow tick does not expire a decision whose horizon has
+        not elapsed. A decision restored from a checkpoint that predates the tick
+        record keeps the wall-clock deadline it was opened with. A due decision
+        whose seat declined it settles declined instead, and is not returned.
+        """
+        rt = self.runtime
+        now_tick, now_ns = rt.ticks_consumed, rt.clock.now_ns
+        due = []
+        for decision in self.queue.outstanding():
+            cutoff = self.deadline_tick(decision.handle)
+            if (decision.deadline_ns <= now_ns) if cutoff is None else cutoff <= now_tick:
+                reason = rt._carried_decline(decision.handle)
+                # A refusal reaching its cutoff ungraded settles declined, exactly as
+                # it would at its settlement check: a timeout is credited the
+                # unpriced neutral, and declining must never pass through that door
+                # free (ruling R9).
+                if reason is not None and rt._settle_declined(decision.handle, reason):
+                    continue
+                due.append(decision.handle)
+        return self.queue.time_out(due, now_ns)
+
+    def forget_ticks(self) -> None:
+        """Drop the tick record of every decision whose outcome is final.
+
+        A final decision is never cut off again and its router has learned it in
+        the event that settled it, so only pending and timed-out ones (whose late
+        settlement still reaches a learner) keep their record.
+        """
+        rt = self.runtime
+        for handle in list(rt.decision_ticks):
+            try:
+                status = self.queue.get(handle).status
+            except KeyError:
+                del rt.decision_ticks[handle]
+                continue
+            if status not in (SettleStatus.PENDING, SettleStatus.TIMED_OUT):
+                del rt.decision_ticks[handle]
+
     def outstanding(self, actor=None):
         return [self.get(d.handle) for d in self.queue.outstanding(actor)]
 
     def settle(self, handle, *, channel, **kwargs):
-        """Only the selected variant may settle; the original kernel routing channel is retained."""
+        """Only the selected variant may settle; the original kernel routing channel is retained.
+
+        Guarantees every settlement the runtime makes, whatever path made it (a
+        verdict, a ballot, a censoring), is seen once by the runtime's settlement
+        hook after the kernel retained it: what a decision composed is credited
+        from its one settlement (W4, ``CompositionMixin._settled``).
+        """
         if channel != self.get(handle).channel:
             raise ValueError("settlement must address the selected return channel")
-        return self.queue.settle(handle, channel=self.queue.get(handle).channel, **kwargs)
+        first = self.queue.get(handle).status is SettleStatus.PENDING
+        result = self.queue.settle(handle, channel=self.queue.get(handle).channel, **kwargs)
+        opened = self.opened_tick(handle)
+        if first and opened is not None:
+            # The settle loop of this decision's measured role (time audit T2): how long
+            # a return waits for the signal its learners and its cards are fed from, a
+            # censoring at its horizon included. The scored loop is the same closure
+            # when a real score closed it: what a judgement of that role waits on
+            # before its evidence is complete (the cascade's inner loop, T10).
+            rt = self.runtime
+            role = rt._decision_role(handle)
+            ticks = max(0, rt.ticks_consumed - opened)
+            rt.clockwork.record(f"settle:{role}", ticks)
+            if kwargs.get("status") == SettleStatus.SETTLED:
+                rt.clockwork.record(f"scored:{role}", ticks)
+        hook = getattr(self.runtime, "_settled", None)
+        if hook is not None:
+            hook(handle, kwargs)
+        return result
 
     def _mapped(self, handle, ret):
         """Return the same feedback under its selected channel, retaining every other field.
@@ -133,9 +266,62 @@ class ContractQueue:
         return tuple(self._mapped(r.handle, r) for r in self.queue.returns_for(actor))
 
     def returns_since(self, actor, start):
-        """``(returns_for(actor)[start:], len(returns_for(actor)))``, mapping only the tail."""
-        raw = self.queue.returns_for(actor)
-        return tuple(self._mapped(r.handle, r) for r in raw[start:]), len(raw)
+        """``(deliveries to actor from position start on, delivered_count(actor))``,
+        mapping only the tail."""
+        raw, total = self.queue.returns_since(actor, start)
+        return tuple(self._mapped(r.handle, r) for r in raw), total
+
+    def delivered_count(self, actor):
+        """How many returns were ever delivered to ``actor``, released ones included."""
+        return self.queue.delivered_count(actor)
+
+
+#: What a round that delivered nothing scores, per score definition a router can be
+#: trained on: the reward an abstention (NOOP) is credited, so a seat is woken more
+#: only by beating what doing nothing would have scored on the same scale. A NOOP
+#: that a know-nothing seat outscores is a dead arm: the router pays to wake someone
+#: every time, which is thrash's bill, "the entire cost of exploration" for nothing
+#: delivered (essay II.II.a). Only settled scores need a value: censored,
+#: inapplicable, unmeasured, declined, timed-out and uninformative rounds carry no
+#: score and are imputed. A definition not listed is worth ``NEUTRAL_REWARD``.
+ZERO_CONSEQUENCE: Mapping[str, float] = MappingProxyType({
+    # Producer scores on the midpoint scale: the mean verdict of an uninformed judge.
+    DEF_VERDICT: 0.5,
+    # A composed return's two signals, its verdict and its requester's settled score,
+    # are both on the producer scale.
+    DEF_COMPOSED: 0.5,
+    # An evaluator decision's two signals are both centred at 0.5: an uninformed tier
+    # grade, and a prediction no better than the base rate (``consequence_score``).
+    DEF_EVALUATION: 0.5,
+    # 1 when a ballot matched the promise the world kept: a coin-flip ballot expects 0.5.
+    "policy-promise-brier-v2": 0.5,
+    # Brier scores, 1 - (q - y)^2: the uninformed forecaster (q = 0.5) earns 0.75
+    # whatever happens. The per-predicate prevalence baseline scores at least that,
+    # but it prices a judge's standing question by question, not a router's round.
+    "brier-v1": 0.75,
+    "forecast-mean-v1": 0.75,  # the mean brier-v1 of a forecast return's predictions
+    # 1 - the judges' consequence score on the antagonist's return: an antagonist
+    # whose return they predicted exactly as well as the base rate earns 0.5.
+    DEF_EXPOSURE: 0.5,
+    # 0.5 + 0.5 * (the counter's Brier - the verdict's): a counter that repeats the
+    # verdict it read earns 0.5 whatever happens.
+    DEF_COUNTER: 0.5,
+})
+
+
+def zero_consequence(definition: str) -> float:
+    """What a round settled under ``definition`` scores when it delivered nothing."""
+    return ZERO_CONSEQUENCE.get(definition, NEUTRAL_REWARD)
+
+
+def learning_death_floor(gamma: float) -> float:
+    """The NOOP probability at or above which a draw woke its seats only by exploration.
+
+    Learning death is the frontier that "is no longer being invoked" (essay II.II.a).
+    A router whose every draw in a whole window gave NOOP at least ``1 - gamma`` left
+    its seats at most the exploration mass: they sat at the gamma floor all window.
+    """
+    return 1.0 - gamma
 
 
 @dataclass
@@ -149,10 +335,45 @@ class RouterState:
     # The rewards this router's own draws observed, per arm: what a censored draw
     # is credited instead of a zero (defect 2).
     observed: ObservedRewards = field(default_factory=ObservedRewards)
+    # The live router that replaced this one: a retired router's settled rounds
+    # train its successor, so no reward is spent on a copy that never samples again.
+    successor: str | None = None
+    # [total ticks, rounds]: how long this router's learned seat rounds took to be
+    # learned, in world ticks, the delay an abstention's credit is deferred by.
+    latency: list[int] = field(default_factory=lambda: [0, 0])
+    # definition -> learned seat rounds settled under it: the scales this router's
+    # rewards are on, and so what an abstention is worth to it (``neutral``).
+    definitions: dict[str, int] = field(default_factory=dict)
+    # This window's NOOP watch, {"window", "draws", "min_p"} and, per draw that offered
+    # an unhistoried seat, "unhistoried_offered", the "unhistoried_mass" it put on such
+    # seats, the largest such seat's probability over the exploration floor
+    # ("fresh_ratio_max") and the smallest leading historied seat's probability
+    # ("incumbent_min"); empty before a draw. The immune organ reads it as its
+    # frontier-invocation evidence; no draw reads it.
+    watch: dict = field(default_factory=dict)
+    # The distribution this router last drew from, {action: p}: its own policy
+    # movement is measured against it (the thrash charge; the #134 review).
+    last_draw: dict = field(default_factory=dict)
+
+    def neutral(self) -> float:
+        """Guarantees the zero-consequence reward of the rounds this router learns from.
+
+        It is the mean of ``zero_consequence`` over the definitions its learned seat
+        rounds settled under, weighted by how many settled under each: a router whose
+        seats are scored by Brier credits NOOP 0.75, one scored on producer outcomes
+        0.5, and a mixed router what its own wakes would have scored had every woken
+        seat delivered nothing. ``NEUTRAL_REWARD`` before any seat round is learned.
+        Independent of insertion order, so a resumed router computes the same value.
+        """
+        total = sum(self.definitions.values())
+        if not total:
+            return NEUTRAL_REWARD
+        return math.fsum(zero_consequence(d) * self.definitions[d]
+                         for d in sorted(self.definitions)) / total
 
     def state(self) -> dict:
-        """Retain the exact learner, public universe order and comparator epoch."""
-        return {
+        """Retain the exact learner, public universe order, comparator epoch and successor."""
+        saved = {
             "kind": self.kind,
             "universe": list(self.universe),
             "router": self.router.state(),
@@ -160,6 +381,17 @@ class RouterState:
             "seed_gamma": self.seed_gamma,
             "observed": self.observed.state(),
         }
+        if self.successor is not None:
+            saved["successor"] = self.successor
+        if self.latency[1]:
+            saved["latency_ticks"] = list(self.latency)
+        if self.definitions:
+            saved["definitions"] = dict(self.definitions)
+        if self.watch:
+            saved["watch"] = dict(self.watch)
+        if self.last_draw:
+            saved["last_draw"] = dict(self.last_draw)
+        return saved
 
     @classmethod
     def restore(cls, state: dict) -> RouterState:
@@ -175,7 +407,12 @@ class RouterState:
         universe = list(state["universe"])
         router = Router(learner, lambda _k: [a for a in universe if a != NOOP])
         return cls(state["kind"], universe, learner, router, state["epoch"],
-                   state.get("seed_gamma", 0.1), ObservedRewards(state.get("observed")))
+                   state.get("seed_gamma", 0.1), ObservedRewards(state.get("observed")),
+                   # A router saved before the tick clock measured its delay in wall
+                   # nanoseconds ("latency"): that sample is not read, and restarts.
+                   state.get("successor"), list(state.get("latency_ticks", [0, 0])),
+                   dict(state.get("definitions", {})), dict(state.get("watch", {})),
+                   dict(state.get("last_draw", {})))
 
 
 class _KeyedLearner:
@@ -272,17 +509,23 @@ class RoutingMixin:
             str(ev.kind), "about_handle")
         return ev.payload.get(key)
 
-    def _higher_tier_universe(self, chosen: str) -> list[str]:
+    def _higher_tier_universe(self, chosen: str, ev: Event | None = None) -> list[str]:
         """The assemblies that could judge the meta verdict ``chosen`` is about to emit.
 
         Nothing judges its own output , so the tier above this decision always
         excludes the meta making it: a recursive meta that is the only assembly
         accepting ``MetaVerdict`` is terminal on the tier it judges, and its
         conformity is graded against the consequence rather than waiting for
-        a verdict that no one can give.
+        a verdict that no one can give. Given the event ``chosen`` reads, a seat on
+        a family of the chain its judgement would carry (``chosen``'s own, and the
+        author of what ``chosen`` grades) could never be drawn for it, so it is not
+        a tier above it either (the #132 review, item 3).
         """
         kinds = (self.assemblies[chosen].spec.emits if chosen in self.assemblies
                  else ("MetaVerdict",))
+        barred: set[str] = set()
+        if ev is not None and chosen in self.assemblies:
+            barred = {self._family(chosen)} | self._chain_families(ev, depth=1)
         return sorted(
             a.spec.id
             for a in self.assemblies.values()
@@ -290,9 +533,33 @@ class RoutingMixin:
             and a.spec.id != chosen
             and a.spec.id not in self.retired_assemblies
             and set(assembly_rewards(a.spec).values()) & {"forecast", "conformity"}
+            and self._family(a.spec.id) not in barred
         )
 
+    def _request_universe(self, kind: str) -> list[str]:
+        """The live contracts a request for ``kind`` can be drawn from, in id order.
+
+        Guarantees a request names a kind of work, never a peer (primitive audit
+        F5; essay II.I: composition "without any single system or agent needing to
+        hold the full topology"): the contracts that emit ``kind`` ("I want a
+        Verdict"), or, when none emits it, those that accept it (work on an input
+        of that kind). A retired contract is never in it, so retirement changes
+        the menu and never fails a request. A judging contract is never in it
+        either: it cannot be commissioned (``_commissioned_judge_refusal``). Nor is
+        an adversary (any contract with an exposure-shaped kind): the adversarial
+        minority is a share of routing the kernel caps (``_cap_adversarial``), not
+        a hand any requester may hire, and an Exposure answer can trade.
+        """
+        live = [a.spec for a in self.assemblies.values()
+                if a.spec.id not in self.retired_assemblies
+                and self._commissioned_judge_refusal(a.spec.id) is None
+                and not set(assembly_rewards(a.spec).values()) & ADVERSARIAL_SHAPES]
+        emitters = sorted(s.id for s in live if kind in s.emits)
+        return emitters or sorted(s.id for s in live if kind in s.accepts)
+
     def _universe_for(self, kind: str, ev: Event | None = None) -> list[str]:
+        if kind.startswith(REQUEST_ROUTER):
+            return self._request_universe(kind[len(REQUEST_ROUTER):]) + [NOOP]
         excluded = self._subject_authors(kind, ev)
         ids = sorted(
             a.spec.id
@@ -306,6 +573,31 @@ class RoutingMixin:
 
     def _all_router_states(self) -> list[RouterState]:
         return [st for states in self.routers.values() for st in states]
+
+    def _seed_learner_kind(self, kind: str) -> str:
+        """The algorithm a router the runtime seeds itself for ``kind`` runs.
+
+        Guarantees a no-swap-regret (Blum-Mansour) router exactly for the event kinds
+        the manifest names in ``[evaluation] no_swap_regret_kinds`` (the retentive
+        core, essay II.a) and mean-based EXP3 for every other kind (the frontier).
+        """
+        return ("blum_mansour" if kind in self.m.evaluation.no_swap_regret_kinds
+                else "exp3")
+
+    def _hand_over(self, retired: RouterState, successor: str) -> None:
+        """Point ``retired`` and every router that handed over to it at ``successor``."""
+        old = retired.learner.id
+        retired.successor = successor
+        for state in self.retired_routers.values():
+            if state.successor == old:
+                state.successor = successor
+
+    def _successor_state(self, state: RouterState) -> RouterState:
+        """The live router that learns ``state``'s settled rounds; ``state`` if none is."""
+        if state.successor is None:
+            return state
+        return next((st for st in self._all_router_states()
+                     if st.learner.id == state.successor), state)
 
     def _make_learner(
         self, kind: str, learner_kind: str, gamma: float, universe: list[str], lid: str
@@ -332,10 +624,14 @@ class RoutingMixin:
         learner = self._make_learner(kind, learner_kind, gamma, universe, lid)
         router = Router(learner, lambda _k, u=universe: [x for x in u if x != NOOP])
         state = RouterState(kind, universe, learner, router, seed_gamma=gamma)
-        self.ledger.append({"kind": "router.created", "learner_id": lid, "event_kind": kind,
-                            "replaces": [st.learner.id for st in existing] if replace else []})
+        created = {"kind": "router.created", "learner_id": lid, "event_kind": kind,
+                   "replaces": [st.learner.id for st in existing] if replace else []}
+        if learner_kind != "exp3":
+            created["learner"] = learner_kind
+        self.ledger.append(created)
         if replace:
             for retired in existing:
+                self._hand_over(retired, lid)
                 self._retain_router(retired)
             self.routers[kind] = [state]
         else:
@@ -349,17 +645,12 @@ class RoutingMixin:
         """Stop sampling an old router while its original decisions can still train it."""
         lid = state.learner.id
         if self.queue.outstanding(lid) or (
-            len(self.queue.returns_for(lid)) > self.delivered_seen.get(lid, 0)
-        ) or self._router_owns_grounded_pending(lid):
+            self.queue.delivered_count(lid) > self.delivered_seen.get(lid, 0)
+        ) or self._router_owed_abstention(lid):
             self.ledger.append({"kind": "router.retained", "learner_id": lid})
             self.retired_routers[lid] = state
         else:
             self.queue.retire_actor(lid)
-
-    def _router_owns_grounded_pending(self, learner_id: str) -> bool:
-        """Keep a router addressable until every grounded decision it sampled is final."""
-        pending = getattr(self, "grounded_pending", {})
-        return any(self.queue.get(handle).actor == learner_id for handle in pending)
 
     def _fresh_router_id(self, base: str) -> str:
         """Fresh learners never receive an active or retired learner's delayed returns."""
@@ -376,13 +667,15 @@ class RoutingMixin:
 
         A population assembly's trial ends when ``novelty.trials`` settled
         consequences have been delivered to it (continuations and children do not
-        count) or ``novelty.max_lifetime_windows`` have passed since its
-        registration, whichever comes first: the lifetime ends the trial even when
-        no consequence ever arrived, so silence is not an unbounded entitlement
-        (essay II.IV.b: the compensation period must be shorter than the lifetime).
-        The window after a learning-death flag grants one more trial. A seed
-        assembly has no registration window; it is protected until its first
-        settled record.
+        count) or its patience has passed since its registration, whichever comes
+        first: the lifetime ends the trial even when no consequence ever arrived, so
+        silence is not an unbounded entitlement. Its patience is ``min_ratio``
+        measured consequence periods in ticks (``_patience``; time audit T5), so the
+        consequence that pays it can arrive inside it (essay II.IV.b: the
+        compensation period must be shorter than the lifetime). A seed assembly has
+        no registration tick; it is protected until its first settled record. A seat
+        past its trial still reaches the niche through each unhistoried action it
+        takes (``_niche_action``; ruling R5).
         """
         try:
             population = self.registry.get(action_id).provenance != "seed"
@@ -390,21 +683,69 @@ class RoutingMixin:
             population = False
         if not population:
             return not self.queue.has_history(action_id)
-        born = self.stats.registered_window.get(action_id, self.stats.reserve_windows)
-        if self.stats.reserve_windows - born >= self.m.novelty.max_lifetime_windows:
+        # Registered before the tick clock: its patience counts from the first read.
+        born = self.stats.registered_tick.setdefault(action_id, self.ticks_consumed)
+        if self.ticks_consumed - born >= self._patience():
             return False
         if not self.queue.has_history(action_id):
             return True
         delivered = self.stats.consequences_by_assembly.get(action_id, 0)
-        return delivered < self.m.novelty.trials or self._novelty_grant_open(action_id)
+        return delivered < self.m.novelty.trials
 
-    def _novelty_grant_open(self, assembly_id: str) -> bool:
-        """A learning-death grant is one extra trial per assembly, live only in the window
-        it was issued for and spent by that assembly's first delivered trial beyond the
-        base allowance; an unspent grant expires at the next boundary."""
-        grant = self.novelty_grant
-        return (grant["window"] == self.stats.reserve_windows
-                and assembly_id not in grant["consumed"])
+    def _tool_action(self, tool_id: str) -> str:
+        """The action key of a call to ``tool_id``: the tool and the kind it is published as."""
+        spec = self.tool_specs.get(tool_id) or {}
+        return action_key(tool=str(tool_id), kind=str(spec.get("kind") or "tool"))
+
+    def _niche_action(self, handle: str, reason: str) -> str | None:
+        """The unhistoried action a metered call serves, or None when it serves none.
+
+        Essay II.II.b; ruling R5: "Some share of compute and write access is usable
+        only in the context of unhistoried actions (decisions that arrive carrying
+        no propensity record and no reward trail)". Two calls qualify, for any seat
+        the router drew, historied or not:
+
+        * a **tool call** of a (tool, kind) that no decision of the seat carrying a
+          propensity record or a delivered return has taken
+          (``DecisionQueue.has_action_history``: censored work counts);
+        * the **one model call** that reads such a call's result in the same
+          decision (``niche_rounds``, cleared once that call returns).
+
+        A committee ballot (the policy channel) never qualifies, nor does a seat that
+        has used its share of the period's niche (``novelty.seat_share``), so no one
+        seat can starve the registration trials. The kernel names what is eligible
+        and makes the reserve available to it; it never chooses a seat's action, and
+        nothing tells the seat the niche exists beyond the schematic in
+        ``world.mechanics.novelty``.
+        """
+        try:
+            decision = self.queue.get(handle)
+        except KeyError:
+            return None
+        seat = decision.propensity.chosen
+        if seat not in self.assemblies or decision.channel == "policy":
+            return None
+        if self._niche_room(seat) <= 0:
+            return None
+        if reason.startswith("tool:"):
+            tool = reason.removeprefix("tool:")
+            if tool not in self.tool_specs:
+                return None
+            key = self._tool_action(tool)
+            return None if self.queue.has_action_history(seat, key) else key
+        if reason == f"model:{self.assemblies[seat].spec.model_id}":
+            return self.niche_rounds.get(handle)
+        return None
+
+    def _niche_room(self, seat: str) -> int:
+        """What of this period's niche ``seat`` may still spend, in micro-USD.
+
+        ``novelty.seat_share`` of the period's share of the reserve, less what the
+        seat's unhistoried actions used since the period opened (``niche_use``).
+        """
+        use = self.niche_use
+        limit = int(use.get("cap", 0) * self.m.novelty.seat_share)
+        return max(0, limit - use.get("used", {}).get(seat, 0))
 
     def _register_with_trial(self, contract: Contract, handle: str, amount: int,
                              *, refuse: str = ""):
@@ -431,7 +772,10 @@ class RoutingMixin:
                 and self.queue.has_history(contract_id))
 
     def _novelty_compute(self, handle: str, reason: str) -> bool:
-        """Only an assembly's own model calls can use its novelty entitlement."""
+        """An unhistoried seat's own model calls, and every call an unhistoried action
+        makes (``_niche_action``), may use the novelty entitlement; nothing else."""
+        if self._niche_action(handle, reason) is not None:
+            return True
         if not reason.startswith("model:"):
             return False
         try:
@@ -456,8 +800,10 @@ class RoutingMixin:
         """The ceiling one call of this seat needs now: its last rendered ceiling plus the
         input price of every character the world block has grown by since (at the
         meter's own slack). Before its first call, the ceiling of its last hold.
-        A flat-fee seat (a program) needs its fee: the world block's growth costs
-        it nothing, so there is no growth term and no token price to look up."""
+        A program seat needs nothing: its jail pays no one, so its recorded ceiling
+        is zero, the world block's growth costs it nothing and there is no token
+        price to look up. Its entitlement therefore does not bound it; the limits
+        that do are the kernel's (docs/manifest.md, "Program seats")."""
         record = self.seat_ceilings.get(action_id)
         if record is None:
             return self.budget.last_hold(action_id)
@@ -531,7 +877,8 @@ class RoutingMixin:
         """
         share = self.ev.adversarial_share
         adversaries = [a for a in dist if a in self.assemblies
-                       and "exposure" in assembly_rewards(self.assemblies[a].spec).values()]
+                       and set(assembly_rewards(self.assemblies[a].spec).values())
+                       & ADVERSARIAL_SHAPES]
         rest = [a for a in dist if a not in adversaries]
         mass = sum(dist[a] for a in adversaries)
         rest_mass = sum(dist[a] for a in rest)
@@ -564,41 +911,139 @@ class RoutingMixin:
         # buys no faster path to the tier above it by being registered under a new
         # name. Tier one is the seed Verdict; every conformity-shaped kind, seed or
         # population, is buffered with the others at the tier it judges.
-        if ev.kind is EventKind.VERDICT or conformity:
-            ev = self._cascade_arrival(ev)
-            if ev is None:
-                return
-        states = list(self.routers.get(kind, []))
-        if self._is_final_grounded_commission(ev) and states:
-            # A grounded consequence is one commission, so additive routers do
-            # not multiply its paid final answer. Router registration order is
-            # checkpointed and deterministic; the selected router still samples
-            # an evaluator (or NOOP) and records that draw's full propensity.
-            selected = states[0]
-            self.ledger.append({
-                "kind": "consequence.final_router",
-                "event_id": ev.id,
-                "policy": "first-active-router-v1",
-                "router": selected.learner.id,
-                "eligible_routers": [state.learner.id for state in states],
-                "ts": self.clock.now_ns,
-            })
-            states = [selected]
-        for state in states:
-            if self.wallet.dead:
-                break
-            self._route_with(state, ev)
+        first_tier = ev.kind is EventKind.VERDICT and "tier" not in ev.payload
+        if first_tier:
+            self._draw_counters(ev)
+        released = ([ev] if not (ev.kind is EventKind.VERDICT or conformity)
+                    else self._cascade_releases(ev))
+        for event in released:
+            states = list(self.routers.get(kind, []))
+            drawn: list[str] = []
+            # A judged return's routers draw one after another, each excluding the judges
+            # already drawn for it and their families (the #132 Codex review): two
+            # routers of one kind never put two judges of a family on one return.
+            judged = self._judged_return(event)
+            for state in states:
+                if self.wallet.dead or self._safety_stop is not None:
+                    break
+                exclude = frozenset(a for a in drawn if a != NOOP) if judged else frozenset()
+                chosen = self._route_with(state, event, exclude=exclude,
+                                          phase="release" if first_tier else None)
+                if chosen is not None:
+                    drawn.append(chosen)
+            self._draw_more_judges(event, states, drawn)
 
-    @staticmethod
-    def _is_final_grounded_commission(ev: Event) -> bool:
-        """True only for the frozen-contract request, not its recursive verdict."""
-        inputs = ev.payload.get("inputs")
-        return (
-            ev.payload.get("grounded_consequence") is True
-            and isinstance(ev.payload.get("contract"), Mapping)
-            and isinstance(inputs, Mapping)
-            and inputs.get("kind") == "RealizedConsequence"
-        )
+    def _draw_counters(self, ev: Event) -> None:
+        """An adversarial judge reads a first-tier verdict when it is given (the #132 review).
+
+        Guarantees the draw happens while the verdict's event is routed, in the tick
+        the verdict was made, over the counter-shaped seats alone (every other seat
+        reads the verdict at the cascade's release), and only when some such seat
+        could read it: the world will measure the return, and the seat is off the
+        chain's families. The judge's frozen view (``verdict_views``) is consumed
+        here: a counter reads it or nothing does.
+        """
+        judge = ev.payload.get("evaluator_handle")
+        try:
+            chain = self._chain_families(ev)
+            readable = self._world_will_measure(ev) and any(
+                a in self.assemblies and a not in self.retired_assemblies
+                and "counter" in assembly_rewards(self.assemblies[a].spec).values()
+                and self._family(a) not in chain
+                for a in self._universe_for(str(ev.kind), ev))
+            if not readable:
+                return
+            for state in list(self.routers.get(str(ev.kind), [])):
+                if self.wallet.dead or self._safety_stop is not None:
+                    break
+                self._route_with(state, ev, phase="emission")
+        finally:
+            self.verdict_views.pop(judge, None)
+    def _judging(self, action_id: str) -> bool:
+        """Whether a contract reads its subject as a judgement: a verdict, a grade, a counter."""
+        spec = self.assemblies[action_id].spec
+        return bool(set(assembly_rewards(spec).values()) & JUDGING_SHAPES)
+
+    def _family(self, action_id: str) -> str | None:
+        """The foundation family a seat's current model belongs to (``families``)."""
+        asm = self.assemblies.get(action_id)
+        return None if asm is None else model_family(asm.spec.model_id)
+
+    def _author_family(self, ev: Event) -> str | None:
+        """The family of the seat that authored an event's subject, or None without one."""
+        author = self.handle_to_assembly.get(self._event_subject(ev) or "")
+        return self._family(author) if author is not None else None
+
+    def _chain_families(self, ev: Event, depth: int = CHAIN_DEPTH) -> set[str]:
+        """The families a seat that judges ``ev``'s subject must not share (the #132 review).
+
+        Guarantees the families of the authors of the first ``depth`` links of the
+        chain being judged: the subject's author, then the author of what that
+        subject itself judged (``decision_subjects``), and so on. A first-tier judge
+        avoids the producer's family; a meta avoids the judge it grades and that
+        judge's producer; a tier-three grader avoids the meta and the judge.
+
+        Why two links. A grade at tier t is a prediction of the consequence score of
+        the tier t-1 decision it reads, and that score is the world's scoring of the
+        tier t-1 decision's own prediction about tier t-2's work: exactly two authors
+        fix what a grade is about. A reader on either family would grade its own
+        family's reading, or its own family's work as another family read it (essay
+        II.IV: a shared foundation model is a forcing function; II.III.b: the classes
+        "are not permitted to collude"). A link further down reaches the reader only
+        through a reading by a foreign family, which these two links already keep
+        foreign. A whole-chain rule would need t+1 families at tier t, so the depth
+        of recursion would be set by the breadth of the model menu rather than by
+        the evaluators; at two links, three families sustain any depth (II.III:
+        "stacking to some arbitrary level").
+        """
+        families: set[str] = set()
+        subject = self._event_subject(ev)
+        for _ in range(depth):
+            author = self.handle_to_assembly.get(subject or "")
+            if author is None:
+                break
+            family = self._family(author)
+            if family is not None:
+                families.add(family)
+            subject = self.decision_subjects.get(subject)
+        return families
+
+    def _judged_return(self, ev: Event) -> bool:
+        """Whether an event is a return whose reward is its readers' verdicts."""
+        kind = str(ev.kind)
+        return (kind in ("ProducerReturn", "Exposure")
+                or self._kind_rewards().get(kind) in ("judged", "exposure"))
+
+    def _draw_more_judges(self, ev: Event, states: list, drawn: list[str]) -> None:
+        """A share of returns is drawn again, so two or more judges read it (P6, M2).
+
+        Guarantees: with probability ``evaluation.multi_judge_share``, drawn once per
+        judged return from the runtime's seeded stream and never drawn when the share
+        is zero, the return's first router draws again until it has drawn
+        ``evaluation.multi_judge_count`` times. Each further draw is an ordinary
+        routed decision with its own logged propensity, from the same learner over
+        its menu less every seat already drawn for this return and every seat on the
+        family of one already drawn (rulings §2: two or more judges "on different
+        model families (never the author's)"). NOOP stays on the menu: the router may
+        still decline to wake another judge. The judges' verdicts are averaged by the
+        reward chain (``_settle_arrived_verdicts``), and the spread between them is
+        the ensemble disagreement the early-warning statistics read (essay II.III.a).
+        """
+        share = self.ev.multi_judge_share
+        if (share <= 0 or not states or self.wallet.dead or not self._judged_return(ev)
+                or self.rng.random() >= share):
+            return
+        seats = [a for a in drawn if a != NOOP and a in self.assemblies]
+        self.ledger.append({"kind": "route.multi_judge", "event_id": ev.id,
+                            "subject": self._event_subject(ev), "first": list(seats),
+                            "draws": self.ev.multi_judge_count, "ts": self.clock.now_ns})
+        for draw in range(len(drawn), self.ev.multi_judge_count):
+            if self.wallet.dead or self._safety_stop is not None:
+                break
+            exclude = frozenset(seats)
+            chosen = self._route_with(states[0], ev, exclude=exclude, draw=draw)
+            if chosen is not None and chosen != NOOP:
+                seats.append(chosen)
 
     def _addressed_seat(self, ev: Event) -> str | None:
         """The one seat an event is addressed to, or None when the draw is open.
@@ -626,43 +1071,93 @@ class RoutingMixin:
         if addressed is not None and action_id != addressed:
             return "asleep: this event is addressed to another seat"
         return book.absent(action_id, str(ev.kind), now=self.tick_index,
-                           coins=book.fold_coins(action_id))
+                           coins=book.fold_coins(action_id), jitter=self._wake_jitter)
 
     def _quiet_tick(self, ev: Event, candidates: list[str],
                     excluded: dict[str, str]) -> bool:
-        """True when this draw reached nobody because the seats were asleep.
+        """True when this draw reached nobody because the seats were asleep or barred.
 
         A tick that routes to nobody is not an abstention; it is nothing. It is
         ledgered once, with how many seats were absent and why, and no decision
-        is opened. Unaffordability is left exactly as it was: a draw where any
-        seat was excluded for compute keeps the old path, because that exclusion
-        is what the insolvency streak is made of.
+        is opened. The same holds for a draw whose every seat is off its menu by
+        the draw's own structure, or barred from this subject by family
+        (``_route_with``): the router had nobody to choose, so a NOOP there would be
+        a round it never played. A barred draw is a subject no eligible reader can
+        judge, so it is ledgered ``route.barred`` and counted, never silent (the
+        #132 review, item 3). Unaffordability is left exactly as it was: a draw
+        where any seat was excluded for compute keeps the old path, because that
+        exclusion is what the insolvency streak is made of.
         """
         if not candidates or any(a not in excluded for a in candidates):
             return False
         reasons = {a: excluded[a] for a in candidates}
         if any(r.startswith("compute:") for r in reasons.values()):
             return False
-        if not any(r.startswith("asleep:") for r in reasons.values()):
+        known = BARRED | STRUCTURAL
+        barred = any(r in BARRED for r in reasons.values())
+        structural = (all(r in known or r.startswith("asleep:") for r in reasons.values())
+                      and any(r in known and r != "self-judgement" for r in reasons.values()))
+        if barred and all(r in known for r in reasons.values()):
+            self.stats.route_barred += 1
+            self.ledger.append({"kind": "route.barred", "n": self.n, "event_id": ev.id,
+                                "event_kind": str(ev.kind),
+                                "subject": self._event_subject(ev),
+                                "why": dict(sorted(reasons.items())), "ts": self.clock.now_ns})
+            return True
+        if not structural and not any(r.startswith("asleep:") for r in reasons.values()):
             return False
         self.ledger.append({"kind": "tick.quiet", "n": self.n, "event_id": ev.id,
                             "event_kind": str(ev.kind), "absent": len(reasons),
                             "why": dict(sorted(reasons.items())), "ts": self.clock.now_ns})
         return True
 
-    def _route_with(self, state: RouterState, ev: Event) -> None:
+    def _route_with(self, state: RouterState, ev: Event, *,
+                    exclude: frozenset[str] = frozenset(), draw: int = 0,
+                    phase: str | None = None) -> str | None:
+        """Draw one seat for ``ev`` from ``state``; the chosen seat, or None when quiet.
+
+        ``exclude`` names seats already drawn for this event (``_draw_more_judges``):
+        they and every seat on one of their families are off this draw's menu, and
+        ``draw`` numbers the draw so a keyed learner freezes a round per draw. A
+        first-tier verdict is drawn for twice (``_route``): at ``phase`` "emission"
+        only its counter-shaped readers are on the menu, at "release" only the rest.
+        """
         kind = str(ev.kind)
         def mix(dist):
             return self._cap_adversarial(self._mix_with_standing(dist))
 
-        key = f"{state.learner.id}:{self.n}"
+        key = (f"{state.learner.id}:{self.n}" + (f":{draw}" if draw else "")
+               + (":emission" if phase == "emission" else ""))
         if isinstance(state.learner, _KeyedLearner):
             state.learner.current_key = key
         universe = self._universe_for(kind, ev)
+        # Essay II.IV: a shared foundation model is a forcing function, and II.III.b
+        # forbids the producer and evaluator classes to collude. A seat that judges
+        # never shares a family with the authors of the chain it would judge, at any
+        # tier (evaluations P6; the #132 review, item 3).
+        chain = self._chain_families(ev)
+        taken = {self._family(a) for a in exclude}
 
         def feasible(action_id: str) -> tuple[bool, str]:
             if action_id not in universe:
                 return False, "self-judgement"
+            if action_id in exclude:
+                return False, "already drawn for this return"
+            counter = "counter" in assembly_rewards(self.assemblies[action_id].spec).values()
+            if phase == "emission" and not counter:
+                return False, "read at release"
+            if phase == "release" and counter:
+                return False, "read at emission"
+            judging = self._judging(action_id)
+            if judging and self._family(action_id) in chain:
+                return False, "same-family"
+            if judging and self._family(action_id) in taken:
+                return False, "family already drawn for this return"
+            if counter and not self._world_will_measure(ev):
+                # A counter-verdict is paid only by the world's measurement of the
+                # return it re-judges (``_settle_counters``): one the world will not
+                # measure could only ever settle censored.
+                return False, "no world outcome"
             asleep = self._asleep(action_id, ev)
             if asleep:
                 return False, asleep
@@ -676,7 +1171,7 @@ class RoutingMixin:
                 # A draw that opened no decision is no round: the snapshot the
                 # distribution froze for it would otherwise wait forever.
                 state.learner.inner.discard_for(key)
-            return
+            return None
         unaffordable = bool(candidates) and all(
             excluded.get(a, "").startswith("compute:") for a in candidates
         )
@@ -692,31 +1187,31 @@ class RoutingMixin:
         self._compute_unaffordable |= unaffordable
         self.stats.exclusions += len(sample.excluded)
         for assembly_id, reason in sample.excluded:
-            if reason == "self-judgement":
+            if reason in ("self-judgement", "same-family"):
                 self.ledger.append({"kind": "route.excluded", "event_id": ev.id,
                                     "router": state.learner.id, "assembly_id": assembly_id,
                                     "reason": reason, "ts": self.clock.now_ns})
         channels = self._return_channels(sample.chosen, ev)
         channel = next(iter(channels.values()), CH_VERDICT)
-        deadline = (
-            self.clock.now_ns + (self.ev.verdict_timeout_ticks + 2) * self.tick_clock.interval_ns
-        )
-        if set(channels.values()) & {CH_FAST, CH_CONSEQUENCE}:
-            # A top meta is graded against the judged verdict's eventual consequence, so
-            # its decision lives as long as the return's backstop, like a forecast.
-            deadline = self.clock.now_ns + (
-                (self.ev.consequence_backstop_ticks + 2) * self.tick_clock.interval_ns * 4
-            )
+        # A decision's cutoff is the loop it waits on, in world ticks, plus a ratio
+        # slack (time audit T3, T12): a producer's return waits on its judges.
+        horizon = self.ev.verdict_timeout_ticks
+        if set(channels.values()) & {CH_FAST, CH_CONFORMITY, CH_EXPOSURE, CH_CONSEQUENCE,
+                                     CH_COUNTER}:
+            # An evaluator decision is graded against its judged decision's measured
+            # outcome and an exposure against its judges' (ruling R1), so each lives as
+            # long as the return's backstop, like a forecast.
+            horizon = self.ev.consequence_backstop_ticks
         if CH_CONSEQUENCE in channels.values():
-            # A population forecast may select any of the admitted 1..200 event
-            # horizons; its invocation must not expire before its predictions.
-            deadline = max(deadline, self.clock.now_ns + 202 * self.tick_clock.interval_ns * 4)
+            # A population forecast may select any admitted horizon; its invocation
+            # must not be cut off before its predictions come due.
+            horizon = max(horizon, MAX_FORECAST_HORIZON)
         handle = self.queue.open(
             actor=sample.learner_id,
             event_id=ev.id,
             propensity=self._propensity(sample),
             channel=channel,
-            deadline_ns=deadline,
+            horizon_ticks=horizon,
             parent_handle=None,
             cost_ceiling=(self.wallet.unhistoried_available
                           if sample.chosen != NOOP and self._unhistoried(sample.chosen)
@@ -725,6 +1220,15 @@ class RoutingMixin:
         )
         if isinstance(state.learner, _KeyedLearner):
             self.snapshot_keys[handle] = key
+        if sample.chosen == NOOP:
+            # Ruling R9: waking nobody is a real choice and a decision in this window
+            # like any other, so it is priced on the charter cards of the roles it would
+            # have filled, as a woken decision is (``_priced_abstention``).
+            roles = self._abstention_roles(sample)
+            row = self._contribution(handle, max(sorted(roles), key=roles.get))
+            row["menu_roles"] = roles
+        self._watch_abstention(state, sample)
+        self._record_movement(state, sample, handle)
         self.stats.decisions += 1
         if self.stats.sample_propensity is None and sample.chosen != NOOP:
             self.stats.sample_propensity = {
@@ -739,7 +1243,128 @@ class RoutingMixin:
             # A routine paid wake is what a cadence floor counts the ticks between,
             # and it ends whatever sleep the seat had bought itself.
             book.woke(sample.chosen, now=self.tick_index)
-        self._assembly_step(ev, handle, sample, deadline)
+        self._assembly_step(ev, handle, sample, self.queue.get(handle).deadline_ns)
+        return sample.chosen
+
+    def _abstention_roles(self, sample: Sample) -> dict[str, float]:
+        """The roles an abstention stood in for: the draw's own odds over the woken arms.
+
+        Guarantees weights over measured roles that sum to 1: each seat on the menu
+        contributes its drawn probability, renormalised over the seats, to the role its
+        contract is measured in (equal weights if the draw gave the seats no mass). A
+        menu of one role is that role alone; a judge router whose menu also holds a
+        producing seat stood in for both, in the proportion it would have woken them.
+        A draw that could wake no seat at all (each excluded, as an unaffordable one
+        is) stood in for the seats it excluded, equally.
+        """
+        mass: dict[str, float] = {}
+        seats = [(a, p) for a, p in zip(sample.action_ids, sample.probs, strict=True)
+                 if a != NOOP and a in self.assemblies]
+        if not seats:
+            seats = [(a, 0.0) for a, _why in sample.excluded if a in self.assemblies]
+        total = sum(p for _a, p in seats)
+        for action, p in seats:
+            role = measured_role(self.assemblies[action].spec.emits)
+            mass[role] = mass.get(role, 0.0) + (p / total if total > 0 else 1 / len(seats))
+        return mass or {"producer": 1.0}
+
+    def _watch_abstention(self, state: RouterState, sample: Sample) -> None:
+        """Watch this draw's NOOP probability: the router's frontier-invocation evidence.
+
+        Guarantees the draw is made and nothing here changes it. A draw without NOOP
+        on its menu is not watched; a draw in a new window starts a new watch. The
+        immune organ reads the watches of the window it closes as the frontier signal
+        of its one learning-death diagnosis (``frontier_invocation``; ruling R9,
+        versioning U1, time T16).
+        """
+        if NOOP not in sample.action_ids:
+            return
+        p = sample.probs[list(sample.action_ids).index(NOOP)]
+        # The draw mass on seats with no settled record: a frontier offered unhistoried
+        # seats and never drawing them is quarantined (versioning audit P1).
+        fresh = [q for a, q in zip(sample.action_ids, sample.probs, strict=True)
+                 if a != NOOP and a in self.assemblies and self._unhistoried(a)]
+        self._close_abstention_watch(state)
+        if not state.watch:
+            state.watch = {"window": self.window.index, "draws": 0, "min_p": p}
+        state.watch["draws"] += 1
+        state.watch["min_p"] = min(state.watch["min_p"], p)
+        known = [q for a, q in zip(sample.action_ids, sample.probs, strict=True)
+                 if a != NOOP and a in self.assemblies and not self._unhistoried(a)]
+        if fresh:
+            from factorylab.runtime.immune import gamma
+
+            watch = state.watch
+            watch["unhistoried_offered"] = watch.get("unhistoried_offered", 0) + 1
+            watch["unhistoried_mass"] = watch.get("unhistoried_mass", 0.0) + math.fsum(fresh)
+            # The exploration floor gamma/N is what EXP3 gives every arm whatever its
+            # weight; a fresh seat held at it is offered and never chosen on merit.
+            floor = gamma(state.learner) / len(sample.action_ids)
+            watch["fresh_ratio_max"] = max(watch.get("fresh_ratio_max", 0.0),
+                                           max(fresh) / floor if floor > 0 else math.inf)
+            watch["incumbent_min"] = min(watch.get("incumbent_min", 1.0), max(known, default=0.0))
+
+    def _record_movement(self, state: RouterState, sample: Sample, handle: str) -> None:
+        """A core router's policy movement at this draw: TV from the draw before it.
+
+        Essay II.II.b: thrash is priced "incentivizing the surplus-retaining core of
+        no-swap-regret learners to stabilize". What a router can hold still is its own
+        policy, so the thrash charge on this round (``FeedbackMixin._thrash_charged``)
+        scales with how far this draw's distribution moved from the router's last,
+        over the union of their actions; a first draw has not moved.
+        """
+        if state.kind not in self.m.evaluation.no_swap_regret_kinds:
+            return
+        now = dict(zip(sample.action_ids, (float(p) for p in sample.probs), strict=True))
+        before = state.last_draw
+        moved = (0.5 * math.fsum(abs(now.get(a, 0.0) - before.get(a, 0.0))
+                                 for a in sorted(set(now) | set(before))) if before else 0.0)
+        state.last_draw = now
+        # The thrash price in force now times this movement is the round's charge; with
+        # no price in force (the common case) nothing is held for it.
+        charge = min(self.m.prices.penalty_cap,
+                     self.stats.thrash.get("lambda", 0.0) * min(1.0, moved))
+        if charge > 0:
+            self.thrash_charges[handle] = charge
+
+    def _close_abstention_watch(self, state: RouterState) -> None:
+        """Drop a watch whose window has ended; the immune organ read it at the close."""
+        if state.watch and state.watch["window"] != self.window.index:
+            state.watch = {}
+
+    def frontier_invocation(self) -> list[dict[str, Any]]:
+        """Each live router's invocation of its seats in the window now closing.
+
+        Guarantees one row per router that drew with NOOP on its menu in this
+        window: its draws, its lowest NOOP probability, and ``uninvoked`` when every
+        draw gave NOOP at least ``learning_death_floor(seed_gamma)``, so its seats were
+        woken only by exploration all window, the frontier "no longer being invoked"
+        (essay II.II.a). It is evidence inside the immune organ's learning-death
+        diagnosis, not a second definition of it.
+        """
+        rows = []
+        for state in self._all_router_states():
+            watch = state.watch
+            if not watch or watch["window"] != self.window.index:
+                continue
+            floor = learning_death_floor(state.seed_gamma)
+            # Quarantined (essay II.II.a): every draw that offered an unhistoried seat
+            # held it within the organ's tolerance of the exploration floor,
+            # (1 + immune.tv_threshold) * gamma / N, while a historied seat held more
+            # than all the other arms together.
+            offered = watch.get("unhistoried_offered", 0)
+            quarantined = bool(offered) and (
+                watch.get("fresh_ratio_max", math.inf) <= 1 + self.m.immune.tv_threshold
+                and watch.get("incumbent_min", 0.0) > 0.5)
+            rows.append({"router": state.learner.id, "event_kind": state.kind,
+                         "quarantined": quarantined,
+                         # The retentive core (essay II.I.a) is not the frontier.
+                         "core": state.kind in self.m.evaluation.no_swap_regret_kinds,
+                         "draws": watch["draws"], "min_p_noop": watch["min_p"],
+                         "floor": floor, "uninvoked": watch["min_p"] >= floor,
+                         "unhistoried_offered": watch.get("unhistoried_offered", 0),
+                         "unhistoried_mass": watch.get("unhistoried_mass", 0.0)})
+        return sorted(rows, key=lambda row: row["router"])
 
     @staticmethod
     def _propensity(sample: Sample) -> PropensityRecord:
@@ -755,7 +1380,7 @@ class RoutingMixin:
     def _return_channels(self, action_id: str, ev: Event | None = None) -> dict[str, str]:
         """Each output kind declares its reward contract, independent of the accepted event."""
         excluded = self._subject_authors(str(ev.kind), ev) if ev else set()
-        higher = set(self._higher_tier_universe(action_id)) - excluded
+        higher = set(self._higher_tier_universe(action_id, ev)) - excluded
         if action_id == NOOP:
             # Abstention shares a homogeneous menu's contract, including the four
             # shipped seeds. A mixed menu has no selected output and is inapplicable.
@@ -780,15 +1405,65 @@ class RoutingMixin:
         return {kind: return_channel(kind, shapes.get(kind, defaults[kind]), higher=bool(higher))
                 for kind in kinds}
 
+    def _epoch_due(self, kind: str) -> bool:
+        """Whether a kind's routers may open a new epoch now (time audit T6).
+
+        Essay II.IV.b: "some speed limit needs to be applied to the velocity with
+        which the factory refactors itself, allowing feedback loops the time they
+        need to actually close". A router's menu grows at most once per
+        ``min_ratio`` measured periods of its own rounds, in ticks: a registration
+        waits for the rounds drawn over the old menu to be learned before the menu
+        changes again.
+        """
+        opened = self.clockwork.opened(f"epoch:{kind}")
+        inner = self.clockwork.measured(f"router:{kind}")
+        # §IV.c: the loop changing a router's action set is an outer loop over that
+        # router's rounds, so it keeps the same min_ratio separation (Codex review).
+        return opened is None or self.ticks_consumed - opened >= self.m.timing.min_ratio * inner
+
+    def _open_pending_epochs(self) -> None:
+        """Open every deferred epoch whose speed limit has passed."""
+        for kind in list(self.pending_epochs):
+            self._open_epoch(kind)
+
     def _open_epoch(self, kind: str) -> None:
         universe = self._universe_for(kind)
         entry = {"kind": "epoch", "event_kind": kind, "universe": universe, "ts": self.clock.now_ns}
         states = self.routers.get(kind)
+        now = self.ticks_consumed
         if not states:
-            self._build_router(kind, "exp3", self.router_gamma)
+            self._build_router(kind, self._seed_learner_kind(kind), self.router_gamma)
             self.ledger.append({**entry, "carried": False})
             self.stats.epochs += 1
+            configuration_changed(self, f"router:{kind}", self.clockwork.measured(
+                f"router:{kind}"))
+            self.clockwork.loops[f"epoch:{kind}"] = {"opened": now, "due": now, "period": 1.0,
+                                                    "inner": 1, "fires": 1}
             return
+        # Only a grown menu waits: a retirement is already cadence-gated, and a router
+        # must never keep drawing an assembly that left.
+        grows = (any(set(universe) > set(st.universe) for st in states)
+                 and not any(set(st.universe) - set(universe) for st in states))
+        if grows and not self._epoch_due(kind):
+            if kind not in self.pending_epochs:
+                self.ledger.append({"kind": "epoch.deferred", "event_kind": kind,
+                                    "universe": universe, "tick": now,
+                                    "since_tick": self.clockwork.opened(f"epoch:{kind}"),
+                                    "inner_ticks": self.clockwork.measured(f"router:{kind}"),
+                                    "ts": self.clock.now_ns})
+                self.pending_epochs[kind] = now
+            return
+        self.pending_epochs.pop(kind, None)
+        if any(universe != st.universe for st in states):
+            # Time audit T14: an epoch replaces the router's configuration; how long
+            # the last one lived, against the loop that corrects it.
+            configuration_changed(self, f"router:{kind}", self.clockwork.measured(
+                f"router:{kind}"))
+            previous = self.clockwork.loops.get(f"epoch:{kind}", {})
+            self.clockwork.loops[f"epoch:{kind}"] = {
+                "opened": now, "due": now, "period": 1.0,
+                "inner": self.clockwork.measured(f"router:{kind}"),
+                "fires": previous.get("fires", 0) + 1}
         for i, state in enumerate(list(states)):
             if universe == state.universe:
                 continue
@@ -801,7 +1476,10 @@ class RoutingMixin:
                 )
                 state.epoch += 1
                 self.ledger.append({**entry, "carried": True, "router": state.learner.id})
-            else:  # A shrinking universe gets a new identity; old decisions train the old one.
+            else:
+                # A shrinking universe (or any swap router's) gets a new identity that
+                # keeps the weights learned so far; the old identity stays addressable
+                # for its in-flight decisions, whose settled rounds train the new one.
                 lid = self._fresh_router_id(state.learner.id)
                 if isinstance(state.learner, EXP3):
                     saved = state.learner.state()
@@ -816,9 +1494,12 @@ class RoutingMixin:
                         a: retained.get(a, mean) for a in universe})
                     fresh = EXP3.restore(saved)
                 else:
-                    fresh = self._make_learner(
-                        kind, "blum_mansour", gamma(state.learner), universe, lid)
+                    from factorylab.learners.delayed import SnapshotLearner
+
+                    swap = state.learner.inner.inner.reshaped(universe, id=lid)
+                    fresh = _KeyedLearner(SnapshotLearner(swap, id=lid))
                 self.ledger.append({**entry, "carried": False, "router": lid})
+                self._hand_over(state, lid)
                 self._retain_router(state)
                 self.delivered_seen[lid] = 0
                 states[i] = RouterState(
@@ -830,6 +1511,9 @@ class RoutingMixin:
                     state.seed_gamma,
                     # The new identity learns on the same arms' evidence it inherits.
                     ObservedRewards(state.observed.state()),
+                    latency=list(state.latency),
+                    definitions=dict(state.definitions),
+                    watch=dict(state.watch),
                 )
             self.stats.epochs += 1
 
@@ -841,6 +1525,16 @@ class RoutingMixin:
                             "proposal_id": proposal_id,
                             "version": self.assemblies[assembly_id].spec.version})
         self.retired_assemblies.add(assembly_id)
+        # Retirement is final for a version, not for an id: the id's head and program
+        # state are kept for its next version, until the retained private state cap
+        # needs the room (``_reclaimable_state``).
+        self.retirement_order.append(assembly_id)
+        # A retirement frees its venue read slot, for the next registration once the
+        # seat's last read has left the sliding minute.
+        self._free_reader_slot(assembly_id)
+        if assembly_id in self.slot_waiting:
+            self.slot_waiting.remove(assembly_id)
+        self._assign_waiting_readers()
         book = getattr(self, "subscription_book", None)
         if book is not None:
             # A retired watcher stops being evaluated, and stops being charged for it.
@@ -848,3 +1542,55 @@ class RoutingMixin:
         self.budget.retire(assembly_id, f"retire:{proposal_id}")
         for kind in sorted(self.routers):
             self._open_epoch(kind)
+        self._watch_evaluator_majority(f"retire:{assembly_id}")
+
+    def _reclaimable_state(self) -> list[str]:
+        """The ids whose kept private state the archive may release for room, oldest
+        retirement first: retired ids only, so a live seat's state is never released
+        (essay II.II.b: the disk is a hard limit, not a price)."""
+        return [seat for seat in self.retirement_order if seat in self.retired_assemblies]
+
+    def _state_reclaimed(self, seat: str, sha: str, kind: str) -> None:
+        """Forget a retired id's pointer to state the archive released for room.
+
+        Guarantees: the id names no head or program state that is no longer held, and
+        it leaves the retirement order once it holds no private state at all. The
+        release itself was ledgered before the index changed (``ArtifactStore``).
+        """
+        head = self.working_state.heads.get(seat)
+        if kind == "working.state" and head is not None and head["sha"] == sha:
+            del self.working_state.heads[seat]
+        retired = self.assemblies.get(seat)
+        if kind == "program.state" and getattr(retired, "state_sha", None) == sha:
+            retired.state_sha = None
+        if not self.artifacts.private_holdings(seat) and seat in self.retirement_order:
+            self.retirement_order.remove(seat)
+
+    def _watch_evaluator_majority(self, cause: str) -> None:
+        """Ledger the moment the live roster's evaluator seats stop, or resume, outnumbering
+        its producer seats.
+
+        Essay II.III.b: producers are "now established to be the minority of the
+        superdark factory's population". The manifest refuses a world seeded without
+        that majority; after launch the population registers and retires its own
+        seats, and the kernel never refuses a registration for the mix it makes (the
+        #132 review, item 2): it records ``population.evaluator_majority`` with the
+        counts each time the majority is lost or regained, once per change. The
+        seeded roster is the first state; a world that never changes it records
+        nothing.
+        """
+        live = [a.spec for aid, a in self.assemblies.items()
+                if aid not in self.retired_assemblies]
+        shapes = [set(assembly_rewards(spec).values()) for spec in live]
+        evaluators = sum(1 for s in shapes if s & JUDGING_SHAPES)
+        producers = sum(1 for s in shapes if not s & JUDGING_SHAPES
+                        and s & {"judged", "exposure"})
+        held = evaluators > producers
+        before = self.evaluator_majority
+        if before is None:
+            before = self.m.evaluator_population_problems() == []
+        self.evaluator_majority = held
+        if held != before:
+            self.ledger.append({"kind": "population.evaluator_majority", "held": held,
+                                "evaluators": evaluators, "producers": producers,
+                                "cause": cause, "ts": self.clock.now_ns})

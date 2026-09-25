@@ -8,8 +8,9 @@ builds that print the same digests for the same size and seed wrote the same dia
 
 The one field that must differ between two builds is ``release_digest``: it is a
 hash of the executing source tree (``runtime/release.py``), ledgered in ``Launch``
-and in every snapshot. The ledger digest replaces that value with ``RELEASE``
-before hashing, so it compares behaviour, not source bytes.
+and in every checkpoint. The ledger digest replaces that value with ``RELEASE``
+before hashing, and leaves out a ``snapshot`` item's hash and size of the checkpoint
+state (which holds the digest), so it compares behaviour, not source bytes.
 
     uv run python scripts/bench_scripted.py                 # 50 100 200 500
     uv run python scripts/bench_scripted.py 50 100 --seed 1 --json out.json
@@ -33,7 +34,7 @@ def run_once(events: int, seed: int, world: str = "scripted",
     """Run one world and return its wall time, item count and digests."""
     manifest = load_manifest(world)
     rt = Runtime(manifest, events=events, seed=seed, initial_balance_micro=None,
-                 ledger_path=None, drip=True, router_gamma=0.1)
+                 ledger_path=None, router_gamma=0.1)
     items = hashlib.sha256()
     count = 0
     append = rt.ledger.append
@@ -42,7 +43,11 @@ def run_once(events: int, seed: int, world: str = "scripted",
     def capture(item):
         nonlocal count
         seq = append(item)
-        data = canonical(dict(item, seq=seq))
+        entry = dict(item, seq=seq)
+        if entry.get("kind") == "snapshot":
+            entry.pop("state_sha", None)
+            entry.pop("bytes", None)
+        data = canonical(entry)
         if release:
             data = data.replace(release, b"RELEASE")
         items.update(data)

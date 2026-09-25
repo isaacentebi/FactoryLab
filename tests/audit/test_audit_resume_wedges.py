@@ -45,8 +45,7 @@ class FlakyVenue(FakeExchange):
 
 def _live_manifest():
     base = load_manifest("scripted")
-    return replace(base, exchange=replace(base.exchange, kind="hyperliquid", coins=("BTC",)),
-                   drip=None)
+    return replace(base, exchange=replace(base.exchange, kind="hyperliquid", coins=("BTC",)))
 
 
 def _clock():

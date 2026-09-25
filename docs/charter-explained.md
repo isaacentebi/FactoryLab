@@ -111,16 +111,22 @@ an acceptable region, a role that answers for it, and a price (`lambda`).
 over its sample and asks whether the value sits inside the region. When it does not, the card's
 price times how far outside the region the value sits is charged as a penalty against the score
 of every decision that contributed to the violation, in proportion to its share. For the card
-below the share is generic, one part per decision that responded in the window, and never
-smaller than `prices.min_blame_share`, so spreading participation across many decisions cannot
-dilute what each one carries. The penalty is capped at `prices.penalty_cap` before it is split
+below, measured per assembly, the share belongs to the seats whose own commitments violate it:
+each violating seat's part, one part per decision it made that responded in the window, and
+never smaller than `prices.min_blame_share` of that part, so spreading participation across
+many decisions cannot dilute what each one carries. A seat inside the region pays nothing. The penalty is capped at `prices.penalty_cap` before it is split
 and the final score is clipped to the unit interval. A lower score moves standing, and standing
 is what the router reads: it moves how often a seat is woken for an event and, through the
 consequence credit on settled returns, how much money the seat's own slice holds. A seat that
 keeps violating a card is woken less and gets poorer, which is the whole mechanism. Prices are
 not fixed: a controller re-prices every card at every closed window, and the price of a card
-that keeps being violated rises. Relief halves the effective price on a violated card for one
-window, but the accumulated pressure is preserved and continues to ratchet. Closed windows
+that keeps being violated rises. When the immune organ diagnoses stable failure, each violated
+card's price is ratcheted up further by how many windows the factory has sat in that failing
+attractor. A card measured per assembly, like `censorship-bound`, charges its violation to the
+seats whose own samples violate it, in proportion to their distance outside the region, and not
+to the seats that kept their commitments. A violating seat that made no decision priced on
+that window has nobody to carry its part; the close ledgers it as `price.unattributed` (card,
+seat, window, lambda) so the unpaid price is visible, and charges nothing. Closed windows
 retain the cards and prices of the edition in force at the close, so a late settlement is priced
 by the edition that measured it.
 

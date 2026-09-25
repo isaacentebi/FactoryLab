@@ -46,7 +46,7 @@ def test_overrun_does_not_relax_normal_commit_or_reservation_identity():
 def test_reported_bill_preserves_novelty_protection_and_refunds():
     ledger = Ledger()
     wallet = Wallet(1000, ledger)
-    reserve = NoveltyReserve(.1, 100, has_history=lambda _: False,
+    reserve = NoveltyReserve(.1, has_history=lambda _: False,
                              ledger=ledger, clock_ns=lambda: 0)
     wallet.bind_novelty(reserve, lambda handle, _: handle == "fresh")
     reserve.open_window(0, 1000)
@@ -105,6 +105,11 @@ def test_fatal_vote_overrun_cannot_invoke_another_seat(monkeypatch):
     monkeypatch.setattr(rt.provider.target, "complete", provider)
     monkeypatch.setattr(rt.charter_book, "vote", lambda *_: None)
     monkeypatch.setattr(rt.charter_book, "tally", lambda *_: "failed")
+    # The reported bill must fall inside the wallet's reported-cost multiple of the
+    # ballot's call ceiling, so it is booked as an overrun rather than disputed. A
+    # ballot no longer carries the world block (C7), so the prompt that sizes the
+    # ceiling is padded to the size it used to have.
+    monkeypatch.setattr(rt, "_charter_text", lambda: "x" * 60_000)
     # Stake the whole fixture wallet so prompt-size changes do not turn this
     # overrun test into an unrelated unaffordable-ballot test. The reported bill
     # still exceeds the entire wallet, so a second call must never be admitted.

@@ -48,7 +48,7 @@ def _runtime(*, novelty_share=None):
             manifest, novelty=replace(manifest.novelty, share=novelty_share))
         rt = Runtime(
             manifest, events=0, seed=1, initial_balance_micro=100_000_000,
-            ledger_path=None, drip=False, router_gamma=.1,
+            ledger_path=None, router_gamma=.1,
             exchange=FakeExchange(), provider=ScriptedProvider(),
         )
     rt._manage_reserve_window()
@@ -135,7 +135,12 @@ def test_explicit_endowment_refuses_overspend_and_open_hold_without_mutation():
 
 
 def test_full_novelty_reserve_does_not_block_backed_founder_endowment():
+    from fractions import Fraction
+
     rt = _runtime(novelty_share=1)
+    # A whole flow period's share accrued (time audit T6): the reserve holds everything.
+    rt.clock.now_ns += 1
+    rt.reserve.open_window(rt.clock.now_ns, max(0, rt.wallet.unlocked), accrued=Fraction(1))
     handle = _handle(rt)
     amount = 1_000
     founder_before = rt.budget.entitlement(FOUNDER)
@@ -197,9 +202,12 @@ def test_endowment_replays_and_child_calls_charge_the_right_seat(monkeypatch):
     child_before = rt.budget.entitlement("founder-child")
     monkeypatch.setattr(rt.provider.target, "complete", lambda request: ModelResponse(
         request.model_id, json.dumps({"action": "hold"}), 1, 1, "stop"))
+    # A request names a kind (primitive audit F5). With the observer retired, the
+    # founder's child is the one contract besides the founder that emits it.
+    rt._retire_assembly("seed-observer", "test")
     child_result, child_cost = rt._invoke_child(
         FOUNDER, rt._request(parent, "child task", {}, {"type": "object"}, 10**18, CH_VERDICT),
-        ChildRequest("founder-child", "child task", {}, {"type": "object"}), 10**18)
+        ChildRequest("ProducerReturn", "child task", {}, {"type": "object"}), 10**18)
     assert child_result["result"]["status"] == "ok" and child_cost > 0
     assert rt.budget.entitlement(FOUNDER) < parent_before
     assert rt.budget.entitlement("founder-child") == child_before

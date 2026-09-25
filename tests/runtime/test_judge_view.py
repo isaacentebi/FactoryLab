@@ -1,0 +1,142 @@
+"""Judges read the work like a machine: input, output, acts, propensity (essay II.I.b).
+
+Each case builds what a judge is sent and asserts that nothing in it names the
+author, reveals the author's role, or repeats the propensity outside the
+PROPENSITY block (information audit C1, C2, C7, P5, P8, U5).
+"""
+
+import json
+from types import SimpleNamespace
+
+import pytest
+
+from factorylab.cortex.request import Return
+from factorylab.kernel.events import Event, EventKind
+from factorylab.runtime.shared import CH_CONFORMITY, CH_EXPOSURE, CH_FAST
+from tests.runtime.test_loop import (
+    _consequence_decision,
+    _consequence_runtime,
+)
+
+PROPENSITY = {"over": {"hold": 0.6, "order": 0.4}, "chosen": "hold"}
+
+
+def _captured(rt, monkeypatch):
+    captured = []
+    request = rt._request
+
+    def capture(*args, **kwargs):
+        result = request(*args, **kwargs)
+        captured.append(result)
+        return result
+
+    monkeypatch.setattr(rt, "_request", capture)
+    return captured
+
+
+def _antagonist_return(rt):
+    """An Exposure seat's return, emitted exactly as the producer step emits it."""
+    handle = _consequence_decision(rt, "antagonist-a", CH_EXPOSURE)
+    rt.handle_to_assembly[handle] = "antagonist-a"
+    rt._producer_step(
+        Event("tick-judge-view", EventKind.TICK, rt.clock.now_ns, {"index": 0}, "test"),
+        handle, SimpleNamespace(chosen="antagonist-a"), rt.queue.get(handle).deadline_ns,
+        returned=Return(handle, {"action": "hold", "propensity": PROPENSITY,
+                                 "rationale": "nothing to do"}, 0, "ok"),
+    )
+    # Primitive audit F12: it is published as an Exposure, and only as one.
+    (event,) = [e for e in rt.internal if e.payload.get("about_handle") == handle]
+    assert str(event.kind) == "Exposure"
+    return event
+
+
+def test_first_tier_judge_is_not_told_the_author_or_its_role(monkeypatch):
+    rt = _consequence_runtime()
+    event = _antagonist_return(rt)
+    captured = _captured(rt, monkeypatch)
+    judge = _consequence_decision(rt, "eval-a", CH_CONFORMITY)
+    rt._evaluator_step(event, judge, SimpleNamespace(chosen="eval-a"),
+                       rt.queue.get(judge).deadline_ns,
+                       returned=Return(judge, {"status": "cannot", "reason": "x"}, 0, "ok"))
+    req = captured[-1]
+    producer = req.inputs["producer"]
+    # C1: an event-neutral description, with no clause offered to the antagonist alone.
+    assert producer["description"] == f"Respond to event {event.payload['inputs']['kind']} " \
+        "on test."
+    assert "payoff" not in json.dumps(producer)
+    # P8: the propensity is rendered once, in the PROPENSITY block, never in INPUTS.
+    assert "propensity" not in json.dumps(producer)
+    # P5, U5: no standing, and no null learner slot.
+    assert "your_consequence_standing" not in req.inputs
+    assert "your_action_policy" not in req.inputs
+    assert "antagonist-a" not in json.dumps(producer)
+    # F12: the Exposure arrives as its own kind, and the kind is routing: the judge
+    # reads the same machine view a ProducerReturn gets, with no kind clause in it.
+    assert "event" not in req.inputs
+    assert "Exposure" not in json.dumps(req.inputs["commission"])
+
+
+def test_an_exposure_reaches_only_the_judges_whose_contract_accepts_it():
+    """F12: no ProducerReturn is emitted for an Exposure; a judge declares the kind."""
+    from dataclasses import replace
+
+    from factorylab.runtime.worlds import load_manifest
+
+    rt = _consequence_runtime()
+    event = _antagonist_return(rt)
+    assert not [e for e in rt.internal if e.kind == EventKind.PRODUCER_RETURN]
+    base = load_manifest("scripted")
+    seats = tuple(replace(a, accepts=("ProducerReturn",))
+                  if a.id in ("eval-b", "eval-c", "eval-d") else a for a in base.assemblies)
+    judged = _consequence_runtime(manifest=replace(base, assemblies=seats))
+    assert judged._universe_for("Exposure", event)[:-1] == ["eval-a"]
+    # A roster that seeds judging must seed a reader for every kind that settles on
+    # readers; the load path refuses one whose antagonist nobody judges.
+    unread = replace(base, assemblies=tuple(
+        replace(a, accepts=("ProducerReturn",)) if a.role == "evaluator" else a
+        for a in base.assemblies))
+    with pytest.raises(ValueError, match="emits Exposure"):
+        unread.validate()
+
+
+def test_meta_judge_reads_the_machine_view_not_the_world(monkeypatch):
+    rt = _consequence_runtime()
+    judged = _consequence_decision(rt, "eval-a", CH_CONFORMITY)
+    event = Event("verdict-judge-view", EventKind.VERDICT, rt.clock.now_ns, {
+        "about_handle": "some-return", "evaluator_handle": judged, "verdict": 0.7,
+        "rationale": "fine",
+        "producer_outputs": {"action": "hold", "propensity": PROPENSITY},
+        "propensity": PROPENSITY,
+    }, "runtime")
+    captured = _captured(rt, monkeypatch)
+    meta = _consequence_decision(rt, "meta-b", CH_FAST)
+    rt._meta_step(event, meta, SimpleNamespace(chosen="meta-b"),
+                  rt.queue.get(meta).deadline_ns,
+                  returned=Return(meta, {"conformity": 0.8, "rationale": "ok"}, 0, "ok"))
+    req = captured[-1]
+    # C7: the same operating projection first-tier judges get, scoped to this seat.
+    assert "world" not in req.inputs
+    assert [row["seat_id"] for row in req.inputs["actor_context"]["seats"]] == ["meta-b"]
+    # P8 at the tier above: the judged producer's propensity is not shown, and the
+    # judge's own propensity is only in the PROPENSITY block.
+    assert req.inputs["producer_outputs"] == {"action": "hold"}
+    assert "propensity" not in req.inputs["verdict"]
+    assert "your_action_policy" not in req.inputs
+
+
+def test_ballot_reads_the_machine_view_not_the_world(monkeypatch):
+    from factorylab.charter.amendment import PredictedEffect
+
+    rt = _consequence_runtime()
+    captured = _captured(rt, monkeypatch)
+    monkeypatch.setattr(rt.charter_book, "vote", lambda *_: None)
+    monkeypatch.setattr(rt.charter_book, "tally", lambda *_: "failed")
+    monkeypatch.setattr(rt, "_invoke", lambda aid, req, role, **_: Return(
+        req.handle, {"vote": True, "reason": "x"}, 0, "ok"))
+    am = SimpleNamespace(id="test", proposed_prices=(), add=(), replace=(), remove=(),
+                         predicted_effect=PredictedEffect("cost_per_return", "decrease", 1),
+                         tick_interval=None)
+    rt._hold_vote(am, SimpleNamespace(seats=[("seat1", "seed-decider")]))
+    req = captured[-1]
+    assert "world" not in req.inputs
+    assert [row["seat_id"] for row in req.inputs["actor_context"]["seats"]] == ["seed-decider"]

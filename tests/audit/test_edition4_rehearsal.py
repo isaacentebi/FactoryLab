@@ -15,7 +15,7 @@ from factorylab.world.models import CatalogueEntry, ModelRequest, ModelResponse
 from factorylab.world.openrouter import OpenRouterError
 from scripts import edition4_rehearsal as rehearsal
 
-WORLD = "worlds/edition3-rehearsal-5.toml"
+WORLD = "worlds/edition6-testnet-rehearsal.toml"
 
 
 @dataclass
@@ -29,8 +29,18 @@ class StubProvider:
             ("openai/gpt-5.6-sol", "0.00000200", "0.00001000", 128_000),
             ("venice:z-ai-glm-5-3-flash", "0.00000015", "0.00000050", 131_072),
             ("venice:qwen-3-8-flash", "0.00000014", "0.00000049", 131_072),
+            # Edition 6's OpenRouter routes of the same two models.
+            ("z-ai/glm-5.3-flash", "0.00000009", "0.00000030", 131_072),
+            ("qwen/qwen3.8-flash", "0.00000015", "0.00000047", 131_072),
             ("openai/gpt-5.6-luna", "0.00000020", "0.00000120", 128_000),
             ("openai/gpt-5.6-luna:online", "0.00000020", "0.00000120", 128_000),
+            # Edition 6's roster since #135, and the capital loop's Venice routes of it.
+            ("openai/gpt-6-luna", "0.00000010", "0.00000050", 128_000),
+            ("openai/gpt-6-sol", "0.00000200", "0.00001000", 128_000),
+            ("minimax/minimax-m3", "0.00000030", "0.00000120", 131_072),
+            ("xiaomi/mimo-v2.6-flash", "0.00000014", "0.00000028", 131_072),
+            ("venice:openai-gpt-6-luna", "0.000000125", "0.000000625", 128_000),
+            ("venice:deepseek-v4-1-flash", "0.000000375", "0.00000150", 384_000),
         )
         return [
             CatalogueEntry(
@@ -101,14 +111,10 @@ def test_launch_factors_are_explicit_and_reasoning_changes_roster_with_provenanc
     factored = rehearsal.effective_manifest(
         original,
         prompt_mode="compact",
-        producer_feedback="realized",
-        address_enabled=True,
         reasoning="off",
     )
 
     assert factored.prompt.mode == "compact"
-    assert factored.evaluation.producer_feedback == "realized"
-    assert factored.tools.address_enabled is True
     assert all(dict(model.reasoning) == {"enabled": False} for model in factored.models)
     assert factored.charter.norms == original.charter.norms
     assert factored.assemblies == original.assemblies
@@ -131,15 +137,11 @@ def test_omitted_factors_preserve_the_supplied_manifest_values():
     supplied = replace(
         original,
         prompt=replace(original.prompt, mode="compact"),
-        evaluation=replace(original.evaluation, producer_feedback="realized"),
-        tools=replace(original.tools, address_enabled=True),
     )
 
     effective = rehearsal.effective_manifest(supplied)
 
     assert effective.prompt == supplied.prompt
-    assert effective.evaluation.producer_feedback == "realized"
-    assert effective.tools.address_enabled is True
 
 
 def test_dangerous_or_unsupported_worlds_are_refused_before_runtime():
@@ -158,6 +160,27 @@ def test_dangerous_or_unsupported_worlds_are_refused_before_runtime():
             replace(original, models=(replace(original.models[0], reasoning=()),)),
             reasoning="on",
         )
+
+
+def test_the_prepaid_ceiling_covers_the_wire_schema():
+    """The rehearsal's own reservation counts a carried schema as input (§II.b)."""
+    import json
+
+    manifest = rehearsal.effective_manifest(load_manifest(WORLD))
+    prepaid = rehearsal.PrepaidProvider(
+        StubProvider(ModelResponse(request().model_id, "{}", 1, 1, "stop", cost_micro=1)),
+        manifest, rehearsal.Admission(cap_micro=1_000_000, max_calls=3))
+    schema = {"type": "object", "properties": {"x": {"type": "string"}},
+              "required": ["x"], "description": "d" * 5_000}
+    bare = request()
+    carried = replace(bare, response_schema=schema)
+    chars = len(bare.system) + sum(len(str(m["content"])) for m in bare.messages)
+    size = len(json.dumps(schema, separators=(",", ":")))
+    price = prepaid._prices.price(bare.model_id)
+    assert prepaid._ceiling(bare) == price.cost(int(chars * 1.5) + 64, bare.max_tokens)
+    assert prepaid._ceiling(carried) == price.cost(int((chars + size) * 1.5) + 64,
+                                                   bare.max_tokens)
+    assert prepaid._ceiling(carried) > prepaid._ceiling(bare)
 
 
 def test_admission_counts_attempts_and_stops_on_overrun_or_unknown_bill():
@@ -199,6 +222,45 @@ def test_admission_counts_attempts_and_stops_on_overrun_or_unknown_bill():
     assert table.admission.report()["known_micro"] == 0
     assert table.admission.report()["uncertain_micro"] == max(10, table._ceiling(request()))
     assert table.admission.stop_reason == "non_authoritative_table_cost"
+
+
+def test_a_probe_above_the_whole_cap_is_infeasible_and_admission_goes_on():
+    admission = rehearsal.Admission(cap_micro=1_000, max_calls=10)
+    assert admission.can_admit(1_001, probe=True) == (False, "quote_above_cap")
+    assert admission.stop_reason is None
+    admission.admit(1_000)
+
+
+def test_a_probe_the_spent_cap_cannot_cover_ends_the_rehearsal():
+    # Codex review of #136: once the cap excludes every seat, the run must end rather
+    # than record NOOP decisions for the rest of its duration.
+    admission = rehearsal.Admission(cap_micro=1_000, max_calls=10)
+    admission.known_micro = 600
+    assert admission.can_admit(500, probe=True) == (False, "quote_above_remaining_cap")
+    assert admission.stop_reason == "quote_above_remaining_cap"
+
+
+def test_an_actual_call_above_the_remaining_cap_ends_the_rehearsal():
+    # Codex review of #136: a refused real call would otherwise enter the experiment
+    # as the seat's failed return, and later events would go on around it.
+    admission = rehearsal.Admission(cap_micro=1_000, max_calls=10)
+    with pytest.raises(rehearsal.RehearsalRefused, match="quote_above_remaining_cap"):
+        admission.admit(1_001)
+    assert admission.stop_reason == "quote_above_remaining_cap"
+    assert admission.can_admit(1, probe=True) == (False, "quote_above_remaining_cap")
+
+
+def test_a_seat_above_the_whole_cap_is_excluded_for_compute_and_admission_goes_on():
+    # Codex review of #136: the runtime's insolvency rule, over its live seats, decides
+    # when a menu excluded entirely for compute ends the world; the harness only reports.
+    manifest = rehearsal.effective_manifest(load_manifest(WORLD))
+    provider = rehearsal.PrepaidProvider(StubProvider(None), manifest,
+                                         rehearsal.Admission(cap_micro=1_000, max_calls=3))
+    model = manifest.assemblies[0].model_id
+    allowed, reason = provider.affordable(model, 1_001)
+    assert not allowed and reason.startswith("compute: ceiling 1001 exceeds rehearsal cap")
+    assert provider.admission.stop_reason is None
+    assert provider.affordable(model, 1_000) == (True, "")
 
 
 def test_admission_uses_canonical_provider_failure_billing_classification():
@@ -318,7 +380,6 @@ def test_runner_report_records_effective_manifest_and_uses_denied_market(monkeyp
             assert kwargs["clock_source"].base.deadline_ns == 3_601_000_000_000
             self.ledger = FakeLedger()
             self.ticks_consumed = 1
-            self.grounded_pending = {"pending": object()}
             self.exchange = FakeExchange(
                 seed=1, coins=("BTC", "ETH"), spot_pairs=(), start_cash_usd="120"
             )
@@ -364,21 +425,18 @@ def test_runner_report_records_effective_manifest_and_uses_denied_market(monkeyp
     assert isinstance(market_seen["value"], rehearsal.DeniedMarket)
     assert report["cost"]["attempted"] == 0
     assert "x402" in report["denied_rails"]
-    assert (
-        report["preserved"]["roster_sha256"]["from"]
-        != report["preserved"]["roster_sha256"]["to"]
-    )
+    # The report names the roster the world file ratified and the one that ran. Edition 6's
+    # rehearsal changes nothing a roster digest covers, so the two agree; the report says
+    # so rather than asserting a change that did not happen.
+    from factorylab.charter.provenance import roster_hash
+    from factorylab.runtime.worlds import load_manifest
+
+    assert report["preserved"]["roster_sha256"] == {
+        "from": roster_hash(load_manifest(WORLD)),
+        "to": roster_hash(manifest_seen["value"]),
+    }
     assert report["behavioral_screen"]["status"] == "inconclusive"
     assert report["behavioral_screen"]["criteria_met"]["delivered_ticks"] is False
-    assert report["behavioral_screen"]["delivered"]["grounded"] == {
-        "assessed": 1,
-        "supported": 1,
-        "contrary": 0,
-        "unknown": 0,
-        "censored": 1,
-        "outstanding": 1,
-        "malformed_or_uncited_excluded": 1,
-    }
     critical = report["behavioral_screen"]["critical_path_io"]
     assert critical["provider_complete_calls"] == 2
     assert critical["exchange_account_calls"] == 4
@@ -386,7 +444,8 @@ def test_runner_report_records_effective_manifest_and_uses_denied_market(monkeyp
     assert critical["selected_total_calls"] == 9
     assert critical["selected_total_elapsed_ns"] == 105
     assert critical["selected_mean_elapsed_ns"] == "35/3"
-    assert report["factors"]["roster_preserved"] is False
+    # Edition 6: the rehearsal keeps the roster.
+    assert report["factors"]["roster_preserved"] is True
     assert report["factors"]["completion_allowance"] == "provider"
     assert report["factors"]["reasoning"]["actual_reasoning_provenance"] == {
         "status": "unknown",
@@ -402,8 +461,6 @@ def test_runner_report_records_effective_manifest_and_uses_denied_market(monkeyp
         "max_calls": 2,
         "planned_tick_ceiling": 60,
         "minimum_delivered_ticks": 60,
-        "minimum_assessed_grounded_samples": 0,
-        "minimum_contrary_grounded_samples": 0,
         "no_live_parameter_changes": True,
         "no_horizon_extension": True,
     }
@@ -426,23 +483,15 @@ def test_cli_passes_frozen_factors_and_reports_an_incomplete_screen(monkeypatch,
         "--duration", "60m",
         "--ticks", "60",
         "--prompt", "compact",
-        "--producer-feedback", "realized",
-        "--address-enabled",
         "--reasoning", "on",
         "--minimum-ticks", "60",
-        "--minimum-grounded-samples", "12",
-        "--minimum-contrary-samples", "2",
     ])
 
     assert code == 0
     assert seen["prompt_mode"] == "compact"
-    assert seen["producer_feedback"] == "realized"
-    assert seen["address_enabled"] is True
     assert seen["reasoning"] == "on"
     assert seen["target_ticks"] == 60
     assert seen["minimum_ticks"] == 60
-    assert seen["minimum_grounded_samples"] == 12
-    assert seen["minimum_contrary_samples"] == 2
     assert json.loads(capsys.readouterr().out)["behavioral_screen"]["status"] == "inconclusive"
 
 

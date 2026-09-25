@@ -5,6 +5,7 @@ import json
 from copy import deepcopy
 from types import SimpleNamespace
 
+import pytest
 from eth_account import Account
 
 from factorylab.runtime.resume import restore_runtime, runtime_state
@@ -12,6 +13,11 @@ from factorylab.world.venice import prepare_top_up, top_up
 from factorylab.world.x402 import HTTPResponse
 from tests.runtime.test_fidelity import runtime
 from tests.world.test_x402 import quote as quote_fixture
+
+# Every signature here goes through the production chokepoint, with a real
+# ReserveGuard in this test's temporary lock directory (tests/conftest.py).
+pytestmark = pytest.mark.usefixtures("write_ahead")
+
 
 
 def test_a12_fake_venice_leg_holds_then_moves_five_and_preserves_budget_on_resume():
@@ -33,7 +39,12 @@ def test_a12_fake_venice_leg_holds_then_moves_five_and_preserves_budget_on_resum
     assert treasury.tick(4)[0]["status"] == "confirmed"
     assert treasury.pots()["reserve"] == reserve - 5_000_000
     assert treasury.pots()["sellers"]["venice"] == 5_000_000
-    assert restored.wallet.balance == balance
+    # Delivered provider credit is spending authority (financing, never income):
+    # the factory's own capital became thinking money it may now spend.
+    assert restored.wallet.balance == balance + 5_000_000
+    owed = treasury.collect_financing()
+    assert [(o["handle"], o["micro"]) for o in owed] == [("population", 5_000_000)]
+    assert treasury.collect_financing() == []  # handed over exactly once
     assert treasury.tick(5) == []
     treasury.transfer("to_venice", "5", handle="population-again", now_ns=5)
     treasury.tick(6)
@@ -58,8 +69,11 @@ def test_a12_retries_use_the_journaled_unsigned_authorization():
         submissions.append(json.loads(base64.b64decode(headers["X-402-Payment"])))
         return HTTPResponse(200, {"success": True, "payer": account.address})
 
+    from factorylab.runtime.capital_loop import ReserveGuard
+
     client = SimpleNamespace(address=account.address, _account=account, _request=request,
-                             usdc_balance=lambda: 10_000_000, venice_balance=lambda: 1_000_000)
+                             usdc_balance=lambda: 10_000_000, venice_balance=lambda: 1_000_000,
+                             guard=ReserveGuard("test"), chain_head=lambda: 1)
     reference = prepare_top_up(client, now_s=100, nonce=bytes(32))
     saved = deepcopy(reference)
     assert not submissions and "signature" not in json.dumps(reference)

@@ -16,10 +16,9 @@ class ScriptedProvider:
     """Deterministic stand-in for seed contracts and the A1 composition exercise.
 
     Producers cycle buy / hold / sell / hold on ticks (sized to the world wallet) and
-    occasionally propose registrations; every produce reply carries a low
-    ``payoff`` self-forecast, which the runtime seals only for antagonists.
-    Evaluators return a verdict, a payoff probability and two forecasts whose
-    probabilities depend on the evaluator's own prompt, so evaluators differ.
+    occasionally propose registrations. Evaluators return a verdict and two
+    forecasts whose probabilities depend on the evaluator's own prompt, so
+    evaluators differ.
     Metas return a conformity score. Token usage is declared so costs are
     exact. It exists to close the loop, not to be clever.
     """
@@ -52,20 +51,29 @@ class ScriptedProvider:
         if desc == "A1 helper":
             reply = ({"emits": "Finding", "answer": 1} if "tool_results" in inputs else {
                 "emits": "Finding", "requests": [{
-                    "target": "funding-watcher", "description": "A1 grandchild", "inputs": {},
+                    # A kind of work, never a peer's id (primitive audit F5).
+                    "target": "Funding", "description": "A1 grandchild", "inputs": {},
                     "outcome_schema": {"type": "object", "required": ["action"]}}]})
         elif desc == "A1 grandchild":
             reply = ({"action": "hold"} if "tool_results" in inputs else {
                 "tool_calls": [{"tool": "catalogue.search",
                                 "args": {"substring": "fake", "limit": 1}}]})
-        elif desc.startswith("Evaluate"):
+        elif desc.startswith(("Give verdict", "Evaluate")):
             reply = self._evaluate(req, inputs)
+        elif desc.startswith("Give your own verdict"):
+            # An adversarial judge's counter-verdict: the other side of what it read.
+            read = (inputs.get("verdict") or {}).get("verdict")
+            q = 1 - read if isinstance(read, int | float) else 0.5
+            reply = {"verdict": q, "rationale": "scripted counter"}
         elif desc.startswith("Assess"):
             reply = self._meta(inputs)
         elif desc.startswith("Vote"):
             reply = {"vote": True, "reason": "scripted yes"}
+        elif desc.startswith("Testify"):
+            reply = {"assessment": "scripted testimony"}
         else:
             reply = self._produce(desc, inputs)
+        reply = names_declined_trade(reply, text, inputs, self._producer_calls)
         return ModelResponse(
             req.model_id, json.dumps(reply), self.input_tokens, self.output_tokens, "end_turn"
         )
@@ -210,7 +218,7 @@ class ScriptedProvider:
             ])
         if n == self.tool_at_calls[3]:
             reply["requests"] = [{
-                "target": "composition-helper", "description": "A1 helper", "inputs": {},
+                "target": "Finding", "description": "A1 helper", "inputs": {},
                 "outcome_schema": {"type": "object", "required": ["answer"]},
             }]
         # Offered on three calls rather than one: a registration carried by a child
@@ -235,7 +243,10 @@ class ScriptedProvider:
                     "timeout_s": 2,
                 }
             ]
-        if n == 55:
+        # Offered on three calls for the reason spread-check is: which seat a call
+        # belongs to moves with the reward line, and a seat whose entitlement is below
+        # the trial amount cannot propose. A second offer of the same id is refused.
+        if n in (55, 57, 59):
             reply["register"] = [
                 {
                     "kind": "amendment",
@@ -250,7 +261,6 @@ class ScriptedProvider:
                             "acceptable_region": "below 5",
                             "observation": "turnover",
                             "answers_for": "producer",
-                            "lambda": 0.6,
                         }
                     ],
                     "replace": [],
@@ -304,17 +314,18 @@ class ScriptedProvider:
     @staticmethod
     def _evaluate(req: ModelRequest, inputs: dict[str, Any]) -> dict[str, Any]:
         producer = inputs.get("producer", {})
-        status = producer.get("status")
+        # The judged return's kernel status; a diary recorded before it was renamed
+        # carries it as ``status``.
+        status = producer.get("kernel_status", producer.get("status"))
         action = (producer.get("outputs") or {}).get("action")
         verdict = 1.0 if status == "ok" and action in ("order", "hold") else 0.3
         if action in ("noop", "hold"):
             verdict = 0.9 if req.model_id == "fake-haiku" else 0.1
         style = int(hashlib.sha256(req.system.encode()).hexdigest(), 16) % 4
         q = (0.3, 0.45, 0.6, 0.75)[style]
+        # The haiku judge blesses inaction; the opus judge does not.
         return {
             "verdict": verdict,
-            # The haiku judge blesses inaction as paying off; the opus judge does not.
-            "payoff": verdict,
             "rationale": "scripted judgement",
             "forecasts": [
                 {"predicate": "wallet_up", "params": {"horizon_events": 10}, "q": q},
@@ -328,6 +339,45 @@ class ScriptedProvider:
         ok = isinstance(v.get("verdict"), int | float) and bool(v.get("rationale"))
         return {"conformity": 0.8 if ok else 0.1, "rationale": "scripted meta"}
 
+
+
+def listed_coin(inputs: dict[str, Any]) -> str | None:
+    """A coin the prompt shows the world listing: BTC when shown, else the first shown.
+
+    Guarantees the coin is read from the listing the seat was shown (the world's
+    ``recent_mids``, the record a declined trade is priced from), never assumed,
+    and None when the prompt shows none.
+    """
+    world = inputs.get("world")
+    mids = world.get("recent_mids") if isinstance(world, dict) else None
+    shown = {str(coin) for coin in mids} if isinstance(mids, dict) else set()
+    return "BTC" if "BTC" in shown else (min(shown) if shown else None)
+
+
+def names_declined_trade(reply: dict[str, Any], text: str, inputs: dict[str, Any],
+                         n: int) -> dict[str, Any]:
+    """``reply`` naming a declined trade when it is a final answer that orders nothing.
+
+    The return contract of a producing kind (``runtime.grounded``): a final answer
+    that executes no venue operation carries ``counterfactual {coin, side}``, and the
+    request's outcome schema publishes the field. The side alternates with ``n``, so
+    the scripted population names both. A reply to a schema that does not publish
+    the field, and one that already names a trade, places an answer order, declines,
+    or continues through tools or children, is unchanged. An ``order`` that only
+    reports a tool's write names one too: the write may have been refused.
+    """
+    schema = text.split("OUTCOME SCHEMA\n", 1)
+    if (len(schema) < 2 or '"counterfactual"' not in schema[1].split("\n", 1)[0]
+            or not isinstance(reply, dict) or "counterfactual" in reply
+            or (reply.get("action") == "order"
+                and all(k in reply for k in ("coin", "side", "size")))
+            or reply.get("tool_calls") or reply.get("requests")
+            or reply.get("status") == "cannot"):
+        return reply
+    coin = listed_coin(inputs)
+    if coin is None:
+        return reply
+    return {**reply, "counterfactual": {"coin": coin, "side": "buy" if n % 2 else "sell"}}
 
 
 def _description_from_prompt(text: str) -> str:
@@ -369,11 +419,13 @@ def _world_from_prompt(text: str) -> dict[str, Any]:
 def _inputs_from_prompt(text: str) -> dict[str, Any]:
     try:
         start = text.index("INPUTS\n") + len("INPUTS\n")
-        # The request renders further sections after the inputs (a propensity
-        # declaration sits between the inputs and the schema); stop at whichever
-        # comes first.
+        # The request renders further sections after the inputs (the subject's
+        # propensity and the scoring facts sit between the inputs and the schema);
+        # stop at whichever comes first.
         end = min(
-            (text.index(header, start) for header in ("\n\nPROPENSITY", "\n\nOUTCOME SCHEMA")
+            (text.index(header, start)
+             for header in ("\n\nSUBJECT PROPENSITY", "\n\nPROPENSITY", "\n\nSCORING",
+                            "\n\nOUTCOME SCHEMA")
              if header in text[start:]),
             default=-1,
         )
@@ -468,7 +520,6 @@ def _with_seat_block(text: str, inputs: dict[str, Any]) -> dict[str, Any]:
                          "governance": charter.get("pending_changes")}
             public = update.get("public_observations")
             if isinstance(public, dict):
-                world = {**world, "pathologies": public.get("pathologies"),
-                         "recent_mids": public.get("recent_mids")}
+                world = {**world, "recent_mids": public.get("recent_mids")}
             inputs["world"] = world
     return inputs

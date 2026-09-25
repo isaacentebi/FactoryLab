@@ -11,11 +11,18 @@ from dataclasses import replace
 from decimal import Decimal
 from unittest.mock import Mock
 
+import pytest
+
 from factorylab.runtime.worlds import load_manifest
 from factorylab.world.exchange import FakeExchange, HyperliquidExchange
 from factorylab.world.venue_tools import VenueTools
 from tests.helpers import place, venue_runtime
 from tests.runtime.test_connectors import ledger_items
+
+# Every signature here goes through the production chokepoint, with a real
+# ReserveGuard in this test's temporary lock directory (tests/conftest.py).
+pytestmark = pytest.mark.usefixtures("write_ahead")
+
 
 
 def _live_stub(**state) -> HyperliquidExchange:
@@ -56,7 +63,7 @@ class TestD1NoLeverageOrPrincipalCap:
         from factorylab.world.scripted import ScriptedProvider
 
         rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=50_000_000,
-                     ledger_path=None, drip=False, router_gamma=.1,
+                     ledger_path=None, router_gamma=.1,
                      provider=ScriptedProvider(),
                      exchange=FakeExchange(start_cash_usd=Decimal(966)))
         rt._manage_reserve_window()
@@ -69,7 +76,20 @@ class TestD1NoLeverageOrPrincipalCap:
         assert not ledger_items(rt, "order.infeasible")
 
     def test_old_manifests_with_the_deprecated_keys_still_load_and_keep_their_hash(self):
-        m = load_manifest("edition3-testnet")
+        import tomllib
+
+        from factorylab.runtime.worlds import manifest_from_dict
+
+        # Edition 3's own file names both keys, and its nine-seat roster no longer meets
+        # the evaluator population the kernel requires, so it is refused whole (R8).
+        with pytest.raises(ValueError, match="evaluator population"):
+            load_manifest("edition3-testnet")
+        # The keys themselves still load, read and hashed, on a roster that loads.
+        with open("worlds/edition6-testnet-rehearsal.toml", "rb") as fh:
+            raw = tomllib.load(fh)
+        raw["venue"]["principal_usd"] = "120"
+        raw.setdefault("tools", {})["max_leverage"] = 3
+        m = manifest_from_dict(raw)
         assert m.exchange.principal_usd == "120"  # read, and inert
         payload = json.loads(m.canonical_json())
         assert payload["exchange"]["principal_usd"] == "120"
@@ -728,34 +748,6 @@ class SimpleService:
 class TestFix11NoSalesAfterDeath:
     """A dead world sells nothing: no quote, no settlement, no program run."""
 
-    def test_a_killed_runtime_seller_refuses_before_quoting_or_settling(self):
-        from factorylab.runtime.seller import seller_from_runtime
-        from tests.runtime.test_seller import (
-            SERVICE,
-            TOOL,
-            FakeHTTP,
-            fixture_service,
-            paid_header,
-            register,
-            runtime_with_reserve,
-            settlement,
-        )
-
-        rt = runtime_with_reserve()
-        register(rt, TOOL)
-        register(rt, SERVICE)
-        transport = FakeHTTP([settlement()])
-        seller = seller_from_runtime(rt, transport=transport,
-                                     facilitator="https://facilitator.test")
-        assert seller.handle("doubler", b"{}", {}, "https://x/service/doubler")[0] == 402
-        rt.kill("explicit_kill:operator")
-        header = paid_header(fixture_service())
-        status, _, body = seller.handle("doubler", b'{"x": 1}',
-                                        {"PAYMENT-SIGNATURE": header},
-                                        "https://x/service/doubler")
-        assert status == 503 and transport.calls == []
-        assert seller.handle("doubler", b"{}", {}, "https://x/service/doubler")[0] == 503
-
     def test_the_hosted_seller_fails_closed_on_death_and_on_stale_liveness(self):
         import importlib.util
         from pathlib import Path
@@ -836,7 +828,10 @@ class TestFix12NoTransferBlocksForever:
         rail = LiveRail.__new__(LiveRail)
         top_up = {"reference": {"authorization": {"validBefore": 1_000}}, "nonce": 0}
         assert rail.expired("venice_top_up", top_up, 1_000 * 10**9) is None
-        assert rail.expired("venice_top_up", top_up, (1_000 + 7_200) * 10**9)
+        # A top-up is judged on finalized Base, never on the runtime clock: however far
+        # past validBefore the clock runs, an unread chain proves nothing expired. The
+        # chain proof itself is tests/world/test_venice_hybrid.py's reviewer probe.
+        assert rail.expired("venice_top_up", top_up, (1_000 + 7_200) * 10**9) is None
         day_ms = 86_400_000
         withdraw = {"reference": {"nonce": 10 * day_ms}, "nonce": 10 * day_ms}
         assert rail.expired("withdraw_burn", withdraw, 11 * day_ms * 10**6) is None

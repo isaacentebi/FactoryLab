@@ -1,0 +1,3513 @@
+{
+ "replies": [
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "reason':'this turn responded to event Wo": "status",
+    "requests": [
+     {
+      "addressing": {
+       "to": "text"
+      },
+      "description": "text",
+      "inputs": {
+       "adapter": "world.trade",
+       "cost_band": "under 6.85 USD",
+       "deadline_utc": "2026-09-24T19:40:02Z",
+       "expires": "2026-09-24T19:40:02Z",
+       "ground": "WorldUpdate",
+       "handle": "decision-11",
+       "hint": "text",
+       "kind": "order_or_decline",
+       "liability": "text",
+       "max_requests": 2,
+       "min_window": "under 100 s",
+       "requires_propensity": false,
+       "retry": {
+        "after": "1 routine tick",
+        "on": "refusal"
+       }
+      },
+      "note": "text",
+      "outcome_schema": {
+       "kind": "anyOf",
+       "union": [
+        {
+         "anyOf": [
+          {
+           "properties": {
+            "action": {
+             "type": "string"
+            },
+            "counterfactual": {
+             "coin": "enum",
+             "side": "enum"
+            },
+            "defer": {
+             "minimum": 0,
+             "type": "integer"
+            },
+            "emits": {
+             "enum": [
+              "ProducerReturn"
+             ]
+            },
+            "propensity": {
+             "type": "object"
+            },
+            "register": {
+             "items": {
+              "kind": "enum"
+             },
+             "type": "array"
+            },
+            "subscribe": {
+             "type": "object"
+            }
+           },
+           "required": [
+            "action",
+            "counterfactual"
+           ]
+          },
+          {
+           "properties": {
+            "action": {
+             "enum": [
+              "order"
+             ]
+            },
+            "coin": {
+             "type": "string"
+            },
+            "counterfactual": {
+             "coin": "enum",
+             "side": "enum"
+            },
+            "defer": {
+             "type": "number"
+            },
+            "emits": {
+             "enum": [
+              "ProducerReturn"
+             ]
+            },
+            "propensity": {
+             "type": "object"
+            },
+            "register": {
+             "items": {
+              "kind": "enum"
+             },
+             "type": "array"
+            },
+            "side": {
+             "enum": [
+              "buy",
+              "sell"
+             ]
+            },
+            "size": [
+             "string",
+             "number"
+            ],
+            "subscribe": {
+             "type": "object"
+            }
+           },
+           "required": [
+            "action",
+            "coin",
+            "side",
+            "size"
+           ]
+          }
+         ]
+        },
+        {
+         "properties": {
+          "status": {
+           "enum": [
+            "decline"
+           ]
+          }
+         }
+        }
+       ]
+      },
+      "target": "trade"
+     }
+    ],
+    "status": "cannot",
+    "value": "cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "needed": "text"
+      },
+      "outcome_schema": {
+       "RegistrarId": {
+        "inputs": {
+         "RegistrarId": {
+          "type": "string"
+         },
+         "about": {
+          "type": "string"
+         },
+         "event_id": {
+          "type": "string"
+         },
+         "probability": {
+          "type": "number"
+         }
+        },
+        "required": [
+         "event_id"
+        ]
+       }
+      },
+      "target": "ForecastEvent"
+     },
+     {
+      "description": "text",
+      "inputs": {
+       "coin": "ETH",
+       "confirm": true,
+       "lev": 3,
+       "reference_price": "2679.05",
+       "side": "buy",
+       "size": 0.05
+      },
+      "outcome_schema": {
+       "Fill": {
+        "inputs": {
+         "coin": {
+          "type": "string"
+         },
+         "id": {
+          "type": "string"
+         },
+         "price": {
+          "type": "number"
+         },
+         "side": {
+          "type": "string"
+         },
+         "size": {
+          "type": "number"
+         }
+        },
+        "required": [
+         "id"
+        ]
+       }
+      },
+      "target": "Order"
+     },
+     {
+      "description": "text",
+      "inputs": {
+       "coin": "ETH",
+       "confirm": true,
+       "lev": 3,
+       "reference_price": "2679.05",
+       "side": "sell",
+       "size": 0.05
+      },
+      "outcome_schema": {
+       "Fill": {
+        "inputs": {
+         "coin": {
+          "type": "string"
+         },
+         "id": {
+          "type": "string"
+         },
+         "price": {
+          "type": "number"
+         },
+         "side": {
+          "type": "string"
+         },
+         "size": {
+          "type": "number"
+         }
+        },
+        "required": [
+         "id"
+        ]
+       }
+      },
+      "target": "Order"
+     }
+    ],
+    "status": "cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "action": "hold",
+       "reason": "text"
+      },
+      "outcome_schema": {
+       "fields": [
+        "working_state"
+       ]
+      },
+      "propensity": {
+       "hold": 1.0
+      },
+      "target": "ProducerReturn"
+     }
+    ],
+    "status": "cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported schema type",
+   "reply": {
+    "reason\":\"open verdicts pending; tooling ": "",
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {},
+      "outcome_schema": {
+       "properties": {
+        "action": {
+         "enum": [
+          "hold",
+          "investigate",
+          "build",
+          "govern",
+          "defer",
+          "order"
+         ]
+        },
+        "counterfactual": {
+         "properties": {
+          "coin": {
+           "enum": [
+            "BTC",
+            "ETH",
+            "HYPE/USDC",
+            "PURR/USDC"
+           ]
+          },
+          "side": {
+           "enum": [
+            "buy",
+            "sell"
+           ]
+          }
+         },
+         "required": [
+          "coin",
+          "side"
+         ]
+        },
+        "defer": {
+         "minimum": 0,
+         "type": "integer"
+        },
+        "propensity": {
+         "type": {
+          "additionalProperties": true,
+          "object": "object"
+         }
+        },
+        "register": {
+         "items": {
+          "properties": {
+           "kind": {
+            "enum": [
+             "amendment",
+             "assembly",
+             "challenge",
+             "connector",
+             "learner",
+             "market",
+             "model",
+             "observation",
+             "predicate",
+             "program",
+             "retire",
+             "router",
+             "service",
+             "tool"
+            ]
+           }
+          },
+          "required": [
+           "kind"
+          ]
+         }
+        },
+        "subscribe": {
+         "type": "object"
+        }
+       }
+      },
+      "target": "verdict"
+     }
+    ],
+    "status": "cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported schema type",
+   "reply": {
+    "ack_through": {
+     "reason": "text",
+     "status": "cannot"
+    },
+    "register_register": [
+     {
+      "retire_kind": "assembly"
+     }
+    ],
+    "requests": [
+     {
+      "description": "text",
+      "exchange_orders": 0,
+      "inputs": {
+       "coin": "BTC",
+       "reduce_only": false,
+       "side": "buy",
+       "size": "0.001"
+      },
+      "outcome_schema": {
+       "additionalProperties": false,
+       "properties": {
+        "action": {
+         "enum": [
+          "order"
+         ],
+         "type": "string"
+        },
+        "coin": {
+         "enum": [
+          "BTC",
+          "ETH"
+         ],
+         "type": "string"
+        },
+        "counterfactual": {
+         "additionalProperties": false,
+         "properties": {
+          "coin": {
+           "enum": [
+            "BTC",
+            "ETH",
+            "HYPE/USDC",
+            "PURR/USDC"
+           ],
+           "type": "string"
+          },
+          "side": {
+           "enum": [
+            "buy",
+            "sell"
+           ]
+          }
+         },
+         "required": [
+          "coin",
+          "side"
+         ]
+        },
+        "side": {
+         "enum": [
+          "buy",
+          "sell"
+         ]
+        },
+        "size": {
+         "type": [
+          "string",
+          "number"
+         ]
+        }
+       }
+      },
+      "target": "self"
+     }
+    ],
+    "status": "cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "about_handle": "decision-300",
+    "propensityPlan": {
+     "trailingEdge": true
+    },
+    "requests": [
+     {
+      "cost_ceiling_usd": "0.20",
+      "description": "text",
+      "inputs": {
+       "action": "defer",
+       "counterfactual": {
+        "coin": "BTC",
+        "side": "buy"
+       },
+       "defer": 2,
+       "subscribe": {
+        "cadence_floor": 1,
+        "coins": [
+         "BTC",
+         "ETH"
+        ],
+        "kinds": [
+         "WorldUpdate"
+        ]
+       }
+      },
+      "outcome_schema": {
+       "defer_max_ticks": 2
+      },
+      "target": "self"
+     },
+     {
+      "cost_ceiling_usd": "0.20",
+      "description": "text",
+      "inputs": {
+       "action": "defer",
+       "counterfactual": {
+        "coin": "BTC",
+        "side": "buy"
+       },
+       "defer": 2,
+       "subscribe": {
+        "cadence_floor": 1,
+        "coins": [
+         "BTC",
+         "ETH"
+        ],
+        "kinds": [
+         "WorldUpdate",
+         "Funding"
+        ]
+       }
+      },
+      "outcome_schema": {
+       "defer_max_ticks": 2
+      },
+      "target": "self"
+     }
+    ],
+    "status": "defer",
+    "working_state": {
+     "active_commitments": [],
+     "lens": "text",
+     "open_questions": []
+    }
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {},
+      "outcome_schema": {
+       "anyOf_properties": [
+        {
+         "arguments": "text",
+         "properties": {}
+        }
+       ],
+       "constraints": {},
+       "inputs": {},
+       "required": [],
+       "shape": "/meta"
+      },
+      "prototype": true,
+      "target": "evaluate"
+     }
+    ],
+    "status": "cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "counterfactual": {
+     "coin": "BTC",
+     "side": "buy"
+    },
+    "emits:": "ProducerReturn",
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "handle": "decision-409"
+      },
+      "outcome_schema": {
+       "counterfactual": {
+        "coin": "BTC",
+        "side": "buy"
+       },
+       "status": "object"
+      },
+      "propensity": {},
+      "target": "WorldUpdate"
+     }
+    ],
+    "skill": "synthesis",
+    "status": "cannot",
+    "tool_calls": []
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "reason:": "text",
+    "requests": [
+     {
+      "cost_ceiling_usd": 0,
+      "description": "text",
+      "entitlement_micro_usd": 0,
+      "inputs": {},
+      "outcome_schema": {
+       "action": "defer",
+       "counterfactual": {
+        "coin": "BTC",
+        "side": "buy"
+       },
+       "defer": 1
+      },
+      "target": "self"
+     }
+    ],
+    "status": "cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported schema type",
+   "reply": {
+    "max_compute_usd": 2.0,
+    "provisional": true,
+    "reason_low": "text",
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "max_compute_usd": 0.05,
+       "scope": "text"
+      },
+      "outcome_schema": {
+       "properties": {
+        "action": {
+         "enum": [
+          "hold",
+          "reduce",
+          "flip"
+         ]
+        },
+        "coin": {
+         "enum": [
+          "BTC",
+          "ETH"
+         ]
+        },
+        "reason": {
+         "type": "string"
+        },
+        "size_delta": {
+         "type": [
+          "string",
+          "number"
+         ]
+        }
+       },
+       "required": [
+        "action",
+        "coin",
+        "size_delta",
+        "reason"
+       ],
+       "type": "object"
+      },
+      "target": "trend"
+     }
+    ],
+    "status": "cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "context": [
+     {
+      "detail": "text",
+      "ref": "self:input"
+     }
+    ],
+    "emits_df": [
+     {
+      "desk": "public",
+      "kind": "signal",
+      "name": "text"
+     }
+    ],
+    "priority": "normal",
+    "reason_kind": "diagnostic",
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "claim": "text",
+       "counterparty": "Todd",
+       "tone": "collaborative"
+      },
+      "outcome_schema": {
+       "fields": [
+        "other_seat",
+        "claim",
+        "attestation",
+        "notes"
+       ],
+       "required": [
+        "other_seat",
+        "claim",
+        "attestation"
+       ]
+      },
+      "stream": "public",
+      "target": "Arbiter"
+     }
+    ],
+    "signal": "mayday",
+    "status": "cannot",
+    "text": "text"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "reasonable_next_request_budget_usd": 0.05,
+    "requests": [
+     {
+      "budget_usd": 0.05,
+      "deadline_utc": "2026-09-24T20:30:45Z",
+      "description": "text",
+      "inputs": {
+       "section": "work"
+      },
+      "outcome_schema": {
+       "response": true,
+       "response_required": true
+      },
+      "target": "opinion.work"
+     }
+    ],
+    "status": "cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "about_handle": "decision-653",
+    "acks_requested_through": null,
+    "action_id": "hold",
+    "counterfactual_tx": "none",
+    "propensity_for_kernel": {
+     "build": 0.01,
+     "defer": 0.18,
+     "govern": 0.02,
+     "hold": 0.74,
+     "investigate": 0.05,
+     "order": 0.0
+    },
+    "reason_status": "ok",
+    "register_proposals": [],
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "last_paid_wake_tick": 131,
+       "my_view": "text",
+       "open_outcomes": 7,
+       "sweep_pressure": "text"
+      },
+      "outcome_schema": {
+       "action": {
+        "description": "text",
+        "enum": [
+         "hold",
+         "investigate",
+         "build",
+         "govern",
+         "defer",
+         "order"
+        ]
+       },
+       "propensity": {
+        "description": "recommended action",
+        "enum": [
+         "hold",
+         "investigate",
+         "build",
+         "govern",
+         "defer",
+         "order"
+        ]
+       },
+       "reason": "string"
+      },
+      "propensity": {
+       "build": 0.03,
+       "defer": 0.25,
+       "govern": 0.05,
+       "hold": 0.45,
+       "investigate": 0.2,
+       "order": 0.02
+      },
+      "target": "judge_chain"
+     }
+    ],
+    "working_state": {
+     "last_thinking": "text",
+     "open_questions": [
+      "text",
+      "text",
+      "text"
+     ]
+    }
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "reason_kind": "budget",
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "action": "defer",
+       "cadence_floor": 1,
+       "coins": null,
+       "defer": 1,
+       "kinds": null,
+       "reason": "text",
+       "subscribe": null
+      },
+      "outcome_schema": {
+       "action": {
+        "enum": [
+         "hold",
+         "investigate",
+         "build",
+         "govern",
+         "defer",
+         "order"
+        ]
+       },
+       "anyOf": [
+        {
+         "properties": {
+          "action": {
+           "type": "string"
+          },
+          "counterfactual": {
+           "description": "text",
+           "properties": {
+            "coin": {
+             "enum": [
+              "BTC",
+              "ETH",
+              "HYPE/USDC",
+              "PURR/USDC"
+             ]
+            },
+            "side": {
+             "enum": [
+              "buy",
+              "sell"
+             ]
+            }
+           },
+           "required": [
+            "coin",
+            "side"
+           ]
+          },
+          "defer": {
+           "minimum": 0,
+           "type": "integer"
+          },
+          "emits": {
+           "enum": [
+            "ProducerReturn"
+           ]
+          },
+          "propensity": {
+           "type": "object"
+          },
+          "register": {
+           "items": {
+            "properties": {
+             "kind": {
+              "enum": [
+               "amendment",
+               "assembly",
+               "challenge",
+               "connector",
+               "learner",
+               "market",
+               "model",
+               "observation",
+               "predicate",
+               "program",
+               "retire",
+               "router",
+               "service",
+               "tool"
+              ]
+             }
+            },
+            "required": [
+             "kind"
+            ]
+           }
+          }
+         },
+         "required": [
+          "action",
+          "counterfactual"
+         ]
+        }
+       ]
+      },
+      "target": "WorldUpdate"
+     }
+    ],
+    "status": "cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "defer": 1,
+       "propensity": {
+        "defer": 0.9,
+        "investigate": 0.1
+       }
+      },
+      "outcome_schema": {
+       "core": "outcome",
+       "emits": "ProducerReturn"
+      },
+      "target": "ProducerReturn"
+     }
+    ],
+    "status": "cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "runtime": {
+        "blocked_by": "text",
+        "deadline_utc": "2026-09-24T21:00:16Z",
+        "membrane": "WorldUpdate",
+        "observed_clock": "2026-09-24T20:50:41Z",
+        "tick": 174
+       },
+       "you": {
+        "request": {
+         "capability_version": 1,
+         "cost_ceiling_usd": "6.109236",
+         "deadline_utc": "2026-09-24T21:00:16Z",
+         "handle": "decision-857",
+         "liable_budget": "decision-857"
+        }
+       }
+      },
+      "outcome_schema": {
+       "action": "cannot",
+       "reason": "text"
+      },
+      "status": {
+       "admissible_actions": [
+        "none"
+       ],
+       "reason": "text",
+       "reconciliation_required": [
+        "text",
+        "text"
+       ]
+      },
+      "target": "WorldUpdate"
+     }
+    ],
+    "status": "cannot",
+    "tool_calls_to_resolve": [
+     {
+      "args": {
+       "section": "reserved_return_fields"
+      },
+      "tool": "world.read"
+     }
+    ],
+    "tool_dialect": "WorldContract-Fidelity"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "action_propensity": {
+     "build": 0.05,
+     "defer": 1.0,
+     "govern": 0.05,
+     "hold": 0.6,
+     "investigate": 0.3
+    },
+    "register_applications": [],
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "outcome_id": "outcome:881"
+      },
+      "outcome_schema": {
+       "kind": "outcome.get"
+      },
+      "target": "outcome.get"
+     }
+    ],
+    "status": "cannot",
+    "summary": {
+     "counterfactual": {
+      "coin": "BTC",
+      "side": "buy"
+     },
+     "defer": 2,
+     "propensity": {
+      "build": 0.05,
+      "defer": 1.0,
+      "govern": 0.05,
+      "hold": 0.6,
+      "investigate": 0.3
+     },
+     "rationale": "text",
+     "register": [],
+     "subscribe": {
+      "cadence_floor": 1,
+      "coins": null,
+      "kinds": null
+     },
+     "tool_calls": []
+    }
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "defer_through_tick": 179,
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "after": 0,
+       "limit": 20
+      },
+      "outcome_schema": {
+       "oneOf": [
+        {
+         "kind": "outcome.list",
+         "returns": "index"
+        },
+        {
+         "kind": "outcome.get",
+         "returns": "single"
+        }
+       ]
+      },
+      "target": "outcome.get"
+     }
+    ],
+    "status": ":",
+    "tool_calls": []
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "reason_parent_undetermined": true,
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "decisions": [
+        "decision-987",
+        "decision-1006"
+       ]
+      },
+      "outcome_schema": {
+       "fields": [
+        "verdict",
+        "notes"
+       ]
+      },
+      "target": "judge"
+     },
+     {
+      "description": "text",
+      "inputs": {
+       "symbols": [
+        "BTC",
+        "ETH"
+       ]
+      },
+      "outcome_schema": {
+       "fields": [
+        "positions",
+        "last_prints",
+        "funding_now"
+       ]
+      },
+      "target": "venue"
+     }
+    ],
+    "status": "cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "defer_through_tick": 207,
+    "reason_sent": "text",
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "decision_handle": "decision-1014",
+       "reason_asleep": "text",
+       "seat": "constructor",
+       "verdict_class": "defer"
+      },
+      "outcome_schema": {
+       "action": "defer",
+       "counterfactual": {
+        "coin": "BTC",
+        "side": "sell"
+       },
+       "defer": 1,
+       "propensity": {
+        "defer": 0.95
+       }
+      },
+      "target": "ProducerReturn"
+     }
+    ],
+    "status": "cannot",
+    "subscribe_unchanged": true
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "about_handle": "decision-1025",
+    "propensity_declarations": true,
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "kind": "outcome.get",
+       "outcome_id": "outcome:1051"
+      },
+      "outcome_schema": {
+       "fields": [
+        "decision_id",
+        "outcome_id",
+        "status",
+        "rejection_reason",
+        "rejected_section"
+       ]
+      },
+      "target": "outcome:1051"
+     }
+    ],
+    "status": "ok"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: schema must be an object",
+   "reply": {
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "handle": "decision-1043",
+       "propensity": {
+        "action": "defer"
+       }
+      },
+      "outcome_schema": {
+       "properties": {
+        "status": {
+         "enum": [
+          "ok"
+         ]
+        },
+        "type": "object"
+       }
+      },
+      "target": "verdict"
+     }
+    ],
+    "status": "cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "ack_through": null,
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "reason": "text"
+      },
+      "outcome_schema": {
+       "kind": "ProducerReturn",
+       "required": [
+        "status"
+       ]
+      },
+      "target": "ProducerReturn"
+     }
+    ],
+    "status": "cannot",
+    "working_state": {
+     "reason": "text",
+     "sha": "text"
+    }
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "propensity -1.0 for any BTC close, > 1.0": "propensity",
+    "reason I am not ready to make an order d": null,
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "coins": [
+        "BTC",
+        "ETH"
+       ],
+       "kinds": [
+        "Book",
+        "Funding"
+       ]
+      },
+      "outcome_schema": {
+       "schema": "ProducerReturn"
+      },
+      "target": "ProducerReturn"
+     },
+     {
+      "description": "text",
+      "inputs": {
+       "coin": "BTC",
+       "limit": 30,
+       "timeframe": "1m"
+      },
+      "outcome_schema": {
+       "schema": "ProducerReturn"
+      },
+      "target": "ProducerReturn"
+     }
+    ],
+    "status": "cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported schema type",
+   "reply": {
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "coin": "BTC",
+       "decision": null,
+       "side_options": [
+        "buy_to_close",
+        "hold"
+       ],
+       "size_target": "0.001"
+      },
+      "outcome_schema": {
+       "anyOf": [
+        {
+         "properties": {
+          "about_handle": {
+           "type": "string"
+          },
+          "action": {
+           "enum": [
+            "order"
+           ]
+          },
+          "coin": {
+           "type": "string"
+          },
+          "counterfactual": {
+           "description": "text",
+           "properties": {
+            "coin": {
+             "enum": [
+              "BTC",
+              "ETH",
+              "HYPE/USDC",
+              "PURR/USDC"
+             ]
+            },
+            "side": {
+             "enum": [
+              "buy",
+              "sell"
+             ]
+            }
+           },
+           "required": [
+            "coin",
+            "side"
+           ]
+          },
+          "defer": {
+           "minimum": 0,
+           "type": "integer"
+          },
+          "emits": {
+           "enum": [
+            "ProducerReturn"
+           ]
+          },
+          "propensity": {
+           "type": "object"
+          },
+          "register": {
+           "items": {
+            "properties": {
+             "kind": {
+              "enum": [
+               "amendment",
+               "assembly",
+               "challenge",
+               "connector",
+               "learner",
+               "market",
+               "model",
+               "observation",
+               "predicate",
+               "program",
+               "retire",
+               "router",
+               "service",
+               "tool"
+              ]
+             }
+            },
+            "required": [
+             "kind"
+            ]
+           }
+          },
+          "side": {
+           "enum": [
+            "buy",
+            "sell"
+           ]
+          },
+          "size": {
+           "type": [
+            "string",
+            "number"
+           ]
+          },
+          "subscribe": {
+           "type": {}
+          }
+         },
+         "required": [
+          "action",
+          "coin",
+          "side",
+          "size"
+         ]
+        }
+       ]
+      },
+      "target": "order"
+     }
+    ],
+    "status": "cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "reason':'deferring pending OBs + funding": null,
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "cadence_floor": 1,
+       "coins": [
+        "BTC",
+        "ETH"
+       ],
+       "defer_ticks": 1,
+       "handle": "decision-1185",
+       "kinds": [
+        "WorldUpdate"
+       ]
+      },
+      "outcome_schema": {
+       "budget": "decision-1185",
+       "liability": "text"
+      },
+      "target": "verdict"
+     }
+    ],
+    "status": "cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "cancel": {
+     "after_steps": [],
+     "at_utc": "2025-05-06T20:55:00Z",
+     "reason": "text"
+    },
+    "propensity_dict": {},
+    "reason_handling": "investigate",
+    "registered_actions": [],
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "context": "text",
+       "count": 5,
+       "question": "text",
+       "tool": "catalogue.search"
+      },
+      "outcome_schema": {
+       "as": {
+        "output": "array"
+       },
+       "contract": {
+        "output": "array"
+       },
+       "deadline": "2025-05-06T21:00:00Z",
+       "inputs": {
+        "context": {
+         "description": "Context or rationale",
+         "type": "string"
+        },
+        "count": {
+         "description": "text",
+         "maximum": 20,
+         "minimum": 1,
+         "type": "integer"
+        },
+        "question": {
+         "description": "The actual query",
+         "type": "string"
+        }
+       },
+       "outputs": {
+        "as": {
+         "type": "string"
+        },
+        "contract": {
+         "type": "string"
+        },
+        "deadline": {
+         "format": "date-time",
+         "type": "string"
+        },
+        "inputs": {
+         "properties": {
+          "context": {
+           "description": "Optional context",
+           "type": "string"
+          },
+          "question": {
+           "description": "The actual query",
+           "type": "string"
+          }
+         },
+         "required": [
+          "question"
+         ],
+         "type": "object"
+        },
+        "outputs": {
+         "description": "final response",
+         "type": "string"
+        },
+        "verifies": {
+         "type": "string"
+        }
+       }
+      },
+      "target": "catalogue.search",
+      "verifies": "authentic-information"
+     },
+     {
+      "description": "text",
+      "inputs": {
+       "context": "text",
+       "outcome_schema": {
+        "as": {
+         "output": "array"
+        },
+        "contract": {
+         "output": "array"
+        },
+        "deadline": "2025-05-06T21:00:00Z",
+        "inputs": {
+         "context": {
+          "type": "string"
+         },
+         "question": {
+          "description": "Query field",
+          "type": "string"
+         }
+        },
+        "outputs": {
+         "as": {
+          "type": "string"
+         },
+         "contract": {
+          "type": "string"
+         },
+         "deadline": {
+          "format": "date-time",
+          "type": "string"
+         },
+         "inputs": {
+          "properties": {
+           "question": {
+            "description": "The actual query",
+            "type": "string"
+           }
+          },
+          "required": [
+           "question"
+          ],
+          "type": "object"
+         },
+         "outputs": {
+          "description": "final response",
+          "type": "string"
+         },
+         "verifies": {
+          "type": "string"
+         }
+        }
+       },
+       "question": "working_state",
+       "tool": "artifact.get",
+       "verifies": "authentic-information"
+      },
+      "outcome_schema": {
+       "as": {
+        "output": "array"
+       },
+       "contract": {
+        "output": "array"
+       },
+       "deadline": "2025-05-06T21:00:00Z",
+       "inputs": {
+        "context": {
+         "description": "Context",
+         "type": "string"
+        },
+        "count": {
+         "description": "Number of results",
+         "type": "integer"
+        },
+        "question": {
+         "description": "The actual query",
+         "type": "string"
+        },
+        "tool": {
+         "description": "The tool to query",
+         "type": "string"
+        }
+       },
+       "outputs": {
+        "as": {
+         "type": "string"
+        },
+        "contract": {
+         "type": "string"
+        },
+        "deadline": {
+         "format": "date-time",
+         "type": "string"
+        },
+        "inputs": {
+         "properties": {
+          "context": {
+           "description": "Optional context",
+           "type": "string"
+          },
+          "count": {
+           "description": "Number of results",
+           "type": "integer"
+          },
+          "question": {
+           "description": "The actual query",
+           "type": "string"
+          },
+          "tool": {
+           "description": "The tool to query",
+           "type": "string"
+          }
+         },
+         "required": [
+          "question"
+         ],
+         "type": "object"
+        },
+        "outputs": {
+         "description": "final response",
+         "type": "string"
+        },
+        "verifies": {
+         "type": "string"
+        }
+       }
+      },
+      "target": "artifact.get",
+      "verifies": "authentic-information"
+     }
+    ],
+    "status": "cannot",
+    "tool_calls": []
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "reason_schema": "text",
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "/meta": {
+        "reason": "text"
+       }
+      },
+      "outcome_schema": {
+       "fields": [
+        "defer",
+        "action",
+        "counterfactual"
+       ],
+       "required_order": [
+        "counterfactual",
+        "action",
+        "defer"
+       ]
+      },
+      "target": "defer"
+     }
+    ],
+    "status": "cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 3: more than 3 requests",
+   "reply": {
+    "final": {
+     "action": "defer",
+     "counterfactual": {
+      "coin": "BTC",
+      "side": "buy"
+     },
+     "defer": 1,
+     "propensity": {
+      "build": 50,
+      "close_btc_short": 300,
+      "defer": 250,
+      "govern": 50,
+      "hold": 150,
+      "investigate": 500,
+      "order_long": 100,
+      "order_short": 200
+     },
+     "reason": "text",
+     "status": "defer"
+    },
+    "register_pending": [],
+    "requests": [
+     {
+      "description": "Current BTC orderbook",
+      "inputs": {
+       "coin": "BTC",
+       "depth": 10
+      },
+      "outcome_schema": {
+       "properties": {
+        "asks": {
+         "type": "array"
+        },
+        "bids": {
+         "type": "array"
+        },
+        "mid": {
+         "type": "number"
+        },
+        "ts": {
+         "type": "number"
+        }
+       },
+       "required": [
+        "bids",
+        "asks",
+        "mid"
+       ],
+       "type": "object"
+      },
+      "propensity_milli": 400,
+      "references": {
+       "prior_returns": []
+      },
+      "reply_required": true,
+      "target": "VenueRead"
+     },
+     {
+      "description": "text",
+      "inputs": {
+       "coin": "BTC",
+       "window_ticks": 40
+      },
+      "outcome_schema": {
+       "properties": {
+        "history": {
+         "items": {
+          "properties": {
+           "rate": {
+            "type": "string"
+           },
+           "t_s": {
+            "type": "number"
+           }
+          },
+          "required": [
+           "t_s",
+           "rate"
+          ],
+          "type": "object"
+         },
+         "type": "array"
+        }
+       },
+       "required": [
+        "history"
+       ],
+       "type": "object"
+      },
+      "propensity_milli": 350,
+      "references": {
+       "prior_returns": []
+      },
+      "reply_required": true,
+      "target": "VenueRead"
+     },
+     {
+      "description": "text",
+      "inputs": {
+       "coin": "ETH",
+       "window_ticks": 40
+      },
+      "outcome_schema": {
+       "properties": {
+        "history": {
+         "items": {
+          "properties": {
+           "rate": {
+            "type": "string"
+           },
+           "t_s": {
+            "type": "number"
+           }
+          },
+          "required": [
+           "t_s",
+           "rate"
+          ],
+          "type": "object"
+         },
+         "type": "array"
+        }
+       },
+       "required": [
+        "history"
+       ],
+       "type": "object"
+      },
+      "propensity_milli": 350,
+      "references": {
+       "prior_returns": []
+      },
+      "reply_required": true,
+      "target": "VenueRead"
+     },
+     {
+      "description": "Current ETH orderbook",
+      "inputs": {
+       "coin": "ETH",
+       "depth": 10
+      },
+      "outcome_schema": {
+       "properties": {
+        "asks": {
+         "type": "array"
+        },
+        "bids": {
+         "type": "array"
+        },
+        "mid": {
+         "type": "number"
+        },
+        "ts": {
+         "type": "number"
+        }
+       },
+       "required": [
+        "bids",
+        "asks",
+        "mid"
+       ],
+       "type": "object"
+      },
+      "propensity_milli": 250,
+      "references": {
+       "prior_returns": []
+      },
+      "reply_required": true,
+      "target": "VenueRead"
+     }
+    ],
+    "status": "cannot",
+    "working_state": {
+     "defer_through_tick": 256,
+     "reason": "text",
+     "sha": "text",
+     "status": "defer_1"
+    }
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "reason_str": "text",
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {},
+      "outcome_schema": {
+       "action": {
+        "const": "defer"
+       },
+       "counterfactual": {
+        "required": [
+         "coin",
+         "side"
+        ],
+        "type": "object"
+       },
+       "defer": {
+        "minimum": 1,
+        "type": "object"
+       }
+      },
+      "target": "self"
+     }
+    ],
+    "status": "cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "reason\":\"ProducerReturn is the only emit": "text",
+    "requests": [
+     {
+      "description": "return:follow_up",
+      "inputs": {
+       "context": {
+        "options": [
+         "continue",
+         "defer",
+         "amend_subscription"
+        ],
+        "reason": "text"
+       },
+       "kind": "follow_up",
+       "question": "want continue?"
+      },
+      "outcome_schema": {
+       "emits": "ProducerReturn",
+       "properties": {
+        "action": {
+         "type": "string"
+        },
+        "counterfactual": {
+         "coin": {
+          "enum": [
+           "BTC",
+           "ETH",
+           "HYPE/USDC",
+           "PURR/USDC"
+          ],
+          "side": {
+           "enum": [
+            "buy",
+            "sell"
+           ]
+          }
+         }
+        }
+       },
+       "required": [
+        "action",
+        "counterfactual"
+       ]
+      },
+      "target": "ProducerReturn"
+     }
+    ],
+    "status": "cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "about_handle": "decision-1299",
+    "evidence_summary": "text",
+    "next_action_bias": "investigate",
+    "plan": "defer 1 tick",
+    "plan_hash": "text",
+    "reason_decline": "text",
+    "reason_plan": "text",
+    "reason_tick": 262,
+    "register_proposals": [],
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "bytes": 214,
+       "sha": "text"
+      },
+      "outcome_schema": {
+       "actions": [
+        "plan"
+       ],
+       "operations": []
+      },
+      "target": "decision-1299"
+     },
+     {
+      "description": "text",
+      "inputs": {
+       "bytes": 214,
+       "sha": "text"
+      },
+      "outcome_schema": {
+       "actions": [
+        "plan"
+       ],
+       "operations": []
+      },
+      "target": "decision-1299"
+     }
+    ],
+    "risk_notes": "text",
+    "sha": "text",
+    "status": "defer",
+    "subscribe_update": {},
+    "tx_intent": "none",
+    "working_state": "text"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "outcome_id": "outcome:1403"
+      },
+      "outcome_schema": {
+       "shape": {
+        "handle": "string",
+        "sha": "string"
+       }
+      },
+      "target": "OutcomeGet"
+     },
+     {
+      "description": "text",
+      "inputs": {
+       "outcome_id": "outcome:1429"
+      },
+      "outcome_schema": {
+       "shape": {
+        "handle": "string",
+        "sha": "string"
+       }
+      },
+      "target": "OutcomeGet"
+     }
+    ],
+    "status": "cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    ",": "}",
+    "reason\":\"This seat answers ProducerRetur": [
+     ","
+    ],
+    "requests": [
+     {
+      "description": "Request a verdict",
+      "inputs": {
+       "callers": [
+        "constructor"
+       ],
+       "candidate": {
+        "checklist_evidence": [
+         {
+          "item": "uploads",
+          "present": false,
+          "weight": "low"
+         },
+         {
+          "item": "opening_prices",
+          "present": false,
+          "weight": "low"
+         }
+        ],
+        "gated_actions": [
+         "trade"
+        ],
+        "kind": "TraderVerdict",
+        "rationale": "text",
+        "submitted_by": "constructor"
+       },
+       "task": "text"
+      },
+      "needs": [],
+      "outcome_schema": {
+       "fields": [
+        {
+         "name": "answer",
+         "schema": {
+          "fields": [
+           {
+            "name": "guidance",
+            "type": "text"
+           }
+          ],
+          "type": "object"
+         }
+        }
+       ]
+      },
+      "target": "TraderVerdict"
+     }
+    ],
+    "status": "cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "requests": [
+     {
+      "description": "decision-1606",
+      "inputs": {},
+      "outcome_schema": {
+       "action": "investigate",
+       "counterfactual": {
+        "coin": "BTC",
+        "side": "sell"
+       }
+      },
+      "target": "verdict"
+     }
+    ],
+    "status": ":cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "reasons": [
+     {
+      "code": "malformed_request",
+      "message": "text"
+     }
+    ],
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "cost_ceiling_usd": "5.491937",
+       "deadline_utc": "2026-09-24T22:59:46Z",
+       "prompt": "text"
+      },
+      "outcome_schema": {
+       "properties": {
+        "requests": {
+         "items": {
+          "properties": {
+           "target": {
+            "minLength": 1,
+            "type": "string"
+           }
+          },
+          "required": [
+           "target"
+          ]
+         },
+         "maxItems": 1,
+         "minItems": 1,
+         "type": "array"
+        }
+       },
+       "required": [
+        "requests"
+       ]
+      },
+      "target": "self",
+      "type": "object"
+     }
+    ],
+    "status": "cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "ack_through": null,
+    "propensity_history": [
+     {
+      "label": "defer",
+      "reasons": [
+       "edge_absent",
+       "cost_overshadow_payoff",
+       "fee_drag_negative_short",
+       "funding_fade_negative"
+      ],
+      "score": 0.86,
+      "tick": 407
+     }
+    ],
+    "propensity_label": "defer",
+    "requests": [
+     {
+      "action": "defer",
+      "action_id": "defer:1",
+      "adjudicate_through": "outcome.get",
+      "cost_ceiling_usd": "5.479391",
+      "counterfactual": {
+       "coin": "BTC",
+       "side": "buy"
+      },
+      "defer_through_tick": 408,
+      "description": "text",
+      "inputs": {
+       "as_of_utc": "2026-09-24T22:45:02Z",
+       "budget": {
+        "cost_ceiling": "5.479391",
+        "held": "0"
+       },
+       "funding_recent": {
+        "BTC": "0.0007223334",
+        "ETH": "-0.0006095784"
+       },
+       "mids": {
+        "BTC": 84643.5,
+        "ETH": 2666.45,
+        "HYPE/USDC": 27.3265,
+        "PURR/USDC": 4.60235
+       },
+       "venue_state": {
+        "venue_perps": {
+         "cash_usd": "786.163916",
+         "equity_usd": "828.485916",
+         "margin_used_usd": "42.322",
+         "positions": [
+          {
+           "coin": "BTC",
+           "entry_px": "84750.0",
+           "size": "-0.001"
+          }
+         ]
+        },
+        "venue_spot": {
+         "balances": [
+          {
+           "available": "114.82460146",
+           "coin": "USDC"
+          },
+          {
+           "available": "0.00967",
+           "coin": "HYPE"
+          }
+         ]
+        }
+       }
+      },
+      "max_attempts": 1,
+      "outcome_schema": {
+       "version": "producer_return.v1"
+      },
+      "post_ref": "defer-407",
+      "propensity_label": "defer",
+      "target": "text"
+     }
+    ],
+    "status": "cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "reasonWORLD_LAYER_1_REQUEST_LAYER_basis": "text",
+    "register_also": [],
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "coin": "BTC",
+       "context": "text"
+      },
+      "outcome_schema": {
+       "action": {
+        "enum": [
+         "hold",
+         "close",
+         "adjust"
+        ],
+        "type": "string"
+       },
+       "confidence": {
+        "type": "number"
+       },
+       "reason": {
+        "type": "string"
+       }
+      },
+      "target": "TraderReturn"
+     }
+    ],
+    "status": "cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "reasonation": "text",
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "about_handle": "decision-2122",
+       "propensity": {
+        "build": 0.02,
+        "defer": 0.0,
+        "govern": 0.0,
+        "hold": 0.85,
+        "investigate": 0.03,
+        "order": 0.1
+       },
+       "reason": "text",
+       "working_state": {
+        "reason": "text",
+        "sha": "prev"
+       }
+      },
+      "outcome_schema": {
+       "action": "hold",
+       "counterfactual": {
+        "coin": "BTC",
+        "side": "buy"
+       },
+       "propensity": {
+        "build": 0.02,
+        "defer": 0.0,
+        "govern": 0.0,
+        "hold": 0.85,
+        "investigate": 0.03,
+        "order": 0.1
+       }
+      },
+      "target": "ProducerReturn"
+     }
+    ],
+    "status": "cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "notes_for_next_wake": "text",
+    "propensity_delta_basis": "text",
+    "reason_keys_not_extracted": [
+     "deadline_window",
+     "amendment_window",
+     "commitment_count",
+     "equity_vs_cash"
+    ],
+    "register_child_proposals": [],
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "outcome_id": "outcome:2265"
+      },
+      "outcome_schema": {
+       "goal": "outcome.get"
+      },
+      "target": "outcome.get"
+     }
+    ],
+    "retained_actions": [
+     "hold:1",
+     "investigate:0",
+     "build:0",
+     "govern:0",
+     "defer:0",
+     "order:0"
+    ],
+    "retained_charter_view": "text",
+    "retained_market_view": "text",
+    "retained_portfolio": "text",
+    "retained_position_view": "text",
+    "status": "cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: schema must be an object",
+   "reply": {
+    "emits_kind": null,
+    "propensity_summaries": {
+     "build": 0.0,
+     "defer": 0.55,
+     "govern": 0.0,
+     "hold": 0.4,
+     "investigate": 0.05,
+     "order": 0.0
+    },
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "decisions": [
+        "decision-2245",
+        "decision-2302"
+       ],
+       "handle": "decision-2483"
+      },
+      "outcome_schema": {
+       "anyOf": [
+        {
+         "properties": {
+          "action": {
+           "type": "string"
+          },
+          "counterfactual": {
+           "properties": {
+            "coin": {
+             "enum": [
+              "BTC",
+              "ETH",
+              "HYPE/USDC",
+              "PURR/USDC"
+             ],
+             "type": "string"
+            },
+            "side": {
+             "enum": [
+              "buy",
+              "sell"
+             ]
+            }
+           },
+           "required": [
+            "coin",
+            "side"
+           ]
+          },
+          "defer": {
+           "minimum": 0,
+           "type": "integer"
+          },
+          "emits": {
+           "enum": [
+            "ProducerReturn"
+           ]
+          },
+          "propensity": {
+           "type": "object"
+          },
+          "register": {
+           "items": {
+            "properties": {
+             "kind": {
+              "enum": [
+               "amendment",
+               "assembly",
+               "challenge",
+               "connector",
+               "learner",
+               "market",
+               "model",
+               "observation",
+               "predicate",
+               "program",
+               "retire",
+               "router",
+               "service",
+               "tool"
+              ]
+             }
+            },
+            "required": [
+             "kind"
+            ]
+           }
+          },
+          "subscribe": {
+           "type": "object"
+          }
+         },
+         "required": [
+          "action",
+          "counterfactual"
+         ]
+        },
+        {
+         "properties": {
+          "action": {
+           "enum": [
+            "order"
+           ]
+          },
+          "coin": {
+           "type": "string"
+          },
+          "counterfactual": {
+           "properties": {
+            "coin": {
+             "enum": [
+              "BTC",
+              "ETH",
+              "HYPE/USDC",
+              "PURR/USDC"
+             ],
+             "type": "string"
+            },
+            "side": {
+             "enum": [
+              "buy",
+              "sell"
+             ]
+            }
+           },
+           "required": [
+            "coin",
+            "side"
+           ]
+          },
+          "defer": {
+           "minimum": 0,
+           "type": "integer"
+          },
+          "emits": {
+           "enum": [
+            "ProducerReturn"
+           ]
+          },
+          "propensity": {
+           "type": "object"
+          },
+          "register": {
+           "items": {
+            "properties": {
+             "kind": {
+              "enum": [
+               "amendment",
+               "assembly",
+               "challenge",
+               "connector",
+               "learner",
+               "market",
+               "model",
+               "observation",
+               "predicate",
+               "program",
+               "retire",
+               "router",
+               "service",
+               "tool"
+              ]
+             }
+            },
+            "required": [
+             "kind"
+            ]
+           }
+          },
+          "side": {
+           "enum": [
+            "buy",
+            "sell"
+           ]
+          },
+          "size": [
+           "string",
+           "number"
+          ],
+          "subscribe": {}
+         },
+         "required": [
+          "action",
+          "coin",
+          "side",
+          "size"
+         ]
+        }
+       ]
+      },
+      "target": "role.liaison"
+     }
+    ],
+    "status": "cannot",
+    "tool_calls": [],
+    "working_state": {
+     "bytes": 987,
+     "sha": "text",
+     "state": {
+      "reason": "text",
+      "sha": "prev"
+     }
+    }
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "requests": [
+     {
+      "addr": "other",
+      "description": "text",
+      "inputs": {
+       "hold": "verdict, no produce",
+       "kind": "WorldUpdate",
+       "payload": {
+        "tick": 553
+       }
+      },
+      "outcome_schema": {
+       "action": "string",
+       "counterfactual": "object",
+       "defer": "int",
+       "propensity": "object"
+      },
+      "target": "WorldUpdate"
+     }
+    ],
+    "status": "cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "reason\":\"Flat market continuation with n": "cannot",
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "emits": "ProducerReturn",
+       "propensity": {
+        "hold": 1.0
+       },
+       "state": {
+        "reason": "text",
+        "sha": "prev"
+       }
+      },
+      "outcome_schema": {
+       "action": {
+        "enum": [
+         "hold",
+         "order"
+        ]
+       }
+      },
+      "target": "ProducerReturn"
+     }
+    ],
+    "status": "cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "": [
+     {
+      "sentence_run": "acknowledge outcome:2733",
+      "target": "sentence_run"
+     }
+    ],
+    "about_handle": "decision-2731",
+    "propensity&quots:": "text",
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       ":": ":}}],"
+      },
+      "outcome_schema": {
+       "ack_through": "outcome:2733",
+       "action": "hold",
+       "counterfactual": {
+        "coin": "BTC",
+        "side": "buy"
+       },
+       "defer": 0,
+       "emits": "ProducerReturn",
+       "propensity": {
+        "hold": 1.0
+       },
+       "working_state": {
+        "bytes": 713,
+        "loaded": true,
+        "sha": "text",
+        "state": {
+         "bytes": 541,
+         "emits": "ProducerReturn",
+         "loaded": true,
+         "propensity": {
+          "hold": 1.0
+         },
+         "sha": "text",
+         "state": {
+          "reason": "text",
+          "sha": "text"
+         }
+        }
+       }
+      },
+      "target": "trade_signal"
+     }
+    ],
+    "status": "hold",
+    "tool_calls": [],
+    "type": "object"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "reason:": "text",
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "emits": "ProducerReturn"
+      },
+      "outcome_schema": {
+       "kind": "ProducerReturn",
+       "tick": 625
+      },
+      "pitch": "text",
+      "target": "ProducerReturn",
+      "willingness_to_pay_micro_usd": 0
+     }
+    ],
+    "status": "cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "defer": 1,
+       "reason": "text"
+      },
+      "outcome_schema": {
+       "action": "hold",
+       "counterfactual": {
+        "coin": "BTC",
+        "side": "buy"
+       },
+       "defer": 1,
+       "emits": "ProducerReturn",
+       "propensity": {
+        "hold": 1.0
+       }
+      },
+      "target": "self"
+     }
+    ],
+    "status": "cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "reason\":\"Action schema disallows a hold-": "",
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "intent": "hold",
+       "kind": "WorldUpdate",
+       "tick": 655
+      },
+      "outcome_schema": {
+       "action": "hold",
+       "counterfactual": {
+        "coin": "BTC",
+        "side": "buy"
+       },
+       "defer": 1,
+       "emits": "ProducerReturn",
+       "propensity": {
+        "hold": 1.0,
+        "investigate": 0,
+        "order": 0
+       }
+      },
+      "target": "none"
+     }
+    ],
+    "status": "cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: a request's propensity names its chosen action with positive mass",
+   "reply": {
+    "reason':'The request ": "text",
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "kind": "WorldUpdate",
+       "payload": {
+        "tick": 686
+       }
+      },
+      "outcome_schema": {
+       "properties": {
+        "action": {
+         "enum": [
+          "hold",
+          "investigate",
+          "build",
+          "govern",
+          "defer",
+          "order"
+         ]
+        },
+        "counterfactual": {
+         "required": [
+          "coin",
+          "side"
+         ],
+         "type": "object"
+        }
+       },
+       "required": [
+        "action"
+       ],
+       "type": "object"
+      },
+      "propensity": {
+       "hold": 1
+      },
+      "target": "WorldUpdate"
+     },
+     {
+      "description": "text",
+      "inputs": {
+       "kind": "WorldUpdate",
+       "payload": {
+        "tick": 686
+       }
+      },
+      "outcome_schema": {
+       "required": [
+        "action"
+       ],
+       "type": "object"
+      },
+      "propensity": {
+       "hold": 1
+      },
+      "target": "WorldUpdate"
+     },
+     {
+      "description": "text",
+      "inputs": {
+       "kind": "WorldUpdate",
+       "payload": {
+        "tick": 686
+       }
+      },
+      "outcome_schema": {
+       "required": [
+        "action"
+       ],
+       "type": "object"
+      },
+      "propensity": {
+       "hold": 1
+      },
+      "target": "WorldUpdate"
+     }
+    ],
+    "status": "cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "reason_a": "text",
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "emits": "ProducerReturn",
+       "propensity": {
+        "hold": 1.0
+       }
+      },
+      "outcome_schema": {
+       "emits": "ProducerReturn",
+       "propensity": {
+        "hold": 1.0
+       }
+      },
+      "references": [
+       "decision-3125",
+       "decision-3175",
+       "text"
+      ],
+      "target": "ProducerReturn"
+     }
+    ],
+    "status": "cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: propensity must be a non-empty object of action to probability",
+   "reply": {
+    "reason_for_status": "defer",
+    "register_deferrals": [],
+    "register_props": [
+     {
+      "arguments": "text",
+      "card_id": "text",
+      "kind": "challenge",
+      "lambda": 0.0
+     }
+    ],
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "outcome_ids": [
+        "outcome:3125",
+        "outcome:3113"
+       ]
+      },
+      "outcome_schema": {
+       "properties": {
+        "action": {
+         "type": "string"
+        },
+        "counterfactual": {
+         "properties": {
+          "coin": {
+           "enum": [
+            "BTC",
+            "ETH",
+            "HYPE/USDC",
+            "PURR/USDC"
+           ]
+          },
+          "side": {
+           "enum": [
+            "buy",
+            "sell"
+           ]
+          }
+         },
+         "required": [
+          "coin",
+          "side"
+         ]
+        }
+       },
+       "required": [
+        "action",
+        "counterfactual"
+       ]
+      },
+      "propensity": {},
+      "target": "self"
+     }
+    ],
+    "status": "cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "reason_kernel": "text",
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "coin": "BTC",
+       "event_kind": "Fill",
+       "is_buy": true,
+       "order_id": "60975235588",
+       "px": "85048.0",
+       "size": "0.00013"
+      },
+      "outcome_schema": {
+       "action": [
+        "defer"
+       ],
+       "rationale": "text"
+      },
+      "target": "producer_return"
+     }
+    ],
+    "status": "cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "defer": 1
+      },
+      "outcome_schema": {
+       "action": "defer",
+       "propensity": {
+        "defer": 1
+       }
+      },
+      "target": "ProducerReturn"
+     }
+    ],
+    "status": "cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported schema type",
+   "reply": {
+    "about_handle\":\"decision-3497\",\"counterfa": {
+     "coin": "BTC",
+     "side": "buy"
+    },
+    "defer\":1,": ":",
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "ticks": 1
+      },
+      "outcome_schema": {
+       "anyOf": [
+        {
+         "properties": {
+          "action": {
+           "type": "string"
+          },
+          "counterfactual": {
+           "description": "text",
+           "properties": {
+            "coin": {
+             "enum": [
+              "BTC",
+              "ETH",
+              "HYPE/USDC",
+              "PURR/USDC"
+             ],
+             "type": "string"
+            },
+            "side": {
+             "enum": [
+              "buy",
+              "sell"
+             ]
+            }
+           },
+           "required": [
+            "coin",
+            "side"
+           ],
+           "type": "object"
+          },
+          "defer": {
+           "minimum": 0,
+           "type": "integer"
+          },
+          "emits": {
+           "enum": [
+            "ProducerReturn"
+           ]
+          },
+          "propensity": {
+           "type": "object"
+          },
+          "register": {
+           "items": {
+            "description": "text",
+            "properties": {
+             "kind": {
+              "enum": [
+               "amendment",
+               "assembly",
+               "challenge",
+               "learner",
+               "model",
+               "observation",
+               "predicate",
+               "program",
+               "retire",
+               "router",
+               "service",
+               "tool"
+              ]
+             }
+            },
+            "required": [
+             "kind"
+            ]
+           },
+           "type": "array"
+          },
+          "subscribe": {
+           "type": "object"
+          }
+         },
+         "required": [
+          "action",
+          "counterfactual"
+         ]
+        },
+        {
+         "properties": {
+          "action": {
+           "enum": [
+            "order"
+           ]
+          },
+          "coin": {
+           "type": "string"
+          },
+          "counterfactual": {
+           "description": "text",
+           "properties": {
+            "coin": {
+             "enum": [
+              "BTC",
+              "ETH",
+              "HYPE/USDC",
+              "PURR/USDC"
+             ],
+             "type": "string"
+            },
+            "side": {
+             "enum": [
+              "buy",
+              "sell"
+             ]
+            }
+           },
+           "required": [
+            "coin",
+            "side"
+           ],
+           "type": "object"
+          },
+          "defer": {
+           "minimum": 0,
+           "type": "integer"
+          },
+          "emits": {
+           "enum": [
+            "ProducerReturn"
+           ]
+          },
+          "propensity": {
+           "type": "object"
+          },
+          "register": {
+           "items": {
+            "description": "text",
+            "properties": {
+             "kind": {
+              "enum": [
+               "amendment",
+               "assembly",
+               "challenge",
+               "learner",
+               "model",
+               "observation",
+               "predicate",
+               "program",
+               "retire",
+               "router",
+               "service",
+               "tool"
+              ]
+             }
+            },
+            "required": [
+             "kind"
+            ]
+           },
+           "type": "array"
+          },
+          "side": {
+           "enum": [
+            "buy",
+            "sell"
+           ]
+          },
+          "size": {
+           "type": [
+            "string",
+            "number"
+           ]
+          },
+          "subscribe": {
+           "type": "object"
+          }
+         },
+         "required": [
+          "action",
+          "coin",
+          "side",
+          "size"
+         ]
+        }
+       ]
+      },
+      "target": "self"
+     }
+    ],
+    "status": "cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "action_reason": "text",
+    "reasonack_through": [
+     "outcome:3349"
+    ],
+    "requests": [
+     {
+      "description": "defer 1 routine tick",
+      "inputs": {
+       "tick": 820
+      },
+      "outcome_schema": {
+       "action": "defer",
+       "counterfactual": {
+        "coin": "ETH",
+        "side": "buy"
+       }
+      },
+      "target": "ProducerReturn"
+     }
+    ],
+    "status": "cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: schema must be an object",
+   "reply": {
+    "about_handle": "decision-3544",
+    "proposed_outcome": {
+     "propensity": {
+      "build": 1.0
+     },
+     "register": []
+    },
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "note": "text"
+      },
+      "outcome_schema": {
+       "properties": {
+        "ack_kind": {
+         "enum": [
+          "Reasoned"
+         ]
+        },
+        "emits": {
+         "enum": [
+          "ProducerReturn"
+         ]
+        },
+        "propensity": {
+         "properties": {
+          "build": {},
+          "defer": {},
+          "forecast": {},
+          "govern": {},
+          "hold": {},
+          "investigate": {},
+          "order": {},
+          "register": {},
+          "research": {},
+          "revise_subscription": {},
+          "teach": {}
+         },
+         "required": [],
+         "type": "object"
+        },
+        "register": {
+         "items": {
+          "properties": {
+           "kind": {
+            "enum": [
+             "amendment",
+             "assembly",
+             "challenge",
+             "connector",
+             "learner",
+             "market",
+             "model",
+             "observation",
+             "predicate",
+             "program",
+             "retire",
+             "router",
+             "service",
+             "tool"
+            ]
+           },
+           "required": []
+          }
+         },
+         "required": [],
+         "type": "array"
+        }
+       },
+       "required": [
+        "ack_kind",
+        "emits",
+        "propensity",
+        "register"
+       ]
+      },
+      "target": "library"
+     }
+    ],
+    "status": "cannot",
+    "tool_calls": []
+   }
+  },
+  {
+   "kernel_refusal": "item 0: a request's propensity names its chosen action with positive mass",
+   "reply": {
+    "about_handle_inputs": {},
+    "counterfactual_decline_trade": {
+     "coin": "BTC",
+     "side": "buy"
+    },
+    "defer_intent_ticks": 30,
+    "emits_anticipated": "ProducerReturn",
+    "propensity_declared": {
+     "defer": 1
+    },
+    "reason_status": "text",
+    "register_present": false,
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "after": 11,
+       "limit": 50
+      },
+      "outcome_schema": {
+       "required": [
+        "items"
+       ],
+       "type": "object"
+      },
+      "propensity": {
+       "defer": 1
+      },
+      "register": [],
+      "target": "outcome.list"
+     },
+     {
+      "description": "text",
+      "inputs": {
+       "after": 61,
+       "limit": 50
+      },
+      "outcome_schema": {
+       "required": [
+        "items"
+       ],
+       "type": "object"
+      },
+      "propensity": {
+       "defer": 1
+      },
+      "register": [],
+      "target": "outcome.list"
+     },
+     {
+      "description": "text",
+      "inputs": {
+       "after": 111,
+       "limit": 50
+      },
+      "outcome_schema": {
+       "required": [
+        "items"
+       ],
+       "type": "object"
+      },
+      "propensity": {
+       "defer": 1
+      },
+      "register": [],
+      "target": "outcome.list"
+     }
+    ],
+    "status": "cannot",
+    "subscribe_present": false,
+    "tool_calls_present": false,
+    "working_state": "text"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "action": "defer",
+       "reason": "text",
+       "ticks": 1
+      },
+      "outcome_schema": {
+       "action": [
+        "hold",
+        "investigate",
+        "build",
+        "govern",
+        "defer",
+        "order"
+       ]
+      },
+      "target": "ProducerReturn.contract"
+     }
+    ],
+    "status": "cannot"
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "ticks": 1
+      },
+      "outcome_schema": {
+       "action": "defer",
+       "counterfactual": {
+        "coin": "BTC",
+        "side": "buy"
+       },
+       "defer": 1
+      },
+      "target": "defer"
+     }
+    ],
+    "status": "cannot",
+    "tool_calls": []
+   }
+  },
+  {
+   "kernel_refusal": "item 0: propensity must be a non-empty object of action to probability",
+   "reply": {
+    "propensity_action_declaration": {},
+    "propensity_reviews": [
+     {
+      "inputs": {
+       "after": 11,
+       "limit": 50
+      },
+      "outcome_schema": {
+       "properties": {
+        "handles": {
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        }
+       },
+       "required": [
+        "handles"
+       ],
+       "type": "object"
+      },
+      "prompt": "text",
+      "propensity": {},
+      "target": "outcome.list"
+     }
+    ],
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "outcome_id": "outcome:3380"
+      },
+      "outcome_schema": {
+       "properties": {
+        "block": {
+         "type": "string"
+        },
+        "handle": {
+         "type": "string"
+        },
+        "outcome_id": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "handle",
+        "outcome_id",
+        "block"
+       ],
+       "type": "object"
+      },
+      "propensity": {},
+      "target": "outcome.get"
+     }
+    ],
+    "status": "cannot",
+    "tool_calls": []
+   }
+  },
+  {
+   "kernel_refusal": "item 0: unsupported child outcome schema keyword",
+   "reply": {
+    "requests": [
+     {
+      "description": "text",
+      "inputs": {
+       "cadence_floor": 1,
+       "next_eligible_tick": 917
+      },
+      "outcome_schema": {
+       "properties": {
+        "action": {
+         "enum": [
+          "defer",
+          "hold",
+          "build",
+          "govern",
+          "order",
+          "investigate"
+         ]
+        },
+        "counterfactual": {
+         "coin": "text",
+         "side": "buy|sell"
+        },
+        "defer": {
+         "minimum": 0
+        },
+        "emits": "ProducerReturn",
+        "propensity": {},
+        "register": [],
+        "subscribe": {
+         "cadence_floor": 1,
+         "coins": [],
+         "deferred_through_tick": 917,
+         "kinds": []
+        }
+       },
+       "required": [
+        "action",
+        "counterfactual",
+        "emits",
+        "propensity",
+        "subscribe"
+       ]
+      },
+      "target": "ProducerReturn"
+     }
+    ],
+    "status": "cannot"
+   }
+  }
+ ],
+ "source": "work/capital-loop/longrun1-open/invocation.jsonl: constructor (minimax/minimax-m3, json_schema route) replies the kernel refused as malformed that satisfied the wire schema they were sent (investigator 3, wave 15). Strings over 24 characters are replaced by \"text\" and keys cut to 40 characters; each reply still satisfies that old wire."
+}

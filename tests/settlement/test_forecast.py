@@ -68,6 +68,8 @@ def test_canonical_seal_covers_all_fields_except_seal_and_uses_ledger_clock(
     assert forecast.seal == ""
     payload = {**vars(forecast), "params": params}
     payload.pop("seal")
+    # A forecast sealed without a tick due date seals exactly as it always did.
+    assert payload.pop("due_at_tick") is None
     encoded = json.dumps(
         payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
     ).encode("utf-8")
@@ -253,3 +255,22 @@ def test_helper_rejects_invalid_input_without_opening_a_decision(changes, queue)
     with pytest.raises(ValueError):
         open_forecast_decision(queue, **arguments)
     assert queue.outstanding() == []
+
+
+def test_a_forecast_with_a_tick_due_date_comes_due_on_ticks_never_on_events(
+        book, forecast_factory):
+    """Time audit T3: a horizon counts world ticks consumed, never internal events."""
+    from factorylab.kernel.ledger import Ledger
+    from factorylab.settlement.forecast import ForecastBook
+
+    ticked = book.seal(forecast_factory(handle="ticked", due_at_tick=12))
+    evented = book.seal(forecast_factory(handle="evented"))
+    # The tick due date is part of the commitment's seal.
+    other = ForecastBook(Ledger()).seal(forecast_factory(handle="ticked"))
+    assert ticked.seal != other.seal
+    assert [f.handle for f in book.due(10_000, tick=11)] == ["evented"]
+    assert [f.handle for f in book.due(0, tick=12)] == ["ticked"]
+    assert [f.handle for f in book.due(10)] == ["ticked", "evented"]  # no tick: events
+    assert evented.due_at_tick is None
+    with pytest.raises(ValueError):
+        forecast_factory(due_at_tick=-1)

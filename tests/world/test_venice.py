@@ -231,10 +231,11 @@ def test_missing_auth_and_unprefixed_id_cannot_call_completion(req):
 def test_the_edition3_glm_tier_sends_venices_own_thinking_switch():
     """And the world stops producing the failure: the tier rehearsal 5 ran GLM on now
     declares `reasoning = { enabled = false }`, which this adapter sends to Venice as
-    `venice_parameters.disable_thinking = true`."""
+    `venice_parameters.disable_thinking = true`. Edition 3's world no longer loads (its
+    roster falls short of the evaluator population, R8); edition 6 carries the tier."""
     from factorylab.runtime.worlds import load_manifest
 
-    manifest = load_manifest("edition3-testnet")
+    manifest = load_manifest("edition6-testnet-rehearsal")
     tier = next(m for m in manifest.models if m.id == "venice:z-ai-glm-5-3-flash")
     reasoning = dict(tier.reasoning)
     assert reasoning == {"enabled": False}
@@ -251,3 +252,23 @@ def test_the_edition3_glm_tier_sends_venices_own_thinking_switch():
     payload = fake.calls[0][2]
     assert payload["venice_parameters"] == {"disable_thinking": True}
     assert payload["reasoning"] == {"enabled": False}
+
+
+def test_a_json_schema_route_sends_its_schema_on_venices_openai_wire(completion, req):
+    """Chapter II §II.b: Venice's decoder receives the contract the kernel validates,
+    on a route whose manifest contract is json_schema, and only there."""
+    schema = {"type": "object", "properties": {"action": {"type": "string"}},
+              "required": ["action"], "additionalProperties": True}
+    fake = FakeTransport([dict(completion) for _ in range(4)])
+    provider = VeniceProvider(transport=fake, schema_models=[req.model_id])
+    provider.complete(replace(req, json_object=True, response_schema=schema))
+    provider.complete(replace(req, json_object=True))
+    provider.complete(req)
+    VeniceProvider(transport=fake).complete(
+        replace(req, json_object=True, response_schema=schema))
+    sent = [call[2] for call in fake.calls]
+    assert sent[0]["response_format"] == {"type": "json_schema", "json_schema": {
+        "name": "outcome", "strict": False, "schema": schema}}
+    assert sent[1]["response_format"] == {"type": "json_object"}
+    assert "response_format" not in sent[2]
+    assert sent[3]["response_format"] == {"type": "json_object"}

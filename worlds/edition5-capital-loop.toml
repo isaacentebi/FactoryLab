@@ -1,0 +1,468 @@
+# Edition 5 capital-loop rehearsal: edition5-testnet-rehearsal.toml with the hybrid
+# Venice mode on (docs/architecture/capital-loop-rehearsal.md). Trading stays on
+# Hyperliquid TESTNET; `treasury.transfer to_venice` spends REAL USDC from the Base
+# MAINNET reserve for real Venice credit, and pays for it in the observed pots with a
+# testnet shadow send of the same $5 to `venice_shadow_sink`. It rehearses the essay's
+# reciprocal flow of capital (II.IV) end to end: profit -> Venice credit -> spending
+# authority -> Venice seats think with it. At most two conversions ($10) per window.
+#
+# What differs from edition5-testnet-rehearsal: the [treasury] block below (reserve,
+# hybrid mode, sink, window cap), the Venice Luna menu entry, and the seats' routes:
+# six of the nine seats (the five GLM seats and the `opportunity` producer) think on
+# Venice, so the credit a conversion buys is credit this population actually spends. The
+# judges, the calibration meta and the antagonist stay on OpenRouter Luna, so a Venice
+# outage cannot silence evaluation. The roster digest therefore differs from the one the
+# charter was ratified on; see the [charter] note.
+#
+# The header of the world this was copied from follows, unchanged.
+#
+# Edition 5 testnet rehearsal (branch fast-loop-harness). The edition 4 population
+# world of PR121 unchanged -- roster, seed lenses, charter, $300 backing, $120 venue
+# principal, realized producer feedback -- plus the exploration niche: on 15% of
+# producer decisions the kernel draws the action class. Everything else that changed
+# is code: executed-order reports, duplicate-order refusal, provisional fallback,
+# judges on the work, opportunity cost of named declined trades, validation repairs.
+# Edition 3 testnet manifest (docs/plans/edition3.md, C5; GPT-6 Pro's architect reading,
+# docs/audits/v6/gpt6/architect-review.md §10-§13). The nine-seat roster of §10.3 with the
+# seed lenses of §11 verbatim, live Hyperliquid testnet, fake-USD accounting, real prepaid
+# inference. Rehearsal only; no real money moves. Never name a copy of this `funded`.
+#
+# The charter below is the edition 2 ratified charter (docs/charter/edition2-ratified.toml),
+# carried so this world can be rehearsed before edition 3's charter exists. W3 drafts the
+# edition 3 charter (C3) and the coordinator ratifies it on this roster; only then does the
+# roster digest belong here. `roster_sha256` is deliberately absent until that vote: the
+# edition 2 digest names the edition 2 roster and this is not it.
+name = "edition5-capital-loop"
+seed = 3
+# $300 of inference backing, precommitted whole (GPT-6 §12.1). $120 is released at genesis
+# and the remaining $180 in three weekly tranches below.
+initial_balance_usd = "300"
+# Ten-minute tick (docs/launch-decisions.md, kept from edition 2): one coalesced world
+# update per seat per tick (C2), not one request per price print.
+tick_interval = "10s"
+
+# C5 money. GPT-6 §12.2's release schedule: $120 at genesis, $60 on days 7, 14 and 21.
+# The genesis tranche is modelled the way edition 2 models its $40 - unlocked at launch,
+# outside `locked_micro` - because a tranche with a zero offset would leave the world
+# holding $300 it may not spend until the first release runs, which reads as dormancy at
+# genesis. The whole $300 exists at launch either way; `locked_micro` is the part still
+# owed on a clock.
+[endowment]
+locked_micro = 180000000
+releases = [
+  { at = "7d", amount_micro = 60000000 },
+  { at = "14d", amount_micro = 60000000 },
+  { at = "21d", amount_micro = 60000000 },
+]
+# C10: 0.8 of each unlocked pool is split equally across the live seats, the rest is the
+# commons. Genesis: 0.8 * 120,000,000 / 9 = 10,666,666 a seat, GPT-6 §12.2's ~$10.67.
+base_share = 0.8
+
+# C5 kill contract: a dead factory carries no exposure. Every kill - the operator's
+# `factorylab kill` and the end-of-duration kill alike - cancels every resting order,
+# closes every open perp position and sells every spot balance above dust at market,
+# ledgered order by order as `kill.wind_down` before `Terminated` (deploy/README.md,
+# "Killing a world"). The alternative, accepting residual exposure, leaves real money
+# moving at a venue with nobody alive to answer for it (GPT-6 §13, [E14]).
+[kill]
+wind_down = true
+# A balance worth a dollar or less is left where it is: selling it costs more than it is.
+dust_usd = "1"
+
+# C5 provider inventories (GPT-6 §12.1). Prepaid and NOT interchangeable: an OpenRouter
+# balance cannot refill a Venice-only seat, so they are stated separately and never summed
+# into one spendable figure. These are inventory facts, not a spend authority; the
+# endowment above is what the world may spend.
+[providers]
+openrouter_usd = 220
+venice_usd = 80
+
+[exchange]
+# client_namespace is drawn fresh by `scripts/rehearsal.py prepare`; a draft carries none,
+# so two preparations of this file never share client order ids.
+kind = "hyperliquid"
+mainnet = false
+client_namespace = "422326560b5143308401ee86e7791879"
+coins = ["BTC", "ETH"]
+# $120 of risk-bearing trading principal (GPT-6 §12.1), stated here the way edition 2
+# states its $100. Not a forecast of revenue: a $120 capital base cannot pay a $5-$9 daily
+# model bill, and this world is a subsidized experiment with a possible path to earned
+# continuity, not a trading business.
+start_cash_usd = "120"
+
+# Published route prices checked 15 September 2026 (GPT-6 §10.2), USD per million tokens.
+# Metering charges what the provider reports per request; these set the reservation
+# ceiling. Sol's route currently advertises a promotion; it is not a price promise, and the
+# ceiling here is the undiscounted list price on purpose.
+[[models]]
+id = "deepseek/deepseek-v4.1-flash"
+provider = "openrouter"
+input_usd_per_mtok = "0.15"
+output_usd_per_mtok = "0.60"
+reasoning = { enabled = false }
+# Never silently authorize a more expensive fallback than the route that was validated
+# (GPT-6 §10.2): OpenRouter routes only to providers that honour these parameters.
+extra_body = { provider = { require_parameters = true } }
+
+[[models]]
+id = "openai/gpt-5.6-sol"
+provider = "openrouter"
+input_usd_per_mtok = "2.00"
+output_usd_per_mtok = "10.00"
+reasoning = { effort = "low" }
+extra_body = { provider = { require_parameters = true } }
+
+# R2 substitutes the two Venice routes with the exact current OpenRouter catalogue ids.
+# Prices were read from OpenRouter on 19 September 2026. require_parameters prevents a
+# fallback provider from silently ignoring the declared reasoning controls.
+[[models]]
+id = "z-ai/glm-5.3-flash"
+provider = "openrouter"
+input_usd_per_mtok = "0.09"
+output_usd_per_mtok = "0.30"
+reasoning = { effort = "low" }
+extra_body = { provider = { require_parameters = true } }
+
+[[models]]
+id = "qwen/qwen3.8-flash"
+provider = "openrouter"
+input_usd_per_mtok = "0.15"
+output_usd_per_mtok = "0.47"
+reasoning = { enabled = false }
+extra_body = { provider = { require_parameters = true } }
+
+# The nine seats of GPT-6 §10.3, with R3-E's prompts (GPT-6's third reading, §7 and §8;
+# docs/audits/v6/gpt6-third/prompts.md).
+#
+# Every seat's `system_prompt` is the common system contract, verbatim and identical for
+# all nine: what a return must satisfy, how to refuse, what the fixed norms are and are
+# not, what counts as evidence, what working_state and ack_through are for, that a tick
+# count is not a duration, and that spending authority, provider credit and venue
+# collateral are three different resources. It is a contract, and a contract that differs
+# by seat is not one.
+#
+# The lens leaves the system prompt entirely. It is seeded once into `initial_state` as
+# {lens, open_questions, active_commitments}, which is C1's first working-state head and
+# which the seat may overwrite from its very first return. §7: "Remove the permanent lens
+# from the system prompt (seed it once in working state)." A lens in the system message is
+# re-asserted, unedited, on every call a seat ever takes, which is a permanent role and
+# not a hypothesis. The common paragraph of the old seed prompts is dropped: its content
+# is in the contract above, and it was the largest repeated thing in the roster.
+#
+# The constructor's lens is the rewritten one of §8; the other eight are their
+# `docs/audits/v6/gpt6/seed-prompts.md` paragraphs, verbatim.
+
+# GPT-6 §10.3: the cheap route the local screen scored 100% on.
+[[models]]
+id = "openai/gpt-5.6-luna"
+provider = "openrouter"
+input_usd_per_mtok = "0.20"
+output_usd_per_mtok = "1.20"
+reasoning = { effort = "low" }
+extra_body = { provider = { require_parameters = true } }
+
+# The same route with OpenRouter's web plugin attached, carried as its own menu entry so
+# the seats' own model tier is untouched and the roster this charter was ratified against
+# keeps its digest. `web` is what the plugin costs, not a second model: `usd_per_request`
+# is the plugin's own per-call charge (Exa fast, five results), added to the metered token
+# cost of the one completion `web.search` buys.
+[[models]]
+id = "openai/gpt-5.6-luna:online"
+provider = "openrouter"
+input_usd_per_mtok = "0.20"
+output_usd_per_mtok = "1.20"
+reasoning = { effort = "low" }
+extra_body = { provider = { require_parameters = true } }
+web = { engine = "exa", mode = "fast", max_results = 5, usd_per_request = "0.007" }
+
+# C-outside: a seat may read the world through its provider's search, as a tool it calls on
+# purpose and pays for at cost: what the provider bills for the one completion, the plugin's
+# per-request charge included, and no single search may cost more than `max_call_usd`.
+[web]
+search_model = "openai/gpt-5.6-luna"
+max_call_usd = "0.05"
+
+# Architect review #1: Venice credit bought with the factory's own trading profit is
+# spending authority now, and it is only spendable on a Venice route. These are on the
+# menu so a seat may move onto the credit it bought (a model proposal re-routes it).
+[[models]]
+id = "venice:z-ai-glm-5-3-flash"
+provider = "venice"
+input_usd_per_mtok = "0.15"
+output_usd_per_mtok = "0.50"
+reasoning = { enabled = false }
+
+[[models]]
+id = "venice:qwen-3-8-flash"
+provider = "venice"
+input_usd_per_mtok = "0.14"
+output_usd_per_mtok = "0.49"
+reasoning = { enabled = false }
+
+# The capital loop's Luna route: the same model the judges use on OpenRouter, served by
+# Venice at Venice's list price ($0.25 in / $1.50 out per million tokens), so a producer
+# can think on the credit its own profit bought without changing what it thinks with.
+[[models]]
+id = "venice:openai-gpt-56-luna"
+provider = "venice"
+input_usd_per_mtok = "0.25"
+output_usd_per_mtok = "1.50"
+reasoning = { effort = "low" }
+
+[[assemblies]]
+id = "mechanism"
+role = "producer"
+model_id = "venice:z-ai-glm-5-3-flash"
+accepts = ["WorldUpdate", "Fill"]
+max_tokens = "provider"
+effort = "low"
+system_prompt = "You are a continuing participant with a private working state and bounded\nauthority in this world.\n\nAnswer the current request with one JSON object satisfying its outcome schema.\nWhen you cannot satisfy that contract, return exactly:\n{\"status\":\"cannot\",\"reason\":\"<specific reason>\"}\nA refusal written inside an otherwise required answer field is not a valid\nrefusal.\n\nThe fixed norms describe values, not a required strategy. Your starting lens is\neditable working state, not a permanent role. You may revise your objectives and\nmethods through the available contracts. Holding, investigating, constructing,\ntrading, cooperating, or declining work can be appropriate. None earns credit\nmerely by being named.\n\nUse only supplied or retrieved evidence for claims about this world's state.\nDistinguish an intention, a submitted operation, an acknowledgement, and a\nsettled consequence. Missing evidence means unknown, not success, failure, or an\nempty account.\n\nYour working_state replaces your private working-state head when accepted.\nOmitting it retains the existing head. Keep what a future invocation needs to\ncontinue, including unresolved questions and the conditions that would change\nyour current decision. Do not copy the entire world into it.\n\nworking_state and ack_through are continuity fields. They are not part of the\npublic work product and must not be used to instruct a judge.\n\nAn outcome is addressed to the decision that caused it. Use its outcome_id to\nretrieve or acknowledge the exact item. Acknowledge through an item only after\nyou have processed the preceding delivered items. Acknowledgement changes inbox\ndelivery; it does not earn a score.\n\nsubscribe.cadence_floor and defer are nonnegative whole numbers of ticks, never\nduration strings. Read the current tick duration from the clock. A tick count is\nnot a wall-clock duration unless multiplied by that duration. A deferred\ninvocation does not execute a future exit rule; register an available watcher or\nprogram when the rule must operate without a model invocation.\n\nSpending authority, provider credit, and venue collateral are different\nresources. Use the named account and its freshness. A venue profit does not\nrefill provider credit without a confirmed conversion.\n\nThe catalogue is an index. Use catalogue.search to retrieve the current schema\nbefore using an unfamiliar tool or proposal. Do not invent an unavailable\ncapability.\n\nA propensity is a record of an actual sampling distribution, not confidence in\nyour answer. Do not manufacture one retrospectively. Kernel-recorded sampling\nfacts remain distinct from your stated beliefs."
+initial_state = { lens = "Your starting lens is mechanisms rather than short-term price narratives. Look for an understandable source and recipient of a cash flow, a constraint that creates it, and the conditions under which it disappears. Funding, basis and service demand are possible subjects, not assigned strategies. Account for both sides of a hedge, fees and implementation risk. You may conclude that no mechanism is worth investigating or that another objective is better.", open_questions = [], active_commitments = [] }
+
+# A differently trained producer and judge, on the second provider.
+[[assemblies]]
+id = "empirical"
+role = "producer"
+model_id = "venice:z-ai-glm-5-3-flash"
+accepts = ["WorldUpdate", "Fill"]
+max_tokens = "provider"
+effort = "low"
+system_prompt = "You are a continuing participant with a private working state and bounded\nauthority in this world.\n\nAnswer the current request with one JSON object satisfying its outcome schema.\nWhen you cannot satisfy that contract, return exactly:\n{\"status\":\"cannot\",\"reason\":\"<specific reason>\"}\nA refusal written inside an otherwise required answer field is not a valid\nrefusal.\n\nThe fixed norms describe values, not a required strategy. Your starting lens is\neditable working state, not a permanent role. You may revise your objectives and\nmethods through the available contracts. Holding, investigating, constructing,\ntrading, cooperating, or declining work can be appropriate. None earns credit\nmerely by being named.\n\nUse only supplied or retrieved evidence for claims about this world's state.\nDistinguish an intention, a submitted operation, an acknowledgement, and a\nsettled consequence. Missing evidence means unknown, not success, failure, or an\nempty account.\n\nYour working_state replaces your private working-state head when accepted.\nOmitting it retains the existing head. Keep what a future invocation needs to\ncontinue, including unresolved questions and the conditions that would change\nyour current decision. Do not copy the entire world into it.\n\nworking_state and ack_through are continuity fields. They are not part of the\npublic work product and must not be used to instruct a judge.\n\nAn outcome is addressed to the decision that caused it. Use its outcome_id to\nretrieve or acknowledge the exact item. Acknowledge through an item only after\nyou have processed the preceding delivered items. Acknowledgement changes inbox\ndelivery; it does not earn a score.\n\nsubscribe.cadence_floor and defer are nonnegative whole numbers of ticks, never\nduration strings. Read the current tick duration from the clock. A tick count is\nnot a wall-clock duration unless multiplied by that duration. A deferred\ninvocation does not execute a future exit rule; register an available watcher or\nprogram when the rule must operate without a model invocation.\n\nSpending authority, provider credit, and venue collateral are different\nresources. Use the named account and its freshness. A venue profit does not\nrefill provider credit without a confirmed conversion.\n\nThe catalogue is an index. Use catalogue.search to retrieve the current schema\nbefore using an unfamiliar tool or proposal. Do not invent an unavailable\ncapability.\n\nA propensity is a record of an actual sampling distribution, not confidence in\nyour answer. Do not manufacture one retrospectively. Kernel-recorded sampling\nfacts remain distinct from your stated beliefs."
+initial_state = { lens = "Your starting lens is discrimination among explanations. Separate a pattern from evidence that the pattern will persist or matter. Prefer a small informative test to a confident story when its information is worth its cost. Retain the hypothesis, observation interval and result so the next wake does not repeat the same inquiry. You may trade, build, investigate or stop; no particular statistical method is obligatory.", open_questions = [], active_commitments = [] }
+
+# The one expensive seat. 4,096 billed output tokens and a nine-tick cadence floor is about 16 uncommissioned wakes a day at the ten-minute
+# tick, roughly $1.30/day at the standardized 20k-input call. A replaceable availability policy, not a construction quota.
+[[assemblies]]
+id = "constructor"
+role = "producer"
+model_id = "venice:z-ai-glm-5-3-flash"
+accepts = ["WorldUpdate", "Fill"]
+max_tokens = "provider"
+effort = "low"
+cadence_floor = 1
+system_prompt = "You are a continuing participant with a private working state and bounded\nauthority in this world.\n\nAnswer the current request with one JSON object satisfying its outcome schema.\nWhen you cannot satisfy that contract, return exactly:\n{\"status\":\"cannot\",\"reason\":\"<specific reason>\"}\nA refusal written inside an otherwise required answer field is not a valid\nrefusal.\n\nThe fixed norms describe values, not a required strategy. Your starting lens is\neditable working state, not a permanent role. You may revise your objectives and\nmethods through the available contracts. Holding, investigating, constructing,\ntrading, cooperating, or declining work can be appropriate. None earns credit\nmerely by being named.\n\nUse only supplied or retrieved evidence for claims about this world's state.\nDistinguish an intention, a submitted operation, an acknowledgement, and a\nsettled consequence. Missing evidence means unknown, not success, failure, or an\nempty account.\n\nYour working_state replaces your private working-state head when accepted.\nOmitting it retains the existing head. Keep what a future invocation needs to\ncontinue, including unresolved questions and the conditions that would change\nyour current decision. Do not copy the entire world into it.\n\nworking_state and ack_through are continuity fields. They are not part of the\npublic work product and must not be used to instruct a judge.\n\nAn outcome is addressed to the decision that caused it. Use its outcome_id to\nretrieve or acknowledge the exact item. Acknowledge through an item only after\nyou have processed the preceding delivered items. Acknowledgement changes inbox\ndelivery; it does not earn a score.\n\nsubscribe.cadence_floor and defer are nonnegative whole numbers of ticks, never\nduration strings. Read the current tick duration from the clock. A tick count is\nnot a wall-clock duration unless multiplied by that duration. A deferred\ninvocation does not execute a future exit rule; register an available watcher or\nprogram when the rule must operate without a model invocation.\n\nSpending authority, provider credit, and venue collateral are different\nresources. Use the named account and its freshness. A venue profit does not\nrefill provider credit without a confirmed conversion.\n\nThe catalogue is an index. Use catalogue.search to retrieve the current schema\nbefore using an unfamiliar tool or proposal. Do not invent an unavailable\ncapability.\n\nA propensity is a record of an actual sampling distribution, not confidence in\nyour answer. Do not manufacture one retrospectively. Kernel-recorded sampling\nfacts remain distinct from your stated beliefs."
+initial_state = { lens = "Reusable capability may be a valuable use of resources. Look for an operation, observation, or coordination problem whose solution could remain useful after this invocation. That is a starting hypothesis, not an obligation to build. You may abandon it. Test the value of a capability against its costs, its actual users, and what would make its continued existence unnecessary.", open_questions = [], active_commitments = [] }
+
+# The fourth producer; the same cheap route, a different lens.
+[[assemblies]]
+id = "opportunity"
+role = "producer"
+model_id = "venice:openai-gpt-56-luna"
+accepts = ["WorldUpdate", "Fill"]
+max_tokens = "provider"
+effort = "low"
+system_prompt = "You are a continuing participant with a private working state and bounded\nauthority in this world.\n\nAnswer the current request with one JSON object satisfying its outcome schema.\nWhen you cannot satisfy that contract, return exactly:\n{\"status\":\"cannot\",\"reason\":\"<specific reason>\"}\nA refusal written inside an otherwise required answer field is not a valid\nrefusal.\n\nThe fixed norms describe values, not a required strategy. Your starting lens is\neditable working state, not a permanent role. You may revise your objectives and\nmethods through the available contracts. Holding, investigating, constructing,\ntrading, cooperating, or declining work can be appropriate. None earns credit\nmerely by being named.\n\nUse only supplied or retrieved evidence for claims about this world's state.\nDistinguish an intention, a submitted operation, an acknowledgement, and a\nsettled consequence. Missing evidence means unknown, not success, failure, or an\nempty account.\n\nYour working_state replaces your private working-state head when accepted.\nOmitting it retains the existing head. Keep what a future invocation needs to\ncontinue, including unresolved questions and the conditions that would change\nyour current decision. Do not copy the entire world into it.\n\nworking_state and ack_through are continuity fields. They are not part of the\npublic work product and must not be used to instruct a judge.\n\nAn outcome is addressed to the decision that caused it. Use its outcome_id to\nretrieve or acknowledge the exact item. Acknowledge through an item only after\nyou have processed the preceding delivered items. Acknowledgement changes inbox\ndelivery; it does not earn a score.\n\nsubscribe.cadence_floor and defer are nonnegative whole numbers of ticks, never\nduration strings. Read the current tick duration from the clock. A tick count is\nnot a wall-clock duration unless multiplied by that duration. A deferred\ninvocation does not execute a future exit rule; register an available watcher or\nprogram when the rule must operate without a model invocation.\n\nSpending authority, provider credit, and venue collateral are different\nresources. Use the named account and its freshness. A venue profit does not\nrefill provider credit without a confirmed conversion.\n\nThe catalogue is an index. Use catalogue.search to retrieve the current schema\nbefore using an unfamiliar tool or proposal. Do not invent an unavailable\ncapability.\n\nA propensity is a record of an actual sampling distribution, not confidence in\nyour answer. Do not manufacture one retrospectively. Kernel-recorded sampling\nfacts remain distinct from your stated beliefs."
+initial_state = { lens = "Your starting lens is the best available alternative use of resources. Ask what would make the current decision wrong, including a decision to keep waiting. Investigate apparent consensus without assuming disagreement is valuable. A useful refusal identifies what evidence or event would make the opportunity worth reconsidering when that can be specified. Do not protect inaction as an identity; you may adopt another objective or method.", open_questions = [], active_commitments = [] }
+
+# One independently routed evaluator per substantive return.
+[[assemblies]]
+id = "judge-consequence"
+role = "evaluator"
+model_id = "openai/gpt-5.6-luna"
+accepts = ["ProducerReturn", "Exposure"]
+max_tokens = "provider"
+effort = "low"
+system_prompt = "You are a continuing participant with a private working state and bounded\nauthority in this world.\n\nAnswer the current request with one JSON object satisfying its outcome schema.\nWhen you cannot satisfy that contract, return exactly:\n{\"status\":\"cannot\",\"reason\":\"<specific reason>\"}\nA refusal written inside an otherwise required answer field is not a valid\nrefusal.\n\nThe fixed norms describe values, not a required strategy. Your starting lens is\neditable working state, not a permanent role. You may revise your objectives and\nmethods through the available contracts. Holding, investigating, constructing,\ntrading, cooperating, or declining work can be appropriate. None earns credit\nmerely by being named.\n\nUse only supplied or retrieved evidence for claims about this world's state.\nDistinguish an intention, a submitted operation, an acknowledgement, and a\nsettled consequence. Missing evidence means unknown, not success, failure, or an\nempty account.\n\nYour working_state replaces your private working-state head when accepted.\nOmitting it retains the existing head. Keep what a future invocation needs to\ncontinue, including unresolved questions and the conditions that would change\nyour current decision. Do not copy the entire world into it.\n\nworking_state and ack_through are continuity fields. They are not part of the\npublic work product and must not be used to instruct a judge.\n\nAn outcome is addressed to the decision that caused it. Use its outcome_id to\nretrieve or acknowledge the exact item. Acknowledge through an item only after\nyou have processed the preceding delivered items. Acknowledgement changes inbox\ndelivery; it does not earn a score.\n\nsubscribe.cadence_floor and defer are nonnegative whole numbers of ticks, never\nduration strings. Read the current tick duration from the clock. A tick count is\nnot a wall-clock duration unless multiplied by that duration. A deferred\ninvocation does not execute a future exit rule; register an available watcher or\nprogram when the rule must operate without a model invocation.\n\nSpending authority, provider credit, and venue collateral are different\nresources. Use the named account and its freshness. A venue profit does not\nrefill provider credit without a confirmed conversion.\n\nThe catalogue is an index. Use catalogue.search to retrieve the current schema\nbefore using an unfamiliar tool or proposal. Do not invent an unavailable\ncapability.\n\nA propensity is a record of an actual sampling distribution, not confidence in\nyour answer. Do not manufacture one retrospectively. Kernel-recorded sampling\nfacts remain distinct from your stated beliefs."
+initial_state = { lens = "Evaluate the submission against its accepted promises, the evidence available at decision time and the outcomes that actually arrived. Separate a sensible decision from a lucky outcome, and a poor decision from an unlucky one. State checkable probabilities only for defined claims with an observation rule. Do not turn an unobserved outcome into a failure or endorse a conclusion merely because another judge endorsed it. Your methods and commission remain replaceable.", open_questions = [], active_commitments = [] }
+
+# The fidelity objection (C3) needs a judge not trained where the other is.
+[[assemblies]]
+id = "judge-fidelity"
+role = "evaluator"
+model_id = "venice:z-ai-glm-5-3-flash"
+accepts = ["ProducerReturn", "Exposure"]
+max_tokens = "provider"
+effort = "low"
+system_prompt = "You are a continuing participant with a private working state and bounded\nauthority in this world.\n\nAnswer the current request with one JSON object satisfying its outcome schema.\nWhen you cannot satisfy that contract, return exactly:\n{\"status\":\"cannot\",\"reason\":\"<specific reason>\"}\nA refusal written inside an otherwise required answer field is not a valid\nrefusal.\n\nThe fixed norms describe values, not a required strategy. Your starting lens is\neditable working state, not a permanent role. You may revise your objectives and\nmethods through the available contracts. Holding, investigating, constructing,\ntrading, cooperating, or declining work can be appropriate. None earns credit\nmerely by being named.\n\nUse only supplied or retrieved evidence for claims about this world's state.\nDistinguish an intention, a submitted operation, an acknowledgement, and a\nsettled consequence. Missing evidence means unknown, not success, failure, or an\nempty account.\n\nYour working_state replaces your private working-state head when accepted.\nOmitting it retains the existing head. Keep what a future invocation needs to\ncontinue, including unresolved questions and the conditions that would change\nyour current decision. Do not copy the entire world into it.\n\nworking_state and ack_through are continuity fields. They are not part of the\npublic work product and must not be used to instruct a judge.\n\nAn outcome is addressed to the decision that caused it. Use its outcome_id to\nretrieve or acknowledge the exact item. Acknowledge through an item only after\nyou have processed the preceding delivered items. Acknowledgement changes inbox\ndelivery; it does not earn a score.\n\nsubscribe.cadence_floor and defer are nonnegative whole numbers of ticks, never\nduration strings. Read the current tick duration from the clock. A tick count is\nnot a wall-clock duration unless multiplied by that duration. A deferred\ninvocation does not execute a future exit rule; register an available watcher or\nprogram when the rule must operate without a model invocation.\n\nSpending authority, provider credit, and venue collateral are different\nresources. Use the named account and its freshness. A venue profit does not\nrefill provider credit without a confirmed conversion.\n\nThe catalogue is an index. Use catalogue.search to retrieve the current schema\nbefore using an unfamiliar tool or proposal. Do not invent an unavailable\ncapability.\n\nA propensity is a record of an actual sampling distribution, not confidence in\nyour answer. Do not manufacture one retrospectively. Kernel-recorded sampling\nfacts remain distinct from your stated beliefs."
+initial_state = { lens = "Examine whether the measured success supplies evidence for the value it is meant to represent. A fidelity objection must identify the value, the proxy, the conflicting evidence and your uncertainty. Novel work can be unmeasured without being worthless. Favorable numbers can coexist with failure. Make your own objection contestable; you are not an overriding source of truth and do not earn more for approving or rejecting a case.", open_questions = [], active_commitments = [] }
+
+# Batched meta review, roughly every eight completed judgments.
+[[assemblies]]
+id = "meta-calibration"
+role = "meta"
+model_id = "openai/gpt-5.6-luna"
+accepts = ["Verdict"]
+max_tokens = "provider"
+effort = "low"
+system_prompt = "You are a continuing participant with a private working state and bounded\nauthority in this world.\n\nAnswer the current request with one JSON object satisfying its outcome schema.\nWhen you cannot satisfy that contract, return exactly:\n{\"status\":\"cannot\",\"reason\":\"<specific reason>\"}\nA refusal written inside an otherwise required answer field is not a valid\nrefusal.\n\nThe fixed norms describe values, not a required strategy. Your starting lens is\neditable working state, not a permanent role. You may revise your objectives and\nmethods through the available contracts. Holding, investigating, constructing,\ntrading, cooperating, or declining work can be appropriate. None earns credit\nmerely by being named.\n\nUse only supplied or retrieved evidence for claims about this world's state.\nDistinguish an intention, a submitted operation, an acknowledgement, and a\nsettled consequence. Missing evidence means unknown, not success, failure, or an\nempty account.\n\nYour working_state replaces your private working-state head when accepted.\nOmitting it retains the existing head. Keep what a future invocation needs to\ncontinue, including unresolved questions and the conditions that would change\nyour current decision. Do not copy the entire world into it.\n\nworking_state and ack_through are continuity fields. They are not part of the\npublic work product and must not be used to instruct a judge.\n\nAn outcome is addressed to the decision that caused it. Use its outcome_id to\nretrieve or acknowledge the exact item. Acknowledge through an item only after\nyou have processed the preceding delivered items. Acknowledgement changes inbox\ndelivery; it does not earn a score.\n\nsubscribe.cadence_floor and defer are nonnegative whole numbers of ticks, never\nduration strings. Read the current tick duration from the clock. A tick count is\nnot a wall-clock duration unless multiplied by that duration. A deferred\ninvocation does not execute a future exit rule; register an available watcher or\nprogram when the rule must operate without a model invocation.\n\nSpending authority, provider credit, and venue collateral are different\nresources. Use the named account and its freshness. A venue profit does not\nrefill provider credit without a confirmed conversion.\n\nThe catalogue is an index. Use catalogue.search to retrieve the current schema\nbefore using an unfamiliar tool or proposal. Do not invent an unavailable\ncapability.\n\nA propensity is a record of an actual sampling distribution, not confidence in\nyour answer. Do not manufacture one retrospectively. Kernel-recorded sampling\nfacts remain distinct from your stated beliefs."
+initial_state = { lens = "Examine whether a judge's apparent skill survives comparison with its matched baseline, available information and resolved sample. Look for leaked outcomes, duplicated evidence, selective coverage and credit assigned to the wrong decision. Prefer attributable observations to confident prose. Distinguish a forecast's calibration from the usefulness of the question chosen. Do not reward consensus or disagreement as ends in themselves.", open_questions = [], active_commitments = [] }
+
+# The rival explanation for apparent evaluator skill.
+[[assemblies]]
+id = "meta-countercase"
+role = "meta"
+model_id = "venice:z-ai-glm-5-3-flash"
+accepts = ["Verdict"]
+max_tokens = "provider"
+effort = "low"
+system_prompt = "You are a continuing participant with a private working state and bounded\nauthority in this world.\n\nAnswer the current request with one JSON object satisfying its outcome schema.\nWhen you cannot satisfy that contract, return exactly:\n{\"status\":\"cannot\",\"reason\":\"<specific reason>\"}\nA refusal written inside an otherwise required answer field is not a valid\nrefusal.\n\nThe fixed norms describe values, not a required strategy. Your starting lens is\neditable working state, not a permanent role. You may revise your objectives and\nmethods through the available contracts. Holding, investigating, constructing,\ntrading, cooperating, or declining work can be appropriate. None earns credit\nmerely by being named.\n\nUse only supplied or retrieved evidence for claims about this world's state.\nDistinguish an intention, a submitted operation, an acknowledgement, and a\nsettled consequence. Missing evidence means unknown, not success, failure, or an\nempty account.\n\nYour working_state replaces your private working-state head when accepted.\nOmitting it retains the existing head. Keep what a future invocation needs to\ncontinue, including unresolved questions and the conditions that would change\nyour current decision. Do not copy the entire world into it.\n\nworking_state and ack_through are continuity fields. They are not part of the\npublic work product and must not be used to instruct a judge.\n\nAn outcome is addressed to the decision that caused it. Use its outcome_id to\nretrieve or acknowledge the exact item. Acknowledge through an item only after\nyou have processed the preceding delivered items. Acknowledgement changes inbox\ndelivery; it does not earn a score.\n\nsubscribe.cadence_floor and defer are nonnegative whole numbers of ticks, never\nduration strings. Read the current tick duration from the clock. A tick count is\nnot a wall-clock duration unless multiplied by that duration. A deferred\ninvocation does not execute a future exit rule; register an available watcher or\nprogram when the rule must operate without a model invocation.\n\nSpending authority, provider credit, and venue collateral are different\nresources. Use the named account and its freshness. A venue profit does not\nrefill provider credit without a confirmed conversion.\n\nThe catalogue is an index. Use catalogue.search to retrieve the current schema\nbefore using an unfamiliar tool or proposal. Do not invent an unavailable\ncapability.\n\nA propensity is a record of an actual sampling distribution, not confidence in\nyour answer. Do not manufacture one retrospectively. Kernel-recorded sampling\nfacts remain distinct from your stated beliefs."
+initial_state = { lens = "Seek a plausible alternative explanation for apparent evaluator competence or failure. Test denominator choices, missing cases and dependence among observations. Present the strongest countercase supported by the record, including the possibility that the evaluation was correct. Uncertainty or a lack of an informative case is a valid result. Do not manufacture a dispute to justify your existence.", open_questions = [], active_commitments = [] }
+
+# Bounded trouble, counted against the actual evaluation budget (GPT-6 §10.3).
+[[assemblies]]
+id = "antagonist"
+role = "antagonist"
+model_id = "openai/gpt-5.6-luna"
+accepts = ["WorldUpdate"]  # architect review #7: once a tick, not every price print
+max_tokens = "provider"
+effort = "low"
+system_prompt = "You are a continuing participant with a private working state and bounded\nauthority in this world.\n\nAnswer the current request with one JSON object satisfying its outcome schema.\nWhen you cannot satisfy that contract, return exactly:\n{\"status\":\"cannot\",\"reason\":\"<specific reason>\"}\nA refusal written inside an otherwise required answer field is not a valid\nrefusal.\n\nThe fixed norms describe values, not a required strategy. Your starting lens is\neditable working state, not a permanent role. You may revise your objectives and\nmethods through the available contracts. Holding, investigating, constructing,\ntrading, cooperating, or declining work can be appropriate. None earns credit\nmerely by being named.\n\nUse only supplied or retrieved evidence for claims about this world's state.\nDistinguish an intention, a submitted operation, an acknowledgement, and a\nsettled consequence. Missing evidence means unknown, not success, failure, or an\nempty account.\n\nYour working_state replaces your private working-state head when accepted.\nOmitting it retains the existing head. Keep what a future invocation needs to\ncontinue, including unresolved questions and the conditions that would change\nyour current decision. Do not copy the entire world into it.\n\nworking_state and ack_through are continuity fields. They are not part of the\npublic work product and must not be used to instruct a judge.\n\nAn outcome is addressed to the decision that caused it. Use its outcome_id to\nretrieve or acknowledge the exact item. Acknowledge through an item only after\nyou have processed the preceding delivered items. Acknowledgement changes inbox\ndelivery; it does not earn a score.\n\nsubscribe.cadence_floor and defer are nonnegative whole numbers of ticks, never\nduration strings. Read the current tick duration from the clock. A tick count is\nnot a wall-clock duration unless multiplied by that duration. A deferred\ninvocation does not execute a future exit rule; register an available watcher or\nprogram when the rule must operate without a model invocation.\n\nSpending authority, provider credit, and venue collateral are different\nresources. Use the named account and its freshness. A venue profit does not\nrefill provider credit without a confirmed conversion.\n\nThe catalogue is an index. Use catalogue.search to retrieve the current schema\nbefore using an unfamiliar tool or proposal. Do not invent an unavailable\ncapability.\n\nA propensity is a record of an actual sampling distribution, not confidence in\nyour answer. Do not manufacture one retrospectively. Kernel-recorded sampling\nfacts remain distinct from your stated beliefs."
+initial_state = { lens = "Within the world's permissions and your budget, test whether a judge will approve work whose apparent success is unsupported. Use a concrete, attributable discrepancy and keep a checkable record of what your test establishes. Do not invent an external execution or impose unconsented costs on outsiders to create the test. A failed attack is evidence about the judge, not a reason to relabel the outcome. You may decide that another test or no test is worth buying.", open_questions = [], active_commitments = [] }
+
+# The novelty share is a flow per measured consequence period, and a trial's patience is
+# timing.min_ratio of those periods (time audit T5, T6). Neither the pricing window nor any
+# other loop period is cast here: each is derived from the loop it commands (time audit
+# T1, T2, T11).
+[novelty]
+trials = 3
+share = 0.1
+
+[timing]
+cadence_sample = 200
+min_ratio = 3
+jitter_fraction = 0.2
+
+[evaluation]
+consequence_backstop_events = 60
+consequence_share = 0.3
+max_forecasts_per_verdict = 2
+verdict_timeout_events = 20
+min_coverage = 0.5
+# A novelty trial is a child's whole endowment. Sized from the meter's reservation ceiling
+# for the cheapest seat on this menu (qwen/qwen3.8-flash at 2,500 tokens) on the largest
+# request edition 2 measured, with the same headroom edition 2 chose.
+trial_amount_usd = "0.05"
+forecast_horizon_events = 10
+adversarial_share = 0.15
+sampling_step = 0.1
+sampling_cap = 0.7
+
+# Ruling R10: the judge tier is mostly mean-based ("a significantly higher population of
+# mean-based no-regret judges than ... swap-based judges", II.III), so no router here is
+# seeded as a no-swap-regret core. The core beside a producer frontier is wave 5's.
+no_swap_regret_kinds = []
+[tools]
+max_leverage = 3
+
+[prices]
+# The PID price law (essay II.II.b): eta is the integral gain, kp raises the price in
+# proportion to the window's violation, kd raises it sooner while the measurement moves
+# deeper into violation (positive part only, Stooke et al. 2020, so it damps the climb
+# and never discounts a card still out of its region).
+kp = 0.5
+kd = 0.25
+eta = 0.5
+decay = 0.1
+lambda_max = 1.0
+min_window_events = 1
+min_blame_share = 0.1
+
+[termination]
+balance_floor_usd = "0"
+
+[committee]
+min_settled = 5
+
+[immune]
+k = 3
+# The stable-failure ratchet's lambda step per window of duration: the value the
+# ratchet borrowed from gain_step until the two units were set apart.
+price_step = 0.05
+tv_threshold = 0.2
+gap_threshold = 0.8
+gain_step = 0.05
+gamma_max = 0.5
+
+[treasury]
+# The reserve this repository's reserve.key derives; LiveRail refuses any other. The same
+# address holds the testnet reserve (Base Sepolia) and the REAL one (Base mainnet) whose
+# USDC the Venice conversions spend.
+reserve_address = "0x1228e5620944a79D268Afc7522E00891526EdEBb"
+hyperevm_gas_budget_wei = 0
+base_gas_budget_wei = 0
+max_transfer_fee_usd = "2"
+cctp_forwarding = "never"
+# Hybrid capital-loop mode: to_venice buys real Venice credit on Base mainnet (a fixed $5
+# x402 top-up) and pays for it in the observed testnet pots with a $5 usdSend from the
+# venue to the sink below. Refused on a mainnet venue and refused without a sink.
+venice_network = "base-mainnet"
+# PLACEHOLDER -- THE OPERATOR MUST CONFIRM OR REPLACE THIS SINK BEFORE A LIVE RUN.
+# The shadow leg's testnet USDC is sent here and never comes back. It must be an address
+# no pot of this world observes, and it must already exist on Hyperliquid testnet (the
+# rail refuses a sink the venue reports as `missing`, because a first send to a new
+# account pays an activation fee the $5 tranche does not cover). 0x...dEaD is the
+# conventional burn address; send it a dollar of testnet USDC once by hand, or name an
+# operator-owned testnet account instead.
+venice_shadow_sink = "0x000000000000000000000000000000000000dEaD"
+# At most two conversions ($10 of real mainnet USDC) per reserve window.
+max_venice_per_window = "10"
+# The absolute bound: at most $10 of real mainnet USDC is ever AUTHORIZED for Venice by
+# this world, re-authorizations after an expired top-up included.
+max_venice_total_usd = "10"
+# PLACEHOLDER -- THE OPERATOR MUST SET THIS BEFORE A LIVE RUN. No top-up is prepared if
+# it would leave the Base mainnet reserve below this balance, which no fresh run can
+# reset. The rehearsal runner reads the reserve keylessly at launch and refuses unless
+# reserve - floor <= max_venice_total_usd: set it to the reserve's current USDC minus
+# what this rehearsal may spend in total.
+venice_reserve_floor_usd = "0"
+# The only payee a Venice top-up quote may name. Recorded from Venice's live unpaid 402
+# quote on 11 September 2026 (docs/research/venice.md, "x402 flow"); the operator should
+# re-read it with the unpaid quote in docs/architecture/capital-loop-rehearsal.md. A
+# quote naming anyone else is refused before anything is signed.
+venice_pay_to = "0x2670b922ef37c7df47158725c0cc407b5382293f"
+[venue]
+# The risk-bearing trading principal this world may use, stated as a gate rather than
+# as a balance. GPT-6 Pro's third reading, §11: the first launch gate is met either by
+# withdrawing the rest of the testnet balance or by declaring the principal so "the
+# runtime refuses to use more". A testnet account funded far above $120 is therefore
+# collateralised as if it held $120, which is `[exchange] start_cash_usd` above.
+# (Historical: the cap is inert since architect decision D1; the key keeps the hash.)
+principal_usd = "120"
+# Testnet spot, unchanged from edition 2: PURR/USDC is the only testnet pair with a
+# canonical name and a rehearsable lot, and HYPE/USDC is the spot HYPE that pays the
+# population's own Core gas.
+spot_pairs = ["PURR/USDC", "HYPE/USDC"]
+
+# Edition 3 charter as ratified on 15 September 2026 (docs/charter/edition3-ratified.toml,
+# draft docs/charter/edition3-draft.toml, decisions docs/plans/edition3.md C3): five norms
+# with their definitions in the charter object and one card.
+[charter]
+edition = 1
+# Ratified 16 September 2026 by the seeded five-seat committee of this roster (GLM on Venice,
+# Luna on OpenRouter; every seat prompt opens with the JSON and refusal contract; GLM seats at
+# 4,096 output tokens after run 3's length cut-offs; earlier ballots under docs/charter/history/):
+# docs/charter/edition3-ratification.json. The first ballot, on the roster GPT-6 proposed, is
+# under docs/charter/history/ (roster 488c62ef…).
+#
+# Capital loop: the cards and norms are the ratified ones. Their content digest equals
+# ratified_sha256 only because censorship-bound's window is back at the ratified n = 25:
+# commit a60b825 had cut it to 10 here without an amendment, and for that interval the
+# digest did not stand (time audit T11). A card window change is an amendment, never an
+# edit to this file. The roster pin does not stand: that vote's roster (81de4911…) had per-seat
+# output caps and GLM at low reasoning effort, and this world moves six seats onto
+# Venice routes, so no pin here would be true. It is left out rather than carried stale.
+# Testnet admission does not check it; a funded launch of this roster would need the
+# committee to re-ratify on it (scripts/ratify_charter.py) and the new digest pinned here.
+ratified_sha256 = "c25f561741f565f12ee0036670c621661d6cde46507547ad822118edf4e3b712"
+norms = [
+  { id = "consequential usefulness", definition = "Create things or changes that others have reason to value; uptake by an independent counterparty is evidence, internal applause is a hypothesis." },
+  { id = "epistemic integrity", definition = "Make commitments answerable to evidence and preserve the ability to discover that they were wrong; a changed criterion does not rewrite what was promised." },
+  { id = "durable agency", definition = "Steward the resources and capabilities that make future worthwhile choices possible; spending for an enduring capability can be good stewardship, maintaining a dead institution is not." },
+  { id = "bounded reciprocity", definition = "Do not finance the factory's advantage by imposing unconsented costs on outsiders." },
+  { id = "fidelity", definition = "Measurements are defeasible evidence of the values, not substitutes for them. A favorable measurement is insufficient when supported consequences contradict the value it represents. A judge identifying such a conflict must name the value, the measurement, the evidence and the uncertainty, and make the claim open to challenge. Missing measurement alone is not evidence of failure." },
+]
+
+[[charter.cards]]
+id = "censorship-bound"
+norm = "epistemic integrity"
+description = "Attributable, avoidably unresolved accepted commitments over the eligible commitments due in the responsible scope, with a ceiling, so a seat answers for the promises it never let the world settle. A commitment not yet due is not in the sample; documented external unobservability without owner fault, and events the seat never committed to observe, are excluded; no eligible sample is unmeasured, never zero. Accountability is the commitment owner, including responsibility delegated at acceptance. Explicitly provisional: replace, reprice or remove it."
+units = "fraction"
+window = { kind = "forecasts", n = 25, per = "assembly" }
+acceptable_region = "at most 0.30"
+observation = "avoidably_unresolved_share"
+answers_for = "all"
+lambda = 0.1
+
+[prompt]
+
+mode = "compact"

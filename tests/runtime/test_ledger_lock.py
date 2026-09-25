@@ -26,7 +26,7 @@ if sys.argv[2] == 'resume':
     input()
 else:
     rt = Runtime(m, events=2, seed=1, initial_balance_micro=None,
-                 ledger_path=sys.argv[1], drip=False, router_gamma=.1)
+                 ledger_path=sys.argv[1], router_gamma=.1)
     original = rt._process_event
     def pause(event):
         result = original(event)

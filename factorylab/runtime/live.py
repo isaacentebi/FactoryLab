@@ -61,6 +61,11 @@ class LiveClock:
     deadline_ns: int | None = None
     gaps: deque[int] = field(default_factory=lambda: deque(maxlen=MEASURED_SAMPLE))
 
+    #: The pacing protocol (``wall_paced``): this clock's ticks are paced against the
+    #: wall, and ``now_ns`` reads it. A wrapper that delegates to a live clock says so
+    #: itself (``scripts/edition4_rehearsal.py``, ``AdmissionClock``).
+    wall_paced = True
+
     def set_interval(self, interval_ns: int) -> None:
         """Adopt positive integer nanoseconds and discard gaps delivered at the old interval.
 
@@ -127,6 +132,168 @@ class LiveClock:
         state = dict(state)
         gaps = state.pop("gaps", ())
         return cls(**state, gaps=deque(gaps, maxlen=MEASURED_SAMPLE), now_ns=now_ns, sleep=sleep)
+
+
+@dataclass
+class IdleSkipClock(LiveClock):
+    """A wall-paced clock whose idle waits are skipped instead of slept.
+
+    Chapter II §IV.c: "neither the factory nor its control apparatus may be slower
+    than its environment". A replayed world may only compress the time the factory
+    spends waiting, never the time it spends working. Its instant is ``origin_ns``,
+    plus the real time elapsed on ``monotonic`` since the first read (busy time stays
+    real: the kernel's own work and every real model call), plus ``modelled_ns`` a
+    stand-in declared its calls took (``spend``), plus every wait it skipped. So a tick
+    whose work outlasts the interval fires late exactly as it would live, and the
+    measured interval reports the real lateness; a tick with time to spare fires at
+    exactly its declared instant, having slept nothing.
+
+    Guarantees strictly increasing timestamps, every one at or after ``origin_ns``,
+    and no call to a real sleep. ``skipped_ns`` and ``modelled_ns`` are checkpointed;
+    ``resumed`` continues the saved clock from the world's saved instant.
+    """
+
+    origin_ns: int = 0
+    skipped_ns: int = 0
+    modelled_ns: int = 0
+    monotonic: Callable[[], int] = time.monotonic_ns
+    #: The idle each delivered gap skipped, in order: this process's pace evidence.
+    idle: list[int] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self._anchor: int | None = None
+        # The latest reading the diary holds (``pace_record`` or ``adopt``): what a
+        # checkpoint carries, so it is the same bytes in a run and in its replay.
+        self._recorded: dict | None = None
+        self.now_ns = self._now
+        self.sleep = self._refuse_sleep
+
+    def _now(self) -> int:
+        if self._anchor is None:
+            self._anchor = self.monotonic()  # busy time counts from the first read
+        return (self.origin_ns + (self.monotonic() - self._anchor) + self.modelled_ns
+                + self.skipped_ns)
+
+    @staticmethod
+    def _refuse_sleep(_seconds: float) -> None:
+        raise RuntimeError("an idle-skipping clock never sleeps")
+
+    def spend(self, ns: int) -> None:
+        """Advance this clock by ``ns`` of busy time a stand-in's call is modelled to take."""
+        if type(ns) is not int or ns < 0:
+            raise ValueError("modelled busy time must be non-negative integer nanoseconds")
+        self.modelled_ns += ns
+
+    def _events(self) -> Iterator[WorldEvent]:
+        while self.index < self.count:
+            now = self.now_ns()  # one read: the skip lands exactly on the declared instant
+            idle = max(0, self.last_ns + self.interval_ns - now) if self.last_ns >= 0 else 0
+            self.skipped_ns += idle  # waiting, not working: skipped, never slept
+            ts = max(now + idle, self.last_ns + 1)
+            if self.deadline_ns is not None and ts >= self.deadline_ns:
+                return
+            if self.last_ns >= 0:
+                self.gaps.append(ts - self.last_ns)
+                self.idle.append(idle)
+            self.last_ns = ts
+            i = self.index
+            self.index += 1
+            yield WorldEvent(WorldEventKind.TICK, ts, self.source, {"index": i})
+
+    def pace_record(self) -> dict:
+        """The clock's reading and totals now, for the diary (``runtime.event_done``)."""
+        self._recorded = {"now_ns": self.now_ns(), "skipped_ns": self.skipped_ns,
+                          "modelled_ns": self.modelled_ns}
+        return dict(self._recorded)
+
+    def adopt(self, record: dict) -> None:
+        """Take the reading and totals a diary recorded as this clock's own.
+
+        Guarantees, while a resume replays its tail, that the clock evolves as the
+        recorded run's did: at the end of each replayed event it reads what the
+        recorded clock read, with the idle it had skipped and the busy time it had been
+        modelled, and it counts real busy time again from there. So no work after the
+        replay runs against the checkpoint's stale instant, and no replayed gap is
+        counted again as newly skipped idle.
+        """
+        self.skipped_ns = int(record["skipped_ns"])
+        self.modelled_ns = int(record["modelled_ns"])
+        self.origin_ns = int(record["now_ns"]) - self.skipped_ns - self.modelled_ns
+        self._anchor = None
+        self._recorded = {"now_ns": int(record["now_ns"]), "skipped_ns": self.skipped_ns,
+                          "modelled_ns": self.modelled_ns}
+
+    def state(self) -> dict:
+        """The live clock's continuation, the time skipped and modelled, and its reading.
+
+        The reading is the last one the diary holds (the end of the event the
+        checkpoint follows), never a fresh read: a replay that re-takes the checkpoint
+        must write the same bytes. It is what a resume continues from, so a modelled
+        call inside a tick is not undone by the checkpoint.
+        """
+        recorded = self._recorded
+        return {**super().state(), "skipped_ns": self.skipped_ns,
+                "modelled_ns": self.modelled_ns,
+                "paced_now_ns": None if recorded is None else recorded["now_ns"]}
+
+    def resumed(self, state: dict, *, instant_ns: int) -> IdleSkipClock:
+        """The saved clock, continuing from the world's saved ``instant_ns``.
+
+        Keeps this (freshly built) clock's deadline and monotonic source: a deadline
+        is where the world's recorded market ends, not a wall instant of a dead process.
+        """
+        state = dict(state)
+        gaps = state.pop("gaps", ())
+        skipped, modelled = state.pop("skipped_ns"), state.pop("modelled_ns")
+        # The checkpoint's own paced reading when it carries one; the world's instant
+        # only for a checkpoint taken before any event recorded a reading.
+        paced = state.pop("paced_now_ns", None)
+        now = instant_ns if paced is None else paced
+        clock = IdleSkipClock(**state, gaps=deque(gaps, maxlen=MEASURED_SAMPLE),
+                              deadline_ns=self.deadline_ns, monotonic=self.monotonic,
+                              origin_ns=now - skipped - modelled,
+                              skipped_ns=skipped, modelled_ns=modelled)
+        if paced is not None:
+            clock._recorded = {"now_ns": paced, "skipped_ns": skipped,
+                               "modelled_ns": modelled}
+        return clock
+
+
+def wall_paced(clock: Any) -> bool:
+    """Whether a tick clock's ticks are paced against the wall clock, whose ``now_ns``
+    then reads it: a ``LiveClock``, or any wrapper that declares ``wall_paced`` (and
+    delegates ``now_ns``) to one. A declaration, never an ``isinstance`` test, so a
+    wrapper is never mistaken for a simulated clock."""
+    return getattr(clock, "wall_paced", False) is True
+
+
+@dataclass
+class WallClock:
+    """The wall clock the safety path reads between model calls (time audit T8).
+
+    Read through the journal, so a replay reads the instant the run read and makes
+    the same safety decisions. It is the wall clock the world's ticks are paced
+    against (``now_ns`` of a ``wall_paced`` clock: a ``LiveClock``, injectable, or a
+    wrapper around one); a world whose ticks are not paced against wall time does not
+    move inside an event, so it reads the event's simulated instant.
+    """
+
+    tick_clock: Callable[[], Any]
+    sim: Any = None
+    name: str = "wall"
+
+    def now_ns(self) -> int:
+        """Nanoseconds now on the clock the world's ticks are paced against."""
+        clock = self.tick_clock()
+        if wall_paced(clock):
+            return int(clock.now_ns())
+        return int(self.sim.now_ns)
+
+    def tick_ns(self) -> int:
+        """The delivered tick interval now: the slower of the measured and declared gap."""
+        from factorylab.runtime.clockwork import tick_ns
+
+        return int(tick_ns(self.tick_clock()))
 
 
 @dataclass
@@ -214,6 +381,8 @@ class LiveVenue:
         try:
             funding = self.exchange.funding()
         except (RuntimeError, OSError, ValueError, ArithmeticError):
+            # VenueUnavailable is a RuntimeError: an unanswered funding read emits no
+            # funding event this tick, which is true, and says nothing about rates.
             funding = []
         for f in funding:
             if traded is not None and f.coin not in traded:
@@ -265,7 +434,17 @@ class LiveVenue:
 
 @dataclass
 class Reconciler:
-    """Compares the wallet with the real pots every ``every`` ticks."""
+    """Reads the real pots and the venue's positions every ``every`` ticks.
+
+    It no longer compares the compute wallet with the pots. The wallet is spending
+    authority, not cash (``kernel.wallet``: the pots are what back it, and it is not
+    one of them), so ``wallet - sum(pots)`` compared a $300 authority with about
+    $1,020 of venue, reserve and provider money: every row of ``reconcile.drift`` in
+    a 6 h run was that gap, never a drift, and nothing read it. The comparison is
+    deleted rather than kept as an alarm that cannot pass; like quantities are
+    reconciled where they live (the treasury's receipts, the venue's own books,
+    ``polymarket.reconcile``).
+    """
 
     every: int = 10
     _ticks: int = 0
@@ -301,26 +480,27 @@ class Reconciler:
         values.extend(pots_view["sellers"].values())
         complete = not pots_view.get("pending", False) and all(type(v) is int for v in values)
         pots = sum(values) if complete else None
-        discrepancy = wallet_balance_micro - pots if pots is not None else None
-        within = abs(discrepancy) <= 500_000 if discrepancy is not None else None
-        if ledger is not None and within is False:
-            ledger.append({"kind": "reconcile.drift", "wallet_micro": wallet_balance_micro,
-                           "pots_micro": pots, "discrepancy_micro": discrepancy,
-                           "tolerance_micro": 500_000, "pots": pots_view})
+        del ledger  # nothing here is a drift to ledger: see the class docstring
         return {
+            # Authority, beside the money and never compared with it.
             "wallet_micro": wallet_balance_micro,
             "positions": positions,
             "openrouter_remaining_micro": pots_view["seed"],
             "venue_equity_usd": str(Decimal(pots_view["venue"]) / 1_000_000)
             if pots_view["venue"] is not None else None,
-            "pots": pots_view, "pots_micro": pots, "discrepancy_micro": discrepancy,
-            "within_tolerance": within, "tolerance_micro": 500_000,
+            "pots": pots_view, "pots_micro": pots,
         }
 
 
 def _extra_body(manifest: Any) -> Any:
     """Per-model extra request bodies, when the manifest type carries them (test stubs may not)."""
     return manifest.extra_body_config() if hasattr(manifest, "extra_body_config") else None
+
+
+def _schema_models(manifest: Any) -> frozenset[str]:
+    """The model ids whose route carries the contract as a schema (test stubs may carry none)."""
+    return (manifest.schema_contract_models()
+            if hasattr(manifest, "schema_contract_models") else frozenset())
 
 
 def build_provider(manifest: Any) -> Any:
@@ -354,8 +534,10 @@ def build_provider(manifest: Any) -> Any:
         config = {t.id: dict(t.reasoning) for t in manifest.models if t.reasoning}
         return MultiProvider(
             OpenRouterProvider(reasoning_config=config, web_config=manifest.web_config(),
-                               extra_body=_extra_body(manifest)),
-            VeniceProvider(reasoning_config=config, web_config=manifest.web_config()), market,
+                               extra_body=_extra_body(manifest),
+                               schema_models=_schema_models(manifest)),
+            VeniceProvider(reasoning_config=config, web_config=manifest.web_config(),
+                           schema_models=_schema_models(manifest)), market,
         )
     if "venice" in providers:
         from factorylab.world.venice import VeniceProvider
@@ -367,7 +549,8 @@ def build_provider(manifest: Any) -> Any:
         if any(not t.id.startswith("venice:") for t in manifest.models if t.provider == "venice"):
             raise RuntimeError("Venice model ids must start with venice:")
         config = {t.id: dict(t.reasoning) for t in manifest.models if t.reasoning}
-        venice = VeniceProvider(reasoning_config=config, web_config=manifest.web_config())
+        venice = VeniceProvider(reasoning_config=config, web_config=manifest.web_config(),
+                                schema_models=_schema_models(manifest))
         if providers == {"venice"}:
             return venice
         if not os.environ.get("OPENROUTER_API_KEY"):
@@ -376,7 +559,7 @@ def build_provider(manifest: Any) -> Any:
 
         return MultiProvider(OpenRouterProvider(
             reasoning_config=config, web_config=manifest.web_config(),
-            extra_body=_extra_body(manifest),
+            extra_body=_extra_body(manifest), schema_models=_schema_models(manifest),
         ), venice, market)
     if "openrouter" in providers:
         if not os.environ.get("OPENROUTER_API_KEY"):
@@ -387,7 +570,9 @@ def build_provider(manifest: Any) -> Any:
         config = {t.id: dict(t.reasoning) for t in manifest.models if t.reasoning}
         return MultiProvider(
             OpenRouterProvider(reasoning_config=config, web_config=manifest.web_config(),
-                               extra_body=_extra_body(manifest)),
-            VeniceProvider(reasoning_config=config, web_config=manifest.web_config()), market,
+                               extra_body=_extra_body(manifest),
+                               schema_models=_schema_models(manifest)),
+            VeniceProvider(reasoning_config=config, web_config=manifest.web_config(),
+                           schema_models=_schema_models(manifest)), market,
         )
     raise RuntimeError(f"unsupported provider set {sorted(providers)}")

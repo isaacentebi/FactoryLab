@@ -11,10 +11,20 @@ from urllib import error, request
 
 from factorylab.kernel.money import nonnegative_usd_micro, usd_to_micro
 from factorylab.world.models import CatalogueEntry, ModelRequest, ModelResponse
-from factorylab.world.openai_wire import dispatched, parse_completion
+from factorylab.world.openai_wire import (
+    CALL_EXPIRED,
+    call_timeout,
+    dispatched,
+    expired,
+    parse_completion,
+    response_format,
+)
+from factorylab.world.x402 import MODEL_COMPLETION_TIMEOUT_S
 
-#: Control-plane reads are bounded. Paid completions have no client processing
-#: deadline: a slow model must not lose its answer to an invented thinking cutoff.
+#: Control-plane reads are bounded tightly. A paid completion gets a long idle-socket
+#: deadline instead (x402.MODEL_COMPLETION_TIMEOUT_S): a slow model must not lose its
+#: answer to an invented thinking cutoff, and a stalled connection must not hold the
+#: world forever.
 MODEL_HTTP_TIMEOUT_S = 180
 
 
@@ -59,6 +69,7 @@ class OpenRouterProvider:
         reasoning_config: Mapping[str, Mapping[str, Any]] | None = None,
         web_config: Mapping[str, Mapping[str, Any]] | None = None,
         extra_body: Mapping[str, Mapping[str, Any]] | None = None,
+        schema_models: Iterable[str] = (),
     ) -> None:
         self._key_env = key_env
         self._base_url = base_url.rstrip("/")
@@ -74,7 +85,14 @@ class OpenRouterProvider:
                 raise OpenRouterError(
                     None, "Extra body cannot override the bounded completion request",
                     sent=False)
+        # The model ids whose manifest ``contract`` is ``json_schema``: their requests
+        # hand the contract to the host's decoder (Chapter II §II.b). Every other
+        # route asks for JSON syntax alone.
+        self._schema_models = frozenset(schema_models)
         self._transport = transport if transport is not None else self._default_transport
+        # The deadline of the completion in flight (``ModelRequest.timeout_s``), set
+        # only for the duration of that one call.
+        self._call_timeout: float | None = None
 
     def _redact(self, body: str) -> str:
         key = os.environ.get(self._key_env)
@@ -96,12 +114,22 @@ class OpenRouterProvider:
             method=method,
         )
         opener = request.build_opener(_NoRedirect())
-        timeout = None if method == "POST" and path == "/chat/completions" else MODEL_HTTP_TIMEOUT_S
+        timeout = (call_timeout(self._call_timeout, MODEL_COMPLETION_TIMEOUT_S)
+                   if method == "POST" and path == "/chat/completions"
+                   else MODEL_HTTP_TIMEOUT_S)
         with opener.open(req, timeout=timeout) as response:
             body = response.read().decode("utf-8", errors="replace")
             if not 200 <= response.status < 300:
                 raise OpenRouterError(response.status, self._redact(body))
             return json.loads(body)
+
+    def _post_completion(self, payload: dict, timeout_s: float | None) -> dict:
+        """One completion POST under its caller's deadline, restored afterwards."""
+        self._call_timeout = timeout_s
+        try:
+            return self._request("POST", "/chat/completions", payload)
+        finally:
+            self._call_timeout = None
 
     def _request(self, method: str, path: str, payload: dict | None = None) -> dict:
         attempts = 2 if method == "GET" else 1
@@ -121,7 +149,8 @@ class OpenRouterProvider:
             except (error.URLError, ConnectionError, TimeoutError) as exc:
                 if attempt + 1 == attempts:
                     raise OpenRouterError(
-                        None, "Connection failed", sent=dispatched(exc)
+                        None, CALL_EXPIRED if expired(exc) else "Connection failed",
+                        sent=dispatched(exc)
                     ) from None
             except Exception as exc:
                 # Arbitrary transport/decoder exceptions may contain request headers.
@@ -147,13 +176,15 @@ class OpenRouterProvider:
                       if k in self._extra_body), None)
         if extra is not None:
             payload.update(deepcopy(extra))
-        if req.json_object:
+        contract = response_format(req, schema_route=any(
+            k in self._schema_models for k in (req.model_id, wire_id, base_id)))
+        if contract is not None:
             # The contract is applied after the manifest's extra body, so an extra body
-            # can never turn a structured request into free text. A response_format is
-            # only honoured by hosts that support it: route to those alone, keeping the
-            # manifest's own routing preferences (``provider.order``, say) and letting
-            # its own keys win on conflict.
-            payload["response_format"] = {"type": "json_object"}
+            # can never turn a structured request into free text or loosen its schema.
+            # A response_format is only honoured by hosts that support it: route to
+            # those alone, keeping the manifest's own routing preferences
+            # (``provider.order``, say) and letting its own keys win on conflict.
+            payload["response_format"] = contract
             routing = dict(payload.get("provider") or {})
             routing.setdefault("require_parameters", True)
             payload["provider"] = routing
@@ -171,7 +202,7 @@ class OpenRouterProvider:
         elif req.effort in {"low", "medium", "high"} and base_id in self._reasoning_models:
             payload["reasoning"] = {"effort": req.effort}
         wire = parse_completion(
-            self._request("POST", "/chat/completions", payload), error=OpenRouterError
+            self._post_completion(payload, req.timeout_s), error=OpenRouterError
         )
         cost = wire.usage.get("cost")
         cost_micro = None

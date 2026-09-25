@@ -6,7 +6,6 @@ from typing import Literal
 
 from factorylab.charter.amendment import proposed_price
 from factorylab.kernel.ledger import Ledger
-from factorylab.kernel.timing import TimingRegistry
 
 
 def _number(value: float, name: str) -> float:
@@ -109,7 +108,17 @@ class _CardState:
     max_step: float = 0.0
     last_window_end_event: int | None = None
     previous_violation: float = 0.0
-    relief_window: int | None = None
+    # The integral term: accumulated pressure, bounded to [0, lambda_max].
+    integral: float = 0.0
+    # The last accepted observation, for the PID's derivative on measurement.
+    previous_value: float | None = None
+    # Consecutive windows the immune organ diagnosed this card violated inside a
+    # stable-failure attractor; zero once the attractor is left.
+    failing_windows: int = 0
+    # Charter audit M7: observed windows that closed with the card priced at
+    # lambda_max, and the current run of consecutive observed windows in violation.
+    windows_at_max: int = 0
+    violation_windows: int = 0
 
 
 class PriceController:
@@ -117,6 +126,58 @@ class PriceController:
 
     The caller supplies settled observations. Prices are soft penalties only;
     this controller has no settlement, reserve, exploration or spending authority.
+
+    One law sets a card's price from its window violation ``e`` (distance outside
+    the region, in region-relative units): the PID of essay II.II.b ("the PID
+    controller through which lambda is progressively determined"; Stooke et al.
+    2020). ``lambda = Kp*e + I + D``, where ``I`` accumulates ``eta * e`` while
+    the card violates and leaks ``decay`` per window once it stops, and
+    ``D = Kd * max(0, d(measurement))`` is taken on the measurement, not the
+    error, so a moved region cannot kick the price. ``D`` acts only while the card
+    violates, and only its positive part (Stooke et al.'s own choice): a violation
+    growing fast is priced before the integral has had to wind up to meet it,
+    which is how Kd damps the escalation before it overshoots. A violation that is
+    shrinking but still outside the region is priced by ``P + I`` alone, never
+    below its accumulated integral: the damping the essay asks of Kd is on the
+    price's climb, not a cancellation of it. ``I`` is held in ``[0, lambda_max]``
+    and stops integrating only while the output is already saturated high without
+    it (``P + I >= lambda_max``) *and* the violation is still growing
+    (anti-windup). With ``Kp = Kd = 0`` the law is the integral alone.
+
+    Feed-forward (essay II.IV.a: "Adopting a futarchic model also changes the PID
+    controller … A futarchic λ, however, is necessarily forward-looking—the market
+    continually reprices based on the expectation of constraint violations"). The
+    runtime may pass ``anticipated``: the change in the card's violation that the
+    conditional forecasts on open motions expect, ``ê - v``, where each forecast
+    reads ``max(0, v + sign * q * step)`` (``charter.market.branch_violation``) and
+    only forecasts that stay liable enter (see ``runtime.markets``). While the card
+    violates (``v > 0``) the law adds ``F = Kp * max(anticipated, -v)``, so the
+    proportional part prices the expected violation, ``P + F = Kp * max(0, ê)``,
+    while ``I`` and ``D`` stay on realized measurement. A card inside its region
+    takes no feed-forward: the market may move a price the world has already made
+    nonzero, never create one. The combination is argued this way:
+
+    - the backward terms remain the only memory. ``I`` still integrates realized
+      violation alone and ``D`` still answers a measured move, so a market that is
+      wrong cannot wind the integral up or down: its error reaches the price only
+      through ``F``, for as long as the forecasts stand, and vanishes when they
+      settle;
+    - ``F`` uses the gain the charter already committed for converting violation into
+      price, ``Kp``, so no new constant enters and a world with ``Kp = 0`` is
+      exactly as backward-looking as it was;
+    - ``|F| <= Kp * step`` for any one forecast, in either direction: relief and
+      deepening are read symmetrically, one promise resolution at most, so no single
+      forecast can cancel ``P``;
+    - ``P + F >= 0``, so a card still out of its region is never priced below its
+      accumulated integral (the same guarantee ``D`` keeps);
+    - every forecast that moves ``F`` is scored whichever branch the committee takes
+      (a seat's undecided-motion forecasts count only as a pair on both branches), so
+      moving the price is never free and a mispriced ``F`` is an arbitrage the
+      adversarial population profits by correcting.
+
+    Without ``anticipated`` the law is the backward PID above, unchanged.
+
+    The price is clipped to ``[0, lambda_max]``.
     """
 
     def __init__(
@@ -127,13 +188,14 @@ class PriceController:
         decay: float,
         lambda_max: float,
         min_window_events: int,
-        timing: TimingRegistry | None = None,
-        kappa: float = 0.5,
+        kp: float = 0.0,
+        kd: float = 0.0,
     ) -> None:
-        """Require finite rates, nonnegative damping and positive bounds/window separation."""
-        self.__kappa = _number(kappa, "kappa")
-        if self.__kappa < 0:
-            raise ValueError("kappa must be nonnegative")
+        """Require finite rates, nonnegative gains and positive bounds/window separation."""
+        self.__kp = _number(kp, "kp")
+        self.__kd = _number(kd, "kd")
+        if self.__kp < 0 or self.__kd < 0:
+            raise ValueError("kp and kd must be nonnegative")
         self.__eta = _number(eta, "eta")
         self.__decay = _number(decay, "decay")
         self.__lambda_max = _number(lambda_max, "lambda_max")
@@ -143,28 +205,14 @@ class PriceController:
             raise ValueError("min_window_events must be a positive integer")
         self.__min_window_events = min_window_events
         self.__ledger = ledger
-        self.__timing = timing
         self.__cards: dict[str, _CardState] = {}
 
     def register(self, region: CardRegion) -> None:
-        """Give a new card zero price and exclusive ownership of its timing closures.
-
-        Reuse an unstarted price loop's declared dependencies, or register a leaf
-        if absent. Existing closure history and duplicate card ids are rejected.
-        """
+        """Give a new card zero price; duplicate card ids are rejected."""
         if not isinstance(region, CardRegion):
             raise ValueError("region must be a CardRegion")
         if region.card_id in self.__cards:
             raise ValueError("card_id is already registered")
-        if self.__timing is not None:
-            loop_id = f"price:{region.card_id}"
-            try:
-                count = self.__timing.closure_count(loop_id)
-            except KeyError:
-                self.__timing.register_loop(loop_id, [])
-            else:
-                if count:
-                    raise ValueError("price timing loop must have no prior closures")
         self.__cards[region.card_id] = _CardState(region)
 
     def register_pending(self, card_id: str) -> None:
@@ -174,11 +222,6 @@ class PriceController:
         if card_id in self.__cards:
             raise ValueError("card_id is already registered")
         self.__ledger.append({"kind": "price.register", "card_id": card_id})
-        if self.__timing is not None:
-            try:
-                self.__timing.closure_count(f"price:{card_id}")
-            except KeyError:
-                self.__timing.register_loop(f"price:{card_id}", [])
         self.__cards[card_id] = _CardState(None)
 
     def clear_region(self, card_id: str) -> None:
@@ -188,7 +231,11 @@ class PriceController:
         self.__cards[card_id] = replace(state, region=None)
 
     def set_price(self, card_id: str, value: float, *, amendment_id: str) -> None:
-        """Ledger a bounded adopted price before mutation, preserving observation history."""
+        """Ledger a bounded adopted price before mutation, preserving observation history.
+
+        The adopted price becomes the card's accumulated (integral) pressure, so a
+        PID card resumes from it without a jump (bumpless transfer).
+        """
         state = self.__cards[card_id]
         price = proposed_price(value, self.__lambda_max)
         if not isinstance(amendment_id, str) or not amendment_id.strip():
@@ -197,26 +244,50 @@ class PriceController:
             "kind": "price.proposed", "card_id": card_id, "amendment_id": amendment_id,
             "lambda_before": state.price, "lambda_after": price,
         })
-        self.__cards[card_id] = replace(state, price=price)
+        self.__cards[card_id] = replace(state, price=price, integral=price)
 
-    def relieve(self, card_id: str, *, window: int) -> None:
-        """Halve the effective price for one window without erasing accumulated pressure."""
+    def ratchet(self, card_id: str, *, window: int, step: float) -> None:
+        """Raise a card's price with the duration of the failing attractor it sits in.
+
+        Essay II.II.b: in stable failure "price the duration of failure, ratcheting
+        up penalties the longer the factory spends" in the failing attractor. The
+        n-th consecutive diagnosed window adds ``n * step`` to the card's
+        accumulated pressure and to its price, both bounded by ``lambda_max``, so
+        the raise persists through later windows until the violation ends and the
+        ordinary decay unwinds it. The entry is ledgered before any state changes.
+        """
+        step = _number(step, "step")
+        if step <= 0:
+            raise ValueError("step must be positive")
         state = self.__cards[card_id]
+        duration = state.failing_windows + 1
+        raised = step * duration
+        price = min(self.__lambda_max, state.price + raised)
+        integral = min(self.__lambda_max, state.integral + raised)
         self.__ledger.append({
-            "kind": "immune.price_relief", "card_id": card_id, "window": window,
-            "lambda": state.price, "effective_lambda": state.price / 2,
+            "kind": "immune.price_ratchet", "card_id": card_id, "window": window,
+            "duration": duration, "step": raised,
+            "lambda_before": state.price, "lambda_after": price,
         })
-        self.__cards[card_id] = replace(state, relief_window=window)
+        self.__cards[card_id] = replace(state, price=price, integral=integral,
+                                        failing_windows=duration)
 
-    def expire_relief(self, *, window: int) -> None:
-        """Restore underlying prices after the relief window's settlements have completed."""
-        for card_id, state in tuple(self.__cards.items()):
-            if state.relief_window is not None and state.relief_window <= window:
-                self.__ledger.append({
-                    "kind": "immune.price_relief_expired", "card_id": card_id,
-                    "window": window, "lambda": state.price,
-                })
-                self.__cards[card_id] = replace(state, relief_window=None)
+    def end_failure(self, card_id: str, *, window: int) -> None:
+        """Reset a card's failing-attractor duration; its price is left to the controller.
+
+        A card that leaves the attractor starts its next ratchet from one window.
+        Nothing is ledgered for a card that was not ratcheting.
+        """
+        state = self.__cards[card_id]
+        if not state.failing_windows:
+            return
+        self.__ledger.append({"kind": "immune.price_ratchet_ended", "card_id": card_id,
+                              "window": window, "duration": state.failing_windows})
+        self.__cards[card_id] = replace(state, failing_windows=0)
+
+    def card_ids(self) -> tuple[str, ...]:
+        """Return every registered card id, in registration order."""
+        return tuple(self.__cards)
 
     def remove(self, card_id: str, *, amendment_id: str) -> None:
         """Drop a known card's price and region only after recording its removal."""
@@ -228,7 +299,7 @@ class PriceController:
         del self.__cards[card_id]
 
     def update_region(self, region: CardRegion) -> None:
-        """Replace a registered card's bounds; its price, counts and timing history survive.
+        """Replace a registered card's bounds; its price and counts survive.
 
         The runtime calls this when a card's region is re-derived (a rolling bound
         moved, or a new edition restated the card). Unknown cards raise KeyError.
@@ -246,14 +317,25 @@ class PriceController:
             return 0.0
         return violation(region, value)
 
-    def observe(self, card_id: str, value: float, window_end_event: int) -> None:
+    def observe(self, card_id: str, value: float, window_end_event: int, *,
+                holdout: float = 0.0, anticipated: float | None = None) -> None:
         """Ledger each accepted update or skipped window before any state/clock changes.
 
         Nonnegative event indices double as logical nanosecond timestamps for
         this loop, not wall time. Accepted indices strictly increase per card.
         Saturation means the requested price was outside the bounds; max_step
         measures the largest absolute change after clipping.
+
+        ``holdout`` is the violation the card's failed holdouts add
+        (``charter.holdout_violation``), added to its region violation.
+        ``anticipated`` is the market's expected change
+        in the violation, for the feed-forward term (see the class docstring).
         """
+        holdout = _number(holdout, "holdout")
+        if anticipated is not None:
+            anticipated = _number(anticipated, "anticipated")
+        if holdout < 0:
+            raise ValueError("holdout violation must be nonnegative")
         state = self.__cards[card_id]
         value = _number(value, "value")
         if type(window_end_event) is not int or window_end_event < 0:
@@ -272,54 +354,103 @@ class PriceController:
                 }
             )
             return
-        violation = self.violation(card_id, value)
-        damping = (
-            self.__kappa * max(0.0, state.previous_violation - violation)
-            if violation > 0 else 0.0
-        )
-        # The penalty ratchets while the violation lasts and decays only once it
-        # stops: damping slows the climb for a shrinking violation, but it can never
-        # turn a card that is still out of its region into a falling price.
-        requested = (
-            state.price + max(0.0, self.__eta * violation - damping)
-            if violation > 0 else state.price - self.__decay
-        )
+        violation = self.violation(card_id, value) + holdout
+        requested, integral, terms = self._pid(state, value, violation)
+        if anticipated is not None and violation > 0:
+            feed_forward = self.__kp * max(anticipated, -violation)
+            requested += feed_forward
+            terms = {**terms, "f": feed_forward, "anticipated": anticipated}
         price = min(self.__lambda_max, max(0.0, requested))
         saturated = requested < 0 or requested > self.__lambda_max
-        updated = _CardState(
-            region=state.region,
+        updated = replace(
+            state,
             price=price,
             updates=state.updates + 1,
             saturations=state.saturations + int(saturated),
             max_step=max(state.max_step, abs(price - state.price)),
             last_window_end_event=window_end_event,
             previous_violation=violation,
-            relief_window=state.relief_window,
+            integral=integral,
+            previous_value=value,
+            windows_at_max=state.windows_at_max + int(price >= self.__lambda_max),
+            violation_windows=state.violation_windows + 1 if violation > 0 else 0,
         )
-        self.__ledger.append(
-            {
-                "kind": "price.update",
-                "card_id": card_id,
-                "value": value,
-                "violation": violation,
-                "previous_violation": state.previous_violation,
-                "damping": damping,
-                "lambda_before": state.price,
-                "lambda_after": price,
-                "saturated": saturated,
-                "window_end_event": window_end_event,
-            }
-        )
-        if self.__timing is not None:
-            self.__timing.record_closure(f"price:{card_id}", window_end_event)
+        entry = {
+            "kind": "price.update",
+            "card_id": card_id,
+            "value": value,
+            "violation": violation,
+            "previous_violation": state.previous_violation,
+            "lambda_before": state.price,
+            "lambda_after": price,
+            "saturated": saturated,
+            "window_end_event": window_end_event,
+            **terms,
+            **({"holdout": holdout} if holdout else {}),
+        }
+        self.__ledger.append(entry)
         self.__cards[card_id] = updated
+
+    def _pid(self, state: _CardState, value: float,
+             violation: float) -> tuple[float, float, dict[str, float]]:
+        """Guarantees a violating card is never priced below its accumulated integral.
+
+        Returns the unclipped PID output, the next bounded integral and the three
+        terms. The derivative is the change in the measurement itself, signed so
+        that a move deeper into violation is positive, taken only while the card
+        violates, and only its positive part: a card moving back toward its region
+        but still outside it keeps ``P + I``, so a shrinking violation can lower the
+        price only through ``P``, never to zero while it lasts. The integral never
+        leaves ``[0, lambda_max]`` and holds only while ``P`` plus the integral
+        already reaches ``lambda_max`` and the violation is still growing.
+        """
+        region = state.region
+        derivative = 0.0
+        if violation > 0 and state.previous_value is not None and region is not None:
+            if region.kind == "band":
+                sign = 1.0 if value > region.hi else -1.0
+            else:
+                sign = 1.0 if region.kind == "max" else -1.0
+            # Positive part only (Stooke et al. 2020): Kd answers a violation that is
+            # getting worse. A signed term would let a card still out of its region
+            # but improving fast cancel P and I and be priced at zero (essay II.II.b:
+            # Kd "dampen[s] price escalation", it does not waive the price).
+            derivative = max(0.0, self.__kd * sign * (value - state.previous_value)
+                             / region.scale)
+        proportional = self.__kp * violation
+        if violation <= 0:
+            integral = max(0.0, state.integral - self.__decay)
+        elif (proportional + state.integral >= self.__lambda_max
+              and violation > state.previous_violation):
+            # Saturated high without any new integration and still climbing: hold,
+            # never wind up. A violation that is flat or easing keeps integrating
+            # even when P alone saturates, so I is there when P falls away.
+            integral = state.integral
+        else:
+            integral = min(self.__lambda_max, state.integral + self.__eta * violation)
+        return (proportional + integral + derivative, integral,
+                {"p": proportional, "i": integral, "d": derivative})
+
+    def saturation(self, card_id: str) -> dict[str, int]:
+        """Public per-card statistics: windows priced at lambda_max, and violation duration.
+
+        Charter audit M7 (essay II.IV: "if it cannot be satisfied beyond what is
+        priced as acceptable, then the factory needs to be scrapped"): the
+        evidence on which that threat could be invoked. Counted in observed
+        windows; an unregistered card has zeros. Nothing here kills anything.
+        """
+        state = self.__cards.get(card_id) if isinstance(card_id, str) else None
+        if state is None:
+            return {"windows_at_lambda_max": 0, "violation_windows": 0}
+        return {"windows_at_lambda_max": state.windows_at_max,
+                "violation_windows": state.violation_windows}
 
     def price(self, card_id: str) -> float:
         """Return the current price, or zero for any unregistered identifier."""
         state = self.__cards.get(card_id) if isinstance(card_id, str) else None
         if state is None:
             return 0.0
-        return state.price / 2 if state.relief_window is not None else state.price
+        return state.price
 
     def penalty(self, values: dict[str, float]) -> float:
         """Return the unclipped sum for known cards only; callers own score clipping."""
@@ -353,20 +484,23 @@ class PriceController:
         return {
             "parameters": {
                 "eta": self.__eta,
-                "kappa": self.__kappa,
                 "decay": self.__decay,
                 "lambda_max": self.__lambda_max,
                 "min_window_events": self.__min_window_events,
+                "kp": self.__kp,
+                "kd": self.__kd,
             },
             "cards": {
                 card_id: {
                     "lambda": state.price,
-                    "effective_lambda": self.price(card_id),
-                    "relief_window": state.relief_window,
                     "updates": state.updates,
                     "saturations": state.saturations,
                     "max_step": state.max_step,
                     "last_window_end_event": state.last_window_end_event,
+                    "integral": state.integral,
+                    "failing_windows": state.failing_windows,
+                    "windows_at_lambda_max": state.windows_at_max,
+                    "violation_windows": state.violation_windows,
                 }
                 for card_id, state in self.__cards.items()
             },

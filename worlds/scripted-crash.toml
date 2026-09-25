@@ -32,6 +32,22 @@ provider = "fake"
 input_usd_per_mtok = "1"
 output_usd_per_mtok = "5"
 
+# A third model family (Wave 5a): Chapter II's evaluator tier is served by at least
+# three, and a judge never reads a return authored on its own (evaluations C1, P6).
+[[models]]
+id = "fake-sonnet"
+provider = "fake"
+input_usd_per_mtok = "3"
+output_usd_per_mtok = "15"
+
+# A fourth, for a meta that shares a family with no judge and no producer: a meta
+# never reads a chain on its own family (the #132 review, item 3).
+[[models]]
+id = "fake-gemini"
+provider = "fake"
+input_usd_per_mtok = "1"
+output_usd_per_mtok = "5"
+
 [[assemblies]]
 id = "seed-observer"
 role = "producer"
@@ -46,33 +62,33 @@ model_id = "fake-opus"
 accepts = ["Tick", "Fill"]
 max_tokens = 512
 
-# Evaluators outnumber producers; two run on the other model family.
+# Evaluators outnumber producers and span three model families.
 [[assemblies]]
 id = "eval-a"
 role = "evaluator"
 model_id = "fake-haiku"
-accepts = ["ProducerReturn"]
+accepts = ["ProducerReturn", "Exposure"]
 max_tokens = 256
 
 [[assemblies]]
 id = "eval-b"
 role = "evaluator"
-model_id = "fake-haiku"
-accepts = ["ProducerReturn"]
+model_id = "fake-sonnet"
+accepts = ["ProducerReturn", "Exposure"]
 max_tokens = 256
 
 [[assemblies]]
 id = "eval-c"
 role = "evaluator"
 model_id = "fake-opus"
-accepts = ["ProducerReturn"]
+accepts = ["ProducerReturn", "Exposure"]
 max_tokens = 256
 
 [[assemblies]]
 id = "eval-d"
 role = "evaluator"
 model_id = "fake-opus"
-accepts = ["ProducerReturn"]
+accepts = ["ProducerReturn", "Exposure"]
 max_tokens = 256
 
 [[assemblies]]
@@ -92,7 +108,7 @@ max_tokens = 128
 [[assemblies]]
 id = "meta-b"
 role = "meta"
-model_id = "fake-haiku"
+model_id = "fake-gemini"
 accepts = ["Verdict"]
 max_tokens = 128
 
@@ -105,15 +121,16 @@ min_coverage = 0.5
 trial_amount_usd = "0.10"
 forecast_horizon_events = 10
 adversarial_share = 0.15
-sibling_share = 0.5
 sampling_step = 0.1
 sampling_cap = 0.7
 
+# The novelty share is a flow per measured consequence period, and a trial's patience is
+# timing.min_ratio of those periods (time audit T5, T6). Neither the pricing window nor any
+# other loop period is cast here: each is derived from the loop it commands (time audit
+# T1, T2, T11).
 [novelty]
 trials = 3
-max_lifetime_windows = 6
 share = 0.1
-window = "1d"
 
 [timing]
 cadence_sample = 200
@@ -121,7 +138,6 @@ min_ratio = 3
 jitter_fraction = 0.2
 
 [prices]
-kappa = 0.5
 eta = 0.5
 decay = 0.1
 lambda_max = 1.0
@@ -135,9 +151,52 @@ min_settled = 5
 
 [immune]
 k = 3
-bins = 3
+# The stable-failure ratchet's lambda step per window of duration: the value the
+# ratchet borrowed from gain_step until the two units were set apart.
+price_step = 0.05
 tv_threshold = 0.2
 gap_threshold = 0.8
 gain_step = 0.05
 gamma_max = 0.5
-decay_step = 0.1
+
+[charter]
+# The seed charter: four norms, three cards, edition 1. Until charter audit S3 it
+# lived in code (charter.seed_charter) and reached every world that named none; a
+# world's charter is now always written in the world itself.
+edition = 1
+norms = [
+  "truthful commitments",
+  "care with scarce resources",
+  "useful inquiry",
+  "the capacity to revise inadequate practices",
+]
+
+[[charter.cards]]
+id = "cost_per_return"
+norm = "care with scarce resources"
+description = "Wallet cost of producing one well-formed return."
+units = "micro-USD per return"
+window = { kind = "returns", n = 100, per = "role" }
+acceptable_region = "below the median of the previous window"
+observation = "cost_per_return"
+answers_for = "producer"
+
+[[charter.cards]]
+id = "well_formed_rate"
+norm = "truthful commitments"
+description = "Share of returns that satisfy their declared outcome schema."
+units = "fraction"
+window = { kind = "returns", n = 100, per = "role" }
+acceptable_region = "at least 0.9"
+observation = "well_formed_rate"
+answers_for = "all"
+
+[[charter.cards]]
+id = "forecast_skill"
+norm = "useful inquiry"
+description = "Mean Brier score of settled forecasts minus the prevalence baseline."
+units = "score difference in [-1, 1]"
+window = { kind = "forecasts", n = 50, per = "assembly" }
+acceptable_region = "above zero"
+observation = "forecast_skill"
+answers_for = "evaluator"

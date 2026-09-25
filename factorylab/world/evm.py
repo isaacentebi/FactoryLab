@@ -6,6 +6,9 @@ eth_abi/eth_account dependencies. Private keys never enter a transaction referen
 
 from __future__ import annotations
 
+import re
+import time
+from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
@@ -90,6 +93,35 @@ CORE_USDC_SYSTEM = "0x2000000000000000000000000000000000000000"
 # Blocks per eth_getLogs page: Hyperliquid's official RPC documents a 50-block range
 # limit, and a page is a fixed code constant rather than a manifest setting.
 LOG_PAGE_BLOCKS = 50
+# A rate-limited read is asked again, at most this many attempts in all, after pauses
+# doubling from the first and capped at the last. A paged log scan is a burst a public
+# RPC refuses as a whole although it answers each page alone; the bound means a node
+# that keeps refusing still leaves the reference ``Pending``.
+RATE_LIMIT_ATTEMPTS = 5
+RATE_LIMIT_FIRST_PAUSE_S = 0.5
+RATE_LIMIT_MAX_PAUSE_S = 8.0
+#: The only methods a rate-limit answer is retried for: reads, which change nothing.
+#: No write (``eth_sendRawTransaction``) is in this set, so a write is sent exactly once
+#: per ``call`` whatever answers; its only retry is the journaled reference's rebroadcast.
+RATE_LIMITED_READS = frozenset({
+    "eth_chainId", "eth_blockNumber", "eth_getBalance", "eth_call", "eth_estimateGas",
+    "eth_gasPrice", "eth_getTransactionCount", "eth_getTransactionReceipt",
+    "eth_getBlockByNumber", "eth_getLogs", "eth_getSystemTxsByBlockHash",
+})
+_RATE_LIMIT_TEXT = re.compile(r"rate[\s_-]?limit|too many requests", re.IGNORECASE)
+
+
+def rate_limited(status: int, body: Any) -> bool:
+    """True only for HTTP 429, or a JSON-RPC error whose code is 429 or whose message
+    names a rate limit or too many requests; False for every other answer."""
+    if status == 429:
+        return True
+    error = body.get("error") if isinstance(body, dict) else None
+    if not isinstance(error, dict):
+        return False
+    message = error.get("message")
+    return error.get("code") == 429 or (
+        isinstance(message, str) and _RATE_LIMIT_TEXT.search(message) is not None)
 
 
 def address(value: str) -> str:
@@ -122,6 +154,31 @@ def _with_headroom(price: int) -> int:
     return (price * 5 + 3) // 4
 
 
+#: The reserve-key calls this code base signs, by selector: what a stuck one does, and so
+#: what replacing it at its nonce costs. A CCTP mint (``receiveMessage``) delivers funds
+#: already burned on the other chain, so it is never cancelled, only re-sent.
+STEP_SELECTORS = {
+    keccak(text="approve(address,uint256)")[:4]: "approve",
+    keccak(text="depositForBurn(uint256,uint32,bytes32,address,bytes32,uint256,uint32)")[:4]:
+        "burn",
+    keccak(text="receiveMessage(bytes,bytes)")[:4]: "mint",
+    keccak(text="depositFor(address,uint256,uint32)")[:4]: "deposit",
+    keccak(text="transfer(address,uint256)")[:4]: "transfer",
+}
+
+
+def step_kind(sender: str, to: str, data: str) -> str:
+    """What a reserve-key call does, read from the call itself.
+
+    Guarantees every ``receiveMessage`` is ``mint``; a 0-value empty call to the sender
+    itself is ``cancel``; any selector not in ``STEP_SELECTORS`` is ``other``.
+    """
+    raw = bytes.fromhex(str(data).removeprefix("0x"))
+    if not raw:
+        return "cancel" if str(to).lower() == str(sender).lower() else "other"
+    return STEP_SELECTORS.get(raw[:4], "other")
+
+
 class EVM:
     """Each signed call pins chain, sender, nonce, destination, calldata and maximum gas cost."""
 
@@ -149,25 +206,90 @@ class EVM:
         if type(gas_budget_wei) is not int or gas_budget_wei < 0:
             raise RailError("gas budget must be nonnegative integer wei")
         self.gas_budget_wei = gas_budget_wei
+        # The rate-limit backoff's pause; a test substitutes one that records instead.
+        self.sleep = time.sleep
+        # The write-ahead guard every transaction this signer prepares, replaces or
+        # broadcasts passes (``capital_loop.AuthorizationLog`` or ``ReserveGuard``): the
+        # runtime binds it. Unbound, this EVM reads the chain and signs nothing.
+        self.transaction_guard: Any = None
+
+    def _guarded(self, unsigned: dict, signed: Any) -> None:
+        """Write a signed transaction ahead to the reserve's record, or refuse it.
+
+        Guarantees a transaction signed here is returned (and so can ever be broadcast)
+        only after the guard durably recorded it, under the reserve's lock, with the
+        chain head read now as its ``start_block``; with no guard, a guard that refuses,
+        or an unreadable head, it is dropped unbroadcast and this raises.
+        """
+        guard = self.transaction_guard
+        if guard is None:
+            raise RailError("no write-ahead transaction record; nothing was prepared")
+        try:
+            head = int(self.call("eth_blockNumber", []), 16)
+            guard.record_transaction({
+                "tx_hash": "0x" + bytes(signed.hash).hex(), "chain_id": self.chain.id,
+                "from": self.account.address, "to": unsigned["to"],
+                "data": unsigned["data"], "value": unsigned["value"],
+                "step": step_kind(self.account.address, unsigned["to"], unsigned["data"]),
+                "nonce": unsigned["nonce"], "gas_price": unsigned["gasPrice"],
+                "start_block": head})
+        except Exception as exc:  # noqa: BLE001 - unrecorded means never used
+            raise RailError(f"write-ahead transaction record refused "
+                            f"({getattr(exc, 'reason', type(exc).__name__)}); "
+                            "nothing was prepared") from None
+
+    def _sending(self, tx_hash: str) -> Any:
+        """The guard's hold on this reserve for one send, entered, or a refusal.
+
+        Guarantees the returned context is entered: the reserve's lock is held for this
+        signer and ``tx_hash`` is on its record until the caller exits it after the send
+        returns. With no guard, a held reserve, or an unrecorded hash, nothing is sent.
+        """
+        guard = self.transaction_guard
+        if guard is None:
+            raise RailError("no write-ahead transaction record; nothing was broadcast")
+        hold = ExitStack()
+        try:
+            hold.enter_context(guard.sending(self.account.address, tx_hash))
+        except Exception as exc:  # noqa: BLE001 - a held reserve sends nothing
+            hold.close()
+            raise RailError(f"broadcast refused ({getattr(exc, 'reason', type(exc).__name__)})"
+                            ) from None
+        return hold
 
     def call(self, method: str, params: list) -> Any:
-        try:
-            result = self.transport(
-                "POST",
-                self.rpc,
-                {
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": method,
-                    "params": params,
-                },
-                {"User-Agent": "FactoryLab/0.4"},
-            )
-        except Exception:
-            raise Pending("RPC transport failed; reference remains pending") from None
-        if result.status != 200 or "error" in result.body or "result" not in result.body:
-            raise Pending("RPC call rejected or unavailable")
-        return result.body["result"]
+        """The RPC's result for one JSON-RPC request, or ``Pending``.
+
+        Guarantees a method in ``RATE_LIMITED_READS`` answered with a rate limit
+        (``rate_limited``) is sent at most ``RATE_LIMIT_ATTEMPTS`` times and raises
+        ``Pending`` if the last attempt is refused too. Any other failure, and every
+        answer to a method outside that set (a write), is final on its first attempt.
+        """
+        attempts = RATE_LIMIT_ATTEMPTS if method in RATE_LIMITED_READS else 1
+        pause = RATE_LIMIT_FIRST_PAUSE_S
+        for attempt in range(attempts):
+            try:
+                result = self.transport(
+                    "POST",
+                    self.rpc,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": method,
+                        "params": params,
+                    },
+                    {"User-Agent": "FactoryLab/0.4"},
+                )
+            except Exception:
+                raise Pending("RPC transport failed; reference remains pending") from None
+            if attempt + 1 < attempts and rate_limited(result.status, result.body):
+                self.sleep(pause)
+                pause = min(pause * 2, RATE_LIMIT_MAX_PAUSE_S)
+                continue
+            if result.status != 200 or "error" in result.body or "result" not in result.body:
+                raise Pending("RPC call rejected or unavailable")
+            return result.body["result"]
+        raise AssertionError("unreachable")
 
     def check_chain(self) -> None:
         if int(self.call("eth_chainId", []), 16) != self.chain.id:
@@ -190,8 +312,13 @@ class EVM:
         result = self.call("eth_call", [{"to": address(contract), "data": data}, "latest"])
         return bytes.fromhex(result.removeprefix("0x"))
 
-    def prepare(self, to: str, data: str, *, gas_remaining_wei: int) -> dict:
-        """A reference is computed before broadcast; signing it again yields the same tx hash."""
+    def prepare(self, to: str, data: str, *, gas_remaining_wei: int, nonce: int | None = None,
+                min_gas_price: int = 0) -> dict:
+        """A reference is computed before broadcast; signing it again yields the same tx hash.
+
+        ``nonce`` pins the account nonce (a cancellation takes the stuck one's), else the
+        pending count is used; ``min_gas_price`` floors the price (a replacement's 12.5%).
+        """
         self.check_chain()
         if type(gas_remaining_wei) is not int or gas_remaining_wei <= 0:
             raise RailError("gas budget exhausted")
@@ -204,11 +331,12 @@ class EVM:
         # Headroom over the node's quote: a legacy transaction priced at exactly the
         # current gas price stalls in the mempool at the first uptick, and its nonce
         # then blocks every later transfer from this signer.
-        price = _with_headroom(int(self.call("eth_gasPrice", []), 16))
+        price = max(_with_headroom(int(self.call("eth_gasPrice", []), 16)), min_gas_price)
         ceiling = gas * price
         if ceiling <= 0 or ceiling > gas_remaining_wei:
             raise RailError("transaction exceeds remaining gas budget")
-        nonce = int(self.call("eth_getTransactionCount", [sender, "pending"]), 16)
+        if nonce is None:
+            nonce = int(self.call("eth_getTransactionCount", [sender, "pending"]), 16)
         unsigned = {
             "chainId": self.chain.id,
             "nonce": nonce,
@@ -243,6 +371,7 @@ class EVM:
             ceiling += l1_ceiling
         if ceiling > gas_remaining_wei or self.balance() < ceiling:
             raise RailError("insufficient native gas balance or remaining budget")
+        self._guarded(unsigned, signed)
         return {
             "network": f"eip155:{self.chain.id}",
             "sender": sender,
@@ -275,6 +404,7 @@ class EVM:
             signed = self.account.sign_transaction(unsigned)
         except Exception:
             raise RailError("transaction signing failed") from None
+        self._guarded(unsigned, signed)
         return {**reference, "tx": unsigned, "tx_hash": "0x" + bytes(signed.hash).hex(),
                 "gas_ceiling_wei": ceiling,
                 "replaces": [reference["tx_hash"], *reference.get("replaces", [])]}
@@ -296,7 +426,11 @@ class EVM:
         expected = "0x" + bytes(signed.hash).hex()
         if expected != reference["tx_hash"]:
             raise RailError("transaction reference was modified")
-        result = self.call("eth_sendRawTransaction", ["0x" + bytes(signed.raw_transaction).hex()])
+        # The reserve's lock is held from the record check until the send returns: no
+        # capital-loop launch can start between them.
+        with self._sending(expected):
+            result = self.call("eth_sendRawTransaction",
+                               ["0x" + bytes(signed.raw_transaction).hex()])
         if not isinstance(result, str) or result.lower() != expected.lower():
             raise Pending("RPC did not acknowledge the prepared transaction hash")
 
@@ -357,7 +491,8 @@ class EVM:
         return self.scan(contract, topics, start)[0]
 
     def scan(
-        self, contract: str, topics: list, start: int, *, max_pages: int | None = None
+        self, contract: str, topics: list, start: int, *, max_pages: int | None = None,
+        end: int | None = None,
     ) -> tuple[list, int]:
         """Read finalized logs from ``start`` and report the last block actually read.
 
@@ -365,12 +500,17 @@ class EVM:
         that persists the returned block and resumes from the one after it reads every
         finalized block exactly once across calls. With nothing finalized past
         ``start`` no page is requested and ``start - 1`` is reported, so the cursor holds.
+        ``end`` names the last block to read instead of the ``finalized`` tag, so a caller
+        that read a block's state scans exactly up to that same block.
         """
         self.check_chain()
-        final = self.call("eth_getBlockByNumber", ["finalized", False])
-        if not final or int(final["number"], 16) < start:
+        if end is None:
+            final = self.call("eth_getBlockByNumber", ["finalized", False])
+            if not final or int(final["number"], 16) < start:
+                return [], start - 1
+            end = int(final["number"], 16)
+        elif end < start:
             return [], start - 1
-        end = int(final["number"], 16)
         if max_pages is not None:
             end = min(end, start + max_pages * LOG_PAGE_BLOCKS - 1)
         logs = []
@@ -403,7 +543,11 @@ class EVM:
             if not start <= height <= end:
                 continue
             canonical = self.call("eth_getBlockByNumber", [log["blockNumber"], False])
-            if canonical and canonical["hash"].lower() == log["blockHash"].lower():
+            if not canonical:
+                # A block the node cannot show is not evidence the log was reorged away:
+                # the scan is unreadable and is retried, never silently shortened.
+                raise Pending("a log's block could not be read")
+            if canonical["hash"].lower() == log["blockHash"].lower():
                 verified.append(log)
         return verified, end
 

@@ -1,245 +1,182 @@
-"""Frozen contracts and public evidence for delayed producer evaluation."""
+"""The priced road not taken: a world measurement of a declined trade (ruling R2).
+
+A decision that names the trade it declined, and executes nothing at the venue,
+has an outcome the world writes: which way the trade it named moved over the
+consequence horizon. It is "a fact about the world ...
+priced ex ante on the named trade", so it is a legitimate realized-consequence
+measurement (essay II.III.b: "a judgment of whether a given verdict predicted
+real downstream outcomes"). It grades the verdicts on that decision. It never
+replaces a verdict as the producer's own score (R2).
+
+Naming it is part of the I/O contract of every return the world's first-tier
+verdicts are about (the judged and exposure kinds) whenever that return executes no
+venue operation (``counterfactual_refusal``). Essay II.III.b: the signal that
+grades an evaluator must sit outside the loop it judges, and a return with no world
+outcome leaves its judges graded by other models' readings alone.
+"""
 
 from __future__ import annotations
 
-import hashlib
+import math
 from collections.abc import Iterable, Mapping
-from dataclasses import asdict, dataclass, replace
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from factorylab.kernel.ledger import canonical
-
-GROUNDED_DEFINITION = "realized-consequence-v2"
-UNKNOWN_REASON = "the frozen consequence horizon produced no assessable public evidence"
-
-
-def _plain(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        return {str(k): _plain(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_plain(v) for v in value]
-    return value
+#: The definition an opportunity price is recorded under.
+OPPORTUNITY_DEFINITION = "opportunity-cost-v2"
+#: The definition a refused answer order's own named trade is priced under.
+ATTEMPTED_DEFINITION = "attempted-trade-v1"
 
 
-@dataclass(frozen=True)
-class GroundedContract:
-    """One producer decision's interpretation and observation horizon, frozen ex ante."""
+def latest_mids(runtime: Any) -> tuple[tuple[str, str], ...]:
+    """The last broadcast mid of every coin, from the world's own tick record.
 
-    handle: str
-    producer_id: str
-    opened_tick: int
-    due_tick: int
-    close_tick: int
-    charter_edition: int
-    criteria: tuple[dict[str, Any], ...]
-    predicate_versions: tuple[tuple[str, int], ...]
-    producer_outputs: dict[str, Any]
-    event_cursor: int
-    receipt_cursor: int
-    initial_judge: str | None = None
-    initial_evaluator: str | None = None
-    initial_evaluators: tuple[str, ...] = ()
-    forecast_handles: tuple[str, ...] = ()
-    forecasts: tuple[dict[str, Any], ...] = ()
-    final_requested: bool = False
-    final_attempts: int = 0
-    final_evaluators: tuple[str, ...] = ()
-    # Added after the first realized-feedback checkpoints. An empty tuple means
-    # that historical contract did not freeze norms; it never means current norms.
-    norms: tuple[dict[str, str], ...] = ()
-    # Historical checkpoints omitted the frozen emitted kind; preserve their
-    # final-commission fallback through the built-in producer-return route.
-    subject_kind: str = "ProducerReturn"
-
-    def __post_init__(self) -> None:
-        if not self.handle or not self.producer_id:
-            raise ValueError("grounded contract needs decision and producer identities")
-        if not 0 <= self.opened_tick < self.due_tick < self.close_tick:
-            raise ValueError("grounded consequence ticks must be strictly ordered")
-        object.__setattr__(self, "criteria", tuple(_plain(v) for v in self.criteria))
-        object.__setattr__(self, "predicate_versions", tuple(self.predicate_versions))
-        object.__setattr__(self, "producer_outputs", _plain(self.producer_outputs))
-        evaluators = tuple(self.initial_evaluators)
-        if self.initial_evaluator is not None:
-            evaluators = tuple(dict.fromkeys((self.initial_evaluator, *evaluators)))
-        object.__setattr__(self, "initial_evaluators", evaluators)
-        object.__setattr__(self, "forecast_handles", tuple(self.forecast_handles))
-        object.__setattr__(self, "forecasts", tuple(_plain(v) for v in self.forecasts))
-        object.__setattr__(self, "final_evaluators", tuple(self.final_evaluators))
-        object.__setattr__(self, "norms", tuple(_plain(v) for v in self.norms))
-
-    def with_initial(
-        self, *, judge_handle: str, evaluator_id: str, forecast_handles: Iterable[str],
-        forecasts: Iterable[Mapping] = (),
-    ) -> GroundedContract:
-        """Attach the independently sampled first interpretation without changing its horizon."""
-        evaluators = tuple(dict.fromkeys((*self.initial_evaluators, evaluator_id)))
-        handles = tuple(dict.fromkeys((*self.forecast_handles, *forecast_handles)))
-        claims = {str(v.get("handle")): dict(v) for v in self.forecasts}
-        claims.update({str(v.get("handle")): dict(v) for v in forecasts})
-        return replace(
-            self,
-            initial_judge=self.initial_judge or judge_handle,
-            initial_evaluator=self.initial_evaluator or evaluator_id,
-            initial_evaluators=evaluators,
-            forecast_handles=handles,
-            forecasts=tuple(claims.values()),
-        )
-
-    def requested(self) -> GroundedContract:
-        """Mark the final commission as emitted; retries retain one request."""
-        return replace(self, final_requested=True, final_attempts=self.final_attempts + 1)
-
-    def retry_after(self, evaluator_id: str) -> GroundedContract:
-        """Allow one later commission while excluding a judge whose answer was unusable."""
-        evaluators = tuple(dict.fromkeys((*self.final_evaluators, evaluator_id)))
-        return replace(self, final_requested=False, final_evaluators=evaluators)
-
-    def with_outputs(
-        self, outputs: Mapping, *, subject_kind: str = "ProducerReturn"
-    ) -> GroundedContract:
-        """Attach the public returned claim without moving its pre-action baseline."""
-        return replace(self, producer_outputs=dict(outputs), subject_kind=subject_kind)
+    Guarantees no venue read: the mids are the ones already delivered as
+    ``MarketMid`` events, so freezing and pricing a contract cost no I/O and
+    replay identically.
+    """
+    rows = getattr(runtime, "recent_mids", {}) or {}
+    return tuple(sorted((str(coin), str(dq[-1]["mid"])) for coin, dq in rows.items() if dq))
 
 
-def freeze_contract(
-    runtime: Any, handle: str, producer_id: str, outputs: Mapping
-) -> GroundedContract:
-    """Freeze charter norms, pricing constraints and predicates before later evidence exists."""
-    norms = tuple({"id": norm.id, "definition": norm.definition}
-                  for norm in runtime.charter.norms)
-    cards = tuple({
-        "id": card.id,
-        "norm": card.norm,
-        "description": card.description,
-        "acceptable_region": card.acceptable_region,
-        "observation": card.observation,
-        "answers_for": card.answers_for,
-    } for card in runtime.charter.cards)
-    predicates = tuple((predicate.id, predicate.version) for predicate in runtime.predicates.all())
-    opened = runtime.ticks_consumed
-    horizon = runtime.ev.grounded_horizon_ticks
-    close_delay = max(horizon + 1, int(runtime.ev.verdict_timeout_ticks))
-    return GroundedContract(
-        handle=handle, producer_id=producer_id, opened_tick=opened,
-        due_tick=opened + horizon, close_tick=opened + horizon + close_delay,
-        charter_edition=runtime.charter.edition, criteria=cards,
-        predicate_versions=predicates, producer_outputs=dict(outputs),
-        event_cursor=len(runtime.events_log),
-        receipt_cursor=runtime.consequences.receipts.execution_count(),
-        norms=norms,
-    )
+def declined_trade(outputs: Mapping,
+                   listed: Iterable[str] | None = None) -> dict[str, str] | None:
+    """The trade a decision says it declined, as ``{coin, side}``, or None.
 
-
-def public_evidence(runtime: Any, contract: GroundedContract) -> list[dict[str, Any]]:
-    """Return only public, attributable facts after the frozen baseline, with stable references."""
-    evidence: list[dict[str, Any]] = []
-    try:
-        payoff = runtime.consequences.payoff(contract.handle)
-    except KeyError:
-        payoff = None
-    if payoff is not None:
-        payload = {
-            **_plain(asdict(payoff)),
-            "status": "censored_unknown" if payoff.censored is not None else "fixed",
-            "observed": payoff.censored is None,
-            "amount_unit": "micro_usd",
-            "net_is_signed": True,
-            "cash_realized": payoff.censored is None and not payoff.marked,
-            "fill_is_profit": False,
-            "y_is_observation": payoff.censored is None,
-        }
-        digest = hashlib.sha256(canonical(payload)).hexdigest()
-        evidence.append({
-            "ref": f"economic-outcome:{digest}",
-            "kind": "EconomicOutcome",
-            "payload": payload,
-        })
-    receipts = runtime.consequences.receipts.executions_since(
-        contract.handle, contract.receipt_cursor)
-    for receipt in receipts:
-        evidence.append({
-            "ref": f"execution:{receipt.id}",
-            "kind": f"ExecutionReceipt:{receipt.kind}",
-            "payload": _plain(asdict(receipt)),
-        })
-    forecast_handles = set(contract.forecast_handles)
-    for index, row in enumerate(runtime.events_log[contract.event_cursor:], contract.event_cursor):
-        payload = row.get("payload") if isinstance(row, dict) else None
-        if not isinstance(payload, Mapping):
-            continue
-        kind = str(row.get("kind", ""))
-        # A resolved, ex-ante forecast is a public observation. Producer returns,
-        # registrations and verdicts are claims or opinions and cannot ground themselves.
-        if kind != "ForecastSettled" or payload.get("handle") not in forecast_handles:
-            continue
-        # Private working state never enters events_log; copy again so the judge cannot
-        # mutate checkpointed evidence through a provider adapter.
-        evidence.append({"ref": f"event:{index}", "kind": kind, "payload": _plain(payload)})
-    return evidence
-
-
-def observed_evidence_refs(evidence: Any) -> set[str]:
-    """Name supplied facts that independently observed an effect rather than its absence."""
-    if not isinstance(evidence, (list, tuple)):
-        return set()
-    observed = set()
-    for row in evidence:
-        if not isinstance(row, Mapping) or not isinstance(row.get("ref"), str):
-            continue
-        kind = row.get("kind")
-        payload = row.get("payload")
-        if not isinstance(payload, Mapping):
-            continue
-        eligible = str(kind).startswith("ExecutionReceipt:")
-        if kind == "EconomicOutcome":
-            eligible = (
-                payload.get("status") == "fixed"
-                and payload.get("observed") is True
-                and payload.get("censored") is None
-            )
-        elif kind == "ForecastSettled":
-            eligible = (
-                payload.get("y") is not None
-                and payload.get("status", "settled") == "settled"
-            )
-        if eligible:
-            observed.add(row["ref"])
-    return observed
-
-
-def parse_finding(
-    raw: Any, available_refs: set[str], observed_refs: set[str] | None = None,
-) -> tuple[str, float | None, tuple[str, ...], str]:
-    """Validate a final judge's grounded finding against evidence actually supplied."""
+    Accepts ``counterfactual: {"coin": "BTC", "side": "buy"}`` or the action-label
+    form ``"buy:BTC"``. Anything else names no trade: nothing is inferred. With
+    ``listed`` (the coins the world lists), guarantees the coin is returned in the
+    world's own spelling, matched without regard to case, and None for a coin the
+    world does not list.
+    """
+    raw = outputs.get("counterfactual") if isinstance(outputs, Mapping) else None
+    if isinstance(raw, str) and raw.count(":") >= 1:
+        side, coin = raw.split(":")[:2]
+        raw = {"side": side, "coin": coin}
     if not isinstance(raw, Mapping):
-        raise ValueError("realized_consequence must be an object")
-    status = raw.get("status")
-    if status not in ("supported", "contrary", "unknown"):
-        raise ValueError("realized consequence status is supported, contrary or unknown")
-    reason = raw.get("reason")
-    if not isinstance(reason, str) or not reason.strip():
-        raise ValueError("realized consequence finding needs a reason")
-    refs = raw.get("evidence", [])
-    if not isinstance(refs, list) or any(not isinstance(ref, str) for ref in refs):
-        raise ValueError("realized consequence evidence must be reference strings")
-    refs = tuple(dict.fromkeys(refs))
-    if any(ref not in available_refs for ref in refs):
-        raise ValueError("realized consequence cites evidence outside its commission")
-    score = raw.get("score")
-    if status == "unknown":
-        if score is not None:
-            raise ValueError("unknown consequence carries no numeric score")
-        return status, None, refs, reason.strip()
-    if not refs:
-        raise ValueError("an observed consequence must cite supplied evidence")
-    eligible = available_refs if observed_refs is None else observed_refs
-    if not set(refs) & eligible:
-        raise ValueError("numeric consequence needs cited independently observed evidence")
-    if status == "contrary":
-        if score not in (None, 0, 0.0):
-            raise ValueError("contrary consequence has score zero")
-        return status, 0.0, refs, reason.strip()
-    if isinstance(score, bool) or not isinstance(score, (int, float)) or not 0 < score <= 1:
-        raise ValueError("supported consequence score must be in (0, 1]")
-    return status, float(score), refs, reason.strip()
+        return None
+    side = str(raw.get("side", "")).strip().lower()
+    coin = str(raw.get("coin", "")).strip().upper()
+    if side not in ("buy", "sell") or not coin:
+        return None
+    if listed is not None:
+        listed = tuple(listed)
+        named = str(raw.get("coin", "")).strip()
+        # The world's own spelling: an exact match first, else the one coin that
+        # matches without regard to case (a venue may list mixed-case names).
+        spelled = [named] if named in listed else [c for c in listed if c.upper() == coin]
+        if len(spelled) != 1:
+            return None
+        coin = spelled[0]
+    return {"coin": coin, "side": side}
+
+
+#: Why a return's ``counterfactual`` does not satisfy its contract (``counterfactual_refusal``).
+COUNTERFACTUAL_ABSENT = "counterfactual {coin, side} is absent from a return that executed no " \
+    "venue operation"
+COUNTERFACTUAL_SHAPE = "counterfactual is not {coin, side} with side buy or sell"
+COUNTERFACTUAL_UNLISTED = "counterfactual names a coin the world does not list"
+
+
+def counterfactual_refusal(outputs: Mapping, listed: Iterable[str]) -> str | None:
+    """Why a return that executed no venue operation fails its contract, or None.
+
+    Essay II.III.b: an evaluator is graded by realized consequence, which includes
+    the priced road not taken, benchmarked ex ante; ``opportunity_cost`` prices it
+    from the trade the return names. Guarantees None exactly when the return names a
+    side and a coin in ``listed`` (the coins the world lists when the return is made,
+    ``latest_mids``), or when the field is absent and the world lists no coin at all,
+    where no trade can be named. The field is the published object form alone. A
+    named coin the world does not list is refused whether or not any is listed. The
+    reason is a fact about the return, never advice.
+    """
+    listed = tuple(listed)
+    raw = outputs.get("counterfactual") if isinstance(outputs, Mapping) else None
+    if raw is None:
+        return COUNTERFACTUAL_ABSENT if listed else None
+    if not isinstance(raw, Mapping) or declined_trade({"counterfactual": raw}) is None:
+        return COUNTERFACTUAL_SHAPE
+    if declined_trade({"counterfactual": raw}, listed) is None:
+        return COUNTERFACTUAL_UNLISTED
+    return None
+
+
+def opportunity_cost(open_mids: Iterable[tuple[str, str]],
+                     due_mids: Iterable[tuple[str, str]],
+                     scale_bps: Decimal | int | float,
+                     declined: Mapping[str, str] | None) -> dict[str, Any] | None:
+    """Price the road not taken: the trade the decision itself said it declined.
+
+    ``opportunity-cost-v2`` (the architect's ruling on the #128 review). Guarantees
+    ``y = 0.5 - 0.5 * tanh(gross_bps / scale_bps)``, where ``gross_bps`` is the named
+    trade's gross return over the horizon, signed by its side and excluding fees:
+    0.5 at no move, toward 1 as the named side moves against the trade (declining it
+    was right), toward 0 as it moves for it. The function is symmetric and monotone,
+    so without directional skill a hold earns 0.5 in expectation whatever trade it
+    names, and naming a dull coin buys nothing (the fee-netted v1 paid about 1 for
+    any trade that did not beat its fees). The benchmark is chosen ex ante, on the
+    named trade, never in hindsight. Returns None when no trade is named or its
+    prices are missing: a bare hold has no world outcome.
+    """
+    if declined is None:
+        return None
+    opened = dict(open_mids)
+    due = dict(due_mids)
+    moves = {}
+    for coin in sorted(set(opened) & set(due)):
+        try:
+            before, after = Decimal(opened[coin]), Decimal(due[coin])
+        except (InvalidOperation, ValueError):
+            continue
+        if before > 0 and after > 0:
+            moves[coin] = ((after - before) / before * Decimal(10_000)).quantize(
+                Decimal("0.01"))
+    move = moves.get(declined["coin"])
+    if move is None:
+        return None
+    gross = move if declined["side"] == "buy" else -move
+    scale = float(scale_bps)
+    return {"moves": [{"coin": c, "move_bps": str(m)} for c, m in moves.items()],
+            "declined": dict(declined), "gross_bps": str(gross), "scale_bps": scale,
+            "score": round(0.5 - 0.5 * math.tanh(float(gross) / scale), 6),
+            "basis": "the named declined trade's gross move, marked to the horizon"}
+
+
+def attempted_trade(outputs: Mapping, listed: Iterable[str]) -> dict[str, str] | None:
+    """The trade an answer order named, as ``{coin, side}`` in the world's spelling, or None.
+
+    Guarantees a trade only for an answer ``{"action": "order", "coin", "side", ...}``
+    whose side is buy or sell and whose coin the world lists (``listed``, the coins
+    of ``latest_mids``); the caller says whether the answer's kind owns the answer
+    order. Nothing is inferred: the coin and side are the seat's own.
+    """
+    if not isinstance(outputs, Mapping) or outputs.get("action") != "order":
+        return None
+    return declined_trade({"counterfactual": {"coin": outputs.get("coin"),
+                                              "side": outputs.get("side")}}, listed)
+
+
+def attempted_cost(open_mids: Iterable[tuple[str, str]],
+                   due_mids: Iterable[tuple[str, str]],
+                   scale_bps: Decimal | int | float,
+                   attempted: Mapping[str, str] | None) -> dict[str, Any] | None:
+    """Price the road a refused order tried to take: the trade it named, for its side.
+
+    ``attempted-trade-v1`` (the architect's ruling on wave 13). An answer order names
+    its trade ex ante; when nothing the decision wrote executed, the world measures
+    that trade over the same horizon, from the same frozen mids, as
+    ``opportunity_cost``. Guarantees ``y = 0.5 + 0.5 * tanh(gross_bps / scale_bps)``,
+    ``gross_bps`` the named trade's gross move signed by the ordered side, excluding
+    fees: the mirror of the declined form, 0.5 at no move, toward 1 as the market
+    moves for the ordered side. It is symmetric and monotone, so without directional
+    skill it is 0.5 in expectation. Returns None when no trade is named or its prices
+    are missing.
+    """
+    priced = opportunity_cost(open_mids, due_mids, scale_bps, attempted)
+    if priced is None:
+        return None
+    return {"moves": priced["moves"], "attempted": priced["declined"],
+            "gross_bps": priced["gross_bps"], "scale_bps": priced["scale_bps"],
+            "score": round(0.5 + 0.5 * math.tanh(float(priced["gross_bps"])
+                                                 / priced["scale_bps"]), 6),
+            "basis": "the refused order's named trade's gross move, marked to the horizon"}

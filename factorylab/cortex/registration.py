@@ -20,9 +20,11 @@ from factorylab.cortex.sandbox import jail_available
 
 SLUG = re.compile(r"^[a-z][a-z0-9-]{1,47}$")
 MAX_PROMPT_CHARS = 4000
+#: A contract's public self-description: an assembly's, and a tool's.
+MAX_CONTRACT_DESCRIPTION_CHARS = 500
 MAX_PROPOSALS_PER_RETURN = 3
 LEARNERS = ("exp3", "blum_mansour")
-ROLES = ("producer", "evaluator", "meta", "antagonist")
+ROLES = ("producer", "evaluator", "meta", "antagonist", "adversary")
 # An assembly's declared action set is its own; the kernel bounds only its size.
 MAX_DECLARED_ACTIONS = 32
 MAX_ACTION_ID_CHARS = 64
@@ -31,18 +33,22 @@ MAX_ACTION_ID_CHARS = 64
 def seed_emits(role: str) -> tuple[str, ...]:
     """Expand a legacy seed label into an ordinary, replaceable output contract."""
     return {"producer": ("ProducerReturn",), "evaluator": ("Verdict",),
-            "meta": ("MetaVerdict",), "antagonist": ("Exposure",)}.get(
-                role, ("ProducerReturn",))
+            "meta": ("MetaVerdict",), "antagonist": ("Exposure",),
+            "adversary": ("CounterVerdict",)}.get(role, ("ProducerReturn",))
 
 
+# A counter-verdict is measured in its own scope: the adversarial judges are a
+# population the charter may price apart from the judges they read (essay II.III.b:
+# "the adversarial layer consists not only of evaluators but also of productive
+# workers"; the #132 Codex review).
 CONTRACT_ROLES = MappingProxyType({
     "ProducerReturn": "producer", "Verdict": "evaluator",
-    "MetaVerdict": "meta", "Exposure": "antagonist",
+    "MetaVerdict": "meta", "Exposure": "antagonist", "CounterVerdict": "adversary",
 })
-REWARD_SHAPES = ("judged", "forecast", "conformity", "exposure")
+REWARD_SHAPES = ("judged", "forecast", "conformity", "exposure", "counter")
 SEED_REWARD_SHAPES = MappingProxyType({
     "ProducerReturn": "judged", "Verdict": "forecast",
-    "MetaVerdict": "conformity", "Exposure": "exposure",
+    "MetaVerdict": "conformity", "Exposure": "exposure", "CounterVerdict": "counter",
 })
 
 
@@ -58,7 +64,8 @@ def measured_role(emits: str | tuple[str, ...] | None) -> str:
     return CONTRACT_ROLES.get(kinds[0], kinds[0]) if kinds else "producer"
 
 
-BUILTIN_RETURNS = frozenset({"ProducerReturn", "Verdict", "MetaVerdict", "Exposure"})
+BUILTIN_RETURNS = frozenset({"ProducerReturn", "Verdict", "MetaVerdict", "Exposure",
+                             "CounterVerdict"})
 # A metric card's accountability scope is either a role alias, ``all``, or an
 # emitted kind. These spellings name populations, so no emitted kind may take one
 # in any case: a kind and the scope that measures it must never be the same name.
@@ -77,7 +84,7 @@ def reward_contracts(
     emits: tuple[str, ...], declared: Any = None, *,
     registered: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
-    """Each emitted kind has one of four reward shapes; seed meanings remain fixed."""
+    """Each emitted kind has one of five reward shapes; seed meanings remain fixed."""
     if declared is None:
         declared = {}
     if not isinstance(declared, Mapping) or any(k not in emits for k in declared):
@@ -87,7 +94,8 @@ def reward_contracts(
         existing = SEED_REWARD_SHAPES.get(kind, (registered or {}).get(kind))
         shape = declared.get(kind, existing or "judged")
         if not isinstance(shape, str) or shape not in REWARD_SHAPES:
-            raise ValueError("reward shape must be judged, forecast, conformity or exposure")
+            raise ValueError("reward shape must be judged, forecast, conformity, exposure "
+                             "or counter")
         if kind in SEED_REWARD_SHAPES and shape != SEED_REWARD_SHAPES[kind]:
             raise ValueError("built-in reward shapes cannot be replaced")
         if existing is not None and shape != existing:
@@ -152,6 +160,9 @@ class AssemblyProposal:
     # An optional founder-selected endowment, in exact integer micro-USD. ``None``
     # keeps the historical trial amount selected by the runtime.
     endowment_micro: int | None = None
+    # The public self-description published with the contract in the catalogue
+    # (primitive audit F6). Empty publishes the contract's own line.
+    description: str = ""
 
     def __post_init__(self) -> None:
         """``reward_shapes`` holds the resolved contract for the kinds this proposal emits.
@@ -189,6 +200,9 @@ class ToolProposal:
     args_schema: dict
     code: str
     timeout_s: int
+    # What the tool promises to return (primitive audit F9): a top-level object
+    # schema every result is validated against before a caller reads it.
+    returns_schema: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -386,6 +400,72 @@ class Rejected:
     reason: str
 
 
+def _kind_shape(kind: str, required: tuple[str, ...], *, closed: tuple[str, ...] = (),
+                pinned: dict[str, Any] | None = None) -> dict[str, Any]:
+    """One register item form: ``kind`` pinned, its required fields named.
+
+    ``closed`` names every optional field a kind that refuses any other may carry;
+    such a kind's form is closed and lists every field it admits. ``pinned`` states a
+    field's own value constraint. An open form names its required fields and nothing
+    else, which is all it constrains: it rides in every outcome schema.
+    """
+    properties: dict[str, Any] = {"kind": {"enum": [kind]}}
+    shape: dict[str, Any] = {"properties": properties, "required": ["kind", *required]}
+    if closed or kind in ("service", "predicate", "challenge", "market"):
+        properties.update({name: {} for name in (*required, *closed)})
+        shape["additionalProperties"] = False
+    properties.update(pinned or {})
+    return shape
+
+
+def proposal_schemas() -> dict[str, list[dict[str, Any]]]:
+    """Each proposal kind's register item forms: the fields the kernel refuses it without.
+
+    Chapter II §II.b (physics is enforced, and the published contract is the enforced
+    one). Guarantees, per kind, the fields whose absence ``parse_proposals`` or the
+    runtime's admission refuses (``_apply_registrations``: a retire's and a
+    connector's predicted_effect, an amendment's id and predicted_effect), and a
+    closed form for each kind that refuses any field it does not name (service,
+    predicate, challenge, market, connector). What the fields must contain (a slug,
+    a known model, a current card) is the admission's, refused with a reason that
+    names the field; this is the shape it checks first (``validate_proposal``).
+    """
+    return {
+        "model": [_kind_shape("model", ("openrouter_id",))],
+        "assembly": [
+            _kind_shape("assembly", ("id", "model_id", "system_prompt", "accepts")),
+            _kind_shape("assembly", ("id", "model_id", "code", "accepts"),
+                        pinned={"model_id": {"enum": ["program"]}}),
+        ],
+        "program": [_kind_shape("program", ("id", "code", "accepts"),
+                                pinned={"model_id": {"enum": ["program"]}})],
+        "router": [_kind_shape("router", ("event_kind", "learner"),
+                               pinned={"learner": {"enum": list(LEARNERS)}})],
+        "retire": [_kind_shape("retire", ("assembly_id", "predicted_effect"))],
+        "connector": [_kind_shape("connector", ("id", "description", "origin",
+                                                "predicted_effect"),
+                                  closed=("preflight_path", "pay", "max_call_usd"))],
+        "market": [_kind_shape("market", ("coin",)), _kind_shape("market", ("pair",))],
+        "service": [_kind_shape("service", ("program_id", "price_micro", "description"))],
+        "tool": [_kind_shape("tool", ("id", "description", "args_schema", "code",
+                                      "timeout_s"))],
+        "observation": [_kind_shape("observation", ("id", "description", "unit", "range",
+                                                    "code"))],
+        "predicate": [_kind_shape("predicate", ("id", "description", "code"))],
+        "learner": [_kind_shape("learner", ("assembly_id", "learner", "actions"),
+                                pinned={"learner": {"enum": list(LEARNERS)}})],
+        "amendment": [_kind_shape("amendment", ("id", "predicted_effect"))],
+        "challenge": [_kind_shape("challenge", ("card_id", "evidence", "replacement",
+                                                "trial_windows", "predicted_effect"))],
+    }
+
+
+def register_item_schema() -> dict[str, Any]:
+    """A register item as the kernel admits it: an object in one of every kind's forms."""
+    return {"type": "object",
+            "anyOf": [form for forms in proposal_schemas().values() for form in forms]}
+
+
 def parse_proposals(
     outputs: dict[str, Any],
     *,
@@ -558,10 +638,15 @@ def _assembly(
             raise ValueError("endowment_micro must be a positive integer")
     else:
         endowment_micro = None
+    description = item.get("description", "")
+    if not isinstance(description, str):
+        raise ValueError("description must be text")
+    if len(description.strip()) > MAX_CONTRACT_DESCRIPTION_CHARS:
+        raise ValueError(f"description exceeds {MAX_CONTRACT_DESCRIPTION_CHARS} chars")
     return AssemblyProposal(
         aid, role, model_id, prompt, accepts, max_tokens, effort, emits, schemas,
         reward_contracts(emits, item.get("reward_shapes", {}), registered=known_reward_shapes),
-        code, timeout_s, state_policy, trigger, endowment_micro,
+        code, timeout_s, state_policy, trigger, endowment_micro, description.strip(),
     )
 
 
@@ -594,8 +679,8 @@ def _tool(
     description = item.get("description")
     if not isinstance(description, str) or not description.strip():
         raise ValueError("description is required")
-    if len(description) > 500:
-        raise ValueError("description exceeds 500 chars")
+    if len(description) > MAX_CONTRACT_DESCRIPTION_CHARS:
+        raise ValueError(f"description exceeds {MAX_CONTRACT_DESCRIPTION_CHARS} chars")
     schema = item.get("args_schema")
     if (
         not isinstance(schema, dict)
@@ -611,9 +696,16 @@ def _tool(
     timeout_s = item.get("timeout_s")
     if type(timeout_s) is not int or not 1 <= timeout_s <= 5:
         raise ValueError("timeout_s must be an int in [1, 5]")
+    returns = item.get("returns_schema")
+    if returns is not None:
+        from factorylab.cortex.tools import object_schema_error
+
+        error = object_schema_error(returns)
+        if error is not None:
+            raise ValueError(f"returns_schema: {error}")
     if not (jail_available() if jail is None else jail):
         raise ValueError("no jail on this host")
-    return ToolProposal(tid, description, schema, code, timeout_s)
+    return ToolProposal(tid, description, schema, code, timeout_s, returns)
 
 
 # --- propensity and measurement ----------------------------------------------

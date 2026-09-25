@@ -11,6 +11,11 @@ from tests.conftest import make_runtime
 from tests.runtime.test_connectors import decision, ledger_items, recording_journal
 from tests.world.test_market import TEST_KEY, SellerHTTP
 
+# Every signature here goes through the production chokepoint, with a real
+# ReserveGuard in this test's temporary lock directory (tests/conftest.py).
+pytestmark = pytest.mark.usefixtures("write_ahead")
+
+
 
 class DataTransport:
     def __init__(self, amount=1734, paid=None):
@@ -37,7 +42,7 @@ def paid_runtime(monkeypatch, transport=None):
     rt.market.target = X402Provider(private_key=TEST_KEY, transport=transport.seller)
     rt.connector_proxy = ConnectorProxy(rt.m.connectors, transport)
     monkeypatch.setattr(rt, "_committee_eligible", lambda: {
-        "eval-a": "evaluator", "meta-a": "meta"})
+        "eval-a": "evaluator", "meta-a": "meta", "antagonist-a": "antagonist"})
     handle = decision(rt)
     rt._apply_registrations(handle, Return(handle, {"register": [{
         "kind": "connector", "id": "source", "description": "Paid data",
@@ -45,7 +50,8 @@ def paid_runtime(monkeypatch, transport=None):
         "preflight_path": "/data",
         "predicted_effect": {"card_id": "cost_per_return", "direction": "decrease", "window": 1},
     }]}, 0, "ok"))
-    assert rt.registry.available("connector"), rt.registration_feedback
+    assert rt.registry.available("connector"), [
+        i for i in rt.ledger._recovery_items() if i["kind"] == "registration.rejected"]
     assert len(transport.calls) == 1 and transport.calls[0][2] is None
     transport.calls.clear()
     rt.ledger.active = True
@@ -57,7 +63,8 @@ def test_paid_fetch_debits_the_runtime_wallet_before_return(monkeypatch):
     before = rt.wallet.balance
     result, cost = rt._run_tool("seed-decider", decision(rt), {
         "tool": "connector.fetch", "args": {"id": "source", "path": "/data"}})
-    assert result["body"] == "paid fact" and cost == 2734
+    # The seller's charge is the whole cost: the fetch itself pays no one (Wave 11).
+    assert result["body"] == "paid fact" and cost == 1734
     assert rt.wallet.balance == before - cost and rt.wallet.check_conservation()
     assert ledger_items(rt, "connector.call")[-1]["cost"] == cost
     assert (ledger_items(rt, "wallet.commit")[-1]["seq"]

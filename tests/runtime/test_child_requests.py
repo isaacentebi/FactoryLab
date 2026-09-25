@@ -8,7 +8,7 @@ from factorylab.world.models import ModelResponse
 from tests.conftest import make_runtime
 
 
-def parent_request(rt, ceiling=1000000):
+def parent_request(rt, ceiling=2_000_000):
     lid = 'parent-router'
     h = rt.queue.open(actor=lid, event_id='parent',
                       propensity=PropensityRecord(('seed-decider',), (1.,), 'seed-decider',
@@ -24,11 +24,13 @@ def test_child_and_grandchild_are_judged_and_returned_to_parent(monkeypatch):
     rt = make_runtime()
     spec = rt.assemblies['seed-decider'].spec
     rt._instantiate(replace(spec, id='helper'))
+    # A request names a kind (primitive audit F5): with the observer retired, the
+    # helper is the one contract other than the requester that emits ProducerReturn.
+    rt._retire_assembly('seed-observer', 'test')
     # Each descendant must leave its caller enough for a final answer at the
     # quoted maximum, even though this fixture's actual completions are tiny.
     req = parent_request(rt, ceiling=3_000_000)
     calls = []
-    private_child_text = 'This message is only for the delegated recipient.'
 
     def provider(request):
         text = request.messages[-1]['content']
@@ -41,12 +43,13 @@ def test_child_and_grandchild_are_judged_and_returned_to_parent(monkeypatch):
         elif 'REQUEST\nchild task' in text:
             body = {'answer': 42}
         elif '"continuation":' in text:
-            assert '42' in text and 'assembly:helper' in text
+            # The result names the kind asked for, never the executor.
+            assert '42' in text and 'request:ProducerReturn' in text
+            assert 'assembly:helper' not in text
             body = {'action': 'hold', 'answer': 'used child'}
         else:
-            body = {'requests': [{'target': 'helper', 'description': 'child task',
-                                  'inputs': {'question': 'value', 'recipient': 'seed-observer',
-                                             'text': private_child_text}, 'outcome_schema': {
+            body = {'requests': [{'target': 'ProducerReturn', 'description': 'child task',
+                                  'inputs': {'question': 'value'}, 'outcome_schema': {
                                       'type': 'object',
                                       'properties': {'answer': {'type': 'integer'}},
                                       'required': ['answer']}}]}
@@ -68,11 +71,7 @@ def test_child_and_grandchild_are_judged_and_returned_to_parent(monkeypatch):
     assert not any(i['kind'] == 'requests.refused' for i in items)
     event = next(ev for ev in rt.internal if ev.payload.get('about_handle') == child['handle'])
     assert str(event.kind) == 'ProducerReturn' and event.payload['outputs']['answer'] == 42
-    assert private_child_text not in str(event.payload)
-    assert 'text' not in event.payload['inputs']
-    assert event.payload['inputs']['recipient'] == 'seed-observer'
-    assert event.payload['inputs']['question'] == 'value'
-    assert event.payload['inputs']['body']['fields'] == ('text',)
+    assert dict(event.payload['inputs']) == {'question': 'value'}
     restored = make_runtime()
     monkeypatch.undo()
     rt.provider.target.__dict__.pop("complete", None)
@@ -83,9 +82,10 @@ def test_child_and_grandchild_are_judged_and_returned_to_parent(monkeypatch):
     assert ret.cost == sum(i['amount'] for i in items if i['kind'] == 'wallet.commit')
 
 
-def test_self_request_and_unavailable_target_are_addressable(monkeypatch):
+def test_self_request_runs_and_an_unserved_kind_is_refused_before_any_decision(monkeypatch):
     rt = make_runtime()
     req = parent_request(rt)
+    rt.handle_to_assembly[req.handle] = 'seed-decider'
     calls = []
 
     def provider(request):
@@ -95,15 +95,21 @@ def test_self_request_and_unavailable_target_are_addressable(monkeypatch):
         if len(calls) == 1:
             body['requests'] = [{'target': target, 'description': target + ' task',
                                   'inputs': {}, 'outcome_schema': {}}
-                                 for target in ('self', 'missing')]
+                                 for target in ('self', 'Missing')]
         return ModelResponse(request.model_id, json.dumps(body), 1, 1, 'stop')
 
     monkeypatch.setattr(rt.provider.target, 'complete', provider)
     ret = rt._invoke('seed-decider', req, 'producer')
     assert ret.status == 'ok' and len(calls) == 3
-    child_items = [i for i in rt.ledger._recovery_items() if i['kind'] == 'request.child']
-    assert len(child_items) == 2
-    assert any(e.payload.get('status') == 'failed' for e in rt.internal)
+    items = rt.ledger._recovery_items()
+    child_items = [i for i in items if i['kind'] == 'request.child']
+    assert [(i['requested'], i['target']) for i in child_items] == [('self', 'seed-decider')]
+    refused = [i for i in items if i['kind'] == 'requests.refused']
+    assert [i['target'] for i in refused] == ['Missing']
+    assert 'no live contract' in refused[0]['reason']
+    # The refusal reaches the requester's own inbox, and no one else's.
+    assert 'request_refused' in json.dumps(
+        rt.outcomes.get('seed-decider', req.handle, delivered=False))
 
 
 def test_children_above_manifest_cap_are_malformed_before_any_child_effect(monkeypatch):

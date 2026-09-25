@@ -3,7 +3,6 @@ blamed by the charter. It settles when the return's window closes, its Brier ent
 judge's standing beside payoff skill, the meta is graded against it too, and an antagonist
 exposes a judge whose high verdict landed on a return the window blamed."""
 
-from dataclasses import replace
 
 import pytest
 
@@ -17,16 +16,17 @@ class ProcessDeath(BaseException):
 
 
 def _short_window_manifest():
-    base = load_manifest("scripted")
-    return replace(base, novelty=replace(base.novelty, window_ns=2 * base.tick_interval_ns))
+    # Windows are derived from the loops they command (time audit T1): a few ticks here.
+    return load_manifest("scripted")
 
 
 @pytest.mark.slow
 def test_resume_after_a_verdict_consequence_item_replays_identically(tmp_path):
     m = _short_window_manifest()
     path = tmp_path / "verdict.jsonl"
-    rt = Runtime(m, events=12, seed=1, initial_balance_micro=None, ledger_path=str(path),
-                 drip=True, router_gamma=.1)
+    # Enough events that a verdict is scored by the world (Wave 5a moved the draws).
+    rt = Runtime(m, events=20, seed=1, initial_balance_micro=None, ledger_path=str(path),
+                 router_gamma=.1)
     append = rt.ledger.append
     seen = []
 
@@ -43,4 +43,4 @@ def test_resume_after_a_verdict_consequence_item_replays_identically(tmp_path):
     assert seen
     resumed = resume_world(m, str(path))
     resumed["stats"]["resumes"] = 0
-    assert resumed == run_world(m, events=12, seed=1)
+    assert resumed == run_world(m, events=20, seed=1)

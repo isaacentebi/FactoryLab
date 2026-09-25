@@ -45,7 +45,7 @@ VIEWS = (
     "wallet_series", "spend_by_capability", "invocations_by_assembly",
     "action_frequencies", "settlement_latency",
 )
-SECTIONS = ("roster", "tools", "connectors", "notes", "observations", "charter", "compute", "pots",
+SECTIONS = ("roster", "tools", "connectors", "observations", "charter", "compute", "pots",
             "immune", "portfolio",
             # Edition 2: the architect watches money, deliveries, open promises, the
             # behavioural cells and the alive/dormant/terminated state, without a lever.
@@ -62,7 +62,7 @@ MAX_ROWS = 200
 #: The page carries the latest returns; every older row lives in its window's page file.
 RETURNS_ROWS = 500
 RETURNS_PAGE = "returns-{window}.json"
-ROLES = ("producer", "evaluator", "meta", "antagonist")
+ROLES = ("producer", "evaluator", "meta", "antagonist", "adversary")
 RAILS = ("openrouter", "venice", "x402")
 INCOME_CLASSES = ("earned_micro", "subsidy_micro", "converted_from_principal_micro")
 #: Money that entered this factory, by class, and money that left, by the reason.
@@ -110,7 +110,6 @@ def public_window_item(rt, *, window: int, event: int) -> dict:
     call and adds no resumable state.
     """
     from factorylab.charter.measurement import measurement_catalogue
-    from factorylab.runtime.notes import counts
 
     roster: Counter = Counter()
     for assembly in rt.assemblies.values():
@@ -125,7 +124,6 @@ def public_window_item(rt, *, window: int, event: int) -> dict:
         "tools": [{"id": spec["id"], "description": spec["description"],
                    "version": _tool_version(rt, spec["id"])}
                   for spec in sorted(rt.tool_specs.values(), key=lambda spec: spec["id"])],
-        "notes": counts(rt.notes),
         "connectors": {"registered": rt._connector_catalogue(),
                        "calls_per_day": {
                            datetime.fromtimestamp(day * 86400, UTC).date().isoformat(): count
@@ -144,7 +142,10 @@ def public_window_item(rt, *, window: int, event: int) -> dict:
                        "answers_for": card.answers_for,
                        "lambda": rt.controller.price(card.id),
                        "region": (asdict(region)
-                                  if (region := rt.regions.get(card.id)) is not None else None)}
+                                  if (region := rt.regions.get(card.id)) is not None else None),
+                       # Charter audit M7: windows priced at lambda_max, and the
+                       # current run of windows in violation.
+                       **rt.controller.saturation(card.id)}
                       for card in rt.charter.cards],
         },
         "pots": {"venue": pots.get("venue"), "reserve": pots.get("reserve"),
@@ -649,16 +650,15 @@ class _Observatory:
         self._respond(item.get("window"), {"response": "router_gain",
                                            "pathology": item.get("pathology")})
 
-    def _on_immune_decay(self, item: dict) -> None:
-        self._respond(item.get("window"), {"response": "price_decay",
-                                           "decay_after": item.get("decay_after")})
-
     def _on_immune_price_relief(self, item: dict) -> None:
         self._respond(item.get("window"), {"response": "price_relief",
                                            "card_id": item.get("card_id")})
 
-    def _on_novelty_grant(self, item: dict) -> None:
-        self._respond(item.get("window"), {"response": "novelty_grant"})
+    def _on_immune_price_ratchet(self, item: dict) -> None:
+        self._respond(item.get("window"), {"response": "price_ratchet",
+                                           "card_id": item.get("card_id"),
+                                           "duration": item.get("duration")})
+
 
     def _cells(self, manifest) -> dict:
         """Cells from the immune organ's own per-window profiles, by the versioning module."""
@@ -772,7 +772,6 @@ class _Observatory:
                        "registered": self.registered, "retired": self.retired},
             "tools": latest.get("tools", []),
             "connectors": latest.get("connectors", {"registered": [], "calls_per_day": {}}),
-            "notes": latest.get("notes", {"keys": 0, "bytes": 0}),
             "observations": latest.get("observations", []),
             "charter": {**(latest.get("charter") or _genesis_charter(manifest)),
                         "amendments": list(self.amendments.values())},
@@ -892,7 +891,7 @@ class _Snapshot(Ledger):
         """
         aggregates = {view: self.aggregate(view) for view in VIEWS}
         roles = {a.id: a.role for a in manifest.assemblies}
-        allowed = {"producer", "evaluator", "meta", "antagonist"}
+        allowed = {"producer", "evaluator", "meta", "antagonist", "adversary"}
         # Streaming projection avoids materialising the item diary. Identities
         # are only join keys here; unknown provenance never becomes public text.
         for item in self.items():
@@ -919,8 +918,17 @@ def _open_snapshot(path: Path):
     # Match the public genesis to an installed manifest, never a summary or diary.
     with path.open("rb") as stream:
         header = json.loads(stream.readline())
+    # Only worlds the running kernel loads are candidates. The files archived in
+    # worlds/history are reading material, not identities: a kernel change is a new
+    # world (essay II.b: "a new factory begins from a new v0"), and configuration is
+    # forensic metadata that cannot constitute a version (II), so a ledger born under
+    # an earlier kernel is read by the key-only readers (postmortem, versions), not
+    # re-derived here. A manifest this kernel no longer loads is passed over.
     for manifest_path in sorted(WORLDS_DIR.glob("*.toml")):
-        manifest = load_manifest(str(manifest_path))
+        try:
+            manifest = load_manifest(str(manifest_path))
+        except (ValueError, TypeError, KeyError):
+            continue
         genesis = hashlib.sha256(canonical(
             {"manifest": json.loads(manifest.canonical_json())},
         )).hexdigest()
@@ -1115,13 +1123,12 @@ def render_wake(data: dict) -> str:
     order = (
         "world", "manifest_hash", "uptime_ns", "last_event_time_ns", "venue", "reserve",
         "portfolio", "pots", "entitlements", "liveness", "money", "roster", "tools", "connectors",
-        "notes",
         "observations", "charter", "compute", "prompt_sections", "deliveries", "commitments",
         "cells", "immune",
         *VIEWS, "returns",
     )
     folded = {"wallet_series": "Balance series", "roster": "Roster", "tools": "Tools",
-              "connectors": "Connectors", "notes": "Notes", "observations": "Observations",
+              "connectors": "Connectors", "observations": "Observations",
               "charter": "Charter and amendments",
               "compute": "Compute", "immune": "Windows", "pots": "Pots and transfers",
               "money": "Money in and out by class", "deliveries": "Deliveries per window",

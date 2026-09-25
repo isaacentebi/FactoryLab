@@ -151,8 +151,8 @@ class BudgetBook:
     def unallocated(self) -> Money:
         """Return the unlocked money no seat is entitled to: ``unlocked - entitlements - holds``.
 
-        Shared spending that no seat authored (rent, fees, trading losses booked to
-        the wallet) is absorbed here, so the value is signed: a negative pool means
+        Shared spending that no seat authored (fees, bills booked to the shared
+        meter) is absorbed here, so the value is signed: a negative pool means
         the entitlements overstate the wallet, and the wallet's own check bounds
         every reservation until a credit or release restores it.
         """
@@ -197,10 +197,6 @@ class BudgetBook:
         """
         self._log("retired_credit_to_commons", assembly_id=seat, amount=amount,
                   source=source, reason=reason, unallocated_after=self.unallocated())
-
-    def _after(self, *seats: str) -> dict[str, Any]:
-        return {"entitlement_after": {seat: self.entitlement(seat) for seat in seats},
-                "unallocated_after": self.unallocated()}
 
     @staticmethod
     def _seat(assembly_id: str) -> str:

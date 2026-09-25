@@ -42,7 +42,8 @@ def indexed_kinds(rt):
 
 def test_every_proposal_kind_the_index_names_is_one_a_return_may_register():
     rt = make_runtime()
-    enum = set(rt._register_schema()["items"]["properties"]["kind"]["enum"])
+    enum = {form["properties"]["kind"]["enum"][0]
+            for form in rt._register_schema()["items"]["anyOf"]}
     assert indexed_kinds(rt) == enum
     assert {"program", "predicate"} <= enum
 

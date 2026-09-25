@@ -4,22 +4,25 @@ from __future__ import annotations
 
 import bisect
 import hashlib
-import heapq
 import json
 import math
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from typing import Any
 
-from factorylab.cortex.assembly import Assembly, AssemblySpec, ProgramAssembly
+from factorylab.cortex.assembly import (
+    Assembly,
+    AssemblySpec,
+    ProgramAssembly,
+    cap_continuation,
+    declines,
+)
 from factorylab.cortex.request import (
-    ADDRESS_TOOL,
     ChildRequest,
     Request,
     Return,
     public_child_inputs,
     public_return,
-    public_tool_calls,
 )
 from factorylab.kernel.artifacts import PRIVATE_REFUSAL
 from factorylab.kernel.budget import SeatWallet
@@ -27,9 +30,14 @@ from factorylab.kernel.events import Event, EventKind
 from factorylab.kernel.queue import PropensityRecord
 from factorylab.learners.router import Sample
 from factorylab.runtime.feedback import PendingJudgement
-from factorylab.runtime.grounded import freeze_contract
 from factorylab.runtime.reasons import Reason
-from factorylab.runtime.shared import CH_EXPOSURE, CH_VERDICT, _to_plain
+from factorylab.runtime.shared import (
+    CH_EXPOSURE,
+    CH_VERDICT,
+    _to_plain,
+    assembly_rewards,
+    declined_reason,
+)
 from factorylab.runtime.summary import _price_str
 from factorylab.settlement import SEED_VOCABULARY
 from factorylab.settlement.consequence import ReturnConsequences
@@ -42,6 +50,7 @@ from factorylab.world.metering import (
     provider_namespace,
 )
 from factorylab.world.models import ModelRequest, ModelResponse, TokenPrice
+from factorylab.world.venue_tools import VAULT_READS, VAULT_WRITES
 
 # A fetched body at least this long is text and stays off every durable surface;
 # a shorter one (a price, "OK", a count) is a fact the population may repeat.
@@ -153,44 +162,82 @@ def _transient_snapshot(section: str, value: Any,
     }
 
 
-def _publishable(policy: dict[str, float]) -> dict[str, float]:
-    """Return a readable copy of a distribution that is still a distribution.
+#: Hyperliquid's own SDK names for the venue arguments this world publishes. Models
+#: trained on that SDK write them (PR121 seqs 282 and 7343; edition 5 testnet), and
+#: each voided a whole batch. They name the same quantities, so they are translated
+#: before validation, never guessed: an argument given under both names is left alone.
+_VENUE_ALIASES = {"limit_px": "price", "sz": "size", "reduceOnly": "reduce_only"}
+_ALIASED_TOOLS = ("venue.place_market", "venue.place_limit", "venue.close")
 
-    Guarantees the result sums to one within ``PROPENSITY_TOLERANCE``, so an
-    agent that copies a published policy verbatim into its return declares
-    something the same validator accepts. Rounding alone does not: three equal
-    thirds rounded independently sum to 0.999999.
-    """
-    rounded = {action: round(p, 6) for action, p in policy.items()}
-    if not rounded:
-        return rounded
-    top = max(rounded, key=lambda action: (rounded[action], action))
-    adjusted = round(rounded[top] + (1.0 - math.fsum(rounded.values())), 6)
-    if not 0.0 <= adjusted <= 1.0:
-        return dict(policy)  # full precision rather than a rounding that left the simplex
-    rounded[top] = adjusted
-    return rounded
+
+def _venue_aliases(call: dict) -> None:
+    """Rewrite the venue SDK's argument names to this world's, in place."""
+    if call.get("tool") not in _ALIASED_TOOLS:
+        return
+    args = call["args"]
+    for alias, name in _VENUE_ALIASES.items():
+        if alias in args and name not in args:
+            args[name] = args.pop(alias)
+    if "is_buy" in args and "side" not in args and isinstance(args["is_buy"], bool):
+        args["side"] = "buy" if args.pop("is_buy") else "sell"
+
+class _TickAnswers:
+    """The venue as one tick's answer: the answered method returns it, all else is the venue."""
+
+    def __init__(self, venue: Any, method: str, value: Any) -> None:
+        self._venue, self._method, self._value = venue, method, value
+
+    def __getattr__(self, name: str) -> Any:
+        if name == self._method:
+            return lambda *_args, **_kwargs: self._value
+        return getattr(self._venue, name)
+
+
+def read_share(manifest: Any) -> int:
+    """A reader's venue read share: the read budget over the venue read slots."""
+    return (manifest.exchange.public_read_weight_per_minute
+            // max(1, manifest.exchange.max_readers))
+
+
+def _cursor_position(cursor: str) -> tuple[int, str] | None:
+    """The ``(ns, sha)`` an ``artifact.list`` cursor ``<ns>:<sha>`` names, or None."""
+    ns, _, sha = cursor.partition(":")
+    if not ns.isdigit() or len(sha) != 64 or any(c not in "0123456789abcdef" for c in sha):
+        return None
+    return (int(ns), sha)
 
 
 class ArtifactListing:
-    """The archive's directory rows in listing order, kept sorted as the archive changes.
+    """Each owner's directory rows in listing order, kept sorted as the archive changes.
 
-    Listing order is newest reference first, then by hash, then by the order the
-    references were made: exactly the order a stable sort of ``store.entries()``
-    by ``(-created_ns, sha)`` produces. Each row is the dict the directory always
-    built for that reference. Rows are shared with the listing; the runtime hands
-    out copies.
+    Listing order is newest reference first, then the order the hashes entered the
+    archive index, then the order the references were made. Rows are indexed by
+    owner only: a seat lists what it owns and nothing else (essay II.I.b: "the
+    local state of a given agent ... should be absolutely private"). Rows are
+    shared with the listing; the runtime hands out copies.
+
+    Ties are never broken by hash. An outcome item's bytes name its evidence's
+    ledger sequence, and a resume adds its own ledger items, so the same row can
+    carry a different hash after a resume; ordered by hash, rows sharing a
+    timestamp could swap and a seat would be shown a different newest page than
+    the uninterrupted world. The archive index is checkpointed with its insertion
+    order and a replay repeats every put and collection in order, so its order is
+    the same in both (``order``).
     """
 
     def __init__(self, store: Any) -> None:
         self.store = store
         self.epoch: int | None = None
-        self.keys: list[tuple] = []                 # every row's sort key, sorted
         self.row: dict[tuple, dict[str, Any]] = {}  # sort key -> row
         self.by_sha: dict[str, list[tuple]] = {}
         self.by_owner: dict[str, list[tuple]] = {}  # each sorted
-        self.public: list[tuple] = []               # sorted
-        self.owner_public: dict[str, int] = {}      # rows both owned and published
+        # sha -> its place in the archive index's insertion order: relative order only,
+        # identical between a live run and a rebuild from the checkpointed index. A
+        # collected hash keeps its number (``gone``) so a cursor naming it still has a
+        # place; put again, it enters at the end of the index and is numbered anew.
+        self.order: dict[str, int] = {}
+        self.gone: set[str] = set()
+        self.next_order = 0
 
     def sync(self) -> None:
         """Fold every change the store reports into the listing."""
@@ -201,121 +248,149 @@ class ArtifactListing:
         epoch, changed = store.drain_changes()
         if epoch != self.epoch:
             self.epoch = epoch
+            self.order = {sha: n for n, sha in enumerate(store.index)}
+            self.gone, self.next_order = set(), len(self.order)
             self._rebuild(row for sha in list(store.index) for row in self._rows_for_sha(sha))
             return
+        self._number(changed)
         for sha in sorted(changed):
             for key in self.by_sha.pop(sha, ()):
                 self._remove(key)
             for key, row in self._rows_for_sha(sha):
                 self._insert(key, row)
 
-    def rows(self) -> list[dict[str, Any]]:
-        return [self.row[key] for key in self.keys]
+    def _number(self, changed: set[str]) -> None:
+        """Number the hashes that entered the index since the last sync, in index order.
+
+        Guarantees each is numbered after every hash already numbered, in the order
+        the index holds them: a hash enters the index only at its end, so they are
+        its last entries.
+        """
+        index = self.store.index
+        for sha in changed:
+            if sha not in index and sha in self.order:
+                self.gone.add(sha)
+        entered = {sha for sha in changed
+                   if sha in index and (sha not in self.order or sha in self.gone)}
+        tail = []
+        for sha in reversed(index):
+            if len(tail) == len(entered):
+                break
+            if sha in entered:
+                tail.append(sha)
+        for sha in reversed(tail):
+            self.order[sha] = self.next_order
+            self.gone.discard(sha)
+            self.next_order += 1
 
     def rows_for(self, owner: str) -> list[dict[str, Any]]:
         return [self.row[key] for key in self.by_owner.get(owner, ())]
 
-    def count(self) -> int:
-        return len(self.keys)
+    def rows_after(self, owner: str, ns: int, sha: str) -> list[dict[str, Any]]:
+        """``owner``'s rows after the listing position of the row ``(ns, sha)``.
 
-    def newest(self, limit: int) -> list[dict[str, Any]]:
-        return [self.row[key] for key in self.keys[:limit]]
+        Guarantees the same answer whether or not that row is still listed: a hash
+        the listing has numbered keeps its place, and a hash it never numbered (one
+        collected before a resume) resumes from the first row at ``ns``, so paging
+        may repeat a row it already returned but never skips one.
+        """
+        place = self.order.get(sha)
+        cut = (-ns, place, float("inf")) if place is not None else (-ns, -1)
+        keys = self.by_owner.get(owner, ())
+        return [self.row[key] for key in keys[bisect.bisect_right(keys, cut):]]
 
-    def visible_to(self, seat: str, limit: int) -> tuple[int, list[dict[str, Any]]]:
-        """The count and newest rows a seat owns or that are published, in listing order."""
-        own = self.by_owner.get(seat, [])
-        count = len(own) + len(self.public) - self.owner_public.get(seat, 0)
-        newest: list[dict[str, Any]] = []
-        last = None
-        for key in heapq.merge(own, self.public):
-            if key == last:
-                continue
-            if len(newest) >= limit:
-                break
-            last = key
-            newest.append(self.row[key])
-        return count, newest
+    def _key(self, row: dict[str, Any], position: int) -> tuple:
+        return (-(row["updated_ns"] or 0), self.order.get(row["sha"], position), position)
 
     @staticmethod
-    def _key(row: dict[str, Any], position: int) -> tuple:
-        return (-(row["updated_ns"] or 0), str(row["sha"]), position)
+    def _row(sha: str, owner: str, kind: Any, size: int, ts: int) -> dict[str, Any]:
+        return {"sha": sha, "owner": owner, "bytes": size, "updated_ns": ts,
+                "title": str(sha)[:12], "type": kind, "kind": kind}
 
     def _rows_for_sha(self, sha: str):
         store = self.store
         record = store.index.get(sha)
         if record is None:
             return
-        kind = record.get("kind")
         references = store.references(sha, record)
         for position, (owner, reference) in enumerate(references.items()):
-            row = {"sha": sha, "owner": owner, "public": bool(reference.get("public")),
-                   "bytes": record["bytes"], "updated_ns": reference.get("ts", record["ts"])}
-            row["title"] = str(sha)[:12]
-            row["type"] = row["kind"] = kind
+            # The kind this owner holds the bytes under, never another writer's.
+            row = self._row(sha, owner, reference.get("kind", record.get("kind")),
+                            record["bytes"], reference.get("ts", record["ts"]))
             yield self._key(row, position), row
 
     def _rows_from_list(self, store: Any):  # pragma: no cover - a store from before C1
         kinds = {sha: record.get("kind") for sha, record in store.index.items()}
-        if hasattr(store, "entries"):
-            rows = [{"sha": sha, "owner": owner, "public": bool(public), "bytes": size,
-                     "updated_ns": ts} for sha, owner, public, size, ts in store.entries()]
-        else:
-            rows = [{"sha": row["sha"], "owner": row["owner"],
-                     "public": bool(row.get("public")), "bytes": row["bytes"],
-                     "updated_ns": row["ts"]} for row in store.list()]
-        for position, row in enumerate(rows):
-            row["title"] = str(row["sha"])[:12]
-            row["type"] = row["kind"] = kinds.get(row["sha"])
+        for position, row in enumerate(store.list()):
+            row = self._row(row["sha"], row["owner"], kinds.get(row["sha"]), row["bytes"],
+                            row["ts"])
             yield self._key(row, position), row
 
     def _rebuild(self, keyed) -> None:
-        self.keys, self.row, self.by_sha = [], {}, {}
-        self.by_owner, self.public, self.owner_public = {}, [], {}
+        self.row, self.by_sha, self.by_owner = {}, {}, {}
         for key, row in keyed:
             self.row[key] = row
-            self.keys.append(key)
             self.by_sha.setdefault(row["sha"], []).append(key)
             self.by_owner.setdefault(row["owner"], []).append(key)
-            if row["public"]:
-                self.public.append(key)
-                self.owner_public[row["owner"]] = self.owner_public.get(row["owner"], 0) + 1
-        self.keys.sort()
-        self.public.sort()
         for keys in self.by_owner.values():
             keys.sort()
 
     def _insert(self, key: tuple, row: dict[str, Any]) -> None:
         self.row[key] = row
-        bisect.insort(self.keys, key)
         self.by_sha.setdefault(row["sha"], []).append(key)
         bisect.insort(self.by_owner.setdefault(row["owner"], []), key)
-        if row["public"]:
-            bisect.insort(self.public, key)
-            self.owner_public[row["owner"]] = self.owner_public.get(row["owner"], 0) + 1
 
     def _remove(self, key: tuple) -> None:
         row = self.row.pop(key)
-        _discard_sorted(self.keys, key)
         owned = self.by_owner[row["owner"]]
         _discard_sorted(owned, key)
         if not owned:
             del self.by_owner[row["owner"]]
-        if row["public"]:
-            _discard_sorted(self.public, key)
-            self.owner_public[row["owner"]] -= 1
 
 
 def _discard_sorted(keys: list[tuple], key: tuple) -> None:
     del keys[bisect.bisect_left(keys, key)]
 
 
+class _Clocked:
+    """The runtime's clock around one model call, for every rail (Chapter II §IV.c; T8).
+
+    ``before_call`` is the safety pass run before the call, ``deadline_s`` the
+    deadline the runtime states for it (None where no environment pace is
+    measured), and ``expired`` what it does when the call outlives that deadline.
+    """
+
+    before_call: Any = None
+    deadline_s: Any = None
+    expired: Any = None
+
+    def clocked(self, req: ModelRequest, handle: str, complete) -> Metered[ModelResponse]:
+        """Guarantees the safety pass runs before the call, the call carries the
+        runtime's deadline, and a call that outlived it is reported as expired."""
+        if self.before_call is not None:
+            self.before_call()
+        deadline = self.deadline_s() if self.deadline_s is not None else None
+        if deadline is not None:
+            req = replace(req, timeout_s=deadline)
+        try:
+            return complete(req)
+        except BillingUncertain as exc:
+            if self.expired is not None and call_expired(exc):
+                self.expired(handle, req.timeout_s)
+            raise
+
+
 @dataclass
-class _ObservedMeteredModel(MeteredModel):
+class _ObservedMeteredModel(_Clocked, MeteredModel):
     record: Any = None
+    before_call: Any = None
+    deadline_s: Any = None
+    expired: Any = None
 
     def complete(self, req: ModelRequest, *, handle: str) -> Metered[ModelResponse]:
         """Expose already-debited vendor overruns to runtime evidence before returning."""
-        metered = super().complete(req, handle=handle)
+        metered = self.clocked(req, handle,
+                               lambda r: MeteredModel.complete(self, r, handle=handle))
         if metered.overrun:
             self.record({"kind": "compute.overrun", "handle": handle,
                          "model_id": metered.result.model_id, "cost": metered.cost,
@@ -323,15 +398,31 @@ class _ObservedMeteredModel(MeteredModel):
         return metered
 
 
-class _ObservedX402Model(X402MeteredModel):
-    """Paid completions enter observations after metering, including during journal replay."""
+class _ObservedX402Model(_Clocked, X402MeteredModel):
+    """Paid completions enter observations after metering, including during journal replay.
+
+    A paid seller call runs on the runtime's clock like any other (Codex review of
+    #133): the safety pass before it, the tick-ratio deadline on it in a paced world.
+    """
+
+    def __init__(self, *args, before_call=None, deadline_s=None, expired=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.before_call, self.deadline_s, self.expired = before_call, deadline_s, expired
 
     def complete(self, req: ModelRequest, *, handle: str) -> Metered[ModelResponse]:
         """A positive committed request yields exactly one ledgered purchase observation."""
-        result = super().complete(req, handle=handle)
+        result = self.clocked(req, handle,
+                              lambda r: X402MeteredModel.complete(self, r, handle=handle))
         if result.cost > 0:
             self.record({"kind": "observation.market_purchase", "handle": handle})
         return result
+
+
+def call_expired(exc: BaseException) -> bool:
+    """Whether a failed completion outlived the deadline its caller stated (T8)."""
+    from factorylab.world.openai_wire import CALL_EXPIRED
+
+    return str(getattr(exc, "cause", exc)).endswith(CALL_EXPIRED)
 
 
 def _provider_fault(ret: Return) -> str | None:
@@ -364,8 +455,28 @@ class ContractConsequences(ReturnConsequences):
         """The runtime's world ticks consumed: the unit the backstop counts (defect 1)."""
         return self.runtime.ticks_consumed
 
+    def observe(self, kind, payload, event):
+        if kind != "Fill" or payload.get("market") != "event":
+            return super().observe(kind, payload, event)
+        from factorylab.runtime.polymarket import credit_realized
+
+        # What an event fill realises is the polymarket pot's, kept apart from the
+        # venue's (runtime/polymarket.py); a deferred fill replays through here too.
+        # A released decision's realisation (wave 17b) is the pot's as much as a
+        # retained one's: ``realized_by_handle`` counts both.
+        before = self.table.realized_by_handle()
+        super().observe(kind, payload, event)
+        after = self.table.realized_by_handle()
+        credit_realized(self.runtime, {
+            handle: total - before.get(handle, 0) for handle, total in after.items()
+            if total != before.get(handle, 0)})
+
     def resolve(self, event):
         resolved = super().resolve(event)
+        for payoff in resolved:
+            # An observed payoff is committee evidence the moment it is fixed (wave 17b:
+            # the eligibility tally is kept at settlement, not rescanned).
+            self.runtime._tally_payoff(payoff)
         return [payoff for payoff in resolved
                 if self.runtime.queue.get(payoff.handle).channel in (CH_VERDICT, "exposure")]
 
@@ -393,18 +504,71 @@ class ComputeMixin:
     def _novelty_protection(self, handle: str, reason: str) -> int:
         """The protected share for one reservation: the seat's, for exactly the calls
         the wallet already classifies as protected (an unhistoried seat's own model
-        calls), or the pool bridge routing granted this call where that is larger; the
-        bridge alone otherwise."""
+        calls), the novelty reserve alone for an unhistoried action of a seat past
+        its trial (``_niche_action``; ruling R5), or the pool bridge routing granted
+        this call where that is larger; the bridge alone otherwise."""
         bridged = self.entitlement_bridges.get(handle, 0)
         if not self._novelty_compute(handle, reason):
             return bridged
+        seat = self.queue.get(handle).propensity.chosen
+        if not reason.startswith("model:") or self._niche_action(handle, reason) is not None:
+            # An unhistoried action's call: the niche spends only from the novelty
+            # reserve (essay II.II.b), never the commons a seat's first trial draws on,
+            # and no more of it than the seat's share of the period leaves.
+            return max(min(self.reserve.remaining(), self._niche_room(seat)), bridged)
         # Both are drawn on the same unallocated pool, so the cover is the larger of
         # the two, never their sum: adding them let one call spend the pool twice.
-        return max(self._protected_share(self.queue.get(handle).propensity.chosen), bridged)
+        return max(self._protected_share(seat), bridged)
+
+    def _niche_call(self, handle: str, action_id: str, tool: str) -> str | None:
+        """The unhistoried action a tool call about to be made is, ledgered once, or None.
+
+        Guarantees ``niche.action`` names each (decision, action) the niche admits
+        once, and that the decision's model rounds after the call read its result
+        inside the niche (``niche_rounds``). A child's call is its parent's
+        subcontracting and never qualifies (``_novelty_compute``).
+        """
+        reason = f"tool:{tool}"
+        if not self._novelty_compute(handle, reason):
+            return None
+        key = self._niche_action(handle, reason)
+        if key is not None:
+            self.ledger.append({"kind": "niche.action", "handle": handle,
+                                "assembly_id": action_id, "action": key,
+                                "reserve_remaining": self.reserve.remaining(),
+                                "room": self._niche_room(action_id),
+                                "ts": self.clock.now_ns})
+        return key
+
+    def _niche_spent(self, seat: str, remaining_before: int, cost: int) -> int:
+        """Book what one niche call used against the seat's share of the period.
+
+        The reserve allocated ``min(ceiling, remaining)`` to the hold and returns
+        what the cost did not use, so the call used ``min(remaining, cost)``.
+        """
+        used = max(0, min(remaining_before, cost))
+        if used:
+            rows = self.niche_use.setdefault("used", {})
+            rows[seat] = rows.get(seat, 0) + used
+        return used
+
+    def _open_niche_period(self) -> None:
+        """Start a new period of seat shares once a consequence period has passed.
+
+        Essay II.II.b; the niche is a flow per consequence period (time audit T6), and
+        each seat's share of it is counted over the same period.
+        """
+        now, period = self.ticks_consumed, self._consequence_period()
+        start = self.niche_use.get("start_tick")
+        cap = max(0, self.wallet.unlocked) * self.reserve.share
+        if start is None or now - start >= period:
+            self.niche_use = {"start_tick": now, "cap": int(cap), "used": {}}
+        else:
+            self.niche_use["cap"] = max(self.niche_use.get("cap", 0), int(cap))
 
     def _world_chars(self, world: Any) -> int:
         """The rendered size of a request's world block, the part of every prompt that
-        grows with the factory (registrations, notes, artifacts, charter).
+        grows with the factory (registrations, artifacts, charter).
 
         Compact worlds are measured through the same pure projection an invocation
         receives. Routing therefore prices growth in inline context, not history
@@ -469,21 +633,26 @@ class ComputeMixin:
         if spec.model_id == "program":
             from factorylab.cortex.assembly import ProgramAssembly
 
-            # The seat's executor is its own code in the jail; its flat price is
-            # reserved and committed through the same meter as a model call.
+            # The seat's executor is its own code in the world's own jail, which
+            # pays no one: its price is zero (the wallet moves only when money
+            # moves), and the call still runs through the meter so it is ledgered
+            # beside a model call.
             asm = ProgramAssembly(
-                spec, self.program_runner, meter, self.m.prices.program_micro_per_call,
+                spec, self.program_runner, meter,
                 artifacts=self.artifacts, validator=self._validate_output_contract,
-                record=lambda entry: self.ledger.append(entry),
+                record=self._record_program,
+                state_gate=lambda: self._state_write_refusal(spec.id),
             )
             self.assemblies[spec.id] = asm
             self.event_schemas.update(spec.schemas)
             if not self.ledger.bootstrap:
                 self.stats.registered_window.setdefault(spec.id, self.stats.reserve_windows)
+                self.stats.registered_tick.setdefault(spec.id, self.ticks_consumed)
             return asm
         model = _ObservedMeteredModel(
             self.provider, self.prices, meter, record=self._record_market,
-            settlement=self.bill_settlement,
+            settlement=self.bill_settlement, before_call=self._safety_pass,
+            deadline_s=self._call_deadline_s, expired=self._call_expired,
         )
         if spec.model_id.startswith("x402:"):
             model = _ObservedX402Model(
@@ -492,12 +661,16 @@ class ComputeMixin:
                 meter,
                 record=self._record_market,
                 on_unaffordable=self._compute_failure,
+                before_call=self._safety_pass, deadline_s=self._call_deadline_s,
+                expired=self._call_expired,
             )
-        asm = Assembly(spec, model, validator=self._validate_output_contract)
+        asm = Assembly(spec, model, validator=self._validate_output_contract,
+                       max_children=self.m.tools.max_children)
         self.assemblies[spec.id] = asm
         self.event_schemas.update(spec.schemas)
         if not self.ledger.bootstrap:
             self.stats.registered_window.setdefault(spec.id, self.stats.reserve_windows)
+            self.stats.registered_tick.setdefault(spec.id, self.ticks_consumed)
         return asm
 
     def _check_event_schemas(self, spec: AssemblySpec) -> None:
@@ -522,15 +695,40 @@ class ComputeMixin:
         )
         from factorylab.world.venue_tools import _validate
 
+        live = {**parsed}
+        if isinstance(parsed.get("tool_calls"), list):
+            # A call refused in validation is answered in its slot, never dispatched;
+            # it does not count against the turn's limit.
+            live["tool_calls"] = [c for c in parsed["tool_calls"]
+                                  if not (isinstance(c, dict) and c.get("invalid"))]
+        from factorylab.runtime.propensity import EFFECT_TOOLS
+
+        calls = parsed.get("tool_calls", [])
+        # A batch that writes (the venue, the treasury) runs whole
+        # or not at all; a batch of reads loses only the read that cannot run.
+        writes = any(str(call.get("tool")) in EFFECT_TOOLS
+                     or str(call.get("tool")).startswith("treasury.")
+                     or call.get("tool") in self.CONSEQUENCE_WRITES
+                     for call in calls if isinstance(call, dict))
         for section, limit in (("requests", self.m.tools.max_children),
                                ("tool_calls", self.m.tools.max_tool_calls)):
-            items = parsed.get(section)
+            items = live.get(section)
             if isinstance(items, list) and len(items) > limit:
+                if section == "tool_calls" and not writes:
+                    # The first live call past the limit is refused in its own slot.
+                    over = [i for i, c in enumerate(calls)
+                            if not (isinstance(c, dict) and c.get("invalid"))][limit]
+                    raise SectionError(section, f"more than {limit} {section} in one turn; "
+                                       "call it again next round", over, atomic=False)
                 raise SectionError(section, f"more than {limit} {section}", limit)
-        validate_schema(parsed, {"type": "object", "properties": reserved_return_fields(
+        validate_schema(live, {"type": "object", "properties": reserved_return_fields(
             max_children=self.m.tools.max_children, max_tool_calls=self.m.tools.max_tool_calls)})
+        # A decline (``declines``) names no kind: declining is not one of the
+        # contract's returns, so a contract with several kinds is not asked to pick
+        # one before it may decline.
+        declining = "emits" not in parsed and declines(parsed)
         binding = self.return_bindings.get(req.handle)
-        if binding is not None:
+        if binding is not None and not declining:
             emits = parsed.get("emits")
             if emits is None and len(binding["channels"]) == 1:
                 emits = next(iter(binding["channels"]))
@@ -541,24 +739,40 @@ class ComputeMixin:
         owner = self.handle_to_assembly.get(req.handle)
         # The request's own channel says whether this is a contract return; a policy ballot
         # is not one, and a handle the kernel queue never opened cannot be looked up at all.
-        if owner in self.assemblies and req.scoring_channel != "policy":
+        if owner in self.assemblies and req.scoring_channel != "policy" and not declining:
             spec = self.assemblies[owner].spec
             emits = parsed.get("emits", spec.emits[0] if len(spec.emits) == 1 else None)
             if emits not in spec.emits:
                 raise ValueError("select a declared emits kind")
+            producing = self._return_shape(spec, emits) in self.PRODUCING_SHAPES
             if emits in spec.schemas:
                 # The caller's outcome schema cannot weaken a custom event's declaration.
+                # A producing kind's counterfactual is the kernel's field, not the
+                # declaration's, so a closed declaration still carries it.
                 validate_schema(
                     {k: v for k, v in parsed.items()
                      if k not in ("emits", "register", "requests", "tool_calls", "about_handle",
-                                  "status", "reason", "working_state", "ack_through")},
+                                  "status", "reason", "working_state", "ack_through")
+                     and not (producing and k == "counterfactual")},
                     spec.schemas[emits],
                     partial=bool(parsed.get("requests") or parsed.get("tool_calls")
-                                 or parsed.get("status") == "cannot"),
+                                 or declines(parsed)),
                 )
-        for index, call in enumerate(parsed.get("tool_calls", [])):
+            if producing and not (parsed.get("requests") or parsed.get("tool_calls")):
+                # A final answer of a kind the world's first-tier verdicts are about.
+                if (reason := self._counterfactual_refusal(req.handle, parsed, emits)):
+                    raise ValueError(reason)
+        refused = next((i for i, c in enumerate(calls)
+                        if isinstance(c, dict) and c.get("invalid")), None)
+        if writes and refused is not None:
+            raise SectionError("tool_calls", "a batch that writes cannot run beside a "
+                               f"refused call: {calls[refused]['invalid']}", refused)
+        for call in calls:
+            if isinstance(call, dict) and isinstance(call.get("args"), dict):
+                _venue_aliases(call)
+        for index, call in enumerate(calls):
             spec = self.tool_specs.get(call["tool"])
-            if spec is None:
+            if spec is None or call.get("invalid"):
                 continue
             try:
                 if spec["kind"] == "venue":
@@ -569,7 +783,8 @@ class ComputeMixin:
                 else:
                     validate_schema(call["args"], spec["args_schema"])
             except (ValueError, TypeError, ArithmeticError, RecursionError) as exc:
-                raise SectionError("tool_calls", f"{call['tool']}: {exc}", index) from None
+                raise SectionError("tool_calls", f"{call['tool']}: {exc}", index,
+                                   atomic=writes) from None
         known = {p.id: p for p in SEED_VOCABULARY}
         for index, forecast in enumerate(parsed.get("forecasts", [])):
             if forecast["predicate"] not in known:
@@ -637,6 +852,29 @@ class ComputeMixin:
                  or needle in str(spec.get("description", "")).lower()]
         specs.sort(key=lambda spec: str(spec.get("id")))
         return specs[: max(1, min(limit, 50))]
+
+    def _assembly_search(self, substring: str, limit: int) -> list[dict[str, Any]]:
+        """Live assembly contracts whose id, kinds or description match the substring.
+
+        Guarantees each row is the catalogue's agent card for one live assembly
+        (id, version, accepts, emits, description; primitive audit F6), so a seat
+        can find a contract by what it does and address a request to its kind. An
+        empty substring matches every live assembly.
+        """
+        from factorylab.cortex.assembly import public_description
+
+        needle = substring.lower()
+        rows = []
+        for assembly in sorted(self.assemblies.values(), key=lambda a: a.spec.id):
+            spec = assembly.spec
+            if spec.id in self.retired_assemblies:
+                continue
+            row = {"id": spec.id, "version": spec.version, "accepts": sorted(spec.accepts),
+                   "emits": list(spec.emits), "description": public_description(spec)}
+            text = " ".join([spec.id, *row["accepts"], *row["emits"], row["description"]])
+            if needle in text.lower():
+                rows.append(row)
+        return rows[: max(1, min(limit, 50))]
 
     def _proposal_shape_search(self, substring: str) -> dict[str, Any]:
         """Full proposal shapes whose kind or one-line index entry matches the substring."""
@@ -747,11 +985,34 @@ class ComputeMixin:
         from factorylab.cortex.tools import connector_spec
 
         self._init_connectors()
-        self.tool_specs.setdefault(
-            "connector.fetch", connector_spec(self.m.connectors.call_price_micro))
+        if self.m.exchange.tape is None:
+            self.tool_specs.setdefault("connector.fetch", connector_spec())
+        else:
+            # A world replaying a recorded market reads nothing of today's outside:
+            # a fetch could read the future of the market it replays (critique C2).
+            self.tool_specs.pop("connector.fetch", None)
+        self._ensure_treasury_tool()
         self._ensure_web_tool()
         self._ensure_calc_tool()
         self._ensure_directory_tools()
+
+    def _ensure_treasury_tool(self) -> None:
+        """Publish ``treasury.transfer`` as this world's rail admits it, or not at all.
+
+        Chapter II §II.b: guarantees the published enum, examples and description are
+        ``transfer_tool_spec`` of the rail's ``admitted_directions`` now, so a rail a
+        rehearsal wraps after launch to refuse directions publishes only the ones it
+        runs, and a world that admits none publishes no transfer tool.
+        """
+        from factorylab.world.treasury import admitted_directions, transfer_tool_spec
+
+        spec = transfer_tool_spec(
+            admitted_directions(self.treasury.rail),
+            hybrid=getattr(self.m.treasury, "venice_network", None) == "base-mainnet")
+        if spec is None:
+            self.tool_specs.pop("treasury.transfer", None)
+        elif self.tool_specs.get("treasury.transfer") != spec:
+            self.tool_specs["treasury.transfer"] = spec
 
     def _ensure_calc_tool(self) -> None:
         """Publish ``calc`` wherever the fixed primitives are published (R3-E).
@@ -763,14 +1024,12 @@ class ComputeMixin:
         manifest, the roster or the manifest hash changes — the spec is a
         constant of the runtime, not a committed parameter.
 
-        The price is ``prices.tool_micro_per_call`` where a world commits one
-        (GPT-6 §7 allows free or the flat tool price) and free otherwise, which
-        is what every world in this repository is today.
+        It is free: arithmetic in the world's own process pays no one, and the
+        wallet moves only when money moves (GPT-6 §7 allowed free).
         """
         from factorylab.cortex.tools import calc_spec
 
-        price = getattr(self.m.prices, "tool_micro_per_call", 0)
-        self.tool_specs.setdefault("calc", calc_spec(price if type(price) is int else 0))
+        self.tool_specs.setdefault("calc", calc_spec())
 
     def _ensure_web_tool(self) -> None:
         """Register ``web.search`` exactly when the manifest names a search route.
@@ -785,66 +1044,41 @@ class ComputeMixin:
             return
         cap = (Decimal(self.m.web.max_call_micro) / 1_000_000).normalize()
         self.tool_specs.setdefault(
-            "web.search", web_search_spec(self.m.web.call_price_micro, f"{cap}"))
+            "web.search", web_search_spec(f"{cap}"))
 
     #: What one page of a shared-directory listing returns before a cursor.
     DIRECTORY_PAGE = 50
 
     def _ensure_directory_tools(self) -> None:
-        """Expose the shared directory: an index of the notebook and of the archive.
+        """Expose the caller's own archive index: sha, kind, bytes and when, never contents.
 
-        Public storage without a discovery surface is a poor shared memory. Both
-        tools are indexes — key or sha, title, type, bytes, owner seat, when it
-        was updated, whether it is public — so a reader need not already know a
-        key or a hash to find what the population has written down. Neither
-        returns contents: ``note.get`` and ``artifact.get`` do that, at their own
-        prices.
+        ``artifact.get`` returns contents, at its own price.
         """
-        from factorylab.runtime.notes import list_spec
-
         page = self.DIRECTORY_PAGE
-        self.tool_specs.setdefault("note.list", list_spec())
         self.tool_specs.setdefault("artifact.list", {
             "id": "artifact.list",
             "kind": "artifact",
-            "description": f"Index the artifact archive: up to {page} rows of sha, kind, "
-            "bytes, owner seat, when it was archived and whether it is public, newest "
-            "first, with a cursor for the next page. Optionally filtered by owner seat. "
-            "Free, like artifact.get.",
+            "description": f"Index your own archived artifacts: up to {page} rows of sha, "
+            "kind, bytes and when it was archived, newest first, with a cursor for the "
+            "next page. Free, like artifact.get.",
             "args_schema": {
                 "type": "object",
-                "properties": {"owner": {"type": "string", "maxLength": 64},
-                               "cursor": {"type": "string", "maxLength": 128}},
+                "properties": {"cursor": {"type": "string", "maxLength": 128}},
                 "additionalProperties": False,
                 # Every published tool carries examples its own schema accepts (B1).
-                "examples": [{}, {"owner": "seed-decider"}],
+                "examples": [{}, {"cursor": "0" * 64}],
             },
             "price_micro_per_call": 0,
         })
-
-    def _artifact_entries(self) -> list[dict[str, Any]]:
-        """Every archived artifact's index row, newest first.
-
-        The rows come from ``ArtifactStore.entries()`` — ``(sha, owner, public,
-        bytes, created_ns)`` — so a scoped read and a bounded listing agree on one
-        shape and one published flag; an older store with only ``list()`` still
-        indexes, with the same fields under their record names. The listing itself
-        is not scoped: C1 makes an artifact readable when it is published *or*
-        listed in the directory, and an index of hashes, sizes and owners is what
-        makes shared memory findable without disclosing a byte of any of it.
-
-        The rows are detached copies: a caller may change them freely.
-        """
-        return [dict(row) for row in self._artifact_listing().rows()]
 
     def _artifact_listing(self) -> ArtifactListing:
         """The directory's sorted view of the archive, brought up to date with it.
 
         One listing lives as long as its store; each call folds in only the hashes
         put or collected since the last one (``ArtifactStore.drain_changes``), so
-        a world block that lists the archive for every seat no longer re-reads
-        and re-sorts all of it once per seat. A store without change tracking is
-        listed from scratch on every call, as it always was.
+        a world block that lists each seat's own rows does not re-read and re-sort
+        the archive once per seat. A store without change tracking is listed from
+        scratch on every call, as it always was.
         """
         store = self.artifacts
         listing = self.__dict__.get("_artifact_listing_view")
@@ -855,41 +1089,54 @@ class ComputeMixin:
         listing.sync()
         return listing
 
-    def _artifact_index(self, owner: str | None = None,
-                        cursor: str | None = None) -> list[dict[str, Any]]:
-        """The archive's rows, optionally one owner's; the full list for the world block."""
+    def _artifact_index(self, owner: str, cursor: str | None = None) -> list[dict[str, Any]]:
+        """One owner's rows, newest first, after ``cursor`` when one is named.
+
+        Guarantees no row another seat owns is returned: the index is keyed by
+        owner and there is no unscoped read (information audit C4).
+        """
         listing = self._artifact_listing()
-        rows = listing.rows() if owner is None else listing.rows_for(owner)
+        rows = listing.rows_for(owner)
         if cursor:
-            shas = [row["sha"] for row in rows]
-            start = shas.index(cursor) + 1 if cursor in shas else len(rows)
-            rows = rows[start:]
-        return [dict(row) for row in rows]
+            position = _cursor_position(cursor)
+            if position is not None:
+                # A position, not a row: paging continues past a row that was since
+                # released or collected instead of ending at it. The cursor names the
+                # row by hash, never by its listing number: numbers are derived and a
+                # rebuild renumbers them, while a hash names the same row after a
+                # resume as before it.
+                rows = listing.rows_after(owner, *position)
+            else:
+                shas = [row["sha"] for row in rows]
+                rows = rows[shas.index(cursor) + 1:] if cursor in shas else []
+        return [{k: v for k, v in row.items() if k != "owner"} for row in rows]
 
-    def _artifacts_visible_to(self, seat: str, limit: int) -> tuple[int, list[dict[str, Any]]]:
-        """How many rows ``seat`` owns or sees published, and the newest ``limit`` of them.
+    def _artifacts_owned_by(self, seat: str, limit: int) -> tuple[int, list[dict[str, Any]]]:
+        """How many rows ``seat`` owns, and the newest ``limit`` of them."""
+        rows = self._artifact_index(seat)
+        return len(rows), rows[:limit]
 
-        Exactly ``[row for row in self._artifact_index() if row["owner"] == seat or
-        row["public"]]`` counted and truncated, without walking the whole archive.
+    def _artifact_page(self, owner: str, args: dict) -> dict[str, Any]:
+        """One ``artifact.list`` page of the caller's own rows, the total, and the cursor.
+
+        ``count`` is the caller's whole listing, not the remainder, so a reader
+        knows how much it has not seen. ``next_cursor`` names a position in the
+        listing order (``<ns>:<sha>``), so a row released or collected between two
+        pages never ends the paging; a cursor naming no position and no row ends
+        the listing and says so (``cursor_unknown``) rather than restarting it, so
+        paging can never loop.
         """
-        count, rows = self._artifact_listing().visible_to(seat, limit)
-        return count, [dict(row) for row in rows]
-
-    def _artifact_page(self, args: dict) -> dict[str, Any]:
-        """One ``artifact.list`` page: rows, the total, and the cursor that continues it.
-
-        ``count`` is the whole listing under this filter, not the remainder, so a
-        reader knows how much it has not seen; an unknown cursor ends the listing
-        rather than restarting it, so paging can never loop.
-        """
-        owner = args.get("owner")
-        owner = owner if isinstance(owner, str) and owner else None
         cursor = args.get("cursor") if isinstance(args.get("cursor"), str) else None
-        total = len(self._artifact_index(owner))
+        rows = self._artifact_index(owner)
         remaining = self._artifact_index(owner, cursor)
         page = remaining[:self.DIRECTORY_PAGE]
-        return {"items": page, "count": total,
-                "next_cursor": page[-1]["sha"] if len(remaining) > len(page) else None}
+        last = page[-1] if page else None
+        unknown = (cursor is not None and _cursor_position(cursor) is None
+                   and cursor not in {row["sha"] for row in rows})
+        return {"items": page, "count": len(rows),
+                "next_cursor": (f"{last['updated_ns'] or 0}:{last['sha']}"
+                                if last is not None and len(remaining) > len(page) else None),
+                **({"cursor_unknown": True} if unknown else {})}
 
     def _connector_catalogue(self) -> list[dict]:
         """Public connector contracts expose latest versions, descriptions and origins."""
@@ -907,11 +1154,19 @@ class ComputeMixin:
 
     def _fetch_connector(self, action_id: str, handle: str, args: dict, *,
                          origin: str | None = None) -> tuple[dict, int]:
-        """Reserve first; count attempts durably; return text only after the flat debit."""
+        """Count attempts durably; return text only after any paid read is debited.
+
+        A public fetch pays no one, so the fetch itself moves no money (the wallet
+        moves only when money moves); ``max_calls_per_window`` is its limit. A paid
+        source debits the seller's own price before its text is returned.
+        """
         from factorylab.cortex.tools import _validate_args, connector_spec
         from factorylab.world.connector import ConnectorRefused
 
-        error = _validate_args(connector_spec(0)["args_schema"], args)
+        if self.m.exchange.tape is not None:
+            return self._connector_refused(
+                handle, "this world replays a recorded market and has no connector reads")
+        error = _validate_args(connector_spec()["args_schema"], args)
         if error:
             return self._connector_refused(handle, error)
         preflight = origin is not None
@@ -930,13 +1185,16 @@ class ComputeMixin:
         except (KeyError, ConnectorRefused, ValueError) as exc:
             reason = "unknown connector" if isinstance(exc, KeyError) else str(exc)
             return self._connector_refused(handle, reason, **fields)
+        if not preflight and self._chaos_call("connector_timeout", handle=handle,
+                                              tool="connector.fetch"):
+            # A timeout before anything is fetched or metered (runtime.chaos).
+            return self._connector_refused(handle, "timeout", **fields)
         window, count = self.connector_calls.get(action_id, (self.window.index, 0))
         if window != self.window.index:
             count = 0
         if count >= self.m.connectors.max_calls_per_window:
             return self._connector_refused(handle, "connector window call cap reached", **fields)
-        price = self.m.connectors.call_price_micro
-        if price + (paid_cap or 0) > self.wallet.available_for(handle, "tool:connector.fetch"):
+        if (paid_cap or 0) > self.wallet.available_for(handle, "tool:connector.fetch"):
             return self._connector_refused(handle, "connector call unaffordable", **fields)
         data_cost = 0
 
@@ -966,8 +1224,8 @@ class ComputeMixin:
 
         try:
             paid = self._seat_meter(action_id).run(
-                handle=handle, reason="tool:connector.fetch", ceiling=price,
-                execute=execute, cost_of=lambda _: price)
+                handle=handle, reason="tool:connector.fetch", ceiling=0,
+                execute=execute, cost_of=lambda _: 0)
         except BillingUncertain as exc:
             result, cost = {"error": str(exc), "status": "uncertain", "bytes": 0}, exc.cost
         except Exception:
@@ -997,6 +1255,294 @@ class ComputeMixin:
         meter = self._seat_meter(self.handle_to_assembly.get(handle))
         return metered_data(meter, handle, cap, execute, self._record_market)
 
+    PUBLIC_READ_REFUSAL = "venue read share spent"
+
+    def venue_read_share(self) -> int:
+        """Each reader's venue read share: the read budget over the venue read slots.
+
+        Guarantees: a manifest constant, fixed for the world's life (``[venue]
+        public_read_weight_per_minute // max_readers``), so the shares of every slot
+        never sum past the budget, and nothing another seat does (reading,
+        registering, retiring) changes a reader's share or its refusals (AGENTS.md
+        rule 4: no channel between seats).
+        """
+        return read_share(self.m)
+
+    def _tick_key(self) -> tuple[int, int, int] | None:
+        """The tick and the counts of venue and treasury writes that can move an answer.
+
+        An answer is good for the tick it was read in and only until an operation
+        that can change what the venue answers: an order, a cancel, a leverage or
+        vault write, a transfer. ``drain_events`` hands over the simulated venue's
+        local event queue and changes nothing the venue answers, so the journal's
+        venue write count is taken net of the drains the venue answered
+        (``_observe_venue_answer`` counts them). The journal's own classification is
+        untouched: replay still reads a drain as a write. A ledger with no journal
+        keeps no answers.
+        """
+        writes = getattr(self.ledger, "writes", None)
+        if type(writes) is not dict:
+            return None
+        drains = getattr(self, "_venue_drains", 0)
+        return (self.ticks_consumed, writes.get("exchange", 0) - drains,
+                writes.get("treasury", 0))
+
+    @staticmethod
+    def _answer_key(method: str, args: tuple, kwargs: dict) -> str:
+        return json.dumps([method, list(args), kwargs], sort_keys=True, default=str)
+
+    def _observe_venue_answer(self, method: str, args: tuple, kwargs: dict,
+                              result: Any) -> None:
+        """Keep the tick's first answer to each venue read, whoever asked for it.
+
+        Guarantees: fed the journal's own result, so a replay keeps exactly what the
+        recording kept; only reads a seat can make are kept; the first answer of the
+        tick stands until the tick or a venue or treasury write moves the key.
+        """
+        from copy import deepcopy
+
+        from factorylab.world.venue_tools import TICK_ANSWERED
+
+        if method == "drain_events":
+            # Counted so the answers' key can take the journal's write count net of
+            # it; a drain the venue did not answer stays counted, which only ever
+            # drops answers, never keeps a stale one.
+            self._venue_drains = getattr(self, "_venue_drains", 0) + 1
+            return
+        if method not in {name for name, _ in TICK_ANSWERED.values()}:
+            return
+        key = self._tick_key()
+        if key is None:
+            return
+        cache = getattr(self, "_tick_reads", None)
+        if cache is None or cache["key"] != key:
+            cache = self._tick_reads = {"key": key, "answers": {}}
+        cache["answers"].setdefault(self._answer_key(method, args, kwargs), deepcopy(result))
+
+    def _tick_answer(self, tool_id: str, args: dict) -> dict | None:
+        """A seat read answered from this tick's answer to the identical request, or None.
+
+        Guarantees: no request is sent, so nothing is charged; the answer is shaped by
+        the same tool code a sent read is, from the very value the venue returned
+        earlier in this tick (the kernel's own read included), and only while no
+        venue or treasury write has happened since. None when there is no such answer.
+        """
+        from copy import deepcopy
+
+        from factorylab.world.venue_tools import TICK_ANSWERED, _json_value, _validate
+
+        spec = TICK_ANSWERED.get(tool_id)
+        cache = getattr(self, "_tick_reads", None)
+        key = self._tick_key()
+        if spec is None or cache is None or key is None or cache["key"] != key:
+            return None
+        try:
+            _validate(args, self.tool_specs[tool_id]["args_schema"])
+        except ValueError:
+            return None
+        method, names = spec
+        answer_key = self._answer_key(method, tuple(args[name] for name in names), {})
+        if answer_key not in cache["answers"]:
+            return None
+        value = deepcopy(cache["answers"][answer_key])
+        if tool_id in VAULT_READS:
+            return _json_value(value)
+        tools = self.venue_tools
+        real = tools.exchange
+        tools.exchange = _TickAnswers(real, method, value)
+        try:
+            return tools.call(tool_id, args)
+        finally:
+            tools.exchange = real
+
+    def _assign_reader_slot(self, seat: str) -> bool:
+        """Give a seat a venue read slot when one is free; say whether.
+
+        Guarantees at most ``[venue] max_readers`` seats hold a slot, a live seat
+        keeps its own, only retirement frees one (``_free_reader_slot``), and a freed
+        slot is given again only once its last holder's last venue read has left the
+        sliding minute (``slot_free_at``) and nothing of its Polymarket reads or open
+        reads still counts in wall time (``runtime/polymarket.py``, ``reader_counts``,
+        ``open_limit``). So no two
+        registrations' reads or open reads through one slot ever count at once: the
+        slots' totals stay under ``max_readers × share`` on both venues and under
+        the open-read limit, and nothing of a predecessor's reads reaches the seat
+        that follows it (AGENTS.md rule 5).
+        """
+        if seat in self.venue_readers:
+            return True
+        now = self.clock.now_ns
+        for index, holder in enumerate(self.venue_readers):
+            if (holder is None and self.slot_free_at.get(str(index), 0) <= now
+                    and not self._holds_open_reads(self.slot_last_reader.get(str(index)))):
+                self.venue_readers[index] = seat
+                return True
+        if len(self.venue_readers) >= self.m.exchange.max_readers:
+            return False
+        self.venue_readers.append(seat)
+        return True
+
+    def _free_reader_slot(self, seat: str) -> None:
+        """Free a retiring seat's slot, held back until its last read has slid out.
+
+        Guarantees the slot is given to no one before every venue read charged to the
+        retiring seat is older than the sliding minute of world time; its Polymarket
+        reads are held to their own window, in wall time, by ``_holds_open_reads``.
+        """
+        from factorylab.world.venue_tools import READ_WINDOW_NS
+
+        if seat not in self.venue_readers:
+            return
+        index = self.venue_readers.index(seat)
+        reader = self._reader_id(seat)
+        since = self.clock.now_ns - READ_WINDOW_NS
+        last = max((row[0] for row in self.venue_read_use.get(reader, ())
+                    if row[0] > since), default=None)
+        self.venue_readers[index] = None
+        self.slot_free_at[str(index)] = (self.clock.now_ns if last is None
+                                         else last + READ_WINDOW_NS)
+        self.slot_last_reader[str(index)] = reader
+
+    def _holds_open_reads(self, reader: str | None) -> bool:
+        """Whether anything of the registration ``reader`` still counts against a
+        Polymarket window: an open read, or a read in the last 10 s of wall time."""
+        if reader is None or getattr(self, "polymarket", None) is None:
+            return False
+        from factorylab.runtime.polymarket import reader_counts
+
+        return reader_counts(self, reader)
+
+    def _reader_id(self, seat: str) -> str:
+        """The registration a seat's reads and open reads are counted under: its id and
+        version, never the id string alone, so a later registration of the same id
+        (a next version, which can only be its owner's) counts only its own."""
+        assembly = self.assemblies.get(seat) if hasattr(self, "assemblies") else None
+        return seat if assembly is None else f"{seat}#{assembly.spec.version}"
+
+    def _assign_waiting_readers(self) -> None:
+        """Give free slots to the seats registered without one, first in first out.
+
+        Guarantees each assignment is ledgered (``venue.reader_slot``), the queue is
+        served in order (a later seat never takes a slot an earlier one waits for),
+        and a retired seat waits for nothing. Called at every registration and
+        retirement and once a tick, so a slot that comes free goes to the queue.
+        """
+        for seat in list(self.slot_waiting):
+            if seat in self.retired_assemblies or seat not in self.assemblies:
+                self.slot_waiting.remove(seat)
+                continue
+            if not self._assign_reader_slot(seat):
+                return
+            self.slot_waiting.remove(seat)
+            self.ledger.append({"kind": "venue.reader_slot", "assembly_id": seat,
+                                "slot": True, "ts": self.clock.now_ns})
+
+    def _prune_read_use(self) -> None:
+        """Drop the read rows every window has passed, a retired registration's included.
+
+        Guarantees the per-registration read books hold only rows some share still
+        counts (the longest window is the venue's 60 s), so they do not grow with the
+        registrations the world has ever had.
+        """
+        from factorylab.world.venue_tools import READ_WINDOW_NS
+
+        since = self.clock.now_ns - READ_WINDOW_NS
+        uses = self.venue_read_use
+        for key in [key for key, rows in uses.items() if all(row[0] <= since for row in rows)]:
+            del uses[key]
+        if getattr(self, "polymarket", None) is not None:
+            from factorylab.runtime.polymarket import prune_read_use
+
+            prune_read_use(self)  # its own window, in wall time
+
+    def _venue_read_used(self, seat: str) -> int:
+        """The venue weight charged to this seat's own reads in the sliding minute."""
+        from factorylab.world.venue_tools import READ_WINDOW_NS
+
+        reader = self._reader_id(seat)
+        since = self.clock.now_ns - READ_WINDOW_NS
+        uses = getattr(self, "venue_read_use", {})
+        kept = [row for row in uses.get(reader, ()) if row[0] > since]
+        if kept:
+            uses[reader] = kept
+        else:
+            uses.pop(reader, None)
+        return sum(weight for _ts, weight in kept)
+
+    def _venue_read_refusal(self, seat: str, tool_id: str, args: Any) -> str | None:
+        """Refuse a seat's venue read its share cannot cover, before anything is sent.
+
+        Guarantees: a read is admitted only when the weight its first attempt sends
+        fits in what the seat's own reads left of its share over the sliding minute;
+        another seat's reads never enter it. With one seat a slot at a time
+        (``_assign_reader_slot``), the seats together send at most
+        ``public_read_weight_per_minute`` a minute, which leaves the kernel the rest of
+        the venue's 1200. The venue itself enforces its per-IP limit (a 429), which the
+        adapter backs off from. Any other tool passes untouched.
+        """
+        from factorylab.world.venue_tools import public_read_weight
+
+        weight = public_read_weight(tool_id, args)
+        if weight is None or weight == 0:
+            return None
+        share, used = self.venue_read_share(), self._venue_read_used(seat)
+        if used + weight > share:
+            return (f"{self.PUBLIC_READ_REFUSAL}: {used} of {share} venue request weight "
+                    f"in the last 60 s; this read sends {weight}")
+        return None
+
+    def _charge_venue_read(self, seat: str, weight: int) -> None:
+        if weight:
+            self._venue_read_used(seat)
+            self.venue_read_use.setdefault(self._reader_id(seat), []).append(
+                [self.clock.now_ns, weight])
+
+    def _charge_slot_read(self, seat: str, tool_id: str, args: Any) -> None:
+        """Charge an admitted seat read its first-attempt weight, whether the tick already
+        held the answer or the read is sent. A share is a quota on reads asked, so a seat
+        cannot tell a tick's answer from a sent read (AGENTS.md rule 4)."""
+        from factorylab.world.venue_tools import public_read_weight
+
+        self._charge_venue_read(seat, public_read_weight(tool_id, args) or 0)
+
+    def _venue_weight_sent(self) -> int | None:
+        """The live adapter's count of venue weight sent, or None.
+
+        None for a simulated venue, which sends nothing, and for a counter that could
+        not be read. A journaled read-only call (``runtime/resume.py``,
+        ``_read_only``), so a replay returns what was recorded and it moves no memo
+        keyed on venue writes.
+        """
+        if not hasattr(self.exchange, "request_weight_sent"):
+            return None
+        try:
+            sent = self.exchange.request_weight_sent()
+        except Exception:  # noqa: BLE001 - a counter read never fails the seat's call
+            return None
+        return sent if type(sent) is int else None
+
+    def _seat_read_attempts(self, single: bool) -> None:
+        """A seat's read goes to the venue once: no retry can overshoot the seat's share."""
+        if hasattr(self.exchange, "request_weight_sent"):
+            self.exchange.single_attempt = single
+
+    def _charge_excess_sent(self, seat: str, tool_id: str, args: Any,
+                            before: int | None) -> None:
+        """Charge a sent seat read whatever the live adapter reports it sent beyond its
+        first-attempt weight, already charged on admission.
+
+        A seat read is sent once (``_seat_read_attempts``) and its first-attempt weight
+        counts a requested item count at its most, so the excess is normally nothing;
+        should the venue weigh more than documented, the seat's own share pays for it.
+        A simulated venue reports nothing. Never raises.
+        """
+        from factorylab.world.venue_tools import public_read_weight
+
+        after = self._venue_weight_sent()
+        if before is not None and after is not None and after >= before:
+            self._charge_venue_read(
+                seat, max(0, after - before - (public_read_weight(tool_id, args) or 0)))
+
     def _tool_price_bound(self, call: dict) -> int:
         """Variable tool prices fit the remaining request ceiling before dispatch."""
         tool = call["tool"]
@@ -1006,13 +1552,9 @@ class ComputeMixin:
                 contract = self.registry.get(f"connector:{call['args']['id']}")
                 price += contract.input_schema.get("max_call_micro", 0)
             if tool == "web.search":
-                # The flat price is not what a search costs: the metered completion
-                # rides with it, and the manifest's ceiling is what must fit.
+                # A search costs its metered completion, and the manifest's ceiling
+                # on it is what must fit.
                 price = self.m.web.max_call_micro
-            if tool in ("note.put", "note.get"):
-                from factorylab.runtime.notes import prepare
-
-                _, price = prepare(self.notes, self.m.notes, tool, call["args"], self.window.index)
         except (KeyError, ValueError):
             pass  # The normal dispatcher supplies the shape or identity refusal.
         return price
@@ -1020,7 +1562,17 @@ class ComputeMixin:
     CONSEQUENCE_WRITES = frozenset({
         "venue.place_market", "venue.place_limit", "venue.close", "venue.cancel",
         "venue.set_leverage", "treasury.transfer",
+        # The vault surface ([venue] vault_tools): money moving between perps
+        # collateral and a vault is a consequence exactly as an order is.
+        "venue.vault_create", "venue.vault_deposit", "venue.vault_withdraw",
+        # Polymarket event markets (runtime/polymarket.py), on the simulated venue.
+        "polymarket.place_limit", "polymarket.cancel",
     })
+
+    #: Reads whose answers carry text third parties wrote, jailed like a fetched
+    #: body: Polymarket's market questions, rules and slugs (runtime/polymarket.py).
+    OUTSIDE_TEXT_TOOLS = frozenset({"connector.fetch", "web.search", "polymarket.search",
+                                    "polymarket.market", "polymarket.book"})
 
     #: The most continuation calls one decision can buy, whatever it retrieves.
     #: The budget is the live limit; this is the backstop that makes the worst
@@ -1035,32 +1587,27 @@ class ComputeMixin:
     #: Tool kinds a round earned by text from outside may still run. Fetched or
     #: searched bytes cannot reach the venue, the treasury or a transport inside
     #: the same wake that read them.
-    PARSE_KINDS = frozenset({"population", "note", "artifact", "outcome"})
+    PARSE_KINDS = frozenset({"population", "artifact", "outcome"})
 
     #: Tool kinds that answer with state and change none. Reading one can be worth
     #: another round, because what it returned arrives after the answer that asked
     #: for it, and a round that ran only these has not acted.
     READ_ONLY_KINDS = frozenset({
         "institution", "catalogue", "outcome", "artifact", "market", "venue",
-        "connector", "web",
+        "connector", "web", "polymarket",
     })
-
-    #: The reads inside a kind that also writes.
-    READ_ONLY_TOOLS = frozenset({"note.get", "note.list"})
 
     def _read_only_call(self, tool_id: str) -> bool:
         """Whether this tool answers with state without changing any.
 
         Guarantees the answer is False for anything this runtime does not know to
-        be a read: a write, a transport, a notebook entry, population code and any
+        be a read: a write, a transport, population code and any
         tool the population registers later. Retrieval is extended by reads and
         ended by everything else, so a new capability cannot become a way to buy
         more rounds of acting.
         """
         if tool_id in self.CONSEQUENCE_WRITES:
             return False
-        if tool_id in self.READ_ONLY_TOOLS:
-            return True
         return self.tool_specs.get(tool_id, {}).get("kind") in self.READ_ONLY_KINDS
 
     def _call_reserve(self, assembly: Any, req: Request) -> int | None:
@@ -1073,7 +1620,7 @@ class ComputeMixin:
         round rather than treated as free.
         """
         if isinstance(assembly, ProgramAssembly):
-            return assembly.price
+            return 0  # the jail pays no one: a program call costs nothing
         model = getattr(assembly, "model", None)
         build = getattr(assembly, "build_model_request", None)
         if model is None or build is None:
@@ -1083,74 +1630,6 @@ class ComputeMixin:
         except Exception:
             return None
 
-    def _address_send(self, action_id: str, handle: str, args: dict, *,
-                      slot: Any, price: int) -> tuple[dict, int]:
-        """Deliver one addressed message: validated free, delivered once, paid once.
-
-        Guarantees a refused message costs nothing. Validation runs before the
-        seat's meter is touched, so a seat that names an unknown recipient, writes
-        too much text or addresses itself pays no transport for a message that was
-        never carried.
-
-        Guarantees a fresh delivery is paid exactly once, by the sender. The charge
-        is the transport price and it is settled around the one append that puts
-        the message in the recipient's inbox.
-
-        Guarantees a replay is free. The slot is this decision's own tool index, so
-        a return replayed after an interruption prepares the same message id, finds
-        the item already in the inbox, and pays nothing to learn that it arrived.
-
-        Guarantees the recipient is not charged and not woken. Nothing here opens a
-        decision, meters another seat or touches a router: the message waits in an
-        inbox the recipient reads when it next decides to.
-
-        Guarantees the sender's receipt carries no body. What comes back is that the
-        message was delivered, to whom, under which id and at what size -- the text
-        the sender wrote is already the sender's own, and the copy that matters now
-        belongs to the recipient.
-        """
-        from factorylab.runtime import address as addressing
-
-        def refused(reason: str, cost: int = 0) -> tuple[dict, int]:
-            self.ledger.append({"kind": "address.refused", "handle": handle,
-                                "assembly_id": action_id, "reason": reason[:200],
-                                "cost": cost, "ts": self.clock.now_ns})
-            return {"error": reason}, cost
-
-        try:
-            prepared = addressing.prepare(self, action_id, handle, args, slot)
-        except addressing.AddressRefused as exc:
-            return refused(str(exc))
-        receipt = {"status": "delivered", "message_id": prepared.message_id,
-                   "recipient": prepared.recipient,
-                   "text_bytes": len(prepared.text.encode("utf-8"))}
-        if prepared.replay:
-            self.ledger.append({"kind": "address.replayed", "handle": handle,
-                                "assembly_id": action_id, "recipient": prepared.recipient,
-                                "message_id": prepared.message_id, "ts": self.clock.now_ns})
-            return {**receipt, "replay": True}, 0
-        try:
-            metered = self._seat_meter(action_id).run(
-                handle=handle,
-                reason="tool:address.send",
-                ceiling=price,
-                execute=lambda: addressing.deliver(self, prepared),
-                cost_of=lambda _r: price,
-            )
-        except addressing.AddressRefused as exc:
-            # The recipient retired or filled up between validation and delivery.
-            # Nothing was appended, so nothing is owed.
-            return refused(str(exc))
-        except Exception as exc:  # reservation refused: the seat cannot afford transport
-            return refused(f"{type(exc).__name__}: {exc}"[:200])
-        record = metered.result if isinstance(metered.result, dict) else {}
-        self.ledger.append({"kind": "address.delivered", "handle": handle,
-                            "assembly_id": action_id, "recipient": prepared.recipient,
-                            "message_id": prepared.message_id,
-                            "text_bytes": receipt["text_bytes"],
-                            "item": record.get("seq"), "cost": metered.cost,
-                            "ts": self.clock.now_ns})
-        return {**receipt, "replay": False}, metered.cost
     WRITE_REFUSAL = ("venue and treasury writes require a producing return kind and an open "
                      "consequence account; judging decisions and their children cannot write")
 
@@ -1179,15 +1658,179 @@ class ComputeMixin:
             decision = self.queue.get(ancestor)
             if decision.channel not in self.WRITING_CHANNELS:
                 return False
-            if self.return_kinds.get(ancestor) in ("Verdict", "MetaVerdict"):
+            if self.return_kinds.get(ancestor) in ("Verdict", "MetaVerdict", "CounterVerdict"):
                 return False
             if not self.consequences.account_open(ancestor):
                 return False
         return True
 
+    #: The reward shapes whose returns the world's first-tier verdicts are about: a
+    #: judged return settles on its judges' verdicts, an exposure on how those
+    #: verdicts scored against its measured outcome (``FeedbackMixin._final_outcome``).
+    PRODUCING_SHAPES = frozenset({"judged", "exposure"})
+
+    def _return_shape(self, spec: AssemblySpec, kind: str | None) -> str | None:
+        """The reward shape ``kind`` settles on: the world's meaning of it, else its author's."""
+        shapes = getattr(self, "kind_reward_shapes", {}) or {}
+        return shapes.get(kind) or assembly_rewards(spec).get(kind)
+
+    def _counterfactual_refusal(self, handle: str, parsed: dict, kind: str | None) -> str | None:
+        """Why a producing kind's final answer fails its counterfactual contract, or None.
+
+        Essay II.III.b (evaluations graded by realized consequence, the priced road
+        not taken included): a producing return that executes no venue operation
+        names the trade it declined (``runtime.grounded.counterfactual_refusal``).
+        Guarantees None for a decision that acted (``_acted``, the one definition the
+        world's measurement also reads: a venue write accepted or possibly accepted,
+        lots or earnings; a write the venue refused is not acting), and for an answer
+        order this decision may place (``_execute_outputs``); otherwise the answer is
+        held to the contract against the coins the world lists now (``latest_mids``,
+        the mids a declined trade is frozen from).
+        """
+        from factorylab.cortex.assembly import ANSWER_ORDER_KINDS
+        from factorylab.runtime.grounded import counterfactual_refusal, latest_mids
+
+        if self._acted(handle):
+            return None
+        if (kind in ANSWER_ORDER_KINDS and parsed.get("action") == "order"
+                and all(k in parsed for k in ("coin", "side", "size"))
+                and self._may_write(handle)):
+            return None
+        return counterfactual_refusal(parsed, dict(latest_mids(self)))
+
+    def _published_contract(self, action_id: str, handle: str, schema: Any,
+                            scoring_channel: str | None) -> Any:
+        """The outcome schema a request publishes: its contract as the kernel enforces it now.
+
+        Chapter II §II.b (physics is enforced, and the published contract is the
+        enforced one). Guarantees every answer shape of a producing kind is the union
+        ``producing_contract`` builds from the same facts ``_counterfactual_refusal``
+        reads: whether the decision acted (``_acted``), the coins the world lists now
+        (``latest_mids``), and whether an answer order may be placed (``_may_write``).
+        A shape's kind is the ``emits`` it pins, else the seat's only kind; a shape a
+        seat of several kinds may answer as any of them is expanded only when all of
+        them produce, so nothing is required of an answer the kernel would not require
+        it of. A policy ballot's schema is unchanged; every other object answer shape
+        states that a reply's field names are identifiers (``FIELD_NAMES``), which
+        ``_validate_return`` enforces on every reply.
+        """
+        from factorylab.cortex.assembly import (
+            ANSWER_ORDER_KINDS,
+            FIELD_NAMES,
+            _answer_shapes,
+            producing_contract,
+        )
+        from factorylab.runtime.grounded import latest_mids
+
+        assembly = self.assemblies.get(action_id)
+        if (assembly is None or scoring_channel == "policy" or not isinstance(schema, dict)):
+            return schema
+        spec = assembly.spec
+        acted = self._acted(handle)
+        listed = None if acted else [coin for coin, _ in latest_mids(self)]
+        writes = not acted and self._may_write(handle)
+
+        def named(shape: Any) -> Any:
+            if (isinstance(shape, dict) and "propertyNames" not in shape
+                    and (shape.get("type") == "object"
+                         or isinstance(shape.get("properties"), dict))):
+                return {**shape, "propertyNames": dict(FIELD_NAMES)}
+            return shape
+
+        def expand(shape: Any) -> Any:
+            if not isinstance(shape, dict):
+                return shape
+            pinned = ((shape.get("properties") or {}).get("emits") or {}).get("enum")
+            kinds = (tuple(pinned) if isinstance(pinned, list) and len(pinned) == 1
+                     else tuple(spec.emits))
+            if not kinds or any(self._return_shape(spec, k) not in self.PRODUCING_SHAPES
+                                for k in kinds):
+                return shape
+            return producing_contract(
+                shape, listed=listed,
+                answer_order=writes and all(k in ANSWER_ORDER_KINDS for k in kinds))
+
+        shapes = _answer_shapes(schema)
+        built = (expand(schema) if len(shapes) == 1 and shapes[0] is schema
+                 else {"anyOf": [expand(shape) for shape in shapes]})
+        forms = _answer_shapes(built) if isinstance(built, dict) else [built]
+        if len(forms) == 1 and forms[0] is built:
+            return named(built)
+        return {"anyOf": [named(form) for form in forms]}
+
     def _allowed_tools(self, action_id: str) -> set[str]:
-        """Every registered tool is a public primitive; schematics are public."""
-        return set(self.tool_specs)
+        """Every registered tool is a public primitive; schematics are public.
+
+        The venue reads are held only by a seat with a venue read slot: the venue's
+        IP limit bounds who reads it (``[venue] max_readers``), never how many
+        seats exist.
+        """
+        from factorylab.runtime.polymarket import READS as POLYMARKET_READS
+        from factorylab.world.venue_tools import _BASE_WEIGHT
+
+        tools = set(self.tool_specs)
+        if action_id not in getattr(self, "venue_readers", (action_id,)):
+            tools -= set(_BASE_WEIGHT) | set(POLYMARKET_READS)
+        return tools
+
+    def _weigh_venue_batch(self, action_id: str, handle: str, ret: Return,
+                           tool_round: int) -> Return:
+        """Refuse a batch's venue writes together when any one of them would be refused.
+
+        Guarantees no venue write in a batch is submitted unless every write in it
+        passes the tests it would meet alone: a hedge never leaves one leg standing.
+        Each refused write is answered in its own slot with the reason, reads in the
+        batch still run, and nothing is ledgered as an intent.
+        """
+        writes = [(index, call) for index, call in enumerate(ret.tool_calls)
+                  if not call.get("invalid") and call.get("tool") in self.CONSEQUENCE_WRITES
+                  and self.tool_specs.get(str(call.get("tool")), {}).get("kind") in (
+                      "venue", "polymarket")
+                  and isinstance(call.get("args"), dict)]
+        if len(writes) < 2 or not self._may_write(handle):
+            return ret  # a lone write meets these same tests where it is dispatched
+        # A tool the seat does not hold is refused where it is dispatched, as always;
+        # it still holds back the writes beside it.
+        allowed = self._allowed_tools(action_id)
+        held = [(i, c) for i, c in writes if c["tool"] in allowed]
+        stranger = next((i for i, c in writes if c["tool"] not in allowed), None)
+        slot = (lambda i: f"tool:{i}") if tool_round == 0 else (
+            lambda i: f"round{tool_round}:{i}")
+        if stranger is not None:
+            refusal, failing = (None, "unknown or disallowed tool"), stranger
+        else:
+            refusal, failing = None, None
+            # Each venue weighs its own legs; the first leg either would refuse holds
+            # back every write in the batch, on both venues.
+            for legs, weigh in (
+                    ([(i, c) for i, c in held if not str(c["tool"]).startswith("polymarket.")],
+                     self.venue_batch_refusal),
+                    ([(i, c) for i, c in held if str(c["tool"]).startswith("polymarket.")],
+                     self._polymarket_batch_refusal)):
+                found = weigh(action_id, handle,
+                              [(slot(i), str(c["tool"]), c["args"]) for i, c in legs]
+                              ) if legs else None
+                if found is not None and (failing is None or legs[found[0]][0] < failing):
+                    refusal, failing = found, legs[found[0]][0]
+        if refusal is None:
+            return ret
+        reason = refusal[1]
+        writes = held
+        reason = (f"nothing in this batch was submitted: {ret.tool_calls[failing]['tool']} "
+                  f"(call {failing}) would be refused: {reason}")
+        self.venue_attempts[handle] = reason
+        self._refuse_order(handle, reason, kind="order.batch_refused", index=failing)
+        refused = {i for i, _ in writes}
+        return replace(ret, tool_calls=tuple(
+            {**call, "invalid": reason} if i in refused else call
+            for i, call in enumerate(ret.tool_calls)))
+
+    def _polymarket_batch_refusal(self, seat: str, handle: str,
+                                  writes: list[tuple[str, str, dict]]):
+        """The first Polymarket write of a batch that would be refused, and why, or None."""
+        from factorylab.runtime.polymarket import batch_refusal
+
+        return batch_refusal(self, seat, handle, writes)
 
     def _run_tool(self, action_id: str, handle: str, call: dict[str, Any], *,
                   slot: str = "tool:0") -> tuple[dict, int]:
@@ -1205,31 +1848,15 @@ class ComputeMixin:
             from factorylab.runtime import websearch
 
             return websearch.run(self, action_id, handle, args)
-        if tool_id == "note.list":
-            # An index of public keys, free like artifact.get: a directory nobody
-            # can afford to read is not a directory. It is ledgered like any call.
-            from factorylab.runtime.notes import index
-
-            cursor = args.get("cursor")
-            result = index(self.notes, cursor if isinstance(cursor, str) else None)
-            self.ledger.append({"kind": "note.list", "handle": handle,
+        if tool_id == "artifact.list":
+            result = self._artifact_page(action_id, args)
+            self.ledger.append({"kind": "artifact.list", "handle": handle,
                                 "assembly_id": action_id, "rows": len(result["items"]),
                                 "count": result["count"], "ts": self.clock.now_ns})
             return result, 0
-        if tool_id == "artifact.list":
-            result = self._artifact_page(args)
-            self.ledger.append({"kind": "artifact.list", "handle": handle,
-                                "assembly_id": action_id, "rows": len(result["items"]),
-                                "count": result["count"], "owner": args.get("owner"),
-                                "ts": self.clock.now_ns})
-            return result, 0
-        if tool_id in ("note.put", "note.get"):
-            from factorylab.runtime.notes import run
-
-            return run(self, action_id, handle, tool_id, args)
         if tool_id == "artifact.get":
             # Free by contract (C9) and scoped by contract (C1): a seat reads what it
-            # wrote, what was published, and a program's state within its own lineage.
+            # wrote and a program's state within its own lineage.
             # Every read is ledgered, refusals included.
             result = self.artifacts.read(args.get("sha"), reader=action_id,
                                          lineage_of=self.budget.lineage)
@@ -1237,7 +1864,10 @@ class ComputeMixin:
                                 "handle": handle, "assembly_id": action_id,
                                 "found": "error" not in result,
                                 **({"reason": Reason.ARTIFACT_PRIVATE.value}
-                                   if result.get("error") == PRIVATE_REFUSAL else {}),
+                                   if result.get("error") == PRIVATE_REFUSAL else
+                                   {"reason": Reason.ARTIFACT_RELEASED.value}
+                                   if result.get("error") == Reason.ARTIFACT_RELEASED.value
+                                   else {}),
                                 "ts": self.clock.now_ns})
             return result, 0
         if tool_id == "outcome.get":
@@ -1281,17 +1911,50 @@ class ComputeMixin:
                                 "reason": self.WRITE_REFUSAL, "ts": self.clock.now_ns})
             return {"error": self.WRITE_REFUSAL}, 0
         spec = self.tool_specs[tool_id]
-        price = int(spec["price_micro_per_call"])
+        fault = self._chaos_tool_fault(tool_id, spec, handle)
+        if fault is not None:
+            # Decided before the meter reserves: a fault moves no money (runtime.chaos).
+            return fault, 0
+        from factorylab.world.venue_tools import public_read_weight
 
-        if spec["kind"] == "address":
-            from factorylab.cortex.assembly import validate_schema
+        venue_read = public_read_weight(tool_id, args) is not None
+        if venue_read:
+            # A read the tool's own schema refuses is refused here, before admission
+            # and before any charge: it can never reach the venue, on any adapter.
+            from factorylab.world.venue_tools import _validate
 
             try:
-                validate_schema(call.get("args"), spec["args_schema"])
-            except (ValueError, TypeError, RecursionError):
-                # Do not echo an invalid field name or value into the receipt.
-                return {"error": "invalid address arguments"}, 0
-            return self._address_send(action_id, handle, args, slot=slot, price=price)
+                _validate(args, spec["args_schema"])
+            except ValueError as exc:
+                self.ledger.append({"kind": "tool.refused", "handle": handle,
+                                    "assembly_id": action_id, "tool": tool_id,
+                                    "reason": str(exc)[:200], "ts": self.clock.now_ns})
+                return {"error": str(exc)}, 0
+        if venue_read:
+            # Admission and the slot's charge come first and are the same whether the
+            # tick holds the answer or not: a seat cannot tell the two apart, so no
+            # other seat's reads reach it through them (AGENTS.md rule 4).
+            refusal = self._venue_read_refusal(action_id, tool_id, args)
+            if refusal is not None:
+                self.ledger.append({"kind": "tool.refused", "handle": handle,
+                                    "assembly_id": action_id, "tool": tool_id,
+                                    "reason": refusal, "ts": self.clock.now_ns})
+                return {"error": refusal}, 0
+            self._charge_slot_read(action_id, tool_id, args)
+        answered = self._tick_answer(tool_id, args) if venue_read else None
+        if answered is not None:
+            # No request, no weight sent: the tick already holds the venue's answer.
+            self.ledger.append({"kind": "venue.read_answered", "handle": handle,
+                                "assembly_id": action_id, "tool": tool_id,
+                                "ts": self.clock.now_ns})
+            if tool_id in self.venue_tools.PUBLIC_READS:
+                from factorylab.runtime.observations import record_venue_facts
+
+                record_venue_facts(self.window, tool_id, args, answered, self.clock.now_ns)
+            return answered, 0
+        if venue_read:
+            weight_before = self._venue_weight_sent()
+        price = int(spec["price_micro_per_call"])
 
         def execute() -> dict:
             if spec["kind"] == "institution":
@@ -1312,10 +1975,21 @@ class ComputeMixin:
                         reduce_only=args.get("reduce_only") is True,
                     )
                     if reason:
+                        self.venue_attempts[handle] = reason
                         return {"status": "rejected", "error": reason}
                 if tool_id in ("venue.place_market", "venue.place_limit", "venue.close",
                                "venue.cancel"):
-                    return self._venue_write(handle, tool_id, args, slot=slot)
+                    result = self._venue_write(handle, tool_id, args, slot=slot)
+                    if f"{handle}:{slot}" not in self.order_intents:
+                        self.venue_attempts[handle] = str(result.get("error") or "refused")
+                    return result
+                if tool_id in VAULT_WRITES:
+                    result = self._vault_write(handle, tool_id, args, slot=slot)
+                    if f"{handle}:{slot}" not in self.vault_intents:
+                        self.venue_attempts[handle] = str(result.get("error") or "refused")
+                    return result
+                if tool_id in VAULT_READS:
+                    return self._vault_read(tool_id, args)
                 return self.venue_tools.call(tool_id, args)
             if spec["kind"] == "catalogue":
                 needle = str(args["substring"])
@@ -1327,6 +2001,8 @@ class ComputeMixin:
                     # and this is where their full schemas are read when a seat
                     # actually means to call a tool or register something.
                     "tools": self._tool_schema_search(needle, limit),
+                    # Agent cards (essay II.I): a contract is found by what it does.
+                    "assemblies": self._assembly_search(needle, limit),
                     "proposal_shapes": self._proposal_shape_search(needle),
                 }
             if spec["kind"] == "market":
@@ -1344,15 +2020,21 @@ class ComputeMixin:
                     "direction": direction,
                     "usd": str(usd),
                     "reason": str(args.get("reason", ""))[:500],
-                    "by": action_id,
                     "handle": handle,
                 }
-                self.ledger.append({"kind": "treasury.intent", **intent, "ts": self.clock.now_ns})
+                self.ledger.append({"kind": "treasury.intent", **intent, "by": action_id,
+                                    "ts": self.clock.now_ns})
+                # The event every subscriber reads carries the handle, not the author's
+                # seat (information audit C8; essay II.I.b, the author is private).
                 self._emit(EventKind.TRANSFER_INTENT, intent, source="kernel")
                 self.stats.transfer_intents += 1
                 return self.treasury.transfer(
                     direction, usd, handle=handle, now_ns=self.clock.now_ns
                 )
+            if spec["kind"] == "polymarket":
+                from factorylab.runtime import polymarket
+
+                return polymarket.execute(self, action_id, handle, tool_id, args, slot)
             if spec["kind"] == "calc":
                 # Deterministic arithmetic (R3-E): a pure function of its arguments,
                 # no jail, no rail, no clock. It is metered and ledgered like any
@@ -1367,6 +2049,11 @@ class ComputeMixin:
             return self.tool_runner.run(tool, args)
 
         try:
+            if venue_read:
+                # Set inside the try whose ``finally`` clears it: nothing between
+                # setting and clearing can leave the kernel's own reads without
+                # their retries.
+                self._seat_read_attempts(True)
             metered = self._seat_meter(action_id).run(
                 handle=handle,
                 reason=f"tool:{tool_id}",
@@ -1378,6 +2065,12 @@ class ComputeMixin:
             return {"error": str(exc)}, exc.cost
         except Exception as exc:  # reservation refused or execution known unbilled
             return {"error": f"{type(exc).__name__}: {exc}"[:200]}, 0
+        finally:
+            if venue_read:
+                try:
+                    self._seat_read_attempts(False)
+                finally:
+                    self._charge_excess_sent(action_id, tool_id, args, weight_before)
         if spec["kind"] == "venue":
             if tool_id in self.venue_tools.PUBLIC_READS:
                 from factorylab.runtime.observations import record_venue_facts
@@ -1385,45 +2078,7 @@ class ComputeMixin:
                 record_venue_facts(self.window, tool_id, args, metered.result, self.clock.now_ns)
             if hasattr(self.exchange, "drain_events"):
                 self._settle_exchange_effects(self.exchange.drain_events())
-        elif (spec["kind"] == "population"
-              and getattr(self.ev, "producer_feedback", "verdict") == "realized"):
-            self._record_tool_use(action_id, handle, tool_id, slot, metered.result, metered.cost)
         return metered.result, metered.cost
-
-    def _record_tool_use(self, caller: str, handle: str, tool_id: str, slot: str,
-                         result: Any, cost: int) -> None:
-        """Address actual paid tool execution to maker and caller without publishing their data.
-
-        A receipt establishes execution, version and provenance, never usefulness.
-        Arguments and output bodies stay private; hashes bind the observed result.
-        Same-lineage use remains explicitly distinguishable from independent use.
-        """
-        from factorylab.kernel.ledger import canonical
-        from factorylab.settlement.receipts import execution_receipt
-
-        tool = self.population_tools.get(tool_id)
-        if tool is None:
-            return
-        maker = self.tool_owner.get(tool_id)
-        caller_lineage = self.budget.lineage(caller)
-        maker_lineage = self.budget.lineage(maker) if maker is not None else None
-        relation = ("self" if caller == maker else "unknown" if maker is None
-                    else "same_lineage" if caller_lineage == maker_lineage else "cross_lineage")
-        facts = {
-            "tool": tool_id, "maker": maker, "caller": caller,
-            "maker_handle": tool.provenance, "caller_handle": handle, "slot": slot,
-            "lineage_relation": relation,
-            "version_sha256": hashlib.sha256(canonical({
-                "code": tool.code, "args_schema": tool.args_schema,
-                "timeout_s": tool.timeout_s})).hexdigest(),
-            "result_sha256": hashlib.sha256(canonical(result)).hexdigest(),
-            "status": "failed" if isinstance(result, dict) and result.get("error") else "executed",
-            "cost_micro": cost,
-        }
-        for subject in sorted({handle, tool.provenance} - {"", None}):
-            execution_receipt(self.consequences.receipts, kind="program_result",
-                              handle=subject, owner=maker if subject == tool.provenance else caller,
-                              at_event=self.n, facts=facts)
 
     def _invoke_compute(self, action_id: str, req: Request) -> Return:
         """Each model call is metered and counted; lifetime trials count settled consequences.
@@ -1455,8 +2110,20 @@ class ComputeMixin:
         req = replace(req, cost_ceiling=min(
             req.cost_ceiling, max(0, self.wallet.available_for(req.handle, reason)), cover,
         ))
+        # The bytes of the prompt this call renders, counted on the very request the
+        # assembly is handed: its ``YOU`` states this ceiling, so a count taken before
+        # the cap, or after the caller has since changed the request, is of a prompt
+        # nobody was sent (edition 3, C4). The count renders exactly what the assembly
+        # renders, so a request that cannot be rendered fails here as it fails there.
+        # A measurement never fails a call: the call keeps its own failure path (the
+        # assembly returns it failed) and the prompt is simply unmeasured, as the
+        # ceiling probe above is.
         try:
-            ret = asm.invoke(req)
+            sections = replace(req, inputs={**req.inputs, "you": action_id}).section_bytes()
+        except Exception:
+            sections = None
+        try:
+            ret = replace(asm.invoke(req), prompt_sections=sections)
         finally:
             self.entitlement_bridges.pop(req.handle, None)
         if ceiling is not None:
@@ -1516,8 +2183,8 @@ class ComputeMixin:
         charter edition, cards and pending changes stay inline while its full
         text is addressable as canonical bytes. Public observation history moves
         only when there is prior midpoint history to remove; the latest exact row
-        for every market, freshness, closed-window values, pathologies and shared
-        directory remain inline. The returned request owns the same immutable
+        for every market, freshness and closed-window values
+        remain inline. The returned request owns the same immutable
         inputs for its first call and every continuation, while ``retrieved``
         survives for the whole invocation and nowhere else.
         """
@@ -1538,8 +2205,9 @@ class ComputeMixin:
         assembly = self.assemblies[action_id]
         retrieved: dict[str, bytes] = {}  # same-handle only; never checkpointed or published
         # Programs receive the request directly on jailed stdin and cannot use a
-        # model continuation's transient ``artifact.get`` map. Keep their inputs
-        # whole; only model assemblies receive same-handle snapshot references.
+        # model continuation's transient ``artifact.get`` map, so their inputs are
+        # not compacted; only model assemblies receive same-handle snapshot
+        # references. ``ProgramAssembly.build_stdin`` scopes the seats to their own.
         if isinstance(assembly, Assembly):
             req = self._compact_invocation_context(req, retrieved)
         prompt_cache = (_safe_prompt_cache_identity(assembly, req)
@@ -1551,7 +2219,36 @@ class ComputeMixin:
         # prompt (``Assembly.build_model_request``), so it is inside every ceiling
         # priced from this request and a parent cannot forge its child's.
         effects: list[str] = []  # venue and treasury writes, children: the action so far
+        taken: set[str] = set()  # the tool actions this decision dispatched (action_key)
+        niche_spent = 0  # what this decision's unhistoried actions used of the niche
+        # §II.b: the schema a request publishes is the contract the kernel enforces on
+        # its answer, rebuilt for every round from the base contract and the facts of
+        # that round (``_published_contract``, ``cap_continuation``).
+        contract = req.outcome_schema
+
+        def published(*, tools: bool | None) -> Any:
+            schema = self._published_contract(action_id, req.handle, contract,
+                                               req.scoring_channel)
+            return schema if tools is None else cap_continuation(schema, tool_calls=tools)
+
+        req = replace(req, outcome_schema=published(tools=None))
+
+        def closing() -> Request:
+            # A round that grants no further tools: its answer is the final one.
+            return replace(req, outcome_schema=published(tools=False))
+
+        def granted_round() -> Request:
+            # A granted reading round: tools again, children refused.
+            return replace(req, outcome_schema=published(tools=True))
+
         ret = self._invoke_compute(action_id, req)
+        # The opening prompt's bytes, as the first call rendered them. ``req`` changes
+        # below (the cover cap, a working state written in a tool round, the niche's
+        # ceiling) and each continuation renders its own prompt, so these are taken
+        # now and never recomputed. None when no prompt was rendered for the call.
+        sections = getattr(ret, "prompt_sections", None)
+        # Whether the opening request reached its executor, as the assembly reports it.
+        delivered = bool(getattr(ret, "delivered", False))
         # The routing bridge buys only the routed call. Reads and children spend
         # the liable seat's remaining cover, never a fresh claim on the commons.
         seat = self._liable_seat(req.handle) or action_id
@@ -1560,8 +2257,9 @@ class ComputeMixin:
         req = replace(req, cost_ceiling=min(req.cost_ceiling, ret.cost + cover))
         dropped = list(ret.dropped)  # optional sections dropped while the answer stood
         self._check_compute_return(req.handle, ret)
-        if (ret.status == "ok" and ret.outputs.get("status") == "cannot"
-                and isinstance(ret.outputs.get("reason"), str)):
+        # A decline is read by ``declines`` alone, in any case, so its tool calls,
+        # children and answer order never act (Chapter II §II.b: physics enforced).
+        if ret.status == "ok" and declines(ret.outputs):
             ret = replace(ret, status="refused", children=(), tool_calls=())
         if ret.status == "ok" and req.scoring_channel != "policy":
             # The channel is the emitted kind of the contract this assembly declared.
@@ -1583,6 +2281,9 @@ class ComputeMixin:
                 req = replace(req, inputs={**req.inputs,
                                           "your_state": self.working_state.render(action_id)})
         total_cost = ret.cost
+        # The decision's own ceiling; the niche only ever widens it for one tool call
+        # and the one round that reads its result, then it is restored.
+        base_ceiling = req.cost_ceiling
         prior_results: list[dict] = []
         previous_results: list[dict] = []
         tool_round = 0
@@ -1597,7 +2298,8 @@ class ComputeMixin:
                       "consumed. Further tool calls and requests are refused.")
         minimum_inputs = {**req.inputs, "continuation": final_note,
                           "context_notice": "Tool bodies were not loaded: insufficient budget."}
-        minimum_answer = req.continuation(inputs=minimum_inputs, cost_ceiling=req.cost_ceiling)
+        minimum_answer = closing().continuation(inputs=minimum_inputs,
+                                                cost_ceiling=req.cost_ceiling)
         answer_reserve = self._call_reserve(assembly, minimum_answer) or 0
         while (not self.wallet.dead and ret.status == "ok" and (ret.tool_calls or ret.children)
                and granted):
@@ -1616,10 +2318,26 @@ class ComputeMixin:
             learned = False  # a lookup this decision had not already been given
             acted = False  # a write or a child: this decision has taken its action
             delivered_reads = []
+            ret = self._weigh_venue_batch(action_id, req.handle, ret, tool_round)
             for index, call in enumerate(ret.tool_calls):
                 if self.wallet.dead:
                     break
+                if call.get("invalid"):
+                    # Refused by validation, never dispatched: its error answers in
+                    # its own slot so the next round can correct it.
+                    results.append({"tool": call.get("tool"), "args": call.get("args"),
+                                    "result": {"error": call["invalid"]}})
+                    learned = True
+                    continue
                 price = self._tool_price_bound(call)
+                # Essay II.II.b, ruling R5: an unhistoried action may spend the novelty
+                # reserve beyond this decision's own ceiling; the kernel's reservation
+                # still enforces exactly what the wallet and the seat may cover.
+                niche = self._niche_call(req.handle, action_id, str(call.get("tool")))
+                niche_before = self.reserve.remaining()
+                req = replace(req, cost_ceiling=base_ceiling + niche_spent + (
+                    min(niche_before, self._niche_room(action_id))
+                    if niche is not None else 0))
                 # A slot is a client identity: it names the round as well as the
                 # position, so two rounds of one decision cannot collide on one
                 # order id and an intended second write is never read as a repeat.
@@ -1649,6 +2367,11 @@ class ComputeMixin:
                     else:
                         result, cost = self._run_tool(action_id, req.handle, call, slot=slot)
                     dispatched = True
+                    taken.add(self._tool_action(str(call.get("tool"))))
+                    if niche is not None:
+                        niche_spent += self._niche_spent(action_id, niche_before, cost)
+                        # The one round that reads this result is compute the action uses.
+                        self.niche_rounds[req.handle] = niche
                 tool_cost += cost
                 # A venue write the venue has not yet acknowledged is its own outcome:
                 # the intent is durable and the reconciler finalises it under the
@@ -1664,7 +2387,7 @@ class ComputeMixin:
                 # retains the ordinary continuation. A round earned by outside text
                 # runs jailed tools only, so a seat can read and then compose within
                 # the same wake instead of spending another decision on it.
-                if ok and (call["tool"] in ("connector.fetch", "web.search")
+                if ok and (call["tool"] in self.OUTSIDE_TEXT_TOOLS
                            or (call["tool"] == "catalogue.search"
                                and isinstance(result, dict) and result.get("models"))):
                     outside_text = True
@@ -1682,7 +2405,7 @@ class ComputeMixin:
                 answered.add(signature)
                 if dispatched and not read_only:
                     # Anything that is not a known read ends the retrieval, whether or
-                    # not it names an action: a notebook entry, a message, population
+                    # not it names an action: population
                     # code and an unrecognised tool all stop the wake at one round of
                     # doing, so nothing executed here can be executed again below.
                     acted = True
@@ -1690,11 +2413,7 @@ class ComputeMixin:
                 if not ok:
                     self.stats.tool_call_failures += 1
                 # Parser arguments can contain a connector body. They are transient.
-                # An addressed body belongs to its recipient, and the wake page is
-                # built from these rows: what is logged is that the message went,
-                # to whom and how large it was, never what it said.
-                visible = (public_tool_calls([call])[0].get("args")
-                           if call.get("tool") == ADDRESS_TOOL else call.get("args"))
+                visible = call.get("args")
                 # A continuation's arguments are redacted once text from outside has
                 # entered this wake, because from then on an argument can carry
                 # fetched bytes. A retrieval that never left this world keeps its
@@ -1749,7 +2468,7 @@ class ComputeMixin:
             note = final_note
             follow_inputs = {**req.inputs, "tool_results": results,
                              "seen_tool_results": seen_results, "continuation": note}
-            follow = req.continuation(inputs=follow_inputs, cost_ceiling=remaining)
+            follow = closing().continuation(inputs=follow_inputs, cost_ceiling=remaining)
             final_quote = self._call_reserve(assembly, follow)
             if final_quote is not None and final_quote > remaining:
                 # Result size is unknown before dispatch. Keep it exact but unloaded
@@ -1761,11 +2480,11 @@ class ComputeMixin:
                                  "context_notice": "Tool bodies were not loaded because their "
                                  "input cost exceeds the remaining decision budget."}
                 delivered_reads = []
-                follow = req.continuation(inputs=follow_inputs, cost_ceiling=remaining)
+                follow = closing().continuation(inputs=follow_inputs, cost_ceiling=remaining)
                 compact_quote = self._call_reserve(assembly, follow)
                 if compact_quote is not None and compact_quote > remaining:
                     follow_inputs = minimum_inputs
-                    follow = req.continuation(inputs=follow_inputs, cost_ceiling=remaining)
+                    follow = closing().continuation(inputs=follow_inputs, cost_ceiling=remaining)
                 learned = False  # do not buy another read after withholding its body
             # A decision acts once: a write or a child ends the retrieval and the
             # next call is the answer. Nothing executed in one wake can therefore
@@ -1794,14 +2513,22 @@ class ComputeMixin:
                     "You may call tools again to use what you retrieved, then return the "
                     "final answer. Requests are refused."
                 )
-                follow = req.continuation(inputs={**follow_inputs, "continuation": note},
-                                          cost_ceiling=remaining)
+                follow = granted_round().continuation(
+                    inputs={**follow_inputs, "continuation": note}, cost_ceiling=remaining)
             if isinstance(assembly, Assembly):
                 # The invocation's usage is the final provider call's usage. Keep
                 # the diagnostic identity aligned with that same continuation.
                 prompt_cache = _safe_prompt_cache_identity(assembly, follow)
+            reading = self.niche_rounds.get(req.handle)
+            niche_before = self.reserve.remaining()
             ret = (Return(req.handle, {"reason": "wallet exhausted"}, 0, "failed")
                    if self.wallet.dead else self._invoke_compute(action_id, follow))
+            if reading is not None:
+                # The niche covers this one reading round and nothing after it: the
+                # entry is cleared and the decision's own ceiling restored (ruling R5).
+                niche_spent += self._niche_spent(action_id, niche_before, ret.cost)
+                self.niche_rounds.pop(req.handle, None)
+            req = replace(req, cost_ceiling=base_ceiling + niche_spent)
             if ret.status != "failed":
                 for entry in delivered_reads:
                     body = entry.get("result")
@@ -1811,8 +2538,7 @@ class ComputeMixin:
             total_cost += tool_cost + ret.cost
             self._check_compute_return(req.handle, ret)
             tool_round += 1
-            if (ret.status == "ok" and ret.outputs.get("status") == "cannot"
-                    and isinstance(ret.outputs.get("reason"), str)):
+            if ret.status == "ok" and declines(ret.outputs):
                 ret = replace(ret, status="refused", children=(), tool_calls=())
             has_continuation = bool(ret.tool_calls or ret.children)
             if ret.children:
@@ -1835,7 +2561,7 @@ class ComputeMixin:
                 minimum_inputs = {**req.inputs, "continuation": final_note,
                                   "context_notice": "Tool bodies were not loaded: "
                                                     "insufficient budget."}
-                minimum_answer = req.continuation(
+                minimum_answer = closing().continuation(
                     inputs=minimum_inputs, cost_ceiling=req.cost_ceiling)
                 answer_reserve = self._call_reserve(assembly, minimum_answer) or 0
             # The extra round composes the retrieved text through ordinary jailed
@@ -1845,8 +2571,7 @@ class ComputeMixin:
             # outside text, so a seat that looked a capability up may call the
             # capability it looked up, which is the whole point of looking.
             if (granted and ret.tool_calls and outside_text
-                    and any(c["tool"] == "note.put" or
-                            self.tool_specs.get(c["tool"], {}).get("kind") not in self.PARSE_KINDS
+                    and any(self.tool_specs.get(c["tool"], {}).get("kind") not in self.PARSE_KINDS
                             for c in ret.tool_calls)):
                 granted = False
             if ret.tool_calls and not granted:
@@ -1858,11 +2583,14 @@ class ComputeMixin:
 
                 if ret.status == "ok":
                     try:
-                        validate_schema(ret.outputs, req.outcome_schema)
+                        validate_schema(ret.outputs, closing().outcome_schema)
                         self._validate_output_contract(ret.outputs, req)
-                    except (ValueError, TypeError, RecursionError):
-                        ret = replace(ret, status="malformed",
-                                      outputs={"reason": "incomplete continuation answer"})
+                    except (ValueError, TypeError, RecursionError) as exc:
+                        # The reason names what the answer lacked, against the schema
+                        # this round published.
+                        ret = replace(ret, status="malformed", outputs={
+                            "reason": "incomplete continuation answer",
+                            "validation_error": (str(exc) or type(exc).__name__)[:200]})
                 break
         if self.ledger.without_connector_bodies(ret.outputs) != ret.outputs:
             # A body cannot become durable output. Refuse rather than rewriting an
@@ -1880,6 +2608,9 @@ class ComputeMixin:
         self.stats.invocations_by_role[role] = self.stats.invocations_by_role.get(role, 0) + 1
         sr = ret.stop_reason or "none"
         self.stats.stop_reasons[sr] = self.stats.stop_reasons.get(sr, 0) + 1
+        # Rendered bytes per prompt section (edition 3, C4), counted once on the opening
+        # call: the ledger row, the window's public counters and the return's
+        # measurement sample all carry these same numbers, so none can drift.
         self.ledger.append(
             {
                 "kind": "invocation",
@@ -1904,8 +2635,7 @@ class ComputeMixin:
                 # institutional catalogue behind catalogue.search is a claim about
                 # bytes; the claim is recorded beside the bill it is supposed to
                 # move, so the change is measured rather than assumed.
-                "sections": replace(
-                    req, inputs={**req.inputs, "you": action_id}).section_bytes(),
+                "sections": sections,
                 **({"prompt_cache": prompt_cache} if prompt_cache is not None else {}),
                 "ts": self.clock.now_ns,
             }
@@ -1923,11 +2653,29 @@ class ComputeMixin:
                 "max_tokens": ret.provider.get("max_tokens"), "ts": self.clock.now_ns,
             })
         self.window.invocations += 1
+        # Its return's readings are metered from here on (``downstream_read_bytes``),
+        # whether or not its prompt could be rendered: a failed return is published too.
+        self.window.read_measured += 1
+        # Essay II.IV.a: the metrics layer is ceded, and the factory can propose a
+        # metric only on a quantity the world publishes. These are that quantity for
+        # context size: facts, with no target attached (the seed observations
+        # ``prompt_bytes``, ``you_bytes`` and ``inputs_bytes`` read them).
+        if sections is not None:
+            self.window.prompts += 1
+            self.window.prompt_bytes += sections["total"]
+            self.window.you_bytes += sections.get("you", 0)
+            self.window.inputs_bytes += sections.get("inputs", 0)
+        ret = replace(ret, prompt_sections=dict(sections) if sections is not None else None,
+                      delivered=delivered)
         if ret.status == "ok":
             self.window.ok += 1
             if role == "producer":
                 self.window.costs.append(ret.cost)
-        self._record_declared_propensity(action_id, req, ret, role, effects=tuple(effects))
+        record = self._record_declared_propensity(action_id, req, ret, role,
+                                                  effects=tuple(effects))
+        # The actions this decision took gain a reward trail when it settles (ruling R5).
+        self._record_actions(req.handle, taken, record)
+        self.niche_rounds.pop(req.handle, None)
         self._apply_continuity(
             action_id, req.handle, ret, working_state_handled=working_state_handled)
         ret = replace(ret, dropped=tuple(dropped))
@@ -1939,6 +2687,21 @@ class ComputeMixin:
                 error=ret.outputs["validation_error"])
         del self.ledger.connector_bodies[body_mark:]
         return ret
+
+    def _record_actions(self, handle: str, taken: set[str], record: Any) -> None:
+        """Log the (tool, kind) actions a decision took on its handle (ruling R5).
+
+        A declared action label is not an action here: a fresh string would make any
+        decision look new (the #134 review). ``record`` is the propensity the decision
+        now carries, after which its actions are historied.
+        """
+        keys = set(taken)
+        if not keys:
+            return
+        try:
+            self.queue.record_actions(handle, keys)
+        except (KeyError, ValueError):
+            return  # a handle that closed already keeps the trail it had
 
     def _report_dropped_sections(self, seat: str, handle: str,
                                  dropped: tuple[dict[str, Any], ...], *,
@@ -1982,7 +2745,7 @@ class ComputeMixin:
         """
         if action_id not in self.assemblies or not isinstance(ret.outputs, dict):
             return
-        if ret.status == "refused" and ret.outputs.get("status") == "cannot":
+        if ret.status == "refused" and declines(ret.outputs):
             # Paid work a seat declined (R3-F). Judge and meta commissions are not
             # covered by defer or the cadence floor — they are somebody else's
             # request arriving — so the only way to decline one is to answer
@@ -1990,7 +2753,7 @@ class ComputeMixin:
             # the population can read, not a malformed return.
             self.ledger.append({"kind": "commission.declined", "assembly_id": action_id,
                                 "handle": handle,
-                                "reason": str(ret.outputs.get("reason"))[:200],
+                                "reason": str(declined_reason(ret))[:200],
                                 "ts": self.clock.now_ns})
         if self.assemblies[action_id].spec.model_id == "program":
             # R3-F: a program has no model to read an inbox, so what it produced
@@ -2001,6 +2764,21 @@ class ComputeMixin:
             self._write_working_state(action_id, handle, ret.outputs)
         if "ack_through" in ret.outputs:
             self.outcomes.ack_through(action_id, ret.outputs["ack_through"])
+
+    def _record_program(self, entry: dict[str, Any]) -> int:
+        """Ledger what a program seat's executor records; a refusal carries its time."""
+        if entry.get("kind") == "state.refused":
+            entry = {**entry, "ts": self.clock.now_ns}
+        return self.ledger.append(entry)
+
+    def _state_write_refusal(self, seat: str) -> str | None:
+        """``retired`` when a return of ``seat`` may not write state.
+
+        Guarantees a retired version writes no private state: its pending return may
+        settle, but a retired id never gains state after it retired, so it never
+        holds state the retirement order (and the cap's reclaiming) does not know.
+        """
+        return "retired" if seat in self.retired_assemblies else None
 
     def _write_working_state(self, action_id: str, handle: str, outputs: Any) -> bool:
         """Commit one accepted private head, or leave the prior head unchanged.
@@ -2013,6 +2791,12 @@ class ComputeMixin:
         """
         if (action_id not in self.assemblies or not isinstance(outputs, dict)
                 or "working_state" not in outputs):
+            return False
+        refused = self._state_write_refusal(action_id)
+        if refused is not None:
+            self.ledger.append({"kind": "state.refused", "assembly_id": action_id,
+                                "handle": handle, "reason": refused,
+                                "ts": self.clock.now_ns})
             return False
         state = outputs["working_state"]
         if self.ledger.without_connector_bodies(state) != state:
@@ -2036,13 +2820,12 @@ class ComputeMixin:
         """One durable learning identity per assembly, distinct from any router's."""
         return f"assembly:{assembly_id}"
 
-    def _action_policy(self, assembly_id: str) -> dict[str, Any] | None:
-        """An assembly's own learner's current recommendation, private to that assembly.
+    def _learner_policy(self, assembly_id: str) -> dict[str, float] | None:
+        """An assembly's own learner's current policy, read from a detached copy.
 
-        Local state stays local (essay II.I.b): this is the one learner whose rounds
-        this assembly's own decisions opened, so it is its own running score and
-        nobody else's. It is read from a detached copy, so disclosing it can never
-        disturb a round that is waiting for its reward.
+        Guarantees nothing it returns can disturb a round that is waiting for its
+        reward, and ``None`` when the assembly has no learner or its state cannot be
+        read.
         """
         from factorylab.learners.base import restore_learner
 
@@ -2051,12 +2834,96 @@ class ComputeMixin:
             return None
         try:
             detached = restore_learner(learner.inner.state())
-            policy = detached.distribution(tuple(detached.actions))
+            return detached.distribution(tuple(detached.actions))
         except (ValueError, RuntimeError, TypeError, ArithmeticError):
             return None
-        return {"over": _publishable(policy),
-                "note": "your own learner's current policy over the action set you registered; "
-                        "declare a propensity on your return to train it"}
+
+    def _action_policy(self, assembly_id: str) -> dict[str, Any] | None:
+        """One draw from an assembly's own learner, private to that assembly.
+
+        Guarantees the seat is shown a sample and its probability, ``{recommended,
+        p}``, and never the distribution (Chapter II rulings R4, information audit
+        P3): a seat handed a distribution that then picks by judgement declares a
+        behaviour policy it did not follow. The draw comes from the runtime's own
+        reproducible stream. Local state stays local (essay II.I.b): this is the one
+        learner whose rounds this assembly's own decisions opened.
+        """
+        policy = self._learner_policy(assembly_id)
+        actions = tuple(a for a in (policy or {}) if policy[a] > 0)
+        if not actions:
+            return None
+        recommended = self.rng.choices(actions, weights=[policy[a] for a in actions], k=1)[0]
+        return {"recommended": recommended, "p": round(policy[recommended], 6),
+                "note": "drawn by the kernel from your registered learner's current policy; "
+                        "p is its probability there"}
+
+    def _followed_recommendation(self, action_id: str, req: Request, taken: tuple[str, ...],
+                                 state_hash: str) -> PropensityRecord | None:
+        """The learner's own record when the seat took the action its learner drew, or None.
+
+        Guarantees that a seat that did what its learner recommended is recorded at
+        the learner's probability, over the learner's whole policy, so the round it
+        opens is on-policy (R4: "if the seat obeys, record the learner's p"). The
+        policy must still be the one the draw was disclosed from; when it is not,
+        or the seat did something else, ``None``, and the seat's own declaration
+        stands.
+        """
+        shown = req.inputs.get("your_action_policy") if isinstance(req.inputs, dict) else None
+        if not isinstance(shown, dict) or shown.get("recommended") not in taken:
+            return None
+        recommended = shown["recommended"]
+        policy = self._learner_policy(action_id)
+        if policy is None or round(policy.get(recommended, 0.0), 6) != shown.get("p"):
+            self.ledger.append({"kind": "propensity.recommendation_stale",
+                                "handle": req.handle, "assembly_id": action_id,
+                                "recommended": recommended, "ts": self.clock.now_ns})
+            return None
+        actions = tuple(a for a in policy if policy[a] > 0)
+        total = math.fsum(policy[a] for a in actions)
+        try:
+            record = PropensityRecord(
+                actions, tuple(policy[a] / total for a in actions), recommended, 0,
+                self._assembly_learner_id(action_id), state_hash, source="declared")
+        except (ValueError, TypeError):
+            return None
+        self.ledger.append({"kind": "propensity.learner", "handle": req.handle,
+                            "assembly_id": action_id, "recommended": recommended,
+                            "p": policy[recommended], "ts": self.clock.now_ns})
+        return record
+
+    def _note_to_owner(self, handle: str, kind: str, **facts: Any) -> None:
+        """Address one fact about a decision to its owner's inbox, and to no one else."""
+        owner = self.handle_to_assembly.get(handle) or self.outcomes.seat_of(handle)
+        self.outcomes.append(owner, handle=handle,
+                             outcome={"kind": kind, "status": "admitted", **facts},
+                             delta_micro=0,
+                             evidence={"kind": kind, "handle": handle,
+                                       "ts": self.clock.now_ns})
+
+    def _refusal_to_owner(self, handle: str, kind: str, reason: str, **extra: Any) -> None:
+        """Address one refusal to the inbox of the seat whose decision it was, and to no one else.
+
+        Guarantees the reason reaches only the decision's owner, under its handle,
+        through the stateful queue (essay II.I.b: reward "must find its way back to
+        the exact decision"); a refusal with no owner is ledgered undeliverable by
+        the inbox. Nothing is broadcast (information audit C5).
+        """
+        owner = self.handle_to_assembly.get(handle) or self.outcomes.seat_of(handle)
+        self.outcomes.append(owner, handle=handle,
+                             outcome={"kind": kind, "status": "rejected", "reason": reason,
+                                      **extra},
+                             delta_micro=0,
+                             evidence={"kind": kind, "handle": handle,
+                                       "ts": self.clock.now_ns})
+
+    def _action_policy_input(self, assembly_id: str) -> dict[str, Any]:
+        """``your_action_policy`` as a request input, or nothing when there is no learner.
+
+        Guarantees the key is absent rather than null for an assembly without a
+        registered learner (information audit U5): a null slot is a standing hint.
+        """
+        policy = self._action_policy(assembly_id)
+        return {} if policy is None else {"your_action_policy": policy}
 
     def _record_declared_propensity(self, action_id: str, req: Request, ret: Return, role: str,
                                     *, effects: tuple[str, ...] = ()):
@@ -2091,11 +2958,17 @@ class ComputeMixin:
             hashlib.sha256(state_bytes(learner.state())).hexdigest()
             if learner is not None else "declared"
         )
-        record, reason = declared_record(
-            label, ret.outputs.get("propensity") if isinstance(ret.outputs, dict) else None,
-            learner_id=self._assembly_learner_id(action_id), state_hash=state_hash,
-            taken_class=taken_class,
-        )
+        # R4: a seat that took the action its learner drew is recorded at the
+        # learner's probability; otherwise its own declaration stands.
+        record, reason = self._followed_recommendation(
+            action_id, req, (label, taken_class), state_hash), None
+        if record is None:
+            declared = ret.outputs.get("propensity") if isinstance(ret.outputs, dict) else None
+            record, reason = declared_record(
+                label, declared,
+                learner_id=self._assembly_learner_id(action_id), state_hash=state_hash,
+                taken_class=taken_class,
+            )
         try:
             self.queue.record_propensity(req.handle, record)
         except (KeyError, ValueError):
@@ -2106,8 +2979,8 @@ class ComputeMixin:
             floored = len(record.action_ids) > 1
             self.ledger.append({"kind": "propensity.floored" if floored else "propensity.refused",
                                 "handle": req.handle, "reason": reason, "ts": self.clock.now_ns})
-            self.registration_feedback.append({"kind": "propensity",
-                                               "reason": f"propensity: {reason}"})
+            self._refusal_to_owner(req.handle, "propensity_floored" if floored
+                                   else "propensity_refused", reason)
         self._open_assembly_round(action_id, req.handle, record)
         return record
 
@@ -2145,125 +3018,83 @@ class ComputeMixin:
             return
         self.assembly_rounds[handle] = action_id
 
-    def _invoke_child(
-        self, action_id: str, parent: Request, item: ChildRequest, ceiling: int,
-    ) -> tuple[dict, int]:
-        """A bounded child retains its own decision and spends only its parent's remaining cap."""
-        target = action_id if item.target == "self" else item.target
-        depth = 0
-        cursor = parent.handle
-        while self.queue.get(cursor).parent_handle is not None:
-            depth += 1
-            cursor = self.queue.get(cursor).parent_handle
-        if depth >= self.m.tools.max_depth:
-            reason = "tools.max_depth reached"
-            self.ledger.append({"kind": "requests.refused", "handle": parent.handle,
-                                "reason": reason, "depth": depth})
-            return {"tool": f"assembly:{target}", "args": item.inputs,
-                    "result": {"error": reason}}, 0
-        # A child spends its parent's money: whatever the parent's remaining request
-        # ceiling says, the ceiling never exceeds what the parent's own decision may
-        # spend now, so a fresh target cannot be bought compute the parent lacks.
-        ceiling = min(ceiling, max(0, self._compute_available(parent.handle)))
-        # The child is opened under the learner that woke its parent, so its
-        # returns have an addressable home. Its propensity is the parent's choice,
-        # recorded as such ("parent-selected"): no router sampled it, so no router
-        # is trained on it (defect 3, ``FeedbackMixin._router_sampled``).
-        actor = self.queue.get(parent.handle).actor
-        channels = self._return_channels(target) if target in self.assemblies else {}
-        handle = self.queue.open(
-            actor=actor, event_id=f"child-{parent.handle}",
-            propensity=PropensityRecord((target,), (1.,), target, 0, actor, "parent-selected"),
-            channel=next(iter(channels.values()), CH_VERDICT), deadline_ns=parent.deadline_ns,
-            parent_handle=parent.handle, cost_ceiling=ceiling,
-            return_channels=channels,
-        )
-        self.ledger.append({"kind": "request.child", "handle": handle, "target": target,
-                            "resource_liability": parent.handle, "cost_ceiling": ceiling,
-                            "description": item.description, "inputs": item.inputs,
-                            "outcome_schema": item.outcome_schema})
-        self.stats.decisions += 1
-        self.consequences.start(handle, self.n)
-        grounded_contract = None
-        if (
-            getattr(self.ev, "producer_feedback", "verdict") == "realized"
-            and CH_VERDICT in channels.values()
-            and target in self.assemblies
-            and target not in self.retired_assemblies
-        ):
-            grounded_contract = freeze_contract(self, handle, target, {})
-        req = Request(handle, item.description, {**item.inputs, "world": self._world_block()},
-                      {}, item.outcome_schema,
-                      parent.deadline_ns, ceiling, parent.handle,
-                      "a JSON object satisfying the outcome schema", CH_VERDICT, parent.handle)
-        if target in self.assemblies and target not in self.retired_assemblies:
-            self.handle_to_assembly[handle] = target
-            ret = self._invoke(target, req, "child", child=True)
-        else:
-            ret = Return(handle, {"reason": "target assembly unavailable"}, 0, "failed")
-            self.ledger.append({"kind": "request.failed", "handle": handle,
-                                "reason": "target assembly unavailable"})
+    def _run_child(
+        self, parent: Request, item: ChildRequest, handle: str, target: str,
+        sample: Sample, req: Request,
+    ) -> Return:
+        """Run one opened child decision on its drawn executor and publish its return.
+
+        Guarantees the child is invoked once, under its own handle, within the
+        ceiling its request carries (its parent's remaining cap), and that its
+        return is published as the kind it emitted (primitive audit F12) for the
+        judges that accept that kind. ``CompositionMixin._invoke_child`` opened the
+        decision and drew ``target``; this is only the executor's side of it.
+        """
+        channels = self.return_bindings.get(handle, {}).get("channels") or {
+            self.assemblies[target].spec.emits[0]: self.queue.get(handle).channel}
+        self.handle_to_assembly[handle] = target
+        ret = self._invoke(target, req, "child", child=True)
         emitted = self.return_kinds.get(handle, next(iter(channels), "ProducerReturn"))
         if len(channels) > 1 and handle not in self.return_kinds:
-            from factorylab.kernel.queue import SettleStatus
-
             self.consequences.finish(handle, ret.cost)
-            self.queue.settle(handle, channel=self.queue.get(handle).channel, score=0.0,
-                              status=SettleStatus.CENSORED,
-                              definition_version="unselected-return-v1", sampling_ref=None)
-            return {"tool": f"assembly:{target}", "args": item.inputs,
-                    "result": {"outputs": public_return(ret.outputs), "status": ret.status,
-                               "cost_micro": ret.cost}}, ret.cost
+            self._settle_unselected(handle, ret)
+            return ret
         if emitted in ("Verdict", "MetaVerdict"):
-            sample = Sample((target,), (1.,), target, 0, actor, "parent-selected", ())
             event = Event(f"child-input-{handle}", EventKind.REGISTERED,
                           self.clock.now_ns, item.inputs, "request")
             step = self._evaluator_step if emitted == "Verdict" else self._meta_step
             step(event, handle, sample, parent.deadline_ns, returned=ret)
         else:
-            if target in self.assemblies:
-                if self._may_write(handle):
-                    self._execute_outputs(ret)
-                self._apply_registrations(handle, ret)
+            # A requested child never trades through an Exposure answer: an adversary
+            # cannot be commissioned (``_request_universe``), and this holds even so.
+            if self._may_write(handle) and emitted != "Exposure":
+                self._execute_outputs(ret, emitted)
+            self._apply_registrations(handle, ret)
             self.consequences.finish(handle, ret.cost)
+            if ret.status == "ok":
+                self._freeze_declined_trade(handle, ret.outputs)
             if emitted == "Exposure":
                 self.pending_exposure[handle] = self.ticks_consumed
-                payoff = ret.outputs.get("payoff") if ret.status == "ok" else None
-                if payoff is not None and self.consequences.seal_self_forecast(
-                        self.book, self.queue, handle=handle, assembly_id=target, payoff=payoff,
-                        event=self.n, now_ns=self.clock.now_ns,
-                        tick_ns=self.tick_clock.interval_ns) is not None:
-                    self.stats.forecasts_sealed += 1
+                if (reason := declined_reason(ret)) is not None:
+                    self.declined_exposures[handle] = reason
             else:
-                if (grounded_contract is not None
-                        and self.queue.get(handle).channel == CH_VERDICT):
-                    self.grounded_pending[handle] = grounded_contract.with_outputs(
-                        public_return(ret.outputs), subject_kind=emitted)
-                    contract = self.grounded_pending[handle]
-                    self.ledger.append({
-                        "kind": "consequence.contract", "handle": handle,
-                        "opened_tick": contract.opened_tick, "due_tick": contract.due_tick,
-                        "close_tick": contract.close_tick,
-                        "charter_edition": contract.charter_edition,
-                        "predicate_versions": list(contract.predicate_versions),
-                        "ts": self.clock.now_ns,
-                    })
+                # A requested child's refusal is a decline like a routed one: unjudged,
+                # it settles declined and its request router prices it as an
+                # abstention (ruling R9), never at a free neutral.
                 self.pending[handle] = PendingJudgement(handle, CH_VERDICT, self.n,
-                                                        opened_at_tick=self.ticks_consumed)
+                                                        opened_at_tick=self.ticks_consumed,
+                                                        declined=declined_reason(ret))
             self.stats.producer_returns += 1
             payload = {"about_handle": handle, "description": item.description,
                        # A parent may hand its child the text of a message to send.
                        # The judge that prices the child sees the task, not the body.
                        "inputs": public_child_inputs(item.inputs),
                        "outputs": public_return(ret.outputs),
+                       # The judge of a child reads its acts beside its claim, as the
+                       # judge of a routed return does (rulings §2, Information).
+                       "executed_operations": self.executed_operations(handle),
                        "cost": ret.cost, "status": ret.status,
                        "propensity": self._public_propensity(handle)}
-            self._emit("ProducerReturn" if emitted == "Exposure" else emitted, payload)
-            if emitted == "Exposure" and self.routers.get("Exposure"):
-                self._emit("Exposure", payload)
-        return {"tool": f"assembly:{target}", "args": item.inputs,
-                "result": {"outputs": public_return(ret.outputs), "status": ret.status,
-                           "cost_micro": ret.cost}}, ret.cost
+            # Published as its own kind only (primitive audit F12).
+            self._emit(emitted, payload)
+        return ret
+
+    def _settle_unselected(self, handle: str, ret: Return) -> None:
+        """Close a return that named none of its contract's several kinds.
+
+        Guarantees a seat that answered ``status: cannot`` settles declined, priced
+        as an abstention (ruling R9), since no kind was bound for any judge to grade;
+        any other such return settles censored, as a form failure.
+        """
+        from factorylab.kernel.queue import SettleStatus
+
+        reason = declined_reason(ret)
+        if reason is not None:
+            self._settle_declined(handle, reason)
+            return
+        self.queue.settle(handle, channel=self.queue.get(handle).channel, score=0.0,
+                          status=SettleStatus.CENSORED,
+                          definition_version="unselected-return-v1", sampling_ref=None)
 
     def _check_compute_return(self, handle: str, ret: Return) -> None:
         """Assembly-wrapped affordability failures join the enclosing event's insolvency count."""
@@ -2283,8 +3114,13 @@ class ComputeMixin:
         deadline: int,
         channel: str,
         propensity: dict[str, Any] | None = None,
+        settlement: dict[str, str] | None = None,
     ) -> Request:
-        """A request about someone else's decision carries that decision's propensity."""
+        """A request about someone else's decision carries that decision's propensity.
+
+        ``settlement`` is how the answer settles, as ``world.scoring`` states it; the
+        request renders it as its SCORING section (Chapter II §I.b).
+        """
         declared = chosen = None
         if isinstance(propensity, dict) and isinstance(propensity.get("over"), dict):
             declared, chosen = propensity["over"], propensity.get("chosen")
@@ -2302,6 +3138,7 @@ class ComputeMixin:
             resource_liability=handle,
             propensity=declared,
             propensity_chosen=chosen if isinstance(chosen, str) else None,
+            settlement=settlement,
         )
 
     def _public_propensity(self, handle: str) -> dict[str, Any] | None:

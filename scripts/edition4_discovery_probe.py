@@ -43,7 +43,7 @@ from scripts.edition4_rehearsal import (
     source_hash,
 )
 
-DEFAULT_WORLD = Path("worlds/edition3-rehearsal-5.toml")
+DEFAULT_WORLD = Path("worlds/edition6-testnet-rehearsal.toml")
 DEFAULT_OUT = Path("docs/audits/edition4-next/discovery-probe.jsonl")
 DEFAULT_FREEZE = Path("docs/audits/edition4-next/discovery-probe.preflight.json")
 #: One US dollar for the whole invocation, continuations included, and a call
@@ -53,6 +53,9 @@ DEFAULT_MAX_CALLS = 12
 #: The GLM producer and the Luna producer of the rehearsal-5 roster: two rails,
 #: two trainings, both already priced in this manifest.
 DEFAULT_SEATS = ("mechanism", "opportunity")
+#: The output allowance of a seat whose manifest leaves it to the provider: the
+#: rehearsal-5 roster's GLM ceiling, fixed so the offline render needs no catalogue.
+PROBE_MAX_TOKENS = 4096
 #: The whole callable surface of this diagnostic. Everything else this world
 #: publishes - the venue, the treasury, the transport, the web and the x402
 #: rails - is refused before dispatch and recorded as refused.
@@ -255,8 +258,14 @@ def effective_manifest(base: Any) -> Any:
     """
     treasury = replace(base.treasury, reserve_address=None, cctp_forwarding="never",
                        hyperevm_gas_budget_wei=0, base_gas_budget_wei=0)
+    # The initial requests are rendered offline, before any provider exists, so a seat
+    # whose output allowance is the provider's own is pinned to the probe's fixed one:
+    # the frozen bytes and the paid dispatch must agree without a catalogue read.
+    assemblies = tuple(a if a.max_tokens is not None else replace(a, max_tokens=PROBE_MAX_TOKENS)
+                       for a in base.assemblies)
     manifest = replace(base, name=f"{base.name}-edition4-discovery-probe",
-                       prompt=PromptSpec(mode="compact"), treasury=treasury)
+                       prompt=PromptSpec(mode="compact"), treasury=treasury,
+                       assemblies=assemblies)
     manifest.validate()
     return manifest
 
@@ -335,7 +344,7 @@ def _probe_runtime(manifest: Any, provider: Any, refusals: list[dict],
     """One fresh world on a fake exchange, with every rail this probe denies removed."""
     runtime = Runtime(
         manifest, events=0, seed=manifest.seed, initial_balance_micro=None,
-        ledger_path=None, drip=False, router_gamma=0.1, provider=provider,
+        ledger_path=None, router_gamma=0.1, provider=provider,
         market=DeniedMarket(), exchange=FakeExchange(coins=manifest.exchange.coins),
     )
     runtime.clock.now_ns = FIXED_NOW_NS

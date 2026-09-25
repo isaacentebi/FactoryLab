@@ -206,7 +206,9 @@ def test_pots_are_read_only_and_never_create_kernel_money():
         wallet.bind_pots(lambda: {})
 
 
-def test_reconciler_half_dollar_tolerance_and_incomplete_views():
+def test_reconciler_sums_the_pots_and_never_ledgers_authority_as_drift():
+    """The wallet is authority, not one of the pots: a snapshot reports both, compares
+    neither with the other, and an incomplete view sums to nothing."""
     ledger, wallet, records = setup()
     pots = {
         "venue": 60_000_000,
@@ -216,19 +218,15 @@ def test_reconciler_half_dollar_tolerance_and_incomplete_views():
         "pending": False,
     }
     snap = Reconciler.snapshot(wallet.balance, None, None, pots_view=pots, ledger=ledger)
-    assert snap["within_tolerance"] is True
+    assert snap["pots_micro"] == 99_500_000 and snap["wallet_micro"] == 100_000_000
+    pots["sellers"]["venice"] -= 70_000_000  # authority far above the money: no alarm
+    Reconciler.snapshot(wallet.balance, None, None, pots_view=pots, ledger=ledger)
     assert not any(i["kind"] == "reconcile.drift" for i in records)
-    pots["sellers"]["venice"] -= 1
-    snap = Reconciler.snapshot(wallet.balance, None, None, pots_view=pots, ledger=ledger)
-    assert snap["within_tolerance"] is False
-    assert records[-1]["kind"] == "reconcile.drift"
     assert wallet.balance == 100_000_000
     pots["reserve"] = None
     assert Reconciler.snapshot(wallet.balance, None, None, pots_view=pots)["pots_micro"] is None
     pots["reserve"], pots["pending"] = 20_000_000, True
-    assert (
-        Reconciler.snapshot(wallet.balance, None, None, pots_view=pots)["within_tolerance"] is None
-    )
+    assert Reconciler.snapshot(wallet.balance, None, None, pots_view=pots)["pots_micro"] is None
 
 
 def test_seller_seed_and_reserve_are_not_double_counted():
@@ -270,7 +268,7 @@ def test_a_stalled_poll_is_ledgered_bounded_and_public_until_evidence_arrives():
     assert stalls[0] == {"kind": "treasury.pending", "transfer_id": "treasury-0",
                          "step": "to_reserve", "phase": "poll",
                          "reason": "RPC call rejected or unavailable", "attempts": 1,
-                         "since_ns": 2, "since_window": 0, "reference": None}
+                         "since_ns": 2, "since_window": 0, "since_tick": 0, "reference": None}
     assert all(i["since_ns"] == 2 for i in stalls)
     assert treasury.state["pending"]["attempts"] == 25
     view = wallet.pots()
@@ -317,7 +315,8 @@ def test_a_pending_preparation_is_ledgered_with_its_step_and_carries_the_rail_cu
     assert stalls == [{"kind": "treasury.pending", "transfer_id": "treasury-0",
                        "step": "mint_base", "phase": "prepare",
                        "reason": "awaiting the Circle forwarder's Base mint", "attempts": 1,
-                       "since_ns": 2, "since_window": 0, "reference": {"scanned_to": 101}}]
+                       "since_ns": 2, "since_window": 0, "since_tick": 0,
+                       "reference": {"scanned_to": 101}}]
     for tick in range(3, 12):
         treasury.tick(tick)
     # Each wait resumes from the cursor the previous wait carried back.
@@ -356,4 +355,5 @@ def test_an_old_checkpoint_without_a_pending_record_restores():
     restored.tick(3)
     assert restored.state["pending"] == {
         "step": "to_reserve", "phase": "poll", "reason": "RPC call rejected or unavailable",
-        "attempts": 1, "since_ns": 3, "since_window": 0, "reference": None}
+        "attempts": 1, "since_ns": 3, "since_window": 0, "since_tick": 0,
+        "reference": None}

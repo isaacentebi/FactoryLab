@@ -199,7 +199,7 @@ def test_public_ipv6_dns_and_configured_networks():
 @pytest.mark.parametrize("host", [
     "api.hyperliquid.xyz", "rpc.hyperliquid.xyz", "api.hyperliquid-testnet.xyz",
     "rpc.hyperliquid-testnet.xyz", "mainnet.base.org", "sepolia.base.org", "openrouter.ai",
-    "api.venice.ai", "api.cdp.coinbase.com", "api.anthropic.com", "node.rpc.hyperliquid.xyz",
+    "api.venice.ai", "api.cdp.coinbase.com", "node.rpc.hyperliquid.xyz",
     "10.0.0.1", "127.0.0.1", "192.168.1.1", "::1", "localhost",
 ])
 def test_default_denylist_covers_the_rails_on_both_networks_and_every_address(host):

@@ -24,7 +24,7 @@ def invariant(rt) -> bool:
 @pytest.fixture(scope="module")
 def world(scripted_runtime_run):
     manifest = load_manifest("scripted")
-    record = scripted_runtime_run(manifest, EVENTS, 1, drip=False)
+    record = scripted_runtime_run(manifest, EVENTS, 1)
     return record.runtime(manifest), record.entries
 
 

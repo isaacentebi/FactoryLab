@@ -4,11 +4,12 @@ The loop owns no money, no scores and no rules; it is glue over kernel
 physics.
 
 Contracts. Any assembly may accept any event kind and select a declared
-output kind. Producer-shaped and custom returns receive verdict feedback;
-verdicts carry independent quality and payoff values; meta verdicts receive
-conformity or terminal consequence feedback; exposures retain their exposure
-channel. The shipped registrations preserve the seeded evaluation chain.
-Unjudged returns are censored, and retirement preserves delayed feedback.
+output kind. Producer-shaped and custom returns settle on the mean of their
+judges' verdicts. A verdict is also a prediction: a judge settles on its grade
+from the tier above and on the world's score of its verdict, and a meta the same
+way one tier up (ruling R1); exposures earn by how wrong the judges were. The
+shipped registrations preserve the seeded evaluation chain. Unjudged returns are
+censored, and retirement preserves delayed feedback.
 
 Prices. At each reserve-window boundary the runtime measures the window
 that closed using the factory's observation vocabulary — the twenty-three seeds
@@ -29,172 +30,145 @@ from __future__ import annotations
 
 import json
 from collections import deque
-from itertools import islice
+from copy import deepcopy
 from typing import Any
 
-from factorylab.cortex.registration import measured_role
-from factorylab.cortex.request import Request, Return, public_return
+from factorylab.cortex.assembly import (
+    COUNTERFACTUAL_FIELD,
+    DECLINE_FORM,
+    FORWARDED_RATIONALE_CHARS,
+    JUDGING_FIELDS,
+)
+from factorylab.cortex.registration import BUILTIN_RETURNS, measured_role
+from factorylab.cortex.request import Return, public_return
 from factorylab.cortex.sandbox import NoJail, jail_probe
 from factorylab.cortex.schematics import SchematicsMixin
 from factorylab.kernel.events import Event, EventKind
-from factorylab.kernel.queue import PropensityRecord, SettleStatus
+from factorylab.kernel.ledger import canonical
+from factorylab.kernel.queue import SettleStatus
 from factorylab.kernel.termination import DORMANT
 from factorylab.learners.router import Sample
 from factorylab.runtime.bootstrap import BootstrapMixin
 from factorylab.runtime.cadence import settle_forecasts
+from factorylab.runtime.chaos import ChaosMixin
+from factorylab.runtime.composition import CompositionMixin
 from factorylab.runtime.compute import ComputeMixin
 from factorylab.runtime.feedback import (
-    UNMEASURED_REASON_UNCOMMITTED,
     FeedbackMixin,
     PendingJudgement,
 )
 from factorylab.runtime.governance import GovernanceMixin
-from factorylab.runtime.grounded import freeze_contract
-from factorylab.runtime.live import LiveClock, Reconciler
+from factorylab.runtime.live import LiveClock, Reconciler, wall_paced
+from factorylab.runtime.markets import MarketsMixin
 from factorylab.runtime.pricing import PricingMixin
 from factorylab.runtime.resume import decode, encode, runtime_state
-from factorylab.runtime.routing import ContractQueue, PopulationEvent, RoutingMixin
+from factorylab.runtime.routing import (
+    JUDGING_SHAPES,
+    ContractQueue,
+    PopulationEvent,
+    RoutingMixin,
+)
+from factorylab.runtime.settled import RELEASED_REFUSAL, SettledMixin
 from factorylab.runtime.shared import (
     CH_CONFORMITY,
     CH_EXPOSURE,
     CH_FAST,
     CH_VERDICT,
     DEF_CONFORMITY,
+    DEF_COUNTER,
     DEF_FAST,
     DEF_VERDICT,
     NOOP,
     _to_plain,
     assembly_rewards,
+    declined_reason,
 )
 from factorylab.runtime.subscriptions import SubscriptionBook, ThinkingMixin
 from factorylab.runtime.summary import SummaryMixin, _as_unit
+from factorylab.runtime.uptake import UptakeMixin
+from factorylab.runtime.vault import VaultMixin
 from factorylab.runtime.venue import VenueMixin
 from factorylab.runtime.worlds import WorldManifest
-from factorylab.settlement.vocabulary import (
-    DECLINED_DEFINITION,
-    UNMEASURED,
-    UNMEASURED_DEFINITION,
-    commission_block,
-    evaluator_answer_schema,
-)
-from factorylab.world.clock import ClockSource, DripSource, merge_sources
+from factorylab.settlement.vocabulary import commission_block
+from factorylab.world.clock import ClockSource, merge_sources
 from factorylab.world.events import WorldEvent, WorldEventKind
 from factorylab.world.market import X402Provider
 
-#: What a grounded commission's evidence was read at, as the settling code froze
-#: it. The names are that snapshot's own; nothing here is recomputed from the
-#: runtime's current position.
-SNAPSHOT_FIELDS = ("as_of_tick", "event_cursor", "receipt_cursor", "observation_due_tick",
-                   "assessment_timeout_tick", "scope")
-
-#: The frozen record a released grounded verdict carries for its reviewers.
-GROUNDED_FIELDS = ("realized_finding", "grounded_contract", "grounded_evidence",
-                   "grounded_evidence_snapshot")
-
-#: How many uncited rows one review carries as context. Cited rows are never cut.
-GROUNDED_REVIEW_CONTEXT = 24
+#: What a return carries that is not the work under judgement: its propensity, which
+#: the request's PROPENSITY block renders once (P8).
+UNJUDGED_OUTPUT_FIELDS = frozenset({"propensity"})
+#: The seed kinds a judge reads through the producer view (the machine view of
+#: essay II.I.b): the one kind a producer emits and the one an antagonist emits.
+PRODUCING_KINDS = frozenset({"ProducerReturn", "Exposure"})
 
 
-def _grounded_review(payload: Any) -> dict[str, Any] | None:
-    """The frozen facts a final grounded finding rests on, for the judge above it.
+def judged_outputs(outputs: Any) -> Any:
+    """A return's outputs as a judge reads them: the work, without its sealed side-claims."""
+    if not isinstance(outputs, dict):
+        return outputs
+    return {k: v for k, v in outputs.items() if k not in UNJUDGED_OUTPUT_FIELDS}
 
-    Guarantees the reviewer reads every row the finding cited, the norms and
-    horizon frozen with the contract, and the commission's own evidence-time
-    snapshot — not a fresh charter, a fresh world block or a fresh reading of
-    when the evidence was taken. Uncited rows are context and are bounded; the
-    number dropped is stated, so a short list is visibly short rather than
-    absent. Nothing here scores the finding or repairs it.
+
+def judge_view(payload: dict[str, Any]) -> dict[str, Any]:
+    """An event payload as a judge reads it.
+
+    Guarantees judged outputs lose ``UNJUDGED_OUTPUT_FIELDS`` and the payload's own
+    ``propensity`` is left to the PROPENSITY block. Everything else is the event as
+    emitted: a judge should "simply look at it like a machine: input, output"
+    (essay II.I.b), and no event payload names its author.
     """
-    finding = payload.get("realized_finding")
-    contract = payload.get("grounded_contract")
-    if not isinstance(finding, dict) or not isinstance(contract, dict):
-        return None
-    supplied = payload.get("grounded_evidence")
-    rows = [row for row in supplied if isinstance(row, dict)] if isinstance(supplied, list) else []
-    cited = {ref for ref in finding.get("evidence", []) if isinstance(ref, str)}
-    shown = ([row for row in rows if row.get("ref") in cited]
-             + [row for row in rows if row.get("ref") not in cited][:GROUNDED_REVIEW_CONTEXT])
-    return {
-        "finding": finding,
-        "frozen_norms": contract.get("norms", []),
-        "producer_claim": contract.get("producer_outputs", {}),
-        "price_constraints": contract.get("criteria", []),
-        "observation_contract": {key: contract.get(key) for key in
-                                 ("handle", "producer_id", "opened_tick", "due_tick",
-                                  "close_tick", "charter_edition")},
-        "evidence_snapshot": _evidence_snapshot(payload.get("grounded_evidence_snapshot")),
-        "evidence": shown,
-        "evidence_supplied": len(rows),
-        "evidence_omitted": len(rows) - len(shown),
-    }
+    out: dict[str, Any] = {}
+    for key, value in payload.items():
+        if key == "propensity":
+            continue
+        if key in ("outputs", "producer_outputs"):
+            value = judged_outputs(value)
+        out[key] = value
+    return out
 
 
-def _evidence_snapshot(snapshot: Any) -> dict[str, Any]:
-    """Copy the commission's frozen evidence-time metadata, or say it is unknown.
+#: What a judge's INPUTS says in place of the fold the judged decision was shown: the
+#: event is never rendered hollow (Chapter II §I.b, a self-describing request).
+FOLD_WITHHELD = ("not carried to judges: the world changes the deciding seat was shown "
+                 "since its last paid wake")
 
-    Guarantees every field is the one the commission carried and none is filled
-    in from the runtime's current tick, cursor or clock: a commission emitted
-    before this metadata existed reports each field as null, which is what a
-    judge needs in order to treat the reading time as unknown rather than as now.
+
+def forwarded_rationale(outputs: Any) -> dict[str, Any]:
+    """A judgement's rationale as its published event carries it, the cut stated.
+
+    Guarantees the first ``FORWARDED_RATIONALE_CHARS`` characters, and, when the
+    rationale was longer, its full length beside them: the limit the judging
+    contract publishes, never applied in silence (Chapter II §II.b).
     """
-    source = snapshot if isinstance(snapshot, dict) else {}
-    return {key: source.get(key) for key in SNAPSHOT_FIELDS}
-
-
-def _citable_evidence_schema(schema: dict[str, Any], evidence: Any) -> dict[str, Any]:
-    """Bind a grounded finding's evidence field to the refs its commission supplied.
-
-    Guarantees the answer contract names every reference this finding may cite and
-    nothing else, by the same rule settlement checks the citations against: the
-    ref of each supplied evidence row, in the order supplied. A commission that
-    supplied no evidence admits the empty list alone.
-
-    The field was an array of any string, so a judge with a real receipt beside a
-    claim and a contract had no way to tell which of them was a reference, and one
-    invented string refused an otherwise sound finding. Nothing here interprets
-    the evidence, scores it, or repairs a citation after the fact.
-
-    Guarantees the contract narrows which strings are references and nothing else
-    about the answer: a citation repeated is as valid as it was before, because
-    settlement drops the repeat and reads the same set. No length bound is stated
-    where there is anything to cite.
-    """
-    refs = [row["ref"] for row in evidence
-            if isinstance(row, dict) and isinstance(row.get("ref"), str)
-            ] if isinstance(evidence, list) else []
-    refs = list(dict.fromkeys(refs))
-    realized = schema["properties"]["realized_consequence"]
-    # With nothing supplied the only valid answer is the empty list, and that is
-    # said with a length of zero rather than an empty set of allowed strings,
-    # which reads as a field whose every value is wrong.
-    evidence_field: dict[str, Any] = (
-        {"type": "array", "items": {"type": "string", "enum": refs}} if refs
-        else {"type": "array", "items": {"type": "string"}, "maxItems": 0}
-    )
-    properties = {
-        **realized["properties"],
-        "evidence": {
-            **evidence_field,
-            "description": (
-                "The references above, copied exactly; nothing else is one. Name the "
-                "claim, the norms you applied and what the evidence shows in reason."
-            ),
-        },
-    }
-    return {**schema, "properties": {**schema["properties"],
-                                     "realized_consequence": {**realized,
-                                                              "properties": properties}}}
+    text = str(outputs.get("rationale", "")) if isinstance(outputs, dict) else ""
+    out: dict[str, Any] = {"rationale": text[:FORWARDED_RATIONALE_CHARS]}
+    if len(text) > FORWARDED_RATIONALE_CHARS:
+        out["rationale_chars"] = len(text)
+        out["rationale_forwarded_chars"] = FORWARDED_RATIONALE_CHARS
+    return out
 
 
 class Runtime(
+    # Anticipatory settlement of registrations (time audit T18) reads registrations,
+    # tool calls and invocations, and posts through the markets' refusals.
+    UptakeMixin,
+    # The charter's markets (charter audit M1, M2) read and publish through the
+    # governance, pricing and schematics methods below them, so they come first.
+    MarketsMixin,
+    # The chaos actuator (evaluations M1) only withholds or ages what seats are shown.
+    ChaosMixin,
     SchematicsMixin,
     ThinkingMixin,
     RoutingMixin,
+    CompositionMixin,
     GovernanceMixin,
     VenueMixin,
+    VaultMixin,
     PricingMixin,
     FeedbackMixin,
     SummaryMixin,
+    # Release of fully settled decisions (wave 17b) reads every book above it.
+    SettledMixin,
     BootstrapMixin,
     ComputeMixin,
 ):
@@ -218,7 +192,34 @@ class Runtime(
                                        or self.assemblies[action_id].spec.emits),
                                    window=self.window.index, ret=ret)
         self.card_samples.returns[-1]["tool_calls"] = self.window.tool_calls - tool_calls
+        self._record_reading(req.handle, ret)
         return ret
+
+    def _record_reading(self, handle: str, ret) -> None:
+        """File a reader's INPUTS bytes under the author of the return it was commissioned on.
+
+        Essay II.IV.a (the metrics layer is ceded) and II.I.b (minimal disclosure):
+        a decision routed on a published return reads that return in its INPUTS, so
+        those bytes are a fact about the return as much as about the reader. The
+        kernel files them under the author's scope in the window the reading was
+        metered; the reader's request is not touched, so nothing about the author
+        reaches it. A decision with no subject, a subject no assembly authored, an
+        invocation for which the runtime rendered no prompt, or one
+        whose request never reached its executor (refused over its ceiling, its
+        reservation refused, the world terminal: ``Return.delivered`` is False),
+        records nothing: no reader read those bytes.
+        """
+        sections = getattr(ret, "prompt_sections", None)
+        subject = self.decision_subjects.get(handle)
+        author = self.handle_to_assembly.get(subject) if subject is not None else None
+        if (not sections or not getattr(ret, "delivered", False) or author is None
+                or subject == handle):
+            return
+        read = int(sections.get("inputs", 0))
+        self.window.downstream_read_bytes += read
+        self.card_samples.read(handle=subject, assembly=author,
+                               role=self._decision_role(subject),
+                               window=self.window.index, read_bytes=read)
 
     def _settle_due_forecasts(self) -> None:
         """A6 sampling and A2 cadence openings both wrap the one settlement implementation."""
@@ -230,11 +231,21 @@ class Runtime(
         self._record_card_forecasts(pending, baseline)
 
     def _settle_priced(self, handle, *, cards, **kwargs):
-        """Custom emitted kinds answer for their own cards on every reward shape."""
+        """Custom emitted kinds answer for their own cards on every reward shape.
+
+        A decision that settles here carries its raw (pre-penalty) score to what it
+        composed: the settlement hook every path shares (``ContractQueue.settle``,
+        ``CompositionMixin._settled``) reads it from ``raw_scores``, so each decision
+        answers for its own cards and credit is never charged the requester's.
+        """
         emitted = self.return_kinds.get(handle)
-        if emitted and emitted not in ("ProducerReturn", "Verdict", "MetaVerdict", "Exposure"):
+        if emitted and emitted not in BUILTIN_RETURNS:
             cards = measured_role(emitted)
-        return super()._settle_priced(handle, cards=cards, **kwargs)
+        self.raw_scores[handle] = kwargs["score"]
+        try:
+            return super()._settle_priced(handle, cards=cards, **kwargs)
+        finally:
+            self.raw_scores.pop(handle, None)
 
     def _settle_exchange_effects(self, events, *, observe_positions=True) -> None:
         super()._settle_exchange_effects(events, observe_positions=observe_positions)
@@ -252,17 +263,10 @@ class Runtime(
         if ev is None:
             return universe
         excluded = self._subject_authors(kind, ev)
-        if self._is_final_grounded_commission(ev):
-            excluded |= set(ev.payload.get("excluded_evaluators", ()))
-            # This event is a kernel commission for a final independent evaluator,
-            # not a new opportunity for producers to answer and recursively create
-            # more producer contracts from the act of judging one.
-            universe = [a for a in universe if a == NOOP or (
-                a in self.assemblies and "Verdict" in self.assemblies[a].spec.emits)]
         return [a for a in universe
                 if a == NOOP or a not in excluded
                 or not set(assembly_rewards(self.assemblies[a].spec).values())
-                & {"forecast", "conformity"}]
+                & JUDGING_SHAPES]
 
     def _novelty_compute(self, handle: str, reason: str) -> bool:
         """A requested child spends its parent's money, never the protected share.
@@ -283,32 +287,28 @@ class Runtime(
 
     def run(self) -> dict[str, Any]:
         """Keep exclusive ledger ownership through the last runtime action or process death."""
+        from factorylab.runtime import polymarket
+
         try:
+            # A live Polymarket reader is admitted, and holds the host's IP, before the
+            # world's first event; an offline one takes nothing.
+            polymarket.arm(self)
             return self._run()
         finally:
             self._ledger_lock.close()
+            polymarket.disarm(self)
 
     def _run(self) -> dict[str, Any]:
         """Continue the original source budget; restored internal events keep their ordering."""
         if self.termination.final or (self.started and self._check_termination()):
             return self._summary()
         self.ledger.active = True
-        tick_ns = self.m.tick_interval_ns
         if self.clock_source is None:
             self.tick_clock.count = self.events_budget
         if self.clock_source is not None and not hasattr(self.clock_source, "events"):
             sources = [self.clock_source]
         else:
             sources = [self.tick_clock.events()]
-        if self.use_drip and self.m.drip is not None:
-            d = self.m.drip
-            drips = DripSource(
-                d.amount_micro,
-                d.period_ns,
-                max(d.start_ns, tick_ns),
-                min(d.end_ns, (self.events_budget + 1) * self.m.max_tick_ns),
-            ).events()
-            sources.append(islice(drips, self.drips_consumed, None))
         if (
             isinstance(self.tick_clock, ClockSource)
             and self.clock_source is None
@@ -371,6 +371,9 @@ class Runtime(
         previous_window = self.reserve_window_start
         self.n += 1
         self.clock.now_ns = max(self.clock.now_ns, ev.ts_ns)
+        # The safety path's own clock and latch restart with every event (time audit T8).
+        self._safety_ns = self.clock.now_ns
+        self._safety_stop = None
         self.bus.publish(ev)
         self.stats.events += 1
         self.events_log.append({"kind": str(ev.kind), "payload": _to_plain(ev.payload)})
@@ -380,14 +383,15 @@ class Runtime(
             dq = self.recent_mids.setdefault(coin, deque(maxlen=20))
             dq.append({"t_s": ev.ts_ns // 1_000_000_000, "mid": str(ev.payload.get("mid"))})
 
-        self.wallet.drip(self.clock.now_ns)
         # Due tranches are mandatory even while dormant; each released tranche is then
         # classified (C10): base_share across live seats, the remainder unallocated.
         released = self.wallet.release_due(self.clock.now_ns)
         if released:
             self.budget.on_release(released)
         self._manage_reserve_window()
-        self.treasury.open_window(self.stats.reserve_windows)  # reserve-window top-up cap
+        # The Venice and forwarding-fee caps count their own wall-clock windows, never
+        # the pricing window (time audit T1, T13).
+        self.treasury.open_window(self._cap_window())
         # At each window boundary: when no live seat can act from its entitlement,
         # release the commons to the seats, or, with nothing left to release, let
         # the termination rule below see the starvation (P1-04).
@@ -396,9 +400,18 @@ class Runtime(
             self._sampling_actuator()
         self._observe_delivered_event(ev)
         if ev.kind is EventKind.TICK:
+            self._open_pending_epochs()
+            self._assign_waiting_readers()
+            self._prune_read_use()
+            self._chaos_tick()  # seat-facing faults only (runtime.chaos), drawn per tick
             self._reconcile_orders()
+            if getattr(self, "polymarket", None) is not None:
+                from factorylab.runtime import polymarket
+
+                polymarket.tick(self)  # its own intents, fills and resolutions
             self._collect_income()  # C10: each receipt credits its owning seat before the tick
-            self.treasury.tick(self.clock.now_ns)
+            self._tick_treasury()
+            self._classify_financing()  # a conversion confirmed this tick is spendable now
             self._reconcile_x402()
             if self.venue is not None:
                 observed = [
@@ -425,8 +438,8 @@ class Runtime(
                     self._emit(EventKind.RECONCILED, snap, source="kernel")
             else:
                 self._settle_exchange_effects(self.exchange.advance(self.clock.now_ns))
-            # C2: the kernel settles every registered watcher from world state at the
-            # program price, then offers one coalesced update to the seats that asked
+            # C2: the kernel settles every registered watcher from world state, then
+            # offers one coalesced update to the seats that asked
             # for one. Both are queued behind this tick's own routing.
             self._evaluate_watchers()
             self._emit_world_update()
@@ -443,32 +456,257 @@ class Runtime(
         # Dormant (C2): no paid cognition is routed; the maintenance below still runs,
         # the fills, treasury and releases above already did.
 
+        # Every verdict this event's routing produced is in: each return it judged
+        # settles on their mean (ruling R1).
+        self._settle_arrived_verdicts()
         self._settle_due_forecasts()
-        self._settle_due_grounded()
         self._censor_stale_judgements()
-        self.stats.timeouts += len(self.queue.expire(self.clock.now_ns))
+        # A requested child settles once its requester has (the collaboration credit).
+        self._settle_composed()
+        self.stats.timeouts += len(self.queue.expire_due())
         self._deliver_returns()
-        self.ledger.append({"kind": "runtime.event_done", "n": self.n})
+        self.ledger.append({"kind": "runtime.event_done", "n": self.n, **self._pace_record()})
         self.balance_at.append(self.wallet.balance)
         if previous_window != self.reserve_window_start:
             self._snapshot("reserve_window")
         return True
 
+    def _pace_record(self) -> dict:
+        """What an idle-skipping clock read at the end of this event, for the diary.
+
+        Empty for every other clock, so their diaries are unchanged. On a replay the
+        clock adopts the recorded reading and totals first and the recorded values are
+        written back as they were, so the replayed tail leaves the clock exactly where
+        the recorded run's stood (Chapter II §IV.c: the resumed world keeps the pace
+        it ran at, and never counts replayed busy time as idle).
+        """
+        record = getattr(self.tick_clock, "pace_record", None)
+        if record is None:
+            return {}
+        saved = self.ledger.peek() if getattr(self.ledger, "recovering", False) else None
+        if (saved is not None and saved.get("kind") == "runtime.event_done"
+                and isinstance(saved.get("clock"), dict)):
+            self.tick_clock.adopt(saved["clock"])
+            return {"clock": saved["clock"]}
+        return {"clock": record()}
+
+    def _paced(self) -> bool:
+        """Whether this world's ticks are paced by an environment whose gaps are measured.
+
+        A live world is paced by wall time; a replay of a diary's delivered gaps
+        (``fastloop --gaps-from``) by that world's. A virtual clock ticking at
+        exactly the declared interval has no environment pace to keep up with.
+        """
+        return callable(getattr(self.tick_clock, "measured_interval_ns", None))
+
+    def _call_deadline_s(self) -> float | None:
+        """A model call's deadline: ``min_ratio`` delivered ticks, in seconds (time audit T8).
+
+        Chapter II §IV.c: "the factory is expected to outrun the world", and it
+        "cannot move slower than its environment". Where the environment's pace is
+        measured (``_paced``) a call may take no longer than one period of the
+        fastest outer loop over the delivered tick, read through the journal so a
+        replay states the same deadline. An unpaced world has no environment pace:
+        there only the adapter's finite ceiling applies (None).
+        """
+        if not self._paced():
+            return None
+        return self.m.timing.min_ratio * self.wall.tick_ns() / 1_000_000_000
+
+    def _call_expired(self, handle: str, timeout_s: float | None) -> None:
+        """A call that outlived its deadline is its decision timing out, in tick terms.
+
+        The decision's cutoff is reached now: the queue records the timeout, its
+        router is credited at the cutoff like any other (zero consequence, T4), and
+        a return that settles it later settles it without training a learner twice.
+        """
+        try:
+            pending = self.queue.get(handle).status is SettleStatus.PENDING
+        except KeyError:
+            return
+        self.ledger.append({"kind": "decision.call_expired", "handle": handle,
+                            "timeout_s": timeout_s, "tick": self.ticks_consumed,
+                            "ts": self.clock.now_ns})
+        if pending:
+            self.stats.timeouts += len(self.queue.time_out([handle], self.clock.now_ns))
+
+    def _safety_pass(self) -> None:
+        """Fills, order state, watchers and a terminal stop never wait behind a model call.
+
+        Chapter II §IV.c (requisite velocity); time audit T8. Before every model
+        call (and so between every tool round), once a delivered tick of wall time
+        has passed since the event began or since the last pass, the kernel reads
+        the venue's fills and settles them, reconciles resting orders and settles
+        every watcher from world state, without a model call and without a thread.
+        A terminal state the pass sees is latched: every later call in this event is
+        refused unbilled, so the wind-down the event's termination check starts is
+        not held behind them. A simulated world's clock does not move inside an
+        event, so it never needs one.
+        """
+        from factorylab.world.metering import UnbilledFailure
+
+        if self._safety_stop is not None:
+            raise UnbilledFailure(f"world is terminal ({self._safety_stop}): no further calls")
+        if self.live:
+            if self.venue is None:
+                return
+        elif not (wall_paced(self.tick_clock) and getattr(self.exchange, "opens_ns", None)):
+            # A simulated world whose clock does not move inside an event never needs a
+            # pass; one paced by the wall (an idle-skipping replay) does, when its venue
+            # prices by time (a recorded tape) and can be read at any instant.
+            return
+        now = self.wall.now_ns()
+        ended = self._tape_ended(now)
+        if not ended and now - self._safety_ns < self.wall.tick_ns():
+            return
+        self._safety_ns = now
+        closes = None if self.live else getattr(self.exchange, "closes_ns", None)
+        if closes is not None:
+            now = min(now, int(closes))  # a recorded world's time ends with its tape
+        self.clock.now_ns = max(self.clock.now_ns, now)
+        if self.live:
+            fills = [WorldEvent(WorldEventKind.FILL, max(now, ts), self.exchange.name, payload)
+                     for ts, payload in self.consequence_fills.poll(self.exchange)]
+        else:
+            # The recorded market moved while a model thought: whatever it filled,
+            # refused or charged by now settles here. Its mids are read afresh by the
+            # next read; as on the live path, the pass delivers no mid of its own.
+            fills = [we for we in self.exchange.advance(now)
+                     if we.kind is not WorldEventKind.MARKET_MID]
+        self._settle_exchange_effects(fills)
+        self._reconcile_orders()
+        self._evaluate_watchers(sweep=f"safety-{now}")
+        terminal = self.termination.check(self.wallet, self.clock.now_ns,
+                                          cheapest_seat_micro=self._cheapest_seat_micro())
+        terminal = terminal if terminal not in (None, DORMANT) else None
+        if terminal is None and ended:
+            from factorylab.world.tape import TAPE_ENDED
+
+            terminal = TAPE_ENDED
+        self.ledger.append({"kind": "safety.pass", "fills": len(fills), "tick": self.ticks_consumed,
+                            "terminal": terminal, "ts": now})
+        if terminal is not None:
+            self._safety_stop = terminal
+            raise UnbilledFailure(f"world is terminal ({terminal}): no further calls")
+
+    def _tape_ended(self, now: int | None = None) -> bool:
+        """Whether a recorded world's paced clock has reached its tape's end; latched.
+
+        Reads the wall through the journal (a replay reads the same instant). Once it
+        has, the world is terminal (``TAPE_ENDED``): every later model call of the event
+        is refused unbilled, every venue write is refused with the published fact that
+        the recorded market has ended, and the event's termination check kills the
+        world, closing it through the tape's end. Never true for a live world, or for
+        a world whose clock does not move inside an event.
+        """
+        from factorylab.world.tape import TAPE_ENDED
+
+        if self._safety_stop == TAPE_ENDED:
+            return True
+        closes = None if self.live else getattr(self.exchange, "closes_ns", None)
+        if closes is None or not wall_paced(self.tick_clock):
+            return False
+        now = self.wall.now_ns() if now is None else now
+        if now < int(closes):
+            return False
+        self._safety_stop = TAPE_ENDED
+        return True
+
+    def _cap_window(self) -> int:
+        """The index of the treasury caps' own window: ``treasury.cap_window`` wall time.
+
+        Money rails run in wall time, so a rate cap on them is a wall-clock duration
+        counted from launch (time audit T1, T13). The duration is a declared money
+        bound, a cast of the Stackelberg move, not a period derived from a measured
+        loop: it only no longer borrows the pricing window. A world resumed from a
+        checkpoint that predates the anchor continues from the window its treasury
+        last opened.
+        """
+        span = self.m.treasury.cap_window_ns
+        if self.cap_anchor_ns is None:
+            self.cap_anchor_ns = self.clock.now_ns - max(0, self.treasury.venice_window - 1) * span
+        return 1 + max(0, self.clock.now_ns - self.cap_anchor_ns) // span
+
+    def _forward_wait_ticks(self) -> int:
+        """The ticks a stalled conversion may wait before it strands (time audit T13).
+
+        ``min_ratio`` times the capital loop's p90 closure once enough conversions
+        have finalized to support one (``timing.min_support``); until then the
+        manifest's declared floor. A strand is an outer loop over the rail's own
+        delivery, so it waits the ratio every other outer loop keeps.
+        """
+        measured = self.cadence.capital_period_events()
+        if measured is None:
+            return self.m.treasury.forward_wait_ticks
+        return self.m.timing.min_ratio * max(1, measured)
+
+    def _tick_treasury(self) -> None:
+        """Advance the treasury one tick on the capital loop's own clock (time audit T13).
+
+        Every conversion that finalizes this tick is one closure of that loop,
+        measured in ticks consumed (an outage consumes none), and joins the
+        slowest period governance respects once the loop has enough support.
+        """
+        self.treasury.tick_index = self.ticks_consumed
+        self.treasury.forward_wait_ticks = self._forward_wait_ticks()
+        for result in self.treasury.tick(self.clock.now_ns) or ():
+            ticks = result.get("latency_ticks") if isinstance(result, dict) else None
+            if result.get("status") != "confirmed" or ticks is None:
+                continue
+            self.cadence.record_capital(transfer_id=result["transfer_id"],
+                                        latency_ticks=ticks,
+                                        latency_ns=result.get("latency_ns"))
+            self.clockwork.record("capital", ticks)
+
     def _snapshot(self, boundary: str) -> bool:
-        """Persist a complete continuation at launch and after each boundary event finishes."""
+        """Persist a complete continuation at launch and after each boundary event finishes.
+
+        Guarantees (wave 17): the state is one rolling checkpoint file beside the
+        diary, durable before the ``snapshot`` item naming its SHA-256 and size is
+        appended, and every older checkpoint file is removed only after that item
+        is durable (``runtime/sidecar.py``). The item also carries what the
+        checkpoint cost, in the clock the world is paced by, against the period
+        it serves; a cost above ``1/min_ratio`` of that period is ledgered as a
+        ``checkpoint.slow`` alarm (essay II.IV.c: an inner loop settles at least
+        ``min_ratio`` times faster than the loop it serves; the apparatus may not be
+        slower than its environment). The alarm is a fact, never a kill.
+        """
+        started = self.wall.now_ns()
+        # Retained state no reader can reach is dropped here, at the one boundary a
+        # live run and its replay share (``_prune_retained``).
+        self._prune_retained()
         try:
             state = runtime_state(self)
             # Router states contain ordinary JSON floats as well as tagged codec values.
             from factorylab.cortex.assembly import _finite_json
 
             _finite_json(state)
+            data = canonical(state)
         except (ValueError, OverflowError, RecursionError):
             self.ledger.append({"kind": "snapshot.refused", "boundary": boundary, "n": self.n,
                                 "reason": "invalid checkpoint number or nesting"})
             return False
+        reference = self.ledger.checkpoints.write(data)
+        cost_ns = max(0, self.wall.now_ns() - started)
+        tick = self.wall.tick_ns()
+        # The checkpoint serves the price loop: one is written at each of its
+        # boundaries. Before the loop's first period (launch) there is none to serve.
+        period = (self.clockwork.period("price")
+                  if self.clockwork.opened("price") is not None else None)
+        cost = {"cost_ns": cost_ns, "tick_ns": tick, "period_ticks": period}
+        if period is not None and cost_ns * self.m.timing.min_ratio > period * tick:
+            self.ledger.append({"kind": "checkpoint.slow", "boundary": boundary, "n": self.n,
+                                **cost, "min_ratio": self.m.timing.min_ratio,
+                                "ts": self.clock.now_ns})
         self.ledger.append(
-            {"kind": "snapshot", "boundary": boundary, "n": self.n, "state": state}
+            {"kind": "snapshot", "boundary": boundary, "n": self.n, **reference, **cost}
         )
+        # Durable in the chain: no resume can start from an older checkpoint now.
+        self.ledger.checkpoints.retire_others(reference)
+        self.ledger.io_store.sweep()
+        # The checkpoint just made durable names no reference to anything released
+        # before it, so those records may now be collected (kernel/artifacts.py).
+        self.artifacts.seal_released()
         # The held venue reads are not in the checkpoint — the listing, the mids and
         # the account state are the venue's own facts, and a checkpoint is a
         # continuation, not a cache. Dropping them here is what makes it safe to leave
@@ -477,12 +715,167 @@ class Runtime(
         # the venue exactly where the recorded tail did.
         self._instruments_memo = None
         self._mids_memo = None
+        # The tick's venue answers are not in the checkpoint either: the replayed tail
+        # starts with none, and so does the run that wrote it.
+        self._tick_reads = None
+        self._polymarket_tick_reads = None
         self._account_memo = None
         self._peak_observed = None
         forget = getattr(self.treasury, "forget_observations", None)
         if forget is not None:
             forget()
         return True
+
+    def _prune_retained(self) -> None:
+        """Drop retained state no reader can reach; called only at a checkpoint boundary.
+
+        Essay II.II.b: the disk and the memory are the world's own finite machine,
+        a hard cast, and essay II.IV.c: the control apparatus may not become slower
+        than its environment, as a checkpoint that grows with every event does.
+        Pruning is deterministic and happens at the boundary a live run and its
+        replay share (before the checkpoint is taken), so a resumed world holds
+        exactly what the uninterrupted one holds. Each rule below removes only
+        what no reader of that structure can reach, and says why.
+        """
+        self._prune_event_log()
+        self._slim_return_events()
+        self._release_read_deliveries()
+        # Every decision no score is owed to any more (wave 17b, ``SettledMixin``), and
+        # every inbox item acknowledged or past its published retention horizon.
+        self._release_settled()
+        self._release_inbox()
+
+    def _release_read_deliveries(self) -> None:
+        """Release, in the kernel queue, every delivery its one reader has already read.
+
+        Readers of the deliveries addressed to a router learner (``router:<kind>``
+        ids, the keys of ``delivered_seen``): ``_deliver_returns`` reads them from its
+        cursor ``delivered_seen[lid]`` on, and ``_retain_router`` and
+        ``_prune_price_evidence`` compare their count with that cursor. A cursor
+        only advances, and a router id starting at 0 is fresh, never used before
+        (``_fresh_router_id``). The deliveries of a seat (``assembly:<id>``: its
+        ballots, testimony, posts and uptake) are read by its next ballot, from its
+        cursor ``policy_seen[lid]`` on (wave 17b), and those delivered longer ago than
+        the published retention are released unread. So every delivery before its
+        reader's cursor is unreachable; the kernel keeps its count
+        (``DecisionQueue.release_delivered``), and a decision whose deliveries are
+        all read may be released once no other score is owed to it (``_score_owed``).
+        """
+        for lid, seen in self.delivered_seen.items():
+            self.queue.release_delivered(lid, seen)
+        # A seat's policy returns are read by its next ballot, once (wave 17b: a
+        # verdict "is consumed as a reward signal ... and then discarded", essay
+        # II.IV.c); ``policy_seen`` is that reader's cursor, and it only advances.
+        for lid, seen in self.policy_seen.items():
+            self.queue.release_delivered(lid, seen)
+        # An actor that is no router and no live seat has no reader now: a forecast's
+        # evaluator id (``open_forecast_decision``), a retired seat. Its deliveries are
+        # discarded as made; the count stays, and a retired seat's cursor moves past
+        # them, so an id versioned again reads on from there.
+        live_seats = {f"assembly:{aid}" for aid in self.assemblies
+                      if aid not in self.retired_assemblies}
+        # A live seat that is not balloted within the published retention
+        # (``outcome_retention_ticks``, the inbox's rule) is not shown the policy
+        # returns delivered to it before then: they are released unread. Each
+        # boundary marks how many had been delivered by its tick; a mark older than
+        # the retention releases everything delivered by it (the inbox's rule).
+        now, retention = self.ticks_consumed, self._inbox_retention_ticks()
+        holding = self.queue.delivery_actors()
+        for actor in holding:
+            if actor in self.delivered_seen:
+                continue
+            count = self.queue.delivered_count(actor)
+            if actor not in live_seats:
+                self.queue.release_delivered(actor, count)
+                if actor.startswith("assembly:"):
+                    # A retired id can be versioned again and inherit its records: its
+                    # next ballot reads on from here, never below what was discarded.
+                    self.policy_seen[actor] = max(self.policy_seen.get(actor, 0), count)
+                continue
+            marks = self.policy_marks.setdefault(actor, [])
+            if not marks or marks[-1][1] != count:
+                marks.append([now, count])
+            due = [mark for mark in marks if mark[0] < now - retention]
+            if due and due[-1][1] > self.policy_seen.get(actor, 0):
+                self.queue.release_delivered(actor, due[-1][1])
+                self.policy_seen[actor] = due[-1][1]
+            marks[:] = [mark for mark in marks if mark[0] >= now - retention]
+        holding = set(self.queue.delivery_actors())
+        for actor in [a for a in self.policy_marks if a not in holding]:
+            del self.policy_marks[actor]
+
+    def _slim_return_events(self) -> None:
+        """Drop the payload of every published return no judgement can accept any more.
+
+        Readers of ``return_events[R]`` (the event that published return R): only
+        ``_judged_event`` and ``_hindsight_reason``. They read the event's kind, its
+        subject field (``_event_subject``) and its ``tier``, to decide whether a
+        judgement may address R and why not; the rest of the payload is read only by
+        the caller of a judgement that was *accepted* (the verdict's
+        ``producer_outputs``, a meta's judge handle). So once no judgement can ever
+        accept R, the payload is unreachable, and the entry keeps exactly the fields
+        the refusals read. Every refusal is then decided, and worded, as before.
+
+        R can never be accepted again when all hold:
+
+        * no event waiting in ``internal`` has R as its subject, so no judge will be
+          delivered R by the router (the one path with no hindsight check); a later
+          event about R replaces the entry whole when it is emitted;
+        * R has no open judgement state (``pending``), so its tier is fixed by its
+          kind and published tier alone;
+        * the hindsight refusal is permanent: for a judged tier, R's consequence
+          score is in (``consequence_scores`` never forgets one); for a return,
+          its account is voided or its consequence horizon, counted in ticks from
+          the tick it opened, has passed (the horizon is the manifest's, fixed for
+          the world's life, and ticks only advance).
+
+        The key itself stays: a judgement may still name R, and is refused as before.
+        """
+        from dataclasses import replace
+
+        queued = {self._event_subject(ev) for ev in self.internal}
+        horizon = self.ev.consequence_horizon_ticks
+        for about, event in self.return_events.items():
+            key = {"Verdict": "evaluator_handle", "MetaVerdict": "by"}.get(
+                str(event.kind), "about_handle")
+            # A MetaVerdict is only a valid event with its handles, tier and score.
+            kept = ((key, "tier", "about", "score") if event.kind is EventKind.META_VERDICT
+                    else (key, "tier"))
+            slim = {k: event.payload[k] for k in kept if k in event.payload}
+            if event.payload == slim or about in queued or about in self.pending:
+                continue
+            if self._judged_tier(event, None):
+                if about not in self.consequence_scores:
+                    continue
+            else:
+                try:
+                    account = self.consequences.table.account(about)
+                except KeyError:
+                    continue
+                if not account.voided and (
+                        account.opened_at_tick is None
+                        or self.ticks_consumed < account.opened_at_tick + horizon):
+                    continue
+            self.return_events[about] = replace(event, payload=slim)
+
+    def _prune_event_log(self) -> None:
+        """Keep ``balance_at`` and ``events_log`` from the oldest open forecast's start.
+
+        Readers (the whole list): ``_facts_for`` reads ``balance_at[start:n+1]`` and
+        ``events_log[start+1:n+1]`` for a forecast being settled, where ``start`` is
+        its ``made_at_event``; ``_chaos_fault`` writes into the current event's entry.
+        Only forecasts in the book's unsettled set are ever settled, and every
+        forecast sealed later is sealed at ``made_at_event = n`` or after. So the
+        rule: entries before ``min(n, made_at_event of every unsettled forecast)``
+        are unreachable, and dropped; ``event_log_base`` keeps event numbers exact.
+        """
+        keep = min([self.n, *(f.made_at_event for f in self.book.pending())])
+        drop = keep - self.event_log_base
+        if drop <= 0:
+            return
+        del self.balance_at[:drop]
+        del self.events_log[:drop]
+        self.event_log_base = keep
 
     def _resume_at(self, now_ns: int) -> None:
         """Reconcile and ledger outage timeouts before admitting another world event."""
@@ -508,7 +901,8 @@ class Runtime(
             observed.extend(self.venue.funding_payments(now_ns))
             self._settle_exchange_effects(observed)
             self._collect_income()
-            self.treasury.tick(now_ns)
+            self._tick_treasury()
+            self._classify_financing()
         snapshot = Reconciler.snapshot(
             self.wallet.balance,
             self.provider,
@@ -520,9 +914,14 @@ class Runtime(
         if self.live:
             self.stats.reconciliations += 1
             self._emit(EventKind.RECONCILED, snapshot, source="kernel")
-        handles = [d.handle for d in self.queue.outstanding() if d.deadline_ns <= now_ns]
+        # A cutoff counts world ticks (time audit T3): an outage consumed none, so only
+        # a decision whose tick cutoff had already passed times out here. One restored
+        # from a checkpoint that predates the tick record keeps its wall deadline.
+        handles = [d.handle for d in self.queue.outstanding()
+                   if (d.deadline_ns <= now_ns if self.queue.deadline_tick(d.handle) is None
+                       else self.queue.deadline_tick(d.handle) <= self.ticks_consumed)]
         self.ledger.append({"kind": "resume.timeouts", "handles": handles, "n": self.n})
-        self.stats.timeouts += len(self.queue.expire(now_ns))
+        self.stats.timeouts += len(self.queue.expire_due())
         self._deliver_returns()
         self.ledger.append(
             {
@@ -547,13 +946,15 @@ class Runtime(
         if we.kind is WorldEventKind.TICK:
             self.ticks_consumed += 1
             if isinstance(self.tick_clock, (ClockSource, LiveClock)):
-                if (isinstance(self.tick_clock, LiveClock)
-                        and 0 <= self.tick_clock.last_ns < we.ts_ns):
-                    self.tick_clock.gaps.append(we.ts_ns - self.tick_clock.last_ns)
+                # A clock that measures its delivered gaps (the wall clock, a replay of a
+                # diary's gaps) measures a replayed tick too, so a resumed world converts
+                # ticks at the interval the recording measured (time audit T3).
+                last = self.tick_clock.last_ns
+                gaps = getattr(self.tick_clock, "gaps", None)
+                if gaps is not None and last is not None and 0 <= last < we.ts_ns:
+                    gaps.append(we.ts_ns - last)
                 self.tick_clock.index = self.ticks_consumed
                 self.tick_clock.last_ns = we.ts_ns
-        elif we.kind is WorldEventKind.DRIP:
-            self.drips_consumed += 1
         if isinstance(self.tick_clock, ClockSource):
             self.tick_clock.last_event_ns = we.ts_ns
         return self._kernel_event(we)
@@ -573,9 +974,13 @@ class Runtime(
                 if kind not in self.event_schemas:
                     raise ValueError("population event has no declared schema")
                 if payload.get("status") == "ok":
+                    # A producing kind's counterfactual is the kernel's field, not the
+                    # declaration's (``_contract_schema``).
+                    producing = self._kind_rewards().get(kind) in self.PRODUCING_SHAPES
                     validate_schema({k: v for k, v in payload["outputs"].items()
                                       if k not in ("emits", "register", "about_handle",
-                                                   "status", "reason")},
+                                                   "status", "reason")
+                                      and not (producing and k == "counterfactual")},
                                      self.event_schemas[kind])
             event_type = PopulationEvent
         else:
@@ -621,6 +1026,10 @@ class Runtime(
                 self._enter_dormancy(now_ns, trigger="entitlement")
                 return False
             reason = "insolvency:entitlement"
+        if reason is None and self._safety_stop is not None:
+            # A terminal state the safety pass saw between model calls ends the world
+            # through this one kill path, at the end of the event it stopped.
+            reason = self._safety_stop
         if reason is None and self.insolvency_count >= self.m.treasury.insolvency_events:
             if self.wallet.locked > 0 and self.wallet.next_release_ns is not None:
                 self._enter_dormancy(now_ns, trigger="insolvency")
@@ -628,6 +1037,7 @@ class Runtime(
             reason = "insolvency:compute"
         if reason is None:
             return False
+        self._settle_arrived_verdicts()
         self._settle_due_forecasts()
         self.kill(reason)  # edition 3, C5: every runtime death winds the venue down
         return True
@@ -733,6 +1143,8 @@ class Runtime(
             self._evaluator_step(ev, handle, sample, deadline)
         elif emits == ("MetaVerdict",):
             self._meta_step(ev, handle, sample, deadline)
+        elif emits == ("CounterVerdict",):
+            self._counter_step(ev, handle, sample, deadline)
         else:
             self._producer_step(ev, handle, sample, deadline)
 
@@ -742,54 +1154,70 @@ class Runtime(
 
         spec = self.assemblies[assembly_id].spec
         schemas = []
-        unit = {"type": "number", "minimum": 0, "maximum": 1}
         for kind in spec.emits:
             if kind in spec.schemas:
                 schema = _to_plain(spec.schemas[kind])
+            elif kind in JUDGING_FIELDS:
+                # A judging kind's answer form, as ``judging_contract`` builds it; its
+                # decline form joins the union once, below.
+                schema = self._judging_contract(kind)["anyOf"][0]
             else:
-                fields = ({"verdict": unit, "payoff": unit,
-                           "rationale": {"type": "string"}, "forecasts": self._forecast_schema()}
-                          if kind == "Verdict" else
-                          {"conformity": unit} if kind == "MetaVerdict" else
-                          {"action": {"type": "string"}})
+                fields = {"action": {"type": "string"}}
                 schema = {"type": "object", "properties": fields, "required": list(fields)}
+            # A producing kind's contract carries the declined trade (II.III.b). The
+            # field is the kernel's, so it stands over a declaration's own.
+            producing = ({"counterfactual": deepcopy(COUNTERFACTUAL_FIELD)}
+                         if self._return_shape(spec, kind) in self.PRODUCING_SHAPES else {})
             schemas.append({**schema, "properties": {
                 **{k: v for k, v in reserved_return_fields(
                     max_children=self.m.tools.max_children,
                     max_tool_calls=self.m.tools.max_tool_calls).items()
                    if k in ("requests", "tool_calls", "status", "reason")},
-                **schema.get("properties", {}), "emits": {"enum": [kind]},
+                **schema.get("properties", {}), **producing, "emits": {"enum": [kind]},
                 "about_handle": {"type": "string"}, "register": self._register_schema(),
             }, "required": [*schema.get("required", []),
                             *(["emits"] if len(spec.emits) > 1 else [])]})
+        if any(kind in JUDGING_FIELDS for kind in spec.emits):
+            # The judging contract's decline form, published as its request publishes
+            # it: the whole union, never its answer form alone (§II.b).
+            schemas.append(deepcopy(DECLINE_FORM))
         return schemas[0] if len(schemas) == 1 else {"anyOf": schemas}
 
     def _hindsight_reason(self, handle: str, about: str) -> str | None:
-        """Name why a chosen target cannot carry a payoff forecast, or None if it can.
+        """Name why a chosen target cannot carry a prediction, or None if it can.
 
-        A forecast precedes its outcome. The router's subject is not chosen, but a
-        return that names an older target instead may not name one whose
-        consequence is already fixed, one at or past its backstop, or one whose
-        backstop falls before this judgement's own decision deadline.
+        A prediction precedes its outcome. The router's subject is not chosen, but a
+        return that names an older target instead may not name one whose outcome the
+        world has already given: a consequence already fixed, or one past the horizon
+        at which its mark settles its judges (``consequence_horizon_ticks``). The
+        judgement's own deadline is not compared: it lives until its target's
+        backstop by construction, and a verdict is scored when the world answers,
+        not when its decision expires. A judgement of an evaluator decision predicts
+        that decision's consequence score (ruling R1), so it may not name one whose
+        score is already known; its economic account says nothing about it.
         """
+        target = self.return_events.get(about)
+        if target is not None and self._judged_tier(target, self.pending.get(about)):
+            if about in self.consequence_scores:
+                return "judgement needs a chosen judgement whose consequence is still open"
+            return None
         try:
             account = self.consequences.table.account(about)
         except KeyError:
             return None
         if account.voided:
             return "judgement needs a chosen return a seat authored, not an abstention"
-        if account.payoff is not None:
+        # A return that acted is answered when its payoff is fixed; one that did not
+        # has an account fixed at once that says nothing about it (its measurement, if
+        # any, is its declined trade's price), so only its mark or final price answers.
+        if ((account.payoff is not None and self._acted(about))
+                or about in self.marked_outcomes or about in self.world_outcomes):
             return "judgement needs a chosen return whose consequence is still open"
-        # The backstop counts world ticks consumed since the return opened (defect 1).
+        # The horizons count world ticks consumed since the return opened (defect 1).
         opened = (account.opened_at_tick if account.opened_at_tick is not None
                   else self.ticks_consumed)
-        due = opened + self.consequences.backstop
-        if self.ticks_consumed >= due:
-            return "judgement needs a chosen return inside its consequence backstop"
-        backstop_ns = (self.clock.now_ns
-                       + (due - self.ticks_consumed) * self.tick_clock.interval_ns)
-        if self.queue.get(handle).deadline_ns > backstop_ns:
-            return "judgement would settle after the chosen return's consequence backstop"
+        if self.ticks_consumed >= opened + self.ev.consequence_horizon_ticks:
+            return "judgement needs a chosen return before its consequence horizon"
         return None
 
     CHILD_SUBJECT_REFUSAL = ("a requested judgement may only address the requesting decision "
@@ -808,20 +1236,27 @@ class Runtime(
         return self.CHILD_SUBJECT_REFUSAL
 
     def _refuse_judgement(self, handle: str, reason: str, about: Any = None) -> None:
-        """A refused judgement is public evidence the population can read.
+        """A refused judgement is ledgered and its reason addressed to its author.
 
-        The paid return is discarded, so the reason reaches
-        ``registration_feedback`` the way a refused propensity does: a refusal
-        nobody can read is repeated.
+        The paid return is discarded, so the reason reaches the judge's own inbox
+        under its handle, the way a refused propensity does.
         """
         self.ledger.append({"kind": "return.refused", "handle": handle, "reason": reason,
                             **({"about_handle": about} if about is not None else {})})
-        self.registration_feedback.append({"kind": "judgement",
-                                               "reason": f"judgement: {reason}"})
+        self._refusal_to_owner(handle, "judgement_refused", reason)
 
     def _judged_event(self, ev: Event, handle: str, ret: Return,
-                      *, seals_payoff: bool = False) -> Event | None:
-        """A judgement may address a public return handle, excluding its complete ancestry."""
+                      *, predicts: bool = False) -> Event | None:
+        """A judgement addresses a public return handle, excluding its complete ancestry.
+
+        A value in about_handle that is not a return handle from the request —
+        prose, a handle no public return carries, or the judgement's own decision —
+        is not a choice of target: the delivered subject is judged instead, and the
+        author is told why (evaluations P2: every meta that named its own handle was
+        refused and graded zero). A verdict is a prediction (ruling R1), so one about
+        a target anyone chose rather than the delivered subject must precede that
+        target's outcome (``predicts``).
+        """
         subject = self._event_subject(ev)
         about = ret.outputs.get("about_handle", subject)
 
@@ -832,21 +1267,27 @@ class Runtime(
                 return False
             return True
 
-        if not addressable(about):
-            if about == subject or not addressable(subject):
-                self._refuse_judgement(handle, "judgement needs an addressable return handle")
-                return None
+        if (about != subject and isinstance(about, str) and about != handle
+                and self.queue.is_released(about)):
+            # Wave 17b: a decision no score was owed to any more was released; its
+            # handle still answers, and the answer is that it settled and was released.
+            self._refuse_judgement(handle, RELEASED_REFUSAL, about)
+            return None
+        if about != subject and not (isinstance(about, str) and about != handle
+                                     and about in self.return_events and addressable(about)):
             # A value that names no return is not a choice of target: the judgement
-            # stands about the return the router delivered, and the population is
-            # told why its about_handle went unread.
+            # stands about the return the router delivered, and its author is told
+            # why its about_handle went unread.
             reason = ("about_handle must be a return handle from the request; the "
                       "delivered subject was judged instead")
             self.ledger.append({"kind": "about_handle.ignored", "handle": handle,
                                 "about_handle": str(about)[:64], "subject": subject,
                                 "reason": reason, "ts": self.clock.now_ns})
-            self.registration_feedback.append({"kind": "judgement",
-                                               "reason": f"judgement: {reason}"})
+            self._refusal_to_owner(handle, "about_handle_ignored", reason)
             about = subject
+        if not addressable(about):
+            self._refuse_judgement(handle, "judgement needs an addressable return handle")
+            return None
         target = self.return_events.get(about)
         if target is None and about == subject:
             target = ev
@@ -869,10 +1310,10 @@ class Runtime(
         }:
             self._refuse_judgement(handle, "self-judgement: ancestor", about)
             return None
-        # A payoff forecast on a target anyone chose — the return itself, or the
-        # parent that requested it — rather than the one the router delivered,
-        # must still be sealed before the outcome is fixed.
-        if seals_payoff and (about != subject or parent is not None) and (
+        # A verdict on a target anyone chose — the return itself, or the parent
+        # that requested it — rather than the one the router delivered is a
+        # prediction, so it must precede the outcome it will be scored on.
+        if predicts and (about != subject or parent is not None) and (
                 reason := self._hindsight_reason(handle, about)) is not None:
             self._refuse_judgement(handle, reason, about)
             return None
@@ -882,7 +1323,6 @@ class Runtime(
     def _producer_step(self, ev: Event, handle: str, sample: Sample, deadline: int,
                        *, returned: Return | None = None) -> None:
         self._start_return(handle)
-        self_forecast = None  # an antagonist's own payoff claim, sealed once it is finished
         payload = _to_plain(ev.payload)
         if ev.kind is EventKind.TICK:
             try:
@@ -910,6 +1350,7 @@ class Runtime(
                 # has always worked this way, and the mids read is the same kind of
                 # fact. GPT-6 third reading, §11: "missing data stays unavailable".
                 payload["mids_unavailable"] = type(exc).__name__
+            self._seat_tick_view(payload)
         if ev.kind is EventKind.WORLD_UPDATE and sample.chosen != NOOP:
             # C2: the event carries the world every subscriber could have read; the
             # seat that was drawn reads its own fold, which reaches back to the last
@@ -917,47 +1358,35 @@ class Runtime(
             payload["since_you_last_woke"] = self.subscription_book.take(
                 sample.chosen, now=self.tick_index)
         description = f"Respond to event {ev.kind} on {ev.source}."
-        adversarial = (sample.chosen != NOOP
-                       and self.assemblies[sample.chosen].spec.emits == ("Exposure",))
-        if adversarial:
-            description += (
-                " You may include payoff: your probability that return_paid_off, the "
-                "kernel's consequence predicate, resolves true for this return; it is "
-                "sealed as your forecast about your own return."
-            )
+        # What a judge of this return is told it answered: the event, and no clause
+        # that names the author's role (information audit C1).
+        judged_description = description
         inputs = {
             "kind": str(ev.kind),
             "payload": payload,
             "world": self._world_block(),
             "your_state": self.working_state.render(sample.chosen),
             "unread_outcomes": self.outcomes.unread(sample.chosen),
-            "your_action_policy": self._action_policy(sample.chosen),  # private
+            **self._action_policy_input(sample.chosen),  # private
         }
-        grounded_contract = None
-        binding = self.return_bindings.get(handle)
-        admissible_channels = (
-            set(binding["channels"].values())
-            if binding is not None else {self.queue.get(handle).channel}
-        )
-        if (
-            sample.chosen != NOOP
-            and getattr(self.ev, "producer_feedback", "verdict") == "realized"
-            and CH_VERDICT in admissible_channels
-        ):
-            # Freeze the world-facing basis before the model call, tool execution,
-            # registrations or orders can create the evidence later used to assess it.
-            grounded_contract = freeze_contract(self, handle, sample.chosen, {})
         if sample.chosen == NOOP:
             self.stats.noops += 1
             ret = Return(handle, {"action": "noop"}, 0, "ok")
         else:
+            # The wake describes itself (Chapter II §I, "the contract has to carry enough
+            # self-description"): what its return is and where each answer's settlement
+            # is published, as facts; no task and no preferred answer.
+            spec = self.assemblies[sample.chosen].spec
+            description += " " + self._wake_contract(
+                {kind: self._return_shape(spec, kind) or "judged" for kind in spec.emits})
+            # Physics, not a menu (smuggling A3): the kernel classifies every answer
+            # for the ledger; the seat's own action ids stand beside the classes.
             description += (
-                " Your action is one of hold, investigate (tool calls, no order), build "
-                "(a registration), govern (a proposal or a challenge), defer (sleep through "
-                "routine ticks) or order (place or close); your propensity is declared over "
-                "those. You own what wakes you: subscribe {kinds, coins, cadence_floor} "
-                "changes it, defer: <n ticks> sleeps through routine ticks, and a fill or a "
-                "safety event wakes you anyway."
+                " The kernel classifies each answer for the ledger as hold, investigate, "
+                "build, govern, defer or order; a propensity may be declared over those "
+                "or over your own action ids. You own what wakes you: subscribe {kinds, "
+                "coins, cadence_floor} changes it, defer: <n ticks> sleeps through routine "
+                "ticks, and a fill or a safety event wakes you anyway."
             )
             schema = {
                 "type": "object",
@@ -966,9 +1395,10 @@ class Runtime(
                     "propensity": {"type": "object"},
                     "subscribe": {"type": "object"},
                     "defer": {"type": "integer", "minimum": 0},
+                    # A contract field (II.III.b, the priced road not taken): the
+                    # kernel requires it on an answer that executes nothing.
+                    "counterfactual": deepcopy(COUNTERFACTUAL_FIELD),
                     "register": self._register_schema(),
-                    **({"payoff": {"type": "number", "minimum": 0, "maximum": 1}}
-                       if adversarial else {}),
                 },
                 "required": ["action"],
             }
@@ -976,6 +1406,10 @@ class Runtime(
             if len(kinds) > 1 or kinds[0] in self.event_schemas:
                 schema = self._contract_schema(sample.chosen)
                 description += " Select one of your declared emits kinds."
+            else:
+                # The one kind this contract answers as, as the kernel reads ``emits``
+                # (§II.b: the published contract is the enforced one).
+                schema["properties"]["emits"] = {"enum": [kinds[0]]}
             req = self._request(handle, description, inputs, schema, deadline,
                                 self.queue.get(handle).channel)
             ret = (returned if returned is not None
@@ -995,31 +1429,24 @@ class Runtime(
             if shape == "conformity":
                 self._meta_step(ev, handle, sample, deadline, returned=ret)
                 return
+            if shape == "counter":
+                self._counter_step(ev, handle, sample, deadline, returned=ret)
+                return
             if emitted is None:
                 self.consequences.finish(handle, ret.cost)
-                self.queue.settle(handle, channel=self.queue.get(handle).channel, score=0.0,
-                                  status=SettleStatus.CENSORED,
-                                  definition_version="unselected-return-v1", sampling_ref=None)
+                self._settle_unselected(handle, ret)
                 return
-            adversarial = shape == "exposure"
             if self._may_write(handle):
-                self._execute_outputs(ret)
+                # Only a producer kind's answer is an order (primitive audit F7).
+                self._execute_outputs(ret, emitted)
             self._apply_registrations(handle, ret)
             self._apply_thinking(handle, sample.chosen, ret)
             self.handle_to_assembly[handle] = sample.chosen
-            payoff = _as_unit(ret.outputs.get("payoff")) if ret.status == "ok" else None
-            if adversarial and payoff is not None:
-                self_forecast = payoff
+            if ret.status == "ok":
+                # A declined trade is priced from the mids the world had broadcast
+                # when this return was made (ruling R2).
+                self._freeze_declined_trade(handle, ret.outputs)
         self.consequences.finish(handle, ret.cost)
-        if self_forecast is not None:
-            # Sealed once the return is finished, so a return that left nothing open
-            # (its outcome already determined) is refused rather than scored.
-            if self.consequences.seal_self_forecast(
-                self.book, self.queue, handle=handle, assembly_id=sample.chosen,
-                payoff=self_forecast, event=self.n, now_ns=self.clock.now_ns,
-                tick_ns=self.tick_clock.interval_ns,
-            ) is not None:
-                self.stats.forecasts_sealed += 1
         noop = str(ret.outputs.get("action", "")).lower() in ("noop", "hold")
         revision = handle in self.window.revision_handles
         self.ledger.append(
@@ -1035,45 +1462,39 @@ class Runtime(
         self.window.noop_returns += int(noop)
         self.window.revision_returns += int(revision)
         self.window.revision_handles.discard(handle)
-        if grounded_contract is not None and self.queue.get(handle).channel == CH_VERDICT:
-            self.grounded_pending[handle] = grounded_contract.with_outputs(
-                public_return(ret.outputs), subject_kind=emitted)
-            self.ledger.append({
-                "kind": "consequence.contract",
-                "handle": handle,
-                "opened_tick": self.grounded_pending[handle].opened_tick,
-                "due_tick": self.grounded_pending[handle].due_tick,
-                "close_tick": self.grounded_pending[handle].close_tick,
-                "charter_edition": self.grounded_pending[handle].charter_edition,
-                "predicate_versions": list(self.grounded_pending[handle].predicate_versions),
-                "ts": self.clock.now_ns,
-            })
         if self.queue.get(handle).channel == CH_EXPOSURE:
             self.pending_exposure[handle] = self.ticks_consumed
+            if (reason := declined_reason(ret)) is not None:
+                self.declined_exposures[handle] = reason
         else:
+            # A refusal is still published and may be judged like any return (II.III.b);
+            # only if no judge grades it does it settle as the abstention it is.
             self.pending[handle] = PendingJudgement(handle, CH_VERDICT, self.n,
-                                                    opened_at_tick=self.ticks_consumed)
+                                                    opened_at_tick=self.ticks_consumed,
+                                                    declined=declined_reason(ret))
         self.stats.producer_returns += 1
         emitted = self.return_kinds.get(handle, "ProducerReturn" if sample.chosen == NOOP
                                         else self.assemblies[sample.chosen].spec.emits[0])
         payload = {
                 "about_handle": handle,
-                "description": description,
+                "description": judged_description,
                 # Judges see the event the producer answered, never the producer's own
                 # state, its inbox or its copy of the world block, and never its name.
                 "inputs": {"kind": inputs["kind"], "payload": inputs["payload"]},
                 "outputs": public_return(ret.outputs),
+                # What the decision actually did at the venue, from its durable
+                # intents and the venue's answers: a claim is judged beside its acts.
+                "executed_operations": self.executed_operations(handle),
                 "cost": ret.cost,
                 "status": ret.status,
                 # The one private thing the essay directs forward (II.I.b), so the
                 # judge can price the roads this return did not take.
                 "propensity": self._public_propensity(handle),
             }
-        # Exposure retains its producer-shaped judgment route for the shipped seeds;
-        # assemblies may also subscribe to its explicit kind.
-        self._emit(EventKind.PRODUCER_RETURN if emitted == "Exposure" else emitted, payload)
-        if emitted == "Exposure" and self.routers.get("Exposure"):
-            self._emit("Exposure", payload)
+        # A return is published as the kind it is, and only as that kind (primitive
+        # audit F12): a judge of Exposure says so in its contract, accepts =
+        # ["Exposure"], rather than meeting one disguised as a ProducerReturn.
+        self._emit(emitted, payload)
 
     def _forecast_step(self, ev, handle, sample, ret, emitted) -> None:
         """Population forecast work is rewarded only by its future public facts."""
@@ -1083,58 +1504,33 @@ class Runtime(
             handle, sample.chosen, self._event_subject(ev) or handle,
             ret.outputs.get("forecasts") if ret.status == "ok" else None)
         self.forecast_returns[handle] = {"handles": forecasts, "results": {}}
+        if (reason := declined_reason(ret)) is not None:
+            # A refusal makes no prediction, so nothing will ever score it: it settles
+            # declined now, priced as an abstention, never censored at a free neutral.
+            self._settle_declined(handle, reason)
         self._settle_forecast_returns()
         self._emit(emitted, {"about_handle": handle, "outputs": public_return(ret.outputs),
                              "cost": ret.cost, "status": ret.status,
                              "propensity": self._public_propensity(handle)})
 
-    def _invoke_child(self, action_id, parent, item, ceiling):
-        """New work shapes use the same bounded child admission and declared-shape dispatch."""
-        target = action_id if item.target == "self" else item.target
-        if (reason := self._commissioned_judge_refusal(target)) is not None:
-            return self._refuse_commissioned_judge(parent, item, target, reason)
-        spec = self.assemblies[target].spec if target in self.assemblies else None
-        if (spec is None or target in self.retired_assemblies
-                or not any(k not in ("ProducerReturn", "Verdict", "MetaVerdict", "Exposure")
-                           and shape != "judged" for k, shape in assembly_rewards(spec).items())):
-            return super()._invoke_child(action_id, parent, item, ceiling)
-        depth, cursor = 0, parent.handle
-        while self.queue.get(cursor).parent_handle is not None:
-            depth += 1
-            cursor = self.queue.get(cursor).parent_handle
-        if depth >= self.m.tools.max_depth:
-            reason = "tools.max_depth reached"
-            self.ledger.append({"kind": "requests.refused", "handle": parent.handle,
-                                "reason": reason, "depth": depth})
-            return {"tool": f"assembly:{target}", "args": item.inputs,
-                    "result": {"error": reason}}, 0
-        ceiling = min(ceiling, max(0, self._compute_available(parent.handle)))
-        actor = self.queue.get(parent.handle).actor
-        channels = self._return_channels(target)
-        channel = next(iter(channels.values()))
-        handle = self.queue.open(
-            actor=actor, event_id=f"child-{parent.handle}",
-            propensity=PropensityRecord((target,), (1.,), target, 0, actor, "parent-selected"),
-            channel=channel, deadline_ns=parent.deadline_ns, parent_handle=parent.handle,
-            cost_ceiling=ceiling, return_channels=channels)
-        self.ledger.append({"kind": "request.child", "handle": handle, "target": target,
-                            "resource_liability": parent.handle, "cost_ceiling": ceiling,
-                            "description": item.description, "inputs": item.inputs,
-                            "outcome_schema": item.outcome_schema})
-        self.stats.decisions += 1
-        self.consequences.start(handle, self.n)
+    def _run_child(self, parent, item, handle, target, sample, req):
+        """A declared work shape answers through its own reward path, like a routed return.
+
+        Guarantees a child whose executor declared a custom kind with a reward shape
+        other than ``judged`` (a forecast, a conformity or an exposure) is dispatched
+        by that shape through ``_producer_step``, exactly as a routed return of the
+        same contract would be; every other child takes the seed path.
+        """
+        spec = self.assemblies[target].spec
+        if not any(k not in BUILTIN_RETURNS
+                   and shape != "judged" for k, shape in assembly_rewards(spec).items()):
+            return super()._run_child(parent, item, handle, target, sample, req)
         self.handle_to_assembly[handle] = target
-        req = Request(handle, item.description, {**item.inputs, "world": self._world_block()},
-                      {}, item.outcome_schema, parent.deadline_ns, ceiling, parent.handle,
-                      "a JSON object satisfying the outcome schema", channel, parent.handle)
         ret = self._invoke(target, req, "child", child=True)
         event = Event(f"child-input-{handle}", EventKind.REGISTERED,
                       self.clock.now_ns, item.inputs, "request")
-        sample = Sample((target,), (1.,), target, 0, actor, "parent-selected", ())
         self._producer_step(event, handle, sample, parent.deadline_ns, returned=ret)
-        return {"tool": f"assembly:{target}", "args": item.inputs,
-                "result": {"outputs": public_return(ret.outputs), "status": ret.status,
-                           "cost_micro": ret.cost}}, ret.cost
+        return ret
 
     def _evaluator_step(self, ev: Event, handle: str, sample: Sample, deadline: int,
                         *, returned: Return | None = None) -> None:
@@ -1153,133 +1549,70 @@ class Runtime(
             )
             return
         inputs = {
+            # The judged return, addressable by its own handle; its kernel status is
+            # named so it cannot be read as the answer's refusal flag (II.I.b).
             "producer": {
+                "handle": about,
                 "description": payload.get("description", f"Return on {ev.kind}"),
                 "inputs": payload.get("inputs", {}),
-                "outputs": payload.get("outputs", payload),
+                "outputs": judged_outputs(payload.get("outputs", payload)),
                 "cost_micro_usd": payload.get("cost", 0),
-                "status": payload.get("status", "ok"),
-                # what it says it was choosing among, and what it chose.
-                "propensity": payload.get("propensity"),
+                "kernel_status": payload.get("status", "ok"),
             },
             "charter": self._charter_text(),
             "predicates": [
                 {"predicate": p.id, "description": p.description, "params": list(p.param_schema)}
                 for p in self.predicates.all()
             ],
-            "forecast_example": {
-                "predicate": "wallet_up",
-                "params": {"horizon_events": self.ev.forecast_horizon_events},
-                "q": 0.4,
-            },
             "world": self._world_block(),
             "your_state": self.working_state.render(sample.chosen),
-            "unread_outcomes": ({} if payload.get("grounded_consequence") else
-                                self.outcomes.unread(sample.chosen)),
-            "your_consequence_standing": self._standing_for(sample.chosen),
-            "your_action_policy": self._action_policy(sample.chosen),  # private
+            "unread_outcomes": self.outcomes.unread(sample.chosen),
+            # Variance, autocorrelation and ensemble disagreement, live (II.III.a):
+            # the evaluators' reading of the stack, never a producer's (M2).
+            "early_warning": self._early_warning_view(),
+            **self._action_policy_input(sample.chosen),  # private
             # Evaluation is a commission, not an obligation (§6.B): a subject, a
-            # scope, an evidence horizon and a budget, which may be declined.
+            # scope, an evidence horizon and a budget. The decline is a form of the
+            # outcome schema, stated there once.
             "commission": commission_block(
                 subject=about,
-                scope=f"the public return addressed by about_handle, judged on {ev.kind}",
+                scope=("the public return named by subject_handle"
+                       + ("" if str(ev.kind) in PRODUCING_KINDS else f", judged on {ev.kind}")),
                 horizon=self.ev.forecast_horizon_events,
                 budget_micro=self.queue.get(handle).cost_ceiling,
             ),
+            "subject_handle": about,
         }
-        adjudication = self._adjudication_for(sample.chosen)
-        if adjudication is not None:
-            # An objection someone else made, given to a judge that did not write
-            # the verdict it rides on and does not own the measurement it
-            # challenges (§7: independent adjudication).
-            inputs["adjudication"] = {
-                "id": adjudication.id, "value": adjudication.value,
-                "measurement": adjudication.measurement, "evidence": adjudication.evidence,
-                "about_handle": adjudication.about_handle,
-                "answer_with": "fidelity_finding: {upheld, reason}",
-            }
-        generic = ev.kind is not EventKind.PRODUCER_RETURN
-        grounded = bool(payload.get("grounded_consequence"))
-        if grounded:
-            frozen = payload.get("contract")
-            frozen = frozen if isinstance(frozen, dict) else {}
-            # The commission's normative basis and observations are its frozen
-            # record, not a fresh market snapshot or the current pricing cards.
-            inputs["actor_context"] = self._operating_context(sample.chosen, inputs["world"])
-            for key in ("charter", "predicates", "forecast_example", "world",
-                        "your_consequence_standing", "your_state", "unread_outcomes"):
-                inputs.pop(key, None)
-            inputs["commission"].pop("horizon_events", None)
-            inputs["commission"]["horizon_ticks"] = (
-                frozen.get("due_tick", 0) - frozen.get("opened_tick", 0))
-            inputs["realized_consequence"] = {
-                "frozen_norms": frozen.get("norms", []),
-                "producer_claim": frozen.get("producer_outputs", payload.get("outputs", {})),
-                "price_constraints": frozen.get("criteria", []),
-                "observation_contract": {
-                    key: frozen.get(key)
-                    for key in ("handle", "producer_id", "opened_tick", "due_tick",
-                                "close_tick", "charter_edition", "predicate_versions")
-                },
-                "observation_contract_ticks": (
-                    "due_tick is when this observation first matures; close_tick is when "
-                    "this assessment times out, not a deadline the producer's claim named"
-                ),
-                "evidence_snapshot": _evidence_snapshot(payload.get("evidence_snapshot")),
-                "evidence": payload.get("evidence", []),
-                "answer_with": (
-                    "realized_consequence: {status: supported|contrary|unknown, "
-                    "score: number only when supported, evidence: [references], reason}"
-                ),
-            }
+        # The two seed producing kinds are judged through one machine view: an
+        # Exposure arrives as its own kind (F12), and the kind is routing, never a
+        # clause that tells the judge its author was an antagonist (essay II.I.b:
+        # the author "should be either irrelevant, or fungible, or private").
+        generic = str(ev.kind) not in PRODUCING_KINDS
+        # A judge looks at the work like a machine — request, answer, acts,
+        # propensity — and never at the whole world the producer was shown
+        # (essay II.I.b, after Yan 2026). It keeps its own operating access,
+        # its private state and inbox, and the charter it judges against.
+        inputs["actor_context"] = self._operating_context(sample.chosen, inputs.pop("world"))
+        producer_inputs = inputs["producer"].get("inputs")
+        if isinstance(producer_inputs, dict) and isinstance(
+                producer_inputs.get("payload"), dict):
+            inputs["producer"]["inputs"] = {**producer_inputs, "payload": {
+                k: (FOLD_WITHHELD if k == "since_you_last_woke" else v)
+                for k, v in producer_inputs["payload"].items()}}
+        inputs["producer"]["executed_operations"] = payload.get("executed_operations", [])
         if generic:
-            inputs["event"] = {"kind": str(ev.kind), "payload": payload}
-            inputs["subject_handle"] = about
-        schema = evaluator_answer_schema(
-            self._forecast_schema(), self._register_schema(), include_realized=grounded)
-        if grounded:
-            schema = _citable_evidence_schema(schema, payload.get("evidence", []))
-        if grounded:
-            instruction = (
-                "Evaluate independently the observed effect of producer_claim under the "
-                "complete frozen_norms. In reason, name the frozen norm or norms you applied, "
-                "the claim or effect, and the cited evidence; if frozen_norms is empty, do not "
-                "reconstruct it from the current charter. price_constraints are role- and "
-                "window-level pricing measurements, not the sole criterion for this decision. "
-                "Uptake, profit, execution, and other measurements are evidence only when "
-                "relevant to the frozen claim and norms; none is mandatory. A true predicate "
-                "or execution receipt is evidence, not automatic usefulness. Use contrary "
-                "only when cited observed evidence falsifies an express proposition or accepted "
-                "promise in producer_claim, or contradicts an applicable frozen norm or "
-                "criterion. Name that exact claim, promise, norm, or criterion. A direct "
-                "observed violation of a frozen norm does not require producer_claim to repeat "
-                "that norm. Zero earnings, zero net, or compute cost alone is not "
-                "contrary unless producer_claim expressly promised a financial result or an "
-                "applicable frozen criterion measures it. When the evidence merely fails to "
-                "show usefulness, answer unknown. Do not return payoff or forecasts because "
-                "this return's consequence is already fixed. Explain what "
-                "the observed consequences establish about this undertaking, what they "
-                "contradict, and what remains unresolved. Also give verdict as your "
-                "normative quality judgment so the ordinary recursive evaluation path can "
-                "judge your interpretation."
-            )
-        else:
-            instruction = (
-                ("Evaluate, on commission, the public return addressed by about_handle. The "
-                 "input's subject_handle is the default when present. Give verdict = its quality "
-                 if generic else
-                 "Evaluate, on commission, a producer return. Give verdict = its quality ") +
-                "against the charter (0 to 1). Judge it against what it committed to — a claim, "
-                "a counterfactual, an observation rule, a resource decision, an accepted promise "
-                "— and if it committed to nothing this evidence can measure, answer status: "
-                "unmeasured with a reason instead: that is a complete answer and carries no "
-                "penalty. You may decline the commission with status: cannot and a reason; you "
-                "are then charged for this call alone. Optionally give "
-                "payoff = your probability that return_paid_off, the kernel's consequence "
-                "predicate, resolves true for the return, and up to "
-                f"{self.ev.max_forecasts_per_verdict} forecasts: for each, a predicate from the "
-                "list and q = your probability it happens within its horizon."
-            )
+            inputs["event"] = {"kind": str(ev.kind), "payload": judge_view(payload)}
+        schema = self._judging_contract("Verdict")
+        # The request states what the answer is; how a verdict settles is a schematic
+        # (world.scoring), carried with the request as its SCORING section, and no
+        # rubric says what a good return is (smuggling A7; essay II.III on
+        # predefined rubrics).
+        instruction = (
+            "Give verdict 0-1 on the public return addressed by about_handle "
+            "(subject_handle by default) against the charter."
+            if generic else
+            "Give verdict 0-1 on the return against the charter."
+        )
         req = self._request(
             handle,
             instruction,
@@ -1288,163 +1621,89 @@ class Runtime(
             deadline,
             CH_CONFORMITY,
             propensity=payload.get("propensity"),
+            settlement=self._settlement_facts("Verdict"),
         )
         ret = (returned if returned is not None
                else self._invoke(sample.chosen, req, "evaluator"))
         self.consequences.finish(handle, ret.cost)
         self._apply_registrations(handle, ret)
         self.handle_to_assembly[handle] = sample.chosen
-        self._resolve_adjudication(sample.chosen, handle, ret.outputs.get("fidelity_finding"))
-        if grounded:
-            self._complete_grounded_evaluation(
-                handle, sample.chosen, about, ret, payload.get("evidence", []),
-                payload.get("evidence_snapshot"))
-            return
-        answered = str(ret.outputs.get("status", "")).strip().lower()
-        reason = str(ret.outputs.get("reason", ""))[:500]
-        if ret.status == "refused" or answered == "cannot":
-            # A commission may be declined. The seat is charged the call it made
-            # and nothing else: no score, no penalty, no quota (§6.B).
-            self._settle_unmeasured(handle, CH_CONFORMITY,
-                                    reason or "the seat declined this commission",
-                                    definition=DECLINED_DEFINITION)
+        reason = declined_reason(ret)
+        if reason is not None:
+            # A commission may be declined (§6.B). The seat is charged the call it
+            # made; no score, no quota; its learners credit the decline as an
+            # abstention, less its role's price (ruling R9), as the schematic says.
+            self._settle_declined(handle, reason)
             return
         verdict = _as_unit(ret.outputs.get("verdict")) if ret.status == "ok" else None
-        payoff = _as_unit(ret.outputs.get("payoff")) if ret.status == "ok" else None
-        if answered == UNMEASURED and verdict is None:
-            self._settle_unmeasured(handle, CH_CONFORMITY,
-                                    reason or "the evaluator found nothing measurable here")
-            return
-        target = (self._judged_event(ev, handle, ret, seals_payoff=True)
-                  if verdict is not None else None)
-        if target is not None:
-            about = self._event_subject(target)
-            payload = _to_plain(target.payload)
-        else:
-            verdict = None
         if verdict is None:
-            # a malformed verdict is objectively non-conforming; the producer stays unjudged
-            self.queue.settle(
-                handle,
-                channel=CH_CONFORMITY,
-                score=0.0,
-                status=SettleStatus.SETTLED,
-                definition_version=DEF_CONFORMITY,
-                sampling_ref=None,
-            )
-            self.stats.conformities += 1
-            self.window.outcomes += 1
+            # Malformed, refused or without a verdict: charged, censored, never a grade.
+            self._censor_judgement(handle, f"{ret.status}: no verdict in [0, 1]")
             return
-        if about in self.grounded_pending:
-            # A numeric provisional opinion makes this evaluator non-fresh even
-            # when the subject has no commitment the runtime can measure.
-            self.grounded_pending[about] = self.grounded_pending[about].with_initial(
-                judge_handle=handle, evaluator_id=sample.chosen, forecast_handles=())
-        if self._judged_commitment(about, payload) is None:
-            # Nothing was committed to, so there is nothing to be right or wrong
-            # about. The commission is answered unmeasured: no standing moves and
-            # no price moves, and the judged return keeps its own settlement path.
-            self._settle_unmeasured(handle, CH_CONFORMITY, UNMEASURED_REASON_UNCOMMITTED)
+        target = self._judged_event(ev, handle, ret, predicts=True)
+        if target is None:
+            self._censor_judgement(handle, "the judgement's target was refused")
             return
+        about = self._event_subject(target)
+        payload = _to_plain(target.payload)
         about_decision = self.queue.get(about)
-        grounded_subject = (
-            getattr(self.ev, "producer_feedback", "verdict") == "realized"
-            and about_decision.channel == CH_VERDICT
-            and about in self.grounded_pending
-        )
-        pend = (self.pending.get(about) if grounded_subject else self.pending.pop(about, None))
-        if about_decision.channel == CH_EXPOSURE:
+        pend = self.pending.get(about)
+        # A tier grades the tier below it (II.III.b): a verdict on a producer return is
+        # tier one, and one on an evaluator decision sits one tier above that decision,
+        # end to end: it grades it, it is published at that tier, and the world scores
+        # it against that decision's consequence, never against a world outcome of a
+        # judgement.
+        tier = self._judged_tier(target, pend) + 1
+        if pend is not None and pend.evaluation:
+            self._grade_evaluation(about, verdict, by=handle, tier=tier)
+        elif (pend is not None and about_decision.channel == CH_VERDICT
+              and about_decision.status is SettleStatus.PENDING):
+            # The producer's reward: the mean of its judges' verdicts, settled once
+            # routing is done (``_settle_arrived_verdicts``; ruling R1).
+            self.arrived_verdicts.setdefault(about, []).append([handle, verdict])
             self._deliver_verdict_to_inbox(about, verdict, judge_handle=handle)
-        if (
-            pend is not None
-            and about_decision.channel in (CH_VERDICT, CH_CONFORMITY)
-            and (
-                about_decision.status is SettleStatus.PENDING
-                or (grounded_subject and about_decision.status is SettleStatus.TIMED_OUT)
-            )
-        ):
-            if not grounded_subject:
-                self._settle_priced(
-                    about,
-                    channel=about_decision.channel,
-                    score=verdict,
-                    definition_version=(DEF_VERDICT if about_decision.channel == CH_VERDICT
-                                        else DEF_CONFORMITY),
-                    sampling_ref=handle,
-                    cards="producer" if about_decision.channel == CH_VERDICT else "evaluator",
-                )
-                self.stats.verdicts += 1
-            self.stats.max_settlement_latency_events = max(
-                self.stats.max_settlement_latency_events, self.n - pend.opened_at_event
-            )
+        elif about_decision.channel == CH_EXPOSURE:
             self._deliver_verdict_to_inbox(about, verdict, judge_handle=handle)
-            if grounded_subject:
-                forecasts = self._open_forecasts(
-                    handle, sample.chosen, about, ret.outputs.get("forecasts"))
-                opened = {f.handle: f for f in self.book.pending() if f.handle in forecasts}
-                claims = []
-                frozen_predicates = dict(self.grounded_pending[about].predicate_versions)
-                for forecast_handle in forecasts:
-                    forecast = opened[forecast_handle]
-                    predicate = self.predicates.get(forecast.predicate_id)
-                    version = predicate.version if predicate is not None else 1
-                    if frozen_predicates.get(forecast.predicate_id) != version:
-                        # The forecast remains the evaluator's ordinary public claim,
-                        # but a predicate born with or after this action cannot define
-                        # that action's own success retrospectively.
-                        continue
-                    claims.append({
-                        "handle": forecast.handle,
-                        "predicate": forecast.predicate_id,
-                        "predicate_version": version,
-                        "params": dict(forecast.params),
-                        "q": forecast.q,
-                        "made_at_event": forecast.made_at_event,
-                        "due_at_event": forecast.due_at_event,
-                    })
-                self.grounded_pending[about] = self.grounded_pending[about].with_initial(
-                    judge_handle=handle, evaluator_id=sample.chosen,
-                    forecast_handles=[claim["handle"] for claim in claims], forecasts=claims)
-        forecast = None
-        if payoff is not None:
-            # None when the judged return's outcome was already fixed or determined:
-            # a claim about an answer is refused (defect 7), and the verdict stands
-            # on its own commitment below like one that made no payoff claim.
-            forecast = self.consequences.seal_verdict(
-                self.book,
-                self.queue,
-                evaluator_handle=handle,
-                evaluator_id=sample.chosen,
-                about=about,
-                payoff=payoff,
-                event=self.n,
-                now_ns=self.clock.now_ns,
-                tick_ns=self.tick_clock.interval_ns,
-            )
-            self.stats.forecasts_sealed += int(forecast is not None)
-        if forecast is None:
-            # §7: the payoff privilege is gone. A verdict with no payoff forecast
-            # is still a commitment about the charter's blame on the return it
-            # judged, so it is committed here under its own handle rather than
-            # under a kernel forecast it never made.
-            self._commit_verdict_without_payoff(handle, sample.chosen, about, verdict)
-        if not grounded_subject:
-            self._open_forecasts(handle, sample.chosen, about, ret.outputs.get("forecasts"))
-        self.pending[handle] = PendingJudgement(handle, CH_CONFORMITY, self.n,
-                                                opened_at_tick=self.ticks_consumed)
+        self._open_forecasts(handle, sample.chosen, about, ret.outputs.get("forecasts"))
+        # The verdict is also a prediction about the return's measured outcome: the
+        # judge's decision waits on that and on the tier above (ruling R1).
+        self._open_evaluation(handle, about=about, q=verdict, evaluator_id=sample.chosen,
+                              tier=tier)
+        if tier == 1 and (about in self.reference_mids or self._acted(about)):
+            # What this judge was shown of the world, kept for an adversarial judge
+            # that re-judges its verdict (``_counter_step``): the counter reads the
+            # same world the verdict was made in, never a later one.
+            self.verdict_views[handle] = {
+                "world": {k: v for k, v in inputs["actor_context"].items() if k != "seats"},
+                "early_warning": inputs["early_warning"], "tick": self.ticks_consumed}
         self._emit(
             EventKind.VERDICT,
             {
                 "about_handle": about,
                 "evaluator_handle": handle,
                 "verdict": verdict,
-                "payoff": payoff,
-                "payoff_handle": forecast.handle if forecast is not None else None,
-                "rationale": str(ret.outputs.get("rationale", ""))[:2000],
+                **({"tier": tier} if tier > 1 else {}),
+                **forwarded_rationale(ret.outputs),
                 "producer_outputs": payload.get("outputs", payload),
                 "propensity": self._public_propensity(handle),
             },
         )
+
+    def _judged_tier(self, target: Event, pend: PendingJudgement | None) -> int:
+        """The tier of the decision a judgement is about: 0 for a producing return.
+
+        Guarantees an evaluator decision's own tier while it waits on its signals,
+        and otherwise the tier its published judgement states (a Verdict is tier one
+        unless it says otherwise; a conformity-shaped judgement always says).
+        """
+        if pend is not None and pend.evaluation:
+            return pend.tier
+        kind = str(target.kind)
+        if target.kind is EventKind.VERDICT:
+            return int(target.payload.get("tier", 1))
+        if target.kind is EventKind.META_VERDICT or self._kind_rewards().get(kind) == "conformity":
+            return int(target.payload.get("tier", 2))
+        return 0
 
     def _meta_step(self, ev: Event, handle: str, sample: Sample, deadline: int,
                    *, returned: Return | None = None) -> None:
@@ -1453,7 +1712,10 @@ class Runtime(
         recursive = (ev.kind is EventKind.META_VERDICT
                      or self._kind_rewards().get(str(ev.kind)) == "conformity")
         about = self._event_subject(ev)
-        tier = payload["tier"] + 1 if recursive else 2
+        # A Verdict published above tier one (a judge that graded an evaluator decision)
+        # states its tier; the meta reading it sits one above.
+        tier = (payload["tier"] + 1 if recursive
+                else payload.get("tier", 1) + 1 if ev.kind is EventKind.VERDICT else 2)
         channel = self.queue.get(handle).channel
         definition = DEF_FAST if channel == CH_FAST else DEF_CONFORMITY
         if sample.chosen == NOOP:
@@ -1467,158 +1729,185 @@ class Runtime(
                 sampling_ref=None,
             )
             return
-        review = _grounded_review(payload)
         inputs = {
             "verdict": {
                 "verdict": payload.get("score") if recursive else payload.get("verdict"),
-                **({} if recursive else {"payoff": payload.get("payoff")}),
                 "rationale": payload.get("rationale", ""),
-                # The judge's own account of the verdicts it was choosing among.
-                "propensity": payload.get("propensity"),
             },
-            "producer_outputs": payload.get("producer_outputs", {}),
+            "producer_outputs": judged_outputs(payload.get("producer_outputs", {})),
             "charter": self._charter_text(),
-            "world": self._world_block(),
+            "early_warning": self._early_warning_view(),
+            # A meta judge reads the verdict like a machine, as a first-tier judge
+            # reads a return (C7): its own operating access, not the whole world.
+            "actor_context": self._operating_context(sample.chosen, self._world_block()),
         }
-        inputs["your_action_policy"] = self._action_policy(sample.chosen)  # private
+        inputs.update(self._action_policy_input(sample.chosen))  # private
         inputs["your_state"] = self.working_state.render(sample.chosen)
-        inputs["unread_outcomes"] = (self.outcomes.unread(sample.chosen)
-                                    if review is None else {})
+        inputs["unread_outcomes"] = self.outcomes.unread(sample.chosen)
         if "window" in payload:
             inputs["window"] = payload["window"]
         if recursive:
-            # The grounded record is given once, below.
-            inputs["meta_verdict"] = {key: value for key, value in payload.items()
-                                      if key not in GROUNDED_FIELDS}
-        if review is not None:
-            # The judge answered under frozen norms; the current charter and a fresh
-            # world block would grade it against a standard it was not answering to.
-            inputs["actor_context"] = self._operating_context(sample.chosen, inputs["world"])
-            for key in ("charter", "world", "your_state", "unread_outcomes"):
-                inputs.pop(key, None)
-            inputs["realized_consequence"] = review
+            inputs["meta_verdict"] = judge_view(payload)
         generic = ev.kind not in (EventKind.VERDICT, EventKind.META_VERDICT)
         if generic:
-            inputs["event"] = {"kind": str(ev.kind), "payload": payload}
-            inputs["subject_handle"] = about
-        # The root judge whose payoff forecast eventually grades this tier's top meta.
+            inputs["event"] = {"kind": str(ev.kind), "payload": judge_view(payload)}
+        inputs["subject_handle"] = about
+        # The root judge of the chain this meta reads, carried upward for the record.
         judge_handle = payload.get("evaluator_handle", about)
-        schema = {
-            "type": "object",
-            "properties": {
-                "conformity": {"type": "number"},
-                "rationale": {"type": "string"},
-                "propensity": {"type": "object"},
-                "register": self._register_schema(),
-                "about_handle": {"type": "string"},
-            },
-            "required": ["conformity"],
-        }
-        grounded_prompt = (
-            "Assess the immediate meta verdict in meta_verdict, identified by "
-            "meta_verdict.by, for conformity using realized_consequence as its preserved "
-            "grounded record. Judge that meta verdict's score and rationale, not the "
-            "original finding as a new first-tier review. Do not reconstruct the norms "
-            "from the current charter."
-            if review is not None and recursive else
-            "Assess the final grounded judgement in realized_consequence: whether its "
-             "finding is what the cited evidence supports under the complete frozen_norms, "
-             "and whether those norms bear on producer_claim. evidence lists the cited rows "
-             "first and evidence_supplied says how many the judge was shown. A finding of "
-             "unknown is reviewable like any other; evidence_snapshot says when the facts "
-             "were read. Do not reconstruct the norms from the current charter."
-             if review is not None else
-             "Assess the public return addressed by about_handle for conformity with the charter. "
-             "The input's subject_handle is the default when present." if generic else
-             "Assess the released representative verdict for conformity with the charter, "
-             "using its window as context."
+        schema = self._judging_contract("MetaVerdict")
+        prompt = (
+            "Assess the public return addressed by about_handle for conformity with the charter. "
+            "The input's subject_handle is the default when present." if generic else
+            "Assess the released representative verdict for conformity with the charter, "
+            "using its window as context."
         )
         req = self._request(
             handle,
-            grounded_prompt,
+            prompt,
             inputs,
             schema,
             deadline,
             channel,
             propensity=payload.get("propensity"),
+            settlement=self._settlement_facts("MetaVerdict"),
         )
         ret = (returned if returned is not None else self._invoke(sample.chosen, req, "meta"))
         self.consequences.finish(handle, ret.cost)
         self.handle_to_assembly[handle] = sample.chosen
         self._apply_registrations(handle, ret)
-        self._resolve_adjudication(sample.chosen, handle, ret.outputs.get("fidelity_finding"))
-        answered = str(ret.outputs.get("status", "")).strip().lower()
-        if ret.status == "refused" or answered in ("cannot", UNMEASURED):
-            # Meta work is a commission like any other: it may be declined, or
-            # answered "there is nothing here to measure", at the cost of the call.
-            self._settle_unmeasured(
-                handle, channel, str(ret.outputs.get("reason", ""))[:500] or
-                "the seat declined this commission",
-                definition=(DECLINED_DEFINITION if answered != UNMEASURED
-                            else UNMEASURED_DEFINITION))
+        reason = declined_reason(ret)
+        if reason is not None:
+            # Meta work is a commission like any other: it may be declined, at the
+            # cost of the call, and is priced as an abstention (ruling R9).
+            self._settle_declined(handle, reason)
             return
         conformity = _as_unit(ret.outputs.get("conformity")) if ret.status == "ok" else None
-        target = self._judged_event(ev, handle, ret) if conformity is not None else None
-        if target is not None:
-            about = self._event_subject(target)
-            if target is not ev:
-                payload = _to_plain(target.payload)
-                tier = payload.get("tier", 1) + 1
-                judge_handle = payload.get("evaluator_handle", about)
-        else:
-            conformity = None
-        if channel == CH_FAST and conformity is None:
-            # a malformed conformity is objectively non-conforming
-            self._settle_priced(
-                handle,
-                channel=CH_FAST,
-                score=0.0,
-                definition_version=DEF_FAST,
-                sampling_ref=None,
-                cards="meta",
-            )
-            self.stats.fast_settlements += 1
-        elif channel == CH_FAST:
-            # The top meta earns nothing for being well formed: its conformity is graded by
-            # Brier against the judged verdict's eventual consequence.
-            known = self.verdict_outcomes.get(judge_handle)
-            if known is not None:
-                y, _at, forecast_handle = known
-                self._settle_meta_consequence(handle, conformity, y, forecast_handle)
-            else:
-                self.ledger.append({"kind": "meta.awaiting_consequence", "handle": handle,
-                                    "judge_handle": judge_handle, "ts": self.clock.now_ns})
-                self.pending_meta.setdefault(judge_handle, []).append((handle, conformity))
-        else:
-            self.ledger.append(
-                {
-                    "kind": "meta.pending",
-                    "handle": handle,
-                    "tier": tier,
-                    "opened_at_event": self.n,
-                    "ts": self.clock.now_ns,
-                }
-            )
-            self.pending[handle] = PendingJudgement(handle, channel, self.n, tier,
-                                                    opened_at_tick=self.ticks_consumed)
-        if conformity is not None:
-            emitted = self.return_kinds.get(handle, "MetaVerdict")
-            self._emit(
-                EventKind.META_VERDICT if emitted == "MetaVerdict" else emitted,
-                {
-                    "about": about,
-                    "tier": tier,
-                    "score": conformity,
-                    "by": handle,
-                    "evaluator_handle": judge_handle,
-                    "propensity": self._public_propensity(handle),
-                    "rationale": str(ret.outputs.get("rationale", ""))[:2000],
-                    # The frozen record travels with the judgement, so a higher tier
-                    # reads the same facts rather than an opinion about them.
-                    **{key: payload[key] for key in GROUNDED_FIELDS if key in payload},
-                    **({"about_handle": handle} if emitted != "MetaVerdict" else {}),
-                },
-            )
+        if conformity is None:
+            # Malformed or refused: charged, censored, never a kernel zero (evaluations S2).
+            self._censor_judgement(handle, f"{ret.status}: no conformity in [0, 1]")
+            return
+        # A meta's grade is a prediction of its target's consequence score, so a target
+        # it chose must still be open, exactly as a judge's must (``_hindsight_reason``).
+        target = self._judged_event(ev, handle, ret, predicts=True)
+        if target is None:
+            self._censor_judgement(handle, "the judgement's target was refused")
+            return
+        about = self._event_subject(target)
+        if target is not ev:
+            payload = _to_plain(target.payload)
+            tier = payload.get("tier", 1) + 1
+            judge_handle = payload.get("evaluator_handle", about)
+        # The grade is also a prediction: of the consequence score of the decision it
+        # graded. The meta waits on that and, below the top, on the tier above it.
+        self._open_evaluation(handle, about=about, q=conformity, evaluator_id=sample.chosen,
+                              tier=tier)
+        self.ledger.append({"kind": "meta.pending", "handle": handle, "tier": tier,
+                            "about_handle": about, "opened_at_event": self.n,
+                            "ts": self.clock.now_ns})
+        emitted = self.return_kinds.get(handle, "MetaVerdict")
+        self._emit(
+            EventKind.META_VERDICT if emitted == "MetaVerdict" else emitted,
+            {
+                "about": about,
+                "tier": tier,
+                "score": conformity,
+                "by": handle,
+                "evaluator_handle": judge_handle,
+                "propensity": self._public_propensity(handle),
+                **forwarded_rationale(ret.outputs),
+                **({"about_handle": handle} if emitted != "MetaVerdict" else {}),
+            },
+        )
+
+    def _counter_step(self, ev: Event, handle: str, sample: Sample, deadline: int,
+                      *, returned: Return | None = None) -> None:
+        """An adversarial judge reads a verdict and gives its own on the return it judged.
+
+        Essay II.III.b: realized consequence is "sparse ... and shrinking", so it is
+        farmed "by inducing a level of adversarial activity", and the adversarial
+        layer "consists not only of evaluators but also of productive workers"
+        (evaluations M1). The counter-verdict is a prediction of the same measured
+        outcome the verdict it read predicts; it is paid only when the world measures
+        that return, on how far it beat that verdict (``_settle_counters``). It never
+        reaches the producer's reward or the judge's: the world grades both.
+
+        Guarantees a counter settles censored, never scored, when it read anything but
+        a first-tier verdict on a return, or a return whose outcome the world had
+        already given (a reading of the answer is not a prediction).
+        """
+        self._start_return(handle)
+        payload = _to_plain(ev.payload)
+        channel = self.queue.get(handle).channel
+        if sample.chosen == NOOP:
+            self.stats.noops += 1
+            self.queue.settle(handle, channel=channel, score=0.0,
+                              status=SettleStatus.INAPPLICABLE,
+                              definition_version=DEF_COUNTER, sampling_ref=None)
+            return
+        about = payload.get("about_handle")
+        view = self.verdict_views.get(payload.get("evaluator_handle"))
+        own = self._operating_context(sample.chosen, self._world_block())
+        inputs = {
+            "verdict": {"verdict": payload.get("verdict"),
+                        "rationale": payload.get("rationale", "")},
+            "producer_outputs": judged_outputs(payload.get("producer_outputs", {})),
+            "charter": self._charter_text(),
+            "subject_handle": about,
+            # The world exactly as the judge it re-judges was shown it, frozen at that
+            # verdict (the #132 review, item 1): its edge may be a better reading of
+            # the same evidence, never fresher prices. Its own seat row is its own.
+            "early_warning": view["early_warning"] if view is not None else None,
+            "actor_context": ({**view["world"], "seats": own["seats"]} if view is not None
+                              else own),
+        }
+        inputs.update(self._action_policy_input(sample.chosen))  # private
+        inputs["your_state"] = self.working_state.render(sample.chosen)
+        inputs["unread_outcomes"] = self.outcomes.unread(sample.chosen)
+        schema = self._judging_contract("CounterVerdict")
+        req = self._request(
+            handle,
+            "Give your own verdict 0-1 on the return this verdict judged, against the "
+            "charter.",
+            inputs, schema, deadline, channel, propensity=payload.get("propensity"),
+            settlement=self._settlement_facts("CounterVerdict"))
+        ret = (returned if returned is not None
+               else self._invoke(sample.chosen, req, "adversary"))
+        self.consequences.finish(handle, ret.cost)
+        self.handle_to_assembly[handle] = sample.chosen
+        self._apply_registrations(handle, ret)
+        reason = declined_reason(ret)
+        if reason is not None:
+            self._settle_declined(handle, reason)
+            return
+        q = _as_unit(ret.outputs.get("verdict")) if ret.status == "ok" else None
+        if q is None:
+            self._censor_judgement(handle, f"{ret.status}: no verdict in [0, 1]")
+            return
+        judged = _as_unit(payload.get("verdict"))
+        if (ev.kind is not EventKind.VERDICT or "tier" in payload or judged is None
+                or not isinstance(about, str)):
+            self._censor_judgement(handle, "a counter-verdict reads a first-tier verdict "
+                                           "on a return")
+            return
+        if view is None or view["tick"] != self.ticks_consumed:
+            # Only a counter made in the tick of the verdict it read, on that verdict's
+            # frozen view, is a prediction on equal information.
+            self._censor_judgement(handle, "a counter-verdict reads a verdict in the tick "
+                                           "it was given")
+            return
+        self.decision_subjects[handle] = payload.get("evaluator_handle") or about
+        if self._consequence_known(about, 1):
+            self.ledger.append({"kind": "evaluation.hindsight", "handle": handle,
+                                "about_handle": about, "tier": 1, "ts": self.clock.now_ns})
+            self._censor_judgement(handle, "the return's outcome was already known")
+            return
+        self.pending_counters[handle] = {
+            "about": about, "q": q, "judge_handle": payload.get("evaluator_handle"),
+            "judge_q": judged, "evaluator_id": sample.chosen, "tick": self.ticks_consumed,
+        }
+        self.ledger.append({"kind": "counter.opened", "handle": handle, "about_handle": about,
+                            "judge_handle": payload.get("evaluator_handle"), "q": q,
+                            "judge_q": judged, "ts": self.clock.now_ns})
 
 
 def run_world(
@@ -1629,7 +1918,6 @@ def run_world(
     initial_balance_micro: int | None = None,
     ledger_path: str | None = None,
     router_gamma: float = 0.1,
-    drip: bool = True,
     provider: Any | None = None,
     market: X402Provider | None = None,
     exchange: Any | None = None,
@@ -1644,21 +1932,19 @@ def run_world(
     outcome is known and settle to their own handle; the world terminates by
     death if the wallet reaches zero and the summary reports the seal state.
 
-    A world whose manifest prices population tools does not launch on a host
-    where the jail cannot start: the world block would promise tools that no
-    proposal could ever obtain. Nothing is written before the refusal.
+    Every world offers population tools, so no world launches on a host where
+    the jail cannot start: the world block would promise tools that no proposal
+    could ever obtain. Nothing is written before the refusal.
     """
-    if manifest.tools.population_tool_micro_per_call > 0:
-        reason = jail_probe()
-        if reason is not None:
-            raise NoJail(f"this world offers population tools and the host has no jail: {reason}")
+    reason = jail_probe()
+    if reason is not None:
+        raise NoJail(f"this world offers population tools and the host has no jail: {reason}")
     return Runtime(
         manifest,
         events=events,
         seed=seed,
         initial_balance_micro=initial_balance_micro,
         ledger_path=ledger_path,
-        drip=drip,
         router_gamma=router_gamma,
         provider=provider,
         market=market,

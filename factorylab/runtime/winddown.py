@@ -532,6 +532,19 @@ class WindDownExecutor:
         except Exception as exc:  # noqa: BLE001
             mids, unreadable = {}, [*unreadable, ("mids", type(exc).__name__)]
 
+        # Money in a vault is exposure the executor does not wind down: a lockup or a
+        # leader's 5% floor can refuse the withdrawal, so no pass here attempts one. It
+        # is read and reported, and an account holding it is not flat.
+        read_vaults = getattr(self.exchange, "vault_equities", None)
+        if read_vaults is not None:
+            try:
+                residual["vaults"] = [
+                    {"vault": str(p["vault"]), "equity_usd": str(p["equity_usd"]),
+                     "locked_until_ns": p.get("locked_until_ns")}
+                    for p in read_vaults()["positions"]
+                    if _decimal(p.get("equity_usd"))]
+            except Exception as exc:  # noqa: BLE001
+                unreadable = [*unreadable, ("vault_equities", type(exc).__name__)]
         residual["resting"] = [{"order_id": str(o.get("order_id")), "coin": str(o.get("coin"))}
                                for o in resting]
         if account is not None:
@@ -566,7 +579,8 @@ class WindDownExecutor:
 
         if unreadable or (account is None):
             state = UNKNOWN
-        elif residual["resting"] or residual["positions"] or residual["balances"]:
+        elif (residual["resting"] or residual["positions"] or residual["balances"]
+              or residual.get("vaults")):
             state = PENDING
         elif residual["dust"]:
             state = DUST

@@ -1,7 +1,8 @@
 import pytest
 
-from factorylab.charter.charter import Charter, MetricCard, seed_charter
+from factorylab.charter.charter import Charter, MetricCard
 from factorylab.charter.windows import MetricWindow
+from tests.seed_charter import seed_charter
 
 
 def test_seed_charter_renders_norms_and_cards() -> None:
@@ -10,7 +11,7 @@ def test_seed_charter_renders_norms_and_cards() -> None:
     assert text.startswith("CHARTER (edition 1)")
     for n in c.norms:
         assert f"- {n}" in text
-    assert "forecast_skill" in text and "acceptable: above zero" in text
+    assert "forecast_skill" in text and "acceptable: above 0" in text
 
 
 def test_charter_validation() -> None:

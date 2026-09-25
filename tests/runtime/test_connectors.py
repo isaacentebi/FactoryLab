@@ -39,7 +39,8 @@ def register(rt, monkeypatch, owner="seed-decider", origin="https://example.org"
     handle = decision(rt, owner)
     # Unit fixture supplies eligibility; the scripted acceptance test uses real consequences.
     monkeypatch.setattr(rt, "_committee_eligible", lambda: {
-        "seed-decider": "producer", "eval-a": "evaluator", "meta-a": "meta"})
+        "seed-decider": "producer", "eval-a": "evaluator", "meta-a": "meta",
+        "antagonist-a": "antagonist"})
     rt._apply_registrations(handle, Return(handle, {"register": [{
         "kind": "connector", "id": "source", "description": "Public data", "origin": origin,
         "predicted_effect": {"card_id": "cost_per_return", "direction": "decrease", "window": 1},
@@ -64,9 +65,9 @@ def test_preflight_vote_then_versioned_admission_with_proposer_excluded(monkeypa
     assert kinds.index("connector.call") < kinds.index("connector.seated")
     assert kinds.index("connector.tally") < kinds.index("connector.registered")
     seats = ledger_items(rt, "connector.seated")[0]["seats"]
-    assert {seat["assembly_id"] for seat in seats} == {"eval-a", "meta-a"}
+    assert {seat["assembly_id"] for seat in seats} == {"eval-a", "meta-a", "antagonist-a"}
     ballots = ledger_items(rt, "connector.vote")
-    assert len(ballots) == 2 and all(row["vote"] is True for row in ballots)
+    assert len(ballots) == 3 and all(row["vote"] is True for row in ballots)
     assert all(not rt.queue.history(row["handle"]) for row in ballots)
     assert {v["handle"] for v in rt.pending_votes} == {row["handle"] for row in ballots}
     assert all(v["activation_window"] == rt.window.index for v in rt.pending_votes)
@@ -77,7 +78,9 @@ def test_preflight_vote_then_versioned_admission_with_proposer_excluded(monkeypa
     assert rt.wallet.check_conservation()
 
 
-def test_flat_cost_precedes_return_and_window_cap_survives_checkpoint(monkeypatch):
+def test_a_public_fetch_moves_no_money_and_window_cap_survives_checkpoint(monkeypatch):
+    """Wave 11: a GET of a public origin pays no one, so the wallet does not move for
+    it; the per-window call cap is its limit, and the cap survives a checkpoint."""
     rt = make_runtime()
     register(rt, monkeypatch)
     bounds = replace(rt.m.connectors, max_calls_per_window=2)
@@ -88,8 +91,8 @@ def test_flat_cost_precedes_return_and_window_cap_survives_checkpoint(monkeypatc
     before = rt.wallet.balance
     result, cost = rt._run_tool("seed-decider", handle, {
         "tool": "connector.fetch", "args": {"id": "source", "path": "/data"}})
-    assert result["body"] == '{"value": 42}' and cost == 1000
-    assert rt.wallet.balance == before - cost
+    assert result["body"] == '{"value": 42}' and cost == 0
+    assert rt.wallet.balance == before
     assert (ledger_items(rt, "wallet.commit")[-1]["seq"]
             < ledger_items(rt, "connector.call")[-1]["seq"])
     result, cost = rt._fetch_connector("seed-decider", handle, {"id": "source", "path": "/again"})
@@ -104,7 +107,9 @@ def test_flat_cost_precedes_return_and_window_cap_survives_checkpoint(monkeypatc
     result, cost = rt2._fetch_connector("seed-decider", handle, {"id": "source", "path": "/"})
     assert "cap" in result["error"] and cost == 0
     rt.window.index += 1
-    assert rt._fetch_connector("seed-decider", handle, {"id": "source", "path": "/"})[1] == 1000
+    result, cost = rt._fetch_connector("seed-decider", handle, {"id": "source", "path": "/"})
+    assert "error" not in result and cost == 0 and len(transport.calls) == 2
+    assert rt.wallet.balance == before
 
 
 def test_unaffordable_calls_cannot_dispatch_or_consume_quota(monkeypatch):
@@ -120,15 +125,15 @@ def test_unaffordable_calls_cannot_dispatch_or_consume_quota(monkeypatch):
     assert rt.connector_calls == calls
 
 
-def test_failure_after_dispatch_is_metered_and_counted(monkeypatch):
+def test_failure_after_dispatch_is_counted_and_moves_no_money(monkeypatch):
     rt = make_runtime()
     register(rt, monkeypatch)
     rt.connector_proxy = ConnectorProxy(rt.m.connectors, Transport(error=TimeoutError()))
     before = rt.wallet.balance
     result, cost = rt._fetch_connector("eval-a", decision(rt, "eval-a"),
                                       {"id": "source", "path": "/"})
-    assert result["error"] == "connector timeout" and cost == 1000
-    assert rt.wallet.balance == before - 1000
+    assert result["error"] == "connector timeout" and cost == 0
+    assert rt.wallet.balance == before
     assert rt.connector_calls["eval-a"][1] == 1
 
 
@@ -175,7 +180,8 @@ def composition(rt, monkeypatch, *, stub_parser):
     ret = rt._invoke("seed-decider", req, "producer")
     assert ret.status == "ok" and ret.outputs["parsed"] == 42
     assert len(requests) == 3
-    assert ret.cost == 3 * 30 + 1000 + rt.m.tools.population_tool_micro_per_call
+    # Three model calls are the whole cost: the fetch and the jailed tool pay no one.
+    assert ret.cost == 3 * 30
     rows = ledger_items(rt)
     # The body is recovery evidence on the io plane only; no public surface carries it.
     public = [row for row in rows if row["kind"] not in ("io.call", "io.result")]

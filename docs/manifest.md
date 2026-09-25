@@ -20,6 +20,7 @@ round-three fixes to the existing contracts.
 | `tools.max_depth` | Integer ≥ 0, never boolean or float | `4` | Yes: root depth is 0; zero disables children |
 | `tools.max_children` | Integer ≥ 0, never boolean or float | `3` | Yes: per-request fan-out; zero disables children |
 | `tools.max_tool_calls` | Integer ≥ 0, never boolean or float | `4` (the existing limit, now a manifest key) | Yes: per request; zero disables tool calls |
+| `venue.max_readers` | Integer ≥ 1 | `16` | Yes: the venue read slots. Seeds take slots in manifest order; a registration takes the lowest free one; a retirement frees one, given again only once its last holder's last read has left the sliding minute; a seat without one registers all the same, without the venue read tools. The venue read share divides by it (see "Seeing the world"). The population itself has no size cap: `tools.max_seats` was removed and is refused |
 
 The assembly proposal uses the same accepts/emits/schemas contract. A custom
 schema validates the returned payload, excluding the protocol fields `emits`,
@@ -48,7 +49,8 @@ subject's router, even if the contract also includes a producing kind.
 
 Judging returns may include `about_handle`; omission selects the delivered
 subject. A value absent from the decision queue falls back to an addressable
-delivered subject with `about_handle.ignored` and `registration_feedback`.
+delivered subject with `about_handle.ignored`, and the reason reaches the judge's
+own outcome inbox.
 An existing but forbidden handle is refused, not replaced. A requested judge
 may address only its requesting decision or that decision's ancestors. The
 ancestor self-judgement check still refuses those subjects, so this restriction
@@ -56,7 +58,7 @@ does not grant permission to judge the requesting chain. A payoff judgement on
 a subject not chosen by the router also passes the hindsight check, including
 a parent-selected subject. A fixed consequence, expired backstop or judgement
 deadline beyond that backstop is refused. Judgement `return.refused` items
-deliver their reasons in `registration_feedback`.
+deliver their reasons to the judge's own outcome inbox.
 
 `tool.call.outcome` is `ok`, `failed` or `uncertain`. An unacknowledged venue
 write is `uncertain` and retains its client id for reconciliation. An
@@ -106,6 +108,39 @@ completed operations, so a long completion can outlast the requested run duratio
 Stopping an in-flight process still leaves its full quote as uncertain liability;
 there is no automatic retry.
 
+`models[].contract` states how a route carries each request's I/O contract
+(Chapter II §II.b: physics is enforced, not announced). It defaults to
+`"json_object"`, which asks the host for JSON syntax alone. `"json_schema"` hands
+the contract to the host's constrained decoder as `response_format.json_schema`
+(`strict: false`). The schema has one form for each reply shape the kernel
+distinguishes: the final answer, a continuation (a non-empty `tool_calls` or
+`requests`) and the refusal form (`status: "cannot"` with a `reason`). Each form
+is the intersection of what the kernel checks a reply against: the universal
+envelope, the fields the answer's kind owns, and the contract. A form the kernel
+cannot accept is not sent. For example, a closed contract that does not name
+`tool_calls` has no continuation through it. Every object the contract leaves
+open is marked open. A contract that is a union of answers (a producing kind's;
+see "The declined trade is part of the return contract") is carried as the same
+answers the request publishes and the kernel validates, never rebuilt for the
+wire. What a schema cannot state (an answer order's semantics, a child request's
+checks, the rest of the runtime's validator) stays the kernel's alone.
+Hosts enforce the schema on a best-effort basis: the 23 September 2026 probes
+saw json_schema routes still return replies outside it. On OpenRouter, `provider.require_parameters` is set
+unless `extra_body` names it, as it is for `json_object`. The key is accepted only
+on `openrouter` and `venice` routes, and any other value is refused at load. It is
+fixed for the world's life. A route changes contract only in a new manifest; a
+refused schema never falls back to `json_object` mid-run. Either way the kernel's
+own validation of the reply is the authority, and the prompt's `outcome_schema`
+section is unchanged. OpenAI-hosted routes stay on the default: their hosts
+refuse a schema whose root is a union, and strict mode would require every
+property and close every object, which is a different contract.
+
+`models[].training_cutoff` is the last UTC day (`"YYYY-MM-DD"`) a model's training
+data may cover, as its provider states it; absent (the default) means unknown. It is
+fixed for the world's life and hashed. It binds only a world that replays a recorded
+tape (`[exchange.tape]`, the look-ahead guard below); no shipped world states one,
+because a cutoff is the provider's statement to record, not the architect's guess.
+
 The deterministic scripted fixture reuses its existing call schedule: the third
 registration slot installs a helper and a producer accepting `ProducerReturn`;
 the fourth tool slot requests helper → grandchild with a catalogue tool; the
@@ -122,23 +157,38 @@ settings".
 
 | Key | Type | Default / seed | Hard cast? |
 | --- | --- | --- | --- |
-| `treasury.max_venice_per_window` | Exact USD decimal string or integer, nonnegative | `"10"` (10,000,000 micro-USD) | Configured resource bound, fixed for a run; not amendable through metric cards |
-| `treasury.cctp_forwarding` | `"never"`, `"on_empty_gas"` or `"always"` | `"on_empty_gas"` | Configured route rule, fixed for a run; absent or default keys leave the manifest hash unchanged |
+| `treasury.max_venice_per_window` | Exact USD decimal string or integer, nonnegative | `"10"` (10,000,000 micro-USD) | Configured resource bound per `treasury.cap_window`, fixed for a run; not amendable through metric cards |
+| `treasury.cap_window` | Duration, at least `timing.min_ratio` declared ticks | `"1h"` | The Venice and forwarding-fee caps' own wall-clock window, counted from launch. A declared money bound, not derived from any measured loop: a money rail runs in wall time, so its rate cap is a duration, and it no longer borrows the pricing window (time audit T1, T13) |
+| `treasury.cctp_forwarding` | `"never"`, `"on_empty_gas"` or `"always"` | `"on_empty_gas"` | Configured route rule, fixed for a run |
 | `treasury.max_forward_fee_usd` | Exact USD decimal string, nonnegative | `"0.30"` ($0.10 of headroom over the $0.20 quoted on both networks) | Hard bound on the on-chain forwarding fee quote per exit; a higher quote refuses before signing |
-| `treasury.max_forward_fees_per_window` | Exact USD decimal string or integer, nonnegative | `"1"` | Per-reserve-window cap on forwarding fees quoted for submitted exits; a failed exit still counts |
-| `treasury.forward_wait_windows` | Positive integer | `2` | Reserve windows a forwarded mint may stay unobserved before the exit strands recoverably; absent or default keys leave the manifest hash unchanged |
+| `treasury.max_forward_fees_per_window` | Exact USD decimal string or integer, nonnegative | `"1"` | Per-cap-window cap on forwarding fees quoted for submitted exits; a failed exit still counts |
+| `treasury.forward_wait_ticks` | Integer, at least `timing.min_ratio` | `360` | Declared wait, in world ticks, before a forwarded mint or a hybrid top-up that stays undone strands recoverably. Once `timing.min_support` conversions have finalized, the wait is derived instead: `timing.min_ratio` times the capital loop's p90 conversion (open to finalized, in ticks consumed, so an outage adds nothing) (time audit T13). `treasury.forward_wait_windows` is refused |
+| `treasury.venice_network` | Absent, or `"base-mainnet"` | Absent | Hybrid capital-loop rehearsal: `to_venice` buys real Venice credit from the Base mainnet reserve and pays for it in the testnet pots with a shadow send (docs/architecture/capital-loop-rehearsal.md). Refused on a mainnet venue and without `venice_shadow_sink` |
+| `treasury.venice_shadow_sink` | Nonzero EVM address, only with `venice_network` | Absent | Where the shadow leg's testnet USDC goes; must be an existing Hyperliquid testnet account outside every observed pot |
+| `treasury.max_venice_total_usd` | Exact USD, positive; required with `venice_network`, refused without it | Absent | Absolute bound on real USDC ever authorized for Venice in the world, re-authorizations included; the counter is checkpointed |
+| `treasury.venice_reserve_floor_usd` | Exact USD, nonnegative; required with `venice_network`, refused without it | Absent | No top-up is prepared if the Base mainnet reserve would fall below it (read on chain, so a fresh run cannot reset it); the capital-loop runner reads the reserve keylessly at launch and refuses unless reserve − floor ≤ `max_venice_total_usd` |
+| `treasury.venice_pay_to` | Nonzero EVM address; required with `venice_network`, refused without it | Absent | The only payee a Venice top-up quote may name; a quote or journaled authorization paying anyone else is refused before signing |
 | `committee.seats` | Integer, at least 3 so the existing three core roles can be covered | `5` | Configured resource bound, fixed for a run |
-| `committee.promise_resolution` | Finite positive number | `0.01` | Fraction of the frozen region's scale a promised move must clear to count; absent or default, it leaves the manifest hash unchanged |
-| `charter.norms` | Nonempty array of names, or of `{ id, definition }` tables | Required for explicit charters; edition 3 carries definitions, editions before it carry bare names | Read-only for the edition. A bare name loads with an empty definition, so a charter surveyed before definitions existed keeps its content digest; `Charter.render` prints each definition under its norm |
+| `committee.promise_resolution` | Finite positive number | `0.01` | Fraction of the frozen region's scale a promised move must clear to count |
+| `committee.quorum` | Integer in `[1, committee.seats]` | `3` (the smallest body in which a strict majority is not unanimity, so no one seat passes or blocks alone; also `committee.seats`' floor) | Launch cast, fixed for the world's life. Fewer eligible assemblies than this seat no committee at a governance boundary (`charter.seat_deferred`); a motion with fewer voting seats than this, once its proposer is excluded, waits for the next boundary; a retirement or connector below it is refused |
+| `norm_house.signer` | Absent, or a 0x-prefixed 20-byte EVM address (stored lower-case) | Absent: no norm edition is possible | Launch cast, fixed for the world's life and hashed: the one key whose signature makes a norm edition valid (essay II.IV.a, the input layer's write permission is part of the hard kernel) |
+| `charter.edition` | Positive integer | `1` | The edition the world launches with; after 1 it requires `parent_charter_sha256` (charter audit P5) |
+| `charter.parent_charter_sha256` | 64 lowercase hex characters | Absent; required when `edition` is after 1 and refused at 1 | The content digest of the charter this one descends from. Part of the charter's content digest and of the manifest hash (`charter_parent_sha256`) |
+| `charter.norms` | Nonempty array of names, or of `{ id, definition }` tables | Required; edition 3 carries definitions, editions before it carry bare names | Read-only for the edition. A bare name loads with an empty definition, so a charter surveyed before definitions existed keeps its content digest; `Charter.render` prints each definition under its norm |
 | `charter.cards[].window.kind` | `"returns"`, `"forecasts"`, or `"windows"` | Required for explicit cards | Executable selector type; its value is population amendable |
 | `charter.cards[].window.n` | Positive integer, never a boolean or float | Required; seed cost and well-formedness cards use `100`, forecast skill uses `50` | Population amendable sample horizon |
 | `charter.cards[].window.per` | `"role"`, `"assembly"`, or null | Required in JSON; omitted in TOML means null. Seed cost and well-formedness use `"role"`; forecast skill uses `"assembly"` | Population amendable scope |
 | `charter.cards[].answers_for` | `producer`, `evaluator`, `meta`, `antagonist`, `all`, or any registered emitted kind | Required | Population amendable pricing responsibility |
-| Proposal `predicted_effect.card_id` | Current or proposed card id for amendments; current card id for connectors and retirements | Required; no default | Liability binds to a measurable card |
+| `charter.cards[].region` | `{ rule, lo, hi }`: `rule` one of `at least`, `above` (with `lo`), `at most`, `below` (with `hi`), `between` (both, `lo < hi`), `below the median of the previous window` (neither) | Required unless `acceptable_region` states it | The typed acceptable region (charter audit P2); the rendered sentence is derived from it. Hashed with the card |
+| `charter.cards[].acceptable_region` | One of the historical sentences (`at most 0.30`, `above zero`, …) | Accepted in place of `region`; with both, they must agree | Read into the same typed rule; a sentence no rule reads holds no region and carries no price, and a manifest refuses it |
+| `charter.cards[].holdout` | Array of `predicate-id@version` | `[]` | Registered predicates a closed window must also satisfy (charter audit M3); appended by a holdout motion, never by a cards motion |
+| `charter.cards[].window.interval` | Absent, or `{ level, half_width }`, `level` in (0, 1), `half_width` > 0 | Absent | A scope is measured only when the `level` interval of its mean is at most `half_width` wide on each side (charter audit M3) |
+| Proposal `predicted_effect.card_id` | Current or proposed card id for cards and lambda amendments; current card id for connectors and retirements | Required unless `observation` is given; no default | Liability binds to a measurable card |
+| Proposal `predicted_effect.observation` | `burn_per_window` or a population-registered observation id | Required for, and only for, a clock amendment (`tick_interval`) | Speed is cash burn (charter audit M6): the promise is graded on the observation over one closed window, its region the observation's declared range |
 | Proposal `predicted_effect.direction` | `increase` or `decrease` | Required; no default | The promise graded against the baseline recorded at activation |
-| Proposal `predicted_effect.window` | Positive integer count of closed reserve windows after activation | Required; no default | Population-authored liability horizon |
+| Proposal `predicted_effect.window` | Positive integer count of closed price windows after activation | Required; no default | Population-authored liability horizon. The promise is graded at the later of that count and `timing.min_ratio` measured consequence periods, in ticks, after activation (time audit T2) |
 
-The existing `committee.min_settled`, `novelty.window`, `novelty.share`,
+The existing `committee.min_settled`, `novelty.share`,
 `novelty.trials`, prices, timing and clock parameters are disclosed in
 every request's `world.mechanics`, at the values the manifest committed and an
 amendment last activated. The two the runtime adapts live — the consequence mix
@@ -193,12 +243,12 @@ timestamp. The cadence threshold remains available under
 `amendment_eligibility` as `eligible_no_earlier_than`, explicitly an eligibility
 boundary rather than a scheduled charter change. `catalogue` carries version
 and changed entries only; `public_observations` carries the last closed window's
-values, pathologies, recent prints and the shared directory,
+values, pathologies and recent prints,
 and `unavailable_observations` — every source that could not be read, with the
 reason. No private state is in this block; a seat's own state appears exactly
 once, in `YOU`. Everything else the world publishes — `inputs.you`, the event,
-the pots, note counts, the reserve remaining, `tick_intervals`,
-`registration_feedback`, `adaptive_scoring`, the tool, connector, work and
+the pots, the reserve remaining, `tick_intervals`,
+`adaptive_scoring`, the tool, connector, work and
 observation catalogues, the mechanics and the scoring formulas — is rendered
 after those, inside `INPUTS`. A key of the world block is rendered in exactly
 one of those four places: the partition is `PREFIX_WORLD_KEY` with
@@ -256,11 +306,13 @@ by `catalogue.search`, whose result carries `models`, `tools` and
 in the prefix — and the schemas a decision never reads no longer ride in front
 of every decision.
 
-The **OUTCOME CONTRACT** (§8, verbatim) is rendered once per request,
-immediately after the outcome schema it is about: what an execution claim must
-distinguish (`intended`, `submitted`, `settled`, `rejected`, `unknown`), what a
-forecast and a fidelity objection must carry, what a pause must state, and that
-a monetary quantity names its asset, its custody account and its unit.
+The **OUTCOME CONTRACT** is rendered once per request, immediately after the
+outcome schema it is about. It states what every return must satisfy and
+nothing else: the tool-round protocol and the refusal form
+(`{"status": "cannot", "reason": ...}`). The execution-claim taxonomy, the pause,
+forecast and monetary-unit paragraphs and the duplicated fidelity-objection shape
+of §8 were removed (Chapter II rulings, smuggling audit D1): no code read them,
+and a fidelity objection's shape is published in the evaluator answer schema.
 
 The change is measured, not assumed: every `invocation` item carries `sections`,
 the UTF-8 bytes rendered per prompt section (`stable_prefix`, `you`,
@@ -289,9 +341,8 @@ every field name. Funding and carry state the venue's sign convention and
 settlement period in the result: a positive `funding_usd` is what the position
 pays. It prescribes no objective: `carry` reports `net_usd_positive`, a fact
 about a subtraction, and never a recommendation. It is published wherever the
-fixed primitives are (a resume included), priced at
-`prices.tool_micro_per_call` where a world commits one and free otherwise, and
-metered and ledgered like any other tool. It answers every fee, funding and
+fixed primitives are (a resume included), free (arithmetic in the world's own
+process pays no one), and metered and ledgered like any other tool. It answers every fee, funding and
 carry case of `scripts/calibrate_seats.py` exactly.
 
 ## Round-two W2: judges, consequences, the reserve
@@ -302,29 +353,87 @@ carry case of `scripts/calibrate_seats.py` exactly.
 |---|---|---|---|---|
 | `consequence_share` | float in [0, 1) | 0.3 | hard | Base weight of payoff standing in evaluator selection; the live actuator starts here. |
 | `adversarial_share` | float in [0, 1] | 0.15 | hard | Cap on the router's probability mass over antagonist assemblies (A5). The essay's "minority" is a constraint, not a prize. |
-| `sibling_share` | float in [0, 1] | 0.5 | hard | Share of the representative's meta score at which an unread cascade sibling settles (A14). |
 | `sampling_step` | float in [0, 1] | 0.1 | hard | Step by which the consequence mix rises per divergent window and steps back otherwise (A14, the live sampling-rate actuator). |
 | `sampling_cap` | float in [consequence_share, 1) | 0.7 | hard | Ceiling of the raised consequence mix (A14). |
+| `multi_judge_share` | float in [0, 1] | 0.3 | hard | Share of judged returns drawn again until `multi_judge_count` judges read them (Wave 5a; evaluations P6, M2). Drawn once per judged return from the runtime's seeded stream; 0 draws nothing. |
+| `multi_judge_count` | int in [2, 5] | 2 | hard | Draws a multi-judged return receives. Each further draw is an ordinary routed decision from the kind's first router, over its menu less every seat drawn for the return and every seat on a drawn seat's family (`route.multi_judge`). |
+| `meta_read_share` | float in (0, 1] | 0.5 | hard | Of a cascade window's completed judgements, the share released to the tier above at its close, the representative first and then by the same rank (`cascade.release` with `companion_of`; evaluations C7). Edition 6 sets 1.0. |
+
+### The evaluator population (Wave 5a; evaluations C1, M3, P6)
+
+A world whose seeds emit a `Verdict` is refused at load unless all of these hold
+(`WorldManifest.evaluator_population_problems` names each failure):
+
+- **Producers are the minority.** Evaluator seats (every seed with a verdict,
+  conformity or counter reward shape: judges, metas, adversarial judges) strictly
+  outnumber producer seats (every seed with a judged or exposure shape, antagonists
+  included). Essay II.III.b: producers are "now established to be the minority of the
+  superdark factory's population". After launch the population's own registrations
+  and retirements are never refused for the mix they make; the kernel ledgers
+  `population.evaluator_majority` (`held`, the counts, the cause) each time the
+  majority is lost or regained. The evaluators' share of compute is not enforced: the
+  seed observation `evaluator_compute_share` (evaluator-role compute over all compute
+  in the window) is published every window for a card to price.
+- **At least three model families serve the evaluator tier.** A family is the
+  foundation model, not the route (`runtime/families.py: model_family`):
+  `venice:z-ai-glm-5-3-flash` and `z-ai/glm-5.3-flash` are one family, and so are
+  `openai/gpt-5.6-sol` and `openai/gpt-5.6-luna`. A `fake-` test double is its own.
+- **Every return has a judge off its author's family**, and two judges are possible
+  while `multi_judge_share > 0`: every judged kind a seed emits is accepted by judges
+  on at least `multi_judge_count` families other than its author's.
+- **Every chain a tier can be asked to grade has a reader.** Each (judge, producer)
+  pair of families a Verdict can carry is read by a meta on neither; when any seed
+  reads MetaVerdicts, each (grader, graded) pair a MetaVerdict can carry is read by a
+  seed on neither, to every depth the roster reaches. Every adversarial judge can
+  read some Verdict the roster makes.
+
+Routing never draws a judging seat (a verdict, conformity or counter shape) on the
+family of either of the two nearest authors of the chain it would judge: a judge
+avoids the producer's family, a meta the judge's and the producer's, a grader of a
+meta the meta's and the judge's (`route.excluded`, reason `same-family`;
+`RoutingMixin._chain_families` argues the depth). The tier above a meta is counted
+the same way. A draw every eligible seat of which is barred is ledgered
+`route.barred` and counted (`stats.route_barred`); it opens no decision. Edition 5, edition 3 and their capital-loop copy fail all
+three checks and no longer load (R8); `worlds/edition6-capital-loop.toml` replaces
+the capital loop's world.
+
+### `[chaos]`: the chaos actuator (Wave 5a; essay II.III.b; evaluations M1)
+
+| Key | Type | Default | Cast | Meaning |
+|---|---|---|---|---|
+| `venue_unavailable` | float in [0, 0.5] | 0 | hard | Per tick: every venue read a seat makes that tick answers `{"status": "unavailable"}`, and a Tick payload's account and mids read unavailable. |
+| `stale_mids` | float in [0, 0.5] | 0 | hard | Per tick: the mids a seat is shown (the Tick payload, `recent_mids`, source freshness, its fold) stay the tick before's. |
+| `tool_withheld` | float in [0, 0.5] | 0 | hard | Per population-tool call: its result is withheld and the call is neither run nor charged. |
+| `connector_timeout` | float in [0, 0.5] | 0 | hard | Per connector fetch: it times out before anything is fetched or charged (`connector.refused`, reason `timeout`). |
+
+Each fault is drawn from the runtime's seeded stream (a zero rate draws nothing),
+counted in `stats.chaos_faults`, ledgered as `chaos.fault`, and marked on the event it
+happened in, where the seed predicate `failure_within` reads it. No fault moves money:
+a faulted call returns before the meter reserves, venue writes and treasury transfers
+are never faulted, and the venue reads behind the pre-submission collateral check, the
+fills, the reconciler, settlement, custody and the kill path never consult it. The
+world's own record (`recent_mids`, which prices a declined trade, and the window's
+public facts) keeps every print.
 
 ### `[novelty]`
 
 | Key | Type | Default | Cast | Meaning |
 |---|---|---|---|---|
-| `trials` | int >= 1 | 3 | hard | Settled consequences delivered to a population assembly before its protected trial ends (A13). Replaces `trial_invocations`, which counted model calls; continuations and children do not count. A learning-death window grants one more. |
+| `trials` | int >= 1 | 3 | hard | Settled consequences delivered to a population assembly before its protected trial ends (A13). Replaces `trial_invocations`, which counted model calls; continuations and children do not count. |
+| `seat_share` | number in (0, 1] | 0.25 | hard | The most of one consequence period's share of the novelty reserve one seat's unhistoried actions (tool calls and the rounds that read them) may use, so no seat starves the registration trials (ruling R5; the #134 review). |
 | `max_lifetime_windows` | int >= 1 | 6 | hard | Reserve windows after registration after which the trial ends regardless of deliveries (A13). |
 
 ### Ledger evidence these keys produce
 
 `route.excluded`, `tool.refused`, `consequence.refused` (A9); `exposure.settled` (A5);
-`cascade.sibling`, `meta.consequence`, `meta.awaiting_consequence`, `sampling.raise`,
-`sampling.lower` (A14); `novelty.release`, `novelty.grant`,
-`novelty.grant_consumed` (A13). Edition 3's third round adds
-`evaluation.unmeasured`, `verdict.unmeasured`,
-`verdict.committed_without_payoff`, `receipt.execution`, `receipt.learning`,
-`receipt.commitment`, `receipt.adjudication`,
-`fidelity.adjudication_queued`, `fidelity.adjudicated`,
-`fidelity.finding_refused`, `fidelity.challenge_opened` and
-`fidelity.challenge_skipped`.
+`meta.consequence`, `sampling.raise`, `sampling.lower` (A14); `novelty.release`,
+`novelty.compute`, `niche.action`, `decision.actions` (A13, ruling R5; older diaries
+also carry `novelty.grant` and `novelty.grant_consumed`); `receipt.execution`,
+`receipt.learning` and `receipt.commitment`. The reward chain (ruling R1) adds
+`verdict.mean`, `verdict.consequence`, `consequence.opportunity`,
+`evaluator.meta_grade`, `evaluator.settled`, `evaluation.censored`,
+`evaluation.declined` and `router.abstention_priced`. `evaluation.sibling_share` is
+refused at load (evaluations U2).
 
 A closed lot's realised P&L is credited once (edition 2, cold audit F7). A
 handle that opens and closes its own lot receives the whole of it, net of its
@@ -336,55 +445,202 @@ full. A liquidation has no closer: the liquidated opener carries the whole P&L
 and the liquidation fee. `return_paid_off` reads the result credited to a
 return as opener or closer, so a trade cannot pay off twice.
 
-A verdict is also a prediction that the judged return will not be blamed by the
-charter. It is scored against the share of its window's blame the pricing pass
-attributed to that return, and the score joins payoff skill in the judge's
-standing (`verdict.consequence`). The outcome is fractional, `1 - share`, and
-the prevalence baseline the judge is scored against learns that same fraction
-(`record_fraction`, once per judged return however many judges it has), never a
-rounded `share == 0` (edition 2, cold audit F3): a judge that only repeats the
-constant share of blame every return carries shows no excess skill. Every
-verdict about one return is scored against the base rate as it stood before
-that return's outcome entered it. A window that has not closed by the
-consequence backstop, or whose attribution evidence was released before it could
-be read, judged nothing: there is no fact either way, so the commitment is closed
-out unscored (`verdict.unread`). It moves neither the judge's standing nor the
-base rate of unblamed returns. A missing fact is never performance.
+### The reward chain (ruling R1; Chapter II §III.b)
 
-### Evaluation is a commission (edition 3, third round)
+**Producers learn from verdicts.** A producer decision settles on the mean of the
+verdicts its judges gave while it waited, less its card penalty (`verdict-v1`).
+Verdicts are collected while an event is routed and settled when its routing is
+done, so every judge a draw woke on a return counts and none alone
+(`verdict.mean` names them when there is more than one).
 
-Every evaluator request carries a `commission`: the subject, the observation
-scope, the evidence horizon in events, and the budget in micro-USD. What comes
-back may be a verdict, or one of two other complete answers.
+**A verdict is also a prediction.** When the world resolves the judged return,
+the kernel scores the verdict `q` against a measured outcome `y`:
+`brier = 1 - (q - y)^2`, `base = 1 - (b - y)^2` with `b` the base rate of that
+kind of outcome before this return's own entered it (once per return, however
+many judges read it), and `consequence score = 0.5 + 0.5 * (brier - base)`, which
+stays in [0, 1] and is a proper scoring rule (an affine map of Brier)
+(`verdict.consequence`). A judge the world proved wrong earns less than one it
+proved right, and one that only repeats the base rate earns 0.5. `y` is:
 
-- **Unmeasured.** `{"status": "unmeasured", "reason": ...}` settles the
-  commission `INAPPLICABLE` under `unmeasured-v1` (`evaluation.unmeasured`). No
-  score, no price, no standing, no base rate: the work was done and the finding
-  is that there was nothing here this evidence could measure. It is not a low
-  score and not a censored decision somebody failed to answer.
-- **Declined.** `{"status": "cannot", "reason": ...}` settles under
-  `declined-v1`. The seat is charged the call it made and nothing else. There
-  is no activity quota and no profit quota anywhere in the runtime.
+- for a return that executed venue operations (or earned service income):
+  `return_paid_off`, 0 or 1, fixed when its lots close or marked at the
+  consequence backstop. A venue write counts once the venue accepted it or may
+  have (`uncertain`); a return whose every write the venue rejected executed
+  nothing;
+- for a return that executed nothing and named a declined trade
+  (`counterfactual {coin, side}`): `opportunity-cost-v2`,
+  `y = 0.5 - 0.5 * tanh(g / opportunity_scale_bps)` with `g` the trade's gross
+  move in bp, signed by its side and excluding fees, from the mids the world had
+  broadcast when the return was made (ruling R2). It is symmetric and monotone,
+  so a hold without directional skill earns 0.5 whatever trade it names;
+- for a return whose answer order (`{"action": "order", coin, side, size}`) was
+  refused (by the collateral check, the venue, or a terminal error) and that
+  executed nothing else: `attempted-trade-v1`,
+  `y = 0.5 + 0.5 * tanh(g / opportunity_scale_bps)` with `g` the ordered coin's
+  gross move in bp, signed by the ordered side and excluding fees, from the same
+  frozen mids and horizons as the declined form, of which it is the mirror: 0.5 at
+  no move, toward 1 as the market moves for the ordered side. It is ledgered as
+  `consequence.attempted_mark` and `consequence.attempted`. An order left
+  `uncertain` is acting, and is measured by `return_paid_off`;
+- for anything else (a return made while the world listed no coin, a declined
+  commission, or a named coin with no mid at the horizon): nothing. Only the tier
+  above grades it.
 
-The runtime reaches `unmeasured` on its own in three places. A judged return
-that committed to nothing — no stated claim, counterfactual, observation rule,
-resource decision or accepted promise, in its return or in its inbox-visible
-commitments — cannot be judged against anything, so the commission concludes
-unmeasured rather than scoring how prudent the return looked. Unfamiliar work
-keeps its exploratory allowance: while a seat is inside the novelty share the
-population granted it, its returns stay evaluable whatever they say. A verdict
-whose normative window closed unread settles unmeasured instead of falling back
-to its payoff forecast, and every meta that conformed to it settles unmeasured
-with it rather than timing out at zero for a fact the runtime owed it and never
-delivered.
+**The declined trade is part of the return contract** (§III.b: evaluators are
+graded by realized consequence, the priced road not taken included). A final
+answer of ProducerReturn, Exposure or a declared kind whose reward shape is
+`judged` or `exposure`, from a decision that executed no venue operation (no venue
+write the venue accepted or left `uncertain`, and no answer order it may place),
+carries `counterfactual
+{coin, side}`: `side` is `buy` or `sell`, and `coin` is a key of `recent_mids` (the
+world's broadcast mids, the record the trade is priced from) when the return is
+made. Without it the return is `malformed`, as it is with a coin the world does
+not list or any other shape; the seat's inbox and `return.validation_failed` carry
+the reason, which names the fields that failed. Nothing is required while
+`recent_mids` is empty. A return that executed venue operations needs none.
 
-`payoff` is an optional field. A judge with nothing to say about the kernel's
-consequence predicate is not forced to invent a number for it and is not
-penalised for leaving it out; its verdict is still committed as a normative
-claim (`verdict.committed_without_payoff`) and decided by whatever facts the
-world produced about it — its normative outcome, its payoff forecast, or both.
-When neither exists there is nothing to be right about
-(`verdict.unmeasured`).
+The request states this contract as structure, and the published schema is the
+enforced one (§II.b). Every round's `outcome_schema` is rebuilt by one function
+(`producing_contract`) from the facts the kernel checks: before the decision
+acts, a producing answer is `anyOf` (a) the kind's answer with `counterfactual`
+required and its `coin` an `enum` of the coins `recent_mids` lists, or, when the
+decision may place an answer order and the kind owns one, (b) `action: "order"`
+with `coin`, `side` and `size` required. After a venue write the venue accepted or
+left `uncertain`, the field is optional. With nothing listed it is absent. The kernel
+validates the reply against that same schema, and `wire_schema` carries the same
+forms, so a `json_object` route and a `json_schema` route read one contract. A
+continuation round states its own bounds: `requests` has `maxItems: 0` in every
+continuation (children are refused there), and so does `tool_calls` in a round that
+grants no further tools, whose answer is the final one. A single-kind contract
+publishes its kind as `emits: {"enum": [kind]}`. The field is also described in
+`world.read {"section": "a_return_may_include"}`. Policy ballots, judgements, forecasts, metas and counters
+are not returns a first-tier verdict judges and carry no such requirement; neither does a
+declined commission (`status: "cannot"`), which is not a contract return. The
+scoring above is unchanged.
+
+**Anticipatory settlement** (§IV.b: an explorer is compensated sooner than the
+lifetime of what it found). A verdict's reward is scored as soon as its return's
+outcome is fixed, or at the latest `consequence_horizon_ticks` after the return
+opened, on its mark then: the lots marked to the mids then
+(`consequence.marked`), the declined trade priced then
+(`consequence.opportunity_mark`). The final measurement (a fixed payoff, or the
+declined trade priced at the backstop, `consequence.opportunity`) then trains
+the judge's standing and the base rate once (`verdict.consequence_late`) and
+never re-settles the reward. The timing is never a charter price window
+(evaluations P7). A judgement may choose a target other than its delivered
+subject only while that target's outcome is unanswered: not fixed, marked or
+priced, and before its horizon.
+
+`[evaluation] consequence_horizon_ticks` (integer in [1, backstop], default 10)
+and `opportunity_scale_bps` (positive number, default 50) are hashed.
+
+A declined commission (`status: cannot`) is credited to the router that drew the
+seat as an abstention is, the zero-consequence reward less its role's card
+penalty (`router.decline_priced`), never the seat's own mean. The meta tier's
+cascade window reads first a verdict on a return with no world outcome, since the
+tier above is that verdict's only grader.
+
+**The judge's reward is both signals.** A judge's decision settles
+(`evaluation-v1`, `evaluator.settled`) on the equal mean of its grade from the
+tier above (the mean of the grades metas gave it while its grade window was
+open, `evaluator.meta_grade`) and its consequence score, whichever exist, less its
+card penalty; with neither it settles censored (`evaluation-unscored-v1`).
+Neither channel is weighted by the charter. The argument is in
+`runtime/feedback.py: evaluation_reward`. The router that drew the judge learns
+the same reward, so a judge decision's deadline covers the return's backstop.
+
+**The grade window is the read above it.** At every tier, an evaluator decision's
+grade window closes on the tick after the cascade window holding its judgement
+released it to the tier above or passed it over (`FeedbackMixin._grade_window_over`).
+A cascade window lasts `timing.min_ratio` times the measured period in which the
+decisions its tier judges reach a score, and a meta's judge settles no sooner than
+its own grade window, so a grade window of a fixed `verdict_timeout_ticks` closed
+before the tier above could read the metas (essay II.IV.c: the queue withholds a
+verdict until it settles, at a 3:1 ratio or more; II.III.b: evaluators are graded
+tier upon tier). Before this, 0 to 4 of the 11 to 17 tier-three grades delivered in
+200 events counted on seeds 1 to 5 of the recursive scripted world; every one now
+counts. A judgement held in a window closes at the latest after
+`consequence_backstop_ticks + verdict_timeout_ticks` plus that window's drawn
+duration; one no window took (a judgement a judge chose rather than a routed one)
+waits `verdict_timeout_ticks`. A judgement whose decision has not settled when its
+window releases is withheld, not dropped (II.IV.c: "withheld ... until it
+settles"): it is carried into the tier's next window, which opens at the release
+with a duration drawn by the same law (`CascadeGate.carried`, `cascade.carry`),
+keeps its own open time and open grade window, and is read in the first release
+after its decision settles, ahead of that window's own arrivals of equal priority,
+within `meta_read_share`. It is carried until `consequence_backstop_ticks +
+verdict_timeout_ticks` after it was made; past that it is listed under `backstop`
+in `cascade.carry` and its grade window closes. A delivered grade that cannot
+count, and a grade window that closes with no grade, are ledgered as
+`evaluator.grade_censored` with the reason (passed over, no grade returned, no
+read, or backstop); nothing is dropped unseen.
+
+**Metas are graded by the world too.** A meta's conformity `k` is a prediction of
+the consequence score `s` of the decision it graded, scored the same way against
+the base rate of those scores (`meta.consequence`); a meta of a verdict the world
+never resolved has none. A top-tier meta settles on that alone, a lower tier on it
+and the grade from the tier above. A meta reads what the cascade window released
+to it: the representative and, up to `meta_read_share` of the window's completed
+evidence, its companions, each with the window as context; a verdict nobody read
+borrows no grade (the sibling share is deleted, evaluations U2).
+
+**The antagonist** earns `0.5 + 0.5 * (mean(ordinary) - mean(c))` (`exposure-v2`,
+`exposure.settled`), where `c` are the consequence scores of the judges scored on its
+return and `ordinary` each of those judges' mean consequence score on ordinary
+returns (0.5 before its first): it earns above 0.5 only when it made its judges miss
+more than they usually miss, never for a judge's plain miscalibration (the Wave 2
+review, item 6). It is censored when no judge's verdict on it was scored. There is no
+endorsement threshold (evaluations S4). Edition 6 seeds two antagonists: one on
+WorldUpdate through the kind's mean-based EXP3 router, one on Tick, which it alone
+reads, through a Blum-Mansour router (`no_swap_regret_kinds = ["Tick"]`), both capped
+at `adversarial_share` (II.III.b: "healthy mixes of mean-based and swap-based
+learners").
+
+**The adversarial judge** (role `adversary`, kind `CounterVerdict`, reward shape
+`counter`) reads a first-tier Verdict and the return it judged, and answers its own
+verdict `q` on that return. It is drawn when the verdict is given, in the same tick,
+before the cascade (every other reader of a Verdict is drawn at the cascade's
+release), and it is shown the world exactly as the judge it re-judges was shown it,
+frozen at that verdict; a counter made in a later tick is censored. When the world measures the return (the same mark or
+final measurement its judges are rewarded on), it settles on
+`0.5 + 0.5 * ((1 - (q - y)^2) - (1 - (v - y)^2))` (`counter-v1`, `counter.settled`),
+`v` the verdict it read: a proper rule in `q`, 0.5 for a counter that repeats the
+verdict. A return the world will not measure is never on an adversary's menu
+(`no world outcome`), and a counter the world leaves unmeasured past the backstop
+settles censored. A counter never touches the judge's or the producer's reward. It is
+measured in its own `adversary` scope (a card may answer for `adversary`, and counter
+settlements bear that scope's prices), capped with the antagonists at
+`adversarial_share`, and cannot be commissioned.
+
+**The tiers above.** A MetaVerdict is routed like any judgement: a meta that accepts
+`MetaVerdict` reads it one tier up (`evaluator.meta_grade` with its tier), off its
+author's family and out of its ancestry, so recursion deepens as far as distinct
+seats allow. Edition 6's metas read Verdicts and MetaVerdicts and a standing
+tier-three meta reads MetaVerdicts only.
+
+**Early warning** (ruling R3; evaluations M2). At every measurement window's close
+the runtime appends the window's score profile (mean verdict, mean meta grade,
+consequence skill, evaluator disagreement, the wallet balance, each card's value) to
+a history of the last 4k windows (`immune.k`) and computes population variance and
+lag-one autocorrelation at k, 2k and 4k windows
+(`versioning.versions.early_warnings`; `ews.window`). The table goes into every
+judge's, meta's and adversarial judge's request as `early_warning`, never into a
+producer's, and two seed observations summarise it for cards (`ews_variance`,
+`ews_autocorrelation`); both are withheld from `last_closed_window_values`.
+Evaluators may forecast `drawdown_exceeds` or `failure_within` to say a regression
+is coming; each settles on the realized drawdown or failure. `failure_within` counts
+only failures the forecaster's lineage did not cause: a chaos fault drawn for a tick,
+and a per-call fault, an order rejection or a liquidation on a decision of another
+lineage.
+
+**Form is not a grade.** A judgement with no verdict or conformity in [0, 1], a
+model refusal, or one whose target is refused settles censored
+(`judgement-censored-v1`, `evaluation.censored`) after its call is charged. A
+`about_handle` that names the judgement's own decision, or anything that is not a
+return handle from the request, is ignored and the delivered subject is judged
+(`about_handle.ignored`; evaluations P2). `{"status": "cannot"}` declines the
+commission (`declined-v1`); there is no kernel list of what may be judged and no
+`unmeasured` answer (evaluations S1).
 
 Easy questions do not pay. A forecast on a predicate whose prevalence baseline
 is at or above 0.95, or at or below 0.05, over at least 20 recorded
@@ -393,12 +649,11 @@ the observation still enters the base rate, the learning receipt carries
 `score: null` and the reason `uninformative_baseline`, and no standing moves.
 The bound is on the question, not on the forecaster.
 
-### Four settlement objects
+### Three settlement objects
 
-`settlement/receipts.py` keeps four things apart, each addressed by a content
+`settlement/receipts.py` keeps three things apart, each addressed by a content
 id of its own and each written to the diary before it is addressable
-(`receipt.execution`, `receipt.learning`, `receipt.commitment`,
-`receipt.adjudication`). An **execution receipt** is a fact the world produced
+(`receipt.execution`, `receipt.learning`, `receipt.commitment`). An **execution receipt** is a fact the world produced
 — a fill, a refusal, a charge, a transfer, a program result, a failed delivery
 — and carries no score. A **learning receipt** is one assessment of one
 decision: the decision handle, the scoring rule and its version, the
@@ -406,23 +661,13 @@ observation horizon, the outcome, the score, the sampling record; its score may
 be `null` with a reason, and an assessment that could not be made is never a
 zero. A **commitment** is a promise with a responsible principal, a deadline,
 an observation rule and the conditions under which it is unobservable through
-nobody's fault. An **adjudication** is a contestable interpretation: a value, a
-measurement, evidence, a finding and the adjudicator who made it.
+nobody's fault.
 
-### A fidelity objection is an adjudication
-
-An accepted objection becomes an open `Adjudication` the moment it is made, and
-it is queued (`fidelity.adjudication_queued`) for an adjudicator drawn from the
-seats that judge — never the judge that wrote the verdict, and never a seat the
-challenged card answers for. With nobody independent available the claim stays
-open: an interested finding is worse than none. The adjudicator answers with
-`fidelity_finding: {upheld, reason}` on its own judging return. The finding
-produces a learning receipt for the objector, scoring the uncertainty it stated
-against the finding by the same proper score as anything else
-(`fidelity.adjudicated`), and, when the objection is upheld, opens a
-`challenge` proposal for the card through the population's ordinary
-registration route (`fidelity.challenge_opened`). Nothing here reprices a card:
-the committee does that, or nobody does.
+The fidelity objection and its adjudication are deleted (evaluations U1): no
+passage of Chapter II calls for an adjudication protocol, and its answer to
+overfitting is realized consequence and adversarial populations (II.III.b). A
+checkpoint that still carries an adjudication receipt, an open adjudication or a
+settler objection restores without it.
 
 ### The commissioned-child-judge route is closed
 
@@ -430,7 +675,7 @@ A judging contract cannot be requested as a child. A requested judge may only
 address the chain that requested it, and nothing judges its own output or its
 ancestors', so the route could be bought, paid for and never executed. It is
 refused before a decision is opened or a call is made (`requests.refused`), with
-the reason in `return_feedback` and in the catalogue's addressing text. Judging
+the reason in the requester's outcome inbox and in the catalogue's addressing text. Judging
 work reaches a seat the three ways it always did: the router's sampling, the
 adversarial share and the cascade.
 
@@ -443,10 +688,94 @@ opens and never redrawn inside it (`cascade.arrival` carries `window_ns`,
 `opened_ns` and `elapsed_ns`). The window releases when its duration has
 elapsed and some of the evidence inside it has completed — for a verdict, that
 the return it judged has an outcome. Every arrival is named in the released
-report, so the sibling share still reaches it, and only completed evidence is
-averaged. Three judgements arriving in the same nanosecond are three arrivals
+report, only its representative is graded, and only completed evidence is
+averaged. An arrival whose evidence has not completed at the release is carried
+into the tier's next window (see "The grade window is the read above it"). Three
+judgements arriving in the same nanosecond are three arrivals
 in an empty window and trigger nothing. Execution facts and safety actions never
 enter the cascade and are never slowed by it.
+
+### Settled decisions are released (wave 17b)
+
+Chapter II §I.b: the return channel keeps "actions addressable over time", "a
+managed queue of outstanding decisions awaiting their reward"; §IV.c: a verdict
+"is consumed as a reward signal ... and then discarded", and what persists is
+aggregates. **A decision stays addressable exactly while a score is still owed to
+it.** It is fully settled (`SettledMixin._score_owed` is `None`) when all hold:
+
+- the kernel owes it nothing (`DecisionQueue.owed`): it is final, not timed out
+  (a late settlement keeps its right), every child it requested is released, and
+  every return delivered for it was read by its one reader (a router's cursor, a
+  seat's next ballot; an actor with no reader, such as a forecast's evaluator id,
+  reads nothing);
+- no retained decision names it as its parent or its judged subject;
+- no live book names it: no event about it waits to be routed, no judge, grade,
+  counter-verdict, forecast, exposure, abstention credit, assembly round, tool
+  hold, uptake, ballot, lambda post, motion or registration still reads it, no
+  cascade window holds or carries a judgement of it to its backstop, and no price,
+  margin or measurement window still measures it; no venue write of it is in
+  flight (a Hyperliquid order intent the venue has not answered, a vault write
+  uncertain or acknowledged and not yet settled from the venue's ledger, a
+  Polymarket write uncertain), and no Polymarket money it realised is unclaimed;
+- its consequence account is closed: outcome fixed, realised money all booked to
+  its owner, no open lot, no live order, no unanswered or unresolved intent, and
+  every order it placed **confirmed terminal by the venue's own order status**:
+  each tick, every order the book holds with no unfilled liability (fully filled
+  as observed, or its cancel acknowledged) is looked up at its venue until the
+  venue answers `filled`, `cancelled` or `rejected`, ledgered
+  `consequence.terminal {order_id, handle, status, filled}`, and no more filled
+  than was accounted. A cancel acknowledgement, a wall clock or a reward-chain
+  horizon is never that word; until the venue gives it, the account is pinned;
+- `consequence_horizon_ticks` have passed since its account opened;
+- no retained `failure_within` window reads an order it placed.
+
+At every checkpoint boundary each fully settled decision is released, newest
+first. The kernel keeps a tombstone (handle, the lineage key of the seat that
+authored it, its final status, when that status was retained); past
+`consequence_backstop_ticks + verdict_timeout_ticks` ticks after settlement a
+tombstone is compacted into a count per final status and a range of ledger
+ordinals, so a released handle still answers that it was released. Its
+propensities, returns, event payload, bindings, kind, author entry, judged
+subject, measured outcomes, forecast, receipts, base-rate questions and order
+intents, venue write intents and Polymarket claim entries are dropped (a vault
+write's venue transaction stays claimed, so no later write binds it); its
+consequence account becomes counts (`consequences.counts()` and the summary answer
+as before), and its orders keep their owner and the seat that authored it for
+`outcome_retention_ticks`. Nothing is appended to the diary: every fact was ledgered when it
+happened, and a replay releases the same decisions at the same boundary. A world
+run with and without release writes the same diary.
+
+A judgement whose `about_handle` names a released decision is refused
+(`return.refused`, `judgement names a decision that settled and was released`). A
+fill the venue still reports on a released account's order (a venue error: the
+venue had confirmed it terminal) is money, and money is always booked: it is
+ledgered `consequence.released_fill {order_id, handle}`, moves the lots as the
+venue's position moved, and what it realises, and what any lot it opened later
+realises, is booked to the seat that authored the decision (or its lineage's root
+when that seat is gone) as a late realization (`consequence.late`, then its venue
+claim), never re-grading the closed outcome. Past `outcome_retention_ticks` the
+order is forgotten, unless its handle still holds a lot or is owed late money; a
+fill on a forgotten order is one no account owns, refused as `fill without an
+open consequence account`, and its money stays in venue custody unattributed, as
+for any order no decision placed. Committee eligibility is a running tally kept
+at settlement, equal to the scan over every decision the world opened. A seat's
+ballot shows the policy returns delivered to it since its last ballot, each once;
+those delivered more than `outcome_retention_ticks` before, without a ballot in
+between, are released unread (the inbox's rule).
+
+Late money keeps its venue: what a released decision realises on a Polymarket
+event lot enters the pot's claim book and is claimed on the pot
+(`polymarket.claim`), never on the Hyperliquid venue claim. When neither the
+authoring seat nor its lineage's root is live, no persistent holder is left: the
+money stays booked in the custody that settled it, unattributed, and is ledgered
+`consequence.late_undeliverable {handle, micro}` beside the inbox's failed
+delivery; no reward credit moves, since the grade was fixed. A released vault
+write's venue transaction stays bound (no later write can claim it) until it is
+older than every window a vault lookup can still read: the earliest write still
+being looked up, less twice `LOOKUP_SKEW_NS`; the retained set is bounded by the
+writes released within that window. An order is confirmed terminal only on an
+answer that states its filled quantity; one that omits it confirms nothing and is
+read again the next tick.
 
 ## Exact measurement
 
@@ -458,20 +787,90 @@ selected rows contribute to the mean. `cost_per_attempt` (edition 2, cold audit
 F4) is the mean over every selected response, failed and malformed ones
 included, so an expensive failure cannot hide inside the tenth the well-formed
 floor tolerates; over global closed windows it uses every return the window
-made. For both, a retained-storage charge is selected beside the responses as
-a cost row of the decision that holds it: it adds to what those responses cost
-and is never divided into as one of them, so paying rent can only raise a cost
-per response. The `n` are counted over responses alone, before any charge joins
-them, and the charges that join a selected horizon are the ones metered in the
-same measurement windows as its selected responses, so a charge never fills a
-response slot, never displaces a response from a full horizon and never
-supplies the support a short scope lacks. No other observation selects one.
+made. Every cost in either is a debit with a real counterparty (Wave 11): retained
+working state is never charged, so no cost row exists without a response.
 Well-formedness uses all selected responses as its denominator. `tool_calls`
 is the mean attempted tool calls per selected response, failures included, as
 its card prose always said (edition 2, cold audit F5): ten returns of one call
 each measure one, not ten; over global closed windows it divides the window's
 attempted calls by its invocations. The other supported return observations
 are `noop_share` and `revision_rate`.
+
+Context size is published as four seed observations (wave 7; essay II.IV.a, the
+metrics layer is ceded, so the factory can propose a metric only on a quantity the
+world publishes). No card, target or threshold comes with them. They read the
+UTF-8 byte counts every invocation's ledger row already records under `sections`,
+counted once in `ComputeMixin._invoke`: the ledger row, the window's counters and
+the return sample carry the same numbers. Bytes, not provider tokens: the kernel
+renders the bytes identically for every seat, program seats included, while
+tokenizers differ by model family, x402 and program seats report no tokens, and
+the reported `usage` covers only an invocation's final provider call.
+
+| Observation | Units | Unit range | Per return scope | Global closed windows |
+|---|---|---|---|---|
+| `prompt_bytes` | bytes per invocation | [0, 100,000] | mean `sections.total` of the selected responses | summed `prompt_bytes` over `prompts` |
+| `you_bytes` | bytes per invocation | [0, 100,000] | mean `sections.you` | summed `you_bytes` over `prompts` |
+| `inputs_bytes` | bytes per invocation | [0, 100,000] | mean `sections.inputs` | summed `inputs_bytes` over `prompts` |
+| `downstream_read_bytes` | bytes per return | [0, 1,000,000] | reading bytes filed under the scope in its selected responses' windows, over those responses | summed `downstream_read_bytes` over `read_measured` |
+
+The byte counts are of the invocation's opening prompt, the one its ledger row
+records; tool-round continuations are not counted. A response the runtime rendered
+no prompt for (a ballot whose assembly was unavailable) is not a zero-byte sample:
+none of the four selects it, so it is not new evidence for a card's price, never
+takes a horizon slot from a measured response, and is not among the responses
+`downstream_read_bytes` divides by, exactly as a global window divides by its
+invocations. A request that cannot be rendered (an input no prompt section can
+serialise) fails as the assembly fails it: it is an invocation, counted in
+`invocations`, but no prompt. Its ledger row's `sections` is null and the window's
+`prompts` (the invocations whose opening prompt was rendered, the three prompt
+means' denominator) does not count it. Measuring a prompt never fails a call. A
+window record closed before prompts were measured carries no `prompts` and no
+prompt bytes: it measured zero prompts, so merged with later windows it adds nothing
+to either side of a prompt mean, and a selection of such records alone is
+unmeasured (never a mean of zero) and no new sample. A
+whole window with no measured prompt (only such a ballot or such a request)
+is no new sample for the three prompt means. `downstream_read_bytes` has its own
+support, `read_measured`: the invocations whose readings are metered, which is
+every invocation from wave 7 on, a failed render included (so it is not
+`prompts`). A return sample carries the `invoked` marker from wave 7 on, and only a
+marked one is a response of its selection. A window record or return sample from
+before readings were metered carries neither: it adds nothing to either side of
+the mean, a selection of such alone is unmeasured and no new sample, while a
+current invocation no one read is a measured zero. The scope facts publish
+`read_measured` as the window does. All four are measurable over `returns` and
+over `windows`, per role, per assembly or globally, and none over `forecasts`;
+none is `per_window`, since each is a ratio of summable numerators and
+denominators.
+
+A *reading* is the INPUTS section of an invocation whose decision was routed on a
+published return (`decision_subjects`: judges, adversarial judges, metas, and any
+contract that accepts the return's kind), counted only when the request reached its
+executor. The assembly reports that on the return (`Return.delivered`), set where it
+sends: a model's provider call was made (answered, or failed possibly billed), or a
+program's stdin was run by the jail. A request refused before that is still an
+invocation, with its prompt measured if it was rendered, but no reading. Refusals of
+this kind: over its ceiling or price, its reservation refused, the world terminal,
+an unbilled provider failure, a request that could not be rendered. The kernel files its bytes under the
+return's author, its assembly and role, in the window the reading was metered: it
+joins a returns horizon when it was
+metered in the windows of the selected responses, never occupies a response slot
+and never supplies support, and a scope whose returns were read by no one in those
+windows measures zero. Reading rows live apart from the return samples
+(`CardSamples.readings`), so no other observation selects one, and they carry no
+identity of the reader. The reader's request is not touched. `downstream_read_bytes`
+is not a mean of per-response samples, so a card over it cannot declare an
+`interval`. A reading is new evidence for a card's price only once the card's
+current selection reads it: inside a full returns horizon, or beside a response of
+its scope in the selected closed windows. One metered after its author's latest
+response is kept for the next horizon but moves no price until then. A registered
+observation measured per scope reads the scope's summed `prompt_bytes`,
+`you_bytes`, `inputs_bytes` and `downstream_read_bytes` among its facts, and a
+scope whose only row in the selected windows is a reading is measured too. The
+scope's `invocations` fact counts its invocations as `window.invocations` counts the
+window's: an assembly-unavailable ballot is a response but no invocation, so it is
+in neither. Its `prompts` fact counts its responses with a rendered prompt, as the
+window's `prompts` does, so summed prompt bytes over `prompts` is a mean per
+rendered prompt in a scope exactly as it is globally. Its violations are attributed by the generic `1/n` share described below.
 
 `forecasts` selects the latest `n` resolved forecast records in each scope.
 `forecast_skill` uses paired Brier skill against the baseline as it stood before
@@ -497,6 +896,56 @@ scope measurements; private entity values never enter the public topology view.
 Previous-cost-median bounds use the same selector's per-response cost samples.
 New horizons may need to warm up when retained history is shorter than a newly
 adopted card. The buffers and their active measurements survive resume.
+
+## The standing committee, motions and norm editions
+
+Charter audit C1, C2, P3, P4, M4, M6, M7 (essay II.IV.a, II.IV.c).
+
+- **Motions.** An amendment carries exactly one change class: cards (`add`,
+  `replace`, `remove`), lambda (`{"lambda": {card_id: value}}` over cards the
+  current edition carries) or clock (`tick_interval`). A card entry carrying its
+  own `lambda`, or a motion carrying two classes, is refused before any trial
+  (`amendment.rejected`). A clock motion's `predicted_effect` names an
+  observation, `burn_per_window` or one the population registered, instead of a
+  card. Admission puts the motion on the agenda; nothing is seated.
+- **Governance boundaries.** A window boundary at which the governance cadence
+  is ready (`timing.min_ratio` times the measured slowest period since the last
+  boundary) is a governance boundary (`charter.boundary`); the next boundary is
+  anchored to it whether or not anything activates. At each one a new committee
+  is drawn (`charter.seat`, keyed by the boundary's ordinal): one seat per role
+  present among the eligible assemblies (the seed roles and any declared role),
+  preferring a learner type not yet seated, then each learner type present
+  (`exp3`, `blum_mansour`: an assembly's own registered learner, else the
+  learners of the routers that sample it), then uniformly. `charter.seat`
+  records the seats, the agenda, the deferred motions, each motion's voter count,
+  the quorum and `coverage` (roles and learner types present and covered). Below
+  `committee.quorum` eligible assemblies it records `charter.seat_deferred`
+  instead and every motion waits. Each seat votes on each agenda motion except
+  its own; passed motions then take effect at the same boundary, in proposal
+  order, each as its own edition (`charter.activate` names its `change`).
+- **Internal motions.** Retirements and connectors are voted when proposed, by a
+  committee drawn the same way (with `coverage` on `retirement.proposed` and
+  `connector.seated`), and never touch the governance cadence. A passed
+  retirement takes effect at the next window boundary.
+- **Norm editions.** `factorylab norm-edition --world W --ledger L --norms F
+  --sequence N --key-file K` writes `L.norms/N.json`: `format`
+  (`factorylab.norm-edition/1`), `world`, `manifest_sha256`, `sequence`, `norms`,
+  `signer`, and `signature`, an EIP-191 signature of the sha256 of the other five
+  fields' canonical JSON. Nothing else is accepted, so money, prices, cards and
+  kernel parameters are unreachable through it. At a governance boundary the
+  runtime reads sequence `applied + 1` through the recovery journal and verifies
+  it against `norm_house.signer`; a refusal is `norm_edition.refused`. A valid
+  edition first hears each seated delegate (`norm_edition.testimony`, recorded,
+  non-binding, its decision closed as `norm-testimony-unscored-v1`; with no
+  committee seated, `norm_edition.testimony_absent`), then takes effect as the
+  next edition (`charter.norm_edition`): the new norms, every card whose norm
+  survives, and a `charter.refused` for each card and each pending motion on a
+  removed norm.
+- **Saturation.** Each priced card's `windows_at_lambda_max` (observed windows
+  closed at `prices.lambda_max`) and `violation_windows` (the current run of
+  consecutive observed windows in violation) are in `world.card_prices`, the
+  public window item and every ballot's `inputs.agenda`. They kill nothing: the
+  kernel's three deaths are unchanged.
 
 ## Committee liability
 
@@ -530,13 +979,95 @@ whether the region is satisfied. A move counts once it clears
 region at the baseline kept the promise only by moving in the promised
 `direction` that far; a card already inside kept it by staying inside without
 moving against the promise. A vote that backed a change whose value went the
-wrong way is wrong even if the region still holds. Yes votes predict a kept
-promise; no votes predict its negation. The score is `1 - (vote - outcome)^2`,
-recorded as `policy-promise-brier-v2`; `policy.outcome` carries `baseline`,
-`direction`, `resolution`, `value` and `y`. Amendments, connectors and
-retirements use this same liability. Abstentions, failed proposals and missing
-baseline, measurement or region evidence are censored, with no fast reward.
-Subsequent ballots receive that assembly's private policy-return history.
+wrong way is wrong even if the region still holds. Each vote is a bet on the
+branch the committee takes (charter audit P1): a yes vote says the motion makes
+the promised difference, so it is `q = 1` that the promise holds if enacted and
+`q = 0` that it holds on the unchanged charter; a no vote is the opposite. A
+charter motion that passes is graded on the enact branch from its activation; one
+that fails its vote (`policy.rejected`) is graded on the reject branch, against
+the unchanged charter measured from the failing boundary over the same horizon.
+The score is `1 - (q - outcome)^2`, recorded as `policy-promise-brier-v2`;
+`policy.outcome` carries `branch`, `q`, `baseline`, `direction`, `resolution`,
+`value` and `y`. Connectors and retirements use the enact-branch liability; a
+failed one is censored. Abstentions, refused activations and missing baseline,
+measurement or region evidence are censored, with no fast reward. Subsequent
+ballots receive that assembly's private policy-return history.
+
+## The charter's markets
+
+Charter audit M1, M2, M3, M5, C3 (essay II.IV.a: λ "reaches the committee as a
+speculative price posted by the factory"; "vote on values, bet on beliefs").
+No manifest key: the formulas are published in `world.mechanics.committee` and
+`world.mechanics.controller`.
+
+- **Posted λ.** Any return may carry `shadow_prices: {card_id: lambda}` for cards
+  priced now, each in `[0, prices.lambda_max]`, one per seat, card and reserve
+  window (`lambda_post.posted`; a refusal is `lambda_post.refused` and reaches the
+  poster's inbox). Each post opens its own `policy` decision under
+  `assembly:<id>`. A post is a claim about the window it is posted in: once that
+  window's decisions have their world-measured consequences
+  (`consequence_backstop_ticks + verdict_timeout_ticks`, in windows at the tick in
+  force, at least `timing.min_ratio`), the window's shadow price `y` is read: the
+  least-squares slope, across the card's scopes (per role or assembly; at least 3,
+  with variance in `v`), of each scope's mean consequence (a judgement's
+  consequence score, a return's `return_paid_off` or priced declined trade) on its
+  violation `v`, clipped to `[0, lambda_max]` (`price.margin`). The post settles as
+  `lambda-post-quadratic-v1` with `1 - ((p - y) / lambda_max)^2`
+  (`lambda_post.settled`); with `y` unidentified it is censored. The committee's
+  λ is never the target. The posted price is the median of each seat's latest
+  unsettled post weighted by `(1/2 + sum of its settled post scores) / (1 + their
+  count)`, ledgered at every close (`lambda_post.aggregate`), published in
+  `world.card_prices[].posted` and on every ballot's `inputs.agenda.cards`. A
+  lambda motion may name `"posted"` for a card: the aggregate at admission
+  (`lambda_post.adopted`).
+- **Conditional forecasts on motions.** Any return may carry
+  `motion_forecasts: [{motion, branch, q}]` on a motion on the agenda, `branch`
+  `enact` or `reject`, one per seat, motion and branch (`policy.forecast`). Each is
+  frozen on the motion's promise like a ballot, opens its own `policy` decision and
+  is graded as `motion-forecast-brier-v1` on the branch taken; the other branch's
+  forecasts are void (`policy.void`, censored). Each agenda motion's forecasts per
+  branch are on `inputs.agenda.markets`.
+- **Feed-forward.** At a window close, for a card in violation (`v > 0`) that
+  is named by the predicted effect of liable forecasts, the price law adds
+  `F = prices.kp * max(E - v, -v)`. Each forecast reads
+  `max(0, v + sign * q * s)`, `sign` +1 when its direction deepens the violation
+  and -1 when it relieves it, `s` one promise resolution in region units. A decided
+  motion's forecasts on the branch taken count one each; an undecided motion's
+  count only as one seat's pair on both branches, `p * e(enact) + (1 - p) *
+  e(reject)`, `p = (passed + 1) / (passed + failed + 2)` over the charter motions
+  decided so far. `E` is their mean. The integral and derivative stay on realized
+  measurement. `price.update` carries `f` and `anticipated` when a market exists.
+  With `prices.kp = 0` there is none.
+- **Holdouts.** An evaluator or antagonist seat proposes
+  `{"kind": "amendment", "id", "holdout": {card_id, predicate, evidence,
+  trial_windows}, "predicted_effect"}`; `predicate` is a registered predicate,
+  frozen at its version. Admission costs one novelty trial (`holdout:<id>`,
+  `holdout.proposed`); its trial windows record `holdout: {predicate, held}` in
+  `challenge.window`, and it then joins the next committee's agenda as the replace
+  of the card with the holdout appended. At each close a card's holdouts are
+  resolved on the window's public facts (`price.window.holdouts`); each failed
+  holdout adds one promise resolution of the card's region to its violation. A
+  holdout predicate reads behavioural facts only (`charter.holdout.BEHAVIOURAL_FACTS`,
+  by literal key, importing at most `math` and `statistics`): one that reads the
+  window's index, timestamps, balances or market series is refused.
+- **Scoped population observations.** A registered observation may be named by a
+  `windows` card with `per` role or assembly: its code runs once per scope on that
+  scope's share of the window facts, with no identity in them, and the card carries
+  attributable blame like a seed one.
+- **λ in dollars.** The same margins are the λ-to-dollar statistic: each
+  `price.margin {window, card_id, lambda, points, slope, micro_usd_per_violation,
+  shadow_price}` carries the window's anonymous per-scope points and, beside the λ
+  the window closed at, the marginal consequence and the marginal compute spend
+  per unit of violation. `world.card_prices[].last_window_margin` publishes the last
+  one read. `scripts/charter_session.py report` recomputes them from the same points
+  with the same function.
+- **The charter session.** `scripts/charter_session.py session` (with `--dry-run`
+  for a scripted provider, else the rehearsal's prepaid provider under `--cap-usd`)
+  has the seed population draft cards from the manifest's
+  norms, a sortition vote on each, a fresh sortition adopt or reject the drafted
+  charter whole, and exports it with typed regions and the digests the load path
+  verifies. It replaces `draft_edition1.py`, `ratify_charter.py` and
+  `adopt_charter.py`.
 
 ## Venice transfer and first move
 
@@ -544,7 +1075,8 @@ Subsequent ballots receive that assembly's private policy-return history.
 $5 tranche from the reserve into Venice credit. The $5 amount is the existing
 x402 protocol constraint, not a new optimiser setting. Submitted tranches count
 against the window budget, including uncertain or later failed submissions.
-The budget resets only when the reserve-window index advances, and survives
+The budget resets only when the treasury's own cap window (`treasury.cap_window`
+of wall time since launch) advances, never with the pricing window, and survives
 resume. A pending or stranded transfer prevents another transfer.
 
 The journal records the quote, unsigned authorization, nonce and expiry before
@@ -592,9 +1124,10 @@ reverts because Circle delivered first ("Nonce already used"), the step
 re-checks the transmitter's consumed-nonce record and confirms the forwarder's
 finalized credit, booking only the reverted transaction's gas, instead of
 stranding money that arrived. The wait is bounded: a forwarded mint still
-unobserved once `treasury.forward_wait_windows` reserve windows have opened
-since the wait began is stranded through `treasury.failed` with reason
-`forwarded mint not delivered within treasury.forward_wait_windows`, the wait
+unobserved once `treasury.forward_wait_ticks` world ticks (or the capital loop's
+measured p90 conversion, if longer) have passed since the wait began is stranded
+through `treasury.failed` with reason
+`forwarded mint not delivered within treasury.forward_wait_ticks`, the wait
 record (`waited`) and `recoverable: true`; such a strand keeps its principal
 hold but leaves the transfer slot, so new transfers are admitted, and whenever
 no transfer is in flight a tick re-checks it exactly as during the wait (the
@@ -629,23 +1162,22 @@ The draft survey accepts any number of cards returned within the existing model
 output budget, with no card-count cap. It withholds existing cards from both
 proposals and ballots, preflights each candidate through the pricing measurement,
 includes `answers_for` and typed windows in the exported TOML, and records the
-surveyed roster hash. `worlds/edition1-example.toml` is only a schema migration of
+surveyed roster hash. `worlds/history/edition1-example.toml` is only a schema migration of
 the historical example. The experimenter must re-draft edition 1 with the actual
 launch roster before launch; the drafting script does not ratify a new edition
 or run the paid survey.
 
-A mainnet Hyperliquid manifest requires an explicit `[charter]`; testnet may
-use the seed charter. `charter_explicit` records admission provenance and is
-excluded from the canonical manifest hash.
+Every manifest requires a `[charter]` table (charter audit S3): the kernel has
+no default charter. The four-norm, three-card seed charter that used to be that
+default is written into the worlds that ran on it.
 
 A mainnet manifest is also refused at load unless `exchange.client_namespace` is
 set and its `[charter]` carries `ratified_sha256` and `roster_sha256`, the values
-`scripts/ratify_charter.py` wrote as the artifact's `charter_sha256` and
+`scripts/charter_session.py` wrote as the artifact's `charter_sha256` and
 `roster_sha256` comments: the loaded cards must hash to the first and
 the manifest's own assemblies and models to the second, so a funded launch cannot
 run an edited charter or a different roster. Both fields are admission provenance
-and, like `charter_explicit`, are excluded from the canonical manifest hash;
-testnet manifests omit them.
+and are excluded from the canonical manifest hash; testnet manifests omit them.
 
 Testnet `treasury.reserve_address` is the public checksummed address
 `0x1228e5620944a79D268Afc7522E00891526EdEBb`, not a placeholder.
@@ -665,6 +1197,10 @@ billing-uncertain and commits the reserved ceiling. `io.result` retains
 ## Timing, pricing and immune settings
 
 The canonical manifest is recorded with its hash in the ledger's `Launch` event.
+It hashes every key at every value, defaults included (R8, versioning S1): no key is
+dropped so that an older world keeps its hash. A kernel change that adds a key
+therefore names a new world, which starts again from v0. Only admission provenance
+(the ratification digests and the loaded cards' digest) is left out.
 `factorylab versions` verifies that record against genesis and uses its immune
 settings. A historical diary without those settings needs explicit analysis
 parameters; the observer never substitutes a second set of thresholds.
@@ -673,27 +1209,141 @@ parameters; the observer never substitutes a second set of thresholds.
 | --- | --- | --- | --- |
 | `timing.min_support` | positive integer, at most `timing.cadence_sample` | `30` | Yes: settled samples required before estimating p90; a larger support than the retained sample could never be reached, so it is refused at load. |
 | `timing.cadence_sample` | positive integer | `200` | Yes: retained consequence-latency sample length (latencies in world ticks). |
-| `timing.min_ratio` | integer, at least 3 | `3` | Yes: cascade and governance separation. |
+| `timing.min_ratio` | integer, at least 3 | `3` | Yes: the one ratio every derived loop keeps to the measured loop it commands (price, immune organ, sampling actuator, cascade tiers, novelty patience, policy grading, governance), and the ratio slack on every decision cutoff. |
+| `timing.jitter_fraction` | finite nonnegative number | `0.2` | Yes: how far each derived loop's own continuous jitter may lengthen its period. |
+| `timing.world_repricing` | Absent, or a positive duration | Absent | Yes: the world's own repricing period, a fact about the venue (Hyperliquid funding settles hourly; edition 6 states `"1h"`). Governance is viable only while `timing.min_ratio` times the slowest loop fits inside it and inside the run's remaining ticks (`governance.nonviable`); `max_tick` is derived from it. |
 | `evaluation.consequence_backstop_events` (or `consequence_backstop_ticks`) | positive integer, in world ticks | `200`; scripted worlds `20`; testnet `60` | Yes: consequence horizon and conservative governance period floor. |
-| `evaluation.verdict_timeout_events` (or `verdict_timeout_ticks`) | positive integer, in world ticks | `20` | Yes: how long a judgement waits for its judge (a verdict for a producer return, a meta verdict for a verdict) before it is censored. |
+| `evaluation.verdict_timeout_events` (or `verdict_timeout_ticks`) | positive integer, in world ticks | `20` | Yes: how long a producer return waits for its judges' verdicts before it is censored, and how long an evaluator decision whose judgement no cascade window took waits for a grade. A routed evaluator decision's grade window is its cascade window's read, not this constant (see "The grade window is the read above it"). |
 | `prices.penalty_cap` | finite number strictly between 0 and 1 | `0.5` | Yes: maximum penalty before attribution. |
-| `prices.min_blame_share` | finite number in [0, 1] | `0.1` | Yes: floor on one decision's share of a generic (non-attributable) violation; absent from the manifest hash at its default. |
-| `immune.k` | integer, at least 2 | `3` | Yes: consecutive windows or changes required for diagnosis. |
-| `immune.bins` | integer, exactly 3 | `3` | Yes: inside, up to one scale unit outside, more than one unit outside. |
+| `prices.min_blame_share` | finite number in [0, 1] | `0.1` | Yes: floor on one decision's share of a generic (non-attributable) violation. |
+| `prices.kp` | finite nonnegative number | `0.0` | Yes: the PID's proportional gain. The PID is the only price law (charter audit U3): `lambda = kp*v + I + D`, where `I` accumulates `eta*v` while violating and leaks `decay` once compliant, held in `[0, lambda_max]` and not integrated only while `P + I` already reaches `lambda_max` and the violation is growing (anti-windup); `D = kd * max(0, d(measurement))/scale`, on the measurement rather than the error, signed toward violation, applied only while violating and only its positive part (Stooke et al. 2020), so a card still out of its region is never priced below `P + I`. With `kp = kd = 0` the law is the integral alone. `prices.controller` and `prices.kappa` are refused. |
+| `prices.kd` | finite nonnegative number | `0.0` | Yes: the PID's derivative-on-measurement gain. |
+| `immune.k` | integer, at least 2 | `3` | Yes: windows of evidence for every diagnosis; the live versioning retains `timing.min_ratio × k` windows. |
 | `immune.registration_bins` | increasing nonnegative numeric array | `[0, 2]` | Yes: zero, 1–2, 3+ registrations. Values equal to a cut enter the lower bin. |
 | `immune.revision_bins` | increasing nonnegative numeric array | `[0]` | Yes: zero versus positive revision. |
-| `immune.tv_threshold` | finite number in (0, 1] | `0.2` | Yes: behavioral version boundaries, not the thrash predicate. |
-| `immune.gap_threshold` | finite number in (0, 1] | `0.8` | Yes: the operator's `durable` readout, not an additional pathology gate. |
+| `immune.tv_threshold` | finite number in (0, 1] | `0.2` | Yes: behavioural version boundaries and settling (the TV between adjacent k-window blocks), and the bound the gap series' volatility is priced above (the thrash price). |
+| `immune.gap_threshold` | finite number in (0, 1] | `0.8` | Yes: a wide gap: a version is `durable`, and a persistent violation is stable failure, at or above it. |
 | `immune.gain_step` | finite number in (0, 1] | `0.05` | Yes: exploration-gain adjustment. |
+| `immune.price_step` | finite number in (0, `prices.lambda_max`] | Required | Yes: the stable-failure price ratchet's lambda step per window of duration. A lambda step and an exploration-gain step are different units, so `gain_step` never stands in (versioning S3). The profile's three region-relative bins (inside, up to one scale unit outside, beyond) are fixed in the kernel; `immune.bins` is refused (versioning U5). |
 | `immune.gamma_max` | finite number in (0, 1] | `0.5` | Yes: exploration-gain ceiling. |
-| `immune.decay_step` | finite number in (0, 1] | `0.1` | Yes: extra price decay for the window following thrash. |
+
+`immune.decay_step` is refused (versioning audit C2): thrash is priced by its
+duration, never answered by letting card prices decay faster.
 
 These launch settings are immutable parameters of an experiment. Effective
 prices, gain, diagnoses and the currently negotiated tick interval remain runtime
-state. Relief halves the effective lambda on violated cards for one window; it
-preserves the controller's accumulated price and previous violation. That state
-resumes with the controller. Repeated failure can renew relief, while underlying
-pressure continues to ratchet.
+state. Stable failure is priced by its duration (essay II.II.b): the n-th
+consecutive diagnosed window adds `n * immune.price_step` to each violated card's
+price and accumulated pressure, bounded by `prices.lambda_max`
+(`immune.price_ratchet`), and the count restarts once the card leaves the
+attractor (`immune.price_ratchet_ended`). The exploration gain raised for stable
+failure steps back toward each router's seed gamma once a window diagnoses no
+pathology (`immune.gain` with pathology `cleared`); a learning-dead window holds
+it. That state resumes with the controller. (Older worlds halved the violated
+cards' effective price for one window instead; `immune.price_relief` entries in
+their diaries record that. The relief is deleted, charter audit U2.) The ratchet
+reaches abstention: a router's NOOP bears the card penalty of the window it was
+drawn in, ratcheted prices included (ruling R9). `prices.penalty_cap` binds the
+ratcheted price like any other: a penalty that took the whole unit reward from
+every arm would leave no difference to learn from, and the essay warns that gain
+ramped unchecked overshoots into thrash.
+
+Thrash is priced (essay II.II.b, versioning audit C2): the diagnosis's
+unsettledness `u` (below) above `immune.tv_threshold` is priced by the charter's PID
+law and gains (`prices.eta`, `kp`, `kd`, `decay`, `lambda_max`), so its integral
+accumulates how long the thrash lasts. A round a router of
+`evaluation.no_swap_regret_kinds` draws, its abstentions included, carries
+`c = min(prices.penalty_cap, lambda * m)`, `m` the total-variation distance between
+that draw's distribution and the router's previous draw's: the router's own policy
+movement, so holding still is what lowers it (a charge every round bore alike would
+be a constant shift a no-regret learner ignores). The router learns
+`(r + penalty_cap - c) / (1 + penalty_cap)` for every round, charged or not, one
+affine map with no clip (`thrash.charged`). The price is published in
+`world.adaptive_scoring.thrash_price`; its controller resumes with the checkpoint
+(`thrash_controller`), and each open round's charge with `thrash_charges`.
+
+## The clock (Chapter II §IV.b-c; time audit T1-T13)
+
+Every loop counts **world ticks consumed**. The delivered tick interval (the
+slower of the measured mean gap and the declared `tick_interval`) converts ticks
+to wall time only for display (a deadline shown to a seat, a window's estimated
+end) and for money rails. No manifest key casts a window: `novelty.window`,
+`novelty.max_lifetime_windows` and `treasury.forward_wait_windows` are refused.
+
+* **Measured loops** (`runtime/clockwork.py`, checkpointed): the settle loop of
+  each measured role (`settle:<role>`, a decision's open to its first outcome,
+  censorings included), its scored loop (`scored:<role>`, the same when a real
+  score closed it), each router kind's rounds (`router:<kind>`), settled forecasts
+  (`forecast`) and conversions (`capital`). A meter reports its p90, never below
+  one tick.
+* **Derived loops**: each outer loop's next period is drawn as
+  `min_ratio × inner × (1 + jitter_fraction × u)`, where `u` is a continuous
+  draw seeded by the world, the loop and its firing count, and each is due only
+  while the ticks since it fired are still at least `min_ratio` times the inner
+  loop measured now. Each firing is a `clock.loop` item. The price loop (the
+  measurement window) is derived from the fastest priced card's sample loop;
+  the immune organ acts over the price loop (versioning P5; it diagnoses every
+  window, `immune.window.acts`), and a kind's gain steps over its router's
+  rounds; the sampling actuator acts over the consequence loop; a cascade tier's
+  window is `min_ratio` times its scored loop; governance keeps
+  `min_ratio × slowest`.
+* **Prices** move only on a new settled sample in the card's scope and no
+  faster than `min_ratio` times the loop the card's samples come from
+  (`price.skipped` with `no_new_sample` or `ratio`). A forecast card's loop is the
+  forecast meter, which counts only with `timing.min_support` settlements and never
+  beyond the consequence backstop: a horizon a seat chose cannot delay its own price.
+* **Cutoffs**: a decision's cutoff is its horizon in ticks plus
+  `ceil(horizon / min_ratio)`: 27 ticks for a 20-tick verdict timeout, 80 for a
+  60-tick backstop, `h + ceil(h/3)` for a forecast of horizon `h`. A forecast
+  comes due on its tick (`Forecast.due_at_tick`). A round that reaches its cutoff
+  unscored is credited the router's zero-consequence reward, never the arm's own
+  mean (T4).
+* **Exploration**: the novelty share is a flow, one share per measured
+  consequence period, of which each window accrues the part its period covers;
+  the reserve never holds more than one period's share (`novelty.window` items
+  carry `carried`, `accrued` and `cap`). A trial's patience is `min_ratio`
+  measured consequence periods. A grown router menu opens its epoch at most once
+  per `min_ratio` measured periods of that router's rounds (`epoch.deferred`).
+* **Governance**: each activation opens a settling probe (`governance.probe`);
+  the time until every read card's score series returns to the band it held
+  before, at any level, is its settling time (`governance.settling`), part of the
+  slowest period. A probe unsettled after `min_ratio` consequence periods closes
+  with its age as a lower bound. `governance.nonviable` / `governance.viable`
+  record each change in whether `min_ratio × slowest` fits the run's whole length
+  and the world's repricing period: nonviable means the band is empty for this
+  world, never that the run is near its end.
+* **Money rails**: each conversion's open-to-finalized latency, in ticks
+  consumed, is a `cadence.capital` sample. It joins the slowest period and sets
+  the forward wait only with `timing.min_support` samples. The caps count
+  `treasury.cap_window` of wall time, a declared bound.
+* **Requisite velocity (T8)**: where the environment's pace is measured (a live
+  world, or `fastloop --gaps-from`), a model call's deadline is `min_ratio`
+  delivered ticks (`ModelRequest.timeout_s`, never above the adapter's ceiling),
+  for every rail, x402 sellers included; an unpaced virtual clock keeps only the
+  adapter's finite ceiling. A call that outlives its deadline times its decision
+  out (`decision.call_expired`). Before every model call, once a delivered tick of
+  wall time has passed in the event, a live world settles venue fills, reconciles
+  orders and settles watchers (`safety.pass`), reading its wall clock and delivered
+  tick through the journal. A watcher's evaluation, on a tick or in a sweep, moves
+  no money: the kernel runs the predicate in the world's own process, which pays no
+  one. Its cost is the world's own time, a hard limit fixed for the world's life:
+  `[subscriptions] max_watcher_evaluations_per_sweep` (default `32`; any other
+  `[subscriptions]` key is unknown) watchers are evaluated a sweep (a tick, or a
+  safety pass), all against one snapshot of the world read once for that sweep (mids,
+  funding and equity: one venue read set a sweep, however many watchers), in id
+  order resuming after the last one evaluated (`watch_cursor`, checkpointed), so each
+  of n live watchers is evaluated within `ceil(n / max_watcher_evaluations_per_sweep)`
+  sweeps whoever registered first; a watcher not reached waits for the next sweep, and
+  a watcher that is retired, or whose owner is, is not evaluated and takes no place in
+  the rotation. There is no per-owner share, and none is needed: every watcher is a
+  registration, which costs its registrant a registration trial (real money), and the
+  rotation is fair per watcher, so an owner with many watchers dilutes the others (each
+  of n is still reached within `ceil(n / max_watcher_evaluations_per_sweep)` sweeps)
+  but can never monopolize the sweep. The world block's `watchers` section publishes
+  the limit and this rule. A terminal state the pass sees is
+  latched: later calls in the event are refused unbilled, routing draws no one
+  else, and the event's termination check kills the world through the one kill
+  path. No thread is used.
 
 ## Timing interpretation
 
@@ -752,7 +1402,10 @@ change either. Bounded fractions and scores use [0, 1], score differences use
 [-1, 1], and standard deviations of unit scores use [0, 0.5]. Unbounded counts
 and ratios use one count or one base quantity as their unit interval [0, 1];
 cost per return uses one dollar [0, 1,000,000] in micro-USD; signed dollar P&L
-uses [-1, 1] USD. These are unit definitions, not acceptable regions or clipping
+uses [-1, 1] USD. Prompt sizes per invocation use [0, 100,000] bytes, a width
+above the opening prompts measured in live runs (median 21k to 29k characters,
+up to 42k in one judge's INPUTS); reading bytes per return, summed over every
+reader of a return, use [0, 1,000,000] bytes. These are unit definitions, not acceptable regions or clipping
 bounds for seed observations: larger and negative observations remain measurable.
 Registered observations must return within their declared range.
 
@@ -769,10 +1422,8 @@ For card j, `v_j = distance_outside_region / card_region.scale`, and
 Cost shares use the card's selected scopes. For `cost_per_return` only
 successful returns own cost; for `cost_per_attempt` every invocation's cost is
 spent and owned, failed ones included. Each selected row contributes its cost
-divided by the count of responses the observation divides over in that scope,
-so a retained-storage charge adds its own cost to the scope it is held in and is
-never one of the responses that count is taken over; a scope with no response
-of its own is measured nowhere and attributed nowhere. The contributions are
+divided by the count of responses the observation divides over in that scope;
+a scope with no response of its own is measured nowhere and attributed nowhere. The contributions are
 normalised across supported scopes. Evaluator and meta cost cards therefore
 charge those roles. Global window cost retains the producer-cost sufficient
 statistics. Tool attempts and turnover use the decision's contribution divided
@@ -781,14 +1432,26 @@ malformed invocations, so a correct return does not pay for someone else's
 malformed one; an upper-bound violation uses well-formed invocations. A zero
 attributable total contributes zero. Other observations use `1/n` decisions
 for the card's role (or all roles for `answers_for = "all"`), counting the
-decisions that responded in the window and not one whose only entry there is a
-retained-storage charge, and that generic share never falls below
+decisions that responded in the window and not one whose only entry there is
+money spent without a response, and that generic share never falls below
 `prices.min_blame_share` (edition 2, cold audit F6): splitting participation
 across many decisions cannot dilute what each one carries of a violation below
 the floor. The generic share is `max(min_blame_share, 1/n)`, so two decisions
 still carry a half each; the floor bites only once `n` exceeds its reciprocal.
 Attributable observations (cost, well-formedness, tool attempts, turnover) keep
-their exact shares. The final score is `clip(raw_score - penalty, 0, 1)`.
+their exact shares. A card measured per assembly or per role is attributable to
+its scopes: each scope whose own value lies outside the region owns
+`v_scope / sum(v_scope)` of the violation (a compliant scope owns none), and a
+decision carries its scope's part times `max(min_blame_share, 1/n_scope)` over
+that scope's decisions that responded in the window; the term records the
+`owner` scope. The generic split applies only when no scope violates. Closed
+windows freeze the per-scope values as `closed_scopes`. The final score is
+`clip(raw_score - penalty, 0, 1)`: the penalty is subtracted (the essay's
+Lagrangian), and the clip at zero only keeps a settled reward in the unit interval.
+A forecast-shaped decision whose accepted commitment came due avoidably unresolved
+(censored with no documented exclusion) still settles censored, never as a zero,
+but under `forecast-unresolved-priced-v1` carrying its penalty as the score; its
+router and assembly learners are credited their neutral estimate less that price.
 
 Closed windows retain their observations, regions, contributions, and the cards
 and prices of the edition in force at the close, for delayed settlements. A
@@ -805,31 +1468,95 @@ A settlement cannot depend on future returns. Each penalty item records the
 terms, window identifiers and shares actually used. Historical windows are
 released when no unresolved decision needs them.
 
-Fixed pathology cells include the priced card dimensions and the two activity
-dimensions. The immune organ uses pricing's typed card measurements, including
-unavailable support, and frozen `closed_regions`, not raw observation-id values
-or later live regions. Raw reward channels remain available for retrospective analysis.
-Adding a card starts its support history; removing one drops that dimension
-without clearing surviving evidence. Thrash requires k consecutive changes with
-no compliant window. Stable failure requires k same-cell windows with a common
-violated card. Learning death is the frontier gone, not a count of edits (the
-essay: the surplus-generating frontier extinguished or quarantined). It requires
-k same-cell windows with zero registrations and revisions, no improvement in
-consequence outcomes over those windows (the least-squares slope of the
-paid-off rate and of realized P&L both flat or falling; an unmeasured series
-never improves) and a compliance the cards cannot vouch for (in some window of
-the tail a card is violated, unmeasured or without a region; a charter with no
-measured card cannot show compliance). A stable, compliant organisation is not
-learning-dead, nor is a stable one whose outcomes are improving. The window
-profile carries `paid_off` and `realized_pnl` for this, and each `immune.window`
-item publishes the `frontier` evidence (`quiet`, `improving`, `holding` and
-the two slopes). Learning death's only response is that flag: the reserve reads it
-at the next window boundary and grants one extra novelty trial per assembly for
-the window that opens. A grant is spent by the first consequence delivered to an
-assembly beyond `novelty.trials`, and whatever is unspent expires at the next
-boundary, where the flag must be raised again to re-issue it. That single grant
-is part of the novelty lifetime policy (A13): ledger evidence `novelty.grant` and
-`novelty.grant_consumed`.
+Pathology cells are the priced cards' region-relative bins and the two activity
+bins, over the dimensions every compared window supports: an unsupported reading
+is missing, never a coordinate of its own (versioning audit P6). The immune organ
+uses pricing's typed card measurements and frozen `closed_regions`, not raw
+observation-id values or later live regions.
+
+**Live versioning** (`versioning/live.py`; essay II.II, versioning audit M1-M3).
+Every closed window joins the retained windows (`timing.min_ratio × max(immune.k,
+timing.min_ratio)`; the rolling operator reads the last `timing.min_ratio × immune.k`).
+A charter edition change or a change of the world's terms (its own tools' kinds and
+prices, and the manifest models' prices; never the population's own tools or
+connectors) opens a version at once. Behaviour opens one when the last k windows
+differ from the rest of the version by more than `immune.tv_threshold` plus the
+sampling allowance `1/2 sum_i sqrt(q_i (1 - q_i) (1/k + 1/n))` over the rest's
+occupancy `q` (n windows), at k consecutive closes (`version.boundary`, with its
+cause). A version's gap is the operator's gap bound over the transitions it has
+counted over its whole life, read once it has 2k windows; its series restarts at
+every boundary. `rolling_gap` is the same over the rolling horizon and `card_gap`
+over the cards alone. The gap bound is `1 - min_t delta(P^t)^(1/t)` for t up to the number of
+occupied cells, a cell never seen leaving taking the sample's occupancy as its
+row. A version settles at the first close, 2k windows or more into it, where the
+last k windows are within that bound of the rest (`version.settled`); a version
+superseded first leaves its age as a lower bound. The settling of a version a
+revision opened (a charter edition or a change of terms) reaches the governance
+cadence (`governance.settling`) and joins its slowest period, and such a version's
+age counts while it is unsettled, censored after `timing.min_ratio` consequence
+periods (essay II.IV.c: the settling after "a small, deliberate intent revision").
+Versions the factory's own dynamics open are versioned and ledgered the same way. `factorylab versions` replays the same code
+over a diary.
+
+**The predicate** (`versioning/versions.py: diagnose`), at every closed window over
+the last k windows. Stable failure: a nonempty set of cards violated in every
+tail window that measured them (activity never enters it) while `card_gap` is at
+least `immune.gap_threshold`. Thrash, and its unsettledness `u`, the largest of
+four signals: the version gap series over its last 2k readings moves by more than
+`immune.tv_threshold` on average (`u` = that mean change); the retained windows'
+cells repeat with a period p in [2, `timing.min_ratio`] for `timing.min_ratio`
+cycles (`period`; `u` = 1); two versions in a row, launch excepted, were superseded
+before they settled and the current one has not (`u` = 1); or a configuration
+lifespan recorded in the tail was shorter than the latency of the loop that
+corrects it (`config.lifespan`: a seat's contract version against the consequence
+loop, a router's epoch against its rounds, a charter edition against governance's
+slowest loop; time audit T14; `u` = 1 - lifespan / latency). Stationary random
+behaviour over three cells is flagged in about 3% of windows at k = 3. Learning
+death: one cell over the tail, no registration or revision, and the frontier gone:
+a frontier (non-core) router whose every draw in every tail window gave NOOP at
+least `1 - gamma` (`uninvoked_routers`, whatever the reason), or one that in every
+tail window held each unhistoried seat it offered within `(1 +
+immune.tv_threshold) * gamma / N` while a historied seat held more than all the
+other arms together (`quarantined_routers`). Card compliance never enters it
+(versioning audit P1). Each `immune.window` item
+publishes the profile, the flags and their evidence, the routers' draws, the
+lifespans, the terms digest and the thrash price.
+
+**The niche** (essay II.II.b, ruling R5). Learning death is not answered by a
+response; it is prevented by the world. An *unhistoried action* is kernel physics
+(`DecisionQueue.record_actions`, `has_action_history`): a (tool, kind) that no
+decision of that assembly carrying a propensity record or a delivered return
+(settled, censored, inapplicable or timed out) has taken. A free-text action label
+is never an action: a fresh string would make any decision look new. The novelty
+reserve is usable by an unhistoried assembly's own model calls (its trial), by
+every tool call that is an unhistoried action of the calling assembly, and by the
+one model round that reads that call's result in the same decision; after it the
+decision's own ceiling is restored (`niche.action`, `novelty.compute`). This holds
+for seats past their first record as much as new ones, up to `novelty.seat_share`
+of the period's share per seat. A requested child's calls are its parent's, and a
+committee ballot's are never covered.
+The kernel never chooses the action; the eligibility and the reserve are published
+in `world.mechanics.novelty` and `world.reserve`. The learning-death grant is
+deleted (versioning audit P2).
+
+**Entrainment** (essay II.IV.c; time audit T15). Two seed observations say how
+concentrated a window's dependencies were, so a card can price them:
+`provider_concentration` (the largest share of the window's model calls one
+provider served) and `family_concentration` (the same by foundation model family).
+Routine seat wakes are jittered: after each routine wake a seat's floor is
+lengthened by `floor × timing.jitter_fraction × u` ticks, rounded up with the
+probability of its fraction, `u` drawn from the world seed, the seat and the tick it
+woke, so seats are not phase-locked to one tick. Safety events are never delayed.
+
+**Anticipatory settlement** (essay II.IV.b; time audit T18). A registration (tool,
+observation, assembly or service) is open on `world.uptake` for `timing.min_ratio`
+measured consequence periods. Judging seats may post `uptake_forecasts`
+(`{registration, q}`), each its own policy decision scored `1 - (q - y)^2`, `y` = 1
+when another lineage calls the tool, a charter card names the observation or the
+assembly is invoked. The registering seat's uptake decision settles at the first
+window close after a forecast at the standing-weighted median q (`uptake.anticipated`)
+and its correction decision `1/2 + (y - q)/2` at realization (`uptake.settled`);
+with no forecast it settles at `y`. No manifest key is added.
 
 ## Round-two W5: propensity and measurement (A10, A11)
 
@@ -867,8 +1594,8 @@ antagonist — the size band buckets the declared size in base units into `xs`,
 `verdict:<q>` and `conformity:<c>` rounded to one decimal for a judge, and
 `malformed` for a return that did not parse. A return that declares nothing, or
 declares something that is not a distribution or omits the action it took, is
-recorded degenerate — that action at 1.0 — and the reason reaches the population
-in `registration_feedback`.
+recorded degenerate — that action at 1.0 — and the reason reaches the declaring
+seat's own outcome inbox.
 
 Producing action labels include accepted or uncertain venue and treasury tool
 effects and successful child requests, followed by the final answer's action.
@@ -883,8 +1610,8 @@ recorded. Zero mass remains a refused declaration.
 
 The declared propensity travels forward on the request about that decision: the
 `ProducerReturn`, `Verdict` and `MetaVerdict` events carry it, and the judge's
-`Request` carries it as a first-class field rendered in its own `PROPENSITY`
-block. This is the essay's single exception to privacy (II.I.b), so nothing else
+`Request` carries it as a first-class field rendered in its own `SUBJECT PROPENSITY`
+block, named apart from the answer's own `propensity` field. This is the essay's single exception to privacy (II.I.b), so nothing else
 of an agent's local state moves with it.
 
 A `{"kind": "learner", "assembly_id", "learner", "actions", "gamma"}`
@@ -945,7 +1672,8 @@ At window close, registered observations run only when named by a live card
 or covered by an open registration trial. Seed observations remain available.
 Delivery of the registration starts `observation.trial`. An undelivered
 registration records `observation.inactive`. An unused observation retires
-after `novelty.max_lifetime_windows` from its trial or inactive window, records
+after `timing.min_ratio` measured consequence periods, in ticks, from its trial or
+inactive tick (time audit T5), records
 `observation.retired`, and leaves the observation book.
 
 ## Spot venue
@@ -968,6 +1696,254 @@ are allowed).
 USDC through the same intent, submission and receipt journal. Venue pots show
 `perps` and `spot` as components of `venue`, never additional capital.
 
+## Recorded tapes: `[exchange.tape]`
+
+`exchange.tape` is absent by default (the fake venue walks its seeded random
+path) and fixed for the world's life when present. It names the recorded market a
+fake venue replays: a past paid run's diary, cut to its market data
+(`factorylab/world/tape.py`, `scripts/fastloop.py tape`). A tape is the world, not
+architecture. The keys:
+
+| Key | Meaning |
+|---|---|
+| `sha256` | SHA-256 of the compact tape's canonical JSON: the tape's identity |
+| `start_ns`, `end_ns` | The first and last recorded tick stamps |
+| `markets` | The perps and pairs whose mids the tape recorded |
+| `spread_bps` | Each market's spread as the tape states it: the median recorded top-of-book spread, else the median over the tape's other recorded books; a tape that recorded no book states none (the market is absent here) |
+| `allow_unknown_cutoff` | Default `false`. Whether the operator admitted models that state no `training_cutoff` (`fastloop --allow-unknown-cutoff`); recorded, since such a model may have been trained on the tape's market |
+
+Load-time invariants: only `exchange.kind = "fake"` replays a tape (a tape world
+never reaches a live adapter, a live rail or a real-money branch); a tape world has
+no `exchange.shocks`; every seeded coin and pair is one the tape recorded. The
+runtime refuses a venue whose tape's SHA-256 is not the manifest's, and a tape venue
+under a manifest that names none, at launch and on every resume (`tape_mismatch`).
+Because the key is hashed, the Launch record carries the tape's identity and a
+resume on another tape is a different world.
+
+The look-ahead guard (load-time invariants of a tape world). A replayed market is in
+the past; a model trained on data covering it, or a seat that can read today's web,
+could know the price path it is about to be surprised by, and evaluators graded on a
+consequence the outside already knew would learn to consult it rather than judge
+(Chapter II §III.b):
+
+- Every model on the menu (not only the seed roster: a seat may move to any menu model
+  by proposal) states a `training_cutoff` whose day ends before the tape's first
+  instant. A known cutoff that does not is refused whatever else is set. A model
+  with no stated cutoff is refused unless `allow_unknown_cutoff` is true.
+- The same policy binds every model admitted after genesis: a model proposal (a
+  catalogue model, a reasoning variant, a `venice:` or `x402:` id) is refused before
+  its trial is charged unless the cutoff this manifest states for its base id ends
+  before the tape's first instant; a model off the menu has no stated cutoff, so it
+  is admitted only under the recorded `allow_unknown_cutoff` waiver; no web route is
+  ever admitted. The rule is published as a fact in `proposal_shapes.model.admission`
+  (`WorldManifest.look_ahead_rule`), and a refusal reaches the proposer as its
+  registration's refusal reason.
+- Web access is off, not a declared confound: a tape world has no `[web]` search
+  route and lists no `:online` model and no model with a `web` plugin table (the
+  harness removes them from the menu), publishes no `connector.fetch` (a fetch is
+  refused), and admits no live Polymarket reader (`polymarket_live_on_a_tape`; the
+  simulated event markets stay).
+- The scorecard's `tape` block states the cutoffs, the models admitted with none,
+  whether the operator allowed that, and `web: "off"`.
+
+What the venue replays, and how:
+
+- The tape holds what the diary recorded and nothing else: the delivered tick
+  stamps; each market's mids and each perp's funding-rate observations, stamped as
+  delivered; the order books the run happened to read, stamped with the venue's own
+  book time; its first instrument listing; the account's fee rates (below). A funding row that moved money was the
+  recording account's payment, not market data, and is left out.
+- Every read answers the latest recorded row at or before the venue's instant, and
+  nothing before a series' first row. Past the last row the last row holds; the tape
+  never loops.
+- The venue's instant is the world's tick. The world keeps the manifest's
+  `tick_interval` and the charter may amend it; the tape is sampled at the tick, never
+  the reverse. A tape world launches at the tape's first instant and ends before the
+  first tick past its last.
+- Funding is charged once per hour boundary of tape time, on the position held at
+  the boundary, at the last recorded rate and mid at or before it: never once per
+  recorded row. When the world ends (the tape ran out, the budget did, or a kill),
+  the position-hours actually held since the last boundary are charged at the last
+  recorded rate and mid, once, before the production mark: the last partial hour is
+  never free, and a receipt is never booked for time a position was not held.
+  The venue's time never passes the recording's end (`closes_ns`, the last recorded
+  tick): an advance to a later instant is an advance to the end, so no fill, mark or
+  funding boundary is invented in time the tape never recorded, and the world's own
+  clock is held there too. When the paced clock reaches the end inside an event (a
+  long call), the world is terminal (`tape_ended`): later calls of the event are
+  refused unbilled, venue writes are refused ("the recorded market has ended"), and
+  the event's termination check ends the world. When the tape ended the run (its
+  clock stopped before its tick budget, or `tape_ended`), the venue is first advanced
+  and settled exactly through the end, so an order in flight meets the tail rows
+  after the world's last tick and funding runs through the end; an explicit, earlier
+  budget or termination closes at the world's own instant.
+  The terminal sequence, on every path that ends a tape world (the tape running out,
+  the budget, a termination condition, an explicit kill; a crashed world resumes and
+  ends by the same path): (a) that partial hour's funding is charged; (b) every order
+  still in flight, which no later recorded row can ever deliver, is cancelled (reason
+  "the recorded market ended before the order arrived"; an immediate-or-cancel order
+  no counterparty met), settled like any venue cancel; the production mark is written;
+  (c) the kill's wind-down closes positions and spot balances, each close filling at
+  once against the last recorded book by the same depth rules, the 5% bound and the
+  taker rate, and its fill and realized P&L are booked; (d) only then is the venue
+  sealed, refusing every further order ("the recorded market has ended"); (e) the
+  world is `Terminated`. The operator's `factorylab kill` of a dead simulated world
+  (any fake venue, a tape's included) winds no venue down: its venue state lives only
+  in the process that died.
+- The venue is named `tape:<first 8 hex of sha256>`.
+
+Fills are the recording's and never kinder (money path). Every rule below is
+published, as a fact and without advice, in each instrument record the venue lists
+(`execution`, with `spread_bps`, `spread_source`, `synthetic_level_size`, the fee
+rates and `fee_basis`):
+
+- An order is acknowledged `resting` and executes when the recording first shows its
+  market after the instant it was sent: at least one world tick later, and never
+  against the book or mid its sender was shown.
+- The book it meets is the recorded order book when that is at least as recent as the
+  recorded mid; otherwise one level each side at the mid plus or minus half the tape's
+  spread. No level is ever unbounded. The synthetic level holds the market's own
+  median recorded top-of-book size; else the smallest-notional top-of-book level
+  recorded for any market on the tape, converted to this market's units at its mid
+  (`synthetic_level_source`); else there is no level, and every order on the market is
+  refused: "the tape recorded no liquidity for this market", published as the
+  instrument record's `liquidity`. `venue.order_book` answers this same book.
+- A market order is immediate-or-cancel within 5% of the mid it was sent at
+  (Hyperliquid's market order); what it cannot fill is cancelled (`OrderRejected`,
+  reason `immediate-or-cancel remainder cancelled`), never rested. An
+  immediate-or-cancel order in flight cannot be cancelled; a limit in flight can.
+- A limit order that crosses on arrival fills at the book's prices at the taker rate
+  and rests the remainder. A resting limit fills only when a recorded mid after it
+  began resting is strictly through its price (a trade happened through it); a book
+  level that merely sits past its price is a quote, not a trade, and fills nothing;
+  and the opposite top of book (recorded or synthetic) must also be at or through its
+  price (a buy: the ask at or below it; a sell: the bid at or above it), since a mid
+  through the price with no counterparty quoting it is no fill.
+  It fills at its own price, at the maker rate, up to what the top level on that side
+  still holds. Within one tick, arriving orders (takers) are matched before resting
+  ones (makers), as on the venue.
+- Size taken from one recorded snapshot is not offered again.
+- Every order below the venue's order floor is refused when sent: the recorded
+  listing's `min_order_value_usd`.
+- Fee rates are this account's, as the recording stood at the venue's instant: a
+  step function of tape time, each rate usable only from the instant the diary
+  recorded it, never averaged across the future. The primary source is the venue's
+  own statement of the rates (`userFees`, read with each instrument listing since
+  live-4: `venue_read`). Else the rate the latest recorded fill on this market stated
+  (`fills`); else the latest fill on the venue's other markets of the same class,
+  perp or spot, whose rates are separate schedules (`fills_pooled`). A fill states its
+  rate only to within one unit of its fee's last recorded place, so its rate is the
+  simplest decimal in that interval. The diary does not record the venue's `crossed`
+  flag, so a fill's side is read off its recorded order: every fill of an
+  immediate-or-cancel order (`venue.place_market`, `venue.close`) and of a limit the
+  venue acknowledged filled took liquidity (taker); a fill of a limit acknowledged
+  resting with nothing filled, observed after that acknowledgement, provided it
+  (maker); any other fill (a limit acknowledged resting part-filled, a liquidation, an
+  order the diary does not name) states no side and is not used. The tape carries
+  each rate with its provenance (the fills by order id, instant and position, or the
+  instrument read's call). A side never recorded by an instant stays refused then: a
+  market order needs the taker rate, a limit the maker rate, and a limit that would
+  cross on arrival with no taker rate is refused on arrival. The listing publishes
+  each side's rate, `taker_fee_source` / `maker_fee_source`, the instant each was
+  recorded (`*_fee_since_ns`), and `market_orders_refused` / `limit_orders_refused`.
+  Only a diary of a live venue states fee rates. A pair trades on its own (spot) rates.
+- A tape world never exposes a value its recording does not contain (Codex review of
+  #151): where the recording is silent the venue refuses, and says so as a fact, never
+  with the fake's constant in the recording's place. A market is absent from
+  `venue.mids`, `venue.order_book` (and candles and funding history) and the
+  instrument listing until its first recorded mid, and an order on it is refused ("the
+  recording has no market for this coin yet"); the bootstrap seeds no price onto a
+  tape venue. An order is refused on a market whose recorded listing row does not
+  state its lot size, tick size and order floor; the listing shows those terms as
+  null and the reason as `refused`. An order is held to the recorded
+  precision: a size that is not a multiple of `lot_size`, or a limit price that is not
+  a multiple of `tick_size` or has more than `price_significant_figures` significant
+  figures (an integer price excepted when `integer_prices_allowed`), is refused. The
+  recording states no leverage terms, so no credit is extended: perp positions are
+  margined at 1x (`max_leverage` 1; `set_leverage` above 1 is refused), and positions
+  are closed at the mid, at the recorded taker rate (the maker rate while no taker
+  rate is recorded), only when the perps account's equity is below zero. The recording has no vaults: vault writes are refused. A
+  resting spot buy holds its cost and its recorded maker fee. A synthetic level holds
+  whole recorded lots. Which sides of which tapes can trade, and from when, is in
+  `worlds/tapes/library.toml`.
+- Orders in flight hold margin in `collateral_view` as resting orders do.
+- An order that has filled anything is never reported rejected: when its unfilled rest
+  can no longer execute (the account cannot carry a later fill, a spot balance cannot
+  pay for it, an immediate-or-cancel remainder), what it executed stands, the rest is
+  cancelled with one `OrderRejected` naming it (`reason` "remainder cancelled: …",
+  `cancelled_size`), and `lookup` reads it back `cancelled` with its executed size.
+  `lookup` always reports an order's executed size, whatever ended it.
+
+A tape world runs on the idle-skipping clock (`IdleSkipClock`, `runtime/live.py`), a
+wall-paced clock that compresses only waiting. Its instant is the tape's first
+instant, plus the real time the process has been busy, plus any busy time a stand-in's
+calls were modelled to take, plus every idle wait it skipped. A tick with time to
+spare fires exactly on its declared instant having slept nothing; a tick whose work
+outlasts the interval fires late, exactly as it would live, and the measured interval
+reports the lateness. The harness can give its scripted stand-in the per-call
+latencies a paid diary measured (`fastloop --latency-from`); without them the
+stand-in costs no time and the pace measures only the kernel's own work. Every
+wall-clock reader is keyed on whether the tick clock is paced by the wall
+(`wall_paced`), never on whether the venue is live:
+
+| Reader | Under the idle-skipping clock |
+|---|---|
+| Model-call deadline (`min_ratio` delivered ticks, wall seconds) | Real seconds of busy time, as live; a modelled call past it expires |
+| Safety pass between model calls | Runs once a delivered tick of wall time has passed in an event; it advances the recorded venue to the wall's instant and settles what filled, refused or funded (never a mid) |
+| `wall` journal (`WallClock`) | Recorded, not re-executed, so a replay reads the run's own instants |
+| Checkpoint cost alarm (`checkpoint.slow`) | Measured in real busy time |
+| Tick clock restore | Restored as the clock it was: the saved skipped and modelled time and its saved paced reading (the one the last event's `runtime.event_done` recorded, so a modelled call inside a tick is not undone and the next tick skips only the remainder), with the fresh clock's deadline (the tape's end). A stand-in's modelled latency rides in its recorded answer and is spent by the provider's observer, live and on replay alike. Each event's `runtime.event_done` records the clock's reading and totals (`clock`), and a replayed event's clock adopts them, so after the replay the clock reads and totals what the recorded run's did, never the checkpoint's stale instant; a replay of a diary's gaps (`--gaps-from`) restores its recorded gaps and measured sample; a restore never changes a clock's kind (`tick_clock_mismatch`) |
+| Resume instant | The world's saved instant |
+| Treasury cap window, venue read share, Polymarket windows, the kernel's ledger and queue | The world's clock, unchanged |
+
+The harness's scorecard carries a `fill_band`: the venue P&L the tape's rules booked,
+and beside it the same recomputed with an extra adverse slippage of half the market's
+stated spread on every fill. Both numbers are always shown. Tape P&L is never evidence
+for a code change: iterating code against a tape until its card looks right is the
+architect optimizing toward its own "better" (AGENTS.md rule 2).
+
+Tapes are listed by market regime in `worlds/tapes/library.toml` (trend, chop,
+jump, funding flip, outage; the rules are in its header), each by SHA-256 with the
+paid diary it was cut from, split into dev tapes and sealed holdouts. The harness
+runs a holdout only with `--release-candidate`, and only for plumbing invariants.
+Seeds on one tape vary the routers, not the market: each seed's card names its tape.
+A real-model tape run uses the edition-4 roster, several families and cheap; there is
+no single-family roster, and a roster is never chosen from what seats did on a tape.
+
+## Vaults
+
+`venue.vault_tools` is a boolean, default `false`, fixed at launch. When
+true the world publishes the venue's vaults as a surface: `venue.vault_details`
+(free, like the other public venue reads) and `venue.vault_positions` (free),
+and the consequence writes `venue.vault_create`, `venue.vault_deposit` and
+`venue.vault_withdraw` (free, like every venue write). The venue's terms and
+their sources are in `factorylab/world/vaults.py`: a 10% leader commission on a
+depositor's withdrawn profit, a leader's 5% minimum share, a 100 USDC minimum
+initial deposit, a 10,000 USDC creation fee, and a depositor lockup (1 day on
+mainnet). Each write has a durable `vault.intent` under a stable client id
+before submission, is refused with a reason when free perps collateral (the
+pot `_order_collateral` weighs orders against), the vault record or the terms
+would refuse it, and an uncertain acknowledgement is resolved from the
+transfer's own `userNonFundingLedgerUpdates` row, never by sending it again.
+Equity in vaults is the `vaults` component of the `venue` pot and the
+`venue_vaults` custody account, never additional capital. A withdrawal's
+difference from its basis is venue P&L (`venue.settled`, custody
+`venue_vaults`); the creation fee is venue P&L on `venue_perps`. A
+`vaultLeaderCommission` row paid to this account is income (`income.earned`,
+service `vault.leader_commission`, custody `venue_perps`), except the
+commission a leader's own withdrawal is charged and repaid in the same
+transaction, which is ledgered `vault.commission_returned` and booked as
+nothing. Each acknowledged write is bound to its own venue transaction hash
+(checkpointed with the intent); a row bound to one write never confirms
+another, and writes alike in operation, vault and amount are paired with their
+rows in submission order. A commission row names no vault, so it is income only
+while every vault the account leads is one this world created, and never on a
+page with a vault row that could not be read (`vault.commission_skipped`
+otherwise). A withdrawal whose row never arrives within the poll bound is
+ledgered `vault.unbooked`. At a kill, vault equity is residual exposure
+(`wind_down_pending`), never withdrawn by the wind-down, and the summary reports
+`vault_equity_usd` beside `exchange_equity_usd`.
+
 Class transfer confirmation requires a unique hashed `accountClassTransfer`
 row matching the signed direction and exact amount, executed within the
 inclusive interval from the nonce to nonce plus `CLASS_EXECUTION_TOLERANCE_MS`
@@ -980,7 +1956,7 @@ A poll or step preparation that cannot complete is ledgered as `treasury.pending
 with the transfer id, `step`, `phase` (`poll` or `prepare`), a bounded `reason`
 (the rail's own constant message or, for any other exception, its class name,
 never RPC text), the monotone per-step `attempts` count, `since_ns`, the
-reserve window `since_window` the wait began in and the
+cap window `since_window` and the world tick `since_tick` the wait began in and the
 rail's carried `reference`, written on the first attempt, on every change of
 reason and on every tenth attempt (`PENDING_JOURNAL_EVERY`), and the pots view
 publishes the current stall as `pending_reason` and `pending_since` until the
@@ -1009,14 +1985,13 @@ The floor is not a guaranteed liquidation price.
 | --- | --- | --- |
 | `max_bytes` | `262144` | Positive integer response-body cap; an extra detection byte causes refusal. |
 | `timeout_s` | `10` | Positive integer wall-time bound for DNS, TLS and reading. |
-| `call_price_usd` | `"0.001"` | Exact USD text or integer, converted to nonnegative integer micro-USD. |
 | `max_calls_per_window` | `60` | Positive integer attempted calls per assembly per novelty reserve window. |
 | `origin_denylist` | The world's own rail hosts: the venue API and RPC on both networks, the model providers and the discovery index | Hostnames (matched exactly or as a parent domain) or CIDRs; every registered seller's host is added to them. Bare addresses, private names and nonpublic resolved addresses are always refused. |
 
 Population proposals have `{kind: "connector", id, description, origin, predicted_effect}`
 and may add `preflight_path`, `pay` and `max_call_usd`, with an
 origin of `https://<host>` and no credentials, port, path, query or fragment.
-A priced `GET` of `preflight_path`, which defaults to `/`, precedes the same
+A `GET` of `preflight_path`, which defaults to `/`, precedes the same
 experienced, proposer-excluding sortition ballot path as amendments. A strict majority admits the next
 `connector:<id>` registry version. `predicted_effect` names a current measurable
 card and carries `direction` and `window`. Admission starts the same delayed
@@ -1029,15 +2004,18 @@ The response body remains bounded by `max_bytes`; headers and body together
 are bounded by `max_bytes + HEADER_ALLOWANCE_BYTES`, with a fixed `65536`-byte
 allowance in `world/connector.py`.
 
-`connector.fetch {id, path}` costs the flat price even for transport or
-size failures once dispatched; malformed, denylisted, over-quota and unaffordable
-requests never dispatch. Preflights share the proposer's price and window cap.
+`connector.fetch {id, path}` of a public origin costs no money: the fetch pays no
+one, so the wallet does not move for it (Wave 11; `call_price_usd` was removed and
+is refused), and `max_calls_per_window` is its limit. A transport or size failure
+once dispatched still counts against that cap; malformed, denylisted, over-quota
+and unaffordable requests never dispatch. Preflights share the proposer's window
+cap.
 Paths may include a query but cannot change origin. HTTP status is returned
 as evidence rather than treated as a fetch error.
 Responses decode as UTF-8 with replacement and arrive in `seen_tool_results`
 (and the existing `tool_results`) on the caller's continuation. A successful
-fetch permits one additional tool round consisting of ordinary population tools
-and the note tools, then a final model answer. The jail is unchanged.
+fetch permits one additional tool round consisting of ordinary population,
+artifact and outcome tools, then a final model answer. The jail is unchanged.
 
 `MIN_PROTECTED_BODY_CHARS` is `32`, fixed in `runtime/compute.py`.
 Bodies at least that long and copies in parser arguments/model journal
@@ -1058,20 +2036,21 @@ Scripted manifests use an offline fake transport; live manifests use bounded HTT
 
 ## Reading the web (edition 3)
 
-`[web]` registers one tool, `web.search {query, max_results?}`, and takes exactly three
+`[web]` registers one tool, `web.search {query, max_results?}`, and takes exactly two
 keys: `search_model`, a model on the menu whose `:online` route the provider searches with
-(OpenRouter's web plugin, Venice's `enable_web_search`); `call_price_micro`, the tool's own
-flat price; and `max_call_usd`, the ceiling on one whole search. With no `[web]` block no
-tool is registered and the manifest hashes exactly as it did before web search existed, so
-edition 2 is untouched. A search is one model call on that route under a fixed system
-prompt asking for a JSON list of `{title, url, snippet, published?}` and nothing else; the
-seat is charged the flat price plus the metered cost of that call, held against its
-entitlement before the call and refused before any call when the ceiling exceeds
-`max_call_usd` or the seat cannot afford it. The result is bounded — at most ten results, a
+(OpenRouter's web plugin, Venice's `enable_web_search`); and `max_call_usd`, the ceiling on
+one whole search. With no `[web]` block no tool is registered. A search is one model call
+on that route under a fixed system prompt asking for a JSON list of
+`{title, url, snippet, published?}` and nothing else; the seat is charged the metered cost
+of that call — what the provider bills, the plugin's per-request charge (the menu entry's
+`web.usd_per_request`) included — and nothing on top of it, held against its entitlement
+before the call and refused before any call when the ceiling exceeds `max_call_usd` or the
+seat cannot afford it. `web.call_price_micro`, a flat price no one was paid, was removed in
+Wave 11 and is refused. The result is bounded — at most ten results, a
 snippet of at most 600 characters, 16 KB in all — and returned with `cost_micro` and
 `as_of_ns`. A provider error, an unparsable answer or an answer that is not a result list
-comes back as `{error}` charged what the wallet was actually charged, and a malformed answer
-pays the metered call but not the tool's flat price. It is a kernel call, not a wake: no
+comes back as `{error}` charged what the wallet was actually charged: a malformed answer
+pays the metered call, because the provider billed it. It is a kernel call, not a wake: no
 propensity, no judgement, no return, and its cost lands on the calling seat's consequence
 account the way a connector read's does. The completion runs through the provider journal
 proxy, so a resumed diary replays the same results from its `io.call`/`io.result` pair
@@ -1084,16 +2063,213 @@ fetched body is: verbatim and JSON-escaped copies are redacted from the public l
 surfaces and a final output carrying one is refused. Urls and shorter strings are
 repeatable facts and stay readable, and the protection is transient — it lasts the
 invocation, like a fetch's. A successful `web.search` also permits one additional tool
-round, the same one a successful `connector.fetch` permits: ordinary population, note,
+round, the same one a successful `connector.fetch` permits: ordinary population,
 artifact and outcome tools, then a final model answer, so a seat can search and act within
 one wake. A search that returned no results buys no extra round.
+
+## Event markets: `[polymarket]`
+
+`[polymarket]` is off by default. A disabled block registers nothing, but its keys are
+still part of the manifest and are hashed like any other. The two edition 6 worlds enable
+it with `venue = "live"` (reads only); Gamma and the CLOB charge nothing for a public
+read, and every Polymarket read is free. No world under `worlds/` enables the simulated
+venue's writes. The keys, all fixed for the world's life:
+
+| key | default | meaning |
+|---|---|---|
+| `enabled` | `false` | publish the Polymarket tools and open the `polymarket` custody pot |
+| `venue` | `"fake"` | `fake`: the seeded simulated venue (`world/polymarket.py`, `FakePolymarket`) for reads and writes. `live`: the public Gamma and CLOB read APIs only; no write tool and no pot are registered, because live order signing on Polygon is not built |
+| `collateral_usd` | `"0"` | the simulated pot's opening USDC; refused with `venue = "live"` (`polymarket_live_writes_not_built`: a live venue is read-only until the live-trading wave, which must bring its own request bound) |
+| `max_order_usd` | `"10"` | the most one order's notional (`price x size`) may be |
+| `max_open_usd` | `"100"` | the most the pot may have committed: tokens held at cost plus resting buys |
+| `max_orders_per_window` | `20` | orders placed per reserve window |
+| `seed` | `0` | the simulated venue's seed |
+| `read_requests_per_10s` | `200` | the Polymarket requests the world's reads may send per sliding 10 s, all together; at most `300`, Polymarket's tightest published limit per 10 s (`read_requests_per_minute` was replaced by it and is refused by name) |
+| `kernel_reserve_per_10s` | `100` | of those, held back for the kernel's own settlement reads; below `read_requests_per_10s`; its half, N, is the kernel's open reads, `N // max_readers` (a seat's open reads) must be at least 1, and `(read_requests_per_10s - kernel_reserve_per_10s) // max_readers` (a seat's requests) at least 3, one claim's lookup (`kernel_reserve_per_minute` was replaced by it and is refused by name) |
+
+Tools: `polymarket.search {query, limit?}`, `polymarket.market {market_id}` and
+`polymarket.book {token_id, depth?}` are free reads (a public market read pays no one;
+`read_price_usd` was removed in Wave 11 and is refused). Gamma answers through a shared
+cache (`max-age=300`) that served a resolved market as still open (read 2026-09-23), so
+every Gamma read carries a fresh query value (`_`) and returns the origin's state at the
+read; the CLOB is not cached. **The reads are bounded by Polymarket's published rate
+limits**, a limit and never a price. Polymarket publishes ("Rate Limits",
+docs.polymarket.com, read 2026-09-24), over sliding 10 s windows and throttled when
+exceeded: Gamma general 4,000 requests, `/events` 500, `/markets` 300,
+`/public-search` 350; CLOB general 9,000, `/book` 1,500, `/books` 500, `/price` 1,500,
+`/midpoint` 1,500. The reads here reach `/public-search`, `/markets` and `/book`, and
+every claim's token lookup lands on `/markets`, so the tightest endpoint a request can
+land on is `/markets`: **300 per sliding 10 s**, the load-time ceiling on
+`read_requests_per_10s`. Every Polymarket budget, share and reserve is counted over
+that same sliding 10 s of **wall time**, the window Polymarket itself counts (a budget
+per minute would have let 16 seats burst far past 300 within one 10 s): the live
+reader stamps every request with the wall clock (`time.time_ns()`) as it sends it
+(`PolymarketReader.drain_sends`), the stamps are journaled, so a replay charges what
+the run charged, and every admission and countdown below is read against that clock
+(`wall_now`, the reader's `wall_ns`, journaled too), never the world's; on the
+simulated venue, which sends nothing, the world's clock stands in for it. The default,
+200, is two thirds of it: the host's IP is dedicated to the world (one live
+Polymarket world a host, below), and half (150) would leave each of 16 seats 3
+requests per 10 s, one claim's lookup, while a judge's one return may carry
+`max_forecasts_per_verdict` (2) claims; so 200 is the least budget that fits a whole
+return. The remaining third covers only what the world cannot see (below). 100 of the 200 are held
+back for the kernel's own settlement reads (`event_facts`), which no seat can spend.
+The rest is divided over the venue read slots (`[venue] max_readers`, the same slots
+the venue reads use): each slot has a fixed share of `(read_requests_per_10s -
+kernel_reserve_per_10s) // max_readers` requests, 6 at the defaults, over any sliding
+10 s of wall time, counted over the registration's own reads (keyed by its id and
+version, never the id string alone), each charged after it is sent, at least what it
+sent, at the stamp of its last request; a freed slot is given again only once its last
+holder's last Polymarket charge is 10 s of wall time old and its open reads (below) no
+longer count (and its last venue read has left the venue's own 60 s), so one slot
+never carries two registrations' reads in one window. A share that cannot cover one
+claim's token lookup (3 requests) is refused at load. Every read tool sends one GET,
+once. A seat read is refused before it is sent
+when the seat's remaining share cannot cover it (`polymarket read share spent: <used>
+of <share> requests in the last 10 s; this read sends 1`); nothing else admits or
+refuses it. Every admitted seat read is charged one request, whether it was sent or
+answered from the tick (below): a share is a quota on reads asked, so a seat cannot
+tell a tick's answer from a sent read. The seats therefore send at most
+`read_requests_per_10s - kernel_reserve_per_10s` in any sliding 10 s.
+
+**What reaches Polymarket.** Only a live-read world sends requests, and it holds no
+positions: writes, positions and the marks of the pot's lots exist only on the
+simulated venue (`venue = "fake"`, and a live world's offline `simulate_reads`), which
+sends Polymarket nothing. A live world with writes is refused at load
+(`polymarket_live_writes_not_built`) until the live-trading wave brings its own bound.
+So the kernel's requests to Polymarket are its settlement reads alone. **One live
+Polymarket world runs a host**: a world whose Polymarket reads go to the network is
+admitted before its first event at genesis and before a resume replays anything
+(`runtime/polymarket.py`, `arm`). It must have a ledger (every request and its wall
+stamp is journaled; refused `polymarket_live_requires_a_ledger`), run on the wall clock
+(Polymarket counts wall time, and a simulated clock's ticks are no measure of it;
+refused `polymarket_live_requires_the_wall_clock`), and take the host's exclusive lock,
+`polymarket-ip.lock` in the operator's one lock directory on the host (the capital
+loop's `default_lock_dir()`, `~/.factorylab/capital-loop` of the account as the
+password database names it, never beside a run), so a second live reader on the host
+is refused (`polymarket_ip_in_use`, its own operator code), whichever directory it runs
+in, because the budget assumes the IP is the world's own. The lock is released when
+the world stops, on every path, including a resume that fails after admission, and by
+process death. A world whose reads are answered offline (`simulate_reads`, or the
+simulated venue) is admitted with no lock, on any clock.
+
+**The kernel's reads fit its reserve by construction; they are never admitted,
+refused or deferred.** A claim is graded on the world at its due pass (essay
+II.III.b, prebaked at the Stackelberg move): the settlement reads of `event_facts` are
+always sent. What bounds them is a limit on what seats can open. An *open read* is a
+seat registration's own: the settlement of its claims on one token due at one tick
+(`<registration>|due:<token>:<tick>`), held whether or not another seat holds the same
+token and tick; it stays open while its claims are pending, and for one window (10 s
+of wall time) after the kernel's last request for it. Each registration holds at most **`N //
+max_readers`** of them, where **N = `kernel_reserve_per_10s // 2`** (50 at the
+defaults, 3 a seat at 16 slots; published in the world block's `polymarket_reads`),
+counted over its own claims alone, so what it is told never depends on another seat
+(AGENTS.md rules 4 and 5); a claim past that is refused (`polymarket open read share
+spent: <share> open reads`), and a key it already holds, open or counting down, is not
+counted again. A world whose seat share would be under 1 is refused at load. A retired
+seat's due keys hold its slot for at most `MAX_FORECAST_HORIZON` ticks. *Proof*
+(`runtime/polymarket.py`, `open_limit`), every window in wall time: the kernel sends at
+most 2 requests for an open read (its market by id and, for a price claim on an open
+market, its book, in the one pass that settles that due tick, since every claim due at
+a tick settles in the first pass at or after it). A kernel request stamped `s` in a
+window `(t - 10 s, t]` keeps every open read holding its settlement counting until at
+least `s + 10 s > t`, so every settlement the kernel read for in the window is held by
+an open read counting at `t`; a registration opens one only while fewer than its share
+count, and holds open reads only through a slot, which is not given again while any
+count, so at most `max_readers × N // max_readers <= N` count at any instant: the
+kernel sends at most `2 N <= kernel_reserve_per_10s` in any 10 s of wall time. A seat
+read admitted at `a` fits the charges in `(a - 10 s, a]` and is charged at its last
+send stamp, not before `a` and not after the next admission, so every read of a
+registration with a request in a window is counted when the last of them is admitted:
+the seats send at most `max_readers × share` in any 10 s of wall time. **Worst case**
+at the defaults: the kernel 2 × 50 = 100 and the seats 16 × 6 = 96, **196 of the
+published 300**, however long or short the world's ticks run. The 104 left cover only
+what the world cannot see: the difference between this host's clock and Polymarket's,
+and a request's time in flight. A claim's token is looked up when the claim is sealed (`open_claim`), as the
+sealing seat's own read through its venue read slot (a seat without one is refused: `a
+polymarket claim needs a venue read slot`), charged 3 requests to its share, the
+lookup's most, and always sent, whether or not the world already knows the token, so
+sealing behaves the same either way (during an outage every claim is refused alike);
+the world's record of a token's market (`PolymarketSurface.token_markets`,
+checkpointed; it grows with the distinct listed tokens the world has seen claimed or
+traded) serves only the kernel's settlement reads, one GET by market id. A token no
+market lists is refused at sealing (`token not listed`), charged to the seat, and not
+kept. A refused claim is not sealed: `forecast.refused` is ledgered and its owner is
+told. The simulated venue counts what the live reader would send for the same read
+(`FakePolymarket.requests_sent`: a token's lookup is 1 to 3 requests, every other read
+1). A write's checks read the token's market through the journal and the same lookup.
+A seat without a venue read slot does not hold the Polymarket reads. Within one world tick, until a Polymarket write, a read identical to one
+already answered in that tick (the kernel's own `order_book` read included) is
+answered from that answer and sends no request (`polymarket.read_answered`); the
+answer carries no marker. A world whose per-slot share cannot cover one read is
+refused at load. Each read tool's description states these limits. Their
+answers
+carry text third parties wrote (questions, rules, slugs, resolution sources), so they are
+outside text exactly as a `connector.fetch` body is: prose of at least
+`MIN_PROTECTED_BODY_CHARS` is protected, and a round that read them runs population,
+artifact and outcome tools only, so market text cannot reach a write in the same wake. With
+the simulated venue, `polymarket.positions {}` reads the pot (free), and
+`polymarket.place_limit {token_id, side, size, price}` and `polymarket.cancel {order_id}`
+write (free). The writes are consequence writes: only a producing decision with an open
+consequence account may make them, each has a client id (`<handle>:<slot>`) and a durable
+`polymarket.intent` before submission, a repeat reconciles and never resubmits, an
+unanswered intent is polled at most `UNCERTAIN_ORDER_POLLS` times and then released as
+unknown, and a batch that writes is weighed whole with the venue's writes.
+
+Custody: collateral is the `polymarket` pot, its own account in `custody_view` and in
+`world.pots` (valued at USDC plus tokens at cost, so a buy does not move the total; tokens
+listed by count and cost). An order is weighed against that pot alone, with the market's own
+tick and minimum size, and never against the Hyperliquid accounts or the reserve. What the pot
+settles is ledgered as `venue.settled` with `custody = "polymarket"` and summed on the pot's
+own books, never in `BudgetBook.book_venue`; what a decision's event positions realise is its
+owner's claim on the pot (`polymarket.claim`), never a venue claim, so `_classify_financing`
+cannot convert a Polymarket profit out of Hyperliquid money. Every tick the pot reconciles
+`opening + settled == USDC + tokens at cost` and ledgers `polymarket.drift` beyond one
+micro-USD. A kill cancels resting orders only: held tokens are paid for, cannot be liquidated
+and resolve into the pot, so they are reported as residual exposure (`wind_down_pending`).
+
+Settlement: a fill opens an `event` lot, marked every tick at the midpoint of its book's
+best bid and ask (never the CLOB's `/midpoint`, which answers 0.5 for an empty book). At the
+consequence backstop a held lot is marked there like a spot lot, so the decision is scored on
+the normal horizon at the market's price: the market's anticipatory settlement (essay
+II.IV.b). The resolution later closes every lot on the token at its payout (1, 0, or 0.5 on a
+50-50), ledgered as `consequence.resolution` with one `resolution` execution receipt per
+decision, and its money reaches the owner through `_settle_late` without rescoring. A token
+with no two-sided book loses its mark (`polymarket.mark_unavailable`) and its decision falls back as
+any unobserved consequence does. Outcome labels are third-party text: outside the jailed reads
+every surface carries ids and a normalised `YES`, `NO` or `outcome <n>`.
+
+Forecasts: an enabled block, on either venue, adds two seed-logic predicates to the
+world's forecast vocabulary (`world.work` `predicates`, and the forecast schema's
+predicate enum); a world without the block offers neither and refuses them. Both take
+`token_id` (an outcome token id, decimal digits) beside `horizon_events`:
+
+| predicate | params | y at settlement |
+|---|---|---|
+| `event_pays` | `horizon_events`, `token_id` | 1 when the token's market has resolved and the token redeems for 1; 0 while it is open, closed without a final resolution, or resolved 50-50 |
+| `event_price_above` | `horizon_events`, `token_id`, `level` in (0, 1) | 1 when the token's price exceeds `level`: its redemption value once resolved, else the midpoint of its CLOB book's best bid and ask (exact comparison) |
+
+The world reads the token at the forecast's due tick, through the surface's journal
+(`polymarket.event_read`): the market that lists it, one GET by the market id the
+claim's sealing found and cached (a claim is admitted only once its token's market is
+found, so settlement never looks a token up, and an uncached token is a kernel fault that
+raises), and for a price claim on an unresolved market its book. Each token is read once a settlement pass, and every
+forecast due on it in that pass settles on that one snapshot. A payout exists only for a closed market whose outcome prices are a redemption (1 and 0, or 0.5 each) and whose UMA status, when stated,
+is `resolved`. A read that did not answer, or a price claim with no midpoint, is
+`polymarket.event_unavailable`: the claim settles censored and is excluded as
+`external_unobservable`. A token no market lists is refused at sealing, so no claim on
+one reaches settlement.
+The reads are the kernel's measurement and cost no seat anything. `scripts/fastloop.py`,
+and `scripts/edition4_rehearsal.py` when it is handed a simulated clock, answer a
+live-read world's reads from the simulated venue (`simulate_reads`), which then moves and
+resolves on the world's clock; such a run takes no IP lock.
 
 ## New kinds of work: reward shapes and predicates
 
 A registration declares which one of the four reward shapes — `judged`,
 `forecast`, `conformity`, `exposure` — pays its emitted kind; the declaration
 defaults to `judged`, is fixed for the life of that kind, cannot redefine a seed
-kind's shape, and a conflicting redeclaration reaches `registration_feedback`.
+kind's shape, and a conflicting redeclaration is refused to the proposer's inbox.
 The declaration is `reward_shapes`, an object on the assembly proposal mapping
 each of its own `emits` kinds to a shape. A declaration naming a kind the
 proposal does not emit is refused. The seed shapes are `ProducerReturn`
@@ -1158,7 +2334,7 @@ censored. `world.work.predicates` publishes each predicate's id, description,
 parameter names, `horizon_param`, `version` and `provenance`, and `predicate`
 is one of the kinds the `register` field accepts.
 
-## Seeing the world: markets, paid sources and notes
+## Seeing the world: markets, paid sources and storage
 
 A connector proposal may carry a `preflight_path` within its own origin, and
 admission judges whether the origin answered within the manifest's bounds rather
@@ -1185,7 +2361,96 @@ dispatch still checks the coin against the venue and refuses an unlisted one.
 or pair the venue lists, and `venue.funding_history` refuses a spot pair.
 `venue.place_market`, `venue.place_limit`, `venue.close`, `venue.cancel` and
 `venue.set_leverage` still refuse a market that is not registered for trading.
-These six public reads are priced at `connectors.call_price_usd` per call. The
+These six public reads are free: the venue charges nothing for them. Every
+venue read a seat can call still spends the venue's per-IP rate limit, which the
+kernel's own order, reconcile and account calls share, so the reads are capped.
+Hyperliquid documents the limit ("Rate limits and user limits": 1200 weight per
+minute per IP; `l2Book`, `allMids`, `clearinghouseState` and
+`spotClearinghouseState` weigh 2, every other info request 20, `candleSnapshot`
+one more per 60 items returned, `fundingHistory`, `userFunding` and `userFills` one
+more per 20; the added weight per interval is not stated and is counted as 1).
+`[venue] public_read_weight_per_minute` (default `480`, an integer below `1200`,
+fixed for the world's life) is what the population's reads may use. **The limit is
+on who reads the venue, not on how many seats exist.** `[venue] max_readers`
+(default `16`) is the number of venue read slots: the seeds take slots in manifest
+order, a newly registered seat takes the lowest free one if there is one, and a
+retirement frees its seat's slot. A freed slot keeps its place and is given again
+only once its last holder's last read has left the sliding minute (`slot_free_at`)
+and nothing of its Polymarket reads or open reads still counts, in wall time
+(`slot_last_reader`), so no two
+registrations' reads through one slot ever share a window and nothing of a
+predecessor's reads reaches the seat that follows it (AGENTS.md rule 5). Reads are
+counted per registration, its id and version, never the id string, and a round of a
+version no longer current runs no tool (`tool.refused`, reason `retired`), so it
+spends nothing of the next version's share. A seat registered while no slot is free
+waits (`slot_waiting`); the queue is served first in, first out, at every
+registration, retirement and tick, before any later registration, which joins the
+back while anyone waits (`venue.reader_slot {slot: true}` when one is given). A
+seat with no slot registers all the same, with every tool but the venue reads, which it is refused as an unknown
+or disallowed tool; its proposer's inbox receives a `registration_admitted` item
+saying so, and the seat's own `YOU` block carries `venue_read_slot`. It reads the
+market through the world update, or through a reader seat by contract. A seat
+learns only its own slot: which seats hold slots is not published. **Each slot has
+an equal, fixed share** of the budget: the budget divided by `max_readers`,
+rounded down, over any sliding 60 s of world time. The share is a manifest
+constant, so the shares of every slot never sum past the budget, and nothing
+another seat does (reading, registering, retiring) changes a reader's share or its
+refusals. A first-come shared budget would let one seat starve the others and
+signal them through refusals, and a share over the live seats would let
+registering seats shrink everyone's share: both are a third channel between seats
+(AGENTS.md rule 4). A read is admitted when the weight its first attempt sends
+fits in what the seat's own reads left of its share, and refused before it is sent
+otherwise (`tool.refused`, naming the seat's own use and share). The seats' total
+is capped by the shares, one seat a slot at a time, at `public_read_weight_per_minute`
+(480), which leaves the kernel the rest of the venue's 1200 (720); the physical
+per-IP limit is the venue's own (a 429), which `_guarded` backs off from.
+
+**A read answered earlier in the tick is not sent again.** Within one world tick,
+until a venue or treasury write that can change what the venue answers (an order,
+a cancel, a leverage or vault write, a transfer; not the simulated venue's local
+`drain_events`, which the tick's key counts net of while the journal still
+classifies it as a write for replay), a seat read identical to a venue request already
+answered in that tick (same adapter method, same arguments; the kernel's own
+reads of the same endpoints included) is answered from that answer, shaped by the
+same tool code: no request is sent (`venue.read_answered`). The seat is charged
+for it as for any read, and the answer carries no marker, so a seat cannot
+tell a tick's answer from a sent read (AGENTS.md rule 4). The kernel's own reads are never answered this way, so
+what a price or a balance has a consequence for is still read afresh. Every
+answered read is kept from the journal's own result (`JournalProxy.observer`), and
+the tick's answers are dropped at every checkpoint, so a replay answers exactly
+what the recording answered.
+The first-attempt weights are `venue.instruments` 0 (the adapter answers it from
+the listing it loaded and sends no request), `venue.mids` and `venue.order_book`
+2, `venue.positions` 6 (user state, spot user state and all mids),
+`venue.funding`, `venue.open_orders` and `venue.vault_details` 20,
+`venue.vault_positions` 40 (vault equities and leading vaults), `venue.candles` 20
+plus 1 per 60 candles and `venue.funding_history` 20 plus 1 per 20 rates, an
+out-of-range count taken at its maximum. **A seat's read is sent once**: the
+adapter's `_guarded` makes three attempts for the kernel's own calls, but one for
+a seat's (`single_attempt`), so no retry can take a seat past the share its read
+was admitted on, and the retry reserve in the arithmetic below is zero. A seat
+read that meets a 429 or a transient failure fails and the seat is told. The seat
+is charged the read's first-attempt weight on admission, and, once it answered,
+whatever the live adapter reports it sent beyond that
+(`HyperliquidExchange.request_weight_sent`, a journaled read-only call, replayed
+from the journal and never counted as a venue write: every attempt `_guarded` makes,
+and the item weight of what came back). A simulated venue reports nothing, so the
+first-attempt weight is what binds there, the same way; a counter that cannot be
+read charges nothing more, and no failure of it escapes the tool call. The sum of all seats' reads over any 60 s is therefore
+at most `max_readers × share ≤ public_read_weight_per_minute`, and the rest of
+the 1200 is the kernel's: 720 at the default. That headroom rests on an estimate,
+not a measurement: at 10-second ticks the kernel's own reads (mids, account and
+spot state, asset contexts, open orders, fills and funding pages) come to roughly
+90 weight a tick, about 540 a minute. **Load-time invariant:** a world is refused
+whose share cannot cover the first attempt of the heaviest venue read it publishes
+(`venue.funding_history` at 25 without the vault surface, `venue.vault_positions`
+at 40 with it), checked when a manifest is read and again when a runtime is built
+from one: a published read no reader could ever be admitted to would be a tool in
+name only. The default, 480 over 16 slots, is 30 a slot; a world publishing the
+vault surface needs a share of 40, for example `max_readers = 12` at the default
+budget. The sliding minute's use and the slot holders are checkpointed. Each
+tool's description states the slot and share rules, its weight and the tick rule.
+The
 launch seed only ever adds to the adapter's own listing; on the deterministic
 venue a seeded market the adapter does not list is dropped, and on a live one an
 unlisted spot pair fails launch. An adapter that publishes no listing keeps the
@@ -1199,11 +2464,12 @@ refused. Admission costs one novelty trial, registers the contract
 payload `{"kind": "market", "coin", "market", "version"}`. `world.trading_markets`
 publishes the `perp` and `spot` lists the population may trade. Resume rebuilds
 the venue tools from the launch seed and replays every `market:` contract, so
-registered markets, inventory and lots survive a restart. An order refused before it reaches the venue is ledgered with its reason, `order.infeasible` when the venue's free collateral — equity less margin used, carried in the item as `venue_available_usd` — cannot carry the margin the order plus the resting book needs, and `order.refused` for every other pre-submission refusal, and the reason also reaches `registration_feedback`. Every counted fill writes one `fill.counted` item at the moment it is counted, with the order id, coin, market, size, price, notional, realised P&L, fee and window; the `event:Fill` the population is delivered is a separate item written on delivery. A live tick broadcasts one `MarketMid` per trading market and one `Funding` per trading perpetual, the manifest seed plus every registered market, never the venue's whole listing, so a registered market enters the broadcast from the next tick and resume restores the set; fills and settled funding payments are never filtered, because they carry cash.
+registered markets, inventory and lots survive a restart. An order refused before it reaches the venue is ledgered with its reason, `order.infeasible` when the venue's free collateral — equity less margin used, carried in the item as `venue_available_usd` — cannot carry the margin the order plus the resting book needs, and `order.refused` for every other pre-submission refusal, and the reason also reaches the ordering seat's outcome inbox. Every counted fill writes one `fill.counted` item at the moment it is counted, with the order id, coin, market, size, price, notional, realised P&L, fee and window; the `event:Fill` the population is delivered is a separate item written on delivery. A live tick broadcasts one `MarketMid` per trading market and one `Funding` per trading perpetual, the manifest seed plus every registered market, never the venue's whole listing, so a registered market enters the broadcast from the next tick and resume restores the set; fills and settled funding payments are never filtered, because they carry cash.
 
 A connector may pay for data through x402 with an exact per-call cap from the
 world's own wallet, journaled as one `io.call`/`io.result` pair and never
-resubmitted on replay; above the cap only the flat read is billed. The proposal
+resubmitted on replay; the seller's charge is the read's whole cost, and above
+the cap nothing is billed. The proposal
 carries `pay: "x402"` and `max_call_usd` as exact USD text or an integer, parsed
 into `max_call_micro`; a cap above `treasury.max_request_micro` is refused. The
 paid read is the journal call `connector.paid_fetch`, and the ledger retains
@@ -1212,68 +2478,90 @@ paid read is the journal call `connector.paid_fetch`, and the ledger retains
 HTTP 402 with no data cost. `world.connectors` publishes `optional_fields`,
 the `payment` note, and each registered connector's `pay` and `max_call_micro`.
 
-`note.put`, `note.get` and `note.list` are a public key-value notebook bounded in
-UTF-8 bytes and charged rent by byte-time; unaffordable rent retains the text, an
-overwrite cannot escape the debt, reads are journaled and priced, and the wake
-publishes counts only. `[notes]` is a hard cast with exactly these keys.
+Retained storage costs no money; `[storage]` holds one limit and no price. The public
+notebook (`note.put`, `note.get`, `note.list` and `[notes]`) was deleted by ruling
+R11: Chapter II §I.b prescribes two channels, rich requests and thin rewards, and
+a population-wide blackboard is neither. Its storage rent survived it until Wave
+11, which removed it: the bytes sit on the world's own fixed-price disk, so the
+rent paid no one, and a debit with no counterparty makes the books lie (the
+wallet moves only when money moves). Retained working state is a constraint, and
+the hard cast (§II.b) bounds the whole of it, not each version. What the archive
+holds, exactly: each seat's current working-state head, at most 64 KiB, and each
+program seat's current private state, at most 64 KiB; every superseded head or
+state until it is collected (see "Collection": at the next reserve-window boundary
+when no checkpoint names it, otherwise at the first boundary after a later
+checkpoint, so at most one more per seat is held a window longer); and every
+outcome body a seat has neither acknowledged nor held past its retention horizon,
+on the order of 0.5 KiB per outcome addressed to a seat (an inbox body with its
+evidence pointer and what the seat said), with the archived rationale of every
+decision not yet released (see "Outcome retention" below). Retirement is final for a
+version, not for an id: a retired id's head and a retired program's private state
+are kept. **A retired id takes its next version only from its owner**, which
+inherits its head (its memory), its inbox and its records; any other proposer is
+refused at admission (`a retired id takes its next version only from its owner`; ids
+are public, so the refusal discloses nothing) and picks a new id, so no other lineage
+ever holds an id whose records are another's private state. Ownership is a lineage
+key, never an id string: a new id draws a registration serial (`registration_serial`;
+the seeds take the first ones) as its key (`lineage_keys`), which it keeps across its
+owner's re-versions, and `registrants[id]` is the key of the seat that registered its
+current version at that time. The owner is the seat whose current key equals
+`registrants[id]` (the registering handle's seat), or the id itself; a seed has no
+registrant, and a seat cannot endow itself, so a retired seed's id takes no next
+version. A program's private state is never inherited: a next version is new code,
+which cannot be assumed to read the old code's state, so it starts with none, and the
+old version's is superseded at the re-registration and released through the journaled
+release (`artifact.released` with `cause: "superseded"`, ledgered before the index
+changes). A retired version
+writes no state: its pending return may settle, but a working-state or program-state
+write in it is refused (`state.refused`, reason `retired`). The disk is finite, so
+the whole of retained private state has its own hard limit:
 
-| Key | Default | Meaning |
-| --- | --- | --- |
-| `max_keys` | `128` | Positive integer count of retained keys. |
-| `max_bytes` | `262144` | Positive integer total of key and text bytes. |
-| `byte_window_micro` | `1` | Positive integer micro-USD charged as the flat price of one `note.put` or `note.get` call. It prices neither storage nor bytes moved; the name is kept so old manifests still load. |
-| `micro_per_byte_day` | `"0.04"` | Exact positive decimal text (or integer) micro-USD per retained byte per day: the storage rent (edition 2, contract C3). At its default the whole 256 KiB cap costs 10,485 micro-USD, about a cent, a day. Absent or default, it leaves the manifest hash unchanged. |
+| key | default | meaning |
+|---|---|---|
+| `[storage] retained_private_bytes` | `67108864` (64 MiB) | the most the archive holds as private state (every working-state head and program private state, retired ids' included); fixed for the world's life |
 
-A key is 1–128 printable UTF-8 bytes. An entry's size is its key bytes plus its
-text bytes, and a call's price is the flat `byte_window_micro` plus any rent the
-entry still owes. Edition 3 (contract C4) removed the per-byte transfer toll:
-charging a micro-USD for every byte moved made a 4 KiB read cost about $0.0041
-before the model had consumed one character of it — more than a cheap model call
-— for a resource the factory does not actually pay for, which made remembering
-dearer than producing another unsupported paragraph. Byte-time rent is
-unchanged: storage is a real resource, and a note nobody will pay to keep should
-go. `note.list` is free, like `artifact.get`, and returns up to 50 rows of key,
-title, type, bytes, version, owner seat, the window last written and `public`
-(always true for the notebook), newest first, with `next_cursor` for the next
-page and `count` for the whole index; it carries no text, so a reader need not
-already know a key. `artifact.list` is its counterpart over the archive, with
-`sha` in place of the key and an optional `owner` filter. A call above the
-caller's available compute or its
-request ceiling is refused before any debit or overwrite. `note.get` on an
-unknown key is an error. Rent is `bytes × elapsed_ns × rate`, accrued from the
-moment a key is written (an overwrite inherits the open interval, so rewriting
-forgives nothing) and collected at each reserve-window boundary for the time
-elapsed since the last boundary, not per window counted: the rate is an exact
-ratio of micro-USD per byte-nanosecond, and whatever fraction of a micro-USD an
-interval leaves over is carried on the entry (`rent_carry`), so collecting
-hourly charges exactly what collecting daily charges and a two-minute window
-cannot round a small note up to a micro-USD (the reviewer's rent trap). The
-boundary writes `note.rent` when the holding decision's compute affords it,
-`note.rent_due` when it does not, in which case the text stays and the debt is
-owed on the next read or overwrite. The ledger items `note.put` and `note.get`
-carry the key, handle, assembly id, cost, window, version and byte count, and
-`note.put` also carries the text. The `note.read` journal call is replayable
-read-only work. `world.notes` publishes the key and byte counts, the bounds and
-the pricing rule; the wake's `notes` section publishes counts only; the
-notebook, its accrual marks and its carried remainders survive resume.
-
-Retained storage is an explicit, resumable liability of the decision that holds
-the note, not only a wallet debit. Every paid charge is added to that
-decision's cost contribution for the window the charge landed in and enters
-that window's measured rows — a producer's charge its cost statistics too, as
-cost the window spent and never as a return it received — as a cost of the same
-decision and never as a response, so a cost card sees it whether it selects
-returns or whole closed windows, and so do the penalty shares it attributes,
-and while the decision's own consequence outcome is still open it is also
-carried into that outcome's cost, so a return cannot resolve
-`return_paid_off = 1` on a margin its storage has already consumed. An outcome
-is fixed once and never reopened, so rent falling due afterwards stays with the
-note's current owner decision as a cost contribution alone, and the note is
-kept rather than released: public text other decisions may already have read is
-not deleted because one account closed. The carried amount is
-`ReturnAccount.carried_micro`, resumes with the consequence table, and appears
-as `consequence.carried`; the matching `price.contribution` item carries
-`storage` and `carried`.
+**Retained private state is at most `retained_private_bytes`, always.** It is
+counted per reference: every holder's head or program state counts its full size,
+whether or not another seat holds identical bytes (the disk may still keep one
+copy), so what a seat is told about capacity never depends on another seat's
+bytes. The cap bounds the indexed private state: bytes on disk can exceed it by the
+releases since the last checkpoint, until collection removes them (see
+"Collection"). Outcome bodies and archived rationales are outside the cap; the
+diary keeps every `outcome.addressed` item as the world's record. A retired id's
+state is kept until capacity is needed: a head or
+program-state write that would take retained private state over the limit
+releases the kept references of retired ids, oldest retirement first, each through
+the journaled release (`artifact.released` with `cause: "capacity"`, ledgered
+before the index changes), and only until the write fits. When releasing every
+retired reference would still not make room, nothing is released and the write is
+refused with `private state is at the world's capacity` (no totals, no sizes), as
+on a full disk: a head or a program state alike is ledgered `state.refused` and
+left as it was, and the return stands. A live seat's state is never released to
+make room. A write replacing a seat's own head or state is measured with the one it
+replaces gone. The key is validated at every load, a
+resume's included: a positive integer, at least the seeded seats times the per-seat
+cap (128 KiB: a head and a private state). At genesis only, it must also be at most
+half the free disk of the filesystem the ledger will live on (the working directory
+for a world without one), read with `shutil.disk_usage`: an admission about the host
+at that moment. The cap is fixed for the world's life, so a resume is never refused
+because the host's free space has changed since. The world block's
+`storage` section publishes it with the rule above. A retired seat's outcome
+bodies stay until acknowledged or past their retention horizon, like any seat's.
+Writing a new head
+releases the superseded one's reference (`artifact.released`), and `artifact.get`
+answers `artifact_released` for it to the seat that released it (for its last
+eight releases) and `artifact_private` to every other reader. The world block's
+`storage` section states the limits and this retention as facts. The size of every
+head is ledgered on its `state.put` item, and the
+archive's size after each boundary's collection on `artifact.retained {records,
+bytes, released_bytes, window}`, where a measurement could read them so the
+charter can price retained state through λ on reward (§II.b soft casts, §IV.a) if
+the population proposes to. A world file naming `[notes]`, or a `[storage]` price
+(`micro_per_byte_day`), is refused by name; any other `[storage]` key is unknown.
+Nothing about retained state reaches a decision's cost, a cost card or a
+consequence outcome: `ReturnAccount.carried_micro`, `consequence.carried`, the
+`storage` rows of a card's samples and the window's `storage_cost_micro` were
+removed with the rent.
 
 Window facts carry the market, funding, wallet and tick series of the closed
 window, retained to `MAX_WORLD_SAMPLES`, so a registered observation can measure
@@ -1314,8 +2602,7 @@ fact; none is new money. Everything below is what the code on `main` does.
 | `endowment.locked_micro` | nonnegative integer micro-USD, at most `initial_balance_micro` | `0` | Yes: backing booked in the balance at launch that nobody can spend until released. |
 | `endowment.releases` | array of tables `{at = "7d", amount_micro = N}`, ascending `at`, positive amounts summing exactly to `locked_micro` | `[]` | Yes: the tranches, as durations after the ledgered `Launch`, never absolute times. |
 
-An absent or default `[endowment]` leaves the manifest hash unchanged. The
-wallet is built with the locked amount and a `ReleaseSchedule`; `sum(releases)
+The wallet is built with the locked amount and a `ReleaseSchedule`; `sum(releases)
 == locked_micro` is validated at load and again at construction. `wallet.locked`
 is the backing not yet released and `wallet.unlocked` is `balance - locked`;
 `available` and `unhistoried_available` are taken from the unlocked part, so
@@ -1329,8 +2616,7 @@ event calls `wallet.release_due(now_ns)` before anything else spends: each
 tranche whose `launch_ns + at` has passed moves from locked to unlocked once,
 in order, ledgered as `release` with `tranche`, `amount`, `due_ns`,
 `locked_after` and `balance_after`. The balance does not change; only its
-classification does. `drip` is unrelated to releases and a final ledger
-releases nothing. `next_release_ns` is the absolute time of the next unreleased
+classification does. A final ledger releases nothing. `next_release_ns` is the absolute time of the next unreleased
 tranche, or null. The locked amount, the schedule, the anchor and the count of
 released tranches are checkpointed and checked on restore: a checkpoint whose
 locked backing disagrees with its released tranches is refused. The wake's
@@ -1374,9 +2660,9 @@ the same money, and leaving resets the insolvency count.
 While dormant the event is not routed: no seat is woken for it, so no model or
 program call, no return, no registration and no tool call comes of it, and the
 compute-insolvency streak is not advanced. Everything mandatory continues on
-every event: drips and due releases, reserve-window management (windows still
-close, cards are still measured and priced, note rent still accrues and is
-collected, and an activation boundary still falls due), the treasury's window
+every event: due releases, reserve-window management (windows still
+close, cards are still measured and priced, the archive still collects, and an
+activation boundary still falls due), the treasury's window
 cap and its tick, order reconciliation, fills and settled funding from the
 venue, x402 reconciliation, the reconciler's snapshot, settlement of due
 forecasts, censoring of stale judgements, queue expiry and return delivery,
@@ -1394,9 +2680,26 @@ checkpointed. The wake shows `liveness.status` as `alive`, `dormant` or
 
 ### Program seats
 
-| Key | Type | Default | Hard cast? |
-| --- | --- | --- | --- |
-| `prices.program_micro_per_call` | nonnegative integer micro-USD | `50` | Yes: the flat price of one program-seat call. Absent or default, it leaves the manifest hash unchanged. |
+A program seat's call costs no money: its code runs in the world's own jail,
+which pays no one, so the wallet does not move for it. `prices.program_micro_per_call`,
+the flat price it used to be debited, was removed in Wave 11 and is refused, and the
+executor takes no price at all (`ProgramAssembly` has no price field; its routing
+ceiling is zero).
+
+**A program seat's entitlement no longer bounds it.** Its calls commit zero, so
+its entitlement neither pays for them nor runs out because of them; routing reads
+its need as zero. What bounds a program seat is the kernel's hard casts: the
+event count (it runs only when routing draws it for an event, once per draw, and a
+watcher at most once per sweep, within `[subscriptions]
+max_watcher_evaluations_per_sweep`); `tools.max_tool_calls` per request
+and the five tool rounds a decision may buy; `tools.max_children`; the jail's wall
+timeout (`timeout_s`, 1–10 s) with its CPU rlimit and output cap; the 64 KiB
+private-state limit, with one state retained; `connectors.max_calls_per_window`
+and, when it holds a venue read slot, the slot's share (`[venue]
+public_read_weight_per_minute // max_readers`) for
+whatever it fetches; and governance, which retires it through a retirement
+proposal. Anything it buys from outside (a model call it subcontracts, a paid
+read, a search) is metered at its real price against its entitlement as before.
 
 An assembly proposal whose `model_id` is `program` registers a seat whose
 executor is population Python in the tool jail rather than a model
@@ -1411,15 +2714,14 @@ and is refused before the trial is spent on a host without the jail. The
 
 Each call runs the code once with one JSON object on stdin — `prompt` (the
 rendered request, exactly what a model would read, with `inputs.you` set to
-the seat's id), `description`, `inputs`, `outcome_schema` and `state` — and
-expects on stdout the same Return JSON a model would print, tool calls,
+the seat's id), `description`, `inputs` (whose world block's `seats` carries
+the program's own row only, the partition the prompt applies; information audit
+C3), `outcome_schema` and `state` — and expects on stdout the same Return JSON a model would print, tool calls,
 child requests and registrations included; it passes through the same output
-validator. The price is reserved and committed through the meter under the
-reason `model:program`, so every call is a wallet transaction and the novelty
-reserve treats it as the seat's own compute; a call whose price exceeds the
-request's cost ceiling is a `failed` return that ran nothing. A non-zero exit,
-a wall timeout, a reply that is not valid Return JSON, or a `state` printed
-under `state_policy = "none"` is a billed `malformed` return, exactly as a
+validator. The call runs through the meter under the reason `model:program` at a
+price of zero, so it is ledgered beside a model call and moves no money. A
+non-zero exit, a wall timeout, a reply that is not valid Return JSON, or a `state`
+printed under `state_policy = "none"` is a `malformed` return, exactly as a
 model's malformed reply would be. Programs are routed, judged, given standing,
 priced by the cards and retired exactly like model seats; the wake's roster
 counts them under the model id `program`.
@@ -1457,7 +2759,7 @@ from the cascade. A commission is declined the only way paid work can be — by
 answering `{"status": "cannot", "reason": ...}`. That costs the call and nothing
 beyond it, is **not** malformed (its propensity label is `declined`, an arm a
 learner can hold), is ledgered `commission.declined {assembly_id, handle,
-reason}`, and R3-D settles it `unmeasured`.
+reason}`, and it settles `declined-v1`.
 
 **The fold has three durable states, per seat.** *Offered*: world events folded
 in — first, last, high, low, the funding prints, the counts — and not yet
@@ -1490,39 +2792,80 @@ bytes without a record; the bytes live beside the ledger under
 and an atomic replace), or in memory for a world without a ledger path. A put
 is idempotent by content, `get` verifies the hash it was asked for and refuses
 a tampered file, and retirement of an owner leaves its artifacts readable. The
-index (hash to owner, kind, size, time, published, references) is checkpointed;
+index (hash to owner, kind, size, time, references) is checkpointed;
 a checkpoint from before the archive restores it empty.
 
 **Ownership is a (sha, owner) reference** (edition 3, R3-F). One blob carries a
-reference per writer, each with its own kind, its own moment and its own
-published flag, so a second writer of identical bytes owns what it wrote and can
-read it rather than being told the first writer's bytes are private; putting an
-existing sha with `public: true` publishes the blob. The **first** reference
-stays the owner of record — `owner_for(sha)`, one payer of rent and one subject
-of retirement. `entries()` and therefore `artifact.list` return one row per
-reference, with that reference's owner and published flag.
+reference per writer, each with its own kind and its own moment, so a second
+writer of identical bytes owns what it wrote and can read it rather than being
+told the first writer's bytes are private. Nothing is published (ruling R11
+deleted the unused `public` flag). The **first** reference stays the owner of
+record — `owner_for(sha)`, one subject of retirement. Holding bytes costs no
+money: the archive is the world's own disk.
+`entries()` returns one row per reference, with that reference's owner.
+`artifact.list {cursor?}` is free and returns only the caller's own rows (sha,
+kind, bytes, when), newest first, 50 a page with `next_cursor` and the caller's
+`count`. Rows sharing a timestamp are ordered by when their hash entered the
+archive, never by hash: an outcome item's bytes name its evidence's ledger
+sequence, which a resume shifts, and the archive index keeps its insertion order
+through a checkpoint and a replay. `next_cursor` is a position in that order
+(`<ns>:<sha>`), so a row released or collected between two pages never ends the
+paging. It names the row by hash, not by its place: places are derived and a
+rebuild renumbers them, while the hash names the same row after a resume. A
+cursor naming a hash the listing never held resumes at the first row with its
+timestamp, so a page may repeat a row but never skips one; a cursor naming
+neither a position nor a row the caller holds returns no rows and
+`cursor_unknown: true`; the seat's `YOU` `directory` previews the same rows. No list names
+another seat's artifacts (information audit C4).
 
 **Collection.** `ArtifactStore.collect()` is the one thing that deletes, and it
-can only reach blobs **no reference names and nothing published** — what a crash
-between the durable write and its ledger item leaves behind. Each removal is
-ledgered `artifact.collected {sha, ts}`. The runtime calls it at each
-reserve-window boundary (`continuity.charge_window`). An owned blob and a public
-blob are never candidates, so collection can never take a seat's working state,
-an inbox body, an archived rationale or anything the population published.
+can only reach blobs **no reference names** — what a crash
+between the durable write and its ledger item leaves behind, and records whose
+last reference was released (a superseded working-state head or program state,
+an acknowledged or expired outcome body, a released decision's archived rationale;
+`ArtifactStore.release`, ledgered `artifact.released` before the index changes).
+A reference names every kind its owner wrote the bytes under, so releasing one
+kind never drops bytes the owner still holds as another, and its `kind` names only
+what the owner still holds. A released record the latest checkpoint named (it was
+in that checkpoint's index) is `pending` until the next durable checkpoint, then
+`sealed` (`seal_released`, also applied to the checkpoint a resume restores); one
+written and released since the latest checkpoint is sealed at once, because no
+checkpoint a resume could start from names it and the replayed tail re-creates it,
+releases it and collects it exactly as the recording did. Only a sealed record is
+collected, so a resume never needs bytes that are gone; the resume's archive check
+skips released records. A record fully released and then written by another seat
+is re-owned: its owner of record and kind become the new writer's, so no reader is
+shown who wrote the bytes before, and the lineage check reads the new owner. Each
+removal of a record is ledgered `artifact.collected {sha, ts}` whatever the disk
+does: the record leaves the index and is ledgered even when its unlink fails, and
+its bytes are then a leftover, so a live run and its replay ledger the same
+removals; `collect()` returns only the hashes whose bytes are gone. Bytes no record
+names (a crash's leftover, a put whose item was never written) and the temporary
+file of a write torn before its rename are removed without an item, and never while
+the journal is recovering. A put that finds a torn or corrupted file under its
+hash replaces it atomically with the bytes in hand, which hash to that name. The runtime calls it at each
+reserve-window boundary (`continuity.collect_window`). An owned blob is never a
+candidate, so collection can never take a seat's working state, an inbox body or
+an archived rationale.
 
 `artifact.get {sha}` is a seed tool, version 1, priced at zero and available
-to every seat: it returns `sha`, `owner`, `kind` (the reader's own reference's
-kind when it has one), `public`, `bytes` and the content as
-`text` (or `base64` for bytes that are not UTF-8) up to 65,536 bytes, an
-`error` above that or for an unknown or malformed hash, and ledgers
-`artifact.get {sha, handle, assembly_id, found, ts}`. The read is **scoped**
-(edition 3, C1): a seat reads what it owns and anything put with `public: true`;
-a program's `program.state` is readable within the program's own lineage
-(`BudgetBook.lineage`); anything else answers `{sha, error: "artifact_private"}`
-and nothing about the bytes, and the ledger row carries `reason`. `entries()`
-returns `(sha, owner, public, bytes, created_ns)` rows for the directory W4
-builds. There is no `artifact.put` tool: the writers are a private-state program
-seat and a seat's own working state. `owner_for(sha)` names who pays rent.
+to every seat: it returns `sha`, `kind` (the reader's own reference's kind, or
+`program.state` for its lineage's program), `bytes` and the content as `text` (or
+`base64` for bytes that are not UTF-8) up to 65,536 bytes, an `error` above that
+or for a malformed hash, and ledgers `artifact.get {sha, handle, assembly_id,
+found, ts}`. **A view never names an owner or anything about another holder**
+(essay II.I.b; AGENTS.md rules 4 and 5). The read is **scoped** (edition 3, C1): a
+seat reads what it holds a reference to; a program's state is readable by a seat
+whose lineage (`BudgetBook.lineage`) holds a `program.state` reference to those
+bytes now, whoever wrote them first. A hash that is one of the reader's own last
+eight releases (`RELEASED_MEMORY`, kept apart from the records and checkpointed)
+answers `{sha, error: "artifact_released"}`; any other hash the reader cannot read
+answers `{sha, error: "artifact_private"}`, byte for byte the same whether the
+archive never saw it, another seat holds it, it was released or collected, or
+leftover bytes sit on the disk, so the store is no existence oracle. The ledger
+row carries the same `reason`. `entries()`
+returns `(sha, owner, bytes, created_ns)` rows. There is no `artifact.put` tool: the writers are a private-state program
+seat and a seat's own working state. `owner_for(sha)` names the owner of record.
 
 ### Continuity: working state and the outcome inbox
 
@@ -1534,13 +2877,14 @@ advances its own head by returning `working_state` (a JSON object): the kernel
 canonicalises it, puts it as `working.state` owned by that seat, ledgers
 `state.put {assembly_id, sha, bytes, handle, over_soft, ts}`, and the seat's
 next request carries `your_state: {sha, bytes, state}` verbatim. The soft
-allowance is 8,192 bytes (accepted, and the rent is what it is); above 65,536
-the field is refused, the head is unchanged and `state.refused {assembly_id,
-handle, reason}` is ledgered. A manifest may seed a head with an assembly's
-`initial_state`; without one the head is None. Rent is byte-time at
-`notes.micro_per_byte_day` collected at each reserve-window boundary through the
-seat's own meter (`state.rent`, or `state.rent_due` when unaffordable), on the
-same accrual arithmetic the notebook uses; there is no transfer toll.
+allowance is 8,192 bytes (accepted, and marked `over_soft`); above 65,536 the
+field is refused, the head is unchanged and `state.refused {assembly_id, handle,
+reason}` is ledgered. A manifest may seed a head with an assembly's
+`initial_state`; without one the head is None. A new head releases the
+superseded one (see "Collection"), so a seat retains one head. Retained state
+costs no money
+(Wave 11: the storage rent paid no one and was removed; see "Seeing the world");
+the hard limit is the constraint, and there is no transfer toll.
 
 `OutcomeInbox` addresses every settled consequence to the seat that decided it:
 `{handle, said: {rationale, payoff, forecasts}, outcome, observed_at_ns,
@@ -1575,14 +2919,31 @@ ledgered `outcome.ack {through, handle, cursor}`; it acknowledges only items
 but was never shown acknowledges only as far as its last delivery — and
 everything after stays unread.
 
+**Outcome retention** (wave 17b). An item is held until its seat acknowledges it
+or until `outcome_retention_ticks` world ticks after it was addressed, whichever
+comes first: `timing.min_ratio × (consequence_backstop_ticks +
+verdict_timeout_ticks)`, published in the world block's `storage` section. At the
+next checkpoint boundary it leaves the inbox and its body is released
+(`artifact.released`, `cause: "retention"`) and collected as any released record is.
+Chapter II §IV.c: a verdict "is consumed as a reward signal in the scored agent's
+propensity update and then discarded"; §I.b: the reward line is thin. The inbox is
+that line, not the record: every `outcome.addressed` item stays in the diary.
+`outcome.get` on an id no longer held answers `no outcome addressed to you and still
+held carries that id or handle; an item is released once acknowledged or past its
+retention horizon`. An item carries the world tick it was addressed at; one restored from a
+checkpoint older than this rule carries none, and the restore stamps it with the
+restore tick, so it is held a full `outcome_retention_ticks` from the restore.
+
 What a seat **said** is retained until that decision's last consequence settles
 or the seat retires. Only then, and only over `MAX_SAID`, is the oldest such
 record archived as an artifact (`said.archived {assembly_id, handle, sha}`) and
 dropped from the table; `outcome.get` and the settler read it back from the
-archive, so no decision with open consequences can lose its rationale. Heads,
+archive, so no decision with open consequences can lose its rationale. Once the
+decision is fully settled and released (see "Settled decisions are released"),
+nothing is addressed to it again, and its record and archived rationale go. Heads,
 item indexes, cursors, how far each seat was delivered, the archived-rationale
 index and what each handle said are checkpointed; the bodies are artifacts, and
-`_verify_artifacts` refuses to continue a world whose head or inbox body is
+`_verify_artifacts` refuses to continue a world whose head or held inbox body is
 missing.
 
 ### The metric challenge
@@ -1594,7 +2955,8 @@ measures without the card it challenges judging the change:
 {"kind": "challenge", "card_id": "censorship-bound", "evidence": "text",
  "replacement": {"observation": "censored_share", "rule": "at most", "value": 0.2,
                  "window": {"kind": "windows", "n": 5}},
- "trial_windows": 6}
+ "trial_windows": 6,
+ "predicted_effect": {"card_id": "censorship-bound", "direction": "decrease", "window": 2}}
 ```
 
 Exactly those keys. `card_id` names a current card that is not already under
@@ -1603,7 +2965,9 @@ challenge; `evidence` is a nonempty string of at most 4,000 chars;
 (`at most`, `at least`, `above`, `below`), a finite `value` and a typed
 `window`, and may add `description`, `units` and `answers_for`; it keeps the
 challenged card's `id` and `norm`, so adopting it is the ordinary replace
-amendment. `trial_windows` is an integer in `[1, 50]`. An unchanged
+amendment. A challenge also carries its own `predicted_effect`, naming the
+challenged card; its ballot is graded on that promise (charter audit P2), and the
+replacement's region is built as typed data from `rule` and `value`. `trial_windows` is an integer in `[1, 50]`. An unchanged
 replacement, an unmeasurable window, an unparsable region, a duplicate
 observation binding or a refused preflight is refused with the reason before
 anything is spent.
@@ -1624,8 +2988,8 @@ supported scopes, or null. When the series holds `trial_windows` rows the
 trial is complete (`challenge.trial_complete`, status `due`) and no further
 window is measured.
 
-At the next activation boundary the completed trial goes to the existing
-committee ballot: the replace amendment is proposed under the challenge's own
+At the next window boundary the completed trial goes on the standing
+committee's agenda: the replace amendment is proposed under the challenge's own
 id with the observation bindings frozen at admission (so a definition that
 drifted during the trial refuses activation exactly as any amendment would,
 ledgered `challenge.refused`), its promise is the replacement holding inside
@@ -1721,12 +3085,14 @@ executes it (cold audit F1, contract C4). `factorylab/runtime/release.py`
 computes once per process
 
 ```
-release_digest = sha256(git_head + sha256(uv.lock) + tree_hash(factorylab/))
+release_digest = sha256(sha256(uv.lock) + tree_hash(factorylab/))
 ```
 
 where the tree hash covers every regular file under the package by relative
 path and content, byte-compiled caches excluded, so an uncommitted edit is a
-different release exactly as a new commit is; the head comes from git, else
+different release exactly as a new commit is. The git head is not an input
+(versioning S2): a commit that changes no executable byte is the same release.
+It is recorded beside the digest as forensic metadata; it comes from git, else
 from the `RELEASE` record `deploy/install.sh` wrote, and `release_info()`
 says which (`git`, `release_file`, `none`). The digest is drawn at
 construction and carried in the `Launch` event's payload and in every
@@ -1830,8 +3196,7 @@ does not silently roll back to the shorter file.
 `exchange.client_namespace` is an optional 32-character lowercase hexadecimal string,
 fixed for a world's life. When supplied, Hyperliquid client order IDs hash the namespace
 and decision identity together. Independent preparations use fresh UUID namespaces;
-resume retains the original namespace. Absence preserves legacy client IDs and canonical
-manifest hashes. Never change it on a living or resumable world.
+resume retains the original namespace. Absence preserves legacy client IDs. Never change it on a living or resumable world.
 
 Because decision handles restart at `decision-1` on a fresh ledger, the namespace alone
 cannot separate two runs of one manifest: each launch also draws a `launch_nonce`,
@@ -1849,9 +3214,10 @@ before starting the CLI. It does not disable paid treasury routes or Venice; tha
 prerequisite was removed with the economic caps.
 Repetition requires a new preparation, not reuse of old client order IDs.
 
-The public world exposes actual proposal refusals in `registration_feedback` and
-judgement, propensity and order refusals in `return_feedback`. Existing checkpoint
-buffers remain readable; legacy prefix-only entries are classified on disclosure.
+Proposal, judgement, propensity, subscription, request and order refusals are
+ledgered and addressed to the owning seat's outcome inbox under the refused
+decision's handle, and to no other seat (information audit C5). The world block's
+`registration_feedback` and `return_feedback` broadcasts are deleted.
 
 ## Edition 3 R3-B: typed custody, and what may move the compute wallet
 
@@ -1861,6 +3227,10 @@ conflated: the **learning score** (evidence for a rule), the **seat entitlement*
 (permission to spend inside the compute budget) and the **assets and credits**
 held by a custodian, which change only by a verified transaction, a provider
 charge, a refund or a purchase — never by an internal reclassification.
+Since Wave 11 an entitlement bounds only what costs money: a program seat's own
+calls, a jailed tool, a public read and retained state cost nothing, so an
+entitlement does not limit them; their limits are the kernel's (see "Program
+seats" and "Seeing the world").
 
 ### The custody accounts
 
@@ -1893,9 +3263,12 @@ tick's hundred prompts ask an unreachable venue once.
 
 ### What moves the compute wallet
 
-Model, tool and program charges; rent, as authority; releases; transfers between
-seats; verified income; and confirmed conversions into provider credit. That is
-the whole list.
+It moves only when money moves (Wave 11): provider bills for model calls and
+searches, a seller's price for a paid read or an x402 call, treasury fees
+(gas, the venue's withdrawal fee, a forwarder's fee); releases; verified income;
+and confirmed conversions into provider credit. A transfer of entitlement between
+seats (an endowment, a trial, a grant, a bridge) reclassifies money the wallet
+already holds and does not move it. That is the whole list.
 
 Venue P&L, fees and funding are not on it. They settle on the venue accounts,
 which are the record of them, and the diary carries one `venue.settled {custody,
@@ -1964,24 +3337,24 @@ needs the base coin (`spot sell exceeds venue base balance`). Unknown collateral
 collateral is stale: venue account older than one tick`, which is how
 Hyperliquid's fallback to its last complete snapshot reads) block new risk, and
 neither ever blocks a cancellation or a `reduce_only` reduction. A failed
-Hyperliquid mids read raises `VenueUnavailable` and is never answered with the last
-prices; an account fallback to the last complete snapshot is returned with
-`stale = true` and its original `observed_at_ns`, and the prompts (`StaleAccount`),
-the watchers, a window's opening equity and the wind-down's final reconciliation
-(`unknown`, never `flat`) all refuse it.
+Hyperliquid mids or funding read raises `VenueUnavailable` and is never answered
+with the last prices or with an empty list (which would say the venue reports no
+funding); a seat's `venue.mids` or `venue.funding` gets that error, and the tick's
+events emit no mid or funding event for it. An account fallback to the last
+complete snapshot is returned with `stale = true` and its original
+`observed_at_ns`, and the prompts (`StaleAccount`), the watchers, a window's opening
+equity and the wind-down's final reconciliation (`unknown`, never `flat`) all
+refuse it; a seat's `venue.positions` gets `VenueUnavailable` rather than the old
+positions.
 
-`[venue] collateral_headroom_usd` is an exact nonnegative decimal string,
-default `"0"`: free collateral the world precommits to leaving unused, declared
-before the orders that would want it. It is not `[kill] dust_micro`, which is a
-different setting for a different thing. At its default the key is dropped from
-the canonical manifest JSON, so no world that predates it changes hash.
+`[drip]`, `[termination] max_events` and `[venue] collateral_headroom_usd` are
+removed (smuggling D-6): no world set them and nothing enforced them. A manifest
+that names one is refused.
 
 `[venue] principal_usd` and `[tools] max_leverage` are **deprecated and inert**
 (architect decision D1: a cap on the principal or the leverage the population may use
 is an objective supplied from outside, a Class-2 imposition). Both keys are still
-read and validated, and both still enter the canonical manifest JSON exactly as
-before, so every manifest that declares them loads and keeps its historical hash;
-nothing enforces either. `_collateral_view` is the venue's own view, unchanged, and
+read, validated and hashed; nothing enforces either. `_collateral_view` is the venue's own view, unchanged, and
 `venue.set_leverage` takes any positive integer and lets the venue accept or refuse
 it. The first launch gate is met by holding only the proposed principal at the venue.
 
@@ -2001,12 +3374,16 @@ rejection is the answer.
 `commitment_settled`, alongside the entitlement movement `net_micro`. The
 inbox item carries them.
 
-## Edition 4 factors: prompt, address, feedback
+## Edition 4 factors: prompt, feedback
 
-Three keys turn on one edition 4 change each. All three are elided from the
-canonical manifest JSON at their defaults, so every manifest that predates them
-keeps its hash, and none of them changes a roster digest: a charter ratified on a
-roster is still ratified on it when a factor is switched on.
+Two keys turn on one edition 4 change each. Like every key they are hashed at any
+value, defaults included (R8). Neither changes a roster digest: a charter
+ratified on a roster is still ratified on it when a factor is switched on.
+The third edition 4 factor, `[tools] address_enabled` (direct messages between
+seats through `address.send`), is deleted by ruling R11: Chapter II §I.b prescribes
+two channels, rich requests and thin rewards, and no third one between seats. A
+world file that still names the key loads with it ignored, like any other unknown
+`[tools]` key; no world under `worlds/` names it.
 
 `[prompt] mode` is `"reference"` (the default) or `"compact"`. Under `reference` a
 request carries the whole institutional world inside the cached prefix, which is
@@ -2019,76 +3396,68 @@ with a generated summary or made inaccessible. `Request.section_bytes` measures
 actual rendered bytes; the offline comparison is in `docs/audits/edition4-context/`.
 
 Own working state stays inline through 4,096 UTF-8 bytes. Larger state retains its
-exact artifact address and `artifact.get` route; storage limits and rent do not
-change. The inbox carries eight typed indices, not eight full bodies. `outcome.list`
+exact artifact address and `artifact.get` route; storage limits do not change. The inbox carries eight typed indices, not eight full bodies. `outcome.list`
 pages further unread indices without acknowledgement, and `outcome.get` returns an
 exact body. An index is notice of an outcome, not evidence that its body was read.
 
-Grounded evaluators and meta-judges receive operational capabilities and their own
-account separately from the frozen judging record. Their prompt does not preload
-mutable memory, inbox text, population tool descriptions, current charter or current
-world observations as judging evidence. Discovery remains available; only the
-commission's preserved evidence can support its finding.
+Every judge, first tier, meta and ballot, reads the same machine view (Chapter II
+§I.b; information audit C1, C2, C7, P5, P8): its own operating access
+(`actor_context`: the capability index without population prose, its own seat row,
+the clock and provider inventory), never the world block. The judged return's
+`description` is the event it answered, with no role clause. Its outputs lose
+`propensity`, which the request's SUBJECT PROPENSITY block renders once. The judged return names its own `handle` and its `kernel_status` (not `status`, which in an answer is only the refusal flag). No event payload names its author. A judge is not shown its own
+consequence standing, and `your_action_policy` is absent when a seat has no
+registered learner. When it has one, `your_action_policy` is one draw from that
+learner, `{recommended, p}`, never the distribution (Chapter II rulings R4,
+information audit P3). A seat whose action taken is the recommended action is
+recorded at the learner's own policy, so its round is on-policy; otherwise its own
+declared propensity stands, floored as before.
 
 A decision may buy up to five tool rounds, bounded by its existing money and model
 call ceilings. Known reads can extend retrieval; a write or child call ends it.
 Continuation pricing reserves another call before extending reads, and unknown
-prices do not extend them. Actual metering remains authoritative. Older tool results
+prices do not extend them; a program seat's next call reserves zero, since it
+costs nothing, so only the round limit bounds its reads. Actual metering remains authoritative. Older tool results
 have exact invocation-local `artifact.get` references that expire when the decision
 returns; they create no permanent archive entries. The current round's results are
-included once. External text retains its restricted continuation and cannot write
-a notebook in that continuation. Public `world.read` is available in both prompt
-modes, including grounded commissions that omit the full reference manual.
+included once. External text retains its restricted continuation. Public `world.read` is available in both prompt
+modes.
 
 
-`[tools] address_enabled` is exactly `true` or `false`, default `false` (a truthy
-string or `1` is refused). It gates whether the world publishes the voluntary
-addressing capability. It schedules nothing and wakes nobody. When a return records
-a call to `address.send`, the projection that crosses a contract boundary
-(`public_return`, `public_tool_calls`) keeps the capability, the recipient, the
-price and the size of what was said, and drops the body under any of the names
-`text`, `body`, `message`, `content` or `payload`, at whatever nesting the return
-wrote it. A judge prices an act it can see the shape of; it does not read the
-message. The sender keeps its own copy in its working state, which no projection
-touches.
+`[evaluation] producer_feedback` and `grounded_horizon_ticks` were removed by ruling
+R1 and are refused at load: a producer decision settles on its judges' verdict, and the
+kernel-commissioned final judge, its rubric and its provisional fallback are deleted.
 
-`[evaluation] producer_feedback` is `"verdict"` (the default) or `"realized"`. Under
-`verdict` a producer decision settles on the judge opinion it drew, which is the
-shipped line. Under `realized`, initial opinion is provisional. Before the producer
-acts, the runtime freezes all charter norm definitions, the separate pricing cards,
-existing predicate versions, evidence baseline and tick horizon. A fresh independent
-evaluator later interprets attributable economic outcomes, execution receipts and
-resolved forecasts against the producer's claim under those frozen norms. Windowed
-pricing cards are not the sole criteria for valuing an individual decision. Historical
-contracts without frozen norms retain that absence on restore; current norms are not
-silently substituted. The current feedback definition is `realized-consequence-v2`. This is
-consequence-grounded evaluation, not an objective utility oracle or a pure-P&L score.
-Supported and contrary findings must cite supplied evidence. Unknown findings have no
-numeric score and produce no learner update; a timed-out pending assessment also cannot
-train early. One malformed final finding can be retried by a different evaluator,
-within the close horizon. Both top-level and child producer decisions use this path.
+`[evaluation] no_swap_regret_kinds` is a list of event kind names, default `[]`, fixed
+for the world's life. Every router the runtime seeds for a named kind (at genesis, or
+when the kind first gains an acceptor) is a no-swap-regret learner, Blum-Mansour over
+one EXP3 row per arm, instead of mean-based EXP3: the retentive core the essay places
+beside the frontier's mean-based learners. No shipped world names `ProducerReturn`:
+the judge tier is mostly mean-based (ruling R10, "a significantly higher population of
+mean-based no-regret judges"), and a core beside a producer frontier is wave 5's. Each
+name must be an event kind the world can route at genesis (a world
+kind, a built-in return, or a kind a manifest seat accepts or emits); a misspelt one is
+refused. The list is a set: it is kept sorted, so its order never changes the hash.
+Every router
+credits an abstention (NOOP) its zero-consequence reward, deferred by the mean delay its
+seat rounds take to be learned: what a woken seat that delivered nothing scores on the
+scales its learned seat rounds settled under, weighted by how many settled under each
+(`ZERO_CONSEQUENCE` in `factorylab/runtime/routing.py`), less the card penalty a
+decision of the role it would have filled bears in the window it was drawn in
+(`router.abstention_priced`; ruling R9): the abstention is recorded as a decision of
+that window and priced exactly as a woken decision is, so waking nobody never beats
+a woken seat merely because penalties touched only the decisions that acted.
+`verdict-v1`, `evaluation-v1`, `exposure-v2`, `counter-v1` and `policy-promise-brier-v2`
+are worth 0.5; Brier scores (`brier-v1`, `forecast-mean-v1`) 0.75, the coin-flip forecaster's;
+any other definition, and a router that has learned no seat round yet, 0.5. An
+unscored seat round with no record of its own is credited the same value. A replaced
+router's settled rounds train the router that replaced it, stepped at the size of the
+universe they were drawn over when that was larger (`router.step_rescaled`). Each
+router's NOOP watch for a window (its draws and lowest NOOP probability) is the
+frontier signal inside the immune organ's one learning-death diagnosis: the immune
+window records `frontier_invocation`, and the diagnosis names the routers whose every
+draw in every tail window left their seats to exploration (`uninvoked_routers`).
 
-Additive routers may commission several provisional opinions; all participating
-provisional evaluators and their eligible forecasts remain attached to the contract.
-None of those evaluators may supply its final independent finding. The final
-commission uses the producer's selected emitted kind, including custom judged kinds.
-It uses the first active router in that kind's checkpointed registration order for
-one ordinary, propensity-logged draw. A NOOP ends that commission without forcing
-a judge or trying the other routers. This single-router rule applies only to the
-final commission, not the subsequent recursive evaluation of its finding. Historical
-contracts lacking the emitted-kind field retain the old `ProducerReturn` fallback.
-
-`grounded_horizon_ticks` is an exact positive integer, default `10`. It controls when
-the first final consequence-grounded commission becomes due and is independent of
-`forecast_horizon_events`, which continues to govern ordinary forecasts. Closure is
-bounded by a further `max(horizon + 1, verdict_timeout_ticks)` ticks. A final unknown
-finding may close earlier. Late adoption is not retroactively scored. Card
-penalties retain the existing originating-measurement-window rule, including the lambda
-at that window's close; the numeric lambda is not frozen at decision time.
-
-In realized mode, paid population-tool executions generate version-bound receipts for
-caller and maker. These distinguish same-lineage and cross-lineage use. They contain
-result hashes, not private argument or result bodies, and execution alone earns no score.
 An unknown configuration value is refused at load. All factors are fixed at launch.
 
 Assembly proposals may include `endowment_micro`, an exact positive integer transferred

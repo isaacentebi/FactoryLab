@@ -12,7 +12,7 @@ from typing import Any
 
 from factorylab.charter.book import CharterBook
 from factorylab.charter.charter import Charter
-from factorylab.charter.controller import CardRegion
+from factorylab.charter.controller import CardRegion, PriceController
 from factorylab.charter.measurement import CardSamples
 from factorylab.cortex.assembly import Assembly, AssemblySpec
 from factorylab.cortex.tools import ObservationRunner, ToolRunner
@@ -24,16 +24,21 @@ from factorylab.kernel.queue import DecisionQueue
 from factorylab.kernel.registry import Contract, PriceSpec, Registry, ResourceBounds
 from factorylab.kernel.reserve import NoveltyReserve
 from factorylab.kernel.termination import Termination
-from factorylab.kernel.timing import TimingRegistry, UpwardBuffer
-from factorylab.kernel.wallet import DripSchedule, ReleaseSchedule, Wallet
+from factorylab.kernel.wallet import ReleaseSchedule, Wallet
 from factorylab.runtime import release, witness
 from factorylab.runtime.cadence import GovernanceCadence
-from factorylab.runtime.cards import forecast_weight
 from factorylab.runtime.cascade import CascadeGate
 from factorylab.runtime.compute import ContractConsequences
 from factorylab.runtime.feedback import PendingJudgement
-from factorylab.runtime.immune import ImmunePriceController
-from factorylab.runtime.live import LiveClock, LiveVenue, Reconciler, build_provider
+from factorylab.runtime.immune import thrash_controller
+from factorylab.runtime.live import (
+    LiveClock,
+    LiveVenue,
+    Reconciler,
+    WallClock,
+    build_provider,
+    wall_paced,
+)
 from factorylab.runtime.observations import seed_book
 from factorylab.runtime.pricing import MeasureWindow
 from factorylab.runtime.resume import JournalProxy, RecoveryJournal
@@ -63,6 +68,69 @@ from factorylab.world.models import FakeModel, TokenPrice
 from factorylab.world.scripted import ScriptedProvider
 from factorylab.world.venue_tools import VenueTools
 
+#: Why a live hybrid Venice world will not start without the capital-loop opt-in.
+CAPITAL_LOOP_REFUSED = (
+    "this world spends real Base mainnet USDC on Venice (treasury.venice_network); start it "
+    "only with scripts/edition4_rehearsal.py --capital-loop "
+    "(docs/architecture/capital-loop-rehearsal.md)")
+
+
+#: Why a world whose treasury rail signs with the mainnet reserve key will not start
+#: without a diary on disk.
+MAINNET_RAIL_REFUSED = (
+    "mainnet_rail_requires_a_ledger: this world's treasury rail signs with the mainnet "
+    "reserve key; run it with --ledger, so the reserve's record can name the diary its "
+    "transfers are booked in and a cancel can tell whether it has ended")
+
+
+def mainnet_rail(manifest: WorldManifest) -> bool:
+    """Whether a live world's treasury rail signs with the mainnet reserve key: a
+    reserve on a mainnet venue, or a hybrid rail's Venice leg on Base mainnet."""
+    treasury = manifest.treasury
+    return treasury.reserve_address is not None and (
+        manifest.exchange.mainnet
+        or getattr(treasury, "venice_network", None) == "base-mainnet")
+
+
+class MainnetRailRequiresALedger(ValueError):
+    """A live world with a mainnet treasury rail was given no ledger: nothing started."""
+
+
+class TapeMismatch(ValueError):
+    """The venue's recorded tape is not the one the manifest names: nothing started."""
+
+
+def check_tape(manifest: WorldManifest, exchange: Any) -> None:
+    """The venue replays exactly the tape the manifest fixes, or no tape at all.
+
+    Guarantees, at launch and on every resume (both build the runtime here), that a
+    world whose manifest names a tape runs on a venue whose tape has that SHA-256,
+    and that a venue replaying a tape runs only under a manifest that names it: the
+    tape is part of the world's identity (``[exchange.tape]``), never a swappable input.
+    """
+    named = manifest.exchange.tape
+    held = getattr(getattr(exchange, "target", exchange), "tape_sha256", None)
+    if named is None and held is None:
+        return
+    if named is None:
+        raise TapeMismatch("tape_mismatch: the venue replays a tape this manifest does not "
+                           "name ([exchange.tape])")
+    if held != named.sha256:
+        raise TapeMismatch(f"tape_mismatch: the manifest fixes tape {named.sha256[:12]}, the "
+                           f"venue replays {str(held)[:12]}")
+    # The digest names the tape; the span, markets and spreads the manifest states about
+    # it must be the tape's own. A later start_ns than the recording's would feed the
+    # look-ahead guard a false date and admit a model trained on the replayed market.
+    tape = getattr(getattr(exchange, "target", exchange), "tape", None)
+    identity = tape.identity() if tape is not None else None
+    stated = {"start_ns": named.start_ns, "end_ns": named.end_ns,
+              "markets": tuple(named.markets), "spread_bps": dict(named.spread_bps)}
+    wrong = sorted(key for key, value in stated.items()
+                   if identity is None or identity[key] != value)
+    if wrong:
+        raise TapeMismatch(f"tape_mismatch: the manifest's [exchange.tape] {', '.join(wrong)} "
+                           "is not what the tape it names recorded")
+
 
 class BootstrapMixin:
     """Preserve runtime state and behavior for bootstrap operations."""
@@ -75,7 +143,6 @@ class BootstrapMixin:
         seed: int | None,
         initial_balance_micro: int | None,
         ledger_path: str | None,
-        drip: bool,
         router_gamma: float,
         provider: Any | None = None,
         market: X402Provider | None = None,
@@ -83,13 +150,45 @@ class BootstrapMixin:
         clock_source: Any | None = None,
         reconcile_every: int = 10,
         kill_at_end: bool = False,
+        capital_loop: bool = False,
         _journal: RecoveryJournal | None = None,
         _lock: LedgerLock | None = None,
     ) -> None:
+        self.live = manifest.exchange.kind != "fake"
+        if (self.live and getattr(manifest.treasury, "venice_network", None) is not None
+                and capital_loop is not True):
+            # A manifest alone never switches on real-money mode: `factorylab run` or
+            # `resume` of a hybrid world would sign mainnet top-ups with no rehearsal
+            # guard around them. Only the capital-loop runner passes the opt-in, and it
+            # is not checkpointed, so a resume must be asked for it again.
+            from factorylab.world.evm import RailError
+
+            raise RailError(CAPITAL_LOOP_REFUSED)
+        # The venue read share is a load-time invariant, checked before anything is
+        # written, for a manifest built in code as for one read from a file.
+        problem = manifest.read_share_problem()
+        if problem is None and _journal is None:
+            # Genesis admits the retained private state cap against the host's free
+            # disk once; the cap is fixed for the world's life, so a resume (which
+            # arrives with its journal) is never refused for the host's disk since.
+            problem = manifest.host_disk_problem(ledger_path)
+        if problem is not None:
+            raise ValueError(problem)
+        check_tape(manifest, exchange)
+        if self.live and not ledger_path and _journal is None and mainnet_rail(manifest):
+            # Every reserve-key entry of a world names its diary: without one, a used
+            # authorization could never be shown booked (a false recovery), and a
+            # cancel could never tell whether the world has ended. Refused before any
+            # venue, key or file is touched.
+            raise MainnetRailRequiresALedger(MAINNET_RAIL_REFUSED)
         self._ledger_lock = _lock or LedgerLock(ledger_path)
+        # Where this process keeps the world's diary, and the host's one live Polymarket
+        # reader when this world holds it: taken before the first event or replay, and
+        # released when the world stops (``runtime/polymarket.py``, ``arm``).
+        self.ledger_path = ledger_path
+        self._polymarket_ip_lock = None
         self.m = manifest
         self.kill_at_end = kill_at_end
-        self.live = manifest.exchange.kind != "fake"
         self.clock_source = clock_source
         self.tick_clock = (
             LiveClock(manifest.tick_interval_ns, events)
@@ -105,13 +204,36 @@ class BootstrapMixin:
         self.seed = manifest.seed if seed is None else seed
         self.rng = random.Random(self.seed)
         self.cascade: dict[int, CascadeGate] = {}
-        self.cascade_windows: dict[str, list[str]] = {}  # representative -> other handles
+        # The factory's clock (essay II.IV.b-c; time audit T1-T3): measured loops and
+        # the derived schedules of the loops they command, all in world ticks.
+        from factorylab.runtime.clockwork import Clockwork
+
+        self.clockwork = Clockwork(min_ratio=manifest.timing.min_ratio,
+                                   jitter_fraction=manifest.timing.jitter_fraction,
+                                   seed=self.seed, sample=manifest.timing.cadence_sample)
+        # handle -> [opened tick, cutoff tick] for every decision not yet final.
+        self.decision_ticks: dict[str, list[int]] = {}
+        # World ticks consumed: the one clock domain every loop counts in (T3).
+        self.ticks_consumed = 0
+        # card id -> the tick its price last moved (time audit T2).
+        self.card_clock: dict[str, int] = {}
+        # Whether a governance tier fits between the slowest loop and the world (T7).
+        self.governance_viable = True
+        # event kind -> the tick a grown menu started waiting for its epoch (T6).
+        self.pending_epochs: dict[str, int] = {}
+        # Where the treasury caps' own wall-clock windows are counted from (T1, T13).
+        self.cap_anchor_ns: int | None = None
         self.clock = SimClock(0) if _journal is None else _journal.clock
         if self.live and _journal is None:
             self.clock.now_ns = (
-                self.tick_clock.now_ns() if isinstance(self.tick_clock, LiveClock)
+                self.tick_clock.now_ns() if wall_paced(self.tick_clock)
                 else self.tick_clock.start_ns
             )
+        elif _journal is None and getattr(exchange, "opens_ns", None) is not None:
+            # A recorded market opens when its recording starts: the world launches
+            # there, so launch-anchored schedules (releases, fill cursors) count from
+            # the tape's first instant, never from the epoch (world/tape.py).
+            self.clock.now_ns = int(exchange.opens_ns)
         self.stats = RunStats()
         self.ev = manifest.evaluation
         self.charter: Charter = manifest.charter
@@ -189,17 +311,36 @@ class BootstrapMixin:
             )
         )
         self.market.max_request_micro = manifest.treasury.max_request_micro
+        from pathlib import Path as _Path
+
+        from factorylab.runtime.capital_loop import ReserveGuard
         from factorylab.world.treasury import UnconfiguredRail
+
+        # Every EIP-3009 authorization this world signs with the reserve key is written
+        # ahead to the reserve's record, under its lock, or never signed
+        # (x402.sign_transfer_authorization): a capital-loop run on the same reserve can
+        # then neither overlap it nor miss what it authorized. The entry names this
+        # world's exact diary (``--ledger runs/foo.jsonl`` included), where a used
+        # authorization of its must be booked.
+        ledger = _Path(ledger_path).resolve() if ledger_path else None
+        run_dir = ledger.parent if ledger is not None else None
+        if isinstance(self.market, X402Provider) and self.market.guard is None:
+            self.market.guard = ReserveGuard("x402_purchase", run_dir=run_dir, ledger=ledger)
 
         if self.live:
             if manifest.treasury.reserve_address is not None:
-                from factorylab.world.treasury_rails import LiveRail
+                from factorylab.world.treasury_rails import HybridRail, LiveRail
 
-                rail = LiveRail(self.exchange, manifest.treasury)
+                # A hybrid capital-loop rehearsal buys real Venice credit on Base mainnet
+                # and pays for it from the testnet pots through a shadow leg (II.IV).
+                hybrid = getattr(manifest.treasury, "venice_network", None) == "base-mainnet"
+                rail = (HybridRail if hybrid else LiveRail)(self.exchange, manifest.treasury)
                 # A Venice purchase is confirmed on the chain's debit; the diary's own
                 # metered spend since the purchase started is recorded beside the
                 # advisory balance so a lost acknowledgment stays explainable (C5).
                 rail.metered_usage_since = self._venice_usage_since
+                # The capital-loop runner replaces this with its held lock's record.
+                rail.bind_guard(ReserveGuard("treasury", run_dir=run_dir, ledger=ledger))
             else:
                 rail = UnconfiguredRail(self.exchange)
 
@@ -222,17 +363,12 @@ class BootstrapMixin:
                     key_path=(ledger_path + ".key") if ledger_path else None,
                 )
             self.ledger = RecoveryJournal(ledger, self.clock)
-        self.use_drip = drip and manifest.drip is not None
-        schedule = None
-        if self.use_drip and manifest.drip is not None:
-            d = manifest.drip
-            schedule = DripSchedule(d.amount_micro, d.period_ns, d.start_ns, d.end_ns)
         # Locked backing and its release schedule come from the manifest; the offsets
         # are anchored to the ledgered Launch timestamp when the world launches.
         endowment = manifest.endowment
         releases = (ReleaseSchedule(tuple(endowment.releases))
                     if endowment.locked_micro else None)
-        self.wallet = Wallet(self.initial, self.ledger, schedule, clock_ns=self.clock,
+        self.wallet = Wallet(self.initial, self.ledger, None, clock_ns=self.clock,
                              balance_floor_micro=manifest.termination.balance_floor_micro,
                              reported_cost_multiple=manifest.treasury.reported_cost_multiple,
                              locked_micro=endowment.locked_micro, release_schedule=releases)
@@ -242,7 +378,6 @@ class BootstrapMixin:
         self.queue = DecisionQueue(self.ledger, clock_ns=self.clock)
         self.reserve = NoveltyReserve(
             manifest.novelty.share,
-            manifest.novelty.window_ns,
             has_history=self._registration_has_history,
             ledger=self.ledger,
             clock_ns=self.clock,
@@ -254,26 +389,17 @@ class BootstrapMixin:
             min_ratio=manifest.timing.min_ratio,
             backstop=self.ev.consequence_backstop_ticks,
         )
-        self.timing = TimingRegistry()
-        self.timing.register_loop("leaf", [])
-        self.timing.register_loop("governance", ["leaf"])
-        self.buffer = UpwardBuffer(
-            self.timing, "governance", min_ratio=manifest.timing.min_ratio, seed=self.seed
-        )
 
         # settlement
         self.book = ForecastBook(self.ledger)
         self.baseline = PrevalenceBaseline()
         self.standing = ConsequenceStanding(self.ev.min_coverage)
         self.observer = Observer()
-        # Edition 3 (C3): the charter's cards, not the settler, say what a judge's
-        # forecasts are worth. A claim about a return in a scope no card answers
-        # for carries no weight; with no scoped card every claim counts equally.
-        self.settler = Settler(
-            self.book, self.queue, self.standing, self.baseline, self.observer,
-            weight_for=lambda forecast: forecast_weight(
-                self.charter, self.return_kinds.get(forecast.about_handle)),
-        )
+        # Every settled claim counts once: the outside signal "sits outside the
+        # factory's input entirely" (essay II.III.b), so no charter card weights it
+        # (ruling R1 deleted ``settlement.weights``).
+        self.settler = Settler(self.book, self.queue, self.standing, self.baseline,
+                               self.observer)
         self.consequences = ContractConsequences(
             self.ledger, self.ev.consequence_backstop_ticks, self)
         self.consequence_fills = FillCursor(self.ledger, start_ns=self.clock.now_ns)
@@ -285,6 +411,10 @@ class BootstrapMixin:
             "exchange",
             deterministic=isinstance(self.exchange, FakeExchange) and not self.live,
         )
+        # Every answered venue read is kept for the rest of its tick, so an identical
+        # seat read is answered without a request (``ComputeMixin._tick_answer``).
+        self._tick_reads = None
+        self.exchange.observer = self._observe_venue_answer
         from factorylab.world.venue_tools import seed_markets
 
         seed_markets(self.exchange, manifest.exchange)
@@ -308,6 +438,11 @@ class BootstrapMixin:
                 fee_micro=manifest.treasury.fake_fee_micro,
                 max_venice_per_window=manifest.treasury.max_venice_per_window,
                 clock_ns=self.clock,
+                venice_shadow_sink=getattr(manifest.treasury, "venice_shadow_sink", None),
+                max_venice_total_micro=getattr(manifest.treasury, "max_venice_total_micro",
+                                               None),
+                venice_reserve_floor_micro=getattr(manifest.treasury,
+                                                   "venice_reserve_floor_micro", None),
             )
         else:
             self.treasury = Treasury(
@@ -318,10 +453,18 @@ class BootstrapMixin:
                 fee_ceiling_micro=manifest.treasury.max_transfer_fee_micro,
                 max_venice_per_window=manifest.treasury.max_venice_per_window,
                 max_forward_fees_per_window=manifest.treasury.max_forward_fees_per_window,
-                forward_wait_windows=manifest.treasury.forward_wait_windows,
+                forward_wait_ticks=manifest.treasury.forward_wait_ticks,
                 clock_ns=self.clock,
+                max_venice_total_micro=getattr(manifest.treasury, "max_venice_total_micro",
+                                               None),
             )
-        self.wallet.bind_pots(self.treasury.pots)
+        if manifest.polymarket.enabled:
+            from factorylab.runtime.polymarket import pots_view
+
+            # The polymarket pot sits beside the treasury's pots, never inside them.
+            self.wallet.bind_pots(lambda: pots_view(self))
+        else:
+            self.wallet.bind_pots(self.treasury.pots)
         self.treasury.rail = JournalProxy(
             self.treasury.rail, self.ledger, "treasury.rail", deterministic=not self.live
         )
@@ -332,6 +475,16 @@ class BootstrapMixin:
             deterministic=isinstance(self.provider, (ScriptedProvider, FakeModel)),
         )
         self.market = JournalProxy(self.market, self.ledger, "market")
+        # Time audit T8: the safety path reads wall time between model calls, journaled.
+        # Whether a read is re-executed on replay is a fact about the clock, not the
+        # venue: a simulated world's wall is its event instant, but a world paced by the
+        # wall (an idle-skipping replay included) reads real time, so its reads are
+        # recorded and a replay reads the instants the run read.
+        self.wall = JournalProxy(WallClock(lambda: self.tick_clock, self.clock), self.ledger,
+                                 "wall",
+                                 deterministic=not (self.live or wall_paced(self.tick_clock)))
+        self._safety_ns = self.clock.now_ns
+        self._safety_stop: str | None = None
         # Uncertain bills settle from the provider's own balance, read through the
         # journal like every other provider read so replay reproduces it.
         self.bill_settlement = BillSettlement(self._provider_balance, record=self._record_market)
@@ -358,6 +511,17 @@ class BootstrapMixin:
             self._register_seed_contracts()
         self.assemblies: dict[str, Assembly] = {}
         self.retired_assemblies: set[str] = set()
+        # The retired ids, oldest retirement first: whose kept state is released first
+        # when a private-state write needs room under the cap (``[storage]``).
+        self.retirement_order: list[str] = []
+        # id -> its lineage key: the registration serial a new id draws (the seeds
+        # take the first ones), kept across its versions, since only its owner may
+        # re-version it. id -> the lineage key of the seat that registered its current
+        # version (None: no known seat); a seed is in none, so only it owns itself.
+        self.lineage_keys: dict[str, int] = {
+            a.id: index + 1 for index, a in enumerate(manifest.assemblies)}
+        self.registration_serial = len(manifest.assemblies)
+        self.registrants: dict[str, int | None] = {}
         self.retirement_proposals: dict[str, dict] = {}
         self.return_kinds: dict[str, str] = {}
         self.return_bindings: dict[str, dict] = {}
@@ -401,25 +565,92 @@ class BootstrapMixin:
         self.routers: dict[str, list[RouterState]] = {}
         self.retired_routers: dict[str, RouterState] = {}
         for kind in self._routable_kinds():
-            self._build_router(kind, "exp3", router_gamma)
-        self.pending_exposure: dict[str, int] = {}  # antagonist decision handle -> opened event
-        # antagonist handle -> which of the two exposure facts have arrived
-        self.exposure_evidence: dict[str, dict[str, bool]] = {}
-        # judge handle -> top-meta (handle, conformity) pairs awaiting the judge's payoff
-        self.pending_meta: dict[str, list[tuple[str, float]]] = {}
-        # judge handle -> (verdict beat baseline, event, forecast handle), pruned by backstop
-        self.verdict_outcomes: dict[str, tuple[int, int, str]] = {}
+            self._build_router(kind, self._seed_learner_kind(kind), router_gamma)
+        self.pending_exposure: dict[str, int] = {}  # antagonist decision handle -> opened tick
+        # Exposure decisions whose seat answered status: cannot -> the reason it gave:
+        # left ungraded, they settle declined, priced as an abstention (ruling R9).
+        self.declined_exposures: dict[str, str] = {}
+        # The reward chain (ruling R1). Antagonist handle -> the consequence scores of
+        # the judges scored on its return, until its exposure settles.
+        self.exposure_scores: dict[str, list] = {}
+        # Each judge's consequence scores on ordinary (non-antagonist) returns, as
+        # [sum, count]: the centre its exposures are measured from (``exposure_score``).
+        self.judge_ordinary: dict[str, list] = {}
+        # Adversarial judges' counter-verdicts awaiting the world's measurement of the
+        # return they re-judged (``FeedbackMixin._settle_counters``).
+        self.pending_counters: dict[str, dict[str, Any]] = {}
+        # First-tier judge handle -> the world it was shown, frozen at its verdict, for
+        # an adversarial judge drawn when that verdict is given (``_counter_step``).
+        self.verdict_views: dict[str, dict[str, Any]] = {}
+        # Whether the live roster keeps its evaluator seats a strict majority, and the
+        # tick that was last measured (``_watch_evaluator_majority``).
+        self.evaluator_majority: bool | None = None
+        # The chaos faults drawn for the tick now running (``runtime.chaos``).
+        self.chaos_tick: dict[str, Any] = {}
+        # Judged return -> [[judge handle, verdict], ...] that arrived while this event
+        # was routed; settled on their mean once routing is done.
+        self.arrived_verdicts: dict[str, list[list]] = {}
+        # Decision handle -> (its consequence score or None, the tick it closed): what a
+        # meta that graded it predicted, kept for one that grades it later.
+        self.consequence_scores: dict[str, tuple[float | None, int]] = {}
+        # Judged return -> its measurement once final, so every verdict about it is
+        # scored against one fact; and the mids a declined trade is priced from.
+        self.world_outcomes: dict[str, dict[str, Any]] = {}
+        # Anticipatory settlement: each judged return's mark once taken, and the judge
+        # decisions rewarded on it whose final measurement is still owed to standing.
+        self.marked_outcomes: dict[str, dict[str, Any]] = {}
+        self.late_verdicts: dict[str, dict[str, Any]] = {}
+        self.reference_mids: dict[str, dict[str, Any]] = {}
         self.consequence_mix: float = self.ev.consequence_share  # live sampling actuator
         self.sampling_history: list[dict[str, Any]] = []
-        # learning-death grant: the window it is live for and the assemblies that spent it
-        self.novelty_grant: dict[str, Any] = {"window": None, "consumed": []}
+        # The niche for unhistoried actions (ruling R5): per open invocation, the
+        # unhistoried tool action whose result its next model round reads. Emptied
+        # when the invocation returns, so a checkpoint never holds an entry.
+        self.niche_rounds: dict[str, str] = {}
+        # Each seat's use of the period's niche, against ``novelty.seat_share`` of it:
+        # {"start_tick", "cap" (the period's share), "used": {seat: micro-USD}}.
+        self.niche_use: dict[str, Any] = {}
+        # The thrash charge each open core-router round carries (versioning C2): the
+        # price in force at its draw times the router's own movement. Only nonzero.
+        self.thrash_charges: dict[str, float] = {}
+        # Time audit T14: when each loop's configuration last changed, and the
+        # lifespans recorded since the immune organ last closed a window.
+        self.config_ticks: dict[str, int] = {}
+        self.lifespan_log: list[dict[str, Any]] = []
         self.delivered_seen: dict[str, int] = {
             st.learner.id: 0 for st in self._all_router_states()
         }
+        # Wave 17b: each seat's cursor over its own deliveries (``assembly:<id>``), read
+        # by its next ballot; the committee-eligibility tally kept at settlement and
+        # the evidence pairs it counted for retained decisions; and the order intents
+        # of released decisions, as counts (``released_intents``).
+        self.policy_seen: dict[str, int] = {}
+        # Each seat's delivery count at recent boundaries, [[tick, count]], oldest
+        # first: what its deliveries were at a tick, so those older than the
+        # published retention can be released unread (wave 17b).
+        self.policy_marks: dict[str, list[list[int]]] = {}
+        # The venue transactions of released decisions' vault writes, [hash, the clock
+        # when it was released], while a vault lookup's window can still return one
+        # (``_prune_vault_released``): still bound, so no later write takes it.
+        self.vault_released_hashes: list[list] = []
+        self.eligibility_tally: dict[str, int] = {}
+        self.eligibility_evidence: set[tuple[str, str]] = set()
+        self.released_intents: dict[str, int] = {}
         self.vote_handles: dict[str, str] = {}
         self.order_intents: dict[str, dict] = {}
+        # The vault surface ([venue] vault_tools): vault writes by client id, the
+        # vaults this world's seats created or hold, and the venue ledger cursor.
+        self.vault_intents: dict[str, dict] = {}
+        self.vault_book: dict[str, dict] = {}
+        self.vault_ledger_cursor_ns = self.clock.now_ns
+        self.vault_ledger_seen: list[str] = []  # row hashes read at the cursor's millisecond
+        # Decision handle -> why a venue write it attempted was refused, read once
+        # by that decision's own answer: a refused write is not an answer's licence.
+        self.venue_attempts: dict[str, str] = {}
         self.voted_amendments: set[str] = set()
         self.snapshot_keys: dict[str, str] = {}  # decision handle -> snapshot key
+        # NOOP handle -> the abstention credit its router is owed, and when it is due.
+        self.noop_credits: dict[str, dict] = {}
 
         # world memory (public facts) and assembly memory (private to each assembly)
         self.recent_mids: dict[str, deque[dict[str, Any]]] = {}
@@ -445,7 +676,6 @@ class BootstrapMixin:
                 self.ledger.append({"kind": "spot.inventory", "coin": coin,
                                     "size": size, "entry_px": px, "source": "launch"})
                 self.spot_inventory[coin] = (Decimal(size), Decimal(px))
-        self.notes: dict[str, dict] = {}
         # The artifact archive (C9): records in the ledger, bytes beside it by hash.
         from factorylab.kernel.artifacts import ArtifactStore, artifact_root
 
@@ -453,6 +683,11 @@ class BootstrapMixin:
             self.ledger, root=artifact_root(ledger_path) if ledger_path else None,
             clock_ns=self.clock,
         )
+        # The disk is finite: retained private state has a hard cap for the world's
+        # life, and a write that needs room releases retired ids' kept state first.
+        self.artifacts.private_cap = manifest.storage.retained_private_bytes
+        self.artifacts.reclaimable = self._reclaimable_state
+        self.artifacts.on_reclaimed = self._state_reclaimed
         # Continuity (C1): a head pointer per seat over the archive, and an inbox of
         # settled consequences addressed to the seat that decided them. These replace
         # the three-entry memory deque, which lost a decision before its outcome landed.
@@ -465,6 +700,8 @@ class BootstrapMixin:
         self.outcomes.consequences_open = lambda handle: (
             self.consequences.account_open(handle)
             or self.outcomes.seat_of(handle) not in self.retired_assemblies)
+        # Wave 17b: an item's retention horizon counts world ticks.
+        self.outcomes.tick = lambda: self.ticks_consumed
         if not self.ledger.bootstrap:
             # The manifest may hand a seat its first head — a lens, a method, a
             # starting hypothesis. It is the initial value of a pointer the seat
@@ -477,6 +714,16 @@ class BootstrapMixin:
         self.tool_specs: dict[str, dict[str, Any]] = {}  # tool id -> spec dict (world block)
         self.population_tools: dict[str, Any] = {}
         self.tool_owner: dict[str, str] = {}  # population tool id -> proposing assembly id
+        # W4: calling decision -> {population tool id: successful calls} by a seat of
+        # another lineage than the tool's builder, until that decision settles and its
+        # builder is credited (``CompositionMixin._credit_requested``).
+        self.tool_uses: dict[str, dict[str, int]] = {}
+        # W4: registering decision -> {"until": tick, "tools": [...], "scores": [...]},
+        # held for its tool-use window (``CompositionMixin._hold_for_tool_use``).
+        self.tool_holds: dict[str, dict[str, Any]] = {}
+        # A priced settlement's raw score while the kernel settles it (never between
+        # events): what the settlement hook credits composition with.
+        self.raw_scores: dict[str, float] = {}
         # C10 routing evidence: each seat's last rendered ceiling and the world size then.
         self.seat_ceilings: dict[str, dict[str, int]] = {}
         self.entitlement_bridges: dict[str, int] = {}  # handle -> pool-backed cover, one call
@@ -490,40 +737,80 @@ class BootstrapMixin:
                 "id": spec.id,
                 "description": spec.description,
                 "args_schema": _to_plain(spec.args_schema),
+                # The venue charges nothing for a call: its public reads are free
+                # and its fees land on the venue account where they happen.
                 "price_micro_per_call": spec.price_micro_per_call,
                 "kind": spec.kind,
             }
-            if spec.id in self.venue_tools.PUBLIC_READS:
-                self.tool_specs[spec.id]["price_micro_per_call"] = (
-                    manifest.connectors.call_price_micro)
-        self.tool_specs["treasury.transfer"] = {
-            "id": "treasury.transfer",
-            "description": "Move USDC spot_to_perps or perps_to_spot, between venue and reserve, "
-            "or to_venice from "
-            "reserve in a fixed $5 tranche, within treasury.max_venice_per_window. "
-            "Principal stays held "
-            "until receipt-confirmed arrival. The result carries references or a refusal reason. "
-            "to_reserve needs spot HYPE in the venue account for the Core gas charge (buy it on "
-            "HYPE/USDC); its Base mint is self-paid when the reserve holds ETH, otherwise Circle "
-            "forwards it for the fee quoted in pots.gas.",
-            "args_schema": {
-                "type": "object",
-                "properties": {
-                    "direction": {"enum": ["to_reserve", "to_venue", "to_venice",
-                                           "spot_to_perps", "perps_to_spot"]},
-                    "usd": {"type": ["string", "integer"], "description": "Exact positive USD"},
-                    "reason": {"type": "string"},
-                },
-                "required": ["direction", "usd"],
-            },
-            "price_micro_per_call": 0,
-            "kind": "treasury",
-        }
+        vault_examples: dict[str, list[dict]] = {}
+        if getattr(manifest.exchange, "vault_tools", False):
+            # A surface, published only where the manifest opts in: what each call
+            # does and costs, and no word about what a vault might be for.
+            from factorylab.world.venue_tools import vault_specs
+
+            specs, vault_examples = vault_specs()
+            self.tool_specs.update(specs)
+            self.treasury.vault_custody = True
+        from factorylab.world.venue_tools import (
+            _BASE_WEIGHT,
+            TICK_ANSWER_FACT,
+            VENUE_WEIGHT_PER_MINUTE,
+        )
+
+        budget = manifest.exchange.public_read_weight_per_minute
+        seats = manifest.exchange.max_readers
+        for tool_id, weight in _BASE_WEIGHT.items():
+            if tool_id not in self.tool_specs:
+                continue
+            # A limit is a published fact (essay II.I.b), never advice.
+            if weight == 0:
+                self.tool_specs[tool_id]["description"] += (
+                    " Held by seats with a venue read slot. Answered from the listing the "
+                    "venue adapter loaded: it sends no request and spends none of your "
+                    "venue read share.")
+                continue
+            self.tool_specs[tool_id]["description"] += (
+                f" Held by seats with a venue read slot (at most {seats}). Each slot has "
+                f"a fixed share of {budget // seats} venue request weight ({budget} over "
+                f"{seats} slots) in any sliding 60 s of world time; the rest of the "
+                f"venue's {VENUE_WEIGHT_PER_MINUTE} a minute per IP is the kernel's. This "
+                f"read is sent at most once and weighs {weight}"
+                + (" plus 1 per 60 candles asked" if tool_id == "venue.candles" else
+                   " plus 1 per 20 rates asked" if tool_id == "venue.funding_history"
+                   else "")
+                + ", charged to your share for every read. A read your remaining share "
+                "cannot cover is refused and not sent. " + TICK_ANSWER_FACT)
+        # seat -> [[world ns, venue weight]] of its reads in the sliding minute.
+        self.venue_read_use: dict[str, list[list[int]]] = {}
+        # The same for Polymarket reads (``runtime/polymarket.py``); empty, and never
+        # spent, in a world without the block.
+        self.polymarket_read_use: dict[str, list[list[int]]] = {}
+        self._polymarket_tick_reads = None
+        # slot index -> the world ns from which a freed slot may be given again (its
+        # last holder's last read has left the sliding minute by then), and the seats
+        # registered while no slot was free, in registration order.
+        self.slot_free_at: dict[str, int] = {}
+        # slot index -> the registration that last held it, whose Polymarket open reads
+        # must all have stopped counting before the slot is given again.
+        self.slot_last_reader: dict[str, str] = {}
+        # The venue read slots, by position: the seeds, in manifest order, up to
+        # ``[venue] max_readers``; then registrations into the lowest free slot. A
+        # retired seat's slot is None until it is given again. Seeds past the slots
+        # wait for one like any seat registered without one.
+        seeds = [a.id for a in manifest.assemblies]
+        self.venue_readers: list[str | None] = seeds[:manifest.exchange.max_readers]
+        self.slot_waiting: list[str] = seeds[manifest.exchange.max_readers:]
+
+        # The directions this world's rail admits, each described once and truly for
+        # this world (``transfer_tool_spec``); ``_ensure_treasury_tool`` re-derives it
+        # when a rehearsal wraps the rail after launch.
+        self._ensure_treasury_tool()
         self.tool_specs["catalogue.search"] = {
             "id": "catalogue.search",
-            "description": "Find tools, complete proposal shapes and model offers by substring. "
-            "Returns exact tool argument schemas and prices, proposal contracts, and "
-            "matching model ids with token prices and context length.",
+            "description": "Find tools, assemblies, complete proposal shapes and model offers "
+            "by substring. Returns exact tool argument and return schemas and prices, live "
+            "assembly contracts with their descriptions, proposal contracts, and matching "
+            "model ids with token prices and context length.",
             "args_schema": {
                 "type": "object",
                 "properties": {
@@ -533,7 +820,7 @@ class BootstrapMixin:
                 "required": ["substring"],
                 "additionalProperties": False,
             },
-            "price_micro_per_call": manifest.tools.population_tool_micro_per_call,
+            "price_micro_per_call": 0,
             "kind": "catalogue",
         }
         self.tool_specs["market.discover"] = {
@@ -548,7 +835,7 @@ class BootstrapMixin:
                 },
                 "additionalProperties": False,
             },
-            "price_micro_per_call": manifest.tools.population_tool_micro_per_call,
+            "price_micro_per_call": 0,
             "kind": "market",
         }
         coin = manifest.exchange.coins[0]
@@ -563,26 +850,23 @@ class BootstrapMixin:
             "venue.cancel": [{"coin": coin, "order_id": "1"}],
             "venue.close": [{"coin": coin}, {"coin": coin, "size": None}],
             "venue.set_leverage": [{"coin": coin, "leverage": 1}],
-            "treasury.transfer": [{"direction": direction, "usd": amount}
-                                  for direction in ("to_reserve", "to_venice")
-                                  for amount in ("5", 5)],
+            # One example per admitted direction, none favoured (smuggling audit D5).
+            **({"treasury.transfer": self.tool_specs["treasury.transfer"]["args_schema"][
+                "examples"]} if "treasury.transfer" in self.tool_specs else {}),
             "catalogue.search": [{"substring": "flash", "limit": 20}],
             "market.discover": [{"query": "inference", "limit": 20}],
-            "note.put": [{"key": "shared-plan", "text": "What the last window showed."}],
-            "note.get": [{"key": "shared-plan"}],
             "artifact.get": [{"sha": "0" * 64}],
             "outcome.get": [{"outcome_id": "outcome:1"}, {"handle": "decision-1"}],
+            **vault_examples,
         }
-        from factorylab.runtime.notes import specs as note_specs
-
-        self.tool_specs.update(note_specs(manifest.notes))
         self.tool_specs["artifact.get"] = {
             "id": "artifact.get",
             "description": "Read an archived artifact by its sha256: your own working "
-            "state, an artifact you wrote, an artifact published with public: true, or "
-            "the private state of a program in your own lineage. Anything else is "
-            "refused with artifact_private. The read is free and ledgered. Returns "
-            "owner, kind, bytes and text (base64 for binary), up to 64 KiB.",
+            "state, an artifact you hold, or the current private state of a program in "
+            "your own lineage. A hash you released recently is refused with "
+            "artifact_released; any other hash you hold no reference to is refused with "
+            "artifact_private, whether or not the archive holds it. The read is free and "
+            "ledgered. Returns your kind, bytes and text (base64 for binary), up to 64 KiB.",
             "args_schema": {
                 "type": "object",
                 "properties": {"sha": {"type": "string", "minLength": 64, "maxLength": 64}},
@@ -615,7 +899,7 @@ class BootstrapMixin:
         }
         self.tool_specs["outcome.list"] = {
             "id": "outcome.list",
-            "description": "Page your own outcome and message index without acknowledging "
+            "description": "Page your own outcome index without acknowledging "
             "items. Read any indexed body with outcome.get using its exact outcome_id.",
             "args_schema": {
                 "type": "object",
@@ -645,21 +929,16 @@ class BootstrapMixin:
             "price_micro_per_call": 0, "kind": "institution",
         }
         examples["world.read"] = [{"section": "composition"}]
-        if getattr(manifest.tools, "address_enabled", False):
-            from factorylab.runtime.address import specs as address_specs
-
-            # The transport is priced like every other population tool this world
-            # publishes, so addressing is a call a seat pays for out of its own
-            # entitlement rather than a free channel that rewards volume.
-            self.tool_specs.update(
-                address_specs(manifest.tools.population_tool_micro_per_call))
-            examples["address.send"] = [{"recipient": "another-live-participant",
-                                        "text": "Your funding series is the one I lack."}]
         # Every published tool carries examples its own schema accepts (B1). Stamping
         # after the whole seed set is assembled keeps that total: a seed tool added
         # without an example fails at launch rather than reaching the population.
         for tool_id, spec in self.tool_specs.items():
             spec["args_schema"]["examples"] = examples[tool_id]
+        from factorylab.runtime.polymarket import install as install_polymarket
+
+        # [polymarket] enabled: event-market tools with their own examples, and the
+        # simulated venue or the public read client behind them. Absent otherwise.
+        install_polymarket(self)
         self.tool_runner = JournalProxy(ToolRunner(), self.ledger, "sandbox")
         available = self.tool_runner.available
         self.ledger.append({"kind": "sandbox.availability", "available": available})
@@ -681,14 +960,16 @@ class BootstrapMixin:
 
         # prices: regions are parsed here, the controller only prices
         pr = manifest.prices
-        self.controller = ImmunePriceController(
+        # The thrash price (versioning C2): the charter's PID over the gap's volatility.
+        self.thrash_controller = thrash_controller(self.ledger, manifest)
+        self.controller = PriceController(
             self.ledger,
             eta=pr.eta,
-            kappa=pr.kappa,
             decay=pr.decay,
             lambda_max=pr.lambda_max,
             min_window_events=pr.min_window_events,
-            timing=self.timing,
+            kp=pr.kp,
+            kd=pr.kd,
         )
         self.regions: dict[str, CardRegion] = {}  # cards of the current edition with a region
         self.priced: set[str] = set()  # card ids currently registered with the controller
@@ -703,25 +984,17 @@ class BootstrapMixin:
 
         # loop state
         self.pending: dict[str, PendingJudgement] = {}
-        self._grounded_pending = {}
-        self._grounded_closed = set()
-        # A verdict commitment is closed out once and never re-opened. The judge's
-        # payoff forecast stays pending in the book after an unread close, so
-        # without these the per-event commitment pass would re-create the same
-        # commitment and close it unread again on every event. They are snapshot
-        # state (``resume._RUNTIME_FIELDS``): a restored runtime re-emits nothing.
-        self.verdicts_closed_out: set[str] = set()
-        self.verdicts_graded: set[str] = set()
-        self.balance_at: list[int] = [self.wallet.balance]  # index = event number
+        # index + event_log_base = event number. Both lists hold only the events an
+        # open forecast's window can still read (``_prune_event_log``, wave 17).
+        self.balance_at: list[int] = [self.wallet.balance]
         self.events_log: list[dict[str, Any]] = [{"kind": "Launch", "payload": {}}]
-        self.last_closure_ns = -1
+        self.event_log_base = 0
         self.reserve_window_start: int | None = None
         self.internal: deque[Event] = deque()
         self.n = 0
         self.emitted = 0
         self.insolvency_count = 0
         self.dormancy: dict[str, Any] | None = None  # C2: set while paid cognition is paused
-        self.registration_feedback: deque[dict[str, Any]] = deque(maxlen=8)
         self._compute_routed = False
         self._compute_unaffordable = False
         self.world_consumed = 0
@@ -730,7 +1003,6 @@ class BootstrapMixin:
         # consequence line reports provider cost and venue delta separately rather
         # than one net (edition 3, C5).
         self.venue_deltas: dict[str, dict[str, int]] = {}
-        self.drips_consumed = 0
         # The venue reads prompts are built from, each held for the tick that read it:
         # the listing (#89), the mid prices and the account state. Not resumable
         # state: a resumed runtime reads afresh and records that read.

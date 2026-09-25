@@ -134,7 +134,7 @@ def test_durable_spot_inventory_write_replays_once_after_interruption(tmp_path):
 
     def build(path=None):
         return Runtime(load_manifest("scripted"), events=40, seed=1,
-                       initial_balance_micro=None, ledger_path=path, drip=False, router_gamma=.1)
+                       initial_balance_micro=None, ledger_path=path, router_gamma=.1)
 
     expected = build().run()
     path = str(tmp_path / "spot.jsonl")

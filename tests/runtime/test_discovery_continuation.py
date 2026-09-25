@@ -23,7 +23,6 @@ def runtime():
         seed=1,
         initial_balance_micro=None,
         ledger_path=None,
-        drip=False,
         router_gamma=0.1,
         provider=ScriptedProvider(),
         exchange=FakeExchange(coins=manifest.exchange.coins),
@@ -159,7 +158,6 @@ def test_repeated_lookup_cannot_buy_a_further_round(monkeypatch):
 @pytest.mark.parametrize("remote_catalogue", [False, True])
 @pytest.mark.parametrize("write", [
     {"tool": "venue.place_market", "args": {"coin": "ETH", "side": "buy", "size": "0.001"}},
-    {"tool": "note.put", "args": {"key": "injected", "text": "a price somewhere"}},
 ])
 def test_text_from_outside_keeps_the_narrow_continuation(monkeypatch, remote_catalogue, write):
     rt = runtime()

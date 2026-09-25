@@ -12,13 +12,13 @@ head verbatim under ``your_state``. Nothing rolls it over: it survives any
 number of intervening returns, the retirement of the model behind the seat, and
 restore, because the head is a hash and the bytes are an artifact the resume
 already verifies. The soft allowance is 8 KiB — above it the state is kept and
-the rent is simply what it is — and the hard limit is 64 KiB, above which the
+the ledger marks it ``over_soft`` — and the hard limit is 64 KiB, above which the
 field is refused, ledgered, and the head is left exactly as it was.
 A third bound is about display, not storage: a head over ``INLINE_STATE_BYTES``
 is named on the request — sha, exact size, ``loaded: False``, and the tool that
-returns it — instead of pasted into it. The bytes are unchanged, the rent is
-unchanged, nothing is summarised, and ``artifact.get`` still hands the seat its
-own state exactly as it wrote it.
+returns it — instead of pasted into it. The bytes are unchanged, nothing is
+summarised, and ``artifact.get`` still hands the seat its own state exactly as it
+wrote it.
 
 **Outcome inbox.** When a consequence settles for a decision a seat made, an
 item addressed to that seat is appended: the original handle, what the seat
@@ -37,26 +37,54 @@ delivery, while merely rendering new previews cannot grow delivery state.
 ``outcome.get`` fetches any of them whole by ``outcome_id`` (a handle is a fallback
 that answers with the oldest unread item of that decision, and says so); an
 answer's ``ack_through`` takes an id and advances the cursor only as far as this
-seat was actually delivered. An unacknowledged item stays. Nothing is lost.
+seat was actually delivered. An item stays until its seat acknowledges it or its
+published retention horizon passes, whichever is first; then its body is released
+(wave 17b; essay II.IV.c: a verdict "is consumed as a reward signal ... and then
+discarded", and II.I.b: the reward line is thin). The diary keeps every
+``outcome.addressed`` item, so the record is whole; the inbox is the reward line, not
+the record.
 
 What the seat said is retained until its decision's last consequence settles or
 the seat retires; only then, and only over ``MAX_SAID``, is the oldest such
 record archived as an artifact and dropped from the table — ``outcome.get`` and
 the settler still read it back. A decision with open consequences is never
 evictable (R3-F; GPT-6 third reading §3, "MAX_SAID can evict decision-linked
-material before a delayed consequence").
+material before a delayed consequence"). Once its decision is fully settled and
+released (``SettledMixin``), nothing is addressed to it again and its record goes.
 
-Rent is by byte-time at the world's ``notes.micro_per_byte_day`` rate (C3),
-accrued on the head's bytes from the moment it is written and collected at each
-reserve-window boundary through the same metered path a note's rent takes.
-There is no transfer toll: rendering a seat its own state costs the tokens it
-costs and nothing else.
+Retained bytes are a constraint, not a cash flow. Holding them pays no one: the
+disk is the world's fixed-price machine, so no money leaves the factory at the
+margin and the wallet does not move for them (the wallet moves only when money
+moves; essay II.II.b casts a scarce resource as a hard limit or prices it through
+the charter's λ on reward, II.IV.a). The hard limit above is the cast, and it bounds
+the whole of what a seat retains, not each version: a new head releases the
+superseded one's reference, whose bytes are collected once no durable checkpoint
+names them (``ArtifactStore.release``). Retirement is final for a version, not for
+an id: a retired id's head is kept, so the id registered again as its next version
+by its owner inherits it. A program's next version is new code and starts with no private
+state: the old version's is superseded, and released, at that registration. The
+disk is finite, so the
+whole of retained private state has its own hard limit, fixed for the world's
+life (``[storage] retained_private_bytes``): **retained private state is at most
+``retained_private_bytes``, always**, every holder's reference counted at its full
+size; it bounds the index, and bytes on disk can exceed it by the releases since the
+last checkpoint until collection. A retired id's state is kept until capacity is
+needed: a write that would pass the limit releases retired ids' state, oldest
+retirement first, through the journaled release, only until it fits; a write that
+all of it would not fit is refused, releasing nothing, as on a full disk. A live
+seat's state is never released to make room, and a retired version writes none. The
+head passes to a next version only from its owner (``GovernanceMixin``). The size
+of every head is ledgered on its ``state.put`` item, and the archive's size at every boundary on
+``artifact.retained``, so the charter can price retained state if the population
+proposes to.
+Rendering a seat its own state costs the tokens it costs and nothing else.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+from decimal import Decimal
 from typing import Any
 
 #: The allowance a seat is told about. Above it the state is accepted anyway.
@@ -66,13 +94,13 @@ HARD_STATE_BYTES = 65_536
 #: Inbox items delivered inline on a request; the rest are counted and fetchable.
 INLINE_OUTCOMES = 8
 #: Above this a head is *shown* by reference instead of inline. Storage, the soft
-#: allowance, the hard limit and the rent are untouched: this bounds what a request
-#: carries, never what the world keeps.
+#: allowance and the hard limit are untouched: this bounds what a request carries,
+#: never what the world keeps.
 INLINE_STATE_BYTES = 4_096
 #: The largest page one list call will return, so a paged index cannot become a dump.
 MAX_LIST_LIMIT = 32
 #: Typed fields an index carries verbatim off an outcome, where the outcome has them.
-INDEX_FIELDS = ("kind", "status", "phase", "from", "subject", "score",
+INDEX_FIELDS = ("kind", "status", "phase", "subject", "score",
                 "rejection_reason", "rejected_section")
 #: An evidence pointer longer than this is named by its size instead of carried.
 MAX_INDEX_EVIDENCE = 128
@@ -84,7 +112,10 @@ MAX_SAID = 1_024
 
 STATE_TOO_LARGE = f"working_state exceeds {HARD_STATE_BYTES} bytes"
 STATE_NOT_OBJECT = "working_state must be a JSON object"
-OUTCOME_UNKNOWN = "no outcome addressed to you carries that handle"
+#: What an id or handle no held item answers to says: never addressed to this seat,
+#: or released once acknowledged or past its retention horizon (wave 17b).
+OUTCOME_UNKNOWN = ("no outcome addressed to you and still held carries that id or handle; "
+                   "an item is released once acknowledged or past its retention horizon")
 STATE_NOT_LOADED = (
     f"this head is over the {INLINE_STATE_BYTES}-byte display bound, so it is named here "
     "and not carried; artifact.get on its sha returns the bytes exactly as written"
@@ -148,8 +179,8 @@ def _bounded_field(field: str, value: Any) -> dict[str, Any]:
 class WorkingState:
     """One head pointer per seat over content-addressed bytes in the archive.
 
-    Guarantees: a refused put changes nothing (the head, its rent accrual and
-    the archive are all untouched); an accepted put is ledgered before it is
+    Guarantees: a refused put changes nothing (the head and the archive are
+    both untouched); an accepted put is ledgered before it is
     readable; ``head`` and ``render`` are pure reads; and a head restored from a
     checkpoint names bytes the resume has already verified, so a seat never
     wakes to a state the world cannot show it.
@@ -159,7 +190,7 @@ class WorkingState:
         self.artifacts = artifacts
         self.ledger = ledger
         self.clock = clock
-        # seat -> {"sha", "bytes", "ns", "handle", "rent_ns", "rent_carry", "rent_due"}
+        # seat -> {"sha", "bytes", "ns", "handle"}
         self.heads: dict[str, dict[str, Any]] = {}
 
     def head(self, seat: str) -> dict[str, Any] | None:
@@ -172,19 +203,15 @@ class WorkingState:
         data = canonical(obj)
         if len(data) > HARD_STATE_BYTES:
             raise ValueError(STATE_TOO_LARGE)
-        sha = self.artifacts.put(data, owner=seat, kind=kind)
-        now = self.clock()
         previous = self.heads.get(seat)
-        successor = {
-            "sha": sha, "bytes": len(data), "ns": now, "handle": handle,
-            # Accrual continues from the last boundary this seat was accounted to:
-            # rewriting a state forgives no rent the old bytes already owed.
-            "rent_ns": now,
-            "rent_byte_ns": (previous.get("rent_byte_ns", 0) + previous["bytes"] *
-                             max(0, now - previous.get("rent_ns", now))) if previous else 0,
-            "rent_carry": previous.get("rent_carry", 0) if previous else 0,
-            "rent_due": previous.get("rent_due", 0) if previous else 0,
-        }
+        # One head per seat is what is retained (the hard limit bounds the whole of
+        # it, not each version): the put releases the superseded head's reference,
+        # whose bytes are collected once no durable checkpoint names them, and is
+        # measured against the retained private state cap with it gone.
+        sha = self.artifacts.put(data, owner=seat, kind=kind,
+                                 supersedes=previous["sha"] if previous else None)
+        now = self.clock()
+        successor = {"sha": sha, "bytes": len(data), "ns": now, "handle": handle}
         self.ledger.append({"kind": "state.put", "assembly_id": seat, "sha": sha,
                             "bytes": len(data), "handle": handle,
                             "over_soft": len(data) > SOFT_STATE_BYTES, "ts": now})
@@ -203,7 +230,7 @@ class WorkingState:
         the true byte size, ``loaded: False``, why, and the tool that returns the
         bytes. Nothing is summarised, shortened or paraphrased — a model's precis of
         a seat's own memory would be a lossy rewrite of a fact the seat owns — and
-        nothing about storage, the soft allowance, the hard limit or rent changes.
+        nothing about storage, the soft allowance or the hard limit changes.
         """
         record = self.heads.get(seat)
         if record is None:
@@ -220,14 +247,38 @@ class WorkingState:
         return {**view, "state": state}
 
 
+def _usd_text(micro: int) -> str:
+    """Exact USD text for integer micro-USD."""
+    sign = "-" if micro < 0 else ""
+    return f"{sign}{Decimal(abs(micro)).scaleb(-6):f}"
+
+
+def _with_usd(value: Any) -> Any:
+    """``value`` with ``<stem>_usd`` beside each integer ``<stem>_micro`` (``with_usd``)."""
+    if isinstance(value, list):
+        return [_with_usd(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    out: dict[str, Any] = {}
+    for key, item in value.items():
+        out[key] = _with_usd(item)
+        if (isinstance(key, str) and type(item) is int
+                and (key == "micro" or key.endswith("_micro"))):
+            usd = "usd" if key == "micro" else f"{key[:-len('_micro')]}_usd"
+            if usd not in value:
+                out[usd] = _usd_text(item)
+    return out
+
+
 class OutcomeInbox:
     """Items addressed to the seat whose decision settled, with a per-seat read cursor.
 
-    Guarantees: an item is appended once per settlement fact and never
-    overwritten; the cursor only advances, and only to a handle the seat was
+    Guarantees: an item is appended once per settlement fact while it is held, and
+    never overwritten; the cursor only advances, and only to a handle the seat was
     actually addressed on; an item the seat has not acknowledged stays unread
-    however many others arrive after it; and every body is an artifact, so a
-    checkpoint carries indexes and cursors while the archive carries the text.
+    however many others arrive after it, until its retention horizon passes
+    (``release_items``); and every body is an artifact, so a checkpoint carries
+    indexes and cursors while the archive carries the text.
     """
 
     def __init__(self, artifacts: Any, ledger: Any, clock: Any) -> None:
@@ -246,13 +297,16 @@ class OutcomeInbox:
         # Items fetched past a delivery gap. They become part of
         # ``delivered_through`` only after every earlier item for this seat arrives.
         self.delivered_sparse: dict[str, set[int]] = {}
-        # handle -> the sha of a ``said`` record evicted under MAX_SAID. Nothing is
-        # lost: the rationale is an artifact and is read back on demand.
+        # handle -> the sha of a ``said`` record evicted under MAX_SAID: the rationale
+        # is an artifact and is read back on demand, until its decision is released.
         self.archived_said: dict[str, str] = {}
         # Set by the runtime to ``lambda handle: <the decision still has an open
         # consequence>``. Until it is set nothing is evictable, which is the
         # conservative reading and the behaviour that preceded R3-F.
         self.consequences_open: Any = None
+        # Set by the runtime to the world's tick clock (ticks consumed): an item's
+        # retention horizon counts ticks, never wall time (wave 17b; time audit T3).
+        self.tick: Any = None
 
     # -- what the seat said, kept so an outcome can be addressed to a reason ------------
 
@@ -265,9 +319,6 @@ class OutcomeInbox:
             "rationale": outputs.get("rationale") or outputs.get("action"),
             "payoff": outputs.get("payoff"),
             "forecasts": forecasts if isinstance(forecasts, list) else [],
-            # A judge's fidelity objection (C3) rides on its return; the settler
-            # reads it back from here when the verdict's consequence settles.
-            "fidelity_objection": outputs.get("fidelity_objection"),
         }
         self.archived_said.pop(handle, None)
         self._evict_said()
@@ -319,13 +370,6 @@ class OutcomeInbox:
         except Exception as exc:
             raise RuntimeError("an archived rationale is unavailable") from exc
 
-    def entry_for(self, handle: str) -> dict[str, Any]:
-        """The ``{"handle", "outputs"}`` view of one retained return, for the settler."""
-        record = self._said(handle)
-        outputs = {k: record[k] for k in ("rationale", "payoff", "forecasts",
-                                          "fidelity_objection") if k in record}
-        return {"handle": handle, "outputs": outputs}
-
     def seat_of(self, handle: str) -> str | None:
         """The seat that made a decision, as the inbox recorded it."""
         record = self._said(handle)
@@ -372,7 +416,8 @@ class OutcomeInbox:
         sha = self.artifacts.put(canonical(body), owner=seat, kind="outcome.item")
         next_seq = self.seq + 1
         record = {"seq": next_seq, "handle": handle, "sha": sha,
-                  "observed_at_ns": observed, "fact": fact}
+                  "observed_at_ns": observed, "fact": fact,
+                  **({"tick": self.tick()} if self.tick is not None else {})}
         self.ledger.append({"kind": "outcome.addressed", "assembly_id": seat, "handle": handle,
                             "sha": sha, "item": next_seq, "delta_micro": int(delta_micro),
                             "evidence": evidence, "ts": observed})
@@ -425,17 +470,31 @@ class OutcomeInbox:
         unread = [r for r in matching if r["seq"] > cursor]
         return (unread or matching or [None])[0]
 
+    def with_usd(self, value: Any) -> Any:
+        """``value`` with an exact USD string beside every integer micro-USD field in it.
+
+        Guarantees every key ending ``_micro`` (or named ``micro``) whose value is an
+        integer, at any depth, gains a sibling ``<stem>_usd`` (``usd``) holding the same
+        amount in dollars as exact decimal text, unless that sibling is already there;
+        nothing else changes. A seat read -77,814 micro-USD as -$77.8: the dollar figure
+        is stated, not left to a reader's conversion (Chapter II §I.b).
+        """
+        return _with_usd(value)
+
     def index_of(self, seat: str, record: dict[str, Any]) -> dict[str, Any]:
         """One item as an address rather than a text: exact identity, timing, amounts.
 
         Guarantees: every field here is copied verbatim off the stored body, none is
-        derived, rounded or written by a model, the body stays whole behind ``sha``,
+        derived (but the exact USD text beside a micro-USD amount), rounded or written
+        by a model, the body stays whole behind ``sha``,
         and the entry is bounded whatever the body contains. It carries what a seat
         needs in order to decide whether to spend a read: the id it must address, the
         decision it answers, when it was observed, the typed outcome (kind, status,
         phase, sender, subject, score, rejection reason and rejected section) where
         the outcome has one, the money, the evidence pointer, and the route to the
         rest.
+
+        Each micro-USD amount carries its exact USD text beside it (``with_usd``).
 
         A typed field is a label, so only a short scalar is carried: a number, a
         boolean, None, or a string within ``MAX_INDEX_FIELD`` bytes. A long string or
@@ -477,7 +536,7 @@ class OutcomeInbox:
             entry["evidence"] = evidence
         elif evidence is not None:
             entry["evidence_not_loaded"] = _shape_of(evidence)
-        return entry
+        return _with_usd(entry)
 
     def unread(self, seat: str) -> dict[str, Any]:
         """Index the oldest and newest unread items; bodies stay archived until asked for.
@@ -576,7 +635,7 @@ class OutcomeInbox:
         if ident != view["outcome_id"]:
             view["note"] = ("a handle can carry several outcomes; this is the oldest you "
                             "have not read. Address one exactly by its outcome_id.")
-        return view
+        return _with_usd(view)
 
     def ack_through(self, seat: str, ident: Any) -> int | None:
         """Acknowledge every item delivered at or before ``ident``; return the new cursor.
@@ -596,6 +655,71 @@ class OutcomeInbox:
                             "cursor": cursor, "ts": self.clock()})
         self.cursors[seat] = cursor
         return cursor
+
+    # -- retention (wave 17b) ----------------------------------------------------------
+
+    def release_items(self, *, before_tick: int) -> int:
+        """Release every item its seat acknowledged, and every item addressed before the
+        world tick ``before_tick``; return how many went.
+
+        Essay II.IV.c: a verdict "is consumed as a reward signal ... and then
+        discarded"; II.I.b: the reward line is thin. An item is kept until its seat
+        acknowledges it or its retention horizon passes, whichever is first (the
+        runtime passes the horizon it publishes, ``storage`` in the world's
+        schematics). Guarantees: an unacknowledged item addressed at or after
+        ``before_tick`` stays, and so does one that carries no tick (an inbox with no
+        tick clock expires nothing; a restore stamps an older checkpoint's items with
+        the restore tick, so they are held a full horizon from it); a released item's
+        body is released from the archive (``artifact.released``, then collected
+        once no durable checkpoint names it) unless another item this seat still
+        holds carries the same body; the cursors never move; delivery bookkeeping
+        keeps only held items' ids.
+        """
+        released = 0
+        for seat, rows in self.items.items():
+            cursor = self.cursors.get(seat, 0)
+
+            def expired(record, cursor=cursor):
+                tick = record.get("tick")
+                return record["seq"] <= cursor or (tick is not None and tick < before_tick)
+
+            gone = [r for r in rows if expired(r)]
+            if not gone:
+                continue
+            kept = [r for r in rows if not expired(r)]
+            self.items[seat] = kept
+            held = {r["sha"] for r in kept}
+            for sha in dict.fromkeys(r["sha"] for r in gone):
+                if sha not in held:
+                    self.artifacts.release(sha, owner=seat, kind="outcome.item",
+                                           cause="retention")
+            sparse = self.delivered_sparse.get(seat)
+            if sparse:
+                sparse.intersection_update(r["seq"] for r in kept)
+                if not sparse:
+                    self.delivered_sparse.pop(seat, None)
+            released += len(gone)
+        self.items = {seat: rows for seat, rows in self.items.items() if rows}
+        return released
+
+    def forget_said(self, handles) -> None:
+        """Drop what the seat said on decisions that were released (wave 17b).
+
+        An item copies ``said`` into its body when it is addressed, and a released
+        decision is addressed nothing more, so nothing reads its record again; an
+        archived record's artifact is released with it, unless another decision's
+        archived record is the same bytes (the archive stores them once, under one
+        reference per owner): the reference goes only with the last record using it.
+        """
+        for handle in handles:
+            self.said.pop(handle, None)
+            sha = self.archived_said.pop(handle, None)
+            if sha is not None and sha not in self.archived_said.values():
+                record = self.artifacts.index.get(sha) or {}
+                for owner, reference in dict(record.get("refs") or {}).items():
+                    if "said.archived" in reference.get("kinds", [reference.get("kind")]):
+                        self.artifacts.release(sha, owner=owner, kind="said.archived",
+                                               cause="retention")
 
     # -- the delivery and retention bookkeeping a checkpoint carries -------------------
 
@@ -617,47 +741,22 @@ class OutcomeInbox:
         self.archived_said = dict(state.get("archived_said") or {})
 
 
-def charge_window(rt) -> None:
-    """Every head pays the rent its bytes accrued since the last boundary (C3).
+def collect_window(rt) -> None:
+    """The archive collects at each reserve-window boundary (R3-F); no money moves.
 
-    The same arithmetic and the same metered path the notebook's rent takes:
-    exact byte-nanoseconds at ``notes.micro_per_byte_day``, the remainder carried
-    on the head so collecting often can never round up and collecting rarely can
-    never round down. An unaffordable boundary forgives nothing — the accrued
-    interval closes and its amount stays due on the head — and a paid charge is a
-    scored liability of the decision that wrote the state, not merely a debit.
+    Guarantees: only records whose every reference was released and that no
+    checkpoint a resume could start from names are removed, each ledgered by the
+    archive, and bytes no record names (a crash's leftover) without an item. An
+    owned blob is never a candidate, so this can take nothing a seat holds. Retained
+    working state is not charged here or anywhere: it is a constraint with a hard
+    limit, not a debit with no counterparty (see the module docstring).
     """
-    from factorylab.runtime.notes import accrue
-    from factorylab.world.metering import Infeasible
-
-    now_ns = rt.clock.now_ns
-    # The window boundary is also where the archive collects (R3-F): blobs no
-    # reference names and nothing published — what a crash between the durable
-    # write and its ledger item leaves — are removed and ledgered. An owned or
-    # published blob is never a candidate, so this can take nothing a seat holds.
     collect = getattr(rt.artifacts, "collect", None)
     if collect is not None:
         collect()
-    for seat, head in rt.working_state.heads.items():
-        micro, carry = accrue(head, now_ns, rt.m.notes)
-        price = head.get("rent_due", 0) + micro
-        head["rent_ns"], head["rent_carry"] = now_ns, carry
-        head["rent_byte_ns"] = 0
-        if not price:
-            continue
-        handle = head.get("handle")
-        try:
-            if handle is None:
-                raise Infeasible("a seeded head has no decision to charge")
-            paid = rt._seat_meter(seat).run(handle=handle, reason="tool:state.storage",
-                                            ceiling=price, execute=lambda: None,
-                                            cost_of=lambda _, price=price: price)
-        except Infeasible:
-            head["rent_due"] = price
-            rt.ledger.append({"kind": "state.rent_due", "assembly_id": seat, "cost": price,
-                              "window": rt.window.index, "handle": handle, "ts": now_ns})
-            continue
-        rt.ledger.append({"kind": "state.rent", "assembly_id": seat, "cost": paid.cost,
-                          "window": rt.window.index, "handle": handle, "ts": now_ns})
-        rt._charge_storage(handle, paid.cost)
-        head["rent_due"] = 0
+    retained = getattr(rt.artifacts, "retained", None)
+    if retained is not None:
+        # The archive's size after collection, so the disk the world keeps is a
+        # fact in the diary (what a card may someday price through λ; II.IV.a).
+        rt.ledger.append({"kind": "artifact.retained", **retained(),
+                          "window": rt.window.index, "ts": rt.clock.now_ns})

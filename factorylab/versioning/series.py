@@ -165,10 +165,15 @@ def windows(items: list[dict], *, window_items: int = 200) -> list[dict]:
         marker = group[-1]
         evidence = (immune.get(marker.get("window"))
                     if marker.get("kind") == "price.window" else None)
+        live = {}
         if evidence is not None:
             measured.update(deepcopy(evidence["profile"]))
             regions = deepcopy(evidence["regions"])
             start_edition = evidence["charter_edition"]
+            # What the live organ recorded beside the profile: the routers' draws, the
+            # configuration lifespans, the world's terms and the tick it closed at.
+            live = {name: deepcopy(evidence[name]) for name in (
+                "frontier_invocation", "lifespans", "terms", "tick") if name in evidence}
         elif "regions" in marker:
             regions = deepcopy(marker["regions"])
             start_edition = marker.get("charter_edition", start_edition)
@@ -182,6 +187,7 @@ def windows(items: list[dict], *, window_items: int = 200) -> list[dict]:
                 "profile": measured,
                 "regions": deepcopy(regions),
                 "charter_edition": start_edition,
+                **live,
             }
         )
         previous_event = end_event

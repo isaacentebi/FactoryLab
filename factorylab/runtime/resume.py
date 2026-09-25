@@ -49,6 +49,10 @@ def resume_reason(exc: Exception) -> Reason:
             return Reason.INVALID_SNAPSHOT
     if isinstance(exc, CredentialMissing):
         return Reason.CREDENTIAL_MISSING
+    from factorylab.runtime.polymarket import LiveReaderRefused
+
+    if isinstance(exc, LiveReaderRefused):
+        return Reason(exc.code)
     if isinstance(exc, GenesisMismatchError):
         return Reason.MANIFEST_MISMATCH
     if isinstance(exc, LedgerIntegrityError):
@@ -65,33 +69,27 @@ class _ReplayFault(BaseException):
 def _record_types() -> dict[str, type]:
     from factorylab.charter.amendment import Amendment, PredictedEffect
     from factorylab.charter.charter import Charter, MetricCard
-    from factorylab.charter.committee import Ballot, Committee, Seat
+    from factorylab.charter.committee import Ballot, Committee, Seat, StandingCommittee
     from factorylab.charter.controller import CardRegion, _CardState
     from factorylab.charter.measurement import CardSamples
-    from factorylab.charter.windows import MetricWindow
+    from factorylab.charter.region import CardRule
+    from factorylab.charter.windows import Interval, MetricWindow
     from factorylab.cortex.assembly import AssemblySpec, ProgramAssemblySpec
     from factorylab.cortex.tools import PopulationTool
     from factorylab.kernel.events import Event, EventKind
     from factorylab.kernel.queue import Decision, LearningReturn, PropensityRecord, SettleStatus
     from factorylab.kernel.registry import Contract, PriceSpec, ResourceBounds
-    from factorylab.kernel.timing import DistributionSummary
     from factorylab.kernel.wallet import DripSchedule, ReleaseSchedule, Reservation
     from factorylab.runtime.cascade import CascadeGate
+    from factorylab.runtime.clockwork import Clockwork
     from factorylab.runtime.feedback import PendingJudgement
     from factorylab.runtime.governance import Retirement, WorkAssemblySpec
-    from factorylab.runtime.grounded import GroundedContract
     from factorylab.runtime.pricing import MeasureWindow
     from factorylab.runtime.routing import PopulationEvent
     from factorylab.runtime.summary import RunStats
-    from factorylab.settlement.fidelity import FidelityObjection
     from factorylab.settlement.forecast import Forecast
     from factorylab.settlement.lots import Lot, LotOrder, LotTable, Payoff, ReturnAccount
-    from factorylab.settlement.receipts import (
-        Adjudication,
-        Commitment,
-        ExecutionReceipt,
-        LearningReceipt,
-    )
+    from factorylab.settlement.receipts import Commitment, ExecutionReceipt, LearningReceipt
     from factorylab.settlement.settle import PredicateForecast
     from factorylab.settlement.standing import _Standing
     from factorylab.settlement.vocabulary import Predicate
@@ -102,6 +100,7 @@ def _record_types() -> dict[str, type]:
         FundingEvent,
         FundingPayment,
         Order,
+        OrderKind,
         OrderResult,
         Position,
         SpotBalance,
@@ -112,20 +111,22 @@ def _record_types() -> dict[str, type]:
 
     classes = (
         Amendment, PredictedEffect, Charter, MetricCard, MetricWindow, CardSamples,
-        Ballot, Committee, Seat, CardRegion, _CardState,
+        CardRule, Interval,
+        Ballot, Committee, Seat, StandingCommittee, CardRegion, _CardState,
         AssemblySpec, WorkAssemblySpec, ProgramAssemblySpec, Predicate, PredicateForecast,
         PopulationTool, Event, PopulationEvent, EventKind, Decision,
         LearningReturn, PropensityRecord,
-        SettleStatus, Contract, PriceSpec, ResourceBounds, DistributionSummary, DripSchedule,
+        SettleStatus, Contract, PriceSpec, ResourceBounds, DripSchedule,
         ReleaseSchedule,
         Reservation, Retirement, CascadeGate, MeasureWindow, PendingJudgement, RunStats, Forecast,
-        GroundedContract,
         Lot,
         LotOrder, LotTable, Payoff, ReturnAccount, _Standing, WorldEvent, WorldEventKind,
         AccountState, Fill, FundingEvent, FundingPayment, Order, OrderResult, Position,
-        SpotBalance, SellerModel, FidelityObjection,
-        Adjudication, Commitment, ExecutionReceipt, LearningReceipt,
-        CatalogueEntry, ModelRequest, ModelResponse, TokenPrice, PaymentQuote,
+        # An order the simulated venue holds resting carries its kind: without it a
+        # fake world checkpointed with a resting order could not be restored.
+        OrderKind,
+        SpotBalance, SellerModel, Commitment, ExecutionReceipt, LearningReceipt,
+        CatalogueEntry, ModelRequest, ModelResponse, TokenPrice, PaymentQuote, Clockwork,
     )
     return {cls.__name__: cls for cls in classes}
 
@@ -224,12 +225,59 @@ def decode(value: Any) -> Any:
         rng.setstate(decode(value["$random"]))
         return rng
     kind = value.get("$record", value.get("$enum"))
+    if kind in _RETIRED_RECORDS:
+        # A deleted mechanism's record in an older checkpoint: read and ignored.
+        return None
     cls = _record_types().get(kind)
     if cls is None:
         raise ResumeError("unknown checkpoint record type")
     if "$enum" in value:
         return cls(value["value"])
-    return cls(**{k: decode(v) for k, v in value["fields"].items()})
+    retired = _RETIRED_FIELDS.get(kind, ())
+    return cls(**{k: decode(v) for k, v in value["fields"].items() if k not in retired})
+
+
+# Records of deleted mechanisms that older checkpoints still carry. They decode to
+# None and are dropped where they sit: the fidelity objection and its adjudication
+# (evaluations U1), and the grounded final judge's frozen contract (ruling R1).
+_RETIRED_RECORDS = frozenset({"FidelityObjection", "Adjudication", "GroundedContract"})
+
+# Runtime fields of deleted mechanisms that older checkpoints still carry: not restored.
+_RETIRED_RUNTIME = frozenset({
+    # The fidelity adjudication queue (evaluations U1).
+    "open_adjudications",
+    # The grounded final judge's open contracts and finality (ruling R1).
+    "grounded_pending", "grounded_closed",
+    # The charter-window verdict commitments, the payoff-forecast waits and the
+    # sibling share they fed (ruling R1; evaluations P7, U2).
+    "exposure_evidence", "pending_meta", "verdict_outcomes", "verdicts_closed_out",
+    "verdicts_graded", "meta_waiting_since", "cascade_windows",
+    # The learning-death grant (versioning P2): the niche for unhistoried actions
+    # replaced it (ruling R5), so an older checkpoint's grant is not read.
+    "novelty_grant",
+})
+
+#: Pending channels of the deleted charter-window verdict commitments: a restored
+#: runtime drops them (ruling R1).
+_RETIRED_PENDING = frozenset({"verdict.norm", "verdict.subject"})
+
+# Fields of deleted mechanisms that older checkpoints still carry: read and ignored.
+# ``relief_window``: the halved-price relief (charter audit U2), replaced by the ratchet.
+# ``upward_releases``: the unread UpwardBuffer (time audit T9).
+_RETIRED_FIELDS = {
+    "_CardState": frozenset({"relief_window"}),
+    # A cascade window measured in wall nanoseconds (time audit T3, T10): the gate
+    # restores as a tick window due at its next completed arrival.
+    "CascadeGate": frozenset({"window_ns", "opened_ns"}),
+    "RunStats": frozenset({"upward_releases"}),
+    # The charter-window verdict commitment's fields (ruling R1).
+    "PendingJudgement": frozenset({"judge", "cards", "window", "payoff_beat", "awaits_payoff",
+                                   "verdict_closed", "verdict_beat", "graded", "unmeasured"}),
+    # ``weight_sum``: the charter's weight on the outside signal (settlement.weights),
+    # deleted by ruling R1. Every shipped world's cards named no scope, so an older
+    # standing's sums were accumulated at weight 1.0 and read the same without it.
+    "_Standing": frozenset({"weight_sum"}),
+}
 
 
 class RecoveryJournal:
@@ -253,6 +301,15 @@ class RecoveryJournal:
         # out again. Transient, never checkpointed: memos keyed on it are dropped at
         # every checkpoint, so only differences within one continuation count.
         self.writes: dict[str, int] = {}
+        # The bytes the diary names by hash and keeps beside itself (wave 17): the
+        # rolling checkpoint and every recorded answer too large to ride inline.
+        from factorylab.runtime.sidecar import CheckpointStore, IoStore
+
+        self.checkpoints = CheckpointStore(ledger)
+        self.io_store = IoStore(ledger)
+        # Why replay failed, when it failed on evidence rather than on divergence:
+        # a recorded answer's bytes missing or altered (``io_result_missing``).
+        self.failure_code: str | None = None
 
     def __getattr__(self, name):
         return getattr(self.ledger, name)
@@ -356,21 +413,25 @@ class RecoveryJournal:
                     self.fail(f"mismatched call result at seq {item['seq']}")
                 result_entry = {k: v for k, v in item.items()
                                 if k not in ("seq", "prev_hash", "hash")}
-                result = decode(item["result"]) if "error" not in item else None
+                result = decode(self._recorded_result(item)) if "error" not in item else None
                 self.append(result_entry)
                 if "error" in item:
                     raise _recorded_error(item["error"], item.get("reason"),
                                           status=item.get("status"),
                                           unbilled=item.get("unbilled", False),
-                                          carry=item.get("carry"))
+                                          carry=item.get("carry"),
+                                          expired=item.get("expired", False))
                 return result
-            if name in ("exchange.place", "exchange.close", "exchange.cancel"):
+            if name in ("exchange.place", "exchange.close", "exchange.cancel",
+                        "exchange.vault_create", "exchange.vault_transfer"):
                 from factorylab.world.exchange import OrderResult
 
                 # Complete the interrupted journal call with uncertainty, then let
                 # the normal intent owner query the venue using its persisted identity.
-                result = ({"status": "uncertain"} if name == "exchange.cancel" else
-                          OrderResult(None, "uncertain", Decimal(0), None))
+                # A vault write is resolved from its own venue ledger row, never resent.
+                result = (OrderResult(None, "uncertain", Decimal(0), None)
+                          if name in ("exchange.place", "exchange.close")
+                          else {"status": "uncertain"})
                 self.append({"kind": "io.result", "call": seq, "result": encode(result)})
                 return result
             if name in ("market.complete", "connector.paid_fetch"):
@@ -389,6 +450,14 @@ class RecoveryJournal:
                 from factorylab.world.metering import UnbilledFailure
 
                 raise UnbilledFailure("interrupted event: external write was never dispatched")
+            if ambiguous_retry and args and args[0] in getattr(
+                    getattr(function, "__self__", None), "poll_only_steps", ()):
+                # A real mainnet top-up whose acknowledgment died with the process is
+                # never submitted again on resume: its outcome is unknown, and the rail
+                # only observes it until it confirms or its authorization expires unused.
+                from factorylab.world.evm import Pending
+
+                raise Pending("replayed submission requires receipt reconciliation")
             result = function(*args, **kwargs)
             encoded_result = encode(result)
         except Exception as exc:
@@ -415,16 +484,54 @@ class RecoveryJournal:
                 billing = {"status": status,
                            "unbilled": isinstance(classify_provider_failure(failure),
                                                   UnbilledFailure)}
+
+            from factorylab.world.openai_wire import CALL_EXPIRED
+
+            if str(failure).endswith(CALL_EXPIRED):
+                # The call outlived its caller's deadline (time audit T8); the replay
+                # reads that from the recorded outcome, whatever the rail.
+                billing["expired"] = True
             self.append({"kind": "io.result", "call": seq, "error": error,
                          **({"reason": reason} if reason is not None else {}),
                          **({"carry": carry} if carry is not None else {}), **billing})
             raise _recorded_error(error, reason, carry=carry, **billing) from None
-        self.append({"kind": "io.result", "call": seq, "result": encoded_result})
+        self.append(self._result_item(seq, encoded_result))
         return result
+
+    def _result_item(self, seq: int, encoded_result) -> dict:
+        """The ``io.result`` item for one answer: inline when small, else named by hash.
+
+        Guarantees the item is a function of the answer alone (the same answer gives
+        the same item, whatever the key), and that a named body is durable beside the
+        diary before the item that names it is appended (``IoStore.put``).
+        """
+        from factorylab.runtime.sidecar import IO_INLINE_BYTES
+
+        body = canonical(encoded_result)
+        if len(body) <= IO_INLINE_BYTES:
+            return {"kind": "io.result", "call": seq, "result": encoded_result}
+        return {"kind": "io.result", "call": seq, **self.io_store.put(body)}
+
+    def _recorded_result(self, item: dict):
+        """The encoded answer a recorded ``io.result`` holds, inline or beside the diary.
+
+        A named body missing or altered latches the replay as failed
+        (``io_result_missing``): the world never continues on an answer it cannot
+        show was the one recorded.
+        """
+        if "result_sha" not in item:
+            return item["result"]
+        from factorylab.runtime.sidecar import SidecarMismatch, SidecarMissing
+
+        try:
+            return json.loads(self.io_store.get(item))
+        except (SidecarMissing, SidecarMismatch, OSError, ValueError):
+            self.failure_code = "io_result_missing"
+            self.fail(f"recorded answer at seq {item.get('seq')} is missing or altered")
 
 
 def _read_only(name: str) -> bool:
-    if name in ("sandbox.run", "observation.run", "predicate.run", "note.read"):
+    if name in ("sandbox.run", "observation.run", "predicate.run"):
         return True
     if name == "treasury.provider_pots" or (
         name.startswith("treasury.rail.")
@@ -432,18 +539,30 @@ def _read_only(name: str) -> bool:
                                          "gas_view")
     ):
         return True
+    if name.startswith("polymarket.") and name.rsplit(".", 1)[-1] in (
+            "search_markets", "market", "market_of_token", "midpoint", "order_book",
+            "requests_sent", "drain_sends", "wall_ns"):
+        return True  # the public Polymarket reads (world/polymarket.py)
     return name.rsplit(".", 1)[-1] in (
+        # The safety path's wall-clock and delivered-tick reads (time audit T8).
+        "now_ns", "tick_ns",
         "mids", "account", "funding", "fills", "candles", "order_book", "funding_history",
         "open_orders", "balance_micro", "balance_of", "affordable", "catalogue", "discover",
         "quote", "fetch",
         "registration_price", "seller_models", "funding_payments", "lookup",
         "reserve_balance", "discover_index", "instruments",
+        # The live adapter's count of venue request weight it has sent: a read of its
+        # own counter, replayed from the journal and never a write to the venue.
+        "request_weight_sent",
+        # The vault surface's reads: a vault's record, this account's vault equities,
+        # its vault ledger rows, and the ledger match that resolves a lost write.
+        "vault_details", "vault_equities", "vault_ledger", "vault_lookup",
     )
 
 
 def _recorded_error(name: str, reason: str | None = None, *,
                     status: int | None = None, unbilled: bool = False,
-                    carry: dict | None = None) -> Exception:
+                    carry: dict | None = None, expired: bool = False) -> Exception:
     from factorylab.world.evm import Pending, RailError
     from factorylab.world.exchange import VenueUnavailable
     from factorylab.world.market import PaymentOutcomeUnknown
@@ -461,9 +580,19 @@ def _recorded_error(name: str, reason: str | None = None, *,
             from factorylab.world import metering
 
             cls = metering.OpenRouterError if cls is OpenRouterError else metering.VeniceError
+        if expired:
+            # The call outlived the deadline its caller stated (time audit T8): the
+            # runtime reads that from the recorded outcome, so a replay reads it too.
+            from factorylab.world.openai_wire import CALL_EXPIRED
+
+            return cls(status, CALL_EXPIRED)
         return cls(status, "Provider request failed")
     if name == "Pending":
         return Pending(reason or "treasury rail unavailable", carry=carry)
+    if expired:
+        from factorylab.world.openai_wire import CALL_EXPIRED
+
+        return cls(f"external call failed ({name}): {CALL_EXPIRED}")
     if name == "RailError":
         return RailError(reason or "treasury rail unavailable")
     return cls(f"external call failed ({name})")
@@ -476,6 +605,13 @@ class JournalProxy:
         self.target, self.journal, self._journal_name = target, journal, name
         self.deterministic = deterministic
         self.call_metrics = {}
+        # Told of every answered call as ``(method, args, kwargs, result)``, the result
+        # being what the journal returned: the recorded one on replay, so whatever an
+        # observer builds from it is the same in a live run and its replay.
+        self.observer = None
+        # Every public call dispatched through this proxy, answered or not: tells a
+        # caller whether anything reached the adapter. Counted identically on replay.
+        self.dispatched = 0
 
     def __getattr__(self, name):
         attr = getattr(self.target, name)
@@ -487,9 +623,13 @@ class JournalProxy:
 
         def call(*args, **kwargs):
             started = time.monotonic_ns()
+            self.dispatched += 1
             try:
-                return self.journal.call(f"{self._journal_name}.{name}", attr, args, kwargs,
-                                         deterministic=self.deterministic)
+                result = self.journal.call(f"{self._journal_name}.{name}", attr, args, kwargs,
+                                           deterministic=self.deterministic)
+                if self.observer is not None:
+                    self.observer(name, args, kwargs, result)
+                return result
             finally:
                 if not self.deterministic and not self.journal.recovering:
                     metric = self.call_metrics.setdefault(name, {"calls": 0, "elapsed_ns": 0})
@@ -499,13 +639,15 @@ class JournalProxy:
         return call
 
     def __setattr__(self, name, value):
-        if name in ("target", "journal", "_journal_name", "deterministic", "call_metrics"):
+        if name in ("target", "journal", "_journal_name", "deterministic", "call_metrics",
+                    "observer", "dispatched"):
             object.__setattr__(self, name, value)
         else:
             setattr(self.target, name, value)
 
     def __delattr__(self, name):
-        if name in ("target", "journal", "_journal_name", "deterministic", "call_metrics"):
+        if name in ("target", "journal", "_journal_name", "deterministic", "call_metrics",
+                    "observer", "dispatched"):
             object.__delattr__(self, name)
         else:
             delattr(self.target, name)
@@ -513,27 +655,70 @@ class JournalProxy:
 
 # Explicit schemas keep SDK clients, keys, bound callbacks and dependencies out of snapshots.
 _RUNTIME_FIELDS = (
-    "rng", "cascade", "cascade_windows", "stats", "charter", "pending_exposure",
-    "delivered_seen", "snapshot_keys", "recent_mids", "realized_to_date", "fees_to_date",
+    "rng", "cascade", "stats", "charter", "pending_exposure",
+    # Exposure refusals awaiting settlement; defaults empty for an older checkpoint.
+    "declined_exposures",
+    "delivered_seen", "snapshot_keys", "noop_credits", "recent_mids", "realized_to_date",
+    "fees_to_date",
     "funding_to_date", "spot_inventory", "handle_to_assembly", "tool_specs",
     "population_tools",
-    "tool_owner", "pending_votes", "regions", "priced", "rolling", "unparsed_logged", "window",
-    "pending", "balance_at", "events_log", "last_closure_ns", "reserve_window_start", "internal",
+    "tool_owner",
+    # W4: population-tool calls awaiting their calling decision's settlement, to
+    # credit the tool's builder. Defaults empty when an older checkpoint lacks it.
+    "tool_uses", "tool_holds",
+    "pending_votes", "regions", "priced", "rolling", "unparsed_logged", "window",
+    "pending", "balance_at", "events_log", "reserve_window_start", "internal",
+    # Wave 17: the event number of the first entry of balance_at and events_log. An
+    # older checkpoint kept every entry from launch: its base is 0.
+    "event_log_base",
     "n", "emitted", "insolvency_count", "_compute_routed", "_compute_unaffordable",
-    "world_consumed", "ticks_consumed", "drips_consumed", "started", "catalogue",
+    "world_consumed", "ticks_consumed", "started", "catalogue",
     "catalogue_completion_limits", "sellers",
-    "registration_feedback", "tool_jail_available", "vote_handles", "voted_amendments",
+    "tool_jail_available", "vote_handles", "voted_amendments",
     "order_intents", "market_index", "unresolved_x402",
-    "exposure_evidence", "pending_meta", "verdict_outcomes", "consequence_mix",
-    # Verdict commitments already closed out and already graded, by judge handle: a
-    # restored runtime never re-opens, re-closes or re-grades one it finished.
-    "verdicts_closed_out", "verdicts_graded",
-    "sampling_history", "novelty_grant",
+    # Vault writes by client id, the vaults this world's seats created or hold, and
+    # the cursor of the venue's vault ledger rows already read.
+    "vault_intents", "vault_book", "vault_ledger_cursor_ns", "vault_ledger_seen",
+    "consequence_mix", "sampling_history",
+    # Time audit T14: each loop's last configuration change and the lifespans not yet
+    # read by the immune organ. An older checkpoint has neither: no lifespan yet.
+    "config_ticks", "lifespan_log",
+    # Ruling R5: each seat's use of the period's niche. An older checkpoint has none:
+    # the next reserve window opens a period.
+    "niche_use",
+    # Versioning C2: the thrash charge each open core-router round carries. An older
+    # checkpoint has none: its rounds are charged nothing.
+    "thrash_charges",
+    # Time audit T18: open registrations' uptake records and each forecaster's settled
+    # record. An older checkpoint has neither: nothing is open, nobody has standing.
+    "uptake", "uptake_standing",
+    # The reward chain (ruling R1): exposure scores awaiting settlement, verdicts
+    # collected while an event is routed, closed consequence scores, measured world
+    # outcomes and the mids declined trades are priced from. Each defaults empty
+    # when an older checkpoint lacks it.
+    "exposure_scores", "arrived_verdicts", "consequence_scores", "world_outcomes",
+    "reference_mids", "marked_outcomes", "late_verdicts",
+    # Wave 5a (evaluations M1, P5): each judge's ordinary consequence tally, the
+    # adversarial judges' open counter-verdicts, and the chaos faults of the tick in
+    # progress. Each defaults empty when an older checkpoint lacks it.
+    "judge_ordinary", "pending_counters", "chaos_tick",
+    # The #132 review: judges' frozen views awaiting their counters, and whether the
+    # live roster still holds an evaluator majority. Both default on absence.
+    "verdict_views", "evaluator_majority",
     "card_samples", "price_windows", "price_origins",
     "retired_assemblies", "retirement_proposals", "return_kinds", "decision_subjects",
     "event_schemas",
     # Metric challenges: frozen incumbent and replacement cards, their trial series and status.
     "challenges",
+    # The charter's markets (charter audit M1): unsettled lambda posts and each seat's
+    # settled-post record. An older checkpoint has neither; both start empty.
+    "lambda_posts", "lambda_standing",
+    # Charter audit M5 and the posts' target: each closed window's decisions and scope
+    # violations until their consequences are in, the consequences measured so far, and
+    # the last margin published. Each starts empty when an older checkpoint lacks it.
+    "margin_windows", "measured_consequences", "lambda_dollars",
+    # Charter motions decided by branch (the realized enactment rate).
+    "motion_tally",
     "return_bindings",
     "return_events",
     # The population's registered measurements and its open assembly-learner rounds.
@@ -543,7 +728,23 @@ _RUNTIME_FIELDS = (
     "facilitator_url",
     "registered_predicates", "kind_reward_shapes", "forecast_returns",
     "connector_calls", "connector_calls_day",
-    "notes",
+    # Each seat's venue read weight in the sliding minute. An older checkpoint starts
+    # every share unspent.
+    "venue_read_use",
+    # When each freed venue read slot may be given again, and the seats waiting for one.
+    "slot_free_at", "slot_last_reader", "slot_waiting",
+    # The seats holding a venue read slot. An older checkpoint gives the seeds theirs.
+    "venue_readers",
+    # The retired ids, oldest retirement first (the order the retained private state
+    # cap releases their kept state in).
+    "retirement_order",
+    # Each id's lineage key, the serial they are drawn from, and the key of the seat
+    # that registered each id's current version: whose next version inherits its head.
+    # An older checkpoint knows only the seeds' keys, so only an id itself inherits.
+    "lineage_keys", "registration_serial", "registrants",
+    # Each seat's Polymarket read requests in the sliding minute. An older checkpoint
+    # (or a world without the block) starts every share unspent.
+    "polymarket_read_use",
     # The pause between releases: None while awake, else the entry record (C2).
     "dormancy",
     # C10: each seat's last rendered call ceiling and the world size it was priced at.
@@ -573,23 +774,30 @@ _RUNTIME_FIELDS = (
     # Venue effects by custody, per decision, until its outcome settles: the
     # consequence line reports them beside provider cost (edition 3, C5).
     "venue_deltas",
-    # When each judge's metas began waiting on a fact about it, and the
-    # adjudication queued for each seat while it is unanswered. Both are
-    # properties over a private dict (``FeedbackMixin``); ``_RUNTIME_BACKING``
-    # names the attribute a restore assigns.
-    "meta_waiting_since", "open_adjudications",
+    # The clock (time audit T1-T3): the measured loops and derived schedules, and each
+    # open decision's tick cutoff. An older checkpoint has neither: its meters start
+    # empty, every derived loop opens afresh, and its decisions keep the wall-clock
+    # deadlines they were opened with.
+    "clockwork", "decision_ticks",
+    # Each card's last price move, the governance tier's viability, the epochs a
+    # speed limit deferred, and the treasury caps' anchor (time audit T2, T6, T7,
+    # T13). An older checkpoint has none: prices move on their next new sample, a
+    # tier is taken as viable until measured, no epoch waits, and the anchor is
+    # rebuilt from the treasury's own window.
+    "card_clock", "governance_viable", "pending_epochs", "cap_anchor_ns",
+    # Wave 17b: each seat's ballot cursor over its own deliveries, the committee
+    # eligibility tally and the evidence it counted, and released decisions' order
+    # intents as counts. An older checkpoint has none: its seats have read nothing, its
+    # tally is rebuilt from the scan (nothing was released), and no intent was folded.
+    "policy_seen", "eligibility_tally", "eligibility_evidence", "released_intents",
+    "policy_marks", "vault_released_hashes",
 )
 # Runtime fields read through a property with no setter, and the attribute behind it.
 _RUNTIME_BACKING = {
-    "meta_waiting_since": "_meta_waiting_since",
-    "open_adjudications": "_open_adjudications",
-    "grounded_pending": "_grounded_pending",
-    "grounded_closed": "_grounded_closed",
 }
 # The settlement receipt books, by the path from the runtime to each. A receipt's
 # id is its content address, so a book is saved as its receipts in record order
-# and rebuilt as ``{receipt.id: receipt}``: the same ids, the same order, and an
-# open adjudication resolved later stays under the id of the claim.
+# and rebuilt as ``{receipt.id: receipt}``: the same ids, the same order.
 _RECEIPT_BOOKS = ("book.receipts", "consequences.receipts")
 
 # State a runtime carries across events that the checkpoint deliberately does not
@@ -615,18 +823,41 @@ _DERIVED_STATE = {
     "ArtifactStore.epoch": "a rebuild counter for views over the index, bumped on restore",
     "ForecastBook._ForecastBook__open_cache": "the unsettled handles, rebuilt from the "
                                               "forecast map and settled set it names",
-    "ReceiptBook._ReceiptBook__execution_ids": "derived global execution-receipt cursor",
+    "ReceiptBook._ReceiptBook__executions": "derived global execution-receipt cursor: the "
+                                            "released count plus the receipts held",
     "ReceiptBook._ReceiptBook__execution_by_handle": "derived per-handle execution index",
     "FakeTreasury._balances_memo": "the scripted rail's balances, keyed on what they read",
+    "Runtime._safety_ns": "the safety path's last wall read, reset at every event's start",
+    "Runtime.niche_rounds": "an invocation's unhistoried tool action, emptied when the "
+                            "invocation returns",
+    "Runtime._safety_stop": "a terminal state the safety path saw, reset at every event's "
+                            "start; the event's own termination check acts on it",
+    "FakeTreasury.forward_wait_ticks": "the runtime restates it before every treasury tick "
+                                       "from the manifest floor and the measured capital loop",
+    "Runtime._tick_reads": "the tick's venue answers, dropped at every checkpoint, so a "
+                           "replay starts with none as the recording did",
+    "Runtime._venue_drains": "the simulated venue's local drains, counted only to key the "
+                             "tick's answers, which every checkpoint drops",
+    "ArtifactStore.checkpointed": "the hashes the latest durable checkpoint's index held, set "
+                                  "identically by a live run and a resume (seal_released)",
 }
 # Transient: belongs to this process or this file, not to the world.
 _TRANSIENT_STATE = {
     "RecoveryJournal": "the diary itself and this process's replay cursor over it: the "
                        "checkpoint is an item in the diary, not a copy of it",
     "LedgerLock": "this process's exclusive hold on the diary file",
+    "Runtime.ledger_path": "where this process finds the diary it was launched or resumed "
+                           "on",
     "Runtime.diary_id": "bound by the restore to the diary the checkpoint came from",
     "ArtifactStore.root": "where this process finds the archive's bytes beside the ledger",
+    "NormInbox.ledger_path": "where this process finds the norm house's files beside the "
+                             "ledger; what they said is journaled at the boundary that read it",
     "JournalProxy.call_metrics": "this process's wall-clock timing of its own adapter calls",
+    "JournalProxy.dispatched": "this process's count of calls that reached the adapter, "
+                               "compared only before and after one call",
+    "ReserveGuard.ledger": "the diary file this process was launched or resumed on, named "
+                           "to the reserve's record so a used authorization is booked there",
+    "ReserveGuard.run_dir": "the directory of that same diary file",
 }
 # Unordered: mappings a checkpoint saves in sorted order because nothing reads
 # their order (lookups and order-free reductions only).
@@ -635,23 +866,39 @@ _UNORDERED_STATE = {
     "SubscriptionBook.last_wake": "per-seat last wake tick, read by seat",
     "OutcomeInbox.delivered_through": "per-seat delivery cursor, read by seat",
     "OutcomeInbox.delivered_sparse": "out-of-order delivered ids, read by seat",
+    # Wave 17b: rebuilt on restore from the retained decisions and deliveries.
+    "DecisionQueue._DecisionQueue__children": "each retained decision's retained children, "
+                                              "read by handle",
+    "DecisionQueue._DecisionQueue__held": "each handle's unreleased deliveries, read by handle",
 }
-_KERNEL_FIELDS = ("wallet", "queue", "registry", "reserve", "timing", "buffer")
+# An older checkpoint's ``timing`` and ``buffer`` entries (the deleted TimingRegistry
+# and UpwardBuffer, time audit T9) are not read.
+_KERNEL_FIELDS = ("wallet", "queue", "registry", "reserve")
 _COMPONENT_FIELDS = (
-    ("book", "_ForecastBook__", ("forecasts", "settled", "requested")),
+    # Wave 17b: forecasts released per [evaluator, predicate]. An older checkpoint
+    # released none.
+    ("book", "_ForecastBook__", ("forecasts", "settled", "requested", "released")),
     ("baseline", "_PrevalenceBaseline__", ("counts",)),
     ("cadence", "_", ("latencies", "last_activation_ns", "waiting", "deferred",
-                       "current_event", "last_activation_event", "outstanding", "min_support")),
+                       "current_event", "last_activation_event", "outstanding", "min_support",
+                       # Time audit T7, T13: settling times, the unsettled version, the
+                       # censored one and the capital loop. An older checkpoint has none.
+                       "settling", "unsettled", "censored", "capital")),
     ("standing", "_ConsequenceStanding__", ("min_coverage", "evaluators")),
-    # ``objections``: the accepted fidelity objection each judge's return carried,
-    # until its verdict settles and pairs with it.
-    ("settler", "_Settler__", ("snapshots", "recorded", "objections")),
+    ("settler", "_Settler__", ("snapshots", "recorded")),
     ("charter_book", "_CharterBook__", (
         "editions", "proposals", "committees", "ballots", "activated", "activations",
         "bindings",
+        # Charter audit C1 and M4: the standing committees by boundary, the
+        # boundaries below quorum, each motion's voters, the norm editions applied.
+        "sittings", "deferrals", "voters", "norm_editions",
     )),
     ("controller", "_PriceController__", (
-        "eta", "kappa", "decay", "lambda_max", "min_window_events", "cards",
+        "eta", "decay", "lambda_max", "min_window_events", "cards", "kp", "kd",
+    )),
+    # The thrash price (versioning C2). An older checkpoint has none: it starts at zero.
+    ("thrash_controller", "_PriceController__", (
+        "eta", "decay", "lambda_max", "min_window_events", "cards", "kp", "kd",
     )),
     ("consequences", "", ("backstop", "table", "mids", "pending_orders", "deferred_events",
                           # R4-C: a released hold's exposure, and the censored
@@ -661,7 +908,7 @@ _COMPONENT_FIELDS = (
     ("reconciler", "", ("every", "_ticks")),
     # The artifact archive's index (C9): hash -> owner, kind, size, time, published.
     # The bytes stay beside the ledger and are found again by hash.
-    ("artifacts", "", ("index",)),
+    ("artifacts", "", ("index", "released_recent")),
     # Continuity (C1): the head pointer each seat holds and the inbox indexes and
     # read cursors addressed to it. Both name artifacts; the bodies are in the
     # archive and ``_verify_artifacts`` proves they are still there before the
@@ -710,12 +957,6 @@ def runtime_state(rt) -> Checkpoint:
     """Retain learning, FIFO lots, private memory and exact source cursors in one checkpoint."""
     rt._ensure_connector_tool()
     runtime = {name: getattr(rt, name) for name in _RUNTIME_FIELDS}
-    # The experimental delayed line retains its frozen contracts and finality.
-    # Reference worlds keep their previous checkpoint shape; older checkpoints
-    # restore with the mixin's empty defaults.
-    if getattr(rt.ev, "producer_feedback", "verdict") == "realized":
-        runtime["grounded_pending"] = rt.grounded_pending
-        runtime["grounded_closed"] = rt.grounded_closed
     runtime["amendment_feedback"] = getattr(rt, "amendment_feedback", None)
     receipts = {path: list(_resolve(rt, path)) for path in _RECEIPT_BOOKS}
     components = {
@@ -726,7 +967,7 @@ def runtime_state(rt) -> Checkpoint:
         "format": 1, "manifest_hash": rt.m.manifest_hash(),
         "config": {
             "events": rt.events_budget, "seed": rt.seed, "initial_balance_micro": rt.initial,
-            "drip": rt.use_drip, "router_gamma": rt.router_gamma, "kill_at_end": rt.kill_at_end,
+            "router_gamma": rt.router_gamma, "kill_at_end": rt.kill_at_end,
         },
         "adapters": {name: {"name": getattr(getattr(rt, name).target, "name", name),
                             "deterministic": getattr(rt, name).deterministic,
@@ -740,6 +981,16 @@ def runtime_state(rt) -> Checkpoint:
         "components": encode(components),
         "treasury": encode(rt.treasury.snapshot()),
         "receipts": encode(receipts),
+        # Wave 17b: execution receipts each book released with their decisions, so the
+        # restored cursor counts them, and each held execution receipt's position,
+        # which a release out of record order leaves with gaps below it. Present only
+        # once a book has released one.
+        **({"receipts_released": released,
+            "receipts_ordinals": {path: _resolve(rt, path).execution_ordinals()
+                                  for path in released}}
+           if (released := {path: _resolve(rt, path).released_executions()
+                            for path in _RECEIPT_BOOKS
+                            if _resolve(rt, path).released_executions()}) else {}),
         # A program seat's private state is restored by artifact hash (C8); the key is
         # present only for program seats, so a world without one checkpoints as before.
         "assemblies": encode([{"spec": a.spec, "memory": a.memory,
@@ -760,10 +1011,59 @@ def runtime_state(rt) -> Checkpoint:
         "fake_exchange": encode(vars(rt.exchange.target)) if rt.exchange.deterministic else None,
         "fake_provider": encode(vars(rt.provider.target)) if rt.provider.deterministic else None,
     })
+    if getattr(rt, "polymarket", None) is not None:
+        # Only a world that enables event markets carries this key, so every other
+        # checkpoint keeps its shape.
+        state["polymarket"] = encode(rt.polymarket.state())
     # The diary this state descends from, beside the mapping and never in it.
     state.diary = rt.diary_id or rt.ledger.diary_id
     state.origin = rt.ledger.path
     return state
+
+
+def _saved_clock_kind(saved: dict) -> str:
+    """Which clock a checkpoint's ``tick_clock`` continues, from its own keys."""
+    if "recorded" in saved:
+        return "replay"
+    if "skipped_ns" in saved:
+        return "idle-skip"
+    return "simulated" if "start_ns" in saved else "wall"
+
+
+def _running_clock_kind(clock) -> str | None:
+    """The kind of a clock a restore must continue in kind, or None for the plain ones."""
+    from factorylab.runtime.live import IdleSkipClock
+    from factorylab.world.clock import ReplayClock
+
+    if isinstance(clock, ReplayClock):
+        return "replay"
+    if isinstance(clock, IdleSkipClock):
+        return "idle-skip"
+    return None
+
+
+def _restored_tick_clock(running, saved: dict, *, instant_ns: int):
+    """The saved tick clock, continued as the clock it was (time audit T3).
+
+    A replay of a diary's gaps continues those gaps with its measured sample; an
+    idle-skipping clock continues from the world's saved instant with the time it
+    skipped and modelled; a plain simulated or wall clock restores as before. A
+    restore never turns one kind into another (``tick_clock_mismatch``, checked
+    before anything is assigned).
+    """
+    from factorylab.runtime.live import LiveClock, wall_paced
+    from factorylab.world.clock import ClockSource, ReplayClock
+
+    kind = _saved_clock_kind(saved)
+    if kind == "replay":
+        return ReplayClock.restore(saved)
+    if kind == "idle-skip":
+        return running.resumed(saved, instant_ns=max(instant_ns, saved.get("last_ns", -1)))
+    if kind == "simulated":
+        return ClockSource.restore(saved)
+    callbacks = ({"now_ns": running.now_ns, "sleep": running.sleep}
+                 if wall_paced(running) else {})
+    return LiveClock.restore(saved, **callbacks)
 
 
 def restore_runtime(rt, state: dict) -> None:
@@ -793,6 +1093,23 @@ def restore_runtime(rt, state: dict) -> None:
     if (saved_venue.get("address") != _venue_address(rt.exchange.target)):
         raise ResumeError("venue account differs from the saved world",
                           code="venue_account_mismatch")
+    if not isinstance(rt.tick_clock, (ClockSource, LiveClock)):
+        # The tick clock is restored below as a bare ClockSource or LiveClock. A wrapper
+        # around one (a rehearsal's AdmissionClock, whose stop is the admission guard's)
+        # would be dropped with whatever it enforces, and its own state is not in the
+        # checkpoint to restore: refused, never resumed without it.
+        raise ResumeError(f"the tick clock is wrapped ({type(rt.tick_clock).__name__}); "
+                          "a restore would drop the wrapper", code="wrapped_tick_clock")
+    saved_kind = _saved_clock_kind(state["tick_clock"])
+    running_kind = _running_clock_kind(rt.tick_clock)
+    if (saved_kind in ("replay", "idle-skip") or running_kind is not None) and (
+            saved_kind != running_kind):
+        # A replay's gaps, or an idle-skipping clock's skipped and modelled time, are
+        # the world's own clock: continuing it as another kind would silently change
+        # the pace it ran at (the bug that restored a replay as a bare clock).
+        raise ResumeError(f"the saved tick clock is a {saved_kind} clock; this runtime's is "
+                          f"{running_kind or type(rt.tick_clock).__name__}",
+                          code="tick_clock_mismatch")
     saved_runtime = decode(state["runtime"])
     running_digest = getattr(rt, "release_digest", None)  # read before the saved fields land
     running_facilitator = getattr(rt, "facilitator_url", None)
@@ -844,8 +1161,15 @@ def restore_runtime(rt, state: dict) -> None:
                      heads=(components.get("working_state") or {}).get("heads") or {},
                      outcomes=(components.get("outcomes") or {}).get("items") or {})
     for name, value in saved_runtime.items():
+        if name in _RETIRED_RUNTIME:
+            continue
         setattr(rt, _RUNTIME_BACKING.get(name, name), value)
+    if "retirement_order" not in saved_runtime:
+        # An older checkpoint kept no retirement order: its retired ids, by id.
+        rt.retirement_order = sorted(rt.retired_assemblies)
     rt.diary_id = diary
+    rt.pending = {handle: p for handle, p in rt.pending.items()
+                  if p.channel not in _RETIRED_PENDING}
     # A checkpoint written before launch-bound venue identities keeps its historical
     # client order IDs rather than adopting this process's fresh nonce. The adapter
     # is rebound below, after a deterministic venue's own state has been restored.
@@ -863,12 +1187,8 @@ def restore_runtime(rt, state: dict) -> None:
         rt.price_windows[rt.window.index] = rt.window
     rt.clock.now_ns = state["clock_ns"]
     saved_clock = state["tick_clock"]
-    if "start_ns" in saved_clock:
-        rt.tick_clock = ClockSource.restore(saved_clock)
-    else:
-        callbacks = ({"now_ns": rt.tick_clock.now_ns, "sleep": rt.tick_clock.sleep}
-                     if isinstance(rt.tick_clock, LiveClock) else {})
-        rt.tick_clock = LiveClock.restore(saved_clock, **callbacks)
+    rt.tick_clock = _restored_tick_clock(rt.tick_clock, saved_clock,
+                                         instant_ns=state["clock_ns"])
     if rt.clock_source is not None:
         rt.clock_source = rt.tick_clock
     for name in _KERNEL_FIELDS:
@@ -877,18 +1197,33 @@ def restore_runtime(rt, state: dict) -> None:
         rt.budget._restore_state(decode(state["budget"]))
     rt.treasury.restore(decode(state["treasury"]))
     # Older checkpoints predate the receipt books; theirs start empty, as they did.
+    released_receipts = state.get("receipts_released") or {}
+    ordinals = state.get("receipts_ordinals") or {}
     for path, saved in decode(state.get("receipts") or {}).items():
-        _resolve(rt, path).restore(saved)
+        # A retired receipt kind (an adjudication) decodes to None and is dropped.
+        _resolve(rt, path).restore((r for r in saved if r is not None),
+                                   released_executions=released_receipts.get(path, 0),
+                                   ordinals=ordinals.get(path))
     for name, prefix, names in _COMPONENT_FIELDS:
         for field in names:
-            if name == "controller" and field == "kappa" and field not in components[name]:
-                # Older checkpoints inherited this immutable parameter from the same manifest.
+            if (name == "controller" and field in ("kp", "kd")
+                    and field not in components[name]):
+                # Older checkpoints inherited these immutable parameters from the same manifest.
                 continue
             if name == "charter_book" and field == "bindings" and field not in components[name]:
                 # Older checkpoints predate the frozen observation version per proposal.
                 continue
+            if (name == "charter_book" and field in ("sittings", "deferrals", "voters",
+                                                     "norm_editions")
+                    and field not in components[name]):
+                # Older checkpoints predate the standing committee and the norm
+                # edition: none was seated, deferred or applied.
+                continue
             if name == "artifacts" and name not in components:
                 # Older checkpoints predate the artifact archive; it starts empty.
+                continue
+            if name == "artifacts" and field not in components[name]:
+                # Older checkpoints predate releases: no seat has released anything.
                 continue
             if name in ("working_state", "outcomes") and name not in components:
                 # Older checkpoints predate continuity; heads and inboxes start empty.
@@ -897,13 +1232,24 @@ def restore_runtime(rt, state: dict) -> None:
                     and field not in components[name]):
                 # Older checkpoints predate the released hold; nothing is released.
                 continue
-            if name == "settler" and field == "objections" and field not in components[name]:
-                # Older checkpoints predate saved objections; none is pending.
-                continue
             if name == "bill_settlement" and name not in components:
                 # Older checkpoints predate bill settlement; the next read takes a reference.
                 continue
+            if (name == "cadence" and field in ("settling", "unsettled", "censored", "capital")
+                    and field not in components[name]):
+                # Older checkpoints predate the settling and capital loops: none measured.
+                continue
+            if name == "thrash_controller" and name not in components:
+                # Older checkpoints predate the thrash price; it starts at zero.
+                continue
+            if name == "book" and field == "released" and field not in components[name]:
+                # Older checkpoints predate decision release (wave 17b): none released.
+                continue
             setattr(getattr(rt, name), prefix + field, components[name][field])
+    # The recorded run sealed every release this checkpoint shows the moment it was
+    # durable; the resumed one does the same, so the tail collects exactly what the
+    # recording collected.
+    rt.artifacts.seal_released()
     rt.prices.prices = decode(state["prices"])
     rt.assemblies.clear()
     for assembly in decode(state["assemblies"]):
@@ -934,6 +1280,8 @@ def restore_runtime(rt, state: dict) -> None:
                 raise ResumeError(f"{name} requires the original deterministic adapter")
             component.target.__dict__.clear()
             component.target.__dict__.update(decode(state[name]))
+    if state.get("polymarket") is not None and getattr(rt, "polymarket", None) is not None:
+        rt.polymarket.restore(decode(state["polymarket"]))
     bind_launch_nonce(rt.exchange, rt.launch_nonce)
     for model_id in rt.sellers:
         rt.market.register(model_id, rt.prices.price(model_id).per_request_micro)
@@ -951,6 +1299,16 @@ def restore_runtime(rt, state: dict) -> None:
     for contract in rt.registry.available("exchange"):
         if contract.id.startswith("market:"):
             rt._admit_market(contract.input_schema["coin"], contract.input_schema["market"])
+    if "eligibility_tally" not in saved_runtime:
+        # A checkpoint older than the tally released nothing: the scan it replaced
+        # still sees every decision, once.
+        rt._rebuild_eligibility_tally()
+    # An inbox item from a checkpoint older than item ticks (wave 17b) was addressed
+    # at a tick nobody recorded: it is held a full retention horizon from this
+    # restore, never released at once as though it had been addressed at tick 0.
+    for rows in rt.outcomes.items.values():
+        for row in rows:
+            row.setdefault("tick", rt.ticks_consumed)
 
 
 def check_witness_identity(saved_runtime: dict) -> None:
@@ -1017,6 +1375,10 @@ def _check_artifacts(store, *, index: dict, assemblies, heads: dict, outcomes: d
                 raise ResumeError("an outcome item's body is not in the archive index",
                                   code="artifact_missing", sha=item["sha"], owner=seat)
     for sha, record in index.items():
+        if record.get("released"):
+            # Released before this checkpoint and possibly collected since: nothing
+            # the saved state names depends on it (kernel/artifacts.py, ``release``).
+            continue
         try:
             store.get(sha)
         except ArtifactError:
@@ -1025,21 +1387,60 @@ def _check_artifacts(store, *, index: dict, assemblies, heads: dict, outcomes: d
                               owner=record.get("owner")) from None
 
 
+def checkpoint_state(ledger, snapshot: dict) -> dict:
+    """The world state a ``snapshot`` item names, authenticated by the chain.
+
+    A snapshot item holds the SHA-256 and size of the canonical state, and the
+    state lives in the one rolling checkpoint file beside the diary (wave 17;
+    ``runtime/sidecar.py``). Guarantees the returned mapping is exactly the
+    state the item names: a file that is missing refuses ``checkpoint_missing``,
+    and one that is foreign, altered or another (older) state refuses
+    ``checkpoint_mismatch``. Nothing falls back to an older checkpoint: the
+    factory never rewinds (essay II). An item written before wave 17 carries its
+    state inline and is read as it always was.
+    """
+    if "state" in snapshot:
+        return snapshot["state"]
+    from factorylab.runtime.sidecar import CheckpointStore, SidecarMismatch, SidecarMissing
+
+    store = getattr(ledger, "checkpoints", None)
+    if not isinstance(store, CheckpointStore):
+        store = CheckpointStore(ledger)
+    try:
+        data = store.read(snapshot)
+    except SidecarMissing:
+        raise ResumeError("the checkpoint the diary names is not beside it",
+                          code="checkpoint_missing") from None
+    except (SidecarMismatch, OSError):
+        raise ResumeError("the checkpoint beside the diary is not the one it names",
+                          code="checkpoint_mismatch") from None
+    return json.loads(data)
+
+
 def resume_runtime(manifest, ledger_path: str, *, provider=None, market=None, exchange=None,
-                   clock_source=None, now_ns=None, _lock=None):
-    """Hold exclusive ownership before reading recovery evidence or contacting a provider."""
+                   clock_source=None, now_ns=None, before_replay=None, _lock=None):
+    """Hold exclusive ownership before reading recovery evidence or contacting a provider.
+
+    ``before_replay``, when given, is called with the restored runtime before any
+    reader is admitted or any recorded item replayed: an offline harness binds its
+    stand-ins there (``scripts/fastloop.py``), exactly where a launch binds them. Its
+    contract: it may bind offline answerers of reads (a simulated Polymarket reader)
+    and harness-side observers, and it must not replace the world's exchange, provider,
+    clock or manifest. The tape identity is checked again after it returns
+    (``check_tape``, ``tape_mismatch``), so a hook that swaps the venue is refused.
+    """
     lock = _lock or LedgerLock(ledger_path)
     try:
         return _resume_runtime(manifest, ledger_path, provider=provider, market=market,
                                exchange=exchange, clock_source=clock_source, now_ns=now_ns,
-                               lock=lock)
+                               lock=lock, before_replay=before_replay)
     except BaseException:
         lock.close()
         raise
 
 
 def _resume_runtime(manifest, ledger_path, *, provider, market, exchange, clock_source,
-                    now_ns, lock):
+                    now_ns, lock, before_replay=None):
     """Authenticate, restore, replay and reconcile before admitting another world event."""
     from factorylab.runtime.loop import Runtime
     from factorylab.runtime.shared import SimClock
@@ -1053,7 +1454,9 @@ def _resume_runtime(manifest, ledger_path, *, provider, market, exchange, clock_
         if not ledger.event_times()["launch"]:
             raise ResumeError("ledger has not launched", code="no_launch")
         raise ResumeError("ledger has no recoverable snapshot")
-    state = snapshot["state"]
+    # The checkpoint is read and authenticated before anything is appended, so a
+    # missing, stale or tampered file refuses with the diary exactly as it was.
+    state = checkpoint_state(ledger, snapshot)
     if state.get("manifest_hash") != manifest.manifest_hash():
         raise ResumeError("snapshot manifest hash differs")
     # The diary says it is alive; the witness may know it was killed. An earlier
@@ -1099,8 +1502,13 @@ def _resume_runtime(manifest, ledger_path, *, provider, market, exchange, clock_
         raise
     journal = RecoveryJournal(ledger, clock)
     journal.bootstrap = True
-    rt = Runtime(manifest, **state["config"], ledger_path=None, provider=provider, market=market,
-                 exchange=exchange, clock_source=clock_source, _journal=journal, _lock=lock)
+    # An older checkpoint's ``drip`` launch flag is read past: [drip] is gone (D-6).
+    config = {k: v for k, v in state["config"].items() if k != "drip"}
+    # The path is passed although the journal carries the diary: the world's reserve
+    # guards name it, so a used authorization is booked against this very diary.
+    rt = Runtime(manifest, **config, ledger_path=str(ledger_path), provider=provider,
+                 market=market, exchange=exchange, clock_source=clock_source,
+                 _journal=journal, _lock=lock)
     # The journal carries no path; the archive's bytes live beside the ledger (C9).
     from factorylab.kernel.artifacts import artifact_root
 
@@ -1142,6 +1550,27 @@ def _resume_runtime(manifest, ledger_path, *, provider, market, exchange, clock_
             })
         raise
     journal.bootstrap = False
+    from factorylab.runtime import polymarket
+
+    if before_replay is not None:
+        from factorylab.runtime.bootstrap import check_tape
+
+        before_replay(rt)
+        # The hook binds stand-ins; it never changes the world's venue.
+        check_tape(rt.m, rt.exchange)
+    # A live Polymarket reader is admitted, and holds the host's IP, before the replay:
+    # the tail's last event runs on past the diary's end and may read the network.
+    polymarket.arm(rt)
+    try:
+        return _replay(rt, journal, ledger, tail, snapshot, state, launch_nonce, now_ns)
+    except BaseException:
+        # A resume that fails here never runs, so nothing else would release the host.
+        polymarket.disarm(rt)
+        raise
+
+
+def _replay(rt, journal, ledger, tail, snapshot, state, launch_nonce, now_ns):
+    """Re-run the diary's tail on the restored runtime, then resume at the wall clock."""
     journal.active = journal.recovering = True
     journal.tail = (item for item in tail
                     if item.get("kind") not in ("ledger.repaired", "failed_resume"))
@@ -1179,7 +1608,7 @@ def _resume_runtime(manifest, ledger_path, *, provider, market, exchange, clock_
         resume_time = (time.time_ns() if now_ns is None else now_ns) if rt.live else rt.clock.now_ns
         rt._resume_at(resume_time)
     except _ReplayFault as exc:
-        raise ResumeError(str(exc), code="replay_diverged") from None
+        raise ResumeError(str(exc), code=journal.failure_code or "replay_diverged") from None
     return rt
 
 

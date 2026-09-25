@@ -114,8 +114,12 @@ def test_default_run_freezes_the_preflight_and_buys_nothing(tmp_path, monkeypatc
     assert frozen["preflight"]["seats"] == list(probe.DEFAULT_SEATS)
     assert frozen["preflight"]["world"]["prompt_mode"] == "compact"
     assert frozen["preflight"]["expected_value"] == probe.EXPECTED_VALUE
+    # The models are the roster's own for the probed seats, read from the world file.
+    from factorylab.runtime.worlds import load_manifest
+
+    roster = {a.id: a.model_id for a in load_manifest(str(probe.DEFAULT_WORLD)).assemblies}
     assert set(frozen["preflight"]["models"].values()) == {
-        "venice:z-ai-glm-5-3-flash", "openai/gpt-5.6-luna"}
+        roster[seat] for seat in probe.DEFAULT_SEATS}
     assert [row["executed"] for row in records(where["out"])] == [False]
 
 
@@ -311,7 +315,9 @@ def test_investigation_paid_mode_requires_an_existing_freeze(tmp_path, monkeypat
 
     code = investigation.main([
         "--source-root", str(Path.cwd()),
-        "--world", "work/coverage-60-r2/world.toml",
+        # Any world the kernel loads: the refusal precedes every model call. An untracked
+        # run copy under work/ is history, and history need not load (R8).
+        "--world", "worlds/edition6-testnet-rehearsal.toml",
         "--out", str(tmp_path / "arm"),
         "--paid",
     ])

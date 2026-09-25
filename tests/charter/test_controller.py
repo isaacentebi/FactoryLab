@@ -6,7 +6,6 @@ from factorylab.charter.controller import CardRegion, PriceController
 from factorylab.kernel.events import Bus
 from factorylab.kernel.ledger import Ledger
 from factorylab.kernel.termination import Termination
-from factorylab.kernel.timing import TimingRegistry
 
 
 @dataclass
@@ -31,7 +30,7 @@ def ledger(clock):
 
 
 def controller(ledger, **changes):
-    parameters = dict(eta=0.5, decay=0.25, lambda_max=2.0, min_window_events=3, kappa=0)
+    parameters = dict(eta=0.5, decay=0.25, lambda_max=2.0, min_window_events=3)
     parameters.update(changes)
     return PriceController(ledger, **parameters)
 
@@ -124,18 +123,27 @@ def test_prices_rise_on_violation_and_decay_inside_region(ledger):
 
 
 def test_clipping_counts_only_attempts_beyond_bounds_and_tracks_actual_steps(ledger):
-    prices = controller(ledger, eta=1, decay=1, lambda_max=2, min_window_events=1)
+    prices = controller(ledger, eta=1, decay=1, lambda_max=2, min_window_events=1, kp=1)
     prices.register(region())
     # Exact hits are not saturation; attempts to go beyond a bound are.
     for event, value in enumerate([14, 12, 10, 10, 10, 100, 100]):
         prices.observe("cost", value, event)
     assert prices.snapshot()["cards"]["cost"] == {
-        "lambda": 2.0, "updates": 7, "saturations": 4, "max_step": 2.0,
-        "last_window_end_event": 6, "effective_lambda": 2.0, "relief_window": None,
+        "lambda": 2.0, "updates": 7, "saturations": 2, "max_step": 2.0,
+        "last_window_end_event": 6,
+        # The integral held while P alone saturated a growing violation; no stable
+        # failure ratcheted it.
+        "integral": 2.0, "failing_windows": 0,
+        # Charter audit M7: four windows closed at lambda_max; the violation that
+        # ended at event 2 reset the run, and the current one has lasted two windows.
+        "windows_at_lambda_max": 4, "violation_windows": 2,
     }
     entries = evidence(ledger)
-    assert [item["lambda_after"] for item in entries] == [2, 2, 1, 0, 0, 2, 2]
-    assert [item["saturated"] for item in entries] == [False, True, False, False, True, True, True]
+    assert [item["lambda_after"] for item in entries] == [2, 2, 0, 0, 0, 2, 2]
+    assert [item["saturated"] for item in entries] == [False] * 5 + [True, True]
+    assert prices.saturation("cost") == {"windows_at_lambda_max": 4, "violation_windows": 2}
+    assert prices.saturation("unregistered") == {"windows_at_lambda_max": 0,
+                                                 "violation_windows": 0}
     assert entries[5]["violation"] == 45.0  # Unclipped observation retained.
 
 
@@ -175,37 +183,6 @@ def test_penalty_sums_known_cards_without_clipping_or_mutating(ledger):
     assert len(evidence(ledger)) == 2
 
 
-def test_timing_records_only_accepted_strictly_increasing_event_indices(ledger, monkeypatch):
-    timing = TimingRegistry()
-    timing.register_loop("judgment", [])
-    timing.register_loop("price:cost", ["judgment"])
-    prices = controller(ledger, timing=timing)
-    prices.register(region())
-    prices.register(region(card_id="other"))
-    assert timing.governed("price:cost") == ("judgment",)
-    assert timing.governed("price:other") == ()
-    closures = []
-    record = timing.record_closure
-
-    def capture(loop_id, ts):
-        record(loop_id, ts)
-        closures.append((loop_id, ts))
-
-    monkeypatch.setattr(timing, "record_closure", capture)
-    for event in (0, 0, 2, 3, 1, 6, 20):
-        prices.observe("cost", 12, event)
-    prices.observe("other", 12, 0)
-    assert closures == [("price:cost", ts) for ts in (0, 3, 6, 20)] + [("price:other", 0)]
-    assert timing.closure_count("price:cost") == 4
-    with pytest.raises(ValueError, match="already registered"):
-        prices.register(region())
-    timing.register_loop("price:started", [])
-    timing.record_closure("price:started", 100)
-    with pytest.raises(ValueError, match="prior closures"):
-        prices.register(region(card_id="started"))
-    assert "started" not in prices.snapshot()["cards"]
-
-
 @pytest.mark.parametrize("value", [True, None, "12", float("nan"), float("inf")])
 def test_invalid_observations_do_not_change_state_or_append(ledger, value):
     prices = controller(ledger)
@@ -219,26 +196,22 @@ def test_invalid_observations_do_not_change_state_or_append(ledger, value):
     assert evidence(ledger) == []
 
 
-def test_update_is_appended_before_price_counters_or_timing_change(ledger, monkeypatch):
-    timing = TimingRegistry()
-    prices = controller(ledger, timing=timing)
+def test_update_is_appended_before_price_or_counters_change(ledger, monkeypatch):
+    prices = controller(ledger)
     prices.register(region())
     before = prices.snapshot()
     append = ledger.append
 
     def inspect(entry):
         assert prices.snapshot() == before
-        assert timing.closure_count("price:cost") == 0
         result = append(entry)
         assert prices.snapshot() == before
-        assert timing.closure_count("price:cost") == 0
         return result
 
     with monkeypatch.context() as patch:
         patch.setattr(ledger, "append", inspect)
         prices.observe("cost", 12, 7)
     assert prices.price("cost") == 0.5
-    assert timing.closure_count("price:cost") == 1
     with pytest.raises(PermissionError):
         ledger.decrypt_item(0)
     item, = evidence(ledger)
@@ -247,15 +220,14 @@ def test_update_is_appended_before_price_counters_or_timing_change(ledger, monke
     }} == {
         "kind": "price.update", "card_id": "cost", "value": 12.0,
         "violation": 1.0, "lambda_before": 0.0, "lambda_after": 0.5,
-        "previous_violation": 0.0, "damping": 0.0,
+        "previous_violation": 0.0, "p": 0.0, "i": 0.5, "d": 0.0,
         "saturated": False, "window_end_event": 7, "ts": 100,
     }
 
 
 @pytest.mark.parametrize("event", [0, 3])
 def test_failed_ledger_append_leaves_update_or_skip_state_unchanged(ledger, clock, event):
-    timing = TimingRegistry()
-    prices = controller(ledger, timing=timing)
+    prices = controller(ledger)
     prices.register(region())
     prices.observe("cost", 12, 0)
     before = prices.snapshot()
@@ -263,11 +235,9 @@ def test_failed_ledger_append_leaves_update_or_skip_state_unchanged(ledger, cloc
     with pytest.raises(RuntimeError, match="clock unavailable"):
         prices.observe("cost", 100, event)
     assert prices.snapshot() == before
-    assert timing.closure_count("price:cost") == 1
     clock.fail = False
     prices.observe("cost", 100, 3)
     assert prices.price("cost") == 2.0
-    assert timing.closure_count("price:cost") == 2
     assert len(evidence(ledger)) == 2
 
 
@@ -281,43 +251,9 @@ def test_nonfinite_violation_is_rejected_before_ledger_or_state_changes(ledger):
     assert evidence(ledger) == []
 
 
-def test_shrinking_violation_damps_step_and_does_not_overshoot_constant_peer(ledger):
-    prices = controller(ledger, kappa=0.5, lambda_max=100, min_window_events=1)
-    for card_id in ("shrinking", "constant"):
-        prices.register(region(card_id=card_id))
-    prices.observe("shrinking", 18, 0)  # violation 4
-    prices.observe("constant", 14, 0)  # violation 2
-    # Compare from the same price: only the previous violation differs.
-    prices.set_price("constant", prices.price("shrinking"), amendment_id="equal-start")
-    for event, value in enumerate((14, 12, 11), 1):
-        before = prices.price("shrinking")
-        prices.observe("shrinking", value, event)
-        # Constant violations of this size have no damping, so this bounds the step.
-        assert prices.price("shrinking") <= before + 0.5 * prices.violation("shrinking", value)
-        if event == 1:
-            prices.observe("constant", value, event)
-            assert prices.price("shrinking") - before < prices.price("constant") - before
-    updates = [i for i in evidence(ledger) if i["kind"] == "price.update"]
-    shrunk = [i for i in updates if i["card_id"] == "shrinking"]
-    assert [i["previous_violation"] for i in shrunk] == [0, 4, 2, 1]
-    assert [i["damping"] for i in shrunk] == [0, 1, 0.5, 0.25]
-
-
-def test_damping_clips_at_zero_and_satisfaction_resets_history(ledger):
-    prices = controller(ledger, kappa=10, min_window_events=1)
-    prices.register(region())
-    for event, value in enumerate((18, 12, 10, 12)):
-        prices.observe("cost", value, event)
-    updates = evidence(ledger)
-    # Damping can stop the climb of a shrinking violation but never lower the price
-    # while the card is still violating; only the compliant window decays it.
-    assert [i["lambda_after"] for i in updates] == [2, 2, 1.75, 2]
-    assert [i["damping"] for i in updates] == [0, 30, 0, 0]
-    assert updates[-1]["previous_violation"] == 0
-
-
-def test_skipped_observations_and_failed_updates_do_not_replace_damping_history(ledger, clock):
-    prices = controller(ledger, kappa=0.5, lambda_max=100)
+def test_skipped_observations_and_failed_updates_do_not_replace_violation_history(ledger,
+                                                                                    clock):
+    prices = controller(ledger, lambda_max=100)
     prices.register(region())
     prices.observe("cost", 18, 0)
     prices.observe("cost", 100, 1)  # skipped
@@ -326,5 +262,5 @@ def test_skipped_observations_and_failed_updates_do_not_replace_damping_history(
         prices.observe("cost", 16, 3)
     clock.fail = False
     prices.observe("cost", 14, 3)
-    assert prices.price("cost") == 2.0  # +1 proportional, -1 damping from violation 4
+    assert prices.price("cost") == 3.0  # the integral: 0.5 * 4, then + 0.5 * 2
     assert evidence(ledger)[-1]["previous_violation"] == 4

@@ -13,7 +13,13 @@ from urllib import error
 
 from factorylab.kernel.money import nonnegative_usd_micro
 from factorylab.world.models import CatalogueEntry, ModelRequest, ModelResponse, TokenPrice
-from factorylab.world.openai_wire import dispatched, parse_completion
+from factorylab.world.openai_wire import (
+    CALL_EXPIRED,
+    dispatched,
+    expired,
+    parse_completion,
+    response_format,
+)
 from factorylab.world.x402 import VENICE_URL, X402Client, http_request, redact
 
 #: How much of a completion's `reasoning_content` the diary keeps. Enough to see
@@ -27,28 +33,46 @@ def _positive_int(value: Any) -> int | None:
     return value if type(value) is int and value > 0 else None
 
 
-def prepare_top_up(client: X402Client, *, now_s: int, nonce: bytes) -> dict:
-    """Fix a $5 quote and unsigned authorization before the treasury reserves and journals it."""
+def _pinned(pay_to: str | None, payee: Any) -> None:
+    """Refuse a quote or authorization naming any payee but the pinned one, when pinned."""
+    from factorylab.world.x402 import X402Error
+
+    if pay_to is not None and str(payee).lower() != pay_to.lower():
+        raise X402Error("Venice quote payee differs from treasury.venice_pay_to")
+
+
+def prepare_top_up(client: X402Client, *, now_s: int, nonce: bytes,
+                   pay_to: str | None = None) -> dict:
+    """Fix a $5 quote and unsigned authorization before the treasury reserves and journals it.
+
+    ``pay_to`` pins the payee: a quote paying anyone else is refused before an
+    authorization is even built (the hybrid rail's ``treasury.venice_pay_to``).
+    """
     from factorylab.world.x402 import TOP_UP_MICRO, authorization_typed_data, parse_quote
 
     if client.usdc_balance() < TOP_UP_MICRO:
         raise ValueError("insufficient Base USDC for a $5 Venice top-up")
     credit = client.venice_balance()
     quote = parse_quote(client._request("POST", "/x402/top-up", {}), amount_micro=TOP_UP_MICRO)
+    _pinned(pay_to, quote.accepted["payTo"])
     typed = authorization_typed_data(quote.accepted, client.address, now=now_s, nonce=nonce)
     return {"accepted": quote.accepted, "resource": quote.resource, "extensions": quote.extensions,
             "created_s": now_s, "authorization": typed["message"], "credit_before_micro": credit}
 
 
-def top_up(client: X402Client, reference: dict) -> dict:
+def top_up(client: X402Client, reference: dict, *, pay_to: str | None = None,
+           guard: Any = None, head: Any = None) -> dict:
     """The existing x402 transport signs and submits only the journal's exact authorization.
 
     The CLI client's one-shot method generates a new nonce per call. Treasury retries
     instead reconstruct this fixed nonce and expiry, so an ambiguous reply cannot
     authorize another $5. References contain no signature or private signing material.
+    With ``pay_to`` pinned, a reference paying anyone else is refused before signing.
+    The signature is made only through ``sign_transfer_authorization`` with ``guard``
+    (the client's own when none is given): recorded ahead, or never signed.
     """
-    from eth_account.messages import encode_typed_data
-
+    _pinned(pay_to, reference["accepted"].get("payTo"))
+    _pinned(pay_to, reference["authorization"].get("to"))
     from factorylab.world.x402 import (
         BASE_NETWORK,
         TOP_UP_MICRO,
@@ -57,6 +81,7 @@ def top_up(client: X402Client, reference: dict) -> dict:
         _decode,
         _header,
         authorization_typed_data,
+        sign_transfer_authorization,
     )
 
     quote = PaymentQuote(reference["accepted"], reference["resource"], reference["extensions"])
@@ -68,7 +93,10 @@ def top_up(client: X402Client, reference: dict) -> dict:
     )
     if typed["message"] != reference["authorization"]:
         raise X402Error("Venice authorization differs from the journal")
-    signature = client._account.sign_message(encode_typed_data(full_message=typed))
+    signature = sign_transfer_authorization(
+        client._account, typed,
+        guard=guard if guard is not None else getattr(client, "guard", None),
+        head=head if head is not None else getattr(client, "chain_head", None))
     authorization = {k: str(v) if k in ("value", "validAfter", "validBefore") else v
                      for k, v in typed["message"].items()}
     envelope = {"x402Version": 2, "accepted": quote.accepted,
@@ -125,14 +153,20 @@ class VeniceProvider:
         reasoning_models: Iterable[str] = (),
         reasoning_config: Mapping[str, Mapping[str, Any]] | None = None,
         web_config: Mapping[str, Mapping[str, Any]] | None = None,
+        schema_models: Iterable[str] = (),
     ) -> None:
         self._key_env = key_env
         self._base_url = base_url.rstrip("/")
         self._transport = transport or self._default_transport
+        # The deadline of the completion in flight (``ModelRequest.timeout_s``), set
+        # only for the duration of that one call.
+        self._call_timeout: float | None = None
         self._reasoning_models = frozenset(reasoning_models)
         self._reasoning_config = deepcopy(dict(reasoning_config or {}))
         self._web_config = deepcopy(dict(web_config or {}))
         self._prices: dict[str, TokenPrice] = {}
+        # The model ids whose manifest ``contract`` is ``json_schema`` (Chapter II §II.b).
+        self._schema_models = frozenset(schema_models)
 
     def _default_transport(self, method: str, path: str, payload: dict | None) -> dict:
         key = os.environ.get(self._key_env)
@@ -144,7 +178,8 @@ class VeniceProvider:
             headers = {}  # The Venice catalogue is public.
         else:
             raise VeniceError(None, "Set VENICE_API_KEY or RESERVE_PRIVATE_KEY", sent=False)
-        response = http_request(method, self._base_url + path, payload, headers)
+        response = http_request(method, self._base_url + path, payload, headers,
+                                timeout=self._call_timeout)
         if not 200 <= response.status < 300:
             raise VeniceError(response.status, "HTTP request failed")
         return response.body
@@ -170,7 +205,8 @@ class VeniceProvider:
                 ) from None
             except (error.URLError, ConnectionError, TimeoutError) as exc:
                 if method != "GET" or attempt == 1:
-                    raise VeniceError(None, "Connection failed", sent=dispatched(exc)) from None
+                    raise VeniceError(None, CALL_EXPIRED if expired(exc) else "Connection failed",
+                                      sent=dispatched(exc)) from None
             except Exception as exc:
                 raise VeniceError(
                     None, "Transport or response decoding failed", sent=dispatched(exc)
@@ -253,16 +289,24 @@ class VeniceProvider:
             "max_tokens": req.max_tokens,
             **options,
         }
-        # Venice speaks the OpenAI wire: a request for a JSON object says so there.
-        if req.json_object:
-            payload["response_format"] = {"type": "json_object"}
+        # Venice speaks the OpenAI wire: a request for a JSON object says so there, and
+        # on a route whose manifest contract is json_schema it carries the schema.
+        tier = req.model_id.partition("@")[0]
+        contract = response_format(req, schema_route=any(
+            k in self._schema_models for k in (req.model_id, tier, tier.removesuffix(":online"))))
+        if contract is not None:
+            payload["response_format"] = contract
         if tools is not None:
             payload["tools"] = list(tools)
         if tool_choice is not None:
             payload["tool_choice"] = tool_choice
         if parallel_tool_calls is not None:
             payload["parallel_tool_calls"] = parallel_tool_calls
-        response = self._request("POST", "/chat/completions", payload)
+        self._call_timeout = req.timeout_s
+        try:
+            response = self._request("POST", "/chat/completions", payload)
+        finally:
+            self._call_timeout = None
         wire = parse_completion(response, error=VeniceError)
         try:
             serving_id = "venice:" + (wire.model or wire_id).removeprefix("venice:")

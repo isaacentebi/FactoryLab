@@ -55,7 +55,7 @@ class BalanceProvider:
 
 def runtime(provider, *, events, ledger_path=None, manifest=MANIFEST):
     rt = Runtime(manifest, events=events, seed=1, initial_balance_micro=None,
-                 ledger_path=ledger_path, drip=False, router_gamma=.1,
+                 ledger_path=ledger_path, router_gamma=.1,
                  exchange=FakeExchange(), provider=provider)
     # The real adapter shape: a non-deterministic provider whose reads are journaled.
     provider.prices = rt.prices

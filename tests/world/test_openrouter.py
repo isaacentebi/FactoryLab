@@ -9,6 +9,7 @@ import pytest
 from factorylab.world.metering import BillingUncertain, Meter, MeteredModel
 from factorylab.world.models import ModelRequest, ModelResponse, PriceTable, TokenPrice
 from factorylab.world.openrouter import OpenRouterError, OpenRouterProvider
+from factorylab.world.x402 import MODEL_COMPLETION_TIMEOUT_S
 
 
 @pytest.fixture
@@ -146,10 +147,14 @@ def test_balance_rounds_down(remaining, expected):
     assert transport.calls == [("GET", "/key", None)]
 
 
-@pytest.mark.parametrize("failure", [error.URLError("offline"), ConnectionError(), TimeoutError()])
-def test_post_never_retried_on_connection_failure(req, failure):
+@pytest.mark.parametrize("failure,reason", [
+    (error.URLError("offline"), "Connection failed"), (ConnectionError(), "Connection failed"),
+    # A socket that timed out is the call outliving its deadline (time audit T8).
+    (TimeoutError(), "Call deadline expired"),
+    (error.URLError(TimeoutError()), "Call deadline expired")])
+def test_post_never_retried_on_connection_failure(req, failure, reason):
     transport = FakeTransport([failure])
-    with pytest.raises(OpenRouterError, match="Connection failed"):
+    with pytest.raises(OpenRouterError, match=reason):
         OpenRouterProvider(transport=transport).complete(req)
     assert len(transport.calls) == 1
 
@@ -205,7 +210,7 @@ def test_default_transport_disables_redirects(monkeypatch, req):
         return original_build_opener(*handlers)
 
     def fake_open(self, wire_req, timeout):
-        assert timeout is None  # Model processing has no client thinking deadline.
+        assert timeout == MODEL_COMPLETION_TIMEOUT_S  # finite: a stalled socket ends
         handler, = handlers_seen
         assert handler.redirect_request(wire_req, None, 302, "", {}, "https://other.test") is None
         raise error.HTTPError(wire_req.full_url, 302, "redirect", {}, BytesIO(b"redirect"))
@@ -275,3 +280,110 @@ def test_reported_zero_and_overrun_preserve_accounting(completion, req, cost, ex
     assert result.cost == expected
     assert result.overrun == max(0, expected - model.ceiling(req))
     assert wallet.balance == 1000 - result.cost and wallet.reserved == 0
+
+
+def test_a_completion_is_sent_under_its_callers_deadline_never_above_the_ceiling(
+        completion, req):
+    """Time audit T8: the runtime states a call's deadline as a ratio of its delivered
+    tick; the adapter applies it to that one POST and keeps its own ceiling above it."""
+    from dataclasses import replace as replaced
+
+    from factorylab.world.openai_wire import call_timeout
+    from factorylab.world.x402 import MODEL_COMPLETION_TIMEOUT_S
+
+    seen = []
+    provider = OpenRouterProvider()
+
+    def transport(method, path, payload):
+        seen.append((path, provider._call_timeout))
+        return completion
+
+    provider._transport = transport
+    provider.complete(replaced(req, timeout_s=30.0))
+    provider.complete(req)
+    assert seen == [("/chat/completions", 30.0), ("/chat/completions", None)]
+    assert provider._call_timeout is None
+    assert call_timeout(None, MODEL_COMPLETION_TIMEOUT_S) == MODEL_COMPLETION_TIMEOUT_S
+    assert call_timeout(30.0, MODEL_COMPLETION_TIMEOUT_S) == 30.0
+    assert call_timeout(5000.0, MODEL_COMPLETION_TIMEOUT_S) == MODEL_COMPLETION_TIMEOUT_S
+    assert call_timeout(0.01, MODEL_COMPLETION_TIMEOUT_S) == 1.0
+
+
+SCHEMA = {"type": "object", "properties": {"verdict": {"type": "number"}},
+          "required": ["verdict"], "additionalProperties": True}
+
+
+def test_a_json_object_request_routes_only_to_hosts_that_honour_it(completion, req):
+    from dataclasses import replace as replaced
+
+    transport = FakeTransport([completion])
+    OpenRouterProvider(transport=transport).complete(replaced(req, json_object=True))
+    payload = transport.calls[0][2]
+    assert payload["response_format"] == {"type": "json_object"}
+    assert payload["provider"] == {"require_parameters": True}
+
+
+def test_a_json_schema_route_sends_the_schema_to_the_decoder(completion, req):
+    """Chapter II §II.b: the contract is enforced by the decoder, not only printed."""
+    from dataclasses import replace as replaced
+
+    transport = FakeTransport([completion, dict(completion), dict(completion)])
+    provider = OpenRouterProvider(transport=transport, schema_models=["test/flash"])
+    provider.complete(replaced(req, json_object=True, response_schema=SCHEMA))
+    payload = transport.calls[0][2]
+    assert payload["response_format"] == {"type": "json_schema", "json_schema": {
+        "name": "outcome", "strict": False, "schema": SCHEMA}}
+    assert payload["provider"] == {"require_parameters": True}
+    # The wire carries a copy: nothing downstream can edit the request's contract.
+    assert payload["response_format"]["json_schema"]["schema"] is not SCHEMA
+    # The route's contract is keyed on the model, whatever effort or plugin suffix.
+    provider.complete(replaced(req, model_id="test/flash@low", json_object=True,
+                               response_schema=SCHEMA))
+    assert transport.calls[1][2]["response_format"]["type"] == "json_schema"
+    # A json_schema route asked only for JSON sends JSON.
+    provider.complete(replaced(req, json_object=True))
+    assert transport.calls[2][2]["response_format"] == {"type": "json_object"}
+
+
+def test_a_default_route_keeps_json_object_when_a_request_carries_a_schema(completion, req):
+    from dataclasses import replace as replaced
+
+    transport = FakeTransport([completion, dict(completion)])
+    OpenRouterProvider(transport=transport, schema_models=["other/model"]).complete(
+        replaced(req, json_object=True, response_schema=SCHEMA))
+    OpenRouterProvider(transport=transport).complete(replaced(req, response_schema=SCHEMA))
+    for call in transport.calls:
+        assert call[2]["response_format"] == {"type": "json_object"}
+        assert call[2]["provider"] == {"require_parameters": True}
+
+
+def test_a_request_without_a_contract_sends_no_response_format(completion, req):
+    transport = FakeTransport([completion])
+    OpenRouterProvider(transport=transport).complete(req)
+    assert "response_format" not in transport.calls[0][2]
+    assert "provider" not in transport.calls[0][2]
+
+
+def test_extra_body_keeps_its_routing_but_cannot_replace_the_contract(completion, req):
+    from dataclasses import replace as replaced
+
+    extra = {"test/flash": {
+        "provider": {"order": ["HostA"], "require_parameters": False},
+        "response_format": {"type": "text"}}}
+    transport = FakeTransport([completion])
+    OpenRouterProvider(transport=transport, extra_body=extra,
+                       schema_models=["test/flash"]).complete(
+        replaced(req, json_object=True, response_schema=SCHEMA))
+    payload = transport.calls[0][2]
+    # The contract is applied after the manifest's body, so the schema wins ...
+    assert payload["response_format"]["type"] == "json_schema"
+    assert payload["response_format"]["json_schema"]["schema"] == SCHEMA
+    # ... while the manifest's own routing keys win on conflict, as they always have.
+    assert payload["provider"] == {"order": ["HostA"], "require_parameters": False}
+    extra["test/flash"]["provider"] = {"order": ["HostA"]}
+    transport = FakeTransport([completion])
+    OpenRouterProvider(transport=transport, extra_body=extra,
+                       schema_models=["test/flash"]).complete(
+        replaced(req, json_object=True, response_schema=SCHEMA))
+    assert transport.calls[0][2]["provider"] == {"order": ["HostA"],
+                                                 "require_parameters": True}

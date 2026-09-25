@@ -1,6 +1,6 @@
 """Supported observations; absent evidence never becomes a score.
 
-The twenty-four seed observations below are the factory's starting measurement
+The seed observations below are the factory's starting measurement
 vocabulary. They are not the whole of it: the population may also register
 its own observation — a pure ``observe(facts) -> float`` over the public
 per-window facts, run in the tool jail — and a card may then name it. Seed and
@@ -23,8 +23,13 @@ if TYPE_CHECKING:
 
 # The per-decision attribution the runtime keeps on the same window object
 # is not a public window fact and never reaches a registered observation.
+# The early-warning summaries are the evaluators' (``runtime.ews``), not a public fact.
 PRIVATE_WINDOW_FIELDS = ("decisions", "closed_values", "closed_regions", "closed_shares",
-                         "closed_cards", "closed_prices", "series_discarded")
+                         "closed_cards", "closed_prices", "closed_holdouts",
+                         "series_discarded", "ews_variance", "ews_autocorrelation",
+                         # The provider and family names are text; the observations
+                         # below publish their concentration, not the names.
+                         "calls_by_provider", "calls_by_family")
 MAX_WORLD_SAMPLES = 1024
 # Fields holding a public quantity filed under a private identity: a decision
 # handle, an evaluator's assembly id. The quantity is disclosed, the identity is
@@ -52,6 +57,12 @@ class Observation:
     code: str | None = None
     version: int = 1
     provenance: str = "seed"
+    # True for a quantity of one window: an amount it accumulates (a count, a spend, a
+    # PnL) or a ratio to that window's own base (turnover over its starting equity).
+    # Over several windows it is the mean of each window's own value, never a value of
+    # their summed statistics. Rates over summable denominators are measured from the
+    # summed statistics.
+    per_window: bool = False
 
     @property
     def scale(self) -> float:
@@ -77,29 +88,57 @@ def _mean(values: list[float] | list[int]) -> float | None:
     return sum(values) / len(values) if values else None
 
 
-def _cost_per_return(w: MeasureWindow) -> float | None:
-    """Mean cost of the window's well-formed producer returns, rent included.
+def _concentration(counts: Mapping[str, int] | None) -> float | None:
+    """The largest share of the window's model calls one name took, or None without calls."""
+    total = sum((counts or {}).values())
+    return max(counts.values()) / total if total else None
 
-    Retained-storage rent is cost the window spent without a return to carry
-    it, so it is added to what those returns cost and never counted as one of
-    them: a window paying rent measures a higher cost per return, not a lower
-    one. Rent alone is therefore unmeasurable — a window with no well-formed
-    producer return has no per-return cost, however much storage it paid for.
+
+def _prompt_mean(w: MeasureWindow, key: str) -> float | None:
+    """A prompt byte count per measured prompt; a window with none measured has no mean.
+
+    The denominator is ``prompts``, the invocations whose opening prompt was rendered
+    and measured, not ``invocations``: a request that could not be rendered is an
+    invocation (it failed) but no prompt, and averaging it in as zero bytes would be
+    a byte count nobody sent. A record closed before prompts were measured carries
+    neither ``prompts`` nor prompt bytes: it measured zero prompts, so it adds
+    nothing to either side of the mean, and a selection of such records alone is
+    unmeasured, never a mean of zero.
+    """
+    return _ratio(getattr(w, key, 0) or 0, getattr(w, "prompts", 0) or 0)
+
+
+def _read_mean(w: MeasureWindow) -> float | None:
+    """Reading bytes per invocation whose readings are measured; none measured, no mean.
+
+    The denominator is ``read_measured``. A record closed before readings were
+    measured carries neither it nor reading bytes: its invocations' readings were
+    never metered, so it adds nothing to either side of the mean, and a selection
+    of such records alone is unmeasured, never a mean of zero. A current invocation
+    no one read is a measured zero and counts.
+    """
+    return _ratio(getattr(w, "downstream_read_bytes", 0) or 0,
+                  getattr(w, "read_measured", 0) or 0)
+
+
+def _cost_per_return(w: MeasureWindow) -> float | None:
+    """Mean metered cost of the window's well-formed producer returns, or None without one.
+
+    Every cost here is a debit with a real counterparty (a provider's bill, a
+    seller's price): nothing the wallet did not pay enters it.
     """
     costs = w.costs
     if not costs:
         return None
-    return (sum(costs) + getattr(w, "storage_cost_micro", 0)) / len(costs)
+    return sum(costs) / len(costs)
 
 
 def _cost_per_attempt(w: MeasureWindow) -> float | None:
-    """Mean cost of every invocation the window made, failed ones and rent included.
+    """Mean cost of every invocation the window made, failed ones included.
 
     A tolerated failure is compute the window spent: nine cheap successes and
-    one expensive failure cost what all ten cost, not what the nine did. The
-    live window's per-decision costs already carry retained-storage rent, so
-    it is in the numerator and never a divisor. A closed record keeps no
-    attribution, so it is measured from the window's return samples instead
+    one expensive failure cost what all ten cost, not what the nine did. A
+    closed record keeps no attribution, so it is measured from the window's return samples instead
     (``charter.measurement``), and a window with no invocation has no cost
     per attempt.
     """
@@ -129,14 +168,14 @@ def _verdict_std(w: MeasureWindow) -> float | None:
 CATALOGUE: tuple[Observation, ...] = (
     Observation(
         "cost_per_return",
-        "Mean cost of well-formed producer returns, including retained-storage rent.",
+        "Mean metered cost of well-formed producer returns.",
         "micro-USD per return",
         _cost_per_return,
         (0.0, 1_000_000.0),
     ),
     Observation(
         "cost_per_attempt",
-        "Mean cost of every selected return, failed ones included, plus retained-storage rent.",
+        "Mean metered cost of every selected return, failed ones included.",
         "micro-USD per attempt",
         _cost_per_attempt,
         (0.0, 1_000_000.0),
@@ -150,7 +189,10 @@ CATALOGUE: tuple[Observation, ...] = (
     ),
     Observation(
         "forecast_skill",
-        "Mean cumulative consequence skill of evaluators with settlements.",
+        "Mean cumulative consequence skill of evaluators with settlements: each "
+        "evaluator's mean score 1 - (q - y)^2 over its settled forecasts and scored "
+        "verdicts minus the same score at the pre-outcome base rate; positive when they "
+        "beat the base rate.",
         "score difference",
         lambda w: _mean(w.forecast_skills),
         (-1.0, 1.0),
@@ -161,6 +203,7 @@ CATALOGUE: tuple[Observation, ...] = (
         "ratio",
         lambda w: 0.0 if not w.notional_micro else _ratio(w.notional_micro, w.equity_start_micro),
         (0.0, 1.0),
+        per_window=True,
     ),
     Observation(
         "noop_share",
@@ -184,6 +227,7 @@ CATALOGUE: tuple[Observation, ...] = (
         "count",
         lambda w: float(w.registrations),
         (0.0, 1.0),
+        per_window=True,
     ),
     Observation(
         "registration_rejections",
@@ -191,6 +235,7 @@ CATALOGUE: tuple[Observation, ...] = (
         "count",
         lambda w: float(w.registration_rejections),
         (0.0, 1.0),
+        per_window=True,
     ),
     Observation(
         "amendments_proposed",
@@ -198,6 +243,7 @@ CATALOGUE: tuple[Observation, ...] = (
         "count",
         lambda w: float(w.amendments_proposed),
         (0.0, 1.0),
+        per_window=True,
     ),
     Observation(
         "amendments_activated",
@@ -205,6 +251,7 @@ CATALOGUE: tuple[Observation, ...] = (
         "count",
         lambda w: float(w.amendments_activated),
         (0.0, 1.0),
+        per_window=True,
     ),
     Observation(
         "verdict_mean",
@@ -236,13 +283,14 @@ CATALOGUE: tuple[Observation, ...] = (
         (0.0, 1.0),
     ),
     Observation("fills", "Venue fills processed in the window.", "count",
-                lambda w: float(w.fills), (0.0, 1.0)),
+                lambda w: float(w.fills), (0.0, 1.0), per_window=True),
     Observation(
         "realized_pnl_usd",
         "Realized fill P&L before fees and funding.",
         "USD",
         lambda w: w.realized_pnl_micro / 1_000_000,
         (-1.0, 1.0),
+        per_window=True,
     ),
     Observation(
         "position_concentration",
@@ -303,6 +351,115 @@ CATALOGUE: tuple[Observation, ...] = (
         "count",
         lambda w: float(w.market_purchases),
         (0.0, 1.0),
+        per_window=True,
+    ),
+    # Essay II.IV: "speed is categorically indistinguishable from a specific approach
+    # to cash burn" (charter audit M6). A clock motion predicts its effect on this, or
+    # on an observation the population registered.
+    # Essay II.III.a, ruling R3, evaluations M2: the early-warning statistics, live. The
+    # full table (every series at k, 2k and 4k windows) is shown to the evaluators;
+    # these two summarise it so a card may price critical slowing down.
+    Observation(
+        "ews_variance",
+        "The largest population variance among the score series (mean verdict, mean "
+        "meta grade, consequence skill, evaluator disagreement), each over its shortest "
+        "complete span of k, 2k or 4k closed windows.",
+        "score variance",
+        lambda w: getattr(w, "ews_variance", None),
+        (0.0, 1.0),
+    ),
+    Observation(
+        "ews_autocorrelation",
+        "The largest centred lag-one autocorrelation among the same score series over "
+        "the same spans.",
+        "correlation",
+        lambda w: getattr(w, "ews_autocorrelation", None),
+        (-1.0, 1.0),
+    ),
+    # Essay II.III: "more evaluators consuming more compute ... than agents engaged in
+    # production". Not enforced: the seat majority is manifest physics, and what share
+    # of compute the evaluators spend is the charter's to price (the #132 review).
+    Observation(
+        "evaluator_compute_share",
+        "Compute the evaluator roles (judges, adversarial judges, every tier of meta) "
+        "spent in the window over all compute spent in it.",
+        "fraction",
+        lambda w: _ratio(getattr(w, "evaluator_spend_micro", 0),
+                         getattr(w, "compute_spend_micro", 0)),
+        (0.0, 1.0),
+    ),
+    # Essay II.IV.c: loops that "share a common medium (e.g., a common foundation model
+    # whose checkpoint releases act as a global forcing function) or a common
+    # infrastructure ... risk entrainment"; governance must "force or incentivize the
+    # randomization of a factory's dependency class" (time audit T15). These say how
+    # concentrated the window's dependencies were, so a card can price it.
+    Observation(
+        "provider_concentration",
+        "The largest share of the window's model calls that one provider served "
+        "(openrouter, venice, x402 sellers, the program jail).",
+        "fraction",
+        lambda w: _concentration(getattr(w, "calls_by_provider", None)),
+        (0.0, 1.0),
+    ),
+    Observation(
+        "family_concentration",
+        "The largest share of the window's model calls made on one foundation model "
+        "family, whichever route served them.",
+        "fraction",
+        lambda w: _concentration(getattr(w, "calls_by_family", None)),
+        (0.0, 1.0),
+    ),
+    Observation(
+        "burn_per_window",
+        "Compute spent in the window: every invocation's metered cost, each a "
+        "debit paid to a real counterparty.",
+        "micro-USD per window",
+        lambda w: float(getattr(w, "compute_spend_micro", 0)),
+        (0.0, 1_000_000.0),
+        per_window=True,
+    ),
+    # Essay II.IV.a: the metrics layer is ceded, and the factory proposes metrics only
+    # on quantities the world publishes. Context size is one: these publish the byte
+    # counts every invocation's ledger row already carries (``sections``), with no
+    # target, threshold or advice attached. Bytes, not provider tokens: the kernel
+    # renders the bytes for every seat alike, while tokenizers differ by family and the
+    # reported usage covers only an invocation's last provider call.
+    Observation(
+        "prompt_bytes",
+        "Mean UTF-8 bytes of the opening prompt rendered for each invocation, every "
+        "section included (the total its ledger row records), over the invocations whose "
+        "prompt was rendered; tool-round continuations are not counted.",
+        "bytes per invocation",
+        lambda w: _prompt_mean(w, "prompt_bytes"),
+        (0.0, 100_000.0),
+    ),
+    Observation(
+        "you_bytes",
+        "Mean UTF-8 bytes of the YOU section of the opening prompt rendered for each "
+        "invocation, as its ledger row records them, over the invocations whose prompt was "
+        "rendered.",
+        "bytes per invocation",
+        lambda w: _prompt_mean(w, "you_bytes"),
+        (0.0, 100_000.0),
+    ),
+    Observation(
+        "inputs_bytes",
+        "Mean UTF-8 bytes of the INPUTS section of the opening prompt rendered for each "
+        "invocation, as its ledger row records them, over the invocations whose prompt was "
+        "rendered.",
+        "bytes per invocation",
+        lambda w: _prompt_mean(w, "inputs_bytes"),
+        (0.0, 100_000.0),
+    ),
+    Observation(
+        "downstream_read_bytes",
+        "INPUTS bytes rendered to the invocations commissioned on a published return "
+        "(judges, adversarial judges, metas, any contract routed on it), summed over the "
+        "window and divided by the window's invocations whose readings are measured; per "
+        "role or assembly, filed under the return's author.",
+        "bytes per return",
+        lambda w: _read_mean(w),
+        (0.0, 1_000_000.0),
     ),
 )
 
@@ -668,9 +825,18 @@ class ObservationBook:
         """
         if not observation.registered:
             return observation.measure(window)
-        if self._run is None:
+        return self.value_of_facts(observation, window_facts(window))
+
+    def value_of_facts(self, observation: Observation, facts: dict) -> float | None:
+        """Run a registered observation on facts already made public, with the same range rule.
+
+        The facts are the caller's: a closed window's (``window_facts``) or one
+        scope's share of them (``charter.measurement.scope_facts``). Either way the
+        code is handed numbers and never the identity they were filed under.
+        """
+        if not observation.registered or self._run is None:
             return None
-        value, _error = self._run(observation.code, window_facts(window))
+        value, _error = self._run(observation.code, facts)
         if value is None:
             return None
         lo, hi = observation.unit_range

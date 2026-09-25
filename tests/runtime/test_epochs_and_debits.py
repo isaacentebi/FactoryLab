@@ -5,11 +5,14 @@ from types import SimpleNamespace
 from factorylab.charter.amendment import PredictedEffect
 from factorylab.kernel.queue import PropensityRecord, SettleStatus
 from factorylab.runtime.live import LiveClock
+from factorylab.runtime.resume import checkpoint_state
 from factorylab.world.events import WorldEvent, WorldEventKind
 from tests.conftest import make_runtime
+from tests.helpers import keep_every_checkpoint
 
 
-def test_both_live_fill_cursors_and_launch_snapshot_start_at_launch():
+def test_both_live_fill_cursors_and_launch_snapshot_start_at_launch(monkeypatch):
+    keep_every_checkpoint(monkeypatch)  # the launch checkpoint is read after the run
     rt = make_runtime(live=True, clock_source=LiveClock(10, 0, now_ns=lambda: 12345))
     assert rt.consequence_fills.since_ns == rt.venue.last_fill_ns == 12345
     assert rt.venue.last_funding_ns == 12345
@@ -18,10 +21,12 @@ def test_both_live_fill_cursors_and_launch_snapshot_start_at_launch():
     launch = next(i for i in items if i["kind"] == "event" and i["event"]["kind"] == "Launch")
     assert launch["event"]["ts_ns"] == 12345
     snapshot = next(i for i in items if i["kind"] == "snapshot")
-    assert snapshot["state"]["clock_ns"] == 12345
+    assert checkpoint_state(rt.ledger, snapshot)["clock_ns"] == 12345
 
 
-def test_replacement_router_does_not_train_on_a_retired_learner_return():
+def test_a_retired_learner_return_trains_its_replacement_not_itself():
+    """A reward settled after its router was replaced trains the live replacement once;
+    the retired copy, which never samples again, is left exactly as it was."""
     rt = make_runtime()
     old = rt.routers["Tick"][0]
     action = next(a for a in old.universe if a != "NOOP")
@@ -31,11 +36,17 @@ def test_replacement_router_does_not_train_on_a_retired_learner_return():
         channel="test", deadline_ns=100, parent_handle=None, cost_ceiling=0,
     )
     fresh = rt._build_router("Tick", "exp3", .1)
-    before = fresh.learner.state()
+    old_before = old.learner.state()
     rt.queue.settle(handle, channel="test", score=1.0, status=SettleStatus.SETTLED,
                     definition_version="1", sampling_ref=None)
     rt._deliver_returns()
-    assert before == fresh.learner.state()
+    after = fresh.learner.state()["log_weights"]
+    assert after[action] > max(w for a, w in after.items() if a != action)
+    assert old.learner.state() == old_before
+    assert any(i["kind"] == "router.carried" and i["handle"] == handle
+               and i["to"] == fresh.learner.id for i in rt.ledger._recovery_items())
+    rt._deliver_returns()
+    assert fresh.learner.state()["log_weights"] == after  # once, not per delivery
     assert old.learner.id != fresh.learner.id
     assert rt.queue.history(handle)[0].score == 1.0
     again = rt._build_router("Tick", "exp3", .1)
@@ -113,19 +124,19 @@ def test_a_loss_making_fill_does_not_drop_later_fills_or_funding():
     assert not rt.wallet.dead and rt.wallet.check_conservation()
 
 
-def test_public_population_tool_is_debited_to_the_caller(monkeypatch):
+def test_public_population_tool_is_ledgered_to_the_caller_and_moves_no_money(monkeypatch):
     from factorylab.cortex.tools import PopulationTool, as_spec
 
     rt = make_runtime()
     tool = PopulationTool("shared-tool", "test", {"type": "object", "properties": {}},
                           'print("{}")', 1, "author-handle")
     rt.population_tools[tool.id] = tool
-    rt.tool_specs[tool.id] = as_spec(tool, 50)
+    rt.tool_specs[tool.id] = as_spec(tool)
     rt.tool_owner[tool.id] = "different-author"
     monkeypatch.setattr(rt.tool_runner.target, "run", lambda *_: {"ok": True})
     before = rt.wallet.balance
     output, cost = rt._run_tool("seed-decider", "caller-handle", {"tool": tool.id, "args": {}})
-    assert output == {"ok": True} and cost == 50 and rt.wallet.balance == before - 50
+    assert output == {"ok": True} and cost == 0 and rt.wallet.balance == before
     commits = [i for i in rt.ledger._recovery_items() if i["kind"] == "wallet.commit"]
     assert commits[-1]["handle"] == "caller-handle"
     assert tool.id in rt._allowed_tools("different-author")

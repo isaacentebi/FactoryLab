@@ -97,7 +97,7 @@ def restored_twin(rt):
 @pytest.mark.gate
 def test_every_attribute_a_world_carries_is_checkpointed_or_declared(tmp_path):
     rt = Runtime(load_manifest("scripted"), events=100, seed=1, initial_balance_micro=None,
-                 ledger_path=str(tmp_path / "world.jsonl"), drip=True, router_gamma=.1)
+                 ledger_path=str(tmp_path / "world.jsonl"), router_gamma=.1)
     original = rt._process_event
     differences: dict[str, tuple] = {}
     seen: set[str] = set()
@@ -137,39 +137,59 @@ def test_declarations_say_why():
     assert len(resume._RUNTIME_FIELDS) == len(set(resume._RUNTIME_FIELDS))
 
 
-def test_objections_adjudications_receipts_waits_and_venue_deltas_survive_a_restore():
-    from factorylab.settlement.fidelity import FidelityObjection
-    from factorylab.settlement.receipts import Adjudication, ExecutionReceipt, LearningReceipt
+def test_receipts_waits_and_venue_deltas_survive_a_restore():
+    from factorylab.settlement.receipts import ExecutionReceipt, LearningReceipt
 
     rt = make_runtime()
-    adjudication = Adjudication(value="useful inquiry", measurement="well_formed_rate",
-                                evidence="counted, not read", objector="eval-a",
-                                objection_handle="decision-7", about_handle="decision-3",
-                                uncertainty=.25)
-    identity = rt.book.receipts.record(adjudication)
-    rt.book.receipts.record(LearningReceipt(
+    learning = LearningReceipt(
         handle="decision-7", assessed="eval-a", scoring_rule="brier", rule_version="v1",
-        horizon=3, outcome=1, score=.1))
+        horizon=3, outcome=1, score=.1)
+    identity = rt.book.receipts.record(learning)
     rt.consequences.receipts.record(ExecutionReceipt(
         kind="fill", handle="decision-3", owner="seed-decider", at_event=4,
         facts={"coin": "BTC"}))
-    rt.settler._Settler__objections["decision-7"] = FidelityObjection(
-        value="useful inquiry", measurement="well_formed_rate", evidence="counted, not read",
-        uncertainty=.25)
-    rt.open_adjudications["eval-b"] = identity
-    rt.meta_waiting_since["eval-a"] = 17
+    rt.consequence_scores["decision-9"] = (0.625, 17)
+    rt.world_outcomes["decision-3"] = {"state": "measured", "y": 1.0,
+                                       "kind": "return_paid_off", "tick": 17}
     rt.venue_deltas["decision-3"] = {"venue_perps": -20}
     twin = restored_twin(rt)
     assert list(twin.book.receipts) == list(rt.book.receipts)
     assert list(twin.consequences.receipts) == list(rt.consequences.receipts)
     assert twin.settler.receipts() is twin.book.receipts
-    assert twin.settler.objection("decision-7") == rt.settler.objection("decision-7")
-    assert twin.open_adjudications == {"eval-b": identity}
-    assert twin._adjudication_for("eval-b") == adjudication  # the finding still lands
-    assert twin.meta_waiting_since == {"eval-a": 17}
+    assert twin.consequence_scores == {"decision-9": (0.625, 17)}
+    assert twin.world_outcomes == rt.world_outcomes
     assert twin.venue_deltas == {"decision-3": {"venue_perps": -20}}
     # An identical re-record after the restore writes nothing, as it would have before.
     written = []
     twin.ledger.append = written.append
-    assert twin.book.receipts.record(adjudication) == identity
+    assert twin.book.receipts.record(learning) == identity
     assert written == []
+
+
+def test_a_checkpoint_carrying_the_deleted_adjudication_pipeline_restores_without_it():
+    """Evaluations U1: the fidelity adjudication is deleted; an older checkpoint's
+    adjudication receipt, open adjudication queue and settler objections are read and
+    ignored, and everything else restores exactly."""
+    from factorylab.settlement.receipts import LearningReceipt
+
+    rt = make_runtime()
+    rt.book.receipts.record(LearningReceipt(
+        handle="decision-7", assessed="eval-a", scoring_rule="brier", rule_version="v1",
+        horizon=3, outcome=1, score=.1))
+    state = runtime_state(rt)
+    adjudication = {"$record": "Adjudication", "fields": {
+        "value": "useful inquiry", "measurement": "well_formed_rate",
+        "evidence": "counted, not read", "objector": "eval-a",
+        "objection_handle": "decision-7", "about_handle": "decision-3",
+        "uncertainty": .25}}
+    books = dict(state["receipts"]["$map"])
+    books["book.receipts"].append(adjudication)
+    state["runtime"]["$map"].append(["open_adjudications", {"$map": [["eval-b", "adjud:x"]]}])
+    settler = dict(state["components"]["$map"])["settler"]["$map"]
+    settler.append(["objections", {"$map": [["decision-7", {
+        "$record": "FidelityObjection", "fields": {"value": "v"}}]]}])
+    twin = Runtime(rt.m, ledger_path=None, **state["config"])
+    restore_runtime(twin, state)
+    assert list(twin.book.receipts) == list(rt.book.receipts)
+    assert not hasattr(twin, "open_adjudications")
+    assert not hasattr(twin.settler, "_Settler__objections")

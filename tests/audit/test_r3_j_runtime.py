@@ -20,7 +20,8 @@ def register_work(rt, *, name="weather-desk", kind="WeatherForecast", shape="for
                         emits=[kind], accepts=list(accepts),
                         schemas={kind: {"type": "object"}}, reward_shapes={kind: shape})
     rt._apply_registrations(origin, Return(origin, {"register": [proposal]}, 0, "ok"))
-    assert name in rt.assemblies, rt.registration_feedback
+    assert name in rt.assemblies, [
+        i for i in rt.ledger._recovery_items() if i["kind"] == "registration.rejected"]
 
 
 def test_forecast_reward_waits_for_all_predictions_and_is_not_credited_twice(monkeypatch):
@@ -34,11 +35,14 @@ def test_forecast_reward_waits_for_all_predictions_and_is_not_credited_twice(mon
             {"predicate": "fill_within", "params": {"horizon_events": 2}, "q": 0.2},
         ]}), 1, 1, "end_turn"))
     handle = routed(rt, "weather-desk", Event("weather", EventKind.TICK, 0, {}, "world"))
+    # A forecast's horizon counts world ticks (time audit T3).
     rt.n += 1
+    rt.ticks_consumed += 1
     rt.balance_at[:] = [rt.wallet.balance] * (rt.n + 1)
     rt._settle_due_forecasts()
     assert rt.queue.get(handle).status is SettleStatus.PENDING
     rt.n += 1
+    rt.ticks_consumed += 1
     rt.balance_at.append(rt.wallet.balance)
     rt._settle_due_forecasts()
     assert rt.queue.history(handle)[-1].score == pytest.approx(0.66)

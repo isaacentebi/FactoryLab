@@ -10,7 +10,6 @@ from __future__ import annotations
 import hashlib
 import os
 import random
-from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from decimal import ROUND_DOWN, Decimal
 from enum import StrEnum
@@ -19,6 +18,7 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 from factorylab.world.events import WorldEvent, WorldEventKind
+from factorylab.world.vaults import FAKE_ACCOUNT
 
 
 class VenueUnavailable(RuntimeError):
@@ -242,6 +242,18 @@ class FakeExchange:
     min_order_value_usd: Decimal = Decimal(0)  # published and enforced; the fake has no floor
     listed_coins: tuple[str, ...] = ()
     listed_spot_pairs: tuple[str, ...] = ()
+    # Vaults (factorylab/world/vaults.py). The lockup is mainnet's documented day. The
+    # fake has no trading on a vault's own account, so a vault's equity moves only by
+    # ``vault_return_bps`` a step; and an outside depositor exists only when a caller
+    # scripts one: ``vault_depositor_usd`` enters every vault this account leads and
+    # leaves ``vault_depositor_steps`` steps later. All zero: no vault ever moves.
+    vault_lockup_ns: int = 86_400 * 10**9
+    vault_return_bps: Decimal = Decimal(0)
+    vault_depositor_usd: Decimal = Decimal(0)
+    vault_depositor_steps: int = 0
+    # The account this venue's books are, as a leader or depositor names it. A class
+    # attribute, not a field: the fake has one account and it is not configurable.
+    _address = FAKE_ACCOUNT
 
     def __post_init__(self) -> None:
         self._rng = random.Random(self.seed)
@@ -308,6 +320,8 @@ class FakeExchange:
         if ts_ns - self._last_funding_ns >= self.funding_interval_ns:
             self._last_funding_ns = ts_ns - (ts_ns % self.funding_interval_ns)
             events.extend(self._apply_funding())
+        if self.__dict__.get("_vaults"):
+            self._advance_vaults()
         return events
 
     def _next_price(self, coin: str) -> Decimal:
@@ -461,16 +475,18 @@ class FakeExchange:
         return dict(result)
 
     def lookup(self, client_id: str, *, order_id: str | None = None) -> OrderResult:
-        """Resolve original order identity without placing or cancelling anything."""
+        """Resolve original order identity without placing or cancelling anything.
+
+        Guarantees a cancelled order reports what it executed before it was cancelled."""
         result = self._client_results.get(client_id)
         oid = order_id or (result.order_id if result else None)
-        if oid in self._cancelled:
-            return OrderResult(oid, "cancelled", Decimal(0), None)
         fills = [f for f in self._fills if f.order_id == oid]
+        size = sum((f.size for f in fills), Decimal(0))
+        avg = sum((f.size * f.px for f in fills), Decimal(0)) / size if size else None
+        if oid in self._cancelled:
+            return OrderResult(oid, "cancelled", size, avg)
         if fills and oid not in self._resting:
-            size = sum((f.size for f in fills), Decimal(0))
-            return OrderResult(oid, "filled", size,
-                               sum((f.size * f.px for f in fills), Decimal(0)) / size)
+            return OrderResult(oid, "filled", size, avg)
         return result or OrderResult(oid, "uncertain", Decimal(0), None, "order not observed")
 
     def fills(self, since_ns: int) -> list[Fill]:
@@ -596,10 +612,13 @@ class FakeExchange:
         return events
 
     def _fill(
-        self, oid: str, order: Order, px: Decimal, *, liquidation: bool = False
+        self, oid: str, order: Order, px: Decimal, *, liquidation: bool = False,
+        fee_rate: Decimal | None = None,
     ) -> OrderResult:
+        """``fee_rate`` is the fraction of notional this fill is charged; by default the
+        venue's single ``fee_bps``. A venue with a maker and a taker rate names one."""
         if order.market == "spot":
-            return self._fill_spot(oid, order, px)
+            return self._fill_spot(oid, order, px, fee_rate=fee_rate)
         if order.reduce_only:
             pos = self._positions.get(order.coin)
             if pos is None or (pos.size > 0) == order.is_buy:
@@ -614,7 +633,8 @@ class FakeExchange:
                 return OrderResult(oid, "rejected", Decimal(0), None, "not reducing position")
             order = replace(order, size=min(order.size, abs(pos.size)))
         notional = order.size * px
-        fee = (notional * self.fee_bps / Decimal(10_000)).quantize(Decimal("0.000001"))
+        fee = (notional * self.fee_bps / Decimal(10_000) if fee_rate is None
+               else notional * fee_rate).quantize(Decimal("0.000001"))
         signed = order.size if order.is_buy else -order.size
         pos = self._positions.get(order.coin)
         new_size = (pos.size if pos else Decimal(0)) + signed
@@ -733,8 +753,12 @@ class FakeExchange:
                              if o.market == "spot" and o.coin == coin and not o.is_buy), Decimal(0))
         return max(Decimal(0), held - committed)
 
-    def _spot_affordable(self, order: Order, px: Decimal) -> bool:
-        fee = (order.size * px * self.fee_bps / 10_000).quantize(Decimal("0.000001"))
+    def _spot_affordable(self, order: Order, px: Decimal, *,
+                         fee_rate: Decimal | None = None) -> bool:
+        """Affordable with its cost and the fee it would pay: ``fee_rate`` of notional,
+        by default the venue's ``fee_bps``."""
+        fee = (order.size * px * self.fee_bps / 10_000 if fee_rate is None
+               else order.size * px * fee_rate).quantize(Decimal("0.000001"))
         return ((not order.reduce_only and order.size * px + fee <= self._spot_available("USDC"))
                 if order.is_buy else order.size <= self._spot_available(order.coin))
 
@@ -747,19 +771,26 @@ class FakeExchange:
         self._cash += amount if to_perp else -amount
 
     def instruments(self) -> dict:
-        """Publish deterministic lot and price increments and the venue's order floor."""
+        """Publish deterministic lot and price increments, the venue's order floor and its
+        fee rates: this venue's own ``fee_bps``, as a fraction of notional, which is what
+        every fill it books is charged, maker or taker (Chapter II §I.b: prices are
+        public)."""
+        rate = format((self.fee_bps / Decimal(10_000)).normalize(), "f")
         return {market: [{"coin": c, "lot_size": "0.000001", "tick_size": "0.01",
-                          "min_order_value_usd": str(self.min_order_value_usd)}
+                          "min_order_value_usd": str(self.min_order_value_usd),
+                          "taker_fee_rate": rate, "maker_fee_rate": rate}
                          for c in coins]
                 for market, coins in (
                     ("perp", tuple(dict.fromkeys((*self.coins, *self.listed_coins)))),
                     ("spot", tuple(dict.fromkeys((*self.spot_pairs, *self.listed_spot_pairs)))))}
 
-    def _fill_spot(self, oid: str, order: Order, px: Decimal) -> OrderResult:
+    def _fill_spot(self, oid: str, order: Order, px: Decimal,
+                   fee_rate: Decimal | None = None) -> OrderResult:
         pos = self._spot_positions.get(order.coin)
         held = pos.size if pos else Decimal(0)
-        fee = (order.size * px * self.fee_bps / 10_000).quantize(Decimal("0.000001"))
-        if not self._spot_affordable(order, px):
+        fee = (order.size * px * self.fee_bps / 10_000 if fee_rate is None
+               else order.size * px * fee_rate).quantize(Decimal("0.000001"))
+        if not self._spot_affordable(order, px, fee_rate=fee_rate):
             return OrderResult(oid, "rejected", Decimal(0), None, "insufficient spot balance")
         realized = Decimal(0) if order.is_buy else (px - pos.entry_px) * order.size
         self._spot_cash += (-order.size * px if order.is_buy else order.size * px) - fee
@@ -800,6 +831,277 @@ class FakeExchange:
                 )
             )
         return events
+
+    # ---- vaults: the venue's terms and their sources are in factorylab/world/vaults.py
+
+    def _vault_state(self) -> tuple[dict, list, dict]:
+        """The vault book, its ledger rows and its client results, created on first use.
+
+        Created lazily so a venue that never touches a vault checkpoints exactly as
+        it did before vaults existed.
+        """
+        d = self.__dict__
+        return (d.setdefault("_vaults", {}), d.setdefault("_vault_rows", []),
+                d.setdefault("_vault_results", {}))
+
+    def _vault_equity(self) -> Decimal:
+        """This account's equity across every vault it holds: a pot, never collateral."""
+        from factorylab.world.vaults import FAKE_ACCOUNT
+
+        return sum((v["followers"][FAKE_ACCOUNT]["equity"]
+                    for v in self.__dict__.get("_vaults", {}).values()
+                    if FAKE_ACCOUNT in v["followers"]), Decimal(0))
+
+    def _vault_row(self, kind: str, tx: str, **fields: Any) -> None:
+        """One row of this account's own venue ledger, in the normalised row shape."""
+        _, rows, _ = self._vault_state()
+        rows.append({"ts_ns": self._now_ns, "hash": tx, "type": kind, **fields})
+
+    def vault_create(self, name: str, description: str, usd: Decimal, *,
+                     client_id: str | None = None) -> dict:
+        """Guarantees one vault per client id, created only with the deposit and fee affordable.
+
+        The initial deposit and the creation fee both leave the perps account; the
+        deposit becomes this account's equity in the vault, the fee is gone.
+        """
+        from factorylab.world.vaults import (
+            CREATE_FEE_USD,
+            FAKE_ACCOUNT,
+            check_create,
+            exact_micro,
+            row_hash,
+        )
+
+        vaults, _, results = self._vault_state()
+        if client_id is not None and client_id in results:
+            return dict(results[client_id])
+        if exact_micro(usd) is None:  # the venue takes whole micro-USDC, like the live one
+            return {"status": "rejected", "error": "usd is finer than one micro-USD"}
+        reason = check_create(name, description, usd)
+        usd = Decimal(str(usd))
+        if reason is None and usd + CREATE_FEE_USD > self._perp_withdrawable():
+            reason = "insufficient perps collateral for the deposit and the creation fee"
+        if reason is not None:
+            result = {"status": "rejected", "error": reason}
+        else:
+            address = row_hash("vault", self.seed, len(vaults), name)[:42]
+            self._cash -= usd + CREATE_FEE_USD
+            vaults[address] = {
+                "name": name, "description": description, "leader": FAKE_ACCOUNT,
+                "created_ns": self._now_ns, "closed": False, "allow_deposits": True,
+                "followers": {FAKE_ACCOUNT: {"equity": usd, "basis": usd,
+                                             "entry_ns": self._now_ns,
+                                             "lockup_until_ns": self._now_ns
+                                             + self.vault_lockup_ns}}}
+            tx = row_hash("create", address, self._now_ns)
+            self._vault_row("vaultCreate", tx, vault=address, user=None, usd=usd,
+                            fee=CREATE_FEE_USD)
+            result = {"status": "ok", "vault": address, "usd": str(usd),
+                      "fee_usd": str(CREATE_FEE_USD), "hash": tx}
+        if client_id is not None:
+            results[client_id] = result
+        return dict(result)
+
+    def vault_transfer(self, vault: str, is_deposit: bool, usd: Decimal, *,
+                       client_id: str | None = None) -> dict:
+        """Guarantees one transfer per client id, between perps collateral and a vault."""
+        from factorylab.world.vaults import FAKE_ACCOUNT, exact_micro
+
+        _, _, results = self._vault_state()
+        if client_id is not None and client_id in results:
+            return dict(results[client_id])
+        if exact_micro(usd) is None:  # the venue takes whole micro-USDC, like the live one
+            return {"status": "rejected", "error": "usd is finer than one micro-USD"}
+        result = self._vault_move(str(vault).lower(), FAKE_ACCOUNT, is_deposit,
+                                  Decimal(str(usd)))
+        if client_id is not None:
+            results[client_id] = result
+        return dict(result)
+
+    def _vault_move(self, vault: str, user: str, is_deposit: bool, usd: Decimal) -> dict:
+        """One deposit or withdrawal by ``user``, under the venue's documented terms.
+
+        This account's own moves change its perps cash and write its ledger rows; an
+        outside depositor's move changes only the vault, except that the commission on
+        its profit is paid to the leader, which writes a commission row when the
+        leader is this account.
+        """
+        from factorylab.world.vaults import (
+            FAKE_ACCOUNT,
+            LEADER_MIN_FRACTION,
+            commission_on,
+            leader_share_after,
+            row_hash,
+        )
+
+        vaults, rows, _ = self._vault_state()
+        v = vaults.get(vault)
+        if v is None:
+            return {"status": "rejected", "error": "unknown vault"}
+        if v["closed"]:
+            return {"status": "rejected", "error": "vault is closed"}
+        if not usd.is_finite() or usd <= 0:
+            return {"status": "rejected", "error": "usd must be positive"}
+        own, followers = user == FAKE_ACCOUNT, v["followers"]
+        total = sum((f["equity"] for f in followers.values()), Decimal(0))
+        leader_equity = followers.get(v["leader"], {}).get("equity", Decimal(0))
+        tx = row_hash("transfer", vault, user, is_deposit, usd, self._now_ns, len(rows))
+        if is_deposit:
+            if not v["allow_deposits"] and user != v["leader"]:
+                return {"status": "rejected", "error": "vault does not accept deposits"}
+            if own and usd > self._perp_withdrawable():
+                return {"status": "rejected", "error": "insufficient perps collateral"}
+            if user != v["leader"] and leader_equity / (total + usd) < LEADER_MIN_FRACTION:
+                return {"status": "rejected",
+                        "error": "deposit would take the leader below 5% of the vault"}
+            f = followers.setdefault(user, {"equity": Decimal(0), "basis": Decimal(0)})
+            f.update(equity=f["equity"] + usd, basis=f["basis"] + usd, entry_ns=self._now_ns,
+                     lockup_until_ns=self._now_ns + self.vault_lockup_ns)
+            if own:
+                self._cash -= usd
+                self._vault_row("vaultDeposit", tx, vault=vault, user=None, usd=usd)
+            return {"status": "ok", "vault": vault, "usd": str(usd), "hash": tx}
+        f = followers.get(user)
+        if f is None or usd > f["equity"]:
+            return {"status": "rejected",
+                    "error": "withdrawal exceeds the equity held in the vault"}
+        if self._now_ns < f["lockup_until_ns"]:
+            return {"status": "rejected",
+                    "error": f"deposit locked until {f['lockup_until_ns']} ns"}
+        if user == v["leader"]:
+            after = leader_share_after(f["equity"], total, usd)
+            if after is not None and after < LEADER_MIN_FRACTION:
+                return {"status": "rejected", "error": "leader share would fall below 5%"}
+        commission, basis_out = commission_on(f["equity"], f["basis"], usd)
+        f.update(equity=f["equity"] - usd, basis=f["basis"] - basis_out)
+        if f["equity"] == 0:
+            del followers[user]
+        net = usd - commission
+        if own:
+            self._cash += net
+            self._vault_row("vaultWithdraw", tx, vault=vault, user=user, requested=usd,
+                            commission=commission, closing_cost=Decimal(0), basis=basis_out,
+                            net=net)
+        rebate = Decimal(0)
+        if v["leader"] == FAKE_ACCOUNT and commission > 0:
+            # The leader is paid in the withdrawal's own transaction; when the leader
+            # withdrew, that is its own commission coming back.
+            self._cash += commission
+            self._vault_row("vaultLeaderCommission", tx, vault=None, user=FAKE_ACCOUNT,
+                            usd=commission)
+            rebate = commission if own else Decimal(0)
+        return {"status": "ok", "vault": vault, "usd": str(usd), "net": str(net),
+                "basis": str(basis_out), "commission": str(commission),
+                "commission_rebate": str(rebate), "hash": tx}
+
+    def vault_details(self, vault: str) -> dict:
+        """A vault's record in the surface's shape; an unknown vault is an error."""
+        from factorylab.world.vaults import FAKE_ACCOUNT, LEADER_MIN_FRACTION, LEADER_PROFIT_SHARE
+
+        v = self.__dict__.get("_vaults", {}).get(str(vault).lower())
+        if v is None:
+            return {"error": "vault not found"}
+        followers = v["followers"]
+        total = sum((f["equity"] for f in followers.values()), Decimal(0))
+        leader_equity = followers.get(v["leader"], {}).get("equity", Decimal(0))
+        mine = followers.get(FAKE_ACCOUNT)
+        own = mine["equity"] if mine else Decimal(0)
+        leading = v["leader"] == FAKE_ACCOUNT
+        withdrawable = (max(Decimal(0), (own - LEADER_MIN_FRACTION * total)
+                            / (1 - LEADER_MIN_FRACTION)) if leading and len(followers) > 1
+                        else own)
+        return {"vault": str(vault).lower(), "name": v["name"], "description": v["description"],
+                "leader": v["leader"], "is_leader": leading, "equity_usd": total,
+                "depositors": len([u for u in followers if u != v["leader"]]),
+                "depositors_capped": False,
+                "leader_fraction": leader_equity / total if total else Decimal(0),
+                "leader_commission": LEADER_PROFIT_SHARE, "own_equity_usd": own,
+                "own_lockup_until_ns": mine["lockup_until_ns"] if mine else None,
+                "max_withdrawable_usd": withdrawable.quantize(Decimal("0.000001"),
+                                                              rounding=ROUND_DOWN),
+                "allow_deposits": v["allow_deposits"], "is_closed": v["closed"],
+                "observed_at_ns": self._now_ns}
+
+    def vault_equities(self) -> dict:
+        """This account's vault positions and the vaults it leads."""
+        from factorylab.world.vaults import FAKE_ACCOUNT
+
+        vaults = self.__dict__.get("_vaults", {})
+        return {"positions": [{"vault": a, "equity_usd": v["followers"][FAKE_ACCOUNT]["equity"],
+                               "locked_until_ns": v["followers"][FAKE_ACCOUNT]["lockup_until_ns"]}
+                              for a, v in vaults.items() if FAKE_ACCOUNT in v["followers"]],
+                "leading": [{"vault": a, "name": v["name"]} for a, v in vaults.items()
+                            if v["leader"] == FAKE_ACCOUNT],
+                "observed_at_ns": self._now_ns}
+
+    def vault_ledger(self, since_ns: int) -> list[dict]:
+        """This account's vault ledger rows at or after an inclusive cursor, oldest first."""
+        return [dict(r) for r in self.__dict__.get("_vault_rows", []) if r["ts_ns"] >= since_ns]
+
+    def vault_lookup(self, client_id: str, *, operation: str, args: dict, since_ns: int = 0,
+                     claimed: frozenset = frozenset(), position: int = 0,
+                     peers: int = 1) -> dict:
+        """Resolve a vault write from this account's own ledger rows, as the live venue
+        must: the fake answers by the row, never by the client id it remembers."""
+        from factorylab.world.vaults import match_intent
+
+        return match_intent(self.vault_ledger(since_ns), operation, args, FAKE_ACCOUNT,
+                            claimed=claimed, position=position, peers=peers)
+
+    def simulate_vault(self, name: str, leader: str, usd: Decimal) -> str:
+        """An outside party's vault, for this account to deposit into; returns its address."""
+        from factorylab.world.vaults import row_hash
+
+        vaults, _, _ = self._vault_state()
+        address = row_hash("outside", leader, len(vaults), name)[:42]
+        vaults[address] = {"name": name, "description": name, "leader": leader.lower(),
+                           "created_ns": self._now_ns, "closed": False, "allow_deposits": True,
+                           "followers": {leader.lower(): {
+                               "equity": Decimal(usd), "basis": Decimal(usd),
+                               "entry_ns": self._now_ns, "lockup_until_ns": self._now_ns}}}
+        return address
+
+    def simulate_deposit(self, vault: str, user: str, usd: Decimal) -> dict:
+        """An outside depositor's deposit: money from outside the factory enters the vault."""
+        return self._vault_move(str(vault).lower(), user.lower(), True, Decimal(usd))
+
+    def simulate_withdraw(self, vault: str, user: str, usd: Decimal) -> dict:
+        """An outside depositor's withdrawal, paying the leader its commission."""
+        return self._vault_move(str(vault).lower(), user.lower(), False, Decimal(usd))
+
+    def mark_vaults(self, bps: Decimal) -> None:
+        """Every open vault's followers gain or lose ``bps`` of their equity, pro rata."""
+        factor = 1 + Decimal(bps) / Decimal(10_000)
+        for v in self.__dict__.get("_vaults", {}).values():
+            if not v["closed"]:
+                for f in v["followers"].values():
+                    f["equity"] = (f["equity"] * factor).quantize(Decimal("0.000001"),
+                                                                  rounding=ROUND_DOWN)
+
+    def _advance_vaults(self) -> None:
+        """One step of the scripted vault world: the return, then the outside depositor."""
+        from factorylab.world.vaults import FAKE_ACCOUNT
+
+        if self.vault_return_bps:
+            self.mark_vaults(self.vault_return_bps)
+        if not self.vault_depositor_usd:
+            return
+        depositor = "0x" + "de9051".rjust(40, "0")
+        entered = self.__dict__.setdefault("_depositor_entered", {})
+        for address, v in self.__dict__["_vaults"].items():
+            if v["leader"] != FAKE_ACCOUNT or v["closed"]:
+                continue
+            if address not in entered:
+                if self.simulate_deposit(address, depositor,
+                                         self.vault_depositor_usd)["status"] == "ok":
+                    entered[address] = self._step
+                continue
+            held = v["followers"].get(depositor)
+            if (entered[address] is not None and held is not None
+                    and self._step - entered[address] >= self.vault_depositor_steps
+                    and self._now_ns >= held["lockup_until_ns"]):
+                if self.simulate_withdraw(address, depositor, held["equity"])["status"] == "ok":
+                    entered[address] = None
 
 
 # --------------------------------------------------------------------- hyperliquid
@@ -862,6 +1164,39 @@ class HyperliquidExchange:
         # Hyperliquid accounts are cross-margin unless an instrument was switched
         # to isolated; nothing here switches one, and the mode is reported as read.
         self._account_mode = "cross"
+        # The account's own fee rates, read once with the listing (Chapter II §I.b:
+        # prices are public), never a constant written here.
+        self._fee_rates = self._read_fee_rates()
+
+    #: The venue's ``userFees`` fields for each market's taker and maker rate.
+    FEE_FIELDS = {"perp": ("userCrossRate", "userAddRate"),
+                  "spot": ("userSpotCrossRate", "userSpotAddRate")}
+
+    def _read_fee_rates(self) -> dict[str, dict[str, str]]:
+        """The account's taker and maker rates per market, as the venue states them.
+
+        Guarantees each market's two rates are the venue's own ``userFees`` answer for
+        this account, as decimal fractions of notional, or ``fee_rates: unavailable``
+        with the reason when the venue was not asked (no address), did not answer, or
+        did not state that market's rates: an unread rate is never a number.
+        """
+        answer, reason = None, "no account address to ask the venue for"
+        if self._address:
+            try:
+                answer = self._info.user_fees(self._address)
+                reason = "the venue's userFees answer did not state them"
+            except Exception as exc:  # noqa: BLE001 - an unread rate is unavailable
+                reason = f"the venue's userFees read failed: {type(exc).__name__}"
+        rates: dict[str, dict[str, str]] = {}
+        for market, (taker, maker) in self.FEE_FIELDS.items():
+            try:
+                rates[market] = {"taker_fee_rate": str(Decimal(str(answer[taker]))),
+                                 "maker_fee_rate": str(Decimal(str(answer[maker]))),
+                                 "fee_basis": "fraction of notional, the venue's userFees "
+                                              "for this account"}
+            except (KeyError, TypeError, ArithmeticError, ValueError):
+                rates[market] = {"fee_rates": "unavailable", "reason": reason}
+        return rates
 
     def _configure_spot(self, meta: dict) -> None:
         """Record the venue's whole spot universe, and the wire names of traded pairs."""
@@ -897,12 +1232,16 @@ class HyperliquidExchange:
         return coin in getattr(self, "_spot_universe", {})
 
     def instruments(self) -> dict:
-        """Expose lot precision, the venue's price precision rule and its order floor."""
+        """Expose lot precision, the venue's price precision rule, its order floor and
+        this account's fee rates for the market, as the venue stated them at start."""
+        fees = getattr(self, "_fee_rates", None) or {}
         return {market: [{"coin": c, "lot_size": str(Decimal(1).scaleb(-self._sz_decimals[c])),
                           "tick_size": str(Decimal(1).scaleb(
                               -(8 if market == "spot" else 6) + self._sz_decimals[c])),
                           "price_significant_figures": 5, "integer_prices_allowed": True,
-                          "min_order_value_usd": MIN_ORDER_VALUE_USD}
+                          "min_order_value_usd": MIN_ORDER_VALUE_USD,
+                          **fees.get(market, {"fee_rates": "unavailable",
+                                              "reason": "the venue was not asked"})}
                          for c in coins]
                 for market, coins in (("perp", getattr(self, "_listed_coins", self.coins)),
                                       ("spot", tuple(getattr(self, "_spot_names", {}))))}
@@ -919,10 +1258,19 @@ class HyperliquidExchange:
         import requests
         from hyperliquid.utils.error import ClientError, ServerError
 
+        from factorylab.world.venue_tools import request_weight
+
+        if getattr(self, "single_attempt", False):
+            # A seat's read: sent once, so its weight never exceeds what its share
+            # admitted (runtime/compute.py, ``_seat_read_attempts``).
+            attempts = 1
         delay = 0.5
         for attempt in range(attempts):
+            # Every attempt is a request the venue weighs against the IP limit, a
+            # retry after a 429 included: counted before it is sent, whatever answers.
+            self.request_weight = getattr(self, "request_weight", 0) + request_weight(what)
             try:
-                return call()
+                result = call()
             except ClientError as exc:
                 # A 4xx is the SDK's ClientError, which is not a RuntimeError and used
                 # to escape every catch site and kill the tick. A 429 is the venue
@@ -941,7 +1289,17 @@ class HyperliquidExchange:
                     raise VenueUnavailable(f"{what}: {type(exc).__name__}: {exc}") from exc
                 time.sleep(delay)
                 delay *= 2
+            else:
+                # The weight that grows with what was returned is known only now.
+                self.request_weight += request_weight(what, result) - request_weight(what)
+                return result
         raise AssertionError("unreachable")
+
+    def request_weight_sent(self) -> int:
+        """Guarantees the documented venue weight of every request this adapter has sent,
+        every attempt counted, monotone. Journaled like any venue read, so a replay
+        charges exactly what the recording measured."""
+        return getattr(self, "request_weight", 0)
 
     # ---- reads
 
@@ -960,12 +1318,15 @@ class HyperliquidExchange:
         return dict(self._last_mids)
 
     def funding(self) -> list[FundingEvent]:
+        """The venue's current funding rates; raises VenueUnavailable when it did not answer.
+
+        An unanswered read is never an empty one: ``[]`` would say the venue reports
+        no funding. A caller for whom absence is a fact (the tick's events,
+        ``runtime/live.py``) catches the error and emits nothing.
+        """
         import time
 
-        try:
-            raw = self._guarded("meta_and_asset_ctxs", self._info.meta_and_asset_ctxs)
-        except VenueUnavailable:
-            return []
+        raw = self._guarded("meta_and_asset_ctxs", self._info.meta_and_asset_ctxs)
         if not isinstance(raw, (list, tuple)) or len(raw) != 2:
             raise VenueUnavailable("invalid funding response")
         meta, ctxs = raw
@@ -1572,6 +1933,155 @@ class HyperliquidExchange:
         except Exception as exc:
             return {"status": "rejected", "error": f"{type(exc).__name__}: {exc}"}
 
+    # ---- vaults: the venue's terms and their sources are in factorylab/world/vaults.py
+
+    def vault_details(self, vault: str) -> dict:
+        """``vaultDetails`` for one vault, with this account's own follower state."""
+        import time
+
+        from factorylab.world.vaults import details_from_wire
+
+        body = {"type": "vaultDetails", "vaultAddress": vault,
+                **({"user": self._address} if self._address else {})}
+        raw = self._guarded("vault_details", lambda: self._info.post("/info", body))
+        return details_from_wire(raw, self._address, time.time_ns())
+
+    def vault_equities(self) -> dict:
+        """``userVaultEquities`` and ``leadingVaults`` for this account, read together."""
+        import time
+
+        if not self._address:
+            raise RuntimeError("vault_equities() needs an address or a private key")
+        held = self._guarded("user_vault_equities",
+                             lambda: self._info.user_vault_equities(self._address))
+        leading = self._guarded("leading_vaults", lambda: self._info.post(
+            "/info", {"type": "leadingVaults", "user": self._address}))
+        positions = []
+        for row in held if isinstance(held, list) else []:
+            lock = row.get("lockedUntilTimestamp")
+            positions.append({"vault": str(row["vaultAddress"]).lower(),
+                              "equity_usd": Decimal(str(row["equity"])),
+                              "locked_until_ns": int(lock) * NS_PER_MS
+                              if isinstance(lock, int) else None})
+        return {"positions": positions,
+                "leading": [{"vault": str(r["address"]).lower(), "name": r.get("name")}
+                            for r in (leading if isinstance(leading, list) else [])],
+                "observed_at_ns": time.time_ns()}
+
+    def vault_ledger(self, since_ns: int) -> list[dict]:
+        """Vault rows of this account's non-funding ledger at or after an inclusive cursor.
+
+        Paginated and failing closed exactly like ``funding_payments``: a stalled
+        full page raises rather than silently skipping its tail.
+        """
+        from factorylab.world.vaults import ledger_rows
+
+        if type(since_ns) is not int or since_ns < 0:
+            raise ValueError("since_ns must be nonnegative integer nanoseconds")
+        if not self._address:
+            raise RuntimeError("vault_ledger() needs an address or a private key")
+        start = since_ns // NS_PER_MS
+        rows: dict[tuple, dict] = {}
+        while True:
+            page = self._guarded("non_funding_ledger", lambda start=start:
+                                 self._info.user_non_funding_ledger_updates(self._address, start))
+            if not isinstance(page, list):
+                raise ValueError("invalid non-funding ledger response")
+            for row in ledger_rows(page):
+                if row["ts_ns"] >= since_ns:
+                    rows[(row["hash"], row["type"], row["vault"], str(row.get("usd")),
+                          str(row.get("requested")))] = row
+            if len(page) < 500:
+                break
+            latest = max((int(r.get("time", 0)) for r in page), default=start)
+            if latest <= start:
+                raise ValueError("non-funding ledger pagination stalled at a full timestamp")
+            start = latest
+        return sorted(rows.values(), key=lambda r: (r["ts_ns"], r["hash"], r["type"]))
+
+    def vault_lookup(self, client_id: str, *, operation: str, args: dict, since_ns: int,
+                     claimed: frozenset = frozenset(), position: int = 0,
+                     peers: int = 1) -> dict:
+        """Resolve a vault write by its own ledger row; never submits anything."""
+        from factorylab.world.vaults import match_intent
+
+        try:
+            return match_intent(self.vault_ledger(since_ns), operation, args, self._address,
+                                claimed=claimed, position=position, peers=peers)
+        except Exception as exc:
+            return {"status": "uncertain", "error": f"lookup exception: {type(exc).__name__}"}
+
+    def _vault_submit(self, client_id: str | None, submit) -> dict:
+        """Submit once per identity. Neither vault action carries a client order id, so
+        a seen identity is answered from what it received, never sent again."""
+        results = self.__dict__.setdefault("_vault_results", {})
+        if client_id is not None and client_id in results:
+            return dict(results[client_id])
+        if self._exchange is None:
+            return {"status": "rejected", "error": "no signing key"}
+        if client_id is not None:
+            results[client_id] = {"status": "uncertain", "error": "submission unacknowledged"}
+        try:
+            resp = submit()
+            if isinstance(resp, dict) and resp.get("status") == "ok":
+                response = resp.get("response") or {}
+                result = {"status": "ok"}
+                if isinstance(response, dict) and isinstance(response.get("data"), str):
+                    result["vault"] = response["data"].lower()
+            elif isinstance(resp, dict) and resp.get("status") == "err":
+                result = {"status": "rejected", "error": str(resp.get("response"))[:300]}
+            else:
+                result = {"status": "uncertain", "error": "unknown response shape"}
+        except Exception as exc:
+            # Exception messages may carry credentials or signed request bodies.
+            result = {"status": "uncertain", "error": f"submit exception: {type(exc).__name__}"}
+        if client_id is not None:
+            results[client_id] = result
+        return dict(result)
+
+    def vault_create(self, name: str, description: str, usd: Decimal, *,
+                     client_id: str | None = None) -> dict:
+        """``createVault``, signed as an L1 action. The SDK has no helper for it; the
+        action's fields are the TS SDK's schema, in its order (unverified on the wire)."""
+        from factorylab.world.vaults import check_create, exact_micro
+
+        reason = check_create(name, description, usd)
+        if reason is not None:
+            return {"status": "rejected", "error": reason}
+        micro = exact_micro(usd)
+        if micro is None:
+            return {"status": "rejected", "error": "usd is finer than one micro-USD"}
+
+        def submit():
+            from hyperliquid.utils.constants import MAINNET_API_URL
+            from hyperliquid.utils.signing import get_timestamp_ms, sign_l1_action
+
+            ex = self._exchange
+            nonce = get_timestamp_ms()
+            action = {"type": "createVault", "name": name, "description": description,
+                      "initialUsd": micro, "nonce": nonce}
+            signature = sign_l1_action(ex.wallet, action, None, nonce, ex.expires_after,
+                                       ex.base_url == MAINNET_API_URL)
+            return ex._post_action(action, signature, nonce)
+
+        result = self._vault_submit(client_id, submit)
+        return {**result, "usd": str(usd)} if result["status"] == "ok" else result
+
+    def vault_transfer(self, vault: str, is_deposit: bool, usd: Decimal, *,
+                       client_id: str | None = None) -> dict:
+        """``vaultTransfer`` through the SDK; ``usd`` goes on the wire as micro-USDC."""
+        from factorylab.world.vaults import exact_micro
+
+        micro = exact_micro(usd)
+        if micro is None:
+            return {"status": "rejected", "error": "usd is finer than one micro-USD"}
+        if micro <= 0:
+            return {"status": "rejected", "error": "usd must be positive"}
+        result = self._vault_submit(client_id, lambda: self._exchange.vault_usd_transfer(
+            vault, is_deposit, micro))
+        return ({**result, "vault": str(vault).lower(), "usd": str(usd)}
+                if result["status"] == "ok" else result)
+
     # ---- helpers
 
     @staticmethod
@@ -1686,27 +2196,3 @@ def bind_launch_nonce(exchange: Any, launch_nonce: str | None) -> None:
         target.__dict__.pop("_launch_nonce", None)
     else:
         target.__dict__["_launch_nonce"] = launch_nonce
-
-
-def stream_market(exchange: Exchange, clock: Iterator[WorldEvent]) -> Iterator[WorldEvent]:
-    """Interleave live venue reads with a clock stream.
-
-    For each tick, emits the tick, then one ``MarketMid`` per coin, then any
-    funding observations. Suitable for the ``testnet`` world's read-only probe.
-    """
-    for tick in clock:
-        yield tick
-        for coin, mid in exchange.mids().items():
-            yield WorldEvent(
-                WorldEventKind.MARKET_MID,
-                tick.ts_ns,
-                exchange.name,
-                {"coin": coin, "mid": str(mid)},
-            )
-        for f in exchange.funding():
-            yield WorldEvent(
-                WorldEventKind.FUNDING,
-                tick.ts_ns,
-                exchange.name,
-                {"coin": f.coin, "rate": str(f.rate), "premium": str(f.premium)},
-            )

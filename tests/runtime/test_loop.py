@@ -1,5 +1,6 @@
 from dataclasses import replace
 from decimal import Decimal
+from math import ceil
 
 import pytest
 
@@ -13,7 +14,7 @@ from factorylab.world.scripted import ScriptedProvider
 
 def test_scripted_world_compute_starvation_is_final_under_phase4() -> None:
     m = load_manifest("scripted")
-    s = run_world(m, events=60, seed=2, initial_balance_micro=1, drip=False)
+    s = run_world(m, events=60, seed=2, initial_balance_micro=1)
     assert s["terminated"] and s["termination_reason"] == "insolvency:compute"
     assert s["seal_key_released"] and s["wallet_balance_micro"] == 1
     assert s["stats"]["exclusions"] > 0
@@ -42,12 +43,11 @@ def test_crash_world_wipes_its_venue_without_spending_its_compute_authority() ->
 
 
 def test_determinism_same_seed_same_summary() -> None:
-    base = load_manifest("scripted")
-    m = replace(base, novelty=replace(base.novelty, window_ns=20_000_000_000))
-    a = run_world(m, events=45, seed=7)
-    b = run_world(m, events=45, seed=7)
-    # Forty-five events reach an immune window, a router replacement and a price update
-    # (thirty did while judges were scored for forecasting holds already resolved).
+    m = load_manifest("scripted")  # every window is derived from the loops it commands
+    a = run_world(m, events=70, seed=7)
+    b = run_world(m, events=70, seed=7)
+    # Seventy events reach an immune window, a router replacement and a price update: a
+    # card is priced once its sample is in, on its own loop (time audit T1, T2).
     assert a["stats"]["immune_windows"] and a["stats"]["routers_replaced"]
     assert a["stats"]["price_updates"]
     a.pop("aggregates", None)
@@ -59,31 +59,8 @@ def test_determinism_same_seed_same_summary() -> None:
 
 
 class RecursiveMetaProvider(ScriptedProvider):
-    """A scripted provider whose producers commit to something.
-
-    Restated for R3-D: a bare ``{"action": "hold"}`` commits to nothing a judge
-    can measure, so under the evaluation commission every judgement of one
-    settles unmeasured (GPT-6 third reading §6.B) and this world stops producing
-    the verdicts these cascade tests are about. The producers here make the same
-    quiet decision and state one thing with it — the cadence they are willing to
-    pay to wake at — which is a resource decision like any other.
-    """
-
-    def _produce(self, desc, inputs):
-        reply = super()._produce(desc, inputs)
-        reply.setdefault("subscribe", {"cadence_floor": 1})
-        return reply
-
-    """Restated for R3-D: these producers commit to something.
-
-    A bare ``{"action": "hold"}`` commits to nothing a judge can measure, so
-    under the evaluation commission every judgement of one settles unmeasured
-    (GPT-6 third reading §6.B) and this world stops producing the verdicts these
-    cascade tests are about. The producers make the same quiet decision and
-    state one thing with it — the cadence they are willing to pay to wake at,
-    which is the default and changes nothing else — so there is a commitment to
-    judge them against.
-    """
+    """A scripted provider whose producers hold at the default cadence and register a
+    recursive meta seat on their eighth call, so a tier judges the metas."""
 
     recursive_ids = ("recursive-meta",)
 
@@ -121,7 +98,6 @@ def _recursive_runtime(*, events=100, provider=None):
         seed=1,
         initial_balance_micro=None,
         ledger_path=None,
-        drip=True,
         router_gamma=0.1,
         provider=provider or RecursiveMetaProvider(),
     )
@@ -160,6 +136,8 @@ def test_cascade_release_is_ledger_first_and_fast_fallback_keeps_timeout(monkeyp
     for event in events[:2]:
         assert runtime._cascade_arrival(event) is None
     before = runtime.cascade[2]
+    # The window's duration is ticks (time audit T3, T10): it has elapsed at the third.
+    runtime.ticks_consumed = ceil(before.window)
     rng_before = runtime.rng.getstate()
     append = runtime.ledger.append
 
@@ -181,23 +159,20 @@ def test_cascade_release_is_ledger_first_and_fast_fallback_keeps_timeout(monkeyp
     runtime.pending[handles[2]].opened_at_tick = runtime.ticks_consumed
     released = runtime._cascade_arrival(events[2])
     assert released.id == events[2].id
-    # Nothing settles at release: the window's siblings wait for the meta's score.
+    # Nothing settles at release, and an evaluator decision is not a stale producer
+    # judgement: it closes on its own two signals (ruling R1).
     assert all(runtime.queue.get(h).status is SettleStatus.PENDING for h in handles)
-    assert runtime.cascade_windows[handles[2]] == handles[:2]
     runtime._censor_stale_judgements()
-    assert runtime.queue.history(handles[0])[0].status is SettleStatus.CENSORED
-    assert handles[1] in runtime.pending and handles[2] in runtime.pending
+    assert all(h in runtime.pending for h in handles)
 
 
-def test_meta_score_settles_the_representative_and_siblings_at_the_sibling_share():
+def test_a_meta_grades_the_representative_and_the_unread_siblings_borrow_nothing():
+    """Evaluations U2: the sibling share is deleted. A meta reads the window's
+    representative and grades it; the window's other verdicts were not read and
+    settle on their own signals, here none, so censored."""
     runtime = _recursive_runtime(events=0)
     runtime.m = replace(runtime.m, timing=replace(runtime.m.timing, jitter_fraction=0))
     handles = [_pending_meta(runtime) for _ in range(3)]
-    # Restated for R3-D: a tier's separation is a duration, not an arrival count
-    # (GPT-6 third reading §6.C), so the three arrivals are spread across the
-    # window the manifest precommits instead of sharing one timestamp. Everything
-    # the test is about — the representative, the siblings, the ledger order — is
-    # unchanged.
     step = runtime.m.timing.min_ratio * runtime.tick_clock.interval_ns // 2
     events = [
         Event(
@@ -211,6 +186,7 @@ def test_meta_score_settles_the_representative_and_siblings_at_the_sibling_share
     ]
     for event in events[:2]:
         assert runtime._cascade_arrival(event) is None
+    runtime.ticks_consumed = ceil(runtime.cascade[2].window)
     released = runtime._cascade_arrival(events[2])
     assert released is not None
     judged = Event(
@@ -221,13 +197,17 @@ def test_meta_score_settles_the_representative_and_siblings_at_the_sibling_share
         "runtime",
     )
     runtime._deliver_meta_verdict(judged)
-    for h in handles:
-        assert runtime.queue.get(h).status is SettleStatus.SETTLED
+    assert runtime.pending[handles[2]].grades == [0.25]
+    assert runtime.pending[handles[0]].grades == runtime.pending[handles[1]].grades == []
+    runtime.ticks_consumed = (runtime.ev.consequence_backstop_ticks
+                              + runtime.ev.verdict_timeout_ticks + 1)
+    runtime._settle_evaluations()
+    (read,) = runtime.queue.history(handles[2])
+    assert read.status is SettleStatus.SETTLED and read.score == 0.25
+    for h in handles[:2]:
+        (unread,) = runtime.queue.history(h)
+        assert unread.status is SettleStatus.CENSORED
         assert h not in runtime.pending
-    assert runtime.queue.history(handles[2])[0].score == 0.25
-    share = runtime.ev.sibling_share
-    assert [runtime.queue.history(h)[0].score for h in handles[:2]] == [0.25 * share] * 2
-    assert handles[2] not in runtime.cascade_windows
 
 
 def _pending_meta(runtime):
@@ -240,7 +220,9 @@ def _pending_meta(runtime):
         cost_ceiling=0,
         propensity=PropensityRecord(("meta",), (1.0,), "meta", 0, "test-router", "state"),
     )
-    runtime.pending[handle] = PendingJudgement(handle, "conformity", 0, tier=2)
+    runtime.pending[handle] = PendingJudgement(handle, "conformity", 0, tier=2,
+                                               opened_at_tick=0, about="lower", q=0.5,
+                                               evaluator_id="meta")
     return handle
 
 
@@ -253,7 +235,6 @@ def _consequence_runtime(*, provider=None, exchange=None, manifest=None):
         seed=1,
         initial_balance_micro=None,
         ledger_path=None,
-        drip=False,
         router_gamma=0.2,
         provider=provider,
         exchange=exchange,
@@ -288,10 +269,13 @@ def _consequence_produce(runtime, action="seed-decider", channel="verdict"):
         SimpleNamespace(chosen=action),
         runtime.queue.get(handle).deadline_ns,
     )
+    # A return is published as its own kind (primitive audit F12): an antagonist's
+    # is an Exposure, never a ProducerReturn.
     event = next(
         e
         for e in runtime.internal
-        if e.kind == EventKind.PRODUCER_RETURN and e.payload["about_handle"] == handle
+        if str(e.kind) in (str(EventKind.PRODUCER_RETURN), "Exposure")
+        and e.payload["about_handle"] == handle
     )
     runtime._settle_due_forecasts()
     return handle, event
@@ -308,6 +292,8 @@ def _consequence_judge(runtime, event, judge):
         SimpleNamespace(chosen=judge),
         runtime.queue.get(handle).deadline_ns,
     )
+    # The end of the event's routing: the judged return settles on its verdicts (R1).
+    runtime._settle_arrived_verdicts()
     runtime._settle_due_forecasts()
     return handle
 
@@ -494,6 +480,7 @@ def market_http(monkeypatch):
 def _market_runtime(market_http, *, provider=None, events=10, treasury=None, seed_price="0"):
     from factorylab.runtime.worlds import manifest_from_dict
     from factorylab.world.market import X402Provider
+    from tests.seed_charter import seed_charter_table
     from tests.world.test_market import TEST_KEY
 
     manifest = manifest_from_dict({
@@ -504,19 +491,26 @@ def _market_runtime(market_http, *, provider=None, events=10, treasury=None, see
         "evaluation": {"trial_amount_usd": "0.001"},
         "novelty": {"share": 0.5},
         "treasury": treasury or {"insolvency_events": 3},
+        "charter": seed_charter_table(), "immune": {"price_step": 0.05},
     })
     return Runtime(
         manifest, events=events, seed=1, initial_balance_micro=None, ledger_path=None,
-        drip=False, router_gamma=0.2, provider=provider or ScriptedProvider(),
+        router_gamma=0.2, provider=provider or ScriptedProvider(),
         market=X402Provider(private_key=TEST_KEY, transport=market_http),
     )
 
 
 def _register_test_seller(runtime):
+    from fractions import Fraction
+
     from factorylab.cortex.registration import AssemblyProposal, ModelProposal
     from tests.world.test_market import MODEL
 
     runtime._manage_reserve_window()
+    # A whole flow period's share accrued (time audit T6): the registrations are funded.
+    runtime.clock.now_ns += 1
+    runtime.reserve.open_window(runtime.clock.now_ns, max(0, runtime.wallet.unlocked),
+                                accrued=Fraction(1))
     runtime._register("proposal", ModelProposal(MODEL))
     runtime._register("proposal", AssemblyProposal(
         "market-buyer", "producer", MODEL, "Return JSON.", ("Tick",), 16, "low",
@@ -537,7 +531,9 @@ def test_x402_feasibility_uses_one_fixed_request_and_on_chain_reserve(market_htt
     assert not market_http.payments  # registration and feasibility never authorize payments
 
 
-def test_market_discovery_tool_is_priced_and_debited_before_return(market_http, monkeypatch):
+def test_market_discovery_is_a_free_read_that_moves_no_money(market_http, monkeypatch):
+    """Wave 11: the discovery index is a public read that pays no one, so the wallet
+    does not move for it."""
     from factorylab.world.x402 import HTTPResponse
     from tests.world.test_market import resource
 
@@ -554,8 +550,7 @@ def test_market_discovery_tool_is_priced_and_debited_before_return(market_http, 
     result, cost = runtime._run_tool("seed-market", "discovery", {
         "tool": "market.discover", "args": {"url_substring": "chat"},
     })
-    assert cost == runtime.m.tools.population_tool_micro_per_call
-    assert runtime.wallet.balance == initial - cost
+    assert cost == 0 and runtime.wallet.balance == initial
     assert result["sellers"][0]["resource"] == "https://seller.test/chat"
     assert runtime.tool_specs["market.discover"]["kind"] == "market" and len(calls) == 1
 
@@ -639,3 +634,43 @@ def test_position_peak_is_ledger_first_and_survives_flat_account(monkeypatch):
     positions.clear()
     rt._observe_positions()
     assert rt.window.max_position_notional_micro == 6_000_000
+
+
+def test_a_paid_seller_call_runs_on_the_same_clock_as_every_other_call(market_http):
+    """Codex review of #133: an x402 assembly's calls get the safety pass and the paced
+    deadline, and an expired paid call is reported expired (its payment still unknown)."""
+    from types import SimpleNamespace as NS
+
+    from factorylab.runtime.compute import _ObservedX402Model
+    from factorylab.world.market import PaymentOutcomeUnknown
+    from factorylab.world.metering import BillingUncertain, Meter
+    from factorylab.world.models import ModelRequest
+    from tests.world.test_market import MODEL
+
+    rt = _market_runtime(market_http)
+    _register_test_seller(rt)
+    wired = rt.assemblies["market-buyer"].model
+    assert isinstance(wired, _ObservedX402Model)
+    assert (wired.before_call, wired.deadline_s, wired.expired) == (
+        rt._safety_pass, rt._call_deadline_s, rt._call_expired)
+    seen, passes, expired = [], [], []
+
+    class Seller:
+        def quote(self, req):
+            seen.append(("quote", req.timeout_s))
+            return NS(amount_micro=1)
+
+        def complete(self, req, *, record=None, quoted=None):
+            seen.append(("complete", req.timeout_s))
+            raise PaymentOutcomeUnknown("Submitted payment outcome is unknown: "
+                                        "Call deadline expired")
+
+    model = _ObservedX402Model(Seller(), wired.prices, Meter(rt.wallet), record=lambda e: None,
+                               on_unaffordable=lambda h: None,
+                               before_call=lambda: passes.append(1), deadline_s=lambda: 7.0,
+                               expired=lambda h, t: expired.append((h, t)))
+    with pytest.raises(BillingUncertain):
+        model.complete(ModelRequest(MODEL, "s", ({"role": "user", "content": "x"},),
+                                    max_tokens=10), handle="h-1")
+    assert passes == [1] and seen == [("quote", 7.0), ("complete", 7.0)]
+    assert expired == [("h-1", 7.0)]

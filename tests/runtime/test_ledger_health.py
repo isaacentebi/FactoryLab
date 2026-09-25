@@ -33,7 +33,7 @@ def test_an_edit_mid_run_is_caught_at_the_next_resume(tmp_path):
     manifest = load_manifest("scripted")
     path = tmp_path / "world.jsonl"
     rt = Runtime(manifest, events=200, seed=1, initial_balance_micro=None,
-                 ledger_path=str(path), drip=True, router_gamma=0.1)
+                 ledger_path=str(path), router_gamma=0.1)
     original = rt._process_event
     seen = {"edited_at": None, "count_at_edit": None}
     cadence = rt.ledger.ledger._Ledger__full_every

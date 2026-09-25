@@ -1,6 +1,6 @@
 """World manifests.
 
-A manifest is the architect's whole first move: initial balance, drip,
+A manifest is the architect's whole first move: initial balance,
 venue, priced model tiers, seed assemblies, novelty share, timing ratios,
 termination conditions and the seed. It is loaded from TOML, validated, and
 hashed into the ledger's genesis entry so a world can prove which manifest
@@ -12,14 +12,15 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
 import tomllib
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, field, fields, replace
 from decimal import Decimal
 from math import isfinite
 from pathlib import Path
 from typing import Any
 
-from factorylab.charter.charter import Charter, MetricCard, Norm, seed_charter
+from factorylab.charter.charter import Charter, MetricCard, Norm, stated_region
 from factorylab.charter.provenance import (
     PROVENANCE_FIELDS,
     charter_content,
@@ -27,24 +28,19 @@ from factorylab.charter.provenance import (
 )
 from factorylab.kernel.money import usd_to_micro
 from factorylab.runtime.cards import parses
-from factorylab.runtime.notes import NotesSpec
 from factorylab.runtime.observations import observation_for
 from factorylab.world.connector import DEFAULT_DENYLIST, validate_denylist
 from factorylab.world.market import DISCOVERY_URL
 from factorylab.world.models import PriceTable, TokenPrice
+from factorylab.world.venue_tools import (
+    DEFAULT_PUBLIC_READ_WEIGHT_PER_MINUTE,
+    VENUE_WEIGHT_PER_MINUTE,
+)
 
 NS_PER_SECOND = 1_000_000_000
 NS_PER_HOUR = 3_600 * NS_PER_SECOND
 NS_PER_DAY = 24 * NS_PER_HOUR
 WORLDS_DIR = Path(__file__).resolve().parents[2] / "worlds"
-
-
-@dataclass(frozen=True)
-class DripSpec:
-    amount_micro: int
-    period_ns: int
-    start_ns: int
-    end_ns: int
 
 
 @dataclass(frozen=True)
@@ -57,6 +53,40 @@ class Shock:
 
 
 @dataclass(frozen=True)
+class TapeSpec:
+    """``[exchange.tape]``: the recorded market this world's venue replays.
+
+    A tape is the world, not architecture: a past paid run's recorded mids, funding
+    rates and tick stamps (``factorylab/world/tape.py``). Its identity is fixed for the
+    world's life: the SHA-256 of the compact tape, its recorded span, the markets it
+    recorded and each market's spread as the tape states it. The manifest hash covers
+    all of it, so a resume on a different tape is a different world and is refused.
+    """
+
+    sha256: str
+    start_ns: int
+    end_ns: int
+    markets: tuple[str, ...]
+    # Each market's spread in basis points, as the tape states it (a recorded book's
+    # median top-of-book spread, or the fake's own when none was recorded), as text.
+    spread_bps: tuple[tuple[str, str], ...] = ()
+    # Whether the operator admitted models whose training cutoff is unknown: recorded,
+    # because such a model may have been trained on the market this tape replays.
+    allow_unknown_cutoff: bool = False
+
+    @classmethod
+    def of(cls, tape: Any, allow_unknown_cutoff: bool = False) -> TapeSpec:
+        """The key for ``tape`` (a ``factorylab.world.tape.Tape``), every field derived
+        from the tape itself and none accepted from a caller; the runtime checks the
+        same derivation again (``bootstrap.check_tape``)."""
+        ident = tape.identity()
+        return cls(sha256=ident["sha256"], start_ns=ident["start_ns"],
+                   end_ns=ident["end_ns"], markets=ident["markets"],
+                   spread_bps=tuple(sorted(ident["spread_bps"].items())),
+                   allow_unknown_cutoff=allow_unknown_cutoff)
+
+
+@dataclass(frozen=True)
 class ExchangeSpec:
     kind: str  # "fake" | "hyperliquid"
     mainnet: bool = False
@@ -66,23 +96,34 @@ class ExchangeSpec:
     start_cash_usd: str = "100"
     shocks: tuple[Shock, ...] = ()
     client_namespace: str | None = None
-    # Free collateral this world precommits to leaving unused at the venue, on top
-    # of the margin an order needs. A buffer declared before the orders exist, so
-    # it cannot be reasoned away by the order that wants it. Zero by default: a
-    # world that wants a cushion says so.
-    collateral_headroom_usd: str = "0"
     # DEPRECATED and inert (architect decision D1: a principal cap is a Class-2
-    # imposition). Still read, validated and hashed exactly as declared, so the
-    # manifests that carry it load and keep their historical manifest hashes; nothing
-    # enforces it. The venue's own account is the only limit on the principal used.
-    # Dropped from the canonical JSON at its ``None`` default, as it always was.
+    # imposition). Still read, validated and hashed as declared; nothing enforces it.
+    # The venue's own account is the only limit on the principal used.
     principal_usd: str | None = None
+    # Whether the venue's vaults are a surface of this world (``[venue] vault_tools``):
+    # the vault reads and writes are published, and a vault's equity is a custody pot.
+    # Off by default.
+    vault_tools: bool = False
+    # ``[venue] public_read_weight_per_minute``: the venue request weight the public
+    # reads may spend per minute of world time, world-wide. The venue's IP limit is a
+    # real constraint shared with the kernel's own calls, so it is a limit, not a price
+    # (essay II.II.b); the default leaves the kernel most of it (world/venue_tools.py).
+    public_read_weight_per_minute: int = DEFAULT_PUBLIC_READ_WEIGHT_PER_MINUTE
+    # ``[venue] max_readers``: the venue read slots. The venue's IP limit bounds who
+    # reads the venue, not how many seats exist: seeds take slots in manifest order,
+    # a registration takes a free one, a retirement frees one, and a seat with none
+    # registers all the same, without the venue read tools. Each slot's share is the
+    # read budget over this count.
+    max_readers: int = 16
+    # ``[exchange.tape]``: the recorded market a fake venue replays (TapeSpec), or None
+    # for the seeded random walk. Only a fake venue replays one.
+    tape: TapeSpec | None = None
 
 
 @dataclass(frozen=True)
 class ModelTier:
     id: str
-    provider: str  # "fake" | "openrouter" | "anthropic"
+    provider: str  # "fake" | "openrouter" | "venice" | "x402"
     input_usd_per_mtok: str
     output_usd_per_mtok: str
     reasoning: tuple[tuple[str, Any], ...] = ()  # OpenRouter `reasoning` object, e.g. effort=low
@@ -91,6 +132,19 @@ class ModelTier:
     # Provider request keys sent verbatim per model (an OpenRouter ``provider`` routing
     # block, say); the request's own keys and its JSON contract are applied after it.
     extra_body: tuple[tuple[str, Any], ...] = ()
+    # How the route carries a request's I/O contract (Chapter II §II.b: physics is
+    # enforced, not announced): "json_object" asks the host for JSON syntax alone;
+    # "json_schema" hands the contract to the host's constrained decoder. A transport
+    # fact about the route, fixed for the world's life.
+    contract: str = "json_object"
+    # The last day (UTC, "YYYY-MM-DD") the model's training data may cover, as its
+    # provider states it; None when unknown. A world replaying a recorded tape refuses
+    # a model that may have seen the tape's market (the look-ahead guard).
+    training_cutoff: str | None = None
+
+
+#: The ways a route may carry a request's contract (``ModelTier.contract``).
+MODEL_CONTRACTS = ("json_object", "json_schema")
 
 
 @dataclass(frozen=True)
@@ -135,35 +189,33 @@ class AssemblySeed:
 
 @dataclass(frozen=True)
 class ToolsSpec:
-    population_tool_micro_per_call: int = 50
     # DEPRECATED and inert (architect decision D1): leverage is whatever the venue
-    # allows. Kept only because every manifest hash was computed with it.
+    # allows. Still read, validated and hashed; nothing enforces it.
     max_leverage: int = 3
     max_routers_per_kind: int = 3
     max_depth: int = 4
     max_children: int = 3
     max_tool_calls: int = 4
-    #: Whether this world publishes the voluntary addressing capability. It is off
-    #: by default, so address is a factor a run turns on rather than something that
-    #: arrives with a code change, and a world that predates the key is unchanged.
-    #: It gates a capability; it schedules nothing and wakes nobody.
-    address_enabled: bool = False
 
 
 @dataclass(frozen=True)
 class ConnectorsSpec:
-    """Connector reads share immutable size, time, flat-price and assembly-window bounds."""
+    """Connector reads share immutable size, time and assembly-window bounds.
+
+    A fetch of a public origin pays no one, so it carries no price: the
+    per-window call cap is its hard limit. Paid data is the seller's own x402
+    price, debited as a real outflow when it is bought.
+    """
 
     max_bytes: int = 262144
     timeout_s: int = 10
-    call_price_micro: int = 1000
     max_calls_per_window: int = 60
     origin_denylist: tuple[str, ...] = DEFAULT_DENYLIST
 
     def __post_init__(self):
-        for name in ("max_bytes", "timeout_s", "max_calls_per_window", "call_price_micro"):
+        for name in ("max_bytes", "timeout_s", "max_calls_per_window"):
             value = getattr(self, name)
-            if type(value) is not int or value < (0 if name == "call_price_micro" else 1):
+            if type(value) is not int or value < 1:
                 raise ValueError(f"connectors.{name} must be an integer within its bounds")
         validate_denylist(self.origin_denylist)
         object.__setattr__(self, "origin_denylist", tuple(self.origin_denylist))
@@ -182,26 +234,125 @@ def online_id(model_id: str) -> str:
 
 @dataclass(frozen=True)
 class WebSpec:
-    """The search route, its flat call price and the ceiling on one search.
+    """The search route and the ceiling on one search.
 
     ``search_model`` names a model on the menu; the tool calls its ``:online``
     route. With no model named there is no ``[web]`` block and no ``web.search``
-    tool: a world that predates this keeps its manifest identity exactly.
+    tool. A search costs what the route's provider bills for it (tokens plus the
+    plugin's own per-request charge) and nothing else.
     """
 
     search_model: str | None = None
-    call_price_micro: int = 0
     max_call_micro: int = 0
 
     def __post_init__(self):
         if self.search_model is not None and not isinstance(self.search_model, str):
             raise ValueError("web.search_model must be a model id on the menu")
-        for name in ("call_price_micro", "max_call_micro"):
+        if type(self.max_call_micro) is not int or self.max_call_micro < 0:
+            raise ValueError("web.max_call_usd must be a non-negative amount")
+        if self.search_model is not None and self.max_call_micro <= 0:
+            raise ValueError("web.max_call_usd must be positive")
+
+
+#: The default cap on retained private state: 64 MiB.
+DEFAULT_RETAINED_PRIVATE_BYTES = 64 * 1024 * 1024
+#: At genesis the cap may take at most this share of the host's free disk, as a
+#: (numerator, denominator) pair: half, so the diary and the world's record keep room.
+MAX_FREE_DISK_SHARE = (1, 2)
+
+
+@dataclass(frozen=True)
+class StorageSpec:
+    """``[storage]``: the hard cap on retained private state, fixed for the world's life.
+
+    Retained private state is every working-state head and program private state
+    the archive holds, retired ids' included. The disk is finite and pays no one,
+    so this is a limit, never a price (essay II.II.b, the hard cast).
+    """
+
+    retained_private_bytes: int = DEFAULT_RETAINED_PRIVATE_BYTES
+
+
+#: The hybrid capital-loop keys: unset (``None``) in every world but the capital loop.
+HYBRID_VENICE_KEYS = ("venice_network", "venice_shadow_sink", "max_venice_total_micro",
+                      "venice_reserve_floor_micro", "venice_pay_to")
+
+
+@dataclass(frozen=True)
+class PolymarketSpec:
+    """``[polymarket]``: Polymarket event markets as a surface, off unless enabled.
+
+    ``enabled = false`` registers no tool and opens no custody pot, whatever else
+    the disabled block names. ``venue`` names what the
+    tools reach: ``fake`` is the seeded simulated venue for reads and writes;
+    ``live`` is the public read API only, and no write tool is registered, because
+    live order signing on Polygon is not built (``world/polymarket.py``,
+    ``LiveOrderAdapter``). The caps are limits the kernel refuses beyond, fixed
+    for the world's life: one order's notional, the pot's open exposure (resting
+    buys plus the cost of tokens held), and orders a window. ``collateral_micro``
+    is the simulated pot's opening USDC; a live pot is whatever its wallet holds.
+    """
+
+    enabled: bool = False
+    venue: str = "fake"
+    collateral_micro: int = 0
+    max_order_micro: int = 10_000_000
+    max_open_micro: int = 100_000_000
+    max_orders_per_window: int = 20
+    seed: int = 0
+    # The world's Polymarket read requests per sliding 10 s of wall time (the window
+    # Polymarket counts), and the part of them held back for the kernel's own
+    # settlement reads. A limit taken from Polymarket's published rate limits
+    # (world/polymarket.py), never a price.
+    read_requests_per_10s: int = 200
+    kernel_reserve_per_10s: int = 100
+
+    def __post_init__(self):
+        from factorylab.world.polymarket import PUBLISHED_REQUESTS_PER_10S
+
+        if type(self.enabled) is not bool:
+            raise ValueError("polymarket.enabled must be true or false")
+        budget, reserve = self.read_requests_per_10s, self.kernel_reserve_per_10s
+        if type(budget) is not int or not 1 <= budget <= PUBLISHED_REQUESTS_PER_10S:
+            raise ValueError("polymarket.read_requests_per_10s must be an integer in "
+                             f"[1, {PUBLISHED_REQUESTS_PER_10S}], Polymarket's "
+                             "tightest published limit per 10 s")
+        if type(reserve) is not int or not 1 <= reserve < budget:
+            raise ValueError("polymarket.kernel_reserve_per_10s must be an integer "
+                             "of at least 1 below polymarket.read_requests_per_10s")
+        if self.venue not in ("fake", "live"):
+            raise ValueError("polymarket.venue must be fake or live")
+        for name in ("collateral_micro", "max_order_micro",
+                     "max_open_micro", "max_orders_per_window", "seed"):
             value = getattr(self, name)
             if type(value) is not int or value < 0:
-                raise ValueError(f"web.{name} must be a non-negative integer")
-        if self.search_model is not None and self.max_call_micro <= self.call_price_micro:
-            raise ValueError("web.max_call_usd must leave room above the flat call price")
+                raise ValueError(f"polymarket.{name} must be a non-negative integer")
+        if self.venue == "live" and self.collateral_micro:
+            # A live venue is read-only: writes, positions and the marks that read a
+            # held token's book exist only on the simulated venue, which sends
+            # Polymarket nothing, so the kernel's request bound covers no live mark.
+            # Live trading must bring its own bound (runtime/polymarket.py, open_limit).
+            raise ValueError("polymarket_live_writes_not_built: polymarket.collateral_usd "
+                             "seeds only the simulated venue; a live venue is read-only")
+
+
+@dataclass(frozen=True)
+class SubscriptionsSpec:
+    """``[subscriptions]``: the hard limit on watcher work, fixed for the world's life.
+
+    A watcher's predicate runs in the world's own process and pays no one, so its
+    cost is the world's own time, a limit and never a price (essay II.II.b): at most
+    ``max_watcher_evaluations_per_sweep`` watchers are evaluated a sweep, in a
+    rotating order, against one snapshot of the world.
+    """
+
+    max_watcher_evaluations_per_sweep: int = 32
+
+    def __post_init__(self):
+        value = self.max_watcher_evaluations_per_sweep
+        if type(value) is not int or value < 1:
+            raise ValueError("subscriptions.max_watcher_evaluations_per_sweep must be a "
+                             "positive integer")
 
 
 @dataclass(frozen=True)
@@ -226,9 +377,29 @@ class TreasurySpec:
     # $0.10 of headroom over the $0.20 the deployed CoreDepositWallet quotes on both networks.
     max_forward_fee_micro: int = 300_000
     max_forward_fees_per_window: int = 1_000_000
-    # Reserve windows a forwarded mint may stay unobserved before the exit is stranded
-    # (recoverably) and the treasury admits new transfers again.
-    forward_wait_windows: int = 2
+    # World ticks a forwarded mint (or a hybrid top-up) may stay undone before the exit
+    # is stranded (recoverably) and the treasury admits new transfers again. A declared
+    # floor: the runtime raises it to the capital loop's measured p90 closure, so a
+    # conversion is never stranded faster than the rail delivers (time audit T13).
+    forward_wait_ticks: int = 360
+    # The Venice and forwarding-fee caps' own period, a wall-clock duration: money rails
+    # run in wall time, so a rate cap is stated there and never borrows the pricing
+    # window (time audit T1, T13).
+    cap_window_ns: int = 3600 * NS_PER_SECOND
+    # The hybrid capital-loop rehearsal (docs/architecture/capital-loop-rehearsal.md):
+    # "base-mainnet" buys real Venice credit from the Base mainnet reserve while the
+    # venue stays on testnet, and a shadow leg sends the same $5 of testnet USDC from
+    # the venue to ``venice_shadow_sink`` so the observed pots pay for it. Both absent
+    # (the default) keep the rail's own network.
+    venice_network: str | None = None
+    venice_shadow_sink: str | None = None
+    # Required with ``venice_network``: the most real USDC the world may ever authorize
+    # for Venice (re-authorizations included), the Base mainnet reserve balance below
+    # which no top-up is prepared (a bound a fresh run cannot reset), and the only payee
+    # a Venice quote may name.
+    max_venice_total_micro: int | None = None
+    venice_reserve_floor_micro: int | None = None
+    venice_pay_to: str | None = None
 
 
 @dataclass(frozen=True)
@@ -239,13 +410,15 @@ class PricesSpec:
     decay: float = 0.1
     lambda_max: float = 1.0
     min_window_events: int = 1
-    kappa: float = 0.5
     penalty_cap: float = 0.5
     # Floor on a decision's share of a generic (non-attributable) violation, so
     # splitting participation across many decisions cannot dilute it away.
     min_blame_share: float = 0.1
-    # The flat price of one program seat call (C8), reserved and committed like a model call.
-    program_micro_per_call: int = 50
+    #: The one price law is the PID (``charter.controller.PriceController``, essay
+    #: II.II.b): ``kp`` is the proportional gain and ``kd`` the derivative-on-measurement
+    #: gain beside the integral gain ``eta``. At zero the law is the integral alone.
+    kp: float = 0.0
+    kd: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -256,18 +429,29 @@ class EvaluationSpec:
     min_coverage: float = 0.5
     trial_amount_micro: int = 100_000  # novelty trial paid per registration
     forecast_horizon_events: int = 10
-    grounded_horizon_ticks: int = 10
+    #: Anticipatory settlement (essay II.IV.b): world ticks after a judged return opens
+    #: at which its mark settles its judges' consequence reward. At most the backstop.
+    consequence_horizon_ticks: int = 10
+    #: The scale, in basis points, of a declined trade's gross move in
+    #: ``opportunity-cost-v2``: y = 0.5 - 0.5 * tanh(gross_bps / scale).
+    opportunity_scale_bps: float = 50.0
     consequence_backstop_events: int = 200
     adversarial_share: float = 0.15  # cap on router mass over antagonist assemblies
-    sibling_share: float = 0.5  # share of the representative's meta score a sibling settles at
     sampling_step: float = 0.1  # consequence-mix step per divergent window
     sampling_cap: float = 0.7  # ceiling of the raised consequence mix
-    #: What finally settles a producer decision. ``verdict`` is the shipped line: a
-    #: judge opinion is the producer score. ``realized`` settles on observed
-    #: consequence instead, so an approval that nothing bore out does not pay. The
-    #: default is ``verdict``, so a world that predates the key is unchanged and a
-    #: run turns the new line on deliberately.
-    producer_feedback: str = "verdict"
+    #: The retentive core (essay II.a): the event kinds whose router the runtime seeds
+    #: as a no-swap-regret learner (Blum-Mansour over EXP3 rows) instead of mean-based
+    #: EXP3. Every other kind stays at the frontier. Empty keeps every earlier world.
+    no_swap_regret_kinds: tuple[str, ...] = ()
+    #: Evaluations P6, M2: the share of judged returns drawn again until
+    #: ``multi_judge_count`` judges on distinct families (never the author's) read
+    #: them, which is what makes ensemble disagreement exist (essay II.III.a).
+    multi_judge_share: float = 0.3
+    multi_judge_count: int = 2
+    #: Evaluations C7: of each cascade window's completed judgements, the share
+    #: released to the tier above (at least one), so the tiers read a meaningful
+    #: share of what the tier below said rather than one representative a window.
+    meta_read_share: float = 0.5
 
     # Both horizons count world ticks consumed, not internal events (defect 1). The
     # field names predate that and are kept so every manifest keeps its meaning; the
@@ -297,11 +481,47 @@ def _tick_horizon(ev: dict, name: str, default: int) -> Any:
 
 
 @dataclass(frozen=True)
+class ChaosSpec:
+    """The chaos actuator's fault rates (essay II.III.b: a chaos monkey; evaluations M1).
+
+    Each rate is the probability, drawn from the runtime's seeded stream, that one
+    real operational fault reaches what the seats experience: per tick, every venue
+    read a seat makes that tick answers unavailable (``venue_unavailable``) or the
+    mids a seat is shown stay those of the tick before (``stale_mids``); per call, a
+    population tool's result is withheld (``tool_withheld``) or a connector fetch
+    times out (``connector_timeout``). No fault moves money: none fills, charges,
+    credits or refunds anything, and none reaches order placement, collateral,
+    settlement, custody or the safety path (``runtime.chaos``). Zero draws nothing.
+    """
+
+    venue_unavailable: float = 0.0
+    stale_mids: float = 0.0
+    tool_withheld: float = 0.0
+    connector_timeout: float = 0.0
+
+
+#: The most judges one return may be drawn for (``evaluation.multi_judge_count``).
+MAX_JUDGES_PER_RETURN = 5
+
+#: The largest rate a chaos fault may be drawn at: faults are a bounded minority of
+#: what seats experience, never the world itself.
+MAX_CHAOS_RATE = 0.5
+
+
+@dataclass(frozen=True)
 class NoveltySpec:
+    """The niche for unhistoried actions (essay II.II.b; ruling R5).
+
+    ``share`` is one consequence period's share of the spendable budget, accrued as
+    a flow (time audit T6). A trial's patience is not cast here: it is ``min_ratio``
+    measured consequence periods (time audit T5).
+    """
+
     share: float
-    window_ns: int
     trials: int = 3  # settled consequences that end an assembly's protected trial
-    max_lifetime_windows: int = 6  # windows after registration that end it regardless
+    #: The most of one consequence period's niche one seat's unhistoried actions may
+    #: use (ruling R5; the #134 review), so no seat can starve the registration trials.
+    seat_share: float = 0.25
 
 
 @dataclass(frozen=True)
@@ -311,19 +531,43 @@ class CommitteeSpec:
     # A promised move counts once it clears this fraction of the frozen region's scale
     # (the observation's declared unit width); smaller moves are "did not move".
     promise_resolution: float = 0.01
+    # The fewest seats that may decide a motion (charter audit C2). Below it no
+    # committee is seated and the motion waits for the next governance boundary.
+    # Three is the smallest body in which a strict majority is not unanimity, so
+    # no one seat can pass or block a motion alone; it is also committee.seats' floor.
+    quorum: int = 3
+
+
+@dataclass(frozen=True)
+class NormHouseSpec:
+    """Who may write the charter's norms into a living world (essay II.IV.a).
+
+    The input layer's write permissions are part of the hard kernel: "Any change to
+    those rules should also result in the termination of the factory". ``signer`` is
+    the one EVM address whose signature makes a norm edition valid; with none, no
+    norm edition is possible for the world's life.
+    """
+
+    signer: str | None = None
 
 
 @dataclass(frozen=True)
 class ImmuneSpec:
-    """Detection horizons and bounded interventions are immutable launch casts."""
+    """Detection horizons and bounded interventions are immutable launch casts.
 
+    The profile's cells are the three region-relative bins (inside, up to one scale
+    unit outside, beyond), fixed in the kernel rather than cast (versioning U5).
+    """
+
+    #: The stable-failure price ratchet's lambda step per window of duration (essay
+    #: II.II.b). Required: a lambda step and the exploration-gain step are different
+    #: units, so neither stands in for the other (versioning S3).
+    price_step: float
     k: int = 3
-    bins: int = 3
     tv_threshold: float = 0.2
     gap_threshold: float = 0.8
     gain_step: float = 0.05
     gamma_max: float = 0.5
-    decay_step: float = 0.1
     registration_bins: tuple[float, ...] = (0.0, 2.0)
     revision_bins: tuple[float, ...] = (0.0,)
 
@@ -335,16 +579,23 @@ class ClockSpec:
 
 @dataclass(frozen=True)
 class TimingSpec:
+    """The relational dynamics of the clock (essay II.IV.c), never its bands.
+
+    ``world_repricing_ns`` is the world's own repricing period, a fact about the
+    world (a venue's funding interval): governance is viable only while
+    ``min_ratio`` times the slowest loop fits within it. None states no bound.
+    """
+
     min_ratio: int = 3
     jitter_fraction: float = 0.2
     cadence_sample: int = 200
     min_support: int = 30
+    world_repricing_ns: int | None = None
 
 
 @dataclass(frozen=True)
 class TerminationSpec:
     balance_floor_micro: int = 0
-    max_events: int | None = None
 
 
 @dataclass(frozen=True)
@@ -385,7 +636,7 @@ class PromptSpec:
     the same block the validators read.
 
     The default is ``reference``: a manifest that does not name a mode gets the
-    prompt it always got, and hashes as it always did.
+    prompt it always got.
     """
 
     mode: str = "reference"
@@ -407,33 +658,39 @@ class WorldManifest:
     name: str
     seed: int
     initial_balance_micro: int
-    drip: DripSpec | None
     exchange: ExchangeSpec
     models: tuple[ModelTier, ...]
     assemblies: tuple[AssemblySeed, ...]
     novelty: NoveltySpec
     timing: TimingSpec
     termination: TerminationSpec
+    # Every world writes its own charter (charter audit S3): the kernel has no default.
+    charter: Charter
+    immune: ImmuneSpec
     evaluation: EvaluationSpec = EvaluationSpec()
     tools: ToolsSpec = ToolsSpec()
     connectors: ConnectorsSpec = ConnectorsSpec()
     web: WebSpec = WebSpec()
-    notes: NotesSpec = NotesSpec()
+    polymarket: PolymarketSpec = PolymarketSpec()
+    storage: StorageSpec = StorageSpec()
     prices: PricesSpec = PricesSpec()
     treasury: TreasurySpec = TreasurySpec()
     clock: ClockSpec = ClockSpec()
     committee: CommitteeSpec = CommitteeSpec()
-    immune: ImmuneSpec = ImmuneSpec()
+    norm_house: NormHouseSpec = NormHouseSpec()
     endowment: EndowmentSpec = EndowmentSpec()
     kill: KillSpec = KillSpec()
     providers: ProvidersSpec = ProvidersSpec()
     prompt: PromptSpec = PromptSpec()
+    chaos: ChaosSpec = ChaosSpec()
+    subscriptions: SubscriptionsSpec = SubscriptionsSpec()
     tick_interval_ns: int = 10 * NS_PER_SECOND
     extra: dict[str, Any] = field(default_factory=dict)
 
-    charter: Charter = field(default_factory=seed_charter)
     charter_prices: tuple[tuple[str, float], ...] = ()
-    charter_explicit: bool = False
+    # Charter audit P5: an edition after 1 names the charter it descends from. Hashed:
+    # a charter's lineage is part of the world it makes.
+    charter_parent_sha256: str | None = None
     # Admission provenance for a funded launch: the digest the ratification exported,
     # the roster it was surveyed against, and the digest of the cards actually loaded.
     charter_ratified_sha256: str | None = None
@@ -443,9 +700,19 @@ class WorldManifest:
     # ---- derived
 
     @property
-    def max_tick_ns(self) -> int:
-        """Return the largest integer interval satisfying the reserve-window ratio."""
-        return self.novelty.window_ns // self.timing.min_ratio
+    def max_tick_ns(self) -> int | None:
+        """The slowest tick at which a governance tier can keep up with the world, or None.
+
+        Essay II.IV.c: governance must not lag the world. Its period is at least
+        ``min_ratio`` consequence backstops, so a tick is admissible while that many
+        ticks fit within the world's repricing period. A world that states no
+        repricing period has no upper bound here.
+        """
+        repricing = self.timing.world_repricing_ns
+        if repricing is None:
+            return None
+        return repricing // (self.timing.min_ratio
+                             * self.evaluation.consequence_backstop_events)
 
     def price_table(self) -> PriceTable:
         t = PriceTable()
@@ -476,83 +743,27 @@ class WorldManifest:
         """Each model's verbatim provider request keys, by model id; absent when empty."""
         return {m.id: dict(m.extra_body) for m in self.models if m.extra_body}
 
+    def schema_contract_models(self) -> frozenset[str]:
+        """The model ids whose route carries the contract as a JSON schema."""
+        return frozenset(m.id for m in self.models if m.contract == "json_schema")
+
     def canonical_json(self) -> str:
+        """Guarantees the manifest hashes every key the world runs under, at any value.
+
+        R8 and versioning S1: no key is dropped at its default, not even to let an older
+        world keep its hash. A kernel change that adds a key renames every world,
+        deliberately, because a world whose physics changed is a new world that starts
+        again from v0. Only
+        admission provenance is left out: the ratification digests and the digest of
+        the loaded cards say how identical cards were admitted, not what world they make.
+        """
         payload = asdict(self)
-        # Admission provenance does not change the world defined by identical cards.
-        payload.pop("charter_explicit")
-        # Preserve historical manifest identities for models without an extra body.
-        for model in payload["models"]:
-            if not model.get("extra_body"):
-                model.pop("extra_body", None)
         for name in ("charter_ratified_sha256", "charter_roster_sha256",
                      "charter_content_sha256"):
             payload.pop(name)
-        # Preserve historical manifest identities when the opt-in namespace is absent.
-        if payload["exchange"]["client_namespace"] is None:
-            payload["exchange"].pop("client_namespace")
-        # Preserve historical manifest identities while the gas-route keys keep their defaults.
-        for key, default in (("cctp_forwarding", "on_empty_gas"),
-                             ("max_forward_fee_micro", 300_000),
-                             ("max_forward_fees_per_window", 1_000_000),
-                             ("forward_wait_windows", 2)):
-            if payload["treasury"].get(key) == default:
-                payload["treasury"].pop(key)
-        # Edition 2 keys keep the identity of every manifest that predates them: a world
-        # without locked backing, or at the default byte-day rent, hashes as it always did.
-        if payload["endowment"] == asdict(EndowmentSpec()):
-            payload.pop("endowment")
-        # Edition 3's keys are hash-neutral at their defaults, so every world that predates
-        # the kill contract, the provider inventories and the per-seat fields keeps both its
-        # manifest identity and the roster hash its charter was ratified against.
-        if payload["kill"] == asdict(KillSpec()):
-            payload.pop("kill")
-        if payload["providers"] == asdict(ProvidersSpec()):
-            payload.pop("providers")
-        # A world that names no prompt mode hashes exactly as it did before the key
-        # existed: an added key may not rename a world that predates it, and every
-        # roster digest a charter was ratified against stays what it was.
-        if payload["prompt"] == asdict(PromptSpec()):
-            payload.pop("prompt")
-        # Likewise for the addressing switch: a world that does not publish address
-        # hashes exactly as it did before the capability existed.
-        if payload["tools"].get("address_enabled") is False:
-            payload["tools"].pop("address_enabled")
-        # And for the feedback line: a world settling producers on judge opinion is
-        # the world every manifest already described.
-        if payload["evaluation"].get("producer_feedback") == "verdict":
-            payload["evaluation"].pop("producer_feedback")
-        if payload["evaluation"].get("grounded_horizon_ticks") == 10:
-            payload["evaluation"].pop("grounded_horizon_ticks")
-        # An absent [web] block registers no search tool, so a world without one hashes
-        # exactly as it did before web search existed.
-        if payload["web"] == asdict(WebSpec()):
-            payload.pop("web")
-        for assembly in payload["assemblies"]:
-            if assembly.get("cadence_floor") == 1:
-                assembly.pop("cadence_floor", None)
-            if not assembly.get("initial_state"):
-                assembly.pop("initial_state", None)
-            if assembly.get("system_prompt") is None:
-                assembly.pop("system_prompt", None)
-        if payload["notes"].get("micro_per_byte_day") == NotesSpec().micro_per_byte_day:
-            payload["notes"].pop("micro_per_byte_day")
-        # Preserve historical manifest identities while the blame floor keeps its default.
-        if payload["prices"].get("min_blame_share") == 0.1:
-            payload["prices"].pop("min_blame_share")
-        # Preserve historical manifest identities while promise grading keeps its resolution.
-        if payload["committee"].get("promise_resolution") == 0.01:
-            payload["committee"].pop("promise_resolution")
-        # Preserve historical manifest identities while the program call price is its default.
-        if payload["prices"].get("program_micro_per_call") == 50:
-            payload["prices"].pop("program_micro_per_call")
-        # A world that precommits no collateral headroom hashes as it did before
-        # the key existed: an added key may not rename a world that predates it.
-        if payload["exchange"].get("collateral_headroom_usd") == "0":
-            payload["exchange"].pop("collateral_headroom_usd")
-        # A world that declares no trading principal hashes as it did before the key
-        # existed: an added key may not rename a world that predates it.
-        if payload["exchange"].get("principal_usd") is None:
-            payload["exchange"].pop("principal_usd", None)
+        # A set, not a sequence: the same core whatever order the manifest listed it in.
+        payload["evaluation"]["no_swap_regret_kinds"] = sorted(
+            payload["evaluation"]["no_swap_regret_kinds"])
         return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
     def manifest_hash(self) -> str:
@@ -598,7 +809,7 @@ class WorldManifest:
 
         The namespace keeps a funded world's client order IDs out of every other
         world's; the two digests bind the loaded cards and the roster that voted them
-        to the exact artifact ``scripts/ratify_charter.py`` exported. The same digest
+        to the exact artifact ``scripts/charter_session.py`` exported. The same digest
         functions serve both, so an existing ratified artifact verifies unchanged.
         """
         from factorylab.charter.provenance import roster_hash
@@ -641,20 +852,406 @@ class WorldManifest:
         if sum(amount for _, amount in e.releases) != e.locked_micro:
             raise ValueError("endowment.releases must sum to endowment.locked_micro")
 
+    def _validate_venice_network(self) -> None:
+        """Guarantees real Venice credit is bought across networks only in a testnet rehearsal.
+
+        The hybrid mode spends real Base mainnet USDC for credit while trading money
+        is testnet money, so its conversions are paid twice: once really, once in the
+        observed pots through a shadow send to a declared sink. On a mainnet venue the
+        ordinary rail already pays from the observed reserve and a shadow would burn
+        real money for nothing, so the mode is refused there, and it is refused without
+        a sink because a conversion the observed pots never pay for would look like
+        credit minted from nowhere (essay II.IV: the reciprocal flow of capital is only
+        a flow if both ends are booked).
+        """
+        import re
+
+        t = self.treasury
+        network, sink = t.venice_network, t.venice_shadow_sink
+        bounds = {"venice_shadow_sink": sink, "max_venice_total_usd": t.max_venice_total_micro,
+                  "venice_reserve_floor_usd": t.venice_reserve_floor_micro,
+                  "venice_pay_to": t.venice_pay_to}
+        if network is None:
+            for name, value in bounds.items():
+                if value is not None:
+                    raise ValueError(f"treasury.{name} requires treasury.venice_network")
+            return
+        if network != "base-mainnet":
+            raise ValueError("treasury.venice_network must be base-mainnet when set")
+        if self.exchange.mainnet:
+            raise ValueError("treasury.venice_network is a testnet rehearsal mode; a mainnet "
+                             "venue converts through its own reserve")
+        if sink is None:
+            raise ValueError("treasury.venice_network requires treasury.venice_shadow_sink")
+        for name in ("venice_shadow_sink", "venice_pay_to"):
+            value = bounds[name]
+            if value is None:
+                raise ValueError(f"treasury.venice_network requires treasury.{name}")
+            if (not isinstance(value, str) or not re.fullmatch(r"0x[0-9a-fA-F]{40}", value)
+                    or int(value, 16) == 0):
+                raise ValueError(f"treasury.{name} must be a nonzero EVM address")
+        # Real money needs an absolute bound, not only a per-window rate: recoverable
+        # strands and re-authorizations used to reach the reserve outside the window cap.
+        total, floor = t.max_venice_total_micro, t.venice_reserve_floor_micro
+        if total is None:
+            raise ValueError("treasury.venice_network requires treasury.max_venice_total_usd")
+        if type(total) is not int or total <= 0:
+            raise ValueError("treasury.max_venice_total_usd must be positive integer money")
+        if floor is None:
+            raise ValueError("treasury.venice_network requires treasury.venice_reserve_floor_usd")
+        if type(floor) is not int or floor < 0:
+            raise ValueError("treasury.venice_reserve_floor_usd must be nonnegative money")
+
+    def _nameable_kinds(self) -> set[str]:
+        """Every event kind a router of this world can be seeded for, known at genesis.
+
+        Guarantees the world's own kinds, the built-in returns, and every kind a
+        manifest seat accepts or emits (an emitted kind gains a router the moment a
+        seat accepts it). A kind a population invents after launch is not in it.
+        """
+        from factorylab.cortex.registration import BUILTIN_RETURNS
+        from factorylab.kernel.events import EventKind
+
+        return ({str(k) for k in EventKind} | set(BUILTIN_RETURNS)
+                | {k for a in self.assemblies for k in (*a.accepts, *(a.emits or ()))})
+
+    def _validate_judged_kinds(self) -> None:
+        """Every seeded kind whose reward is its readers' verdicts has a seeded reader.
+
+        Guarantees that a kind a seed emits under the ``judged`` or ``exposure``
+        reward shape (a ProducerReturn, an Exposure, a manifest kind with no other
+        shape) is accepted by at least one seed. Such a return settles only on the
+        verdicts of the contracts that accept it (ruling R1; primitive audit F12:
+        a judge of Exposure declares it), so a roster that emits one with no reader
+        launches returns that act on the world and are never judged. The rule binds
+        a roster that seeds judging at all (some seed emits a Verdict); a roster
+        with no judge is an evaluation-free fixture, and every return it makes is
+        visibly unjudged rather than silently so.
+        """
+        from factorylab.cortex.registration import reward_contracts, seed_emits
+
+        seeded = {a.id: tuple(a.emits) if a.emits else seed_emits(a.role)
+                  for a in self.assemblies}
+        if not any("Verdict" in emits for emits in seeded.values()):
+            return
+        accepted = {k for a in self.assemblies for k in a.accepts}
+        for a in self.assemblies:
+            for kind, shape in reward_contracts(seeded[a.id]).items():
+                if shape in ("judged", "exposure") and kind not in accepted:
+                    raise ValueError(f"assembly {a.id} emits {kind}, which settles on the "
+                                     "verdicts of its readers, and no seed accepts it")
+
+    def evaluator_population_problems(self) -> list[str]:
+        """Every way the seeded roster falls short of Chapter II §III's evaluators.
+
+        Guarantees one sentence per failed check, and none for a roster that seeds no
+        judging at all (no seed emits a Verdict: an evaluation-free fixture, whose
+        returns are visibly unjudged). The checks are facts about the world fixed at
+        the Stackelberg move (evaluations C1, M3, P6; the #132 review, items 2, 3):
+
+        * evaluator seats (every seed whose kinds read a subject as a judgement: a
+          verdict, a grade of the tier below, a counter-verdict) strictly outnumber
+          producer seats (every seed whose returns settle on their readers'
+          verdicts, antagonists included): producers are "now established to be the
+          minority of the superdark factory's population" (II.III.b);
+        * at least three foundation-model families serve the evaluator tier (II.IV:
+          a common foundation model is "a global forcing function"; a provider change
+          is not a model change, ``runtime.families``);
+        * every judged kind a seed emits is accepted by judges off its author's
+          family, and while ``evaluation.multi_judge_share`` is positive by judges on
+          at least ``multi_judge_count`` such families (rulings §2, Evaluations);
+        * every chain a seeded tier can be asked to grade has a seeded reader: each
+          (judge, producer) pair of families a Verdict can carry is read by a meta
+          on neither, and, when any seed reads MetaVerdicts, each (grader, graded)
+          pair a MetaVerdict can carry is read by a seed on neither, to every depth
+          the roster reaches (the two-link family rule of
+          ``RoutingMixin._chain_families``);
+        * every adversarial judge can read some Verdict the roster makes: a sampled
+          minority need not read every chain, but a seat that can read none is a
+          seat routing can never draw.
+        """
+        from factorylab.cortex.registration import reward_contracts, seed_emits
+        from factorylab.runtime.families import model_family
+
+        seeded = {a.id: tuple(a.emits) if a.emits else seed_emits(a.role)
+                  for a in self.assemblies}
+        if not any("Verdict" in emits for emits in seeded.values()):
+            return []
+        shapes = {a.id: reward_contracts(seeded[a.id]) for a in self.assemblies}
+        family = {a.id: model_family(a.model_id) for a in self.assemblies}
+        evaluators = [a for a in self.assemblies
+                      if set(shapes[a.id].values()) & {"forecast", "conformity", "counter"}]
+        producers = [a for a in self.assemblies if a not in evaluators
+                     and set(shapes[a.id].values()) & {"judged", "exposure"}]
+        problems = []
+        if len(evaluators) <= len(producers):
+            problems.append(f"evaluator seats ({len(evaluators)}) do not outnumber producer "
+                            f"seats ({len(producers)})")
+        families = sorted({family[a.id] for a in evaluators})
+        if len(families) < 3:
+            problems.append(f"{len(families)} model families serve the evaluator tier "
+                            f"({', '.join(families) or 'none'}); at least 3 must")
+
+        def readers(kind: str, shape: str) -> list[AssemblySeed]:
+            return [a for a in self.assemblies if kind in a.accepts
+                    and shape in shapes[a.id].values()
+                    and (kind != "Verdict" or shape != "forecast")]
+
+        judges = {kind: [a for a in self.assemblies if kind in a.accepts
+                         and shapes[a.id].get("Verdict") == "forecast"]
+                  for kind in {k for s in shapes.values() for k in s}}
+        need = self.evaluation.multi_judge_count if self.evaluation.multi_judge_share > 0 else 1
+        verdict_chains: set[tuple[str, str]] = set()
+        for author in producers:
+            for kind, shape in shapes[author.id].items():
+                if shape not in ("judged", "exposure"):
+                    continue
+                off = {family[j.id] for j in judges.get(kind, ())} - {family[author.id]}
+                verdict_chains |= {(f, family[author.id]) for f in off}
+                if len(off) < need:
+                    problems.append(
+                        f"{author.id}'s {kind} is accepted by judges on {len(off)} "
+                        f"families other than its own ({family[author.id]}); "
+                        + (f"evaluation.multi_judge_count needs {need}" if need > 1
+                           else "a judge off its family must read it"))
+        metas = readers("Verdict", "conformity")
+        graded: set[tuple[str, str]] = set()
+        if metas:
+            for chain in sorted(verdict_chains):
+                able = sorted({family[m.id] for m in metas} - set(chain))
+                if not able:
+                    problems.append(f"no meta reads a Verdict by a {chain[0]} judge on a "
+                                    f"{chain[1]} return off both families")
+                graded |= {(f, chain[0]) for f in able}
+        upper = readers("MetaVerdict", "conformity")
+        if upper:
+            seen: set[tuple[str, str]] = set()
+            while graded - seen:
+                chain = sorted(graded - seen)[0]
+                seen.add(chain)
+                able = sorted({family[m.id] for m in upper} - set(chain))
+                if not able:
+                    problems.append(f"no seat reads a MetaVerdict by a {chain[0]} grader of "
+                                    f"a {chain[1]} judgement off both families")
+                graded |= {(f, chain[0]) for f in able}
+        for adversary in readers("Verdict", "counter"):
+            if not any(family[adversary.id] not in chain for chain in verdict_chains):
+                problems.append(f"adversarial judge {adversary.id} ({family[adversary.id]}) "
+                                "can read no Verdict the roster makes off its chain's families")
+        return problems
+
+    def _validate_evaluator_population(self) -> None:
+        """Refuse a world that seeds judging without the evaluators Chapter II requires."""
+        problems = self.evaluator_population_problems()
+        if problems:
+            raise ValueError("the evaluator population Chapter II §III requires is not seeded: "
+                             + "; ".join(problems))
+
+    def read_share_problem(self) -> str | None:
+        """Why this world's venue read share cannot hold, or None.
+
+        Guarantees a world is refused whose per-slot share (``[venue]
+        public_read_weight_per_minute // max_readers``) cannot cover the first attempt
+        of the heaviest venue read it publishes: a published read no reader could
+        ever be admitted to would be a tool in name only. A seat read is sent once,
+        so its first attempt is all it can spend, and the shares of all
+        ``max_readers`` slots sum to at most the budget: the rest of the venue's
+        per-IP limit is the kernel's.
+        """
+        from factorylab.world.venue_tools import _BASE_WEIGHT, VAULT_READS, public_read_weight
+
+        readers = self.exchange.max_readers
+        if type(readers) is not int or readers < 1:
+            return "venue.max_readers must be a positive integer"
+        share = self.exchange.public_read_weight_per_minute // readers
+        published = [tool for tool in _BASE_WEIGHT
+                     if tool not in VAULT_READS or self.exchange.vault_tools]
+        heaviest = max(published, key=lambda tool: public_read_weight(tool, {}))
+        weight = public_read_weight(heaviest, {})
+        if share < weight:
+            return (f"each reader's venue read share, venue.public_read_weight_per_minute // "
+                    f"venue.max_readers = {share}, cannot cover {heaviest} at {weight}")
+        if self.polymarket.enabled:
+            from factorylab.runtime.polymarket import open_limit, seat_open_share
+            from factorylab.world.polymarket import read_requests
+
+            pm = self.polymarket
+            pm_share = (pm.read_requests_per_10s - pm.kernel_reserve_per_10s) // readers
+            lookup = read_requests("market_of_token")
+            if pm_share < lookup:
+                # A claim's token lookup is the seat's own read of up to 3 requests: a
+                # share under it could seal no event claim at all.
+                return (f"each reader's polymarket read share, (read_requests_per_10s - "
+                        f"kernel_reserve_per_10s) // venue.max_readers = {pm_share}, "
+                        f"cannot cover one claim's token lookup of {lookup} requests")
+            if seat_open_share(pm, readers) < 1:
+                # No seat could hold one open read, so no claim could ever be sealed.
+                return (f"each reader's polymarket open read share, "
+                        f"kernel_reserve_per_10s // 2 // venue.max_readers = "
+                        f"{open_limit(pm)} // {readers}, cannot hold one open read")
+        return None
+
+    def storage_problem(self) -> str | None:
+        """Why this world's retained private state cap cannot hold, or None.
+
+        Guarantees a world is refused whose ``[storage] retained_private_bytes`` is
+        not a positive integer or cannot hold every seeded seat at its per-seat cap (a
+        working-state head and a program private state). These are the cap's fixed
+        invariants, checked at every load, a resume's included; the host's free disk
+        is a genesis admission (``host_disk_problem``).
+        """
+        from factorylab.cortex.assembly import MAX_PROGRAM_STATE_BYTES
+        from factorylab.runtime.continuity import HARD_STATE_BYTES
+
+        cap = self.storage.retained_private_bytes
+        if type(cap) is not int or cap <= 0:
+            return "storage.retained_private_bytes must be a positive integer"
+        per_seat = HARD_STATE_BYTES + MAX_PROGRAM_STATE_BYTES
+        floor = len(self.assemblies) * per_seat
+        if cap < floor:
+            return (f"storage.retained_private_bytes = {cap} cannot hold the "
+                    f"{len(self.assemblies)} seeded seats at {per_seat} bytes each "
+                    f"(a working-state head and a program private state): at least {floor}")
+        return None
+
+    def host_disk_problem(self, ledger_path: str | None = None, *,
+                          free_bytes: int | None = None) -> str | None:
+        """Why this host cannot admit this world's retained private state cap, or None.
+
+        Guarantees a world is refused at genesis whose ``[storage]
+        retained_private_bytes`` exceeds ``MAX_FREE_DISK_SHARE`` of the free disk of
+        the filesystem its ledger (and archive) will live on, the working directory
+        when it has none, read with ``shutil.disk_usage`` unless ``free_bytes`` is
+        given. It is an admission about the host at that moment: the cap is fixed for
+        the world's life, and a resume never asks it again.
+        """
+        cap = self.storage.retained_private_bytes
+        if free_bytes is None:
+            where = Path(ledger_path).resolve().parent if ledger_path else Path.cwd()
+            while not where.exists() and where != where.parent:
+                where = where.parent
+            free_bytes = shutil.disk_usage(where).free
+        num, den = MAX_FREE_DISK_SHARE
+        ceiling = free_bytes * num // den
+        if cap > ceiling:
+            return (f"storage.retained_private_bytes = {cap} exceeds {num}/{den} of the "
+                    f"host's free disk ({free_bytes} bytes free): at most {ceiling}")
+        return None
+
+    def _validate_tape(self) -> None:
+        """A tape is replayed only by the fake venue, whole, for the markets it recorded.
+
+        Guarantees a tape world never reaches a live adapter, a live rail or a
+        real-money branch (the venue kind stays ``fake``), carries no scripted shock
+        (its prices are the recording's), and trades only markets the tape recorded.
+        """
+        tape = self.exchange.tape
+        if tape is None:
+            return
+        if self.exchange.kind != "fake":
+            raise ValueError("exchange.tape is replayed only by the fake venue")
+        if self.exchange.shocks:
+            raise ValueError("a tape's prices are recorded; exchange.shocks cannot apply")
+        if (not isinstance(tape.sha256, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", tape.sha256)):
+            raise ValueError("exchange.tape.sha256 must be a lowercase SHA-256 hex digest")
+        if (type(tape.start_ns) is not int or type(tape.end_ns) is not int
+                or not 0 < tape.start_ns < tape.end_ns):
+            raise ValueError("exchange.tape span must be two increasing ns instants")
+        missing = set(self.exchange.coins) | set(self.exchange.spot_pairs)
+        missing -= set(tape.markets)
+        if missing:
+            raise ValueError(f"exchange.tape recorded no mids for {sorted(missing)}")
+        self._validate_look_ahead()
+
+    def look_ahead_refusal(self, model_id: str) -> str | None:
+        """Why a tape world may not call ``model_id``, or None; None in any other world.
+
+        One policy for the seed menu at load and for every model a seat proposes after
+        genesis (a live catalogue model, a reasoning variant, an x402 seller): the
+        model's training cutoff, as this manifest states it for its base id, must end
+        before the tape's first instant; a model with no stated cutoff (every model off
+        the menu) is refused unless the world's recorded ``allow_unknown_cutoff``
+        waiver covers it; a web route (``:online``, a search plugin) is never admitted.
+        """
+        tape = self.exchange.tape
+        if tape is None:
+            return None
+        base = model_id.partition("@")[0]
+        model = next((m for m in self.models if m.id == base), None)
+        if base.endswith(":online") or (model is not None and model.web):
+            return f"look_ahead: a tape world has no web route; {model_id!r} is one"
+        cutoff = None if model is None else model.training_cutoff
+        if cutoff is None:
+            if tape.allow_unknown_cutoff:
+                return None
+            return (f"look_ahead: model {model_id!r} states no training_cutoff; a tape "
+                    "world admits it only with exchange.tape.allow_unknown_cutoff")
+        if cutoff_end_ns(cutoff) > tape.start_ns:
+            return (f"look_ahead: model {model_id!r} was trained on data through {cutoff}, "
+                    f"which the tape (from {tape.start_ns} ns) does not postdate")
+        return None
+
+    def look_ahead_rule(self) -> str | None:
+        """The model admission rule of a tape world, as a published fact; None elsewhere."""
+        tape = self.exchange.tape
+        if tape is None:
+            return None
+        from datetime import UTC, datetime
+
+        start = datetime.fromtimestamp(tape.start_ns // NS_PER_SECOND, UTC).strftime(
+            "%Y-%m-%dT%H:%M:%SZ")
+        unknown = ("is registered: this world's manifest records the "
+                   "allow_unknown_cutoff waiver" if tape.allow_unknown_cutoff else
+                   "is refused")
+        return (f"This world replays a market recorded from {start}. A model id is "
+                "registered only when the training cutoff this world's manifest states for "
+                f"it ends before {start}; a model with no stated cutoff {unknown}. No web "
+                "route (an :online id or a search plugin) is registered.")
+
+    def _validate_look_ahead(self) -> None:
+        """No model of a tape world can have seen the tape's market (critique C2).
+
+        Guarantees the replayed market postdates the training data of every model on
+        the menu (a seat may move to any of them by proposal, so the roster alone is
+        not the bound), or that the operator admitted an unknown cutoff explicitly and
+        the manifest records it; and that the world has no route to today's web: no
+        ``[web]`` search route, no ``:online`` model and no model's search plugin.
+        Evaluators graded on a consequence the web or the weights already knew would
+        learn to consult them, not to judge (Chapter II §III.b).
+        """
+        tape = self.exchange.tape
+        if type(tape.allow_unknown_cutoff) is not bool:
+            raise ValueError("exchange.tape.allow_unknown_cutoff must be true or false")
+        for model in self.models:
+            refusal = self.look_ahead_refusal(model.id)
+            if refusal is not None and "web route" not in refusal:
+                raise ValueError(refusal)
+        if self.web.search_model is not None:
+            raise ValueError("look_ahead: a tape world has no [web] search route")
+        online = [m.id for m in self.models if m.id.endswith(":online") or m.web]
+        if online:
+            raise ValueError(f"look_ahead: a tape world lists no web route; {online} are")
+
     def validate(self) -> None:
+        problem = self.read_share_problem() or self.storage_problem()
+        if problem is not None:
+            raise ValueError(problem)
         namespace = self.exchange.client_namespace
         if self.prompt.mode not in ("reference", "compact"):
             raise ValueError("prompt.mode must be reference or compact")
-        if self.evaluation.producer_feedback not in ("verdict", "realized"):
-            raise ValueError("evaluation.producer_feedback must be verdict or realized")
+        core = self.evaluation.no_swap_regret_kinds
+        if (not isinstance(core, tuple) or len(set(core)) != len(core)
+                or any(not isinstance(k, str) or not k for k in core)):
+            raise ValueError("evaluation.no_swap_regret_kinds must be distinct event kind names")
+        unknown = sorted(set(core) - self._nameable_kinds())
+        if unknown:
+            # A misspelt kind would seed no router at all and leave the core silently empty.
+            raise ValueError("evaluation.no_swap_regret_kinds names no event kind this world "
+                             f"can route: {', '.join(unknown)}")
         if namespace is not None and (not isinstance(namespace, str) or len(namespace) != 32
                                       or any(c not in "0123456789abcdef" for c in namespace)):
             raise ValueError("exchange.client_namespace must be 32 lowercase hex characters")
-        if (self.exchange.kind == "hyperliquid" and self.exchange.mainnet
-                and self.charter_explicit is not True):
-            # Real money launches on the population's charter, never the seed cards.
-            # Testnet rehearsals may run on the seed charter before edition 1 is drafted.
-            raise ValueError("live_exchange_requires_explicit_charter: mainnet needs [charter]")
         if self.initial_balance_micro < 0:
             raise ValueError("initial balance must be non-negative")
         share = self.endowment.base_share
@@ -675,6 +1272,7 @@ class WorldManifest:
                     or not re.fullmatch(r"0x[0-9a-fA-F]{40}", self.treasury.reserve_address)
                     or int(self.treasury.reserve_address, 16) == 0):
                 raise ValueError("treasury.reserve_address must be a nonzero EVM address")
+        self._validate_venice_network()
         for budget_field in ("hyperevm_gas_budget_wei", "base_gas_budget_wei",
                       "max_transfer_fee_micro", "withdrawal_fee_micro", "cctp_max_fee_micro",
                       "fake_fee_micro", "max_request_micro", "max_venice_per_window",
@@ -684,9 +1282,15 @@ class WorldManifest:
                 raise ValueError(f"treasury.{budget_field} must be nonnegative integer money")
         if self.treasury.cctp_forwarding not in ("never", "on_empty_gas", "always"):
             raise ValueError("treasury.cctp_forwarding must be never, on_empty_gas or always")
-        windows = self.treasury.forward_wait_windows
-        if type(windows) is not int or windows < 1:
-            raise ValueError("treasury.forward_wait_windows must be a positive integer")
+        wait = self.treasury.forward_wait_ticks
+        if type(wait) is not int or wait < self.timing.min_ratio:
+            raise ValueError("treasury.forward_wait_ticks must be an integer of at least "
+                             "timing.min_ratio ticks")
+        cap_window = self.treasury.cap_window_ns
+        if (type(cap_window) is not int
+                or cap_window < self.timing.min_ratio * self.tick_interval_ns):
+            # The cap is an outer loop over the ticks transfers are attempted on.
+            raise ValueError("treasury.cap_window must be at least timing.min_ratio ticks")
         # A forwarded exit's burn carries maxFee up to the CCTP cap plus the forwarding cap;
         # the mint step must still fit the transfer fee cap after the principal burned.
         if (self.treasury.withdrawal_fee_micro + self.treasury.cctp_max_fee_micro
@@ -713,27 +1317,33 @@ class WorldManifest:
         for a in self.assemblies:
             if a.model_id not in ids:
                 raise ValueError(f"assembly {a.id} uses unpriced model {a.model_id}")
+        self._validate_judged_kinds()
         if (type(self.novelty.share) not in (int, float)
                 or not isfinite(self.novelty.share) or not 0 < self.novelty.share <= 1):
             raise ValueError("novelty share must be in (0, 1]")
+        seat_share = self.novelty.seat_share
+        if (type(seat_share) not in (int, float) or isinstance(seat_share, bool)
+                or not isfinite(seat_share) or not 0 < seat_share <= 1):
+            raise ValueError("novelty.seat_share must be in (0, 1]")
         for name, value, minimum in (
             ("novelty.trials", self.novelty.trials, 1),
-            ("novelty.max_lifetime_windows", self.novelty.max_lifetime_windows, 1),
             ("committee.min_settled", self.committee.min_settled, 1),
             ("committee.seats", self.committee.seats, 3),
             ("tools.max_depth", self.tools.max_depth, 0),
             ("tools.max_children", self.tools.max_children, 0),
             ("tools.max_tool_calls", self.tools.max_tool_calls, 0),
-            ("immune.k", self.immune.k, 2), ("immune.bins", self.immune.bins, 2),
+            ("immune.k", self.immune.k, 2),
         ):
             if type(value) is not int or value < minimum:
                 raise ValueError(f"{name} must be an integer >= {minimum}")
-        for name in ("tv_threshold", "gap_threshold", "gain_step", "gamma_max", "decay_step"):
+        for name in ("tv_threshold", "gap_threshold", "gain_step", "gamma_max"):
             value = getattr(self.immune, name)
             if type(value) not in (int, float) or not isfinite(value) or not 0 < value <= 1:
                 raise ValueError(f"immune.{name} must be finite and in (0, 1]")
-        if self.immune.bins != 3:
-            raise ValueError("immune.bins must be 3 for fixed region-relative cells")
+        step = self.immune.price_step
+        if (type(step) not in (int, float) or not isfinite(step)
+                or not 0 < step <= self.prices.lambda_max):
+            raise ValueError("immune.price_step must be finite and in (0, prices.lambda_max]")
         for name in ("registration_bins", "revision_bins"):
             cuts = getattr(self.immune, name)
             if (not isinstance(cuts, (tuple, list)) or not cuts
@@ -742,7 +1352,7 @@ class WorldManifest:
                 raise ValueError(f"immune.{name} must contain increasing finite nonnegative cuts")
         if not 0 <= self.evaluation.consequence_share < 1:
             raise ValueError("consequence share must be in [0, 1)")
-        for name in ("adversarial_share", "sibling_share", "sampling_step"):
+        for name in ("adversarial_share", "sampling_step"):
             value = getattr(self.evaluation, name)
             if type(value) not in (int, float) or not isfinite(value) or not 0 <= value <= 1:
                 raise ValueError(f"evaluation.{name} must be finite and in [0, 1]")
@@ -753,14 +1363,31 @@ class WorldManifest:
         backstop = self.evaluation.consequence_backstop_events
         if type(backstop) is not int or backstop < 1:
             raise ValueError("consequence_backstop_events must be a positive integer")
-        grounded = self.evaluation.grounded_horizon_ticks
-        if type(grounded) is not int or grounded < 1:
-            raise ValueError("evaluation.grounded_horizon_ticks must be a positive integer")
+        horizon = self.evaluation.consequence_horizon_ticks
+        if type(horizon) is not int or not 1 <= horizon <= backstop:
+            raise ValueError("evaluation.consequence_horizon_ticks must be an integer in "
+                             "[1, consequence_backstop_ticks]")
+        scale = self.evaluation.opportunity_scale_bps
+        if type(scale) not in (int, float) or not isfinite(scale) or scale <= 0:
+            raise ValueError("evaluation.opportunity_scale_bps must be a positive number")
+        share = self.evaluation.multi_judge_share
+        if type(share) not in (int, float) or not isfinite(share) or not 0 <= share <= 1:
+            raise ValueError("evaluation.multi_judge_share must be finite and in [0, 1]")
+        count = self.evaluation.multi_judge_count
+        if type(count) is not int or not 2 <= count <= MAX_JUDGES_PER_RETURN:
+            raise ValueError("evaluation.multi_judge_count must be an integer in "
+                             f"[2, {MAX_JUDGES_PER_RETURN}]")
+        reads = self.evaluation.meta_read_share
+        if type(reads) not in (int, float) or not isfinite(reads) or not 0 < reads <= 1:
+            raise ValueError("evaluation.meta_read_share must be finite and in (0, 1]")
+        for name in ("venue_unavailable", "stale_mids", "tool_withheld", "connector_timeout"):
+            rate = getattr(self.chaos, name)
+            if (type(rate) not in (int, float) or not isfinite(rate)
+                    or not 0 <= rate <= MAX_CHAOS_RATE):
+                raise ValueError(f"chaos.{name} must be finite and in [0, {MAX_CHAOS_RATE}]")
         for a in self.assemblies:
             if not isinstance(a.role, str) or not a.role.strip():
                 raise ValueError(f"assembly {a.id} has an empty role label")
-        if self.novelty.window_ns <= 0:
-            raise ValueError("novelty window must be positive")
         if type(self.timing.cadence_sample) is not int or self.timing.cadence_sample < 1:
             raise ValueError("timing.cadence_sample must be a positive integer")
         if type(self.timing.min_support) is not int or self.timing.min_support < 1:
@@ -772,9 +1399,22 @@ class WorldManifest:
             raise ValueError("timing min_ratio must be an integer at least 3")
         if type(self.clock.min_tick_ns) is not int or self.clock.min_tick_ns <= 0:
             raise ValueError("clock.min_tick must be positive integer nanoseconds")
+        repricing = self.timing.world_repricing_ns
+        if repricing is not None and (type(repricing) is not int or repricing <= 0):
+            raise ValueError("timing.world_repricing must be a positive duration")
+        maximum = self.max_tick_ns
         if (type(self.tick_interval_ns) is not int
-                or not self.clock.min_tick_ns <= self.tick_interval_ns <= self.max_tick_ns):
+                or self.tick_interval_ns < self.clock.min_tick_ns
+                or (maximum is not None and self.tick_interval_ns > maximum)):
             raise ValueError("tick_interval must lie within clock.min_tick and derived max_tick")
+        # Time audit T2, the load half of the 3:1 rule: a horizon a decision waits on is
+        # an outer loop over the tick its judges and outcomes arrive on.
+        for name, value in (
+                ("evaluation.verdict_timeout_ticks", self.evaluation.verdict_timeout_events),
+                ("evaluation.consequence_backstop_ticks",
+                 self.evaluation.consequence_backstop_events)):
+            if value < self.timing.min_ratio:
+                raise ValueError(f"{name} must be at least timing.min_ratio ticks")
         if self.exchange.kind not in ("fake", "hyperliquid"):
             raise ValueError("unknown exchange kind")
         if self.exchange.mainnet and self.name != "funded":
@@ -783,11 +1423,10 @@ class WorldManifest:
             self._validate_funded_admission()
         if self.exchange.shocks and self.exchange.kind != "fake":
             raise ValueError("price shocks exist only on the fake venue")
+        self._validate_tape()
         for sh in self.exchange.shocks:
             if sh.step < 1 or Decimal(sh.multiplier) <= 0:
                 raise ValueError("shock step must be >= 1 and multiplier positive")
-        if self.drip is not None and (self.drip.period_ns <= 0 or self.drip.amount_micro < 0):
-            raise ValueError("drip period must be positive and amount non-negative")
         self._validate_endowment()
         from factorylab.charter.book import validate_observation_bindings
 
@@ -814,13 +1453,16 @@ class WorldManifest:
         if (type(p.penalty_cap) not in (int, float) or not isfinite(p.penalty_cap)
                 or not 0 < p.penalty_cap < 1):
             raise ValueError("prices.penalty_cap must be finite and in (0, 1)")
-        if type(p.kappa) not in (int, float) or not isfinite(p.kappa) or p.kappa < 0:
-            raise ValueError("prices.kappa must be finite and nonnegative")
         if (type(p.min_blame_share) not in (int, float) or not isfinite(p.min_blame_share)
                 or not 0 <= p.min_blame_share <= 1):
             raise ValueError("prices.min_blame_share must be finite and in [0, 1]")
         if min(p.eta, p.decay, p.lambda_max) <= 0 or p.min_window_events < 1:
             raise ValueError("prices: eta, decay, lambda_max > 0 and min_window_events >= 1")
+        for name in ("kp", "kd"):
+            value = getattr(p, name)
+            if type(value) not in (int, float) or not isfinite(value) or value < 0:
+                raise ValueError(f"prices.{name} must be finite and nonnegative")
+        self._validate_evaluator_population()
 
 
 def duration_ns(value: Any) -> int:
@@ -838,7 +1480,7 @@ def duration_ns(value: Any) -> int:
 
 
 def _manifest_charter(raw: Any) -> tuple[Charter, tuple[tuple[str, float], ...]]:
-    """Explicit charter tables yield edition 1 and card-specific errors for invalid fields."""
+    """Explicit charter tables yield their edition and card-specific errors for invalid fields."""
     if not isinstance(raw, dict):
         raise ValueError("charter must be a table")
     for name in PROVENANCE_FIELDS:
@@ -857,8 +1499,18 @@ def _manifest_charter(raw: Any) -> tuple[Charter, tuple[tuple[str, float], ...]]
         norms = [Norm.parse(n) for n in norms]
     except ValueError as exc:
         raise ValueError(f"charter.norms: {exc}") from None
-    if "edition" in raw and (type(raw["edition"]) is not int or raw["edition"] != 1):
-        raise ValueError("charter.edition must be 1")
+    # Charter audit P5: a charter keeps its lineage across a rebirth. Edition n > 1
+    # names the digest of the edition it descends from; edition 1 has no parent.
+    edition = raw.get("edition", 1)
+    if type(edition) is not int or edition < 1:
+        raise ValueError("charter.edition must be a positive integer")
+    parent = raw.get("parent_charter_sha256")
+    if edition == 1 and parent is not None:
+        raise ValueError("charter.parent_charter_sha256 names the parent of an edition after 1")
+    if edition > 1 and (not isinstance(parent, str)
+                        or not re.fullmatch(r"[0-9a-f]{64}", parent)):
+        raise ValueError("charter.edition after 1 needs parent_charter_sha256: "
+                         "64 lowercase hex characters")
     rows = raw.get("cards", [])
     if not isinstance(rows, list):
         raise ValueError("charter.cards must be a list of tables")
@@ -868,19 +1520,46 @@ def _manifest_charter(raw: Any) -> tuple[Charter, tuple[tuple[str, float], ...]]
         if not isinstance(row, dict):
             raise ValueError(f"card #{index} fields: expected a table")
         card_id = row.get("id", f"#{index}")
-        for name in MetricCard.__dataclass_fields__:
-            if name == "window":
-                continue
+        # Charter audit P2: a card states its region as typed data (``region``), or
+        # as the historical sentence (``acceptable_region``); ``holdout`` is optional.
+        required = [name for name in MetricCard.__dataclass_fields__
+                    if name not in ("window", "region", "holdout")]
+        if row.get("region") is None:
+            required.append("acceptable_region")
+        for name in required:
             if not isinstance(row.get(name), str) or not row[name].strip():
                 raise ValueError(f"card {card_id} {name}: must be a nonempty string")
         window = row.get("window")
         if isinstance(window, dict) and "per" not in window:
             window = {**window, "per": None}  # TOML has no null literal.
-        cards.append(MetricCard(**{name: row[name] for name in MetricCard.__dataclass_fields__
-                                   if name != "window"}, window=window))
+        try:
+            cards.append(MetricCard(
+                **{name: row[name] for name in MetricCard.__dataclass_fields__
+                   if name not in ("window", "region", "holdout")},
+                region=stated_region(row), holdout=tuple(row.get("holdout") or ()),
+                window=window))
+        except (TypeError, ValueError) as exc:
+            message = str(exc)
+            raise ValueError(message if message.startswith(f"card {card_id}")
+                             else f"card {card_id}: {message}") from None
         if "lambda" in row:
             prices.append((card_id, row["lambda"]))
-    return Charter(1, tuple(norms), tuple(cards)), tuple(prices)
+    return Charter(edition, tuple(norms), tuple(cards)), tuple(prices)
+
+
+def _manifest_immune(raw: Any) -> ImmuneSpec:
+    """The immune casts, with the ratchet's lambda step stated and no bin count."""
+    if not isinstance(raw, dict):
+        raise ValueError("immune must be a table")
+    if "bins" in raw:
+        raise ValueError("immune.bins was removed: the three region-relative bins are fixed")
+    if "decay_step" in raw:
+        raise ValueError("immune.decay_step was removed: thrash is priced by its duration "
+                         "(the thrash PID), never answered by lowering card prices")
+    if "price_step" not in raw:
+        raise ValueError("immune.price_step is required: the stable-failure ratchet's "
+                         "lambda step per window")
+    return ImmuneSpec(**raw)
 
 
 def _committee(raw: dict) -> CommitteeSpec:
@@ -889,44 +1568,82 @@ def _committee(raw: dict) -> CommitteeSpec:
     if (type(resolution) not in (int, float) or isinstance(resolution, bool)
             or not isfinite(resolution) or resolution <= 0):
         raise ValueError("committee.promise_resolution must be a finite positive number")
+    if type(spec.quorum) is not int or not 1 <= spec.quorum <= spec.seats:
+        raise ValueError("committee.quorum must be an integer in [1, committee.seats]")
     return replace(spec, promise_resolution=float(resolution))
 
 
+def _norm_house(raw: Any) -> NormHouseSpec:
+    """``[norm_house] signer``: the EVM address allowed to sign norm editions, or none."""
+    if raw is None:
+        return NormHouseSpec()
+    if not isinstance(raw, dict) or set(raw) - {"signer"}:
+        raise ValueError("norm_house accepts only signer")
+    signer = raw.get("signer")
+    if signer is not None and (not isinstance(signer, str)
+                               or not re.fullmatch(r"0x[0-9a-fA-F]{40}", signer)):
+        raise ValueError("norm_house.signer must be a 0x-prefixed 20-byte hex address")
+    return NormHouseSpec(signer.lower() if signer is not None else None)
+
+
+#: Keys that priced a resource no counterparty is paid for, removed with that price
+#: (Wave 11). The wallet moves only when money moves (essay II.II.b, II.IV.a): a
+#: scarce resource that costs nothing at the margin is a limit or a λ on reward.
+REMOVED_PRICE_KEYS = {
+    ("connectors", "call_price_usd"): "a public fetch pays no one; "
+                                      "connectors.max_calls_per_window is its limit",
+    ("web", "call_price_micro"): "a search costs what its route's provider bills, "
+                                 "the plugin's per-request charge included",
+    ("polymarket", "read_price_usd"): "a public market read pays no one",
+    ("tools", "population_tool_micro_per_call"): "a tool runs in the world's own jail "
+                                                 "and pays no one",
+    ("prices", "program_micro_per_call"): "a program seat runs in the world's own jail "
+                                          "and pays no one",
+}
+
+
+def _refuse_removed_prices(d: dict[str, Any]) -> None:
+    """Refuse a manifest naming a price this kernel no longer debits (R8).
+
+    Guarantees a world file that still prices storage, a public read or local
+    compute is refused by name rather than loaded as if the price applied: such a
+    debit had no counterparty, so the books would lie.
+    """
+    storage = d.get("storage")
+    for table in ("storage", "notes"):
+        if table in d and (table == "notes" or not isinstance(storage, dict)
+                           or "micro_per_byte_day" in storage):
+            raise ValueError(
+                f"[{table}] was removed: retained working state pays no one, so it is a "
+                "constraint (the 64 KiB hard limit and storage.retained_private_bytes), "
+                "never a money debit; the wallet moves only when money moves")
+    for (table, key), why in REMOVED_PRICE_KEYS.items():
+        if isinstance(d.get(table), dict) and key in d[table]:
+            raise ValueError(f"{table}.{key} was removed: {why}; the wallet moves only "
+                             "when money moves")
+
+
 def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
-    note = d.get("notes", {})
-    if not isinstance(note, dict) or set(note) - {
-        "max_keys", "max_bytes", "byte_window_micro", "micro_per_byte_day"
-    }:
-        raise ValueError("unknown notes manifest key")
-    # ``byte_window_micro`` stays readable and maps to the per-byte call price; storage
-    # rent is ``micro_per_byte_day`` (C3), at its default unless the manifest names one.
-    notes = NotesSpec(**note)
+    _refuse_removed_prices(d)
     endowment = _manifest_endowment(d.get("endowment"))
     conn = d.get("connectors", {})
     if not isinstance(conn, dict) or set(conn) - {
-        "max_bytes", "timeout_s", "call_price_usd", "max_calls_per_window", "origin_denylist"
+        "max_bytes", "timeout_s", "max_calls_per_window", "origin_denylist"
     }:
         raise ValueError("unknown connectors manifest key")
-    connector_price = conn.get("call_price_usd", "0.001")
-    if type(connector_price) not in (str, int):
-        raise ValueError("connectors.call_price_usd must be exact USD text or integer")
     connectors = ConnectorsSpec(
         max_bytes=conn.get("max_bytes", 262144), timeout_s=conn.get("timeout_s", 10),
-        call_price_micro=usd_to_micro(connector_price, rounding="exact"),
         max_calls_per_window=conn.get("max_calls_per_window", 60),
         origin_denylist=conn.get("origin_denylist", DEFAULT_DENYLIST),
     )
     web_block = d.get("web", {})
-    if not isinstance(web_block, dict) or set(web_block) - {
-        "search_model", "call_price_micro", "max_call_usd"
-    }:
+    if not isinstance(web_block, dict) or set(web_block) - {"search_model", "max_call_usd"}:
         raise ValueError("unknown web manifest key")
     max_call = web_block.get("max_call_usd", "0")
     if type(max_call) not in (str, int):
         raise ValueError("web.max_call_usd must be exact USD text or integer")
     web = WebSpec(
         search_model=web_block.get("search_model"),
-        call_price_micro=web_block.get("call_price_micro", 0),
         max_call_micro=usd_to_micro(max_call, rounding="exact"),
     )
     venice_cap = (d.get("treasury") or {}).get("max_venice_per_window", "10")
@@ -935,35 +1652,27 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
     forward_cap = (d.get("treasury") or {}).get("max_forward_fees_per_window", "1")
     if type(forward_cap) not in (str, int):
         raise ValueError("treasury.max_forward_fees_per_window must be exact USD text or integer")
-    charter, charter_prices = (
-        _manifest_charter(d["charter"]) if "charter" in d else (seed_charter(), ())
-    )
+    if "charter" not in d:
+        # Charter audit S3: the charter is the world's authored input, never a default
+        # the kernel supplies.
+        raise ValueError("a world needs a [charter] table")
+    charter, charter_prices = _manifest_charter(d["charter"])
     # The cards as written, digested exactly as the ratification export digested them.
     charter_content_sha256 = (charter_digest(charter_content(d["charter"]))
                               if isinstance(d.get("charter"), dict) else None)
     clock = d.get("clock", {})
     if set(clock) - {"min_tick"}:
         raise ValueError("clock accepts only min_tick; max_tick is derived")
-    drip = None
-    if "drip" in d:
-        dd = d["drip"]
-        drip = DripSpec(
-            amount_micro=usd_to_micro(dd["amount_usd"], rounding="exact"),
-            period_ns=duration_ns(dd["period"]),
-            start_ns=duration_ns(dd.get("start", 0)),
-            end_ns=duration_ns(dd["end"]),
-        )
+    # Smuggling D-6: keys no world set and nothing enforced. A manifest naming one
+    # would describe physics the kernel does not run, so it is refused, not ignored.
+    for section, key in (("drip", None), ("termination", "max_events"),
+                         ("venue", "collateral_headroom_usd")):
+        if section in d if key is None else key in (d.get(section) or {}):
+            name = section if key is None else f"{section}.{key}"
+            raise ValueError(f"{name} was removed: no world set it and nothing enforced it")
     ex = d.get("exchange", {})
     venue = d.get("venue", {})
     spot_pairs = venue.get("spot_pairs", [])
-    headroom = str(venue.get("collateral_headroom_usd", "0"))
-    try:
-        if Decimal(headroom) < 0 or not Decimal(headroom).is_finite():
-            raise ValueError
-    except (ArithmeticError, ValueError):
-        raise ValueError(
-            "venue.collateral_headroom_usd must be a nonnegative exact decimal string"
-        ) from None
     principal = venue.get("principal_usd")
     if principal is not None:
         principal = str(principal)
@@ -974,21 +1683,50 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             raise ValueError(
                 "venue.principal_usd must be a positive exact decimal string"
             ) from None
+    vault_tools = venue.get("vault_tools", False)
+    if type(vault_tools) is not bool:
+        raise ValueError("venue.vault_tools must be true or false")
+    if "max_seats" in (d.get("tools") or {}):
+        raise ValueError("tools.max_seats was removed: the population has no size cap; the "
+                         "venue's IP limit bounds who reads the venue ([venue] max_readers)")
+    max_readers = venue.get("max_readers", 16)
+    read_weight = venue.get("public_read_weight_per_minute",
+                            DEFAULT_PUBLIC_READ_WEIGHT_PER_MINUTE)
+    if type(read_weight) is not int or not 1 <= read_weight < VENUE_WEIGHT_PER_MINUTE:
+        raise ValueError("venue.public_read_weight_per_minute must be an integer below "
+                         f"{VENUE_WEIGHT_PER_MINUTE}, the venue's own per-minute weight "
+                         "limit, which the kernel's own calls share")
     if (not isinstance(spot_pairs, list) or any(
             not isinstance(p, str) or p.count("/") != 1 or not p.endswith("/USDC")
             or not p.split("/")[0] for p in spot_pairs)
             or len(set(spot_pairs)) != len(spot_pairs)):
         raise ValueError("venue.spot_pairs must be a unique list of BASE/USDC pairs")
+    tape = ex.get("tape")
+    if tape is not None:
+        if not isinstance(tape, dict) or set(tape) - {
+                "sha256", "start_ns", "end_ns", "markets", "spread_bps",
+                "allow_unknown_cutoff"}:
+            raise ValueError("unknown exchange.tape manifest key")
+        spreads = tape.get("spread_bps") or {}
+        tape = TapeSpec(
+            sha256=tape.get("sha256"), start_ns=tape.get("start_ns"),
+            end_ns=tape.get("end_ns"), markets=tuple(tape.get("markets") or ()),
+            spread_bps=tuple(sorted((str(k), str(v)) for k, v in (
+                spreads.items() if isinstance(spreads, dict) else spreads))),
+            allow_unknown_cutoff=tape.get("allow_unknown_cutoff", False))
     exchange = ExchangeSpec(
         kind=ex.get("kind", "fake"),
+        tape=tape,
         client_namespace=ex.get("client_namespace"),
         mainnet=bool(ex.get("mainnet", False)),
         coins=tuple(ex.get("coins", ["BTC", "ETH"])),
         spot_pairs=tuple(spot_pairs),
         seed=int(ex.get("seed", d.get("seed", 0))),
         start_cash_usd=str(ex.get("start_cash_usd", "100")),
-        collateral_headroom_usd=headroom,
         principal_usd=principal,
+        vault_tools=vault_tools,
+        public_read_weight_per_minute=read_weight,
+        max_readers=max_readers,
         shocks=tuple(
             Shock(int(sh["step"]), str(sh["coin"]), str(sh["multiplier"]))
             for sh in ex.get("shocks", [])
@@ -1003,6 +1741,8 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             reasoning=tuple(sorted((m.get("reasoning") or {}).items())),
             web=tuple(sorted((m.get("web") or {}).items())),
             extra_body=tuple(sorted((m.get("extra_body") or {}).items())),
+            contract=_model_contract(m),
+            training_cutoff=_training_cutoff(m),
         )
         for m in d.get("models", [])
     )
@@ -1026,6 +1766,18 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         for a in d.get("assemblies", [])
     )
     ev = d.get("evaluation", {})
+    # Ruling R1: producers learn from verdicts, and the kernel-commissioned final
+    # judge is deleted, so neither the feedback mode nor its horizon names physics
+    # this kernel runs. A manifest that sets one is refused, not ignored (R8).
+    for key in ("producer_feedback", "grounded_horizon_ticks"):
+        if key in ev:
+            raise ValueError(f"evaluation.{key} was removed (ruling R1): a producer's "
+                             "reward is its judges' verdict, and realized consequence "
+                             "grades the judges")
+    if "sibling_share" in ev:
+        # Evaluations U2: an unread verdict borrows no grade from the one a meta read.
+        raise ValueError("evaluation.sibling_share was removed (evaluations U2): an "
+                         "unread cascade sibling settles on its own signals")
     evaluation = EvaluationSpec(
         consequence_share=float(ev.get("consequence_share", 0.3)),
         max_forecasts_per_verdict=int(ev.get("max_forecasts_per_verdict", 2)),
@@ -1033,24 +1785,32 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         min_coverage=float(ev.get("min_coverage", 0.5)),
         trial_amount_micro=usd_to_micro(ev.get("trial_amount_usd", "0.10"), rounding="exact"),
         forecast_horizon_events=int(ev.get("forecast_horizon_events", 10)),
-        grounded_horizon_ticks=ev.get("grounded_horizon_ticks", 10),
+        consequence_horizon_ticks=ev.get("consequence_horizon_ticks", 10),
+        opportunity_scale_bps=ev.get("opportunity_scale_bps", 50.0),
         consequence_backstop_events=_tick_horizon(ev, "consequence_backstop", 200),
         adversarial_share=ev.get("adversarial_share", 0.15),
-        sibling_share=ev.get("sibling_share", 0.5),
         sampling_step=ev.get("sampling_step", 0.1),
         sampling_cap=ev.get("sampling_cap", 0.7),
-        producer_feedback=_manifest_producer_feedback(ev.get("producer_feedback", "verdict")),
+        no_swap_regret_kinds=_manifest_kinds(ev.get("no_swap_regret_kinds", [])),
+        multi_judge_share=ev.get("multi_judge_share", 0.3),
+        multi_judge_count=ev.get("multi_judge_count", 2),
+        meta_read_share=ev.get("meta_read_share", 0.5),
     )
     pr = d.get("prices") or {}
+    for key in ("kappa", "controller"):
+        if key in pr:
+            # Charter audit U3: the PID is the only price law, so there is no law to
+            # name and no integrator damping; a manifest that says so would lie.
+            raise ValueError(f"prices.{key} was removed: the PID is the only price law")
     prices = PricesSpec(
         eta=float(pr.get("eta", 0.5)),
-        kappa=pr.get("kappa", 0.5),
         decay=float(pr.get("decay", 0.1)),
         lambda_max=float(pr.get("lambda_max", 1.0)),
         min_window_events=int(pr.get("min_window_events", 1)),
         penalty_cap=pr.get("penalty_cap", 0.5),
         min_blame_share=pr.get("min_blame_share", 0.1),
-        program_micro_per_call=int(pr.get("program_micro_per_call", 50)),
+        kp=pr.get("kp", 0.0),
+        kd=pr.get("kd", 0.0),
     )
     # Scripted providers run in virtual time, including live-shaped test fixtures.
     default_min_tick = "1s" if all(m.provider == "fake" for m in models) else "10s"
@@ -1058,47 +1818,57 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
     if "trial_invocations" in nov:
         raise ValueError("novelty.trial_invocations was replaced by novelty.trials "
                          "(settled consequences, not invocations)")
+    # Time audit T1, T5, T11: the windows are derived, never cast. A manifest naming
+    # one would describe a clock the kernel does not run, so it is refused (R8).
+    for key, why in (("window", "the measurement window is the price loop's derived period"),
+                     ("max_lifetime_windows", "a trial's patience is min_ratio measured "
+                                              "consequence periods")):
+        if key in nov:
+            raise ValueError(f"novelty.{key} was removed (time audit): {why}")
+    if "forward_wait_windows" in (d.get("treasury") or {}):
+        raise ValueError("treasury.forward_wait_windows was replaced by "
+                         "treasury.forward_wait_ticks (time audit T13)")
     tim = d.get("timing", {})
     term = d.get("termination", {})
     m = WorldManifest(
         name=d["name"],
         seed=int(d.get("seed", 0)),
         initial_balance_micro=usd_to_micro(d["initial_balance_usd"], rounding="exact"),
-        drip=drip,
         exchange=exchange,
         models=models,
         assemblies=assemblies,
-        novelty=NoveltySpec(nov.get("share", 0.1), duration_ns(nov.get("window", "1d")),
-                            nov.get("trials", 3), nov.get("max_lifetime_windows", 6)),
+        novelty=NoveltySpec(nov.get("share", 0.1), nov.get("trials", 3),
+                             nov.get("seat_share", 0.25)),
         committee=_committee(d.get("committee", {})),
-        immune=ImmuneSpec(**d.get("immune", {})),
+        immune=_manifest_immune(d.get("immune", {})),
         timing=TimingSpec(
             int(tim.get("min_ratio", 3)), float(tim.get("jitter_fraction", 0.2)),
             tim.get("cadence_sample", 200),
             tim.get("min_support", 30),
+            (duration_ns(tim["world_repricing"]) if tim.get("world_repricing") is not None
+             else None),
         ),
         termination=TerminationSpec(
             usd_to_micro(term.get("balance_floor_usd", 0), rounding="exact"),
-            term.get("max_events"),
         ),
         charter=charter,
         charter_prices=charter_prices,
-        charter_explicit="charter" in d,
         charter_ratified_sha256=(d.get("charter") or {}).get("ratified_sha256"),
         charter_roster_sha256=(d.get("charter") or {}).get("roster_sha256"),
         charter_content_sha256=charter_content_sha256,
+        charter_parent_sha256=(d.get("charter") or {}).get("parent_charter_sha256"),
+        norm_house=_norm_house(d.get("norm_house")),
         evaluation=evaluation,
         connectors=connectors,
         web=web,
-        notes=notes,
+        storage=_manifest_storage(d.get("storage")),
+        polymarket=_manifest_polymarket(d.get("polymarket")),
         tools=ToolsSpec(
-            int((d.get("tools") or {}).get("population_tool_micro_per_call", 50)),
             int((d.get("tools") or {}).get("max_leverage", 3)),
             int((d.get("tools") or {}).get("max_routers_per_kind", 3)),
             (d.get("tools") or {}).get("max_depth", 4),
             (d.get("tools") or {}).get("max_children", 3),
             (d.get("tools") or {}).get("max_tool_calls", 4),
-            _manifest_address_enabled((d.get("tools") or {}).get("address_enabled", False)),
         ),
         prices=prices,
         treasury=TreasurySpec(
@@ -1122,7 +1892,13 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             max_forward_fee_micro=usd_to_micro(
                 (d.get("treasury") or {}).get("max_forward_fee_usd", "0.30"), rounding="exact"),
             max_forward_fees_per_window=usd_to_micro(forward_cap, rounding="exact"),
-            forward_wait_windows=(d.get("treasury") or {}).get("forward_wait_windows", 2),
+            forward_wait_ticks=(d.get("treasury") or {}).get("forward_wait_ticks", 360),
+            cap_window_ns=duration_ns((d.get("treasury") or {}).get("cap_window", "1h")),
+            venice_network=(d.get("treasury") or {}).get("venice_network"),
+            venice_shadow_sink=(d.get("treasury") or {}).get("venice_shadow_sink"),
+            max_venice_total_micro=_optional_usd(d, "max_venice_total_usd"),
+            venice_reserve_floor_micro=_optional_usd(d, "venice_reserve_floor_usd"),
+            venice_pay_to=(d.get("treasury") or {}).get("venice_pay_to"),
         ),
         clock=ClockSpec(duration_ns(clock.get("min_tick", default_min_tick))),
         tick_interval_ns=duration_ns(d.get("tick_interval", "10s")),
@@ -1130,10 +1906,60 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         kill=_manifest_kill(d.get("kill")),
         providers=_manifest_providers(d.get("providers")),
         prompt=_manifest_prompt(d.get("prompt")),
+        chaos=_manifest_chaos(d.get("chaos")),
+        subscriptions=_manifest_subscriptions(d.get("subscriptions")),
         extra={k: v for k, v in d.items() if k.startswith("x_")},
     )
     m.validate()
     return m
+
+
+def _optional_usd(d: dict, key: str) -> int | None:
+    """An optional exact-USD treasury key as integer micro-USD, or ``None`` when absent."""
+    value = (d.get("treasury") or {}).get(key)
+    if value is None:
+        return None
+    if type(value) not in (str, int):
+        raise ValueError(f"treasury.{key} must be exact USD text or integer")
+    return usd_to_micro(value, rounding="exact")
+
+
+def _training_cutoff(model: dict) -> str | None:
+    """A model's ``training_cutoff``: a UTC calendar day ``YYYY-MM-DD``, or None."""
+    value = model.get("training_cutoff")
+    if value is None:
+        return None
+    from datetime import date
+
+    try:
+        if not isinstance(value, str | date):
+            raise ValueError
+        return date.fromisoformat(str(value)).isoformat()
+    except ValueError:
+        raise ValueError(f"models.training_cutoff must be a YYYY-MM-DD day; "
+                         f"{model.get('id')!r} has {value!r}") from None
+
+
+def cutoff_end_ns(day: str) -> int:
+    """The first instant after the UTC day ``day``: when a cutoff's data ends."""
+    from datetime import UTC, date, datetime, time, timedelta
+
+    after = datetime.combine(date.fromisoformat(day) + timedelta(days=1), time(), UTC)
+    return int(after.timestamp()) * NS_PER_SECOND
+
+
+def _model_contract(model: dict) -> str:
+    """A model's ``contract``: one of ``MODEL_CONTRACTS``, ``json_object`` when absent."""
+    value = model.get("contract", "json_object")
+    if value not in MODEL_CONTRACTS:
+        raise ValueError(f"models.contract must be one of {', '.join(MODEL_CONTRACTS)}; "
+                         f"{model.get('id')!r} has {value!r}")
+    if value == "json_schema" and model.get("provider") not in ("openrouter", "venice"):
+        # Only these adapters can carry a schema; anywhere else the key would be a
+        # promise of enforcement that nothing keeps.
+        raise ValueError(f"models.contract json_schema needs an openrouter or venice "
+                         f"route; {model.get('id')!r} is {model.get('provider', 'fake')!r}")
+    return value
 
 
 def _manifest_kill(raw: Any) -> KillSpec:
@@ -1169,18 +1995,88 @@ def _manifest_providers(raw: Any) -> ProvidersSpec:
     return ProvidersSpec(openrouter_micro=amounts[0], venice_micro=amounts[1])
 
 
-def _manifest_producer_feedback(raw: Any) -> str:
-    """``[evaluation] producer_feedback``: a judge opinion or an observed consequence."""
-    if raw not in ("verdict", "realized"):
-        raise ValueError("evaluation.producer_feedback must be verdict or realized")
-    return raw
+def _manifest_kinds(raw: Any) -> tuple[str, ...]:
+    """``[evaluation] no_swap_regret_kinds``: a list of event kind names, in canonical order.
+
+    The core is a set of kinds; sorting it here keeps two manifests that list the same
+    kinds in a different order one world, with one hash.
+    """
+    if not isinstance(raw, list | tuple) or any(not isinstance(k, str) for k in raw):
+        raise ValueError("evaluation.no_swap_regret_kinds must be a list of event kind names")
+    return tuple(sorted(raw))
 
 
-def _manifest_address_enabled(raw: Any) -> bool:
-    """``[tools] address_enabled``: exactly a boolean, never a truthy string or 1."""
-    if type(raw) is not bool:
-        raise ValueError("tools.address_enabled must be true or false")
-    return raw
+def _manifest_polymarket(raw: Any) -> PolymarketSpec:
+    """``[polymarket] enabled = true`` and its caps, in exact USD text like every price.
+
+    An absent block is the disabled default. An unknown key is refused rather
+    than ignored, so a manifest cannot believe it set a cap it did not set.
+    """
+    if raw is None:
+        return PolymarketSpec()
+    keys = {"enabled", "venue", "collateral_usd", "max_order_usd",
+            "read_requests_per_10s", "kernel_reserve_per_10s",
+            "max_open_usd", "max_orders_per_window", "seed"}
+    for old, new in (("read_requests_per_minute", "read_requests_per_10s"),
+                     ("kernel_reserve_per_minute", "kernel_reserve_per_10s")):
+        if isinstance(raw, dict) and old in raw:
+            # Polymarket counts its limits over a sliding 10 s, so a per-minute budget
+            # cannot bound what reaches it within one 10 s; the key is refused by name.
+            raise ValueError(f"polymarket.{old} was replaced by polymarket.{new}: "
+                             "Polymarket's published limits are per sliding 10 s")
+    if not isinstance(raw, dict) or set(raw) - keys:
+        raise ValueError("unknown polymarket manifest key")
+    default = PolymarketSpec()
+
+    def usd(key: str, micro: int) -> int:
+        value = raw.get(key)
+        if value is None:
+            return micro
+        if type(value) not in (str, int):
+            raise ValueError(f"polymarket.{key} must be exact USD text or integer")
+        return usd_to_micro(value, rounding="exact")
+
+    return PolymarketSpec(
+        enabled=raw.get("enabled", False), venue=raw.get("venue", "fake"),
+        collateral_micro=usd("collateral_usd", default.collateral_micro),
+        max_order_micro=usd("max_order_usd", default.max_order_micro),
+        max_open_micro=usd("max_open_usd", default.max_open_micro),
+        max_orders_per_window=raw.get("max_orders_per_window",
+                                      default.max_orders_per_window),
+        seed=raw.get("seed", default.seed),
+        read_requests_per_10s=raw.get("read_requests_per_10s",
+                                         default.read_requests_per_10s),
+        kernel_reserve_per_10s=raw.get("kernel_reserve_per_10s",
+                                          default.kernel_reserve_per_10s),
+    )
+
+
+def _manifest_storage(raw: Any) -> StorageSpec:
+    """``[storage]``: only the retained private state cap (a price there is refused first)."""
+    if raw is None:
+        return StorageSpec()
+    if not isinstance(raw, dict) or set(raw) - {"retained_private_bytes"}:
+        raise ValueError("unknown storage manifest key")
+    return StorageSpec(raw.get("retained_private_bytes", DEFAULT_RETAINED_PRIVATE_BYTES))
+
+
+def _manifest_subscriptions(raw: Any) -> SubscriptionsSpec:
+    """``[subscriptions]``: the watcher-work limit; any other key is unknown."""
+    if raw is None:
+        return SubscriptionsSpec()
+    if not isinstance(raw, dict) or set(raw) - {"max_watcher_evaluations_per_sweep"}:
+        raise ValueError("unknown subscriptions manifest key")
+    return SubscriptionsSpec(**raw)
+
+
+def _manifest_chaos(raw: Any) -> ChaosSpec:
+    """The ``[chaos]`` table: four fault rates, each absent at zero."""
+    if raw is None:
+        return ChaosSpec()
+    names = {f.name for f in fields(ChaosSpec)}
+    if not isinstance(raw, dict) or set(raw) - names:
+        raise ValueError("chaos accepts only " + ", ".join(sorted(names)))
+    return ChaosSpec(**raw)
 
 
 def _manifest_prompt(raw: Any) -> PromptSpec:
