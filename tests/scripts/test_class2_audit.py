@@ -62,7 +62,9 @@ def _output(key, *, canaries=None, controls=0, summary=True, unread=()):
             if canaries is None or c["id"] in canaries]
     rows += [{"leaf_id": c["leaf_id"], "path": c["path"], "question": "Q4", "class": "C1"}
              for c in key["controls"][:controls]]
-    summ = {"summary": True, "leaves_read": 10, "leaves_total": 10, "unread": list(unread)}
+    read = sorted(set(key["expected_leaves"]) - set(unread))
+    summ = {"summary": True, "leaves_read": len(read),
+            "leaves_total": key["expected_count"], "read": read, "unread": list(unread)}
     return rows, (summ if summary else None)
 
 
@@ -102,8 +104,43 @@ def test_flagging_two_controls_invalidates(rendered):
 def test_a_missing_summary_or_an_unread_leaf_invalidates(rendered):
     _out, key = rendered
     assert not tool.validate(*_output(key, summary=False), key)["valid"]
-    verdict = tool.validate(*_output(key, unread=["abc"]), key)
+    real = next(i for i in key["expected_leaves"]
+                if i not in {c["leaf_id"] for c in key["canaries"]})
+    verdict = tool.validate(*_output(key, unread=[real]), key)
     assert not verdict["valid"] and any("unread" in p for p in verdict["problems"])
+
+
+def test_the_key_records_every_kernel_leaf_rendered(rendered):
+    out, key = rendered
+    records = [json.loads(line)
+               for line in (out / "auditor_input.jsonl").read_text().splitlines()]
+    kernel = {r["leaf_id"] for r in records if r["provenance"] == "kernel"}
+    assert set(key["expected_leaves"]) == kernel and key["expected_count"] == len(kernel)
+    assert {c["leaf_id"] for c in key["canaries"]} <= kernel
+
+
+def test_a_summary_claiming_zero_of_zero_is_refused(rendered):
+    """Codex P1: counts the auditor reports about itself prove nothing. With every canary
+    found and a summary of 0 read of 0, every real leaf went unread: invalid."""
+    _out, key = rendered
+    rows, _summary = _output(key)
+    empty = {"summary": True, "leaves_read": 0, "leaves_total": 0, "unread": []}
+    verdict = tool.validate(rows, empty, key)
+    assert not verdict["valid"] and verdict["canaries_found"] == "8/8"
+    assert any("neither read nor listed" in p for p in verdict["problems"])
+
+
+def test_a_summary_that_silently_skips_one_real_leaf_is_refused(rendered):
+    _out, key = rendered
+    rows, summary = _output(key)
+    canaries = {c["leaf_id"] for c in key["canaries"]}
+    skipped = next(i for i in key["expected_leaves"] if i not in canaries)
+    read = [i for i in summary["read"] if i != skipped]
+    for claimed in (len(read) + 1, len(read)):  # a forged count, and an honest one
+        forged = {**summary, "read": read, "leaves_read": claimed}
+        verdict = tool.validate(rows, forged, key)
+        assert not verdict["valid"]
+        assert any("neither read nor listed" in p for p in verdict["problems"])
 
 
 def test_the_triage_skeleton_records_the_family_and_leaves_out_the_canaries(rendered):

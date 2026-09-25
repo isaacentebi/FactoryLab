@@ -132,6 +132,19 @@ def test_sf1c_the_integral_is_frozen_exactly_at_the_cap():
                               card="c").status == g.UNSUPPORTED
 
 
+def test_sf1c_reads_only_runs_at_the_cap_and_restarts_across_an_uncapped_interval():
+    """Codex P2: after saturation the violation eases below the cap and the integral
+    legitimately moves; that is no windup. A new run at the cap is read afresh, and a
+    windup inside it still fails."""
+    eased = _updates("c", [(0.5, 1.0, 0.5), (0.5, 1.0, 0.5),   # at the cap, frozen
+                           (0.6, 0.5, 0.6), (0.7, 0.5, 0.7),   # eased: 0.3, 0.35 < 0.5
+                           (0.7, 1.0, 0.7), (0.7, 1.0, 0.7)])  # at the cap again, frozen
+    result = g.sf1c_anti_windup(eased, M, card="c")
+    assert result.ok and result.evidence["runs"] == 2
+    winding = eased + _updates("c", [(0.9, 1.0, 0.9)])  # still at the cap, integral moved
+    assert g.sf1c_anti_windup(winding, M, card="c").status == g.FAIL
+
+
 def test_sf1d_saturation_is_ledgered_with_a_rising_duration():
     at_cap = _updates("c", [(0.5, 1.0, 0.5)] * 4)
     rows = at_cap + [{"kind": "immune.price_ratchet_saturated", "card_id": "c",
@@ -247,6 +260,25 @@ def test_th1c_every_charge_is_price_times_movement_and_some_round_is_charged():
     assert g.th1c_movement(wrong, M).status == g.FAIL
     # The negative control's shape: a charge that never lands.
     assert g.th1c_movement(rows, M).status == g.FAIL
+
+
+def test_th1c_one_of_two_expected_charges_missing_fails():
+    """Codex P2: a correct charge for one moved draw must not excuse a dropped one."""
+    rows = _seq([
+        _w(1, lam=0.4),
+        _open("d1", "a", ids=["a", "NOOP"], probs=[0.8, 0.2]),
+        _open("d2", "a", ids=["a", "NOOP"], probs=[0.1, 0.9]),  # moved 0.7
+        _open("d3", "a", ids=["a", "NOOP"], probs=[0.6, 0.4]),  # moved 0.5
+    ])
+    both = rows + [{"kind": "thrash.charged", "handle": h, "router": "router:Tick",
+                    "charge": c, "reward": 0.4} for h, c in (("d2", 0.4 * 0.7),
+                                                             ("d3", 0.4 * 0.5))]
+    assert g.th1c_movement(both, M).ok
+    one = both[:-1]
+    result = g.th1c_movement(one, M)
+    assert result.status == g.FAIL and result.evidence["missing"] == ["d3"]
+    wrong_amount = [*both[:-1], {**both[-1], "charge": 0.1}]
+    assert g.th1c_movement(wrong_amount, M).status == g.FAIL
 
 
 def test_th1d_no_charge_reaches_the_frontier_or_the_niche():

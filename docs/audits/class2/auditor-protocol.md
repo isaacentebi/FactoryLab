@@ -78,9 +78,13 @@ JSON Lines, one object per finding, then one summary object:
  "quote": "≤25 words", "question": "Q4", "class": "C1", "severity": "MED",
  "passage": "§I.a", "rationale": "≤60 words",
  "rewrite": "a declarative fact, or \"delete\"", "confidence": 0.8}
-{"summary": true, "leaves_read": 1432, "leaves_total": 1432, "unread": [],
+{"summary": true, "leaves_read": 1432, "leaves_total": 1432,
+ "read": ["<leaf_id>", "…every leaf_id answered…"], "unread": [],
  "by_class": {"C1": 3, "C2": 1, "ANNOUNCED-PHYSICS": 2}}
 ```
+
+`read` lists the `leaf_id` of every leaf the auditor answered, and `unread` every one it
+did not. The counts are checked against those sets, and the sets against the corpus.
 
 A rewrite is a declarative fact or a deletion. It is justified by its rubric question and
 its passage, never by an expected change in behaviour.
@@ -94,7 +98,11 @@ list. The key is written to `canary_key.json`, which is never part of the audito
 
 The audit is **valid** only if all of these hold (`scripts/class2_audit.py validate`):
 
-- the summary is present, `unread` is empty and every leaf was read;
+- the summary is present and complete against the corpus `render` wrote, not against the
+  auditor's own numbers: the key records every leaf under audit (`expected_leaves`), and
+  every one of them must appear in the summary's `read` set or its `unread` list; any
+  unread leaf fails the audit, and `leaves_total` and `leaves_read` must match those
+  sets;
 - at least **7 of the 8** canaries are found under their question or class;
 - each **mandatory** canary is found: **Q6** (salience), **Q9** (disclosure) and **Q10**
   (standing label). These are the classes the closed lexicon cannot read at all, so they

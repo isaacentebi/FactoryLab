@@ -13,7 +13,8 @@ does everything around that call, offline:
             is never given. Also writes ``prompt.md``: the protocol, the rubric, the
             authority text, the allowlist and last release's triage.
   validate  Score an auditor's JSON Lines output against the key. Valid only when the
-            summary is present, nothing is unread, at least 7 of the 8 canaries are
+            summary's read set covers every leaf the key records as rendered (none
+            unread, none unaccounted for), at least 7 of the 8 canaries are
             found and every mandatory one (Q6, Q9, Q10) is, and at most 1 of 10
             controls is flagged. An invalid audit is rerun with the next family.
   triage    Write ``docs/audits/class2/<world>.md``: the skeleton the architect fills,
@@ -144,6 +145,12 @@ def plant(records: list[dict], *, seed: int, world: str) -> tuple[list[dict], di
                       if r["provenance"] == "kernel" and r["path"].startswith(prefix)), None)
         if match is not None:
             key["controls"].append({"leaf_id": match["leaf_id"], "path": match["path"]})
+    # The trusted record of what is under audit: every leaf the auditor must answer,
+    # canaries included. ``validate`` reads the auditor's read set against this, never
+    # against counts the auditor reports about itself.
+    expected = sorted({r["leaf_id"] for r in out if r["provenance"] == "kernel"})
+    key["expected_leaves"] = expected
+    key["expected_count"] = len(expected)
     return out, key
 
 
@@ -237,13 +244,30 @@ def validate(findings: list[dict], summary: dict | None, key: dict) -> dict:
                 or (not f.get("leaf_id") and f.get("path") == target["path"])]
 
     problems: list[str] = []
+    expected = set(key["expected_leaves"])
+    if len(expected) != key["expected_count"]:
+        problems.append("the key's expected leaf set does not match its count")
     if summary is None:
         problems.append("no summary object")
     else:
-        if summary.get("unread"):
-            problems.append(f"unread leaves: {len(summary['unread'])}")
-        if summary.get("leaves_read") != summary.get("leaves_total"):
-            problems.append("leaves_read differs from leaves_total")
+        # Completeness is judged against the key render wrote, never against the numbers
+        # the auditor reports about itself: every expected leaf is either in its read
+        # set or listed as unread, and an unread leaf fails the audit.
+        read = summary.get("read")
+        read = set(read) if isinstance(read, list) else set()
+        unread = summary.get("unread")
+        unread = set(unread) if isinstance(unread, list) else set()
+        if unread:
+            problems.append(f"unread leaves: {len(unread)}")
+        unaccounted = expected - read - unread
+        if unaccounted:
+            problems.append(f"expected leaves neither read nor listed unread: "
+                            f"{len(unaccounted)}/{len(expected)}")
+        if summary.get("leaves_total") != len(expected):
+            problems.append(f"leaves_total {summary.get('leaves_total')!r} is not the "
+                            f"{len(expected)} leaves rendered")
+        if summary.get("leaves_read") != len(read & expected):
+            problems.append("leaves_read differs from the expected leaves in the read set")
     found = []
     for canary in key["canaries"]:
         hits = flagged(canary)

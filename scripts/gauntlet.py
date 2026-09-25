@@ -418,18 +418,32 @@ def sf1c_anti_windup(events: list[Mapping], manifest: Mapping, *, card: str) -> 
     """SF-1c: once the penalty sits at ``penalty_cap``, the integral is exactly constant.
 
     Wave 16 R-E (amended): "while the penalty sits at penalty_cap, λ's integrator
-    does not integrate (it is frozen)". Equality, not tolerance, for every update
-    after saturation while the violation persists.
+    does not integrate (it is frozen)". Read only on runs of consecutive updates whose
+    penalty ``λ·v`` is at the cap: within each run the integral is equal, not merely
+    close, from one update to the next. A run ends at any update below the cap (the
+    violation eased, and the integral may then legitimately move) and a new run starts
+    at the next capped update.
     """
     ph = physics(manifest)
-    after = _saturated_updates(events, card, ph)
-    persisting = [row for row in after if row["violation"] > 0]
-    if len(persisting) < 2:
+    updates = [row for row in rows_of(events, "price.update") if row.get("card_id") == card]
+    runs: list[list[Mapping]] = []
+    current: list[Mapping] = []
+    for row in updates:
+        if row["violation"] > 0 and row["lambda_after"] * row["violation"] >= ph.cap - 1e-12:
+            current.append(row)
+        else:
+            if len(current) >= 2:
+                runs.append(current)
+            current = []
+    if len(current) >= 2:
+        runs.append(current)
+    if not runs:
         return _unsupported("SF-1c", "the penalty never sat at the cap for two updates",
                             card=card)
-    integrals = [row.get("i") for row in persisting]
-    moved = [(a, b) for a, b in zip(integrals, integrals[1:], strict=False) if a != b]
-    return _result("SF-1c", not moved, card=card, integrals=integrals[:12],
+    moved = [(a.get("i"), b.get("i")) for run in runs
+             for a, b in zip(run, run[1:], strict=False) if a.get("i") != b.get("i")]
+    return _result("SF-1c", not moved, card=card, runs=len(runs),
+                   integrals=[[row.get("i") for row in run][:12] for run in runs[:3]],
                    moved=moved[:5])
 
 
@@ -691,24 +705,28 @@ def expected_thrash_charges(events: list[Mapping], manifest: Mapping) -> dict[st
 
 
 def th1c_movement(events: list[Mapping], manifest: Mapping) -> Result:
-    """TH-1c: every charge is price × the router's own movement, and some round is charged.
+    """TH-1c: every charge is price × the router's own movement, and every one lands.
 
-    Every ``thrash.charged`` row's charge equals ``min(cap, λ_t·min(1, TV))`` of its
-    draw to 1e-12; a draw that did not move is never charged; and when some core
-    draw carried a positive charge, at least one round was charged (so a mechanism
-    that drops the charge fails here).
+    The set of handles charged (``thrash.charged``) equals the set of core draws whose
+    expected charge ``min(cap, λ_t·min(1, TV))`` is positive: a draw that did not move
+    is never charged, and no draw that moved under a price goes uncharged (a mechanism
+    that drops some charges fails here). Each charge equals its expected amount to
+    1e-12.
     """
     expected = expected_thrash_charges(events, manifest)
     charged = rows_of(events, "thrash.charged")
-    positive = [h for h, c in expected.items() if c > 0]
+    positive = {h for h, c in expected.items() if c > 0}
     if not positive and not charged:
         return _unsupported("TH-1c", "no core draw moved under a thrash price")
+    landed = {row["handle"] for row in charged}
+    missing, unexpected = sorted(positive - landed), sorted(landed - positive)
     bad = [{"handle": row["handle"], "charge": row["charge"],
             "expected": expected.get(row["handle"])}
            for row in charged
            if abs(float(row["charge"]) - float(expected.get(row["handle"], 0.0))) > 1e-12]
-    return _result("TH-1c", bool(charged) and not bad, charged=len(charged),
-                   expected_positive=len(positive), bad=bad[:5])
+    return _result("TH-1c", not missing and not unexpected and not bad,
+                   charged=len(charged), expected_positive=len(positive),
+                   missing=missing[:5], unexpected=unexpected[:5], bad=bad[:5])
 
 
 def th1d_frontier(events: list[Mapping], manifest: Mapping) -> Result:
