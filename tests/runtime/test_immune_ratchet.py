@@ -18,9 +18,11 @@ from factorylab.runtime.pricing import MeasureWindow
 from factorylab.runtime.worlds import load_manifest
 
 
-def _runtime(lambda_max=1.0):
+def _runtime(**prices):
+    """The scripted world, its price gains overridden by ``prices``: a test of the
+    duration price needs gains that leave it room below the cap (``gain_headroom``)."""
     seed = load_manifest("scripted")
-    seed = replace(seed, prices=replace(seed.prices, lambda_max=lambda_max))
+    seed = replace(seed, prices=replace(seed.prices, **prices))
     charter = replace(seed.charter, cards=tuple(replace(c, window=MetricWindow("windows", 1, None))
                                                for c in seed.charter.cards))
     rt = Runtime(replace(seed, charter=charter), events=1, seed=1, initial_balance_micro=None,
@@ -49,7 +51,7 @@ def _items(rt, kind):
 
 
 def test_stable_failure_raises_violated_price_with_duration_and_never_halves_it():
-    rt = _runtime(lambda_max=10.0)
+    rt = _runtime(eta=0.01)  # the PID alone takes many windows to reach the cap
     prices = [0.0]
     for _ in range(6):
         _close(rt, 0.2)  # the same failing cell, window after window
@@ -65,7 +67,9 @@ def test_stable_failure_raises_violated_price_with_duration_and_never_halves_it(
     assert [r["step"] for r in ratchets] == [
         rt.m.immune.price_step * r["duration"] for r in ratchets]
     assert all(r["lambda_after"] >= r["lambda_before"] for r in ratchets)
-    assert prices == sorted(prices) and prices[-1] <= rt.m.prices.lambda_max
+    # Bounded by the one bound (wave 16, R-E): the card's penalty never passes the cap.
+    bound = rt.controller.saturation("well_formed_rate")["bound"]
+    assert prices == sorted(prices) and prices[-1] <= bound
 
 
 def test_leaving_the_attractor_ends_the_ratchet_and_unwinds_exploration():
@@ -88,7 +92,7 @@ def test_leaving_the_attractor_ends_the_ratchet_and_unwinds_exploration():
 def test_the_organ_diagnoses_every_window_and_acts_on_its_own_slower_loop():
     """Versioning P5, time audit T2: the organ acts once every min_ratio price periods or
     more, jittered, and diagnoses every window in between."""
-    rt = _runtime(lambda_max=10.0)
+    rt = _runtime()
     rt.clockwork.fire("price", rt.ticks_consumed, 1)
     rt.clockwork.fire("immune", rt.ticks_consumed, rt.clockwork.period("price"))
     for _ in range(12):
@@ -109,14 +113,14 @@ def test_price_step_alone_sets_the_ratchet_and_is_part_of_the_identity():
     stepped = replace(seed, immune=replace(seed.immune, price_step=0.2))
     stepped.validate()
     assert stepped.canonical_json() != seed.canonical_json()
-    for bad in (None, 0.0, -0.1, float("nan"), seed.prices.lambda_max * 2, True):
+    for bad in (None, 0.0, -0.1, float("nan"), float("inf"), True):
         with pytest.raises(ValueError):
             replace(seed, immune=replace(seed.immune, price_step=bad)).validate()
 
-    rt = _runtime(lambda_max=10.0)
-    rt.m = replace(rt.m, immune=replace(rt.m.immune, price_step=0.2))
+    rt = _runtime(eta=0.01)
+    rt.m = replace(rt.m, immune=replace(rt.m.immune, price_step=0.02))
     for _ in range(6):
         _close(rt, 0.2)
     ratchets = _items(rt, "immune.price_ratchet")
     assert ratchets and [r["step"] for r in ratchets] == pytest.approx(
-        [0.2 * r["duration"] for r in ratchets])
+        [0.02 * r["duration"] for r in ratchets])

@@ -704,6 +704,9 @@ _RUNTIME_FIELDS = (
     # Wave 16 (D4): settled raw scores awaiting their router. An older checkpoint has
     # none: its routers learn effective scores until the next settlement.
     "raw_scores",
+    # Wave 16 (D5): settlements waiting for their origin window's close. An older
+    # checkpoint has none: nothing waits.
+    "deferred_settlements",
     # Wave 5a (evaluations M1, P5): each judge's ordinary consequence tally, the
     # adversarial judges' open counter-verdicts, and the chaos faults of the tick in
     # progress. Each defaults empty when an older checkpoint lacks it.
@@ -887,11 +890,11 @@ _COMPONENT_FIELDS = (
         "sittings", "deferrals", "voters", "norm_editions",
     )),
     ("controller", "_PriceController__", (
-        "eta", "decay", "lambda_max", "min_window_events", "cards", "kp", "kd",
+        "eta", "decay", "cap", "min_window_events", "cards", "kp", "kd",
     )),
     # The thrash price (versioning C2). An older checkpoint has none: it starts at zero.
     ("thrash_controller", "_PriceController__", (
-        "eta", "decay", "lambda_max", "min_window_events", "cards", "kp", "kd",
+        "eta", "decay", "cap", "min_window_events", "cards", "kp", "kd",
     )),
     ("consequences", "", ("backstop", "table", "mids", "pending_orders", "deferred_events",
                           # R4-C: a released hold's exposure, and the censored

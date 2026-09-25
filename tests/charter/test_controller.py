@@ -30,7 +30,7 @@ def ledger(clock):
 
 
 def controller(ledger, **changes):
-    parameters = dict(eta=0.5, decay=0.25, lambda_max=2.0, min_window_events=3)
+    parameters = dict(eta=0.25, decay=0.125, penalty_cap=0.9, min_window_events=3)
     parameters.update(changes)
     return PriceController(ledger, **parameters)
 
@@ -118,33 +118,48 @@ def test_prices_rise_on_violation_and_decay_inside_region(ledger):
     for event, value in [(0, 12), (3, 12), (6, 12), (9, 10), (12, -100)]:
         prices.observe("cost", value, event)
         observed.append(prices.price("cost"))
-    assert observed == [0.5, 1.0, 1.5, 1.25, 1.0]
+    assert observed == [0.25, 0.5, 0.75, 0.625, 0.5]
     assert prices.snapshot()["cards"]["cost"]["updates"] == 5
 
 
 def test_clipping_counts_only_attempts_beyond_bounds_and_tracks_actual_steps(ledger):
-    prices = controller(ledger, eta=1, decay=1, lambda_max=2, min_window_events=1, kp=1)
+    """Wave 16, ruling R-E: the one bound is penalty_cap / v, the price at which the
+    card's own penalty takes the whole cap. An exact hit is not saturation; an attempt
+    beyond the bound is."""
+    prices = controller(ledger, eta=0.45, decay=1, min_window_events=1)
     prices.register(region())
-    # Exact hits are not saturation; attempts to go beyond a bound are.
-    for event, value in enumerate([14, 12, 10, 10, 10, 100, 100]):
+    for event, value in enumerate([12, 12, 12, 10]):  # violation 1: bound 0.9
         prices.observe("cost", value, event)
-    assert prices.snapshot()["cards"]["cost"] == {
-        "lambda": 2.0, "updates": 7, "saturations": 2, "max_step": 2.0,
-        "last_window_end_event": 6,
-        # The integral held while P alone saturated a growing violation; no stable
-        # failure ratcheted it.
-        "integral": 2.0, "failing_windows": 0,
-        # Charter audit M7: four windows closed at lambda_max; the violation that
-        # ended at event 2 reset the run, and the current one has lasted two windows.
-        "windows_at_lambda_max": 4, "violation_windows": 2,
-    }
     entries = evidence(ledger)
-    assert [item["lambda_after"] for item in entries] == [2, 2, 0, 0, 0, 2, 2]
-    assert [item["saturated"] for item in entries] == [False] * 5 + [True, True]
-    assert prices.saturation("cost") == {"windows_at_lambda_max": 4, "violation_windows": 2}
-    assert prices.saturation("unregistered") == {"windows_at_lambda_max": 0,
+    assert [item["lambda_after"] for item in entries] == pytest.approx([0.45, 0.9, 0.9, 0])
+    assert [item["saturated"] for item in entries] == [False] * 4
+    # At the bound the integrator is frozen (anti-windup): the third window holds.
+    assert [item["integrator_frozen"] for item in entries] == [False, False, True, False]
+    assert [item["at_cap"] for item in entries] == [False, True, True, False]
+    assert prices.saturation("cost") == {"bound": None, "windows_at_bound": 2,
+                                         "saturated_windows": 0, "violation_windows": 0}
+    assert prices.saturation("unregistered") == {"bound": None, "windows_at_bound": 0,
+                                                 "saturated_windows": 0,
                                                  "violation_windows": 0}
-    assert entries[5]["violation"] == 45.0  # Unclipped observation retained.
+
+
+def test_an_attempt_beyond_the_bound_is_saturation_and_the_bound_moves_with_v(ledger):
+    prices = controller(ledger, eta=1, decay=1, min_window_events=1, kp=1)
+    prices.register(region())
+    for event, value in enumerate([14, 100, 100]):
+        prices.observe("cost", value, event)
+    card = prices.snapshot()["cards"]["cost"]
+    assert card == pytest.approx({
+        "lambda": 0.02, "updates": 3, "saturations": 3, "max_step": 0.45,
+        "last_window_end_event": 2, "integral": 0.0, "failing_windows": 0,
+        "bound": 0.02, "windows_at_bound": 3, "saturated_windows": 3,
+        "violation_windows": 3,
+    })
+    entries = evidence(ledger)
+    assert [item["lambda_after"] for item in entries] == pytest.approx([0.45, 0.02, 0.02])
+    assert entries[1]["violation"] == 45.0  # Unclipped observation retained.
+    # lambda * v never exceeds the cap: the penalty is bounded, not the price.
+    assert all(item["lambda_after"] * item["violation"] <= 0.9 + 1e-12 for item in entries)
 
 
 def test_window_skips_duplicates_old_and_early_observations_without_moving_boundary(ledger):
@@ -158,8 +173,8 @@ def test_window_skips_duplicates_old_and_early_observations_without_moving_bound
         assert prices.snapshot() == before
     prices.observe("other", 12, 10)  # Cadence is independent per card.
     prices.observe("cost", 12, 13)  # Inclusive eligibility, based on last accepted window.
-    assert prices.price("cost") == 1.0
-    assert prices.price("other") == 0.5
+    assert prices.price("cost") == 0.5
+    assert prices.price("other") == 0.25
     entries = evidence(ledger)
     assert [item["kind"] for item in entries] == [
         "price.update", *["price.skipped"] * 4, "price.update", "price.update",
@@ -176,7 +191,9 @@ def test_penalty_sums_known_cards_without_clipping_or_mutating(ledger):
     prices.observe("cost", 14, 0)
     prices.observe("rate", 3, 0)
     before = prices.snapshot()
-    assert prices.penalty({"cost": 16, "rate": 2, "unknown": float("nan")}) == 8.0
+    # Each priced at its bound, 0.9 / v; the sum over cards is not clipped.
+    assert prices.penalty({"cost": 16, "rate": 2, "unknown": float("nan")}) == pytest.approx(
+        0.45 * 3 + 0.9 * 2)
     assert prices.penalty({"cost": 10, "rate": 5}) == 0.0
     assert prices.penalty({}) == prices.penalty({"unknown": 1000}) == 0.0
     assert prices.snapshot() == before
@@ -211,7 +228,7 @@ def test_update_is_appended_before_price_or_counters_change(ledger, monkeypatch)
     with monkeypatch.context() as patch:
         patch.setattr(ledger, "append", inspect)
         prices.observe("cost", 12, 7)
-    assert prices.price("cost") == 0.5
+    assert prices.price("cost") == 0.25
     with pytest.raises(PermissionError):
         ledger.decrypt_item(0)
     item, = evidence(ledger)
@@ -219,9 +236,10 @@ def test_update_is_appended_before_price_or_counters_change(ledger, monkeypatch)
         "seq", "prev_hash", "hash",
     }} == {
         "kind": "price.update", "card_id": "cost", "value": 12.0,
-        "violation": 1.0, "lambda_before": 0.0, "lambda_after": 0.5,
-        "previous_violation": 0.0, "p": 0.0, "i": 0.5, "d": 0.0,
+        "violation": 1.0, "lambda_before": 0.0, "lambda_after": 0.25,
+        "previous_violation": 0.0, "p": 0.0, "i": 0.25, "d": 0.0,
         "saturated": False, "window_end_event": 7, "ts": 100,
+        "bound": 0.9, "at_cap": False, "integrator_frozen": False,
     }
 
 
@@ -237,7 +255,7 @@ def test_failed_ledger_append_leaves_update_or_skip_state_unchanged(ledger, cloc
     assert prices.snapshot() == before
     clock.fail = False
     prices.observe("cost", 100, 3)
-    assert prices.price("cost") == 2.0
+    assert prices.price("cost") == pytest.approx(0.9 / 45)  # the bound at violation 45
     assert len(evidence(ledger)) == 2
 
 
@@ -253,7 +271,7 @@ def test_nonfinite_violation_is_rejected_before_ledger_or_state_changes(ledger):
 
 def test_skipped_observations_and_failed_updates_do_not_replace_violation_history(ledger,
                                                                                     clock):
-    prices = controller(ledger, lambda_max=100)
+    prices = controller(ledger, eta=0.05)
     prices.register(region())
     prices.observe("cost", 18, 0)
     prices.observe("cost", 100, 1)  # skipped
@@ -262,5 +280,5 @@ def test_skipped_observations_and_failed_updates_do_not_replace_violation_histor
         prices.observe("cost", 16, 3)
     clock.fail = False
     prices.observe("cost", 14, 3)
-    assert prices.price("cost") == 3.0  # the integral: 0.5 * 4, then + 0.5 * 2
+    assert prices.price("cost") == pytest.approx(0.3)  # the integral: 0.05 * 4, + 0.05 * 2
     assert evidence(ledger)[-1]["previous_violation"] == 4

@@ -108,17 +108,31 @@ class _CardState:
     max_step: float = 0.0
     last_window_end_event: int | None = None
     previous_violation: float = 0.0
-    # The integral term: accumulated pressure, bounded to [0, lambda_max].
+    # The integral term: accumulated pressure. It integrates only up to the bound of
+    # the window it integrates in (penalty_cap / v) and is held, never cut, while the
+    # penalty sits at the cap, so a violation that spikes and subsides keeps its memory.
     integral: float = 0.0
     # The last accepted observation, for the PID's derivative on measurement.
     previous_value: float | None = None
     # Consecutive windows the immune organ diagnosed this card violated inside a
     # stable-failure attractor; zero once the attractor is left.
     failing_windows: int = 0
-    # Charter audit M7: observed windows that closed with the card priced at
-    # lambda_max, and the current run of consecutive observed windows in violation.
-    windows_at_max: int = 0
+    # Charter audit M7; wave 16, R-E: observed windows that closed with the card at its
+    # bound (the penalty it presses on the reward at ``penalty_cap``), the current run
+    # of consecutive such windows, and the current run of windows in violation.
+    windows_at_bound: int = 0
+    saturated_windows: int = 0
     violation_windows: int = 0
+    # The total pressure on the reward of the roles the card answers for, at its last
+    # observation: sum(lambda * v) over their cards (the runtime's reading, or the
+    # card's own lambda * v). At ``penalty_cap`` no gain on the price's level exists.
+    last_pressure: float = 0.0
+
+
+def _repriced(state: _CardState, price: float) -> float:
+    """The roles' pressure after this card alone moves to ``price``: the last reading
+    moved by the change times the card's violation, never below zero."""
+    return max(0.0, state.last_pressure + (price - state.price) * state.previous_violation)
 
 
 class PriceController:
@@ -139,10 +153,12 @@ class PriceController:
     which is how Kd damps the escalation before it overshoots. A violation that is
     shrinking but still outside the region is priced by ``P + I`` alone, never
     below its accumulated integral: the damping the essay asks of Kd is on the
-    price's climb, not a cancellation of it. ``I`` is held in ``[0, lambda_max]``
-    and stops integrating only while the output is already saturated high without
-    it (``P + I >= lambda_max``) *and* the violation is still growing
-    (anti-windup). With ``Kp = Kd = 0`` the law is the integral alone.
+    price's climb, not a cancellation of it. ``I`` integrates only up to the bound
+    ``penalty_cap / v`` of the window it integrates in, and stops integrating (is
+    held, not cut) while the penalty sits at the cap, or while the output is
+    already saturated high without it (``P + I`` at that bound) *and* the violation
+    is still growing (anti-windup). With ``Kp = Kd = 0`` the law is the integral
+    alone.
 
     Feed-forward (essay II.IV.a: "Adopting a futarchic model also changes the PID
     controller … A futarchic λ, however, is necessarily forward-looking—the market
@@ -177,7 +193,17 @@ class PriceController:
 
     Without ``anticipated`` the law is the backward PID above, unchanged.
 
-    The price is clipped to ``[0, lambda_max]``.
+    One bound (wave 16, ruling R-E): ``penalty_cap``, the reward scale. A card's
+    price is clipped to ``[0, penalty_cap / v]`` while it violates (``v > 0``): above
+    it, ``lambda * v`` would take more than the capped penalty any reward can bear,
+    and no decision's reward would change. There is no ``lambda_max``. While the
+    penalty sits at the cap (the card's own ``lambda * v``, or the total pressure the
+    runtime reads over the cards of its roles, at or above ``penalty_cap``) the
+    integrator is frozen: essay II.IV.b, "gain ramped high enough to kick a system
+    out of an overdamped attractor will, if unchecked, overshoot into an oscillation
+    condition (thrash)", and a wound-up integral would keep the price high long after
+    the attractor was left. Saturation is counted (``saturated_windows``,
+    ``windows_at_bound``) and published, never answered with more gain.
     """
 
     def __init__(
@@ -186,21 +212,23 @@ class PriceController:
         *,
         eta: float,
         decay: float,
-        lambda_max: float,
+        penalty_cap: float,
         min_window_events: int,
         kp: float = 0.0,
         kd: float = 0.0,
     ) -> None:
-        """Require finite rates, nonnegative gains and positive bounds/window separation."""
+        """Require finite rates, nonnegative gains, a cap in (0, 1) and window separation."""
         self.__kp = _number(kp, "kp")
         self.__kd = _number(kd, "kd")
         if self.__kp < 0 or self.__kd < 0:
             raise ValueError("kp and kd must be nonnegative")
         self.__eta = _number(eta, "eta")
         self.__decay = _number(decay, "decay")
-        self.__lambda_max = _number(lambda_max, "lambda_max")
-        if min(self.__eta, self.__decay, self.__lambda_max) <= 0:
-            raise ValueError("eta, decay and lambda_max must be positive")
+        self.__cap = _number(penalty_cap, "penalty_cap")
+        if min(self.__eta, self.__decay) <= 0:
+            raise ValueError("eta and decay must be positive")
+        if not 0 < self.__cap < 1:
+            raise ValueError("penalty_cap must be in (0, 1)")
         if type(min_window_events) is not int or min_window_events < 1:
             raise ValueError("min_window_events must be a positive integer")
         self.__min_window_events = min_window_events
@@ -237,14 +265,15 @@ class PriceController:
         PID card resumes from it without a jump (bumpless transfer).
         """
         state = self.__cards[card_id]
-        price = proposed_price(value, self.__lambda_max)
+        price = proposed_price(value)
         if not isinstance(amendment_id, str) or not amendment_id.strip():
             raise ValueError("amendment_id is required")
         self.__ledger.append({
             "kind": "price.proposed", "card_id": card_id, "amendment_id": amendment_id,
             "lambda_before": state.price, "lambda_after": price,
         })
-        self.__cards[card_id] = replace(state, price=price, integral=price)
+        self.__cards[card_id] = replace(state, price=price, integral=price,
+                                        last_pressure=_repriced(state, price))
 
     def ratchet(self, card_id: str, *, window: int, step: float) -> None:
         """Raise a card's price with the duration of the failing attractor it sits in.
@@ -252,25 +281,61 @@ class PriceController:
         Essay II.II.b: in stable failure "price the duration of failure, ratcheting
         up penalties the longer the factory spends" in the failing attractor. The
         n-th consecutive diagnosed window adds ``n * step`` to the card's
-        accumulated pressure and to its price, both bounded by ``lambda_max``, so
-        the raise persists through later windows until the violation ends and the
-        ordinary decay unwinds it. The entry is ledgered before any state changes.
+        accumulated pressure and to its price, both bounded by the card's bound
+        (``penalty_cap / v``), so the raise persists through later windows until the
+        violation ends and the ordinary decay unwinds it.
+
+        At saturation the ratchet stops (wave 16, ruling R-E): when the card's
+        penalty already sits at ``penalty_cap`` (its own ``lambda * v``, or the total
+        pressure of its roles at its last observation), no gain on the price's level
+        exists, so the integral and the price are left unchanged, the duration keeps
+        counting, and ``immune.price_ratchet_saturated`` is ledgered (card, window,
+        duration, the price at its bound). Either entry is ledgered before any state
+        changes.
         """
         step = _number(step, "step")
         if step <= 0:
             raise ValueError("step must be positive")
         state = self.__cards[card_id]
         duration = state.failing_windows + 1
+        bound = self._bound(state.previous_violation)
+        if self._at_cap(state):
+            self.__ledger.append({
+                "kind": "immune.price_ratchet_saturated", "card_id": card_id,
+                "window": window, "duration": duration, "lambda": state.price,
+                "bound": bound, "pressure": state.last_pressure,
+                "penalty_cap": self.__cap, "saturated_windows": state.saturated_windows,
+            })
+            self.__cards[card_id] = replace(state, failing_windows=duration)
+            return
         raised = step * duration
-        price = min(self.__lambda_max, state.price + raised)
-        integral = min(self.__lambda_max, state.integral + raised)
+        price = state.price + raised
+        integral = state.integral + raised
+        if bound is not None:
+            price, integral = min(bound, price), min(bound, integral)
         self.__ledger.append({
             "kind": "immune.price_ratchet", "card_id": card_id, "window": window,
             "duration": duration, "step": raised,
             "lambda_before": state.price, "lambda_after": price,
         })
         self.__cards[card_id] = replace(state, price=price, integral=integral,
-                                        failing_windows=duration)
+                                        failing_windows=duration,
+                                        last_pressure=_repriced(state, price))
+
+    def _bound(self, violation: float) -> float | None:
+        """The price at which a card's own penalty takes the whole cap, or None unviolated."""
+        return self.__cap / violation if violation > 0 else None
+
+    def _at_cap(self, state: _CardState) -> bool:
+        """Whether a card's penalty sits at ``penalty_cap``: its own price times its
+        violation, or the total pressure of its roles at its last observation."""
+        return self._presses(state.price, state.previous_violation, state.last_pressure)
+
+    def _presses(self, price: float, violation: float, pressure: float) -> bool:
+        """Whether a violating card at ``price`` presses the cap: its price at or above
+        its bound (compared as a price, so a price clipped to the bound is at it
+        whatever the float product rounds to), or the roles' pressure at the cap."""
+        return violation > 0 and (price >= self.__cap / violation or pressure >= self.__cap)
 
     def end_failure(self, card_id: str, *, window: int) -> None:
         """Reset a card's failing-attractor duration; its price is left to the controller.
@@ -318,7 +383,8 @@ class PriceController:
         return violation(region, value)
 
     def observe(self, card_id: str, value: float, window_end_event: int, *,
-                holdout: float = 0.0, anticipated: float | None = None) -> None:
+                holdout: float = 0.0, anticipated: float | None = None,
+                pressure: float | None = None) -> None:
         """Ledger each accepted update or skipped window before any state/clock changes.
 
         Nonnegative event indices double as logical nanosecond timestamps for
@@ -330,6 +396,10 @@ class PriceController:
         (``charter.holdout_violation``), added to its region violation.
         ``anticipated`` is the market's expected change
         in the violation, for the feed-forward term (see the class docstring).
+        ``pressure`` is the total ``sum(lambda * v)`` over the cards of the roles
+        this card answers for, at the prices in force before this update; with it at
+        ``penalty_cap`` the integrator is frozen (anti-windup, ruling R-E). Without
+        it the card's own ``lambda * v`` is the pressure.
         """
         holdout = _number(holdout, "holdout")
         if anticipated is not None:
@@ -355,13 +425,20 @@ class PriceController:
             )
             return
         violation = self.violation(card_id, value) + holdout
-        requested, integral, terms = self._pid(state, value, violation)
+        if pressure is not None:
+            pressure = _number(pressure, "pressure")
+        # The penalty the card presses on the reward at the prices in force now: at the
+        # cap, no gain on the price's level exists, and the integrator holds.
+        frozen = self._presses(state.price, violation, pressure or 0.0)
+        requested, integral, terms = self._pid(state, value, violation, frozen=frozen)
         if anticipated is not None and violation > 0:
             feed_forward = self.__kp * max(anticipated, -violation)
             requested += feed_forward
             terms = {**terms, "f": feed_forward, "anticipated": anticipated}
-        price = min(self.__lambda_max, max(0.0, requested))
-        saturated = requested < 0 or requested > self.__lambda_max
+        bound = self._bound(violation)
+        price = max(0.0, requested) if bound is None else min(bound, max(0.0, requested))
+        saturated = requested < 0 or (bound is not None and requested > bound)
+        at_bound = self._presses(price, violation, pressure or 0.0)
         updated = replace(
             state,
             price=price,
@@ -372,8 +449,13 @@ class PriceController:
             previous_violation=violation,
             integral=integral,
             previous_value=value,
-            windows_at_max=state.windows_at_max + int(price >= self.__lambda_max),
+            windows_at_bound=state.windows_at_bound + int(at_bound),
+            saturated_windows=state.saturated_windows + 1 if at_bound else 0,
             violation_windows=state.violation_windows + 1 if violation > 0 else 0,
+            # The pressure at the prices now in force: the reading (at the prices
+            # before this update) moved by this card's own change.
+            last_pressure=max(0.0, (state.price * violation if pressure is None else pressure)
+                              + (price - state.price) * violation),
         )
         entry = {
             "kind": "price.update",
@@ -385,24 +467,31 @@ class PriceController:
             "lambda_after": price,
             "saturated": saturated,
             "window_end_event": window_end_event,
+            "bound": bound,
+            "at_cap": at_bound,
+            "integrator_frozen": frozen,
+            **({"pressure": pressure} if pressure is not None else {}),
             **terms,
             **({"holdout": holdout} if holdout else {}),
         }
         self.__ledger.append(entry)
         self.__cards[card_id] = updated
 
-    def _pid(self, state: _CardState, value: float,
-             violation: float) -> tuple[float, float, dict[str, float]]:
-        """Guarantees a violating card is never priced below its accumulated integral.
+    def _pid(self, state: _CardState, value: float, violation: float, *,
+             frozen: bool = False) -> tuple[float, float, dict[str, float]]:
+        """Guarantees a violating card is never priced below its accumulated integral,
+        or its bound where the integral exceeds it.
 
-        Returns the unclipped PID output, the next bounded integral and the three
+        Returns the unclipped PID output, the next integral and the three
         terms. The derivative is the change in the measurement itself, signed so
         that a move deeper into violation is positive, taken only while the card
         violates, and only its positive part: a card moving back toward its region
         but still outside it keeps ``P + I``, so a shrinking violation can lower the
         price only through ``P``, never to zero while it lasts. The integral never
-        leaves ``[0, lambda_max]`` and holds only while ``P`` plus the integral
-        already reaches ``lambda_max`` and the violation is still growing.
+        integrates past ``penalty_cap / v``; it holds, unchanged, while the penalty
+        sits at the cap (``frozen``; ruling R-E), and while ``P`` plus the integral
+        already reaches the bound and the violation is still growing; it leaks
+        ``decay`` once the card stops violating.
         """
         region = state.region
         derivative = 0.0
@@ -420,29 +509,40 @@ class PriceController:
         proportional = self.__kp * violation
         if violation <= 0:
             integral = max(0.0, state.integral - self.__decay)
-        elif (proportional + state.integral >= self.__lambda_max
-              and violation > state.previous_violation):
-            # Saturated high without any new integration and still climbing: hold,
-            # never wind up. A violation that is flat or easing keeps integrating
-            # even when P alone saturates, so I is there when P falls away.
-            integral = state.integral
         else:
-            integral = min(self.__lambda_max, state.integral + self.__eta * violation)
+            bound = self.__cap / violation
+            if frozen or (proportional + state.integral >= bound
+                          and violation > state.previous_violation):
+                # At the cap, or saturated high without any new integration and still
+                # climbing: hold, never wind up, and never cut: a spike's lower bound
+                # clips the price, not the pressure the card has accumulated.
+                integral = state.integral
+            else:
+                integral = min(bound, state.integral + self.__eta * violation)
         return (proportional + integral + derivative, integral,
                 {"p": proportional, "i": integral, "d": derivative})
 
-    def saturation(self, card_id: str) -> dict[str, int]:
-        """Public per-card statistics: windows priced at lambda_max, and violation duration.
+    def saturation(self, card_id: str) -> dict[str, float | int | None]:
+        """Public per-card statistics: the card's bound and its saturation, and its
+        violation's duration.
 
         Charter audit M7 (essay II.IV: "if it cannot be satisfied beyond what is
-        priced as acceptable, then the factory needs to be scrapped"): the
-        evidence on which that threat could be invoked. Counted in observed
-        windows; an unregistered card has zeros. Nothing here kills anything.
+        priced as acceptable, then the factory needs to be scrapped"), and wave 16,
+        ruling R-E (saturation is "published to governance"): ``bound`` is the price
+        at which the card's own penalty takes the whole ``penalty_cap`` at its last
+        violation, ``windows_at_bound`` the observed windows it closed pressing the
+        cap, ``saturated_windows`` the current run of them (the card's price held at
+        its bound: its shadow price exceeds what the reward channel can express), and
+        ``violation_windows`` the current run of windows in violation. An
+        unregistered card has zeros. Nothing here kills anything.
         """
         state = self.__cards.get(card_id) if isinstance(card_id, str) else None
         if state is None:
-            return {"windows_at_lambda_max": 0, "violation_windows": 0}
-        return {"windows_at_lambda_max": state.windows_at_max,
+            return {"bound": None, "windows_at_bound": 0, "saturated_windows": 0,
+                    "violation_windows": 0}
+        return {"bound": self._bound(state.previous_violation),
+                "windows_at_bound": state.windows_at_bound,
+                "saturated_windows": state.saturated_windows,
                 "violation_windows": state.violation_windows}
 
     def price(self, card_id: str) -> float:
@@ -477,7 +577,7 @@ class PriceController:
         """
         self.__decay = _number(value, "decay")
         if self.__decay <= 0:
-            raise ValueError("eta, decay and lambda_max must be positive")
+            raise ValueError("eta and decay must be positive")
 
     def snapshot(self) -> dict:
         """Return detached parameters and per-card prices, cadence and revision evidence."""
@@ -485,7 +585,7 @@ class PriceController:
             "parameters": {
                 "eta": self.__eta,
                 "decay": self.__decay,
-                "lambda_max": self.__lambda_max,
+                "penalty_cap": self.__cap,
                 "min_window_events": self.__min_window_events,
                 "kp": self.__kp,
                 "kd": self.__kd,
@@ -499,7 +599,9 @@ class PriceController:
                     "last_window_end_event": state.last_window_end_event,
                     "integral": state.integral,
                     "failing_windows": state.failing_windows,
-                    "windows_at_lambda_max": state.windows_at_max,
+                    "bound": self._bound(state.previous_violation),
+                    "windows_at_bound": state.windows_at_bound,
+                    "saturated_windows": state.saturated_windows,
                     "violation_windows": state.violation_windows,
                 }
                 for card_id, state in self.__cards.items()

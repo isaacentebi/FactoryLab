@@ -416,7 +416,7 @@ class SchematicsMixin:
         "{kind: returns|forecasts|windows, n: positive integer, per: role|assembly|null}. "
         "Insufficient samples are unmeasured. An amendment carries one change class: cards "
         "(add, replace, remove, as in proposal_shapes.amendment), lambda ({\"lambda\": "
-        "{card_id: value}} over current cards, bounded by prices.lambda_max) or clock "
+        "{card_id: value}} over current cards, each a finite number >= 0) or clock "
         "(tick_interval, a duration within world.clock bounds). A prediction names a "
         "card_id, direction (increase or decrease), and a positive window count after activation; "
         "a clock amendment's prediction names an observation instead of a card_id: "
@@ -624,8 +624,9 @@ class SchematicsMixin:
                         if (r := self.regions.get(cid)) is not None
                         else None
                     ),
-                    # Charter audit M7: closed windows priced at lambda_max, and the
-                    # current run of consecutive windows in violation.
+                    # Charter audit M7 and wave 16 R-E: the card's bound
+                    # (penalty_cap / v), its closed windows at it and its current
+                    # saturated run, and the current run of windows in violation.
                     **self.controller.saturation(cid),
                 }
                 for cid in sorted(self.priced)
@@ -779,8 +780,7 @@ class SchematicsMixin:
                 max_children=self.m.tools.max_children,
                 max_tool_calls=self.m.tools.max_tool_calls),
             "scoring": self._scoring_block(),
-            "prices": {"lambda_max": self.m.prices.lambda_max,
-                       "penalty_cap": self.m.prices.penalty_cap},
+            "prices": {"penalty_cap": self.m.prices.penalty_cap},
             "event_kinds": sorted(self._event_kinds()),
             "meta_input": (
                 "A meta judges the released representative verdict. Its window describes "
@@ -1817,14 +1817,21 @@ class SchematicsMixin:
             "controller": {
                 "law": "pid",
                 "eta": pr.eta, "kp": pr.kp, "kd": pr.kd, "decay": pr.decay,
-                "lambda_max": pr.lambda_max, "min_window_events": pr.min_window_events,
-                "penalty_cap": getattr(pr, "penalty_cap", None),
+                "min_window_events": pr.min_window_events, "penalty_cap": pr.penalty_cap,
                 "recurrence": "v = distance outside the inclusive region / scale; "
-                "if v > 0: I' = clip(I + eta*v, 0, lambda_max), except I' = I while "
-                "kp*v + I >= lambda_max and v > v_previous; otherwise I' = max(0, I-decay). "
-                "D = kd*max(0, the measurement's move deeper outside the region since the "
-                "previous window)/scale while v > 0, else 0. "
-                "lambda' = clip(kp*v + I' + D, 0, lambda_max)",
+                "B = penalty_cap / v, the price at which the card's own penalty lambda * v "
+                "takes the whole cap; S = sum(lambda_j * v_j) over the cards of the roles "
+                "the card answers for (the least over roles for a card that answers for "
+                "all), at the prices in force. If v > 0: I' = I while max(lambda * v, S) "
+                ">= penalty_cap (the integrator is frozen at the cap) or while kp*v + I >= "
+                "B and v > v_previous, else I' = min(B, I + eta*v); otherwise I' = max(0, "
+                "I-decay). D = kd*max(0, the measurement's move deeper outside the region "
+                "since the previous window)/scale while v > 0, else 0. lambda' = clip(kp*v "
+                "+ I' + D, 0, B) while v > 0, else max(0, I'). A window closing with "
+                "max(lambda * v, S) >= penalty_cap is a window at the bound, counted and "
+                "published with the card (world.card_prices: bound, windows_at_bound, "
+                "saturated_windows)",
+                "gain_headroom": self.m.gain_headroom(),
             },
             "cascade": {"min_ratio": self.m.timing.min_ratio,
                         "jitter_fraction": self.m.timing.jitter_fraction},
@@ -2169,14 +2176,25 @@ class SchematicsMixin:
                 "share = sum(lambda_j * v_j * share_j) / S (zero when S = 0). "
                 "share_j is the decision's own cost, malformed-return deficit (well-formed "
                 "count for an upper-bound violation), tool attempts or filled notional "
-                "divided by that observation's window total; otherwise "
-                "1/n decisions for that role. A zero total contributes zero. "
+                "divided by that observation's window total; for revision_rate, "
+                "noop_share and consequence_paid_off_rate, 0 for a decision that moved the "
+                "rate toward its region (a floor: in its numerator; a ceiling: in its "
+                "denominator and not its numerator) and 1/n for every other decision of the "
+                "role, n the non-relieving ones, NOOPs and declines included; otherwise "
+                "max(prices.min_blame_share, 1/n) over the role's decisions. A zero total "
+                "contributes zero. Every count n is the window's when it closed: a decision "
+                "settling while its window is open settles at the close (price.deferred). "
+                "A decision taken in the unhistoried niche (a seat in its protected trial, "
+                "or a niche.action) has penalty 0 and is in no n; its score is its "
+                "judges', unchanged. "
                 "Closed decision windows retain their observations; open windows use the last "
                 "closed observations with current contribution totals. "
                 "score = clip(raw_score - penalty, 0, 1). Prices and region scales are in "
                 "card_prices. "
                 "Stable failure raises each violated card's lambda by n * immune.price_step in "
-                "its n-th consecutive failing window, bounded by lambda_max. Duplicate "
+                "its n-th consecutive failing window, bounded by B = penalty_cap / v; a card "
+                "whose penalty sits at penalty_cap is not raised, and the ratchet ledgers "
+                "immune.price_ratchet_saturated instead. Duplicate "
                 "observations on overlapping roles are refused in amendments."
             ),
             "propensity": (

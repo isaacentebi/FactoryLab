@@ -9,7 +9,7 @@ from factorylab.kernel.ledger import Ledger
 
 
 def _controller(**changes):
-    params = dict(eta=0.5, decay=0.25, lambda_max=100.0, min_window_events=1)
+    params = dict(eta=0.5, decay=0.25, penalty_cap=0.9, min_window_events=1)
     params.update(changes)
     return PriceController(Ledger(), **params)
 
@@ -26,3 +26,19 @@ def test_price_never_falls_while_the_card_is_still_violating():
     peak = history[-1]
     prices.observe("cost", 9, 10)  # compliant: now, and only now, it decays
     assert prices.price("cost") == peak - 0.25
+
+
+def test_a_spike_clips_the_price_and_never_cuts_the_accumulated_pressure():
+    """Wave 16, ruling R-E: the bound penalty_cap / v falls as v spikes, so the price
+    falls with it (the penalty stays at the cap); the integral is held, and the price
+    returns with the violation's old size."""
+    prices = _controller()
+    prices.register(CardRegion("cost", "max", None, 10.0, 2.0))
+    for event in range(2):
+        prices.observe("cost", 12, event)  # violation 1: 0.5, then the bound 0.9
+    assert prices.price("cost") == 0.9
+    prices.observe("cost", 100, 2)  # violation 45: bound 0.02
+    assert prices.price("cost") == 0.9 / 45
+    assert prices.snapshot()["cards"]["cost"]["integral"] == 0.9
+    prices.observe("cost", 12, 3)
+    assert prices.price("cost") == 0.9

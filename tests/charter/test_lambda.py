@@ -53,7 +53,7 @@ def activate_after_backstop(rt, activated=1):
 
 def test_controller_ledger_first_bounds_history_and_removal(monkeypatch):
     ledger = Ledger()
-    controller = PriceController(ledger, eta=0.5, decay=0.1, lambda_max=1,
+    controller = PriceController(ledger, eta=0.5, decay=0.1, penalty_cap=0.9,
                                  min_window_events=3)
     controller.register(CardRegion("card", "max", None, 1, 1))
     controller.observe("card", 2, 1)
@@ -75,7 +75,7 @@ def test_controller_ledger_first_bounds_history_and_removal(monkeypatch):
         # An adopted price becomes the card's accumulated pressure (bumpless for the PID).
         **before["cards"]["card"], "lambda": 0.8, "integral": 0.8,
     }
-    for value in (True, -1, 2, float("nan")):
+    for value in (True, -1, float("nan"), float("inf")):  # no upper bound (R-E)
         with pytest.raises(ValueError):
             controller.set_price("card", value, amendment_id="invalid")
     with pytest.raises(KeyError):

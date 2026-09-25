@@ -65,7 +65,14 @@ def _priced_runtime(monkeypatch):
     rt._manage_reserve_window()
     rt._derive_regions()
     rt.controller.set_price(card.id, 0.8, amendment_id="test")
+    _outside_the_niche(rt)
     return rt
+
+
+def _outside_the_niche(rt):
+    """A decision taken in the unhistoried niche bears no card penalty (wave 16, R-E as
+    amended); these tests price the decisions outside it, so none is read as niche."""
+    rt._is_niche = lambda *_a, **_k: False
 
 
 def _drawn(rt, chosen, channel="verdict"):
@@ -148,6 +155,10 @@ def test_a_refusal_a_judge_graded_settles_on_its_verdict_like_any_return(monkeyp
                        returned=Return(judge, {"verdict": 0.2, "rationale": "r"}, 0, "ok"))
     rt._settle_arrived_verdicts()
     _past_the_verdict_timeout(rt)
+    # Its card's share is a count of the window's decisions: it settles at the close
+    # (wave 16, D5, ruling R-I).
+    assert not rt.queue.history(refused) and refused in rt.deferred_settlements
+    rt._close_price_window()
     (settled,) = rt.queue.history(refused)
     assert settled.status is SettleStatus.SETTLED and settled.definition_version == "verdict-v1"
     (row,) = _rows(rt, "price.penalty", handle=refused)
@@ -397,6 +408,7 @@ def _declining_runtime(monkeypatch):
     rt._manage_reserve_window()
     rt._derive_regions()
     rt.controller.set_price(card.id, 0.8, amendment_id="test")
+    _outside_the_niche(rt)
     return rt
 
 
@@ -552,9 +564,14 @@ def test_in_a_world_every_unjudged_refusal_and_decline_settles_at_the_abstention
                    for seat, status, _d in outcomes)
     assert outcomes[(REFUSER, SettleStatus.INAPPLICABLE, DECLINED_DEFINITION)] > 0
     priced = _rows(rt, "router.decline_priced")
-    assert priced and any(row["penalty"] > 0 for row in priced)
+    assert priced
     for row in priced:
         assert row["reward"] == pytest.approx(max(0.0, row["neutral"] - row["penalty"]))
+    # A decision taken in the unhistoried niche bears no card penalty (wave 16, R-E as
+    # amended): a seat with no settled record is in its protected trial, and a seat
+    # that only ever declines never gets one. Every other decline bears its price.
+    niche = {row["handle"] for row in _rows(rt, "price.contribution") if row.get("niche")}
+    assert all(row["penalty"] == 0 for row in priced if row["handle"] in niche)
     # The judges who declined to grade a refusal ("no return to judge") declined too,
     # in the form ``_invoke`` hands on: none is censored at a free neutral, each is
     # priced on its router as an abstention, and some of those prices bite.
@@ -565,5 +582,5 @@ def test_in_a_world_every_unjudged_refusal_and_decline_settles_at_the_abstention
                                                 channel=CH_CONFORMITY)}
     judged = [row for row in priced if row["router"] in judge_routers]
     assert declined and {row["handle"] for row in judged} == declined
-    assert any(row["penalty"] > 0 for row in judged)
     assert all(row["reward"] <= row["neutral"] for row in judged)
+    assert all(row["penalty"] == 0 for row in judged if row["handle"] in niche)

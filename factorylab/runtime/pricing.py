@@ -48,6 +48,11 @@ class MeasureWindow:
     verdicts: dict[str, dict[str, list[float]]] = field(default_factory=dict)
     consequences_settled: int = 0
     consequences_paid_off: int = 0
+    # The acting returns whose payoff this window settled, and those that paid off: the
+    # denominator and numerator of ``consequence_paid_off_rate`` by decision, for relief
+    # attribution (wave 16, D5). Per-decision attribution, never a window observation.
+    paid_off_settled: list = field(default_factory=list)
+    paid_off_handles: list = field(default_factory=list)
     fills: int = 0
     realized_pnl_micro: int = 0
     max_position_notional_micro: int | None = None
@@ -60,6 +65,9 @@ class MeasureWindow:
     market_purchases: int = 0
     decisions: dict[str, dict] = field(default_factory=dict)
     closed_values: dict[str, float] | None = None
+    # Per rate observation, frozen at the close: the decisions in its denominator and
+    # in its numerator (wave 16, D5: who relieved a violation of the rate).
+    closed_relief: dict[str, dict[str, list]] = field(default_factory=dict)
     closed_regions: dict[str, CardRegion] = field(default_factory=dict)
     closed_shares: list[dict] = field(default_factory=list)
     # The edition that priced the window, frozen with its prices at the close. A later
@@ -127,6 +135,11 @@ UNRESOLVED_PRICED = "forecast-unresolved-priced-v1"
 # Observations whose shares already come from each decision's own contribution.
 _EXACT_SHARES = frozenset({"cost_per_return", "cost_per_attempt", "well_formed_rate",
                            "tool_calls", "turnover"})
+#: The per-decision rate observations a violation of which is attributed by relief
+#: (wave 16, D5): each decision either moved the rate toward its region (it relieved
+#: the violation) or did not. The attributed share is 0 for a reliever and an equal
+#: share of the non-relievers' otherwise, NOOP and declines among them (ruling R9).
+RELIEF_RATES = frozenset({"revision_rate", "consequence_paid_off_rate", "noop_share"})
 
 
 class PricingMixin:
@@ -185,7 +198,14 @@ class PricingMixin:
         return measured_role(emitted) if emitted else "producer"
 
     def _invoke(self, action_id, req, role, *, child=False):
-        """Prices retain the completed decision's own cost, schema result and tool attempts."""
+        """Prices retain the completed decision's own cost, schema result and tool attempts.
+
+        A decision of a seat with no reward trail yet (its protected trial) is marked
+        as taken in the unhistoried niche (essay II.II.b): it bears no card penalty and
+        is counted in no one's share (wave 16, R-E).
+        """
+        niche = (not child and action_id in self.assemblies
+                 and self._unhistoried(action_id))
         before_calls = self.window.tool_calls
         before_children = sum(d["tool_calls"] for d in self.window.decisions.values())
         ret = super()._invoke(action_id, req, role, child=child)
@@ -198,8 +218,11 @@ class PricingMixin:
         evidence = {"cost": ret.cost, "ok": int(ret.status == "ok"), "invocations": 1,
                     "tool_calls": self.window.tool_calls - before_calls - child_calls}
         self.ledger.append({"kind": "price.contribution", "handle": req.handle,
-                            "window": self.window.index, "role": observed_role, **evidence})
+                            "window": self.window.index, "role": observed_role, **evidence,
+                            **({"niche": True} if niche else {})})
         sample["role"] = observed_role
+        if niche:
+            sample["niche"] = True
         for name, value in evidence.items():
             sample[name] += value
         self.window.compute_spend_micro += ret.cost
@@ -558,6 +581,7 @@ class PricingMixin:
         # time the live versioning measures at this close (time audit T7).
         self._check_viability()
         # A decision settling late is priced on the window it worked in.
+        self.window.closed_relief = self._relief_sets(w.index)
         self.window.closed_values = dict(card_values)
         self.window.closed_regions = dict(self.regions)
         self.window.closed_scopes = {cid: dict(self.card_samples.scopes.get(cid) or {})
@@ -586,6 +610,9 @@ class PricingMixin:
             }
         )
         cards = {c.id: c for c in self.charter.cards}
+        # The total pressure on the reward of each card's roles at the prices in force
+        # now: at ``penalty_cap`` the controller freezes the card's integrator (R-E).
+        pressure = self._card_pressure(card_values, holdouts)
         for card_id in sorted(card_values):
             held = self._price_held(cards[card_id], w)
             if held is not None:
@@ -600,7 +627,8 @@ class PricingMixin:
             self.controller.observe(card_id, card_values[card_id], window_end_event=self.n,
                                     holdout=holdouts.get(card_id, 0.0),
                                     anticipated=self._anticipated_violation(
-                                        card_id, card_values[card_id]))
+                                        card_id, card_values[card_id]),
+                                    pressure=pressure.get(card_id))
             if self.controller.snapshot()["cards"][card_id]["updates"] > before:
                 self.card_clock[card_id] = now
                 self.stats.price_updates += 1
@@ -622,7 +650,78 @@ class PricingMixin:
                                      for c in self.window.closed_cards}
         self._ledger_unattributed()
         close_window(self, values)
+        # Wave 16, D5 (ruling R-I, Q9): the decisions this window priced by a count of
+        # its decisions settle now, on the count frozen at its close.
+        self._settle_deferred(w.index)
         self._prune_price_evidence()
+
+    def _card_pressure(self, card_values: dict[str, float],
+                       holdouts: dict[str, float]) -> dict[str, float]:
+        """Each measured card's total pressure on the reward: ``sum(lambda * v)`` over the
+        cards of the roles it answers for, at the prices in force.
+
+        A decision's penalty is ``min(S, penalty_cap) * share``, ``S`` that sum over its
+        role's cards and the cards that answer for all (``_penalty_for``). A card that
+        answers for one role presses that role's ``S``; one that answers for all
+        presses every role's, so its pressure is the least of them: at the cap, no
+        decision's reward moves with its price (wave 16, ruling R-E).
+        """
+        cards = {c.id: c for c in self.charter.cards if c.id in card_values}
+        weight = {}
+        for cid in cards:
+            region = self.regions.get(cid)
+            if region is None:
+                continue
+            weight[cid] = self.controller.price(cid) * (
+                violation(region, card_values[cid]) + holdouts.get(cid, 0.0))
+        roles = sorted({c.answers_for for c in cards.values() if c.answers_for != "all"})
+
+        def role_sum(role: str | None) -> float:
+            return sum(w for cid, w in weight.items()
+                       if cards[cid].answers_for in ("all", role))
+
+        pressure = {}
+        for cid, card in cards.items():
+            if card.answers_for != "all":
+                pressure[cid] = role_sum(card.answers_for)
+            else:
+                pressure[cid] = min([role_sum(None), *(role_sum(r) for r in roles)])
+        return pressure
+
+    def _relief_sets(self, index: int) -> dict[str, dict[str, list]]:
+        """Per rate observation, the window's decisions in its denominator and numerator.
+
+        ``revision_rate`` and ``noop_share`` read the window's producer returns (their
+        ``revision`` and ``noop`` flags); ``consequence_paid_off_rate`` the acting
+        returns whose payoff the window settled and those that paid off. Frozen at the
+        close (wave 16, D5).
+        """
+        rows = [row for row in self.card_samples.returns
+                if row.get("window") == index and row.get("role") == "producer"]
+        return {
+            "revision_rate": {"members": sorted({r["handle"] for r in rows}),
+                              "hits": sorted({r["handle"] for r in rows if r["revision"]})},
+            "noop_share": {"members": sorted({r["handle"] for r in rows}),
+                           "hits": sorted({r["handle"] for r in rows if r["noop"]})},
+            "consequence_paid_off_rate": {"members": sorted(set(self.window.paid_off_settled)),
+                                          "hits": sorted(set(self.window.paid_off_handles))},
+        }
+
+    def _is_niche(self, handle: str | None, window=None) -> bool:
+        """Whether a decision was taken in the unhistoried niche (essay II.II.b).
+
+        A decision of a seat with no reward trail (its protected trial), or one that
+        took an unhistoried action the novelty reserve paid for (``niche.action``):
+        the niche is "delivered as a fact about the world", so failed exploration
+        there bears no penalty attribution (wave 16, R-E as amended).
+        """
+        if handle is None:
+            return False
+        if window is None:
+            origin = self.price_origins.get(handle, {}).get("origin")
+            window = self.price_windows.get(origin)
+        sample = window.decisions.get(handle) if window is not None else None
+        return bool(sample and sample.get("niche"))
 
     def _check_viability(self) -> None:
         """Ledger when a governance tier stops, or starts again, to fit (time audit T7).
@@ -931,9 +1030,10 @@ class PricingMixin:
                else self._scope_of(window, handle, per))
         if not excess.get(own):
             return 0.0, own
+        # Decisions taken in the unhistoried niche are not counted (wave 16, R-E).
         peers = {h for h, d in window.decisions.items()
                  if h != handle and (d["invocations"] or d["ok"] or not d["cost"])
-                 and self._scope_of(window, h, per) == own}
+                 and not self._is_niche(h, window) and self._scope_of(window, h, per) == own}
         peers.add(handle)
         part = excess[own] / total
         return part * max(self.m.prices.min_blame_share, 1 / len(peers)), own
@@ -1004,12 +1104,19 @@ class PricingMixin:
 
     def _decision_share(self, window, handle, observation, role, region, value, *,
                         as_role: str | None = None) -> float:
-        """Attributable violations use own contributions; other observations divide by support.
+        """Attributable violations use own contributions; rates by relief; others by count.
 
-        A generic share never falls below ``prices.min_blame_share``: splitting
-        participation across many decisions cannot dilute what each one carries
-        of a violation below that floor. ``as_role`` counts ``handle`` among that
-        role's decisions, whatever role its window recorded.
+        A rate observation (``RELIEF_RATES``; wave 16, D5) is attributed by relief:
+        a decision that moved the rate toward its region (for a floor, one in its
+        numerator; for a ceiling, one in its denominator and not its numerator) bears
+        nothing, and every other decision of the scope bears an equal share, ``1 /
+        n``, NOOP and declines included (ruling R9). Any other generic observation
+        divides by the scope's decisions, never below ``prices.min_blame_share``.
+        The count is the window's decisions when it closed, so a share never depends
+        on the order decisions settled in, and decisions taken in the unhistoried
+        niche are not counted: they bear nothing and change nobody's share.
+        ``as_role`` counts ``handle`` among that role's decisions, whatever role its
+        window recorded.
         """
         samples = window.decisions
         own = samples.get(handle, {})
@@ -1033,22 +1140,86 @@ class PricingMixin:
             # A decision whose only entry in this window is money spent made no
             # response this observation reads, so it does not take a share of the
             # violation and does not dilute the shares that do.
-            n = sum(role == "all"
-                    or (as_role if h == handle and as_role is not None else d["role"]) == role
-                    for h, d in samples.items()
-                    if d["invocations"] or d["ok"] or not d["cost"])
-            return max(self.m.prices.min_blame_share, 1 / max(1, n))
+            scope = [h for h, d in samples.items()
+                     if (d["invocations"] or d["ok"] or not d["cost"])
+                     and not self._is_niche(h, window)
+                     and (role == "all" or (as_role if h == handle and as_role is not None
+                                            else d["role"]) == role)]
+            if handle not in scope and not self._is_niche(handle, window):
+                scope.append(handle)
+            if observation in RELIEF_RATES:
+                relievers = self._relievers(window, observation, region, value)
+                if handle in relievers:
+                    return 0.0
+                return 1.0 / max(1, sum(h not in relievers for h in scope))
+            return max(self.m.prices.min_blame_share, 1 / max(1, len(scope)))
         return min(1.0, numerator / denominator) if denominator > 0 else 0.0
+
+    def _relievers(self, window, observation: str, region, value: float) -> set[str]:
+        """The decisions that moved a rate toward its region in ``window``.
+
+        A floor (or a band read below its low bound) is relieved by the decisions in
+        the rate's numerator; a ceiling (or a band read above its high bound) by the
+        decisions in its denominator and not its numerator. Read from the relief sets
+        the window froze at its close, or live from an open window.
+        """
+        sets = (window.closed_relief or {}).get(observation)
+        if sets is None:
+            sets = self._relief_sets(window.index).get(observation, {})
+        members, hits = set(sets.get("members", ())), set(sets.get("hits", ()))
+        floor = region.kind == "min" or (region.kind == "band" and value < region.lo)
+        return hits if floor else members - hits
 
     def _penalty_for(self, cards: str, handle: str | None = None, *,
                      as_role: str | None = None) -> float:
-        """Cap the total pressure, then allocate its penalty-weighted contribution share."""
+        """Cap the total pressure, then allocate its penalty-weighted contribution share.
+
+        A decision taken in the unhistoried niche bears no penalty (wave 16, R-E as
+        amended: "the prevention of learning death should be delivered as a fact about
+        the world"). It is a penalty rule, never a reward floor: the decision keeps
+        whatever its judges gave it.
+        """
+        if self._is_niche(handle):
+            return 0.0
         terms = self._penalty_terms(cards, handle, as_role=as_role)
         total = sum(t["weight"] for t in terms)
         if total <= 0:
             return 0.0
         share = sum(t["weight"] * t["share"] for t in terms) / total
         return min(total, self.m.prices.penalty_cap) * share
+
+    def _awaits_close(self, cards: str, handle: str | None) -> bool:
+        """Whether a decision's penalty waits for its origin window to close.
+
+        True while that window is open and one of the decision's cards (one with a
+        region, answering for its role) bears on it with a share counted over the
+        window's decisions (a rate by relief, or any other generic observation):
+        that count, the window's violation and the price it closes at are final only
+        at the close, so whether it bites is not known before it. A niche decision
+        bears nothing and waits for nothing.
+        """
+        if handle is None or self._is_niche(handle):
+            return False
+        origins = self.price_origins.get(handle, {})
+        window = self.price_windows.get(origins.get("origin"))
+        if window is None or window.closed_values is not None:
+            return False
+        return any(card.answers_for in (cards, "all") and card.id in self.regions
+                   and observation.id not in _EXACT_SHARES and w is window
+                   for card, observation, w, _price in self._priced_cards(origins))
+
+    def _settle_deferred(self, index: int) -> None:
+        """Settle every decision whose penalty waited for window ``index`` to close."""
+        for handle in sorted(h for h in self.deferred_settlements
+                             if self.price_origins.get(h, {}).get("origin") == index):
+            row = self.deferred_settlements.pop(handle)
+            if self.queue.get(handle).status not in (SettleStatus.PENDING,
+                                                     SettleStatus.TIMED_OUT):
+                continue
+            self._settle_priced(handle, channel=row["channel"], score=row["score"],
+                                definition_version=row["definition_version"],
+                                sampling_ref=row["sampling_ref"], cards=row["cards"],
+                                unresolved=tuple(row["unresolved"]))
 
     def _settle_priced(
         self,
@@ -1077,6 +1248,16 @@ class PricingMixin:
         """
         if handle not in self.price_origins:
             self._contribution(handle, cards)
+        if self._awaits_close(cards, handle):
+            # Wave 16, D5 (ruling R-I, Q9): its share is a count of the window's
+            # decisions, frozen when the window closes, so it settles then.
+            self.deferred_settlements[handle] = {
+                "channel": channel, "score": score, "definition_version": definition_version,
+                "sampling_ref": sampling_ref, "cards": cards, "unresolved": list(unresolved)}
+            self.ledger.append({"kind": "price.deferred", "handle": handle,
+                                "window": self.price_origins[handle]["origin"],
+                                "ts": self.clock.now_ns})
+            return
         penalty = self._penalty_for(cards, handle)
         if not unresolved:
             # The score before its card penalty: what the router's observed mean is made

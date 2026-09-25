@@ -30,6 +30,8 @@ PRIVATE_WINDOW_FIELDS = ("decisions", "closed_values", "closed_regions", "closed
                          # The provider and family names are text; the observations
                          # below publish their concentration, not the names.
                          "calls_by_provider", "calls_by_family",
+                         # Wave 16, D5: per-decision relief evidence, filed by handle.
+                         "closed_relief", "paid_off_settled", "paid_off_handles",
                          # The world's consequence scores in the window: the sampling
                          # actuator's evidence count, not a window observation.
                          "consequence_readings")

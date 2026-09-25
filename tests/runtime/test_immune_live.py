@@ -234,7 +234,7 @@ def test_a_stable_failures_duration_price_reaches_abstention(monkeypatch):
 
 
 def test_one_registration_does_not_reset_the_ratchet():
-    rt = _organ(lambda_max=10.0)
+    rt = _organ()
     durations = []
     for i in range(8):
         _close(rt, 0.2, registrations=3 if i == 4 else 0)

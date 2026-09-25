@@ -43,13 +43,13 @@ ELIGIBLE = {"seed-observer": "producer", "seed-decider": "producer", "eval-a": "
 
 def test_the_post_score_is_strictly_proper_for_the_mean():
     """Whatever the realized price's distribution, the honest mean alone scores best."""
-    lambda_max = 1.0
+    scale = 1.0
     for outcomes in ([(0.1, 0.5), (0.9, 0.5)], [(0.0, 0.2), (0.3, 0.3), (1.0, 0.5)],
                      [(0.4, 1.0)]):
         mean = sum(y * p for y, p in outcomes)
 
         def expected(post, outcomes=outcomes):
-            return sum(p * post_score(post, y, lambda_max) for y, p in outcomes)
+            return sum(p * post_score(post, y, scale) for y, p in outcomes)
 
         best = expected(mean)
         for step in range(101):
@@ -96,7 +96,7 @@ def test_the_shadow_price_is_the_realized_marginal_consequence_or_nothing():
     assert row["slope"] == pytest.approx(0.6)
     assert row["micro_usd_per_violation"] == pytest.approx(300)
     assert shadow_price(points, 1.0) == pytest.approx(0.6)
-    assert shadow_price(points, 0.5) == 0.5  # clipped to lambda_max
+    assert shadow_price(points, 0.5) == 0.5  # clipped to the posts' scale, penalty_cap
     worse = [dict(point, consequence=1 - point["consequence"]) for point in points]
     assert shadow_price(worse, 1.0) == 0.0  # violating costs consequence: no premium
     assert shadow_price(points[:2], 1.0) is None  # too few scopes
@@ -105,7 +105,7 @@ def test_the_shadow_price_is_the_realized_marginal_consequence_or_nothing():
 
 def test_the_feed_forward_term_has_the_market_s_sign_and_never_waives_the_integral():
     def controller():
-        c = PriceController(Ledger(None), eta=0.2, decay=0.1, lambda_max=1.0,
+        c = PriceController(Ledger(None), eta=0.2, decay=0.1, penalty_cap=0.9,
                             min_window_events=1, kp=0.5)
         c.register(CardRegion("c", "max", None, 1.0, 1.0))
         c.observe("c", 1.4, 1)  # violation 0.4: P = 0.2, I = 0.08
@@ -130,7 +130,7 @@ def test_the_feed_forward_term_has_the_market_s_sign_and_never_waives_the_integr
 def test_no_feed_forward_prices_a_card_inside_its_region():
     """Cold review: F priced an in-region card (lambda 0.0033 at v = 0)."""
     ledger = Ledger(None)
-    c = PriceController(ledger, eta=0.2, decay=0.1, lambda_max=1.0, min_window_events=1,
+    c = PriceController(ledger, eta=0.2, decay=0.1, penalty_cap=0.9, min_window_events=1,
                         kp=0.5)
     c.register(CardRegion("c", "max", None, 1.0, 1.0))
     c.observe("c", 0.5, 1, anticipated=+0.5)
@@ -193,7 +193,7 @@ SCOPED = (
                "well_formed_rate", "all"),
 )
 #: One well-formed seat and two malformed ones, and what the world measured of each.
-WORLD = {"eval-a": (True, 0.2), "eval-b": (False, 0.8), "eval-c": (False, 0.8)}
+WORLD = {"eval-a": (True, 0.2), "eval-b": (False, 0.5), "eval-c": (False, 0.5)}
 
 
 def _scoped_window(rt):
@@ -229,7 +229,7 @@ def test_a_post_is_scored_on_the_realized_shadow_price_not_on_the_committee_s_la
     window = rt.window.index
     _return(rt, "eval-a", shadow_prices={card: 0.1})  # the committee's own lambda
     _return(rt, "antagonist-a", shadow_prices={card: 0.0})
-    _return(rt, "seed-decider", shadow_prices={card: 0.6})
+    _return(rt, "seed-decider", shadow_prices={card: 0.3})
     posts = _items(rt, "lambda_post.posted")
     assert rt._posted_lambda(card)["lambda"] == 0.1
     row = next(r for r in rt._world_block()["card_prices"] if r["card_id"] == card)
@@ -239,12 +239,14 @@ def test_a_post_is_scored_on_the_realized_shadow_price_not_on_the_committee_s_la
     rt.controller.set_price(card, 0.9, amendment_id="adopt-posted")
     _to_margin(rt, window)
     settled = {e["posted"]: e for e in _items(rt, "lambda_post.settled")}
-    assert all(e["realized"] == pytest.approx(0.6) for e in settled.values())
-    assert settled[0.1]["score"] == pytest.approx(1 - 0.5 ** 2)
-    assert settled[0.0]["score"] == pytest.approx(1 - 0.6 ** 2)
-    assert settled[0.6]["score"] == pytest.approx(1.0)
+    # Posts and the realized price lie in [0, prices.penalty_cap], the scale (R-E).
+    scale = rt.m.prices.penalty_cap
+    assert all(e["realized"] == pytest.approx(0.3) for e in settled.values())
+    assert settled[0.1]["score"] == pytest.approx(1 - (0.2 / scale) ** 2)
+    assert settled[0.0]["score"] == pytest.approx(1 - (0.3 / scale) ** 2)
+    assert settled[0.3]["score"] == pytest.approx(1.0)
     margin_row, = [e for e in _items(rt, "price.margin") if e["window"] == window]
-    assert margin_row["slope"] == pytest.approx(0.6) and len(margin_row["points"]) == 3
+    assert margin_row["slope"] == pytest.approx(0.3) and len(margin_row["points"]) == 3
     # The score reaches each poster's durable identity on the policy channel.
     post = posts[0]["handle"]
     history = rt.queue.history(post)
@@ -254,7 +256,7 @@ def test_a_post_is_scored_on_the_realized_shadow_price_not_on_the_committee_s_la
     assert rt.lambda_standing["eval-a"][0] == 1
     # The same margins are the window's lambda-to-dollar statistic, in public.
     published = next(r for r in rt._world_block()["card_prices"] if r["card_id"] == card)
-    assert published["last_window_margin"]["marginal_consequence"] == pytest.approx(0.6)
+    assert published["last_window_margin"]["marginal_consequence"] == pytest.approx(0.3)
     assert published["last_window_margin"]["micro_usd_per_violation"] == pytest.approx(0.0)
     assert "lambda_dollars" in rt._mechanics_block()["committee"]
     assert "card_contract" in rt._mechanics_block()["committee"]
@@ -461,8 +463,8 @@ def test_a_pair_of_forecasts_feeds_forward_weighted_by_the_enactment_rate(monkey
     update = [i for i in _items(rt, "price.update") if i["card_id"] == "ok-rate"][-1]
     assert update["f"] == pytest.approx(0.5 * (expected - now)) and update["f"] < 0
     assert abs(update["f"]) <= 0.5 * step
-    assert update["lambda_after"] == pytest.approx(
-        update["p"] + update["i"] + update["d"] + update["f"])
+    assert update["lambda_after"] == pytest.approx(min(
+        update["bound"], update["p"] + update["i"] + update["d"] + update["f"]))
 
 
 def test_once_decided_only_the_branch_taken_feeds_forward(monkeypatch):

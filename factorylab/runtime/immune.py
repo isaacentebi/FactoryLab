@@ -13,7 +13,9 @@ report also replays (``versioning.versions.diagnose``). The answers:
   the ratcheted price reaches abstention too, through the same card penalty a
   router's NOOP bears (ruling R9, ``FeedbackMixin._priced_abstention``). The raise is
   bounded by ``prices.penalty_cap`` like every card penalty; see ``thrash_penalty``
-  for why that bound is kept.
+  for why that bound is kept. At the cap the ratchet stops, and the saturation is
+  ledgered (``immune.price_ratchet_saturated``) and published with the card's
+  statistics, the card's price at its bound (wave 16, R-E).
 * **thrash**: "penalize the duration of spectral-gap volatility, incentivizing the
   surplus-retaining core of no-swap-regret learners to stabilize": the diagnosis's
   unsettledness (the version gap's volatility, oscillation, abandoned versions,
@@ -24,8 +26,9 @@ report also replays (``versioning.versions.diagnose``). The answers:
   is what lowers the charge.
 * **learning death**: "delivered as a fact about the world", never as a response:
   the novelty reserve is usable by unhistoried actions of every seat (ruling R5,
-  ``RoutingMixin._niche_action``). The organ only holds the exploration gain it
-  raised while the frontier is gone.
+  ``RoutingMixin._niche_action``), and a decision taken in the niche bears no card
+  penalty (wave 16, R-E). The organ only holds the exploration gain it raised while
+  the frontier is gone.
 
 The organ diagnoses every window and acts (gain, ratchet) on its own loop, at least
 ``min_ratio`` price periods apart (versioning P5). The thrash price is a price and
@@ -58,14 +61,16 @@ def thrash_controller(ledger, manifest) -> PriceController:
     """The thrash price: the charter's PID law and gains over the version gap's volatility.
 
     One price law (Chapter II rulings §2: "One price law: PID"): the same ``eta``,
-    ``kp``, ``kd``, ``decay`` and ``lambda_max`` the charter committed for its cards,
+    ``kp``, ``kd``, ``decay`` and one bound, ``penalty_cap``, the charter committed for
+    its cards,
     over the volatility of the version gap series, in the region ``[0,
     immune.tv_threshold]``. Its integral accumulates ``eta * v`` for every window
     the volatility stays above that bound, so the price rises with the duration of
     the thrash, and leaks ``decay`` a window once it settles.
     """
     pr, bound = manifest.prices, manifest.immune.tv_threshold
-    controller = PriceController(ledger, eta=pr.eta, decay=pr.decay, lambda_max=pr.lambda_max,
+    controller = PriceController(ledger, eta=pr.eta, decay=pr.decay,
+                                 penalty_cap=pr.penalty_cap,
                                  min_window_events=pr.min_window_events, kp=pr.kp, kd=pr.kd)
     # The violation is in the gap's own units (it lives in [0, 1]), as a card at a zero
     # bound keeps its observation's declared units.
@@ -91,9 +96,9 @@ def thrash_penalty(rt) -> dict:
     and the essay's own warning is that "gain ramped high enough to kick a system out
     of an overdamped attractor will, if unchecked, overshoot into an oscillation
     condition (thrash)". What keeps staying costly beyond the cap is that abstention
-    bears the same price (ruling R9), so the cap no longer makes waiting the escape,
-    and the ratchet keeps winding the card's integral, which keeps the price after
-    the attractor is left.
+    bears the same price (ruling R9), so the cap no longer makes waiting the escape.
+    At the cap the integral is frozen and the ratchet stops (wave 16, R-E): a wound-up
+    integral would keep the price high long after the attractor is left.
     """
     unsettled = rt.stats.versions.get("unsettled")
     controller = rt.thrash_controller

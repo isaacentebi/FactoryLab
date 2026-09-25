@@ -537,6 +537,9 @@ class ComputeMixin:
             return None
         key = self._niche_action(handle, reason)
         if key is not None:
+            # A decision that took an unhistoried action is taken in the niche: it bears
+            # no card penalty (wave 16, R-E).
+            self._contribution(handle, self._decision_role(handle))["niche"] = True
             self.ledger.append({"kind": "niche.action", "handle": handle,
                                 "assembly_id": action_id, "action": key,
                                 "reserve_remaining": self.reserve.remaining(),

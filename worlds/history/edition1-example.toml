@@ -178,7 +178,6 @@ max_leverage = 3
 kappa = 0.5
 eta = 0.5
 decay = 0.1
-lambda_max = 1.0
 min_window_events = 1
 
 [termination]

@@ -120,3 +120,32 @@ def test_a_seat_own_learner_credits_an_unscored_decision_as_its_router_does(monk
     handle = _drawn(rt, state, "eval-a")
     assert rt._router_neutral(handle) == pytest.approx(0.33)
     assert rt._router_neutral("no-such-handle") == NEUTRAL_REWARD
+
+
+def test_an_all_abstaining_router_is_credited_the_published_prior_until_it_observes(
+        monkeypatch):
+    """Addendum item 2: a router that has only ever abstained has no observation, so its
+    abstentions are credited the published prior (world.scoring.abstention states it);
+    the first settled seat round replaces it for good."""
+    monkeypatch.setattr(pricing, "close_window", lambda *_a: None)
+    rt = _runtime(_card(per=None))
+    state = rt.routers["ProducerReturn"][0]
+    noops = [_drawn(rt, state, NOOP) for _ in range(3)]
+    for handle in noops:
+        rt.queue.settle(handle, channel=CH_CONFORMITY, score=0.0,
+                        status=SettleStatus.INAPPLICABLE, definition_version="noop",
+                        sampling_ref=None)
+    rt._deliver_returns()
+    for handle in noops:  # due now, not at the far deadline these draws were given
+        rt.noop_credits[handle]["due_tick"] = rt.ticks_consumed
+    rt._close_price_window()  # a NOOP's price is its window's, known at the close (D5)
+    rt._deliver_returns()
+    assert state.neutral() == NEUTRAL_REWARD and not state.definitions
+    credited = [r for r in rt.ledger._recovery_items()
+                if r.get("kind") == "router.abstention_priced" and r["handle"] in noops]
+    assert len(credited) == 3 and all(r["neutral"] == NEUTRAL_REWARD for r in credited)
+    published = rt._scoring_block()["abstention"]
+    assert f"published prior {NEUTRAL_REWARD}" in published
+    assert "before the router's first settled round" in published
+    state.record_round("verdict-v1", 0.12)
+    assert state.neutral() == pytest.approx(0.12)

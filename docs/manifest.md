@@ -917,11 +917,15 @@ Charter audit C1, C2, P3, P4, M4, M6, M7 (essay II.IV.a, II.IV.c).
   next edition (`charter.norm_edition`): the new norms, every card whose norm
   survives, and a `charter.refused` for each card and each pending motion on a
   removed norm.
-- **Saturation.** Each priced card's `windows_at_lambda_max` (observed windows
-  closed at `prices.lambda_max`) and `violation_windows` (the current run of
+- **Saturation** (charter audit M7; wave 16, ruling R-E). Each priced card's
+  `bound` (`prices.penalty_cap / v`, the price at which its own penalty takes the
+  whole cap at its last violation), `windows_at_bound` (observed windows closed
+  with its penalty, or the total pressure of its roles, at the cap),
+  `saturated_windows` (the current run of them: its shadow price exceeds what the
+  reward channel can express) and `violation_windows` (the current run of
   consecutive observed windows in violation) are in `world.card_prices`, the
-  public window item and every ballot's `inputs.agenda`. They kill nothing: the
-  kernel's three deaths are unchanged.
+  public window item and every ballot's `inputs.agenda` (which also carries
+  `penalty_cap`). They kill nothing: the kernel's three deaths are unchanged.
 
 ## Committee liability
 
@@ -977,7 +981,7 @@ No manifest key: the formulas are published in `world.mechanics.committee` and
 `world.mechanics.controller`.
 
 - **Posted λ.** Any return may carry `shadow_prices: {card_id: lambda}` for cards
-  priced now, each in `[0, prices.lambda_max]`, one per seat, card and reserve
+  priced now, each in `[0, prices.penalty_cap]`, one per seat, card and reserve
   window (`lambda_post.posted`; a refusal is `lambda_post.refused` and reaches the
   poster's inbox). Each post opens its own `policy` decision under
   `assembly:<id>`. A post is a claim about the window it is posted in: once that
@@ -987,8 +991,9 @@ No manifest key: the formulas are published in `world.mechanics.committee` and
   least-squares slope, across the card's scopes (per role or assembly; at least 3,
   with variance in `v`), of each scope's mean consequence (a judgement's
   consequence score, a return's `return_paid_off` or priced declined trade) on its
-  violation `v`, clipped to `[0, lambda_max]` (`price.margin`). The post settles as
-  `lambda-post-quadratic-v1` with `1 - ((p - y) / lambda_max)^2`
+  violation `v`, clipped to `[0, penalty_cap]` (`price.margin`; the price at which a
+  unit violation's penalty takes the whole cap). The post settles as
+  `lambda-post-quadratic-v1` with `1 - ((p - y) / penalty_cap)^2`
   (`lambda_post.settled`); with `y` unidentified it is censored. The committee's
   λ is never the target. The posted price is the median of each seat's latest
   unsettled post weighted by `(1/2 + sum of its settled post scores) / (1 + their
@@ -1190,9 +1195,9 @@ parameters; the observer never substitutes a second set of thresholds.
 | `timing.world_repricing` | A positive duration; required in a world that lists a venue | Absent | Yes: the world's own repricing period, a fact about the venue (Hyperliquid funding settles hourly; edition 6 states `"1h"`). The consequence horizon is `world_repricing / min_ratio` on the venue's clock, and `max_tick` is that over `min_ratio` (wave 16, D2). Governance is viable only while `timing.min_ratio` times the slowest loop fits inside it and inside the run's remaining ticks (`governance.nonviable`). |
 | `evaluation.consequence_backstop_events` (or `consequence_backstop_ticks`) | positive integer, in world ticks | `200`; scripted worlds `20`; testnet `60` | Yes: the conservative governance period floor and the tick-counted waits that are not a consequence (a requester's credit, a tool-use window). A judged return's outcome is fixed at the consequence horizon on the venue's clock, not here (wave 16, D2). |
 | `evaluation.verdict_timeout_events` (or `verdict_timeout_ticks`) | positive integer, in world ticks | `20` | Yes: how long a producer return waits for its judges' verdicts before it is censored, and how long an evaluator decision whose judgement no cascade window took waits for a grade. A routed evaluator decision's grade window is its cascade window's read, not this constant (see "The grade window is the read above it"). |
-| `prices.penalty_cap` | finite number strictly between 0 and 1 | `0.5` | Yes: maximum penalty before attribution. |
+| `prices.penalty_cap` | finite number strictly between 0 and 1 | `0.5` | Yes: maximum penalty before attribution, and the one bound on a card's price (wave 16, ruling R-E): a card is priced at most `penalty_cap / v`, the price at which its own penalty takes the whole cap. `prices.lambda_max` is refused by name. |
 | `prices.min_blame_share` | finite number in [0, 1] | `0.1` | Yes: floor on one decision's share of a generic (non-attributable) violation. |
-| `prices.kp` | finite nonnegative number | `0.0` | Yes: the PID's proportional gain. The PID is the only price law (charter audit U3): `lambda = kp*v + I + D`, where `I` accumulates `eta*v` while violating and leaks `decay` once compliant, held in `[0, lambda_max]` and not integrated only while `P + I` already reaches `lambda_max` and the violation is growing (anti-windup); `D = kd * max(0, d(measurement))/scale`, on the measurement rather than the error, signed toward violation, applied only while violating and only its positive part (Stooke et al. 2020), so a card still out of its region is never priced below `P + I`. With `kp = kd = 0` the law is the integral alone. `prices.controller` and `prices.kappa` are refused. |
+| `prices.kp` | finite nonnegative number | `0.0` | Yes: the PID's proportional gain. The PID is the only price law (charter audit U3): `lambda = kp*v + I + D`, where `I` accumulates `eta*v` while violating, never integrating past the bound `B = penalty_cap / v`, and leaks `decay` once compliant; it is frozen (held, not cut) while the penalty sits at `penalty_cap` (the card's own `lambda * v`, or the total `S` over the cards of its roles, at the prices in force: anti-windup, ruling R-E) or while `P + I` already reaches `B` and the violation is growing; `lambda = clip(P + I + D, 0, B)` while violating; `D = kd * max(0, d(measurement))/scale`, on the measurement rather than the error, signed toward violation, applied only while violating and only its positive part (Stooke et al. 2020), so a card still out of its region is never priced below `P + I`. With `kp = kd = 0` the law is the integral alone. `prices.controller` and `prices.kappa` are refused. |
 | `prices.kd` | finite nonnegative number | `0.0` | Yes: the PID's derivative-on-measurement gain. |
 | `immune.k` | integer, at least 2 | `3` | Yes: windows of evidence for every diagnosis; the live versioning retains `timing.min_ratio × k` windows. |
 | `immune.registration_bins` | increasing nonnegative numeric array | `[0, 2]` | Yes: zero, 1–2, 3+ registrations. Values equal to a cut enter the lower bin. |
@@ -1200,7 +1205,7 @@ parameters; the observer never substitutes a second set of thresholds.
 | `immune.tv_threshold` | finite number in (0, 1] | `0.2` | Yes: behavioural version boundaries and settling (the TV between adjacent k-window blocks), and the bound the gap series' volatility is priced above (the thrash price). |
 | `immune.gap_threshold` | finite number in (0, 1] | `0.8` | Yes: a wide gap: a version is `durable`, and a persistent violation is stable failure, at or above it. |
 | `immune.gain_step` | finite number in (0, 1] | `0.05` | Yes: exploration-gain adjustment. |
-| `immune.price_step` | finite number in (0, `prices.lambda_max`] | Required | Yes: the stable-failure price ratchet's lambda step per window of duration. A lambda step and an exploration-gain step are different units, so `gain_step` never stands in (versioning S3). The profile's three region-relative bins (inside, up to one scale unit outside, beyond) are fixed in the kernel; `immune.bins` is refused (versioning U5). |
+| `immune.price_step` | finite positive number | Required | Yes: the stable-failure price ratchet's lambda step per window of duration. A lambda step and an exploration-gain step are different units, so `gain_step` never stands in (versioning S3). The profile's three region-relative bins (inside, up to one scale unit outside, beyond) are fixed in the kernel; `immune.bins` is refused (versioning U5). |
 | `immune.gamma_max` | finite number in (0, 1] | `0.5` | Yes: exploration-gain ceiling. |
 
 `immune.decay_step` is refused (versioning audit C2): thrash is priced by its
@@ -1210,8 +1215,21 @@ These launch settings are immutable parameters of an experiment. Effective
 prices, gain, diagnoses and the currently negotiated tick interval remain runtime
 state. Stable failure is priced by its duration (essay II.II.b): the n-th
 consecutive diagnosed window adds `n * immune.price_step` to each violated card's
-price and accumulated pressure, bounded by `prices.lambda_max`
-(`immune.price_ratchet`), and the count restarts once the card leaves the
+price and accumulated pressure, bounded by the card's bound `penalty_cap / v`
+(`immune.price_ratchet`). At saturation the ratchet stops (wave 16, ruling R-E):
+a card whose penalty already sits at `penalty_cap` (its own `lambda * v`, or the
+total pressure of its roles at its last observation) keeps its price and integral,
+its duration keeps counting, and `immune.price_ratchet_saturated` is ledgered with
+the price at its bound; the card's saturation is published to governance (above).
+Whether the duration price has room to exist is published as
+`world.mechanics.controller.gain_headroom`: `saturation_windows`, the fewest
+windows in which the PID alone presses a unit violation onto the cap (the least `w
+>= 1` with `kp + w * eta >= penalty_cap`), against `diagnosis_windows`
+(`immune.k`, the fewest windows stable failure is diagnosed in); the relation
+`holds` when the first is at least `timing.min_ratio` times the second (§IV.c). It
+is published and not refused at load: no world in the tree meets it (edition 6:
+1 window against 3, needing 9), and a world's gains are the operator's choice.
+The count restarts once the card leaves the
 attractor (`immune.price_ratchet_ended`). The exploration gain raised for stable
 failure steps back toward each router's seed gamma once a window diagnoses no
 pathology (`immune.gain` with pathology `cleared`); a learning-dead window holds
@@ -1226,7 +1244,7 @@ ramped unchecked overshoots into thrash.
 
 Thrash is priced (essay II.II.b, versioning audit C2): the diagnosis's
 unsettledness `u` (below) above `immune.tv_threshold` is priced by the charter's PID
-law and gains (`prices.eta`, `kp`, `kd`, `decay`, `lambda_max`), so its integral
+law and gains (`prices.eta`, `kp`, `kd`, `decay`, `penalty_cap`), so its integral
 accumulates how long the thrash lasts. A round a router of
 `evaluation.no_swap_regret_kinds` draws, its abstentions included, carries
 `c = min(prices.penalty_cap, lambda * m)`, `m` the total-variation distance between
@@ -1416,7 +1434,21 @@ across many decisions cannot dilute what each one carries of a violation below
 the floor. The generic share is `max(min_blame_share, 1/n)`, so two decisions
 still carry a half each; the floor bites only once `n` exceeds its reciprocal.
 Attributable observations (cost, well-formedness, tool attempts, turnover) keep
-their exact shares. A card measured per assembly or per role is attributable to
+their exact shares. **A rate is attributed by relief** (wave 16, D5): for
+`revision_rate`, `noop_share` and `consequence_paid_off_rate`, a decision that moved
+the rate toward its region (for a floor, one in its numerator; for a ceiling, one
+in its denominator and not its numerator) bears nothing, and every other decision
+of the scope bears `1/n` of the violation, `n` the non-relieving decisions, NOOPs
+and declines included (ruling R9), with no `min_blame_share` floor. Every count
+share (a rate, or any other generic observation) is the window's count when it
+closed: a decision settling while its window is open is deferred
+(`price.deferred`) and settles at the close, so no share depends on the order
+decisions settled in. **The unhistoried niche bears no penalty** (essay II.II.b;
+wave 16, R-E as amended): a decision of a seat in its protected trial (a seed seat
+before its first settled record, a registered seat inside its patience), or one
+that took an unhistoried action the novelty reserve paid for (`niche.action`), is
+priced at zero, is not in any split's denominator and waits for no close. It is a
+penalty rule, never a reward floor: the decision keeps whatever its judges gave it. A card measured per assembly or per role is attributable to
 its scopes: each scope whose own value lies outside the region owns
 `v_scope / sum(v_scope)` of the violation (a compliant scope owns none), and a
 decision carries its scope's part times `max(min_blame_share, 1/n_scope)` over

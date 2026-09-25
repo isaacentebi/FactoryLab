@@ -1196,6 +1196,10 @@ class FeedbackMixin:
                 # it, whoever forecast it (the seed observation consequence_paid_off_rate).
                 self.window.consequences_settled += 1
                 self.window.consequences_paid_off += int(payoff.y == 1)
+                # Who moved the rate, for relief attribution (wave 16, D5).
+                self.window.paid_off_settled.append(payoff.handle)
+                if payoff.y == 1:
+                    self.window.paid_off_handles.append(payoff.handle)
         # The world's reads of each Polymarket token, once for this whole pass: every
         # forecast due now on one token is graded against the same state of it.
         snapshots: dict = {}
@@ -2219,6 +2223,9 @@ class FeedbackMixin:
             if decision.status is SettleStatus.PENDING:
                 continue
             first = next(iter(self.queue.history(handle)), None)
+            if ((first is None or first.status is not SettleStatus.SETTLED)
+                    and self._abstention_awaits_close(handle)):
+                continue  # priced as its router prices it, at its window's close
             reward = (min(1.0, max(0.0, float(first.score)))
                       if first is not None and first.status is SettleStatus.SETTLED
                       else None)
@@ -2360,6 +2367,17 @@ class FeedbackMixin:
             return
         target = self._successor_state(state)
         settled = lr.status is SettleStatus.SETTLED
+        if not settled and self._abstention_awaits_close(lr.handle):
+            # Priced on its origin window's count of decisions, frozen at the window's
+            # close (wave 16, D5): owed until then, as an abstention is.
+            if keyed and key is None:
+                return
+            p, executed = state.learner.inner.take_for(key) if keyed else (None, None)
+            self.noop_credits[lr.handle] = {
+                "router": state.learner.id, "due_tick": self.ticks_consumed, "p": p,
+                "executed": executed, "action": prop.chosen, "status": str(lr.status),
+                "definition": lr.definition_version}
+            return
         if settled:
             reward = min(1.0, max(0.0, float(lr.score)))
         else:
@@ -2457,6 +2475,8 @@ class FeedbackMixin:
             if (credit["due_ns"] > now if "due_tick" not in credit
                     else credit["due_tick"] > self.ticks_consumed):
                 continue
+            if self._abstention_awaits_close(handle):
+                continue  # priced on its origin window's close (wave 16, D5)
             del self.noop_credits[handle]
             drawer = routers.get(credit["router"])
             if drawer is None:
@@ -2473,13 +2493,18 @@ class FeedbackMixin:
             # was drawn in (wave 16, D4).
             neutral = self._successor_state(drawer).neutral()
             reward, penalty = self._priced_abstention(handle, neutral)
-            self.ledger.append({"kind": "router.abstention_priced", "handle": handle,
+            action = credit.get("action", NOOP)
+            kind = ("router.abstention_priced" if action == NOOP
+                    else "router.decline_priced" if credit.get("definition")
+                    == DECLINED_DEFINITION else "router.unscored_priced")
+            self.ledger.append({"kind": kind, "handle": handle,
                                 "router": credit["router"], "neutral": neutral,
+                                **({"status": credit["status"]} if "status" in credit else {}),
                                 "penalty": penalty, "reward": reward, "ts": now})
             # Ruling R9: waking nobody bears the thrash price a woken round of the core
             # would, so abstaining is never the way out of paying for thrash.
             reward = self._thrash_charged(drawer, handle, reward)
-            fb = BanditFeedback(NOOP, reward, prop.probs[prop.action_ids.index(NOOP)])
+            fb = BanditFeedback(action, reward, prop.probs[prop.action_ids.index(action)])
             self._apply_router_round(drawer, handle, credit["p"], credit["executed"], fb)
 
     def _priced_abstention(self, handle: str, neutral: float) -> tuple[float, float]:
@@ -2511,6 +2536,18 @@ class FeedbackMixin:
         penalty = sum(weight * self._penalty_for(role, handle, as_role=role)
                       for role, weight in sorted(roles.items()))
         return min(1.0, max(0.0, neutral - penalty)), penalty
+
+    def _abstention_awaits_close(self, handle: str) -> bool:
+        """Whether a round that delivered nothing waits for its origin window to close
+        before it is priced: any role its draw could have filled has a card whose share
+        is a count of that window's decisions (``PricingMixin._awaits_close``)."""
+        origin = self.price_origins.get(handle, {}).get("origin")
+        window = self.price_windows.get(origin)
+        sample = window.decisions.get(handle) if window is not None else None
+        if sample is None or window.closed_values is not None:
+            return False
+        roles = sample.get("menu_roles") or {sample["role"]: 1.0}
+        return any(self._awaits_close(role, handle) for role in sorted(roles))
 
     def _thrash_charged(self, state: Any, handle: str, reward: float) -> float:
         """A no-swap-regret router's reward, less the thrash charge on its own movement.

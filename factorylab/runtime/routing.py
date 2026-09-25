@@ -183,6 +183,9 @@ class ContractQueue:
         now_tick, now_ns = rt.ticks_consumed, rt.clock.now_ns
         due = []
         for decision in self.queue.outstanding():
+            if decision.handle in getattr(rt, "deferred_settlements", {}):
+                # Its score is in; its penalty waits for its window's close (wave 16, D5).
+                continue
             cutoff = self.deadline_tick(decision.handle)
             if (decision.deadline_ns <= now_ns) if cutoff is None else cutoff <= now_tick:
                 reason = rt._carried_decline(decision.handle)

@@ -511,7 +511,6 @@ kp = 0.5
 kd = 0.25
 eta = 0.5
 decay = 0.1
-lambda_max = 1.0
 min_window_events = 1
 min_blame_share = 0.1
 

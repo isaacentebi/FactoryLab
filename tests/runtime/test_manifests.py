@@ -98,20 +98,21 @@ def test_the_load_half_of_the_ratio_rule_refuses_a_horizon_inside_min_ratio_tick
 
 def test_prices_section_defaults_and_validation() -> None:
     m = manifest_from_dict(_base())
-    assert (m.prices.eta, m.prices.decay, m.prices.lambda_max, m.prices.min_window_events) == (
+    assert (m.prices.eta, m.prices.decay, m.prices.penalty_cap, m.prices.min_window_events) == (
         0.5,
         0.1,
-        1.0,
+        0.5,
         1,
     )
     d = _base()
-    d["prices"] = {"eta": 0.25, "decay": 0.05, "lambda_max": 2, "min_window_events": 3}
+    d["prices"] = {"eta": 0.25, "decay": 0.05, "penalty_cap": 0.25, "min_window_events": 3}
     m2 = manifest_from_dict(d)
-    assert m2.prices.lambda_max == 2.0 and m2.prices.min_window_events == 3
+    assert m2.prices.penalty_cap == 0.25 and m2.prices.min_window_events == 3
     assert (
         m2.manifest_hash() != m.manifest_hash()
     )  # the controller's parameters are part of the seed
-    for bad in ({"eta": 0}, {"decay": -1}, {"lambda_max": 0}, {"min_window_events": 0}):
+    for bad in ({"eta": 0}, {"decay": -1}, {"penalty_cap": 0}, {"penalty_cap": 1},
+                {"min_window_events": 0}):
         d = _base()
         d["prices"] = bad
         with pytest.raises(ValueError):
@@ -159,7 +160,7 @@ def test_a_manifest_hashes_what_it_says_and_a_default_is_no_exception():
     assert '"chaos":{"connector_timeout":0.0' in scripted.canonical_json()
     assert '"contract":"json_object"' in scripted.canonical_json()
     assert scripted.manifest_hash() == (
-        "ed33369bd83a1388316af04a19685fbef7be7f5956269516b2d389b80121e1f4"
+        "95695c3dc81560f7823939283e83cc9e37469d134c338f4407049edc5af64b2a"
     )
 
     implicit = manifest_from_dict(_base())
@@ -248,7 +249,7 @@ def _with_charter():
 @pytest.mark.parametrize(("field", "value"), [
     ("observation", "missing"), ("acceptable_region", "roughly adequate"),
     ("norm", "unknown"), ("description", None), ("observation", 12),
-    ("lambda", -0.1), ("lambda", 1.1), ("lambda", True), ("lambda", "0.5"),
+    ("lambda", -0.1), ("lambda", True), ("lambda", "0.5"),
     ("lambda", float("nan")), ("lambda", float("inf")),
 ])
 def test_manifest_charter_rejects_card_field_with_identity(field, value):
@@ -263,9 +264,8 @@ def test_manifest_charter_duplicate_ids_and_lambda_bounds():
     raw["charter"]["cards"].append(raw["charter"]["cards"][0])
     with pytest.raises(ValueError, match="cost_per_return.*id"):
         manifest_from_dict(raw)
-    for value in (0, 2):
+    for value in (0, 2):  # a price has no bound of its own (wave 16, R-E)
         raw = _with_charter()
-        raw["prices"] = {"lambda_max": 2}
         raw["charter"]["cards"][0]["lambda"] = value
         assert manifest_from_dict(raw).charter_prices == (("cost_per_return", value),)
 
@@ -301,7 +301,7 @@ def test_manifest_card_rejects_unknown_role(value):
     ("evaluation", "adversarial_share", 1.5), ("evaluation", "sibling_share", -0.1),
     ("evaluation", "sampling_step", 2), ("evaluation", "sampling_cap", 0.2),
     ("committee", "min_settled", False), ("immune", "k", 1), ("immune", "k", 3.0),
-    ("immune", "price_step", 0), ("immune", "price_step", 2.0),
+    ("immune", "price_step", 0), ("immune", "price_step", float("inf")),
     ("immune", "tv_threshold", -1),
     ("immune", "gamma_max", 1.1), ("immune", "gap_threshold", float("nan")),
     ("immune", "gain_step", True), ("immune", "decay_step", 0),

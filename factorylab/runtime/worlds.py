@@ -367,7 +367,6 @@ class PricesSpec:
 
     eta: float = 0.5
     decay: float = 0.1
-    lambda_max: float = 1.0
     min_window_events: int = 1
     penalty_cap: float = 0.5
     # Floor on a decision's share of a generic (non-attributable) violation, so
@@ -669,6 +668,34 @@ class WorldManifest:
         if repricing is None:
             return None
         return repricing // self.timing.min_ratio
+
+    def gain_headroom(self) -> dict[str, int | float | bool]:
+        """Whether the duration price of stable failure has room to exist in this world.
+
+        Essay II.II.b: in stable failure, "price the duration of failure, ratcheting up
+        penalties the longer the factory spends" in the attractor; ruling R-E: the one
+        bound is ``penalty_cap``. The ratchet can price duration only while the price
+        law has not already pressed a violation onto the cap by the time the organ can
+        see an attractor. ``saturation_windows`` is the fewest windows in which the
+        PID alone takes a unit violation's penalty to the cap, the least ``w >= 1``
+        with ``kp + w * eta >= penalty_cap`` (``lambda = kp * v + I``, ``I = w * eta *
+        v``, penalty ``lambda * v``, at ``v = 1``); ``diagnosis_windows`` is the
+        fewest closed windows in which stable failure can be diagnosed, ``immune.k``
+        (``versions.diagnose``: a card violated in every one of the last ``k``
+        windows, the tail full). The relation holds when the first exceeds the second
+        by the ratio ``timing.min_ratio`` (§IV.c: 3:1+), a ratio between two loops
+        and no new constant; it also leaves the organ, which acts at most once every
+        ``min_ratio`` windows, room to ratchet after its first diagnosis. It is
+        published (``world.mechanics.controller``) and not refused at load: every
+        world in the tree fails it, and a world's gains are the operator's choice.
+        """
+        from math import ceil
+
+        p, r = self.prices, self.timing.min_ratio
+        saturation = max(1, ceil((p.penalty_cap - p.kp) / p.eta))
+        diagnosis = self.immune.k
+        return {"saturation_windows": saturation, "diagnosis_windows": diagnosis,
+                "min_ratio": r, "holds": saturation >= r * diagnosis}
 
     @property
     def max_tick_ns(self) -> int | None:
@@ -1215,9 +1242,8 @@ class WorldManifest:
             if type(value) not in (int, float) or not isfinite(value) or not 0 < value <= 1:
                 raise ValueError(f"immune.{name} must be finite and in (0, 1]")
         step = self.immune.price_step
-        if (type(step) not in (int, float) or not isfinite(step)
-                or not 0 < step <= self.prices.lambda_max):
-            raise ValueError("immune.price_step must be finite and in (0, prices.lambda_max]")
+        if type(step) not in (int, float) or not isfinite(step) or step <= 0:
+            raise ValueError("immune.price_step must be finite and positive")
         for name in ("registration_bins", "revision_bins"):
             cuts = getattr(self.immune, name)
             if (not isinstance(cuts, (tuple, list)) or not cuts
@@ -1317,9 +1343,8 @@ class WorldManifest:
         for card_id, value in self.charter_prices:
             if card_id not in {c.id for c in self.charter.cards}:
                 raise ValueError(f"card {card_id} lambda: unknown card id")
-            if (type(value) not in (int, float) or not isfinite(value)
-                    or not 0 <= value <= self.prices.lambda_max):
-                raise ValueError(f"card {card_id} lambda: must be in [0, prices.lambda_max]")
+            if type(value) not in (int, float) or not isfinite(value) or value < 0:
+                raise ValueError(f"card {card_id} lambda: must be a finite number >= 0")
         p = self.prices
         if (type(p.penalty_cap) not in (int, float) or not isfinite(p.penalty_cap)
                 or not 0 < p.penalty_cap < 1):
@@ -1327,8 +1352,8 @@ class WorldManifest:
         if (type(p.min_blame_share) not in (int, float) or not isfinite(p.min_blame_share)
                 or not 0 <= p.min_blame_share <= 1):
             raise ValueError("prices.min_blame_share must be finite and in [0, 1]")
-        if min(p.eta, p.decay, p.lambda_max) <= 0 or p.min_window_events < 1:
-            raise ValueError("prices: eta, decay, lambda_max > 0 and min_window_events >= 1")
+        if min(p.eta, p.decay) <= 0 or p.min_window_events < 1:
+            raise ValueError("prices: eta, decay > 0 and min_window_events >= 1")
         for name in ("kp", "kd"):
             value = getattr(p, name)
             if type(value) not in (int, float) or not isfinite(value) or value < 0:
@@ -1663,6 +1688,12 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         meta_read_share=ev.get("meta_read_share", 0.5),
     )
     pr = d.get("prices") or {}
+    if "lambda_max" in pr:
+        # Wave 16, ruling R-E: one bound, penalty_cap, on the reward. A price bound
+        # beside it is refused, never loaded as though it bounded anything (R8).
+        raise ValueError("prices.lambda_max was removed (wave 16, R-E): the one bound is "
+                         "prices.penalty_cap; a card's price is held where its penalty "
+                         "takes the whole cap")
     for key in ("kappa", "controller"):
         if key in pr:
             # Charter audit U3: the PID is the only price law, so there is no law to
@@ -1671,7 +1702,6 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
     prices = PricesSpec(
         eta=float(pr.get("eta", 0.5)),
         decay=float(pr.get("decay", 0.1)),
-        lambda_max=float(pr.get("lambda_max", 1.0)),
         min_window_events=int(pr.get("min_window_events", 1)),
         penalty_cap=pr.get("penalty_cap", 0.5),
         min_blame_share=pr.get("min_blame_share", 0.1),

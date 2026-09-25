@@ -597,6 +597,9 @@ class BootstrapMixin:
         # Decision handle -> its settled score before the card penalty, until the router
         # that drew it learns it (wave 16, D4: the router's observed mean raw score).
         self.raw_scores: dict[str, float] = {}
+        # Decision handle -> the settlement its penalty waits for its origin window's
+        # close to price (wave 16, D5; ruling R-I, Q9).
+        self.deferred_settlements: dict[str, dict] = {}
 
         # world memory (public facts) and assembly memory (private to each assembly)
         self.recent_mids: dict[str, deque[dict[str, Any]]] = {}
@@ -913,7 +916,7 @@ class BootstrapMixin:
             self.ledger,
             eta=pr.eta,
             decay=pr.decay,
-            lambda_max=pr.lambda_max,
+            penalty_cap=pr.penalty_cap,
             min_window_events=pr.min_window_events,
             kp=pr.kp,
             kd=pr.kd,
