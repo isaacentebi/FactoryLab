@@ -47,6 +47,8 @@ _WINDOW_SUPPORT = {
     "verdict_std": lambda w: bool(w.verdicts),
     "consequence_paid_off_rate": lambda w: w.consequences_settled > 0,
     "censored_share": lambda w: w.outcomes > 0,
+    "non_acting_informative_share": lambda w: (w.non_acting_outcomes or 0) > 0,
+    "non_acting_paid_off_rate": lambda w: (w.non_acting_informative or 0) > 0,
 }
 
 
@@ -152,7 +154,12 @@ def measurement_catalogue(observations=None) -> list[dict]:
         "verdict_std": "Population standard deviation of evaluator verdicts; forecast "
         "selectors group verdicts by the judged return's assembly or role.",
         "consequence_paid_off_rate": "Positive return_paid_off outcomes over selected settled "
-        "consequences; forecast selectors restrict this to selected forecast records.",
+        "consequences of acting returns; forecast selectors restrict this to selected "
+        "forecast records about acting returns.",
+        "non_acting_informative_share": "Global closed windows only: non-acting outcomes "
+        "measured with an informative base-rate key over all non-acting outcomes fixed.",
+        "non_acting_paid_off_rate": "Global closed windows only: the share with y = 1 of "
+        "the informative non-acting outcomes.",
         "censored_share": "Censored outcomes over resolved outcomes; forecast selectors use "
         "forecast records, global closed windows also include judgements and exposures.",
         "avoidably_unresolved_share": "Attributable, avoidably unresolved accepted commitments "
@@ -201,7 +208,9 @@ def measurement_catalogue(observations=None) -> list[dict]:
 UNSCOPED_COUNTERS = ("notional_micro", "fills", "realized_pnl_micro",
                      "max_position_notional_micro", "exposures_settled", "exposures_won",
                      "meta_verdicts", "registrations", "registration_rejections",
-                     "amendments_proposed", "amendments_activated", "market_purchases")
+                     "amendments_proposed", "amendments_activated", "market_purchases",
+                     "non_acting_outcomes", "non_acting_informative",
+                     "non_acting_paid_off")
 #: Observations whose value is not a mean of its samples: no interval states their error.
 NOT_A_MEAN = frozenset({"verdict_std", "evaluator_disagreement",
                         # Reading bytes over responses: no reading is one of the responses.
@@ -301,7 +310,7 @@ def _sample_values(observation: str, rows: list[dict]) -> list[float] | None:
                 if row.get("excluded") is None]
     if observation == "consequence_paid_off_rate":
         return [float(row["y"]) for row in rows if row["predicate"] == "return_paid_off"
-                and row["status"] == "settled"]
+                and row["status"] == "settled" and row.get("subject_acted") is not False]
     if observation == "forecast_skill":
         return [float(row["skill"]) for row in rows if row["skill"] is not None]
     return [float(row["verdict"]) for row in rows if row.get("verdict") is not None]
@@ -382,6 +391,9 @@ class CardSamples:
             "window": window, "skill": skill, "predicate": forecast.predicate_id,
             "y": y, "status": status, "verdict": source.get("verdict"),
             "excluded": excluded,
+            # Whether the judged return acted (wave 16, R-H): consequence_paid_off_rate
+            # reads acting returns only. Unknown (None) counts as acting, as before.
+            "subject_acted": subject.get("acted"),
         })
 
     def closed(self, window) -> None:
@@ -479,6 +491,8 @@ def record_card_forecasts(runtime, pending, baseline) -> None:
             kind = runtime.return_kinds.get(forecast.about_handle)
             subject = {"assembly": subject_assembly,
                        "role": measured_role(kind) if kind is not None else None}
+        acted = getattr(runtime, "_acted", None)
+        subject = {**subject, "acted": acted(forecast.about_handle) if acted else None}
         samples.resolved_forecast(
             forecast=forecast, role=role, window=runtime.window.index, skill=skill,
             y=row["y"], status=row["status"], source=source, subject=subject,
@@ -556,6 +570,7 @@ def preflight_measurement(card: MetricCard, observations=None, *,
             )
     window = MeasureWindow(1, 1, costs=[1], invocations=1, ok=1, producer_returns=1,
                            consequences_settled=1, exposures_settled=1, outcomes=1,
+                           non_acting_outcomes=1, non_acting_informative=1,
                            meta_verdicts=[0.0], max_position_notional_micro=0,
                            verdicts={"sample": {"a": [0.0], "b": [0.0]}},
                            prompts=1, prompt_bytes=1, you_bytes=1, inputs_bytes=1,
@@ -688,7 +703,7 @@ def _measure_rows(observation: str, rows: list[dict]) -> float | None:
         return fmean(row["status"] == "censored" for row in eligible)
     if observation == "consequence_paid_off_rate":
         values = [row["y"] for row in rows if row["predicate"] == "return_paid_off"
-                  and row["status"] == "settled"]
+                  and row["status"] == "settled" and row.get("subject_acted") is not False]
     elif observation == "forecast_skill":
         values = [row["skill"] for row in rows if row["skill"] is not None]
     else:

@@ -53,6 +53,13 @@ class MeasureWindow:
     # attribution (wave 16, D5). Per-decision attribution, never a window observation.
     paid_off_settled: list = field(default_factory=list)
     paid_off_handles: list = field(default_factory=list)
+    # Returns that executed nothing and named a trade, whose world outcome this window
+    # fixed (measured, or known absent); those measured with an informative base-rate
+    # key; and of those, the ones with y = 1 (wave 16, R-H: the non-acting outcomes
+    # consequence_paid_off_rate does not count, published on their own).
+    non_acting_outcomes: int = 0
+    non_acting_informative: int = 0
+    non_acting_paid_off: int = 0
     fills: int = 0
     realized_pnl_micro: int = 0
     max_position_notional_micro: int | None = None

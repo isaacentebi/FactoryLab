@@ -853,6 +853,16 @@ rendered prompt in a scope exactly as it is globally. Its violations are attribu
 each outcome, not lifetime standing. The other supported forecast observations
 are `verdict_mean`, `verdict_std`, `consequence_paid_off_rate` and `censored_share`.
 Censored records count toward the selector but not a scored outcome mean.
+`consequence_paid_off_rate` counts acting returns only (wave 16, R-H), on every
+selector: a return that executed nothing has `return_paid_off` 0 by the predicate's
+acting clause whatever the world said about it, so its forecast rows (marked
+`subject_acted: false`) and its outcome are not in the rate. What the world said about
+the returns that acted on nothing is published apart, over global closed windows only:
+`non_acting_informative_share`, the non-acting returns whose named trade's outcome was
+fixed in the window and measured under an informative base-rate key, over all such
+returns whose outcome was fixed (measured, or known absent); and
+`non_acting_paid_off_rate`, the share with `y = 1` among those informative outcomes.
+The charter's cards are the charter's to revise.
 `verdict_mean` and `verdict_std` select by the judged subject's assembly or
 role. `forecast_skill` selects by the forecaster. Preflight uses the same
 subject-aware forecast row construction as runtime measurement.

@@ -282,9 +282,29 @@ CATALOGUE: tuple[Observation, ...] = (
     ),
     Observation(
         "consequence_paid_off_rate",
-        "Positive outcomes over settled return consequences.",
+        "Positive outcomes over settled return consequences of acting returns (those "
+        "that executed a venue operation or earned); a return that acted on nothing is "
+        "not in it.",
         "fraction",
         lambda w: _ratio(w.consequences_paid_off, w.consequences_settled),
+        (0.0, 1.0),
+    ),
+    Observation(
+        "non_acting_informative_share",
+        "Returns that executed nothing and named a trade whose world outcome was fixed "
+        "in the window, measured with an informative base-rate key, over all such "
+        "returns whose outcome was fixed (measured, or known absent).",
+        "fraction",
+        lambda w: _ratio(w.non_acting_informative, w.non_acting_outcomes),
+        (0.0, 1.0),
+    ),
+    Observation(
+        "non_acting_paid_off_rate",
+        "Of the informative non-acting outcomes fixed in the window, the share with "
+        "y = 1: a declined trade that would not have beaten its round trip, or a "
+        "refused order that would have.",
+        "fraction",
+        lambda w: _ratio(w.non_acting_paid_off, w.non_acting_informative),
         (0.0, 1.0),
     ),
     Observation("fills", "Venue fills processed in the window.", "count",

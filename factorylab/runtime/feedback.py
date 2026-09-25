@@ -1546,6 +1546,7 @@ class FeedbackMixin:
         if state == "open":
             return "open", None, None
         self.reference_mids.pop(about, None)
+        self.window.non_acting_outcomes += 1  # wave 16, R-H: fixed now, either way
         if state == "none":
             return self._keep_outcome(self.world_outcomes, about, "none", None, None)
         res_ns, res_mid = frozen["res"]
@@ -1574,9 +1575,14 @@ class FeedbackMixin:
                                           "funding_bps": priced["funding_bps"],
                                           "net_bps": priced["net_bps"],
                                           "moves": priced["moves"]})
-        return self._keep_outcome(self.world_outcomes, about, "measured",
+        kept = self._keep_outcome(self.world_outcomes, about, "measured",
                                   float(priced["score"]), definition,
                                   subject=priced["attempted" if attempted else "declined"])
+        if not self.settler.uninformative(self._verdict_key(about, definition)):
+            # Published on its own (R-H): consequence_paid_off_rate counts acting returns.
+            self.window.non_acting_informative += 1
+            self.window.non_acting_paid_off += int(priced["score"] == 1)
+        return kept
 
     def _keep_outcome(self, kept: dict, about: str, state: str, y: float | None,
                       kind: str | None, *, subject: dict | None = None

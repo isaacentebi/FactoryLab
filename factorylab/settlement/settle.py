@@ -289,6 +289,12 @@ class Settler:
         """
         return self.__excluded.pop(handle, None)
 
+    def uninformative(self, key: str) -> bool:
+        """Whether the base rate under ``key`` already answers its question now
+        (``PrevalenceBaseline.uninformative``): what a verdict about an outcome entering
+        it now would be told."""
+        return self.__baseline.uninformative(key)
+
     def settle_verdict(
         self, *, evaluator_id: str, about_handle: str, q: float, outcome: float, key: str
     ) -> SettledVerdict:
