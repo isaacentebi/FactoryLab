@@ -297,6 +297,15 @@ class RecoveryJournal:
         # out again. Transient, never checkpointed: memos keyed on it are dropped at
         # every checkpoint, so only differences within one continuation count.
         self.writes: dict[str, int] = {}
+        # The bytes the diary names by hash and keeps beside itself (wave 17): the
+        # rolling checkpoint and every recorded answer too large to ride inline.
+        from factorylab.runtime.sidecar import CheckpointStore, IoStore
+
+        self.checkpoints = CheckpointStore(ledger)
+        self.io_store = IoStore(ledger)
+        # Why replay failed, when it failed on evidence rather than on divergence:
+        # a recorded answer's bytes missing or altered (``io_result_missing``).
+        self.failure_code: str | None = None
 
     def __getattr__(self, name):
         return getattr(self.ledger, name)
@@ -400,7 +409,7 @@ class RecoveryJournal:
                     self.fail(f"mismatched call result at seq {item['seq']}")
                 result_entry = {k: v for k, v in item.items()
                                 if k not in ("seq", "prev_hash", "hash")}
-                result = decode(item["result"]) if "error" not in item else None
+                result = decode(self._recorded_result(item)) if "error" not in item else None
                 self.append(result_entry)
                 if "error" in item:
                     raise _recorded_error(item["error"], item.get("reason"),
@@ -482,8 +491,39 @@ class RecoveryJournal:
                          **({"reason": reason} if reason is not None else {}),
                          **({"carry": carry} if carry is not None else {}), **billing})
             raise _recorded_error(error, reason, carry=carry, **billing) from None
-        self.append({"kind": "io.result", "call": seq, "result": encoded_result})
+        self.append(self._result_item(seq, encoded_result))
         return result
+
+    def _result_item(self, seq: int, encoded_result) -> dict:
+        """The ``io.result`` item for one answer: inline when small, else named by hash.
+
+        Guarantees the item is a function of the answer alone (the same answer gives
+        the same item, whatever the key), and that a named body is durable beside the
+        diary before the item that names it is appended (``IoStore.put``).
+        """
+        from factorylab.runtime.sidecar import IO_INLINE_BYTES
+
+        body = canonical(encoded_result)
+        if len(body) <= IO_INLINE_BYTES:
+            return {"kind": "io.result", "call": seq, "result": encoded_result}
+        return {"kind": "io.result", "call": seq, **self.io_store.put(body)}
+
+    def _recorded_result(self, item: dict):
+        """The encoded answer a recorded ``io.result`` holds, inline or beside the diary.
+
+        A named body missing or altered latches the replay as failed
+        (``io_result_missing``): the world never continues on an answer it cannot
+        show was the one recorded.
+        """
+        if "result_sha" not in item:
+            return item["result"]
+        from factorylab.runtime.sidecar import SidecarMismatch, SidecarMissing
+
+        try:
+            return json.loads(self.io_store.get(item))
+        except (SidecarMissing, SidecarMismatch, OSError, ValueError):
+            self.failure_code = "io_result_missing"
+            self.fail(f"recorded answer at seq {item.get('seq')} is missing or altered")
 
 
 def _read_only(name: str) -> bool:
@@ -624,6 +664,9 @@ _RUNTIME_FIELDS = (
     "tool_uses", "tool_holds",
     "pending_votes", "regions", "priced", "rolling", "unparsed_logged", "window",
     "pending", "balance_at", "events_log", "reserve_window_start", "internal",
+    # Wave 17: the event number of the first entry of balance_at and events_log. An
+    # older checkpoint kept every entry from launch: its base is 0.
+    "event_log_base",
     "n", "emitted", "insolvency_count", "_compute_routed", "_compute_unaffordable",
     "world_consumed", "ticks_consumed", "started", "catalogue",
     "catalogue_completion_limits", "sellers",
@@ -1249,6 +1292,36 @@ def _check_artifacts(store, *, index: dict, assemblies, heads: dict, outcomes: d
                               owner=record.get("owner")) from None
 
 
+def checkpoint_state(ledger, snapshot: dict) -> dict:
+    """The world state a ``snapshot`` item names, authenticated by the chain.
+
+    A snapshot item holds the SHA-256 and size of the canonical state, and the
+    state lives in the one rolling checkpoint file beside the diary (wave 17;
+    ``runtime/sidecar.py``). Guarantees the returned mapping is exactly the
+    state the item names: a file that is missing refuses ``checkpoint_missing``,
+    and one that is foreign, altered or another (older) state refuses
+    ``checkpoint_mismatch``. Nothing falls back to an older checkpoint: the
+    factory never rewinds (essay II). An item written before wave 17 carries its
+    state inline and is read as it always was.
+    """
+    if "state" in snapshot:
+        return snapshot["state"]
+    from factorylab.runtime.sidecar import CheckpointStore, SidecarMismatch, SidecarMissing
+
+    store = getattr(ledger, "checkpoints", None)
+    if not isinstance(store, CheckpointStore):
+        store = CheckpointStore(ledger)
+    try:
+        data = store.read(snapshot)
+    except SidecarMissing:
+        raise ResumeError("the checkpoint the diary names is not beside it",
+                          code="checkpoint_missing") from None
+    except (SidecarMismatch, OSError):
+        raise ResumeError("the checkpoint beside the diary is not the one it names",
+                          code="checkpoint_mismatch") from None
+    return json.loads(data)
+
+
 def resume_runtime(manifest, ledger_path: str, *, provider=None, market=None, exchange=None,
                    clock_source=None, now_ns=None, _lock=None):
     """Hold exclusive ownership before reading recovery evidence or contacting a provider."""
@@ -1277,7 +1350,9 @@ def _resume_runtime(manifest, ledger_path, *, provider, market, exchange, clock_
         if not ledger.event_times()["launch"]:
             raise ResumeError("ledger has not launched", code="no_launch")
         raise ResumeError("ledger has no recoverable snapshot")
-    state = snapshot["state"]
+    # The checkpoint is read and authenticated before anything is appended, so a
+    # missing, stale or tampered file refuses with the diary exactly as it was.
+    state = checkpoint_state(ledger, snapshot)
     if state.get("manifest_hash") != manifest.manifest_hash():
         raise ResumeError("snapshot manifest hash differs")
     # The diary says it is alive; the witness may know it was killed. An earlier
@@ -1423,7 +1498,7 @@ def _replay(rt, journal, ledger, tail, snapshot, state, launch_nonce, now_ns):
         resume_time = (time.time_ns() if now_ns is None else now_ns) if rt.live else rt.clock.now_ns
         rt._resume_at(resume_time)
     except _ReplayFault as exc:
-        raise ResumeError(str(exc), code="replay_diverged") from None
+        raise ResumeError(str(exc), code=journal.failure_code or "replay_diverged") from None
     return rt
 
 

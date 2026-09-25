@@ -24,6 +24,7 @@ from factorylab.world.metering import Meter
 from factorylab.world.models import PriceTable, TokenPrice
 from factorylab.world.scripted import ScriptedProvider
 from factorylab.world.x402 import HTTPResponse
+from tests.helpers import keep_every_checkpoint
 
 
 class RecordedProvider:
@@ -47,7 +48,8 @@ def _items(path, manifest):
     return Ledger.reopen(path, manifest=json.loads(manifest.canonical_json()))._recovery_items()
 
 
-def test_replay_of_an_interrupted_event_does_not_charge_undispatched_model_calls(tmp_path):
+def test_replay_of_an_interrupted_event_does_not_charge_undispatched_model_calls(
+        tmp_path, monkeypatch):
     """Finding 4: a process death after decision.open but before io.call means the provider was
     never contacted; the journal knows this ("never dispatched") yet metering books the full
     ceiling as an uncertain bill. Real money is not owed to anyone."""
@@ -55,6 +57,7 @@ def test_replay_of_an_interrupted_event_does_not_charge_undispatched_model_calls
     m = replace(base, exchange=replace(base.exchange, kind="hyperliquid", coins=("BTC",)))
     path = str(tmp_path / "w.jsonl")
     clock = ClockSource(1_000_000_000, 1_000_000_000, 8)
+    keep_every_checkpoint(monkeypatch)  # the diary is cut back to its first checkpoint
     run_world(m, events=8, seed=1, ledger_path=path, provider=RecordedProvider(),
               exchange=Venue(), clock_source=clock.events())
     diary = _items(path, m)

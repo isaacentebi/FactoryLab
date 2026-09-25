@@ -12,6 +12,22 @@ from factorylab.runtime.worlds import load_manifest
 from factorylab.world.exchange import FakeExchange
 from factorylab.world.scripted import ScriptedProvider
 
+# ---- checkpoints ---------------------------------------------------------
+
+
+def keep_every_checkpoint(monkeypatch):
+    """Keep every checkpoint file a run writes, instead of only the latest.
+
+    A world keeps one rolling checkpoint (``runtime/sidecar.py``): once a newer one is
+    in the diary, no resume can start from an older one. A test that cuts a finished
+    diary back to an older checkpoint, which no running world can do, uses this so the
+    checkpoint that prefix names is still beside it.
+    """
+    from factorylab.runtime.sidecar import CheckpointStore
+
+    monkeypatch.setattr(CheckpointStore, "retire_others", lambda self, reference: None)
+
+
 # ---- spot inventory ------------------------------------------------------
 
 

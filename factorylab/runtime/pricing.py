@@ -371,7 +371,7 @@ class PricingMixin:
             decision = self.queue.get(handle)
             if (decision.status not in (SettleStatus.PENDING, SettleStatus.TIMED_OUT)
                     and handle not in self.noop_credits
-                    and len(self.queue.returns_for(decision.actor))
+                    and self.queue.delivered_count(decision.actor)
                     <= self.delivered_seen.get(decision.actor, 0)):
                 del self.thrash_charges[handle]
         for handle in tuple(self.price_origins):

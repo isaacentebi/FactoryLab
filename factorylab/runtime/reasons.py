@@ -29,6 +29,11 @@ class Reason(StrEnum):
     NO_LAUNCH = "no_launch"
     TERMINATED = "terminated"
     EVIDENCE_UNREADABLE = "evidence_unreadable"  # A read-back file is absent, malformed or sealed.
+    # The rolling checkpoint the diary names is not beside it, or is not the one it names.
+    CHECKPOINT_MISSING = "checkpoint_missing"
+    CHECKPOINT_MISMATCH = "checkpoint_mismatch"
+    # A recorded answer the diary names by hash is missing or altered.
+    IO_RESULT_MISSING = "io_result_missing"
 
     # The committed first move.
     MANIFEST_UNAVAILABLE = "manifest_unavailable"
