@@ -119,6 +119,51 @@ def test_a_render_whose_world_raises_midway_writes_no_corpus_and_exits_nonzero(
     assert not out.exists()
 
 
+def test_a_failed_render_refuses_the_whole_baseline_rewrite(tmp_path, monkeypatch, capsys):
+    """Codex review: the tracked findings and surface registry are never rewritten from a
+    partial corpus; the command exits non-zero and both files are untouched."""
+    from tests.audit import class2_audit, class2_corpus, class2_lexicon
+
+    baseline, surfaces = tmp_path / "findings.json", tmp_path / "surfaces.toml"
+    baseline.write_bytes(class2_lexicon.BASELINE.read_bytes())
+    surfaces.write_bytes(class2_audit.SURFACES.read_bytes())
+    monkeypatch.setattr(class2_lexicon, "BASELINE", baseline)
+    monkeypatch.setattr(class2_audit, "SURFACES", surfaces)
+    monkeypatch.setattr(class2_corpus, "launchable_worlds", lambda: [WORLD])
+
+    def partial(world, **_kw):
+        return class2_corpus.Rendered(
+            world, leaves=[(f"{world}/request/produce/request/#prose", "Partial text.")],
+            requests=3, status="failed: RuntimeError: world raised midway")
+
+    monkeypatch.setattr(class2_corpus, "render_dynamic", partial)
+    before = (baseline.read_bytes(), surfaces.read_bytes())
+    with pytest.raises(class2_corpus.RenderFailed, match="world raised midway"):
+        class2_audit.write_baseline([WORLD])
+    assert tool.main(["baseline"]) == 2
+    assert "world raised midway" in capsys.readouterr().err
+    assert (baseline.read_bytes(), surfaces.read_bytes()) == before
+
+
+def test_triage_of_an_invalid_audit_writes_nothing_and_exits_nonzero(rendered, tmp_path,
+                                                                     monkeypatch):
+    """Codex review: an invalid audit is rerun with the next family, never triaged."""
+    out, key = rendered
+    monkeypatch.setattr(tool, "TRIAGE_DIR", tmp_path / "triage")
+    (tmp_path / "triage").mkdir()
+    rows, summary = _output(key, canaries={c["id"] for c in key["canaries"]} - {"canary-q6"})
+    output = tmp_path / "auditor_output.jsonl"
+    output.write_text("\n".join(json.dumps(r) for r in [*rows, summary]) + "\n")
+    argv = ["triage", str(output), "--key", str(out / "canary_key.json"), "--world", WORLD,
+            "--family", "fam-x"]
+    assert tool.main(argv) == 1
+    assert list((tmp_path / "triage").iterdir()) == []
+    valid_rows, valid_summary = _output(key)
+    output.write_text("\n".join(json.dumps(r) for r in [*valid_rows, valid_summary]) + "\n")
+    assert tool.main(argv) == 0
+    assert (tmp_path / "triage" / f"{WORLD}.md").exists()
+
+
 def test_the_canary_corpus_has_one_canary_per_question_and_three_mandatory():
     spec = json.loads(tool.CANARIES.read_text())
     questions = [c["question"] for c in spec["canaries"]]

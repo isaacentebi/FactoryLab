@@ -6,6 +6,7 @@ passes on its violating rows does not discriminate and must be rewritten (design
 
 import json
 import math
+from decimal import Decimal
 from random import Random
 
 import pytest
@@ -182,10 +183,20 @@ def test_sf1e_gain_rises_to_its_bound_and_never_unwinds_while_flagged():
     unwound = closes + steps + [_gain(30, 0.5, 0.45, "cleared")]
     assert g.sf1e_gain(unwound, M).status == g.FAIL
     assert g.sf1e_gain([_w(1)], M).status == g.UNSUPPORTED
+    # Stepping, but the diary ends before the router's bound: not a pass.
+    short = [_w(i, acts=i % 3 == 0, sf=i >= 3) for i in range(1, 12)]
+    early = [_gain(w, round(0.1 + 0.05 * n, 2), round(0.15 + 0.05 * n, 2))
+             for n, w in enumerate(range(3, 12, 3))]
+    assert g.sf1e_gain(short + early, M).status == g.UNSUPPORTED
+    # The bound is fully flagged and the top was never reached: a failure.
+    stalled = closes + steps[:3]
+    assert g.sf1e_gain(stalled, M).status == g.FAIL
 
 
-def _novelty(budget=1_000_000, carried=0, accrued="1/3", cap=None, amount=None):
-    num, den = (0.1).as_integer_ratio()
+def _novelty(budget=1_000_000, carried=0, accrued="1/3", cap=None, amount=None, share="0.1"):
+    """A ``novelty.window`` row as ``NoveltyReserve.open_window`` computes it, in its own
+    Decimal and integer arithmetic."""
+    num, den = Decimal(share).as_integer_ratio()
     true_cap = budget * num // den
     a, b = (int(x) for x in accrued.split("/"))
     true_amount = min(true_cap, carried + true_cap * a // b)
@@ -201,6 +212,29 @@ def test_ld1a_and_sf1f_accrual_is_exact_and_the_route_stays_open():
     assert g.sf1f_route_open(rows + [_w(1), _w(2)], M).ok
     shut = [_w(1), _w(2, profile={"access:registration_route": 0.0})]
     assert g.sf1f_route_open(rows + shut, M).status == g.FAIL
+
+
+def test_ld1a_uses_the_reserves_decimal_arithmetic_at_share_0_3():
+    """Codex review: at share 0.3 on 10 µUSD the kernel's cap is 3 (Decimal "0.3"); a
+    float ratio would say 2. The predicate agrees with the real NoveltyReserve."""
+    from fractions import Fraction
+
+    from factorylab.kernel.ledger import Ledger
+    from factorylab.kernel.reserve import NoveltyReserve
+
+    assert (0.3).as_integer_ratio()[0] * 10 // (0.3).as_integer_ratio()[1] == 2
+    ledger = Ledger(None)
+    reserve = NoveltyReserve(0.3, has_history=lambda _c: False, ledger=ledger,
+                             clock_ns=lambda: 0)
+    reserve.open_window(1, 10, accrued=Fraction(1))
+    reserve.open_window(2, 1_000_001, accrued=Fraction(1, 3))
+    rows = [r for r in ledger._recovery_items() if r["kind"] == "novelty.window"]
+    assert rows[0]["cap"] == 3
+    world = {**M, "novelty": {"share": 0.3}}
+    assert g.ld1a_accrual(rows, world).ok
+    assert g.ld1a_accrual([_novelty(budget=10, accrued="1/1", share="0.3")], world).ok
+    wrong = _novelty(budget=10, accrued="1/1", share="0.3", cap=2, amount=2)
+    assert g.ld1a_accrual([wrong], world).status == g.FAIL
 
 
 def _open(handle, chosen, actor="router:Tick", probs=None, ids=None, seed=None):
@@ -323,6 +357,7 @@ def test_th1d_no_charge_reaches_the_frontier_or_the_niche():
     assert g.th1d_frontier(frontier, M).status == g.FAIL
     niche = ok + [{"kind": "niche.action", "handle": "d1"}]
     assert g.th1d_frontier(niche, M).status == g.FAIL
+    assert g.th1d_frontier([], M).status == g.UNSUPPORTED  # no charge is no evidence
 
 
 def test_th1e_release_after_the_cycle_stops():
@@ -331,6 +366,30 @@ def test_th1e_release_after_the_cycle_stops():
     assert g.th1e_release(closes, M, steady_from=8).ok
     stuck = [_w(i, thrash=True, lam=0.5) for i in range(1, 25)]
     assert g.th1e_release(stuck, M, steady_from=8).status == g.FAIL
+
+
+def test_th1e_passes_only_on_an_observed_zero_and_is_unsupported_when_the_diary_ends():
+    """Codex review: three readings. The flag clears at window 10 and the bound is
+    T_rel(0.5) + 1 = 6 windows, so windows 10-16 are the release horizon."""
+    def diary(last, zero_at=None):
+        return [_w(i, thrash=i < 10,
+                   lam=0.5 if i < 10 or zero_at is None or i < zero_at else 0.0)
+                for i in range(1, last + 1)]
+    observed = g.th1e_release(diary(20, zero_at=14), M, steady_from=8)
+    assert observed.ok and observed.evidence["zero"] == 14
+    never = g.th1e_release(diary(20), M, steady_from=8)
+    assert never.status == g.FAIL
+    truncated = g.th1e_release(diary(13), M, steady_from=8)
+    assert truncated.status == g.UNSUPPORTED
+    unclear = [_w(i, thrash=True, lam=0.5) for i in range(1, 12)]
+    assert g.th1e_release(unclear, M, steady_from=8).status == g.UNSUPPORTED
+
+
+def test_th1a_is_unsupported_when_the_diary_ends_inside_the_horizon():
+    closes = [_w(i) for i in range(1, 6)]
+    assert g.th1a_detection(closes, M, cycle_start=3).status == g.UNSUPPORTED
+    longer = [_w(i) for i in range(1, 20)]
+    assert g.th1a_detection(longer, M, cycle_start=3).status == g.FAIL
 
 
 def test_th1f_thrash_has_priority_over_stable_failure():
@@ -426,8 +485,11 @@ def test_ld1e_and_ld1f_quarantine_is_flagged_and_gain_holds():
     row = {"router": "router:WorldUpdate", "quarantined": True, "core": False}
     closes = [_w(i, ld=i >= 5, frontier=[row]) for i in range(1, 10)]
     assert g.ld1e_detection(closes, M).ok
-    unflagged = [_w(i, frontier=[row]) for i in range(1, 10)]
+    unflagged = [_w(i, frontier=[row]) for i in range(1, 15)]
     assert g.ld1e_detection(unflagged, M).status == g.FAIL
+    # The diary ends before H windows after the quarantine began: no evidence either way.
+    truncated = [_w(i, frontier=[row]) for i in range(1, 8)]
+    assert g.ld1e_detection(truncated, M).status == g.UNSUPPORTED
     assert g.ld1f_hold(closes + [_gain(6, 0.3, 0.3)], M).ok
     assert g.ld1f_hold(closes + [_gain(6, 0.3, 0.25, "cleared")], M).status == g.FAIL
 
@@ -441,6 +503,14 @@ def test_of2d_every_challenge_traces_to_a_seats_return():
     assert g.of2d_authorship(opened + [ret, kernel], M).status == g.FAIL
     other = g.of2d_authorship(opened + [ret, challenge], M, seats={"someone-else"})
     assert other.status == g.FAIL
+    anonymous = {"kind": "holdout.proposed", "card_id": "c"}  # no handle: authored by none
+    assert g.of2d_authorship(opened + [ret, anonymous], M).status == g.FAIL
+    trial_only = [{"kind": "challenge.window", "challenge_id": "x"}]
+    assert g.of2d_authorship(trial_only, M).status == g.UNSUPPORTED
+
+
+def test_sf1f_without_a_reserve_window_is_unsupported():
+    assert g.sf1f_route_open([_w(1)], M).status == g.UNSUPPORTED
 
 
 def _consequence(about, q, y, phase="final"):
@@ -533,6 +603,13 @@ def test_s4_bounds_on_penalties_rewards_and_ratchets():
     assert g.s4_boundedness([_penalty("d", 1.0) | {"penalty": 0.6}], M).status == g.FAIL
     over = [{"kind": "immune.price_ratchet", "card_id": "c", "lambda_after": 1.5}]
     assert g.s4_boundedness(over, M).status == g.FAIL
+    assert g.s4_boundedness([], M).status == g.UNSUPPORTED
+    learned = [{"kind": "propensity.learned", "handle": "d", "reward": 1.5}]
+    assert g.s4_boundedness(learned, M).status == g.FAIL
+    settled = [{"kind": "decision.settle", "return": {"handle": "d", "score": -0.1}}]
+    assert g.s4_boundedness(settled, M).status == g.FAIL
+    abstained = [ok[1] | {"penalty": 0.7}]
+    assert g.s4_boundedness(abstained, M).status == g.FAIL
 
 
 def test_s5_and_s5b_abstention_credit():

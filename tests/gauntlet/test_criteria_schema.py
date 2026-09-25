@@ -26,6 +26,8 @@ NOT_EMITTED = {
                                       "on this branch emits it (SF-1d is a strict xfail)",
     "challenge.proposed": "emitted by governance._register_challenge with the challenge "
                           "record (its handle included); no gauntlet world files a challenge",
+    "uptake.anticipated": "emitted by runtime/uptake.py; no captured run reached it",
+    "uptake.forecast": "emitted by runtime/uptake.py; no captured run reached it",
 }
 
 
@@ -141,3 +143,90 @@ def test_the_criteria_read_real_rows_without_error():
     rows = [dict(r, seq=r.get("seq", 0)) for r in REAL["rows"].values()]
     for result in g.replay(sorted(rows, key=lambda r: r["seq"]), {}):
         assert result.status in (g.PASS, g.FAIL, g.UNSUPPORTED)
+
+
+# --- S4: every reward-bearing kind, enumerated from the emitting code (Codex review) ------
+
+#: Kinds whose rows carry a reward-like key that is not a unit-interval score, or that are
+#: not ledger rows, each with its reason.
+NOT_SCORES = {
+    "outcome.undeliverable": "its `consequence` names what could not be delivered (text)",
+    "composed_settled": "a seat's inbox item (outcomes.append), not a ledger row; its "
+                        "values are the composed.settled row's, which S4 bounds",
+}
+#: Reward-bearing kinds no run captured here, each with its reason.
+UNCAPTURED = {
+    "uptake.anticipated": "emitted by runtime/uptake.py when a judge forecasts a "
+                          "registration's uptake; no captured run reached it",
+    "uptake.forecast": "emitted by runtime/uptake.py with a judge's uptake forecast; no "
+                       "captured run reached it",
+}
+REWARD_KEYS = frozenset({"reward", "score", "grade", "reward_before", "stepped_as",
+                         "effective", "raw", "conformity", "consequence", "q", "y",
+                         "verdict", "judge_q"})
+
+
+def _emitted_reward_kinds():
+    """Every constant-``kind`` dict literal in factorylab/ carrying a reward-like key."""
+    found = {}
+    for path in sorted((ROOT / "factorylab").rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text())):
+            if not isinstance(node, ast.Dict):
+                continue
+            keys = {k.value for k in node.keys if isinstance(k, ast.Constant)}
+            kind = next((v.value for k, v in zip(node.keys, node.values, strict=True)
+                         if isinstance(k, ast.Constant) and k.value == "kind"
+                         and isinstance(v, ast.Constant)), None)
+            if isinstance(kind, str) and keys & REWARD_KEYS:
+                found.setdefault(kind, set()).update(keys & REWARD_KEYS)
+    return found
+
+
+def test_s4_enumerates_every_reward_bearing_kind_the_kernel_emits():
+    emitted = _emitted_reward_kinds()
+    assert "decision.settle" in g.UNIT_FIELDS  # its score is nested under ``return``
+    missing = sorted(set(emitted) - set(g.UNIT_FIELDS) - set(NOT_SCORES))
+    assert missing == [], "a reward-bearing kind S4 does not bound"
+    for kind, keys in emitted.items():
+        if kind in g.UNIT_FIELDS:
+            assert keys <= set(g.UNIT_FIELDS[kind]), (kind, keys)
+
+
+def test_every_s4_field_exists_in_its_real_row():
+    for kind, fields in g.UNIT_FIELDS.items():
+        if kind in UNCAPTURED:
+            continue
+        assert kind in REAL["rows"], kind
+        real = paths(REAL["rows"][kind])
+        assert set(fields) & real, (kind, fields)
+
+
+def _set(row, path, value):
+    row = json.loads(json.dumps(row))
+    target = row
+    *parents, leaf = path.split(".")
+    for part in parents:
+        target = target[part]
+    target[leaf] = value
+    return row
+
+
+def test_s4_refuses_an_out_of_range_score_on_every_reward_bearing_kind():
+    """Codex review: a 1.5 in any learned, settled or graded score of any kind fails S4;
+    the captured real rows pass."""
+    rows = [REAL["rows"][kind] for kind in g.UNIT_FIELDS if kind in REAL["rows"]]
+    manifest = {"prices": {"penalty_cap": 0.5, "lambda_max": 1.0}}
+    assert g.s4_boundedness(rows, manifest).ok
+    tried = 0
+    for kind, fields in g.UNIT_FIELDS.items():
+        if kind not in REAL["rows"]:
+            continue
+        for name in fields:
+            if g._field(REAL["rows"][kind], name) is None:
+                continue
+            tried += 1
+            bad = _set(REAL["rows"][kind], name, 1.5)
+            result = g.s4_boundedness([bad], manifest)
+            assert result.status == g.FAIL, (kind, name)
+            assert result.evidence["bad"][0]["field"] == name
+    assert tried >= len(g.UNIT_FIELDS) - len(UNCAPTURED)

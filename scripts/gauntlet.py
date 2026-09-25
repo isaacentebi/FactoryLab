@@ -38,6 +38,8 @@ import tomllib
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
+from decimal import Decimal
+from fractions import Fraction
 from pathlib import Path
 from random import Random
 from typing import Any
@@ -472,7 +474,13 @@ def sf1d_escalation(events: list[Mapping], manifest: Mapping, *, card: str) -> R
 
 def sf1e_gain(events: list[Mapping], manifest: Mapping) -> Result:
     """SF-1e: γ reaches ``gamma_max`` within ⌈(γmax−γ0)/gain_step⌉·A windows of the flag,
-    and never unwinds while stable failure (without thrash) is flagged."""
+    and never unwinds while stable failure (without thrash) is flagged.
+
+    ``fail`` when a router's bound passed, flagged throughout, without reaching the top,
+    or when γ unwound while flagged; ``unsupported`` when some router's bound lies
+    beyond the flagged evidence (``pending``: the diary or the flag ended first);
+    ``pass`` only when every router that stepped reached the top within its bound.
+    """
     ph = physics(manifest)
     flags = flagged(events, "stable_failure")
     if not flags:
@@ -483,7 +491,7 @@ def sf1e_gain(events: list[Mapping], manifest: Mapping) -> Result:
     by_router: dict[str, list[Mapping]] = defaultdict(list)
     for row in gains:
         by_router[row["router"]].append(row)
-    problems, reached = [], {}
+    problems, reached, pending = [], {}, []
     first_flag = flags[0]
     flag_set = set(flags)
     for router, rows in by_router.items():
@@ -498,33 +506,51 @@ def sf1e_gain(events: list[Mapping], manifest: Mapping) -> Result:
                     if min(row["gamma_after"]) >= ph.gamma_max - 1e-12), None)
         reached[router] = {"window": top, "period": own}
         # The first act after the flag may come up to one period late.
-        if top is None or top > first_flag + (steps + 1) * own:
-            if max(flags) >= first_flag + (steps + 1) * own:
+        bound = first_flag + (steps + 1) * own
+        if top is None or top > bound:
+            if max(flags) >= bound:
                 problems.append({"router": router, "reached_at": top, "steps": steps,
                                  "period": own, "first_flag": first_flag})
+            else:
+                pending.append({"router": router, "bound": bound, "last_flag": max(flags)})
         for row in rows:
             if (row["window"] in flag_set and row["window"] not in thrash
                     and max(row["gamma_after"]) < max(row["gamma_before"])):
                 problems.append({"router": router, "unwound_while_flagged": row["window"]})
     if not by_router:
         return _result("SF-1e", False, why="no gain row while flagged", first_flag=first_flag)
+    if not problems and pending:
+        return _unsupported("SF-1e", "a router's bound lies beyond the flagged evidence",
+                            pending=pending[:10], reached=reached, organ_period=period)
     return _result("SF-1e", not problems, problems=problems[:10], reached=reached,
-                   organ_period=period)
+                   pending=pending[:10], organ_period=period)
+
+
+def novelty_share_ratio(ph: Physics) -> tuple[int, int]:
+    """The novelty share as ``NoveltyReserve`` holds it: ``Decimal(str(share))``, as an
+    exact integer ratio."""
+    return Decimal(str(ph.novelty_share)).as_integer_ratio()
 
 
 def ld1a_accrual(events: list[Mapping], manifest: Mapping) -> Result:
     """LD-1a: each reserve window accrues exactly ``min(cap, carried + cap × accrued)``,
-    ``cap = ⌊budget × novelty.share⌋`` (integer micro-USD), whatever the population did."""
+    ``cap = ⌊budget × novelty.share⌋`` (integer micro-USD), whatever the population did.
+
+    The arithmetic is ``NoveltyReserve.open_window``'s own: the share as
+    ``Decimal(str(share))`` (never the float's binary expansion: at share 0.3 on 10 µUSD
+    the kernel's cap is 3, a float ratio's 2), its exact integer ratio, integer floor
+    division, and ``accrued`` as the exact ``Fraction`` the row records.
+    """
     ph = physics(manifest)
     rows = rows_of(events, "novelty.window")
     if not rows:
         return _unsupported("LD-1a", "no reserve window opened")
-    num, den = float(ph.novelty_share).as_integer_ratio()
+    num, den = novelty_share_ratio(ph)
     bad = []
     for row in rows:
-        a_num, a_den = (int(x) for x in (str(row["accrued"]).split("/") + ["1"])[:2])
+        accrued = Fraction(str(row["accrued"]))
         cap = int(row["budget"]) * num // den
-        expected = min(cap, int(row["carried"]) + cap * a_num // a_den)
+        expected = min(cap, int(row["carried"]) + cap * accrued.numerator // accrued.denominator)
         if cap != int(row["cap"]) or expected != int(row["amount"]):
             bad.append({"seq": row.get("seq"), "cap": row["cap"], "expected_cap": cap,
                         "amount": row["amount"], "expected": expected})
@@ -539,6 +565,8 @@ def sf1f_route_open(events: list[Mapping], manifest: Mapping) -> Result:
     shut = [w["window"] for w in closes
             if (w.get("profile") or {}).get("access:registration_route") != 1.0]
     accrual = ld1a_accrual(events, manifest)
+    if not shut and accrual.status == UNSUPPORTED:
+        return _unsupported("SF-1f", "no reserve window opened", closed=[])
     return _result("SF-1f", not shut and accrual.ok, closed=shut[:10],
                    accrual=accrual.status)
 
@@ -661,6 +689,10 @@ def th1a_detection(events: list[Mapping], manifest: Mapping, *, cycle_start: int
     """TH-1a: thrash is flagged at most ``H`` windows after a cycle starts."""
     ph = physics(manifest)
     first = min((w for w in flagged(events, "thrash") if w >= cycle_start), default=None)
+    last = max((w["window"] for w in windows(events)), default=None)
+    if first is None and (last is None or last < cycle_start + ph.H):
+        return _unsupported("TH-1a", "the diary ends before H windows after the cycle "
+                            "started", cycle_start=cycle_start, last=last, H=ph.H)
     return _result("TH-1a", first is not None and first <= cycle_start + ph.H,
                    cycle_start=cycle_start, first_flag=first, H=ph.H)
 
@@ -762,29 +794,44 @@ def th1d_frontier(events: list[Mapping], manifest: Mapping) -> Result:
         kind = str(row.get("router", "")).split(":", 1)[-1].split("#")[0].split("@")[0]
         if kind not in ph.no_swap_regret_kinds or row["handle"] in niche:
             bad.append({"handle": row["handle"], "router": row.get("router")})
-    return _result("TH-1d", not bad, bad=bad[:5], charged=len(rows_of(events,
-                                                                      "thrash.charged")))
+    charged = len(rows_of(events, "thrash.charged"))
+    if not charged:
+        return _unsupported("TH-1d", "no round was charged")
+    return _result("TH-1d", not bad, bad=bad[:5], charged=charged)
 
 
 def th1e_release(events: list[Mapping], manifest: Mapping, *, steady_from: int) -> Result:
     """TH-1e: after the cycle stops, the flag clears within H windows and the thrash price
-    reaches zero within ``T_rel(λ_peak) + 1`` windows of the clear."""
+    reaches zero within ``T_rel(λ_peak) + 1`` windows of the clear.
+
+    Three readings, never a pass on truncated evidence: ``pass`` only for a clear within
+    H and an observed zero price within the bound; ``fail`` when a bound the diary fully
+    covers passed without it; ``unsupported`` when the diary ends before a bound it has
+    not yet met.
+    """
     ph = physics(manifest)
     series = [s for s in thrash_series(events) if s[0] >= steady_from]
     if not series:
         return _unsupported("TH-1e", "no window after the cycle stopped")
     peak = max((lam for w, lam, _p, _f in thrash_series(events)), default=0.0)
+    last = series[-1][0]
     cleared = next((w for w, _lam, _p, flag in series if not flag
                     and all(not f for w2, _l, _pp, f in series if w2 >= w)), None)
-    if cleared is None:
-        return _result("TH-1e", False, why="the flag never cleared for good")
-    zero = next((w for w, lam, _p, _f in series if w >= cleared and lam <= 1e-12), None)
+    evidence = {"steady_from": steady_from, "H": ph.H, "peak": peak, "last": last}
+    if cleared is None or cleared > steady_from + ph.H:
+        if cleared is None and last < steady_from + ph.H:
+            return _unsupported("TH-1e", "the diary ends before the flag had H windows "
+                                "to clear", **evidence)
+        return _result("TH-1e", False, why="the flag did not clear within H", cleared=cleared,
+                       **evidence)
     bound = t_release(ph, peak) + 1
-    last = series[-1][0]
-    ok = cleared <= steady_from + ph.H and (
-        (zero is not None and zero <= cleared + bound) or last < cleared + bound)
-    return _result("TH-1e", ok, cleared=cleared, zero=zero, bound=bound, peak=peak,
-                   steady_from=steady_from, H=ph.H)
+    zero = next((w for w, lam, _p, _f in series if w >= cleared and lam <= 1e-12), None)
+    evidence.update(cleared=cleared, zero=zero, bound=bound)
+    if zero is not None and zero <= cleared + bound:
+        return _result("TH-1e", True, **evidence)
+    if last < cleared + bound:
+        return _unsupported("TH-1e", "the diary ends before the release bound", **evidence)
+    return _result("TH-1e", False, **evidence)
 
 
 def th1f_priority(events: list[Mapping], manifest: Mapping) -> Result:
@@ -948,8 +995,13 @@ def ld1e_detection(events: list[Mapping], manifest: Mapping) -> Result:
     if not runs:
         return _unsupported("LD-1e", "no frontier router was quarantined for k windows")
     dead = flagged(events, "learning_death")
-    late = [r for r in runs if not any(r[0] <= w <= r[0] + ph.H for w in dead)]
-    return _result("LD-1e", not late, runs=runs[:5], flagged=dead[:10])
+    last = max(w["window"] for w in closes)
+    unmet = [r for r in runs if not any(r[0] <= w <= r[0] + ph.H for w in dead)]
+    late = [r for r in unmet if last >= r[0] + ph.H]
+    if unmet and not late:
+        return _unsupported("LD-1e", "the diary ends before H windows after a quarantine "
+                            "began", runs=unmet[:5], last=last)
+    return _result("LD-1e", not late, runs=runs[:5], flagged=dead[:10], late=late[:5])
 
 
 def ld1f_hold(events: list[Mapping], manifest: Mapping) -> Result:
@@ -1021,21 +1073,22 @@ def of2d_authorship(events: list[Mapping], manifest: Mapping, *,
                     seats: set[str] | None = None) -> Result:
     """OF-2d: every holdout and challenge traces to a seat's return; the kernel adds none.
 
-    A challenge row's ``handle`` names a decision on which a seat returned; when
-    ``seats`` is given, that decision's drawn arm is one of them.
+    Every row that authors a holdout or a challenge (``holdout.proposed``,
+    ``challenge.proposed``: the only kinds that add one) names, as its ``handle``, a
+    decision on which a seat returned; when ``seats`` is given, that decision's drawn arm
+    is one of them. A proposing row with no handle is a failure, not a skip.
     """
     returned = returned_handles(events)
     drawn = decision_seats(events)
-    rows = [row for row in events if str(row.get("kind", "")).startswith(
-        ("holdout.", "challenge.", "charter.challenge"))]
-    proposals = [row for row in rows if row.get("handle")]
-    if not rows:
-        return _unsupported("OF-2d", "no holdout or challenge row")
-    bad = [row for row in proposals if row["handle"] not in returned
+    proposals = rows_of(events, "holdout.proposed", "challenge.proposed")
+    if not proposals:
+        return _unsupported("OF-2d", "no holdout or challenge was proposed")
+    bad = [row.get("handle") for row in proposals
+           if not isinstance(row.get("handle"), str) or row["handle"] not in returned
            or (seats is not None and drawn.get(row["handle"]) not in seats
                and not _child_of_seat(events, row["handle"], seats))]
-    return _result("OF-2d", bool(proposals) and not bad, rows=len(rows),
-                   traced=len(proposals) - len(bad), bad=[r["handle"] for r in bad][:5])
+    return _result("OF-2d", not bad, proposals=len(proposals),
+                   traced=len(proposals) - len(bad), bad=bad[:5])
 
 
 def of1a_outside_the_loop(events: list[Mapping], manifest: Mapping) -> Result:
@@ -1119,12 +1172,27 @@ def _child_of_seat(events: list[Mapping], handle: str, seats: set[str]) -> bool:
 # --- the pricing-not-steering invariants that read rows alone (design §1.2) -----------------
 
 
+#: Every act a seat's return causes, and the field its emitting row names the deciding
+#: handle in: an order, a transfer, a registration, a charter amendment, a holdout or
+#: metric challenge, and a retirement motion. ``CharterBook.propose`` and the retirement
+#: motion ledger their dataclass as it is, which calls it ``proposer_handle``.
+ACT_KINDS: dict[str, str] = {
+    "order.intent": "handle",
+    "treasury.intent": "handle",
+    "registry.register": "handle",
+    "charter.propose": "proposer_handle",
+    "holdout.proposed": "handle",
+    "challenge.proposed": "handle",
+    "retirement.proposed": "proposer_handle",
+}
+
+
 def s1_draw_sovereignty(events: list[Mapping], manifest: Mapping | None = None) -> Result:
     """S1: every drawn arm is the router's own sample, replayed from its logged seed.
 
     ``Random(rng_seed).choices(action_ids, weights=probs)[0] == chosen`` for every
     sampled ``decision.open`` (``learners.router.Router.route``), the logged
-    distribution sums to 1, and every order, registration and amendment row that
+    distribution sums to 1, and every act a seat's return causes (``ACT_KINDS``) that
     names a decision names one a seat returned on.
     """
     bad, checked = [], 0
@@ -1138,12 +1206,8 @@ def s1_draw_sovereignty(events: list[Mapping], manifest: Mapping | None = None) 
         if drawn != prop["chosen"] or abs(math.fsum(probs) - 1.0) > 1e-9:
             bad.append(row["handle"])
     returned = returned_handles(events)
-    # The deciding handle, under the field each emitting row names it: an order and a
-    # registration carry ``handle``; a charter proposal carries the amendment's own
-    # ``proposer_handle`` (``CharterBook.propose`` ledgers the Amendment as it is).
-    acts = [(row["kind"], row.get("proposer_handle" if row["kind"] == "charter.propose"
-                                  else "handle"))
-            for row in rows_of(events, "order.intent", "registry.register", "charter.propose")]
+    acts = [(row["kind"], row.get(ACT_KINDS[row["kind"]]))
+            for row in rows_of(events, *ACT_KINDS)]
     acts = [(kind, h) for kind, h in acts if isinstance(h, str) and h.startswith("decision-")]
     unreturned = [h for _kind, h in acts if h not in returned]
     if not checked:
@@ -1152,24 +1216,83 @@ def s1_draw_sovereignty(events: list[Mapping], manifest: Mapping | None = None) 
                    acts=len(acts), unreturned=unreturned[:5])
 
 
+#: Every ledger kind that carries a learned, settled or graded score, and the fields that
+#: hold it, each a unit-interval quantity. Enumerated from the emitting code (every
+#: ``ledger.append`` in factorylab/ whose row names a reward, score, grade, credit,
+#: forecast q or outcome y) and pinned against it by tests/gauntlet/test_criteria_schema.py.
+UNIT_FIELDS: dict[str, tuple[str, ...]] = {
+    "decision.settle": ("return.score",),
+    "price.penalty": ("raw", "effective"),
+    "router.abstention_priced": ("neutral", "reward"),
+    "router.decline_priced": ("neutral", "reward"),
+    "router.carried": ("reward",),
+    "router.step_rescaled": ("reward", "stepped_as"),
+    "thrash.charged": ("reward", "reward_before", "charge"),
+    "propensity.learned": ("reward",),
+    "evaluator.settled": ("consequence", "grade", "reward"),
+    "evaluator.meta_grade": ("grade",),
+    "meta.consequence": ("conformity", "score"),
+    "verdict.mean": ("score",),
+    "verdict.consequence": ("q", "y", "score"),
+    "verdict.consequence_late": ("q", "y"),
+    "consequence.marked": ("y",),
+    "counter.opened": ("q", "judge_q"),
+    "counter.settled": ("q", "judge_q", "y", "score"),
+    "exposure.settled": ("score",),
+    "lambda_post.settled": ("score",),
+    "composed.settled": ("verdict", "reward"),
+    "policy.outcome": ("q", "y", "score"),
+    "uptake.anticipated": ("q",),
+    "uptake.forecast": ("q",),
+}
+#: The penalty a settlement or an abstention bears is bounded by ``penalty_cap``.
+CAPPED_FIELDS: dict[str, tuple[str, ...]] = {
+    "price.penalty": ("penalty",),
+    "router.abstention_priced": ("penalty",),
+    "router.decline_priced": ("penalty",),
+    "thrash.charged": ("charge",),
+}
+
+
+def _field(row: Mapping, path: str) -> Any:
+    value: Any = row
+    for part in path.split("."):
+        value = value.get(part) if isinstance(value, Mapping) else None
+    return value
+
+
 def s4_boundedness(events: list[Mapping], manifest: Mapping) -> Result:
-    """S4: every settled penalty ≤ ``penalty_cap``; every reward and effective score in
-    [0, 1]; every ratchet ends at or below ``lambda_max``."""
+    """S4: every settled penalty ≤ ``penalty_cap``; every learned, settled or graded score
+    of every kind that carries one (``UNIT_FIELDS``) in [0, 1]; every ratchet ends at or
+    below ``lambda_max``. ``unsupported`` when the rows carry no such value at all."""
     ph = physics(manifest)
-    bad = []
-    for row in rows_of(events, "price.penalty"):
-        effective = row.get("effective")
-        if row["penalty"] > ph.cap + 1e-12 or (effective is not None
-                                               and not 0 <= effective <= 1):
-            bad.append({"kind": row["kind"], "handle": row["handle"]})
-    for row in rows_of(events, "router.abstention_priced", "router.decline_priced",
-                       "thrash.charged"):
-        if not 0 <= float(row["reward"]) <= 1:
-            bad.append({"kind": row["kind"], "handle": row["handle"]})
+    bad, checked = [], 0
+    for kind, fields in UNIT_FIELDS.items():
+        for row in rows_of(events, kind):
+            for name in fields:
+                value = _field(row, name)
+                if value is None:
+                    continue
+                checked += 1
+                if isinstance(value, bool):
+                    continue  # a boolean outcome is 0 or 1
+                if not isinstance(value, int | float) or not 0 <= value <= 1:
+                    bad.append({"kind": kind, "field": name, "value": value,
+                                "handle": row.get("handle")})
+    for kind, fields in CAPPED_FIELDS.items():
+        for row in rows_of(events, kind):
+            for name in fields:
+                value = _field(row, name)
+                if isinstance(value, int | float) and value > ph.cap + 1e-12:
+                    bad.append({"kind": kind, "field": name, "value": value,
+                                "cap": ph.cap, "handle": row.get("handle")})
     for row in rows_of(events, "immune.price_ratchet"):
+        checked += 1
         if row["lambda_after"] > ph.lambda_max + 1e-12:
             bad.append({"kind": row["kind"], "card": row["card_id"]})
-    return _result("S4", not bad, bad=bad[:5])
+    if not checked:
+        return _unsupported("S4", "no row carries a score, a reward or a ratchet")
+    return _result("S4", not bad, checked=checked, bad=bad[:5])
 
 
 def s5_neutral_imputation(events: list[Mapping], manifest: Mapping) -> Result:

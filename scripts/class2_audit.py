@@ -20,7 +20,8 @@ does everything around that call, offline:
             found and every mandatory one (Q6, Q9, Q10) is, and at most 1 of 10
             controls is flagged. An invalid audit is rerun with the next family.
   triage    Write ``docs/audits/class2/<world>.md``: the skeleton the architect fills,
-            one row per finding, with the family and the canary score recorded.
+            one row per finding, with the family and the canary score recorded. An
+            invalid audit writes nothing and exits non-zero.
   baseline  Recompute the static audit's findings and surface registry after the
             architect's triage (tests/audit/class2_findings.json, class2_surfaces.toml).
 
@@ -53,6 +54,9 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+from tests.audit import class2_corpus as corpus  # noqa: E402
+from tests.audit.class2_corpus import RenderFailed  # noqa: E402
 
 CANARIES = ROOT / "docs/audits/class2/canaries.json"
 PROTOCOL = ROOT / "docs/audits/class2/auditor-protocol.md"
@@ -95,10 +99,6 @@ def describe(path: str) -> dict[str, Any]:
     return {"surface_kind": kind, "audience": [], "frequency": "unknown"}
 
 
-class RenderFailed(RuntimeError):
-    """A world's requests could not be rendered completely: no audit can be produced."""
-
-
 def corpus_records(worlds: list[str], *, rendered: bool) -> list[dict]:
     """Every leaf the auditor reads, tagged; charter cards and norms as context.
 
@@ -107,19 +107,13 @@ def corpus_records(worlds: list[str], *, rendered: bool) -> list[dict]:
     audit, and a partial render would make it silently short. A failed or empty render
     raises ``RenderFailed`` naming the world and the failure.
     """
-    from tests.audit import class2_corpus as corpus
 
     records: list[dict] = []
     seen: set[str] = set()
     for world in worlds:
         leaves = corpus.render_static(world)
         if rendered:
-            dynamic = corpus.render_dynamic(world)
-            if dynamic.status != "completed" or not dynamic.requests or not dynamic.leaves:
-                raise RenderFailed(f"{world}: the rendered run did not complete "
-                                   f"({dynamic.status}; {dynamic.requests} requests); "
-                                   "no audit is produced from a partial corpus")
-            leaves += dynamic.leaves
+            leaves += corpus.require_complete(corpus.render_dynamic(world)).leaves
         for path, text in leaves:
             key = leaf_id(path, text)
             if key not in seen:
@@ -425,8 +419,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "baseline":
         from tests.audit import class2_audit, class2_corpus
 
-        document = class2_audit.write_baseline(class2_corpus.launchable_worlds(),
-                                               rendered=not args.static_only)
+        try:
+            document = class2_audit.write_baseline(class2_corpus.launchable_worlds(),
+                                                   rendered=not args.static_only)
+        except RenderFailed as exc:
+            print(f"no baseline rewrite: {exc}", file=sys.stderr)
+            return 2
         print(f"{len(document['findings'])} findings written")
         return 0
     findings, summary = read_output(args.output)
@@ -435,6 +433,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "validate":
         print(json.dumps(verdict, indent=1))
         return 0 if verdict["valid"] else 1
+    if not verdict["valid"]:
+        # An invalid audit is rerun with the next family; its findings are not triaged,
+        # so no triage file is written for it.
+        print(json.dumps(verdict, indent=1), file=sys.stderr)
+        print("no triage: the audit is invalid", file=sys.stderr)
+        return 1
     text = triage_skeleton(findings, verdict, world=args.world, family=args.family, key=key)
     path = TRIAGE_DIR / f"{args.world}.md"
     path.write_text(text)

@@ -217,6 +217,23 @@ def registration_refusals() -> list[tuple[str, str]]:
 # --- the rendered requests (gate) -----------------------------------------------------------
 
 
+class RenderFailed(RuntimeError):
+    """A world's requests could not be rendered completely: nothing may be built on them."""
+
+
+def require_complete(rendered: Rendered) -> Rendered:
+    """``rendered``, if its run completed and sent requests; else ``RenderFailed``.
+
+    Guarantees no consumer (the auditor's corpus, the triage baseline, the surface
+    registry) is built from a partial render: what a failed run rendered before it
+    failed is not the set of surfaces under audit.
+    """
+    if rendered.status != "completed" or not rendered.requests or not rendered.leaves:
+        raise RenderFailed(f"{rendered.world}: the rendered run did not complete "
+                           f"({rendered.status}; {rendered.requests} requests)")
+    return rendered
+
+
 @dataclass
 class Rendered:
     """A world's recorded requests, as leaves, with what the population emitted."""

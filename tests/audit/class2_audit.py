@@ -79,8 +79,14 @@ def write_baseline(worlds: Iterable[str], *, rendered: bool = True) -> dict:
     """Recompute every finding and surface over ``worlds``; write the baseline and registry.
 
     The operator's step after the architect's triage (a FIX removes a finding, an ALLOW
-    adds an allowlist entry): never a way to make a new finding pass unread.
+    adds an allowlist entry): never a way to make a new finding pass unread. Every
+    render is taken before anything is written, and a rendered run that did not
+    complete refuses the whole rewrite (``RenderFailed``): a partial corpus would drop
+    findings and surfaces from the tracked files.
     """
+    worlds = list(worlds)
+    dynamics = ({world: corpus.require_complete(corpus.render_dynamic(world))
+                 for world in worlds} if rendered else {})
     allowlist = lexicon.load_allowlist()
     out: list[dict] = []
     seen = {"static": set(), "rendered": set()}
@@ -94,7 +100,7 @@ def write_baseline(worlds: Iterable[str], *, rendered: bool = True) -> dict:
         result = triage(static, allowlist)
         out += rows(world, "static", result.findings, result.review)
         if rendered:
-            dynamic = corpus.render_dynamic(world)
+            dynamic = dynamics[world]
             seen["rendered"] |= surfaces_of(dynamic.leaves)
             result = triage(dynamic.leaves, allowlist)
             out += rows(world, "rendered", result.findings, result.review)

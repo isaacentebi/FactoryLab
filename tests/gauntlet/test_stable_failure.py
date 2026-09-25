@@ -112,8 +112,13 @@ def test_sf1d_saturation_is_escalated_with_a_rising_duration(sf1):
 
 
 def test_sf1e_gain_rises_to_its_bound_and_holds_while_flagged(sf1):
+    """No router unwound while flagged or missed a bound the run covered, and the Tick
+    router, whose own loop is the organ's, reached gamma_max. The judges' routers step on
+    a 12-window loop, so their bounds (1 + 9 × 12 windows) lie beyond a 300-event world:
+    SF-1e reads them as unsupported, never as a pass."""
     result = g.sf1e_gain(sf1.events, sf1.manifest)
-    assert result.ok, result.evidence
+    assert result.status != g.FAIL, result.evidence
+    assert result.evidence["reached"]["router:Tick"]["window"] is not None
     assert sf1.rows("immune.gain")
 
 
