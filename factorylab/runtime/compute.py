@@ -15,6 +15,7 @@ from factorylab.cortex.assembly import (
     AssemblySpec,
     ProgramAssembly,
     cap_continuation,
+    declines,
 )
 from factorylab.cortex.request import (
     ChildRequest,
@@ -714,11 +715,10 @@ class ComputeMixin:
                 raise SectionError(section, f"more than {limit} {section}", limit)
         validate_schema(live, {"type": "object", "properties": reserved_return_fields(
             max_children=self.m.tools.max_children, max_tool_calls=self.m.tools.max_tool_calls)})
-        # A decline in the published form ({"status": "cannot", "reason": ...}) names no
-        # kind: declining is not one of the contract's returns, so a contract with
-        # several kinds is not asked to pick one before it may decline.
-        declining = ("emits" not in parsed and parsed.get("status") == "cannot"
-                     and isinstance(parsed.get("reason"), str))
+        # A decline (``declines``) names no kind: declining is not one of the
+        # contract's returns, so a contract with several kinds is not asked to pick
+        # one before it may decline.
+        declining = "emits" not in parsed and declines(parsed)
         binding = self.return_bindings.get(req.handle)
         if binding is not None and not declining:
             emits = parsed.get("emits")
@@ -748,7 +748,7 @@ class ComputeMixin:
                      and not (producing and k == "counterfactual")},
                     spec.schemas[emits],
                     partial=bool(parsed.get("requests") or parsed.get("tool_calls")
-                                 or parsed.get("status") == "cannot"),
+                                 or declines(parsed)),
                 )
             if producing and not (parsed.get("requests") or parsed.get("tool_calls")):
                 # A final answer of a kind the world's first-tier verdicts are about.
@@ -2209,8 +2209,9 @@ class ComputeMixin:
         req = replace(req, cost_ceiling=min(req.cost_ceiling, ret.cost + cover))
         dropped = list(ret.dropped)  # optional sections dropped while the answer stood
         self._check_compute_return(req.handle, ret)
-        if (ret.status == "ok" and ret.outputs.get("status") == "cannot"
-                and isinstance(ret.outputs.get("reason"), str)):
+        # A decline is read by ``declines`` alone, in any case, so its tool calls,
+        # children and answer order never act (Chapter II §II.b: physics enforced).
+        if ret.status == "ok" and declines(ret.outputs):
             ret = replace(ret, status="refused", children=(), tool_calls=())
         if ret.status == "ok" and req.scoring_channel != "policy":
             # The channel is the emitted kind of the contract this assembly declared.
@@ -2489,8 +2490,7 @@ class ComputeMixin:
             total_cost += tool_cost + ret.cost
             self._check_compute_return(req.handle, ret)
             tool_round += 1
-            if (ret.status == "ok" and ret.outputs.get("status") == "cannot"
-                    and isinstance(ret.outputs.get("reason"), str)):
+            if ret.status == "ok" and declines(ret.outputs):
                 ret = replace(ret, status="refused", children=(), tool_calls=())
             has_continuation = bool(ret.tool_calls or ret.children)
             if ret.children:
@@ -2697,7 +2697,7 @@ class ComputeMixin:
         """
         if action_id not in self.assemblies or not isinstance(ret.outputs, dict):
             return
-        if ret.status == "refused" and ret.outputs.get("status") == "cannot":
+        if ret.status == "refused" and declines(ret.outputs):
             # Paid work a seat declined (R3-F). Judge and meta commissions are not
             # covered by defer or the cadence floor — they are somebody else's
             # request arriving — so the only way to decline one is to answer
@@ -2705,7 +2705,7 @@ class ComputeMixin:
             # the population can read, not a malformed return.
             self.ledger.append({"kind": "commission.declined", "assembly_id": action_id,
                                 "handle": handle,
-                                "reason": str(ret.outputs.get("reason"))[:200],
+                                "reason": str(declined_reason(ret))[:200],
                                 "ts": self.clock.now_ns})
         if self.assemblies[action_id].spec.model_id == "program":
             # R3-F: a program has no model to read an inbox, so what it produced

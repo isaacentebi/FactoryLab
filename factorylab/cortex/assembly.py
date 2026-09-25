@@ -700,6 +700,23 @@ def validate_schema(value: Any, schema: dict, *, partial: bool = False) -> None:
             validate_schema(item, schema.get("items", {}))
 
 
+def declines(outputs: Any) -> bool:
+    """Whether a reply is the refusal form: its reserved ``status`` reads ``cannot``.
+
+    The one definition of a decline; every site that recognises one calls this.
+    Guarantees, whatever else the reply carries: ``status`` is the refusal form's
+    field in the universal envelope (``reserved_return_fields``), so its value
+    decides, and case or surrounding space does not turn a decline into an
+    instruction. ``reason`` never decides: a decline without one is a decline
+    (``declined_reason`` names it for the seat), and the refusal form the wire
+    publishes requires ``status`` alone (``wire_schema``), so the published
+    contract is the enforced one (§II.b). A ``reason`` that is not a string fails
+    the envelope, and that reply is malformed like any other.
+    """
+    return (isinstance(outputs, dict)
+            and str(outputs.get("status", "")).strip().lower() == "cannot")
+
+
 def reserved_return_fields(*, max_children: int | None = None,
                            max_tool_calls: int | None = None) -> dict:
     """Publish the universal envelope: the reserved names and types every return may carry.
@@ -966,6 +983,10 @@ def validate_return_sections(parsed: dict, schema: dict, validator=None, req=Non
     if ("rationale" in required and "rationale" not in parsed
             and isinstance(parsed.get("reason"), str) and parsed["reason"].strip()):
         parsed["rationale"] = parsed["reason"]
+    # A decline is read by ``declines`` alone, so its status is read in the published
+    # spelling: a contract's ``status`` enum then admits it and every later check agrees.
+    if declines(parsed):
+        parsed["status"] = "cannot"
     dropped: list[dict[str, Any]] = [] if rejected is None else rejected
     origin: dict[str, list[int]] = {}
 
@@ -1055,7 +1076,7 @@ def validate_return_sections(parsed: dict, schema: dict, validator=None, req=Non
     # keeps its declared event body atomic rather than laundering it as a draft.
     continuation = bool(parsed.get("tool_calls") or parsed.get("requests"))
     status_shape = declared.get("status") if isinstance(declared, dict) else None
-    if (continuation and "status" in parsed and parsed["status"] != "cannot"
+    if (continuation and "status" in parsed and not declines(parsed)
             and isinstance(status_shape, dict) and "enum" in status_shape
             and parsed["status"] not in status_shape["enum"]):
         # "pending" beside tool calls is a draft of an answer not yet given.
@@ -1197,7 +1218,7 @@ def _validate_return(parsed: dict, schema: dict, kind: str | None = None) -> Non
         positive_wire_decimal(parsed["size"])
     # Tool/child requests may precede the final answer, but fields already supplied are typed.
     continuation = bool(parsed.get("tool_calls") or parsed.get("requests"))
-    cannot = parsed.get("status") == "cannot" and isinstance(parsed.get("reason"), str)
+    cannot = declines(parsed)
     validate_schema(parsed, schema, partial=continuation or cannot)
     for child in parsed.get("requests", []):
         _check_child(child)
@@ -1211,7 +1232,8 @@ def wire_schema(schema: Any, emits: Any = None, *, policy: bool = False) -> dict
 
     Guarantees, for the answer forms ``_validate_return`` distinguishes (the final
     answer, a continuation through a non-empty ``tool_calls`` or ``requests``, and
-    the refusal ``status: "cannot"`` with a string ``reason``):
+    the refusal, ``declines``: ``status: "cannot"``, with an optional string
+    ``reason``):
 
     - each form is the intersection of what the kernel checks a reply against: the
       universal envelope (``reserved_return_fields``), the fields the answer's kind
@@ -1237,9 +1259,10 @@ def wire_schema(schema: Any, emits: Any = None, *, policy: bool = False) -> dict
     still fail it there: the answer-order rules of the producer kinds, a child
     request's semantic checks (``_check_child``), and the runtime's own validator.
     The kernel also accepts a few habits the wire does not produce: a null optional
-    field, ``reason`` read as a missing ``rationale``, and an invalid optional
-    section it drops. The kernel's validation stays the authority over what a reply
-    means; this is its transport. ``schema`` is never mutated.
+    field, ``reason`` read as a missing ``rationale``, a decline's ``status`` in
+    any case (``declines``), and an invalid optional section it drops.
+    The kernel's validation stays the authority over what a reply means; this is
+    its transport. ``schema`` is never mutated.
     """
     # Chapter II §II.b: physics is enforced, not announced. The I/O contract is
     # physics, so it is handed to the decoder that samples the reply, not only
@@ -1299,7 +1322,7 @@ def wire_schema(schema: Any, emits: Any = None, *, policy: bool = False) -> dict
             continue  # the contract's own status or reason cannot say it
         refusal = _partial(merged)
         refusal["properties"] = {**properties, "status": status, "reason": reason}
-        refusal["required"] = ["status", "reason"]
+        refusal["required"] = ["status"]  # a reason is optional (``declines``)
         forms.append(refusal)
     if not forms:
         return None
