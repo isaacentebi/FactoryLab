@@ -616,6 +616,9 @@ class BootstrapMixin:
         # Decision handle -> its settled score before the card penalty, until the router
         # that drew it learns it (wave 16, D4: the router's observed mean raw score).
         self.raw_scores: dict[str, float] = {}
+        # Decision handle -> the card penalty its priced settlement bore, read with its
+        # raw score by every learner (wave 16, R10-g).
+        self.round_penalties: dict[str, float] = {}
         # Decision handle -> the settlement its penalty waits for its origin window's
         # close to price (wave 16, D5; ruling R-I, Q9).
         self.deferred_settlements: dict[str, dict] = {}
@@ -692,9 +695,6 @@ class BootstrapMixin:
         # W4: registering decision -> {"until": tick, "tools": [...], "scores": [...]},
         # held for its tool-use window (``CompositionMixin._hold_for_tool_use``).
         self.tool_holds: dict[str, dict[str, Any]] = {}
-        # A priced settlement's raw score while the kernel settles it (never between
-        # events): what the settlement hook credits composition with.
-        self.raw_scores: dict[str, float] = {}
         # C10 routing evidence: each seat's last rendered ceiling and the world size then.
         self.seat_ceilings: dict[str, dict[str, int]] = {}
         self.entitlement_bridges: dict[str, int] = {}  # handle -> pool-backed cover, one call

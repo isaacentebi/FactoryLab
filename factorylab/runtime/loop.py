@@ -236,16 +236,15 @@ class Runtime(
         A decision that settles here carries its raw (pre-penalty) score to what it
         composed: the settlement hook every path shares (``ContractQueue.settle``,
         ``CompositionMixin._settled``) reads it from ``raw_scores``, so each decision
-        answers for its own cards and credit is never charged the requester's.
+        answers for its own cards and credit is never charged the requester's. The raw
+        score stays until the router and the seat's own learner have read it (wave 16,
+        D4 and R10-g; ``PricingMixin._prune_price_evidence``).
         """
         emitted = self.return_kinds.get(handle)
         if emitted and emitted not in BUILTIN_RETURNS:
             cards = measured_role(emitted)
         self.raw_scores[handle] = kwargs["score"]
-        try:
-            return super()._settle_priced(handle, cards=cards, **kwargs)
-        finally:
-            self.raw_scores.pop(handle, None)
+        return super()._settle_priced(handle, cards=cards, **kwargs)
 
     def _settle_exchange_effects(self, events, *, observe_positions=True) -> None:
         super()._settle_exchange_effects(events, observe_positions=observe_positions)

@@ -1570,9 +1570,15 @@ its scopes: each scope whose own value lies outside the region owns
 decision carries its scope's part times `max(min_blame_share, 1/n_scope)` over
 that scope's decisions that responded in the window; the term records the
 `owner` scope. The generic split applies only when no scope violates. Closed
-windows freeze the per-scope values as `closed_scopes`. The final score is
+windows freeze the per-scope values as `closed_scopes`. The published score is
 `clip(raw_score - penalty, 0, 1)`: the penalty is subtracted (the essay's
 Lagrangian), and the clip at zero only keeps a settled reward in the unit interval.
+What every learner learns has no clip (wave 16, ruling R10-g): the router that drew the
+decision and the seat's own learner learn `(raw_score + penalty_cap - penalty) / (1 +
+penalty_cap)`, one affine map for the world's life, with `penalty` 0 for a round that
+bore none, so a low-reward decision never escapes part of its penalty. A round that
+delivered nothing is learned on the same map with the router's observed mean as its
+score; a router's thrash charge is then taken on the router's own map (R10-c).
 A forecast-shaped decision whose accepted commitment came due avoidably unresolved
 (censored with no documented exclusion) still settles censored, never as a zero,
 but under `forecast-unresolved-priced-v1` carrying its penalty as the score; its

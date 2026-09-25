@@ -397,16 +397,40 @@ class PricingMixin:
         cards = [c for c in self.charter.cards if c.id in self.regions]
         return min((self._card_inner(c) for c in cards), default=1)
 
+    def _learned(self, raw: float, penalty: float) -> float:
+        """The value a learner learns for a round: ``(r + cap - p) / (1 + cap)``.
+
+        Wave 16, ruling R10-g (widening R10-c): every learner, router and assembly,
+        learns one affine map for the world's life, ``r`` the round's score before its
+        card penalty (or the router's observed mean, for a round that delivered
+        nothing) and ``p`` the penalty it bears (0 when none). No clip: a clip at 0
+        would let a low-reward round escape part of its penalty. With ``0 <= r <= 1``
+        and ``0 <= p <= penalty_cap`` the value lies in ``[0, 1]``.
+        """
+        cap = self.m.prices.penalty_cap
+        return (float(raw) + cap - float(penalty)) / (1.0 + cap)
+
+    def _round_learned(self, handle: str, score: float) -> float:
+        """What a settled round is learned as: its raw score and penalty when it was
+        priced (``raw_scores``, ``round_penalties``), else its score with no penalty."""
+        raw = self.raw_scores.get(handle)
+        if raw is None:
+            return self._learned(score, 0.0)
+        return self._learned(raw, self.round_penalties.get(handle, 0.0))
+
     def _prune_price_evidence(self) -> None:
         """Completed decisions release old attribution windows after their totals are frozen."""
         for handle in tuple(self.raw_scores):
-            # A raw score waits for the router that drew its decision to read it; a
-            # decision no router drew, or one its router has read, keeps nothing.
+            # A raw score waits for the router that drew its decision, and the seat's own
+            # learner, to read it; a decision no router drew, or one both have read,
+            # keeps nothing.
             decision = self.queue.get(handle)
             if (decision.status not in (SettleStatus.PENDING, SettleStatus.TIMED_OUT)
+                    and handle not in self.assembly_rounds
                     and self.queue.delivered_count(decision.actor)
                     <= self.delivered_seen.get(decision.actor, 0)):
                 del self.raw_scores[handle]
+                self.round_penalties.pop(handle, None)
         for handle in tuple(self.thrash_charges):
             # A charge is spent when its round trains; a round that closed and whose
             # router has read every return it was owed will never train.
@@ -1280,8 +1304,10 @@ class PricingMixin:
         penalty = self._penalty_for(cards, handle)
         if not unresolved:
             # The score before its card penalty: what the router's observed mean is made
-            # of (``RouterState.neutral``; wave 16, D4), taken when the router learns it.
+            # of (``RouterState.neutral``; wave 16, D4), taken when the router learns it,
+            # and with its penalty what every learner learns (``_learned``; R10-g).
             self.raw_scores[handle] = float(score)
+            self.round_penalties[handle] = float(penalty)
         if unresolved:
             status, effective = SettleStatus.CENSORED, None
             definition_version, settled_score = UNRESOLVED_PRICED, penalty

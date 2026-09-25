@@ -2233,7 +2233,7 @@ class FeedbackMixin:
             if ((first is None or first.status is not SettleStatus.SETTLED)
                     and self._abstention_awaits_close(handle)):
                 continue  # priced as its router prices it, at its window's close
-            reward = (min(1.0, max(0.0, float(first.score)))
+            reward = (self._round_learned(handle, float(first.score))
                       if first is not None and first.status is SettleStatus.SETTLED
                       else None)
             self._close_assembly_round(handle, reward, priced=first)
@@ -2386,7 +2386,8 @@ class FeedbackMixin:
                 "definition": lr.definition_version}
             return
         if settled:
-            reward = min(1.0, max(0.0, float(lr.score)))
+            # Its raw score less its penalty on the one affine map (ruling R10-g).
+            reward = self._round_learned(lr.handle, float(lr.score))
         else:
             # A decline, a censoring or a cutoff delivered nothing measurable: credited
             # as an abstention, the router's observed mean raw score less the card
@@ -2529,20 +2530,22 @@ class FeedbackMixin:
         An abstention drawn before its window recorded it is credited unpriced. A
         declined, censored or timed-out decision is priced the same way, on the role
         its seat was measured in when it answered (wave 16, D4: NOOP, decline and
-        censored are one imputation). Returns (reward, penalty).
+        censored are one imputation). Returns (learned reward, penalty), the reward
+        on the one affine map every learner learns (``_learned``; ruling R10-g).
         """
         origin = self.price_origins.get(handle, {}).get("origin")
         window = self.price_windows.get(origin)
         sample = window.decisions.get(handle) if window is not None else None
         if sample is None:
-            return neutral, 0.0
+            return self._learned(neutral, 0.0), 0.0
         roles = sample.get("menu_roles") or {sample["role"]: 1.0}
         # Each role's price is measured with the abstention scoped in that role (the
         # Wave 2 review, item 8b): a less-weighted role's floor and attribution are
         # that role's, never the role the window filed the abstention under.
         penalty = sum(weight * self._penalty_for(role, handle, as_role=role)
                       for role, weight in sorted(roles.items()))
-        return min(1.0, max(0.0, neutral - penalty)), penalty
+        # Learned on the one affine map every learner uses (ruling R10-g): no clip.
+        return self._learned(neutral, penalty), penalty
 
     def _abstention_awaits_close(self, handle: str) -> bool:
         """Whether a round that delivered nothing waits for its origin window to close

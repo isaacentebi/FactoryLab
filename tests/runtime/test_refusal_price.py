@@ -39,6 +39,12 @@ from factorylab.world.scripted import (
 )
 from tests.runtime.test_attributable_blame import _card, _commitments
 
+
+def _learned(rt, r, p):
+    """Ruling R10-g: every learner learns (r + cap - p) / (1 + cap), no clip."""
+    cap = rt.m.prices.penalty_cap
+    return (r + cap - p) / (1 + cap)
+
 REASON = "no concrete task was given"
 
 
@@ -133,12 +139,12 @@ def test_a_refusal_no_judge_graded_is_priced_as_an_abstention_never_credited_fre
     rt._deliver_returns()
     (priced,) = _rows(rt, "router.decline_priced", handle=refused)
     assert priced["penalty"] > 0
-    assert priced["reward"] == pytest.approx(state.neutral() - priced["penalty"])
+    assert priced["reward"] == pytest.approx(_learned(rt, state.neutral(), priced["penalty"]))
     # Priced: never credited above a NOOP drawn in the same window, and below the
     # unpriced neutral a censored refusal used to be credited.
     noop_reward, _noop_penalty = rt._priced_abstention(noop, state.neutral())
     assert priced["reward"] <= noop_reward
-    assert priced["reward"] < state.neutral()
+    assert priced["reward"] < _learned(rt, state.neutral(), 0.0)
 
 
 def test_a_refusal_a_judge_graded_settles_on_its_verdict_like_any_return(monkeypatch):
@@ -220,7 +226,7 @@ def test_a_requested_childs_refusal_is_priced_as_an_abstention_on_its_request_ro
     rt._deliver_returns()
     (priced,) = _rows(rt, "router.decline_priced", handle=handle)
     assert priced["router"] == state.learner.id and priced["penalty"] > 0
-    assert priced["reward"] == pytest.approx(state.neutral() - priced["penalty"])
+    assert priced["reward"] == pytest.approx(_learned(rt, state.neutral(), priced["penalty"]))
     noop_reward, _noop_penalty = rt._priced_abstention(noop, state.neutral())
     assert priced["reward"] <= noop_reward
     ((learned, fb),) = updates
@@ -274,7 +280,7 @@ def test_an_ungraded_refusal_on_any_producing_channel_settles_declined_at_the_pr
     rt._deliver_returns()
     (priced,) = _rows(rt, "router.decline_priced", handle=handle)
     assert priced["penalty"] > 0
-    assert priced["reward"] == pytest.approx(state.neutral() - priced["penalty"])
+    assert priced["reward"] == pytest.approx(_learned(rt, state.neutral(), priced["penalty"]))
     _noop_state, noop = _drawn(rt, NOOP, channel)
     rt._contribution(noop, rt.window.decisions[handle]["role"])
     noop_reward, _noop_penalty = rt._priced_abstention(noop, state.neutral())
@@ -311,7 +317,7 @@ def test_a_refusal_cut_off_before_its_settlement_check_still_settles_declined(
     rt._deliver_returns()
     (priced,) = _rows(rt, "router.decline_priced", handle=handle)
     assert priced["penalty"] > 0
-    assert priced["reward"] == pytest.approx(state.neutral() - priced["penalty"])
+    assert priced["reward"] == pytest.approx(_learned(rt, state.neutral(), priced["penalty"]))
     # The settlement checks that come later find it closed and change nothing.
     rt.ticks_consumed += rt.ev.verdict_timeout_ticks + 1
     rt._settle_exposures()
@@ -373,7 +379,7 @@ def test_a_polymorphic_decline_settles_on_the_kind_it_selected_at_its_cutoff(mon
     rt._deliver_returns()
     (priced,) = _rows(rt, "router.decline_priced", handle=handle)
     assert priced["penalty"] > 0
-    assert priced["reward"] == pytest.approx(state.neutral() - priced["penalty"])
+    assert priced["reward"] == pytest.approx(_learned(rt, state.neutral(), priced["penalty"]))
 
 
 # --- a judge, a meta and a counter-judge decline their commissions ---------------------
@@ -486,8 +492,8 @@ def test_a_judging_seat_that_declines_is_priced_as_an_abstention_never_censored_
     rt._deliver_returns()
     (priced,) = _rows(rt, "router.decline_priced", handle=handle)
     assert priced["penalty"] > 0
-    assert priced["reward"] == pytest.approx(state.neutral() - priced["penalty"])
-    assert priced["reward"] < state.neutral()
+    assert priced["reward"] == pytest.approx(_learned(rt, state.neutral(), priced["penalty"]))
+    assert priced["reward"] < _learned(rt, state.neutral(), 0.0)
     # Never above a NOOP the same router drew in the same window.
     _noop_state, noop = _draw(rt, NOOP, channel)
     rt._contribution(noop, rt.window.decisions[handle]["role"])
@@ -571,7 +577,7 @@ def test_in_a_world_every_unjudged_refusal_and_decline_settles_at_the_abstention
     priced = _rows(rt, "router.decline_priced")
     assert priced
     for row in priced:
-        assert row["reward"] == pytest.approx(max(0.0, row["neutral"] - row["penalty"]))
+        assert row["reward"] == pytest.approx(_learned(rt, row["neutral"], row["penalty"]))
     # A seat that only refuses, once past its trial, bears its penalty share (ruling
     # R10-b: its priced declines are a reward trail, and a seed's trial ends at its
     # patience); inside the niche nothing is charged.

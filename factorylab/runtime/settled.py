@@ -60,7 +60,8 @@ LIVE_BOOKS = (
     # (D2, R10-j: judged or not); a settlement whose penalty waits for its origin
     # window's close (D5, R-I); a raw score until the router that drew it learns it
     # (D4); the venue's own marks and funding prints a horizon is priced from.
-    "reference_mids", "deferred_settlements", "raw_scores", "venue_marks",
+    "reference_mids", "deferred_settlements", "raw_scores", "round_penalties",
+    "venue_marks",
     "funding_prints",
 )
 # The venue books are live only where they are not terminal (``_live_venue_books``).

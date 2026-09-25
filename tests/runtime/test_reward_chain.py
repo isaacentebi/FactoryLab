@@ -32,6 +32,12 @@ from tests.runtime.test_loop import (
 )
 
 
+def _learned(rt, r, p):
+    """Ruling R10-g: every learner learns (r + cap - p) / (1 + cap), no clip."""
+    cap = rt.m.prices.penalty_cap
+    return (r + cap - p) / (1 + cap)
+
+
 class Population(ScriptedProvider):
     """Producers hold (naming a declined trade when told to); judges give queued verdicts."""
 
@@ -724,7 +730,7 @@ def test_a_declined_commission_is_priced_like_an_abstention_not_its_own_mean(mon
     rt._deliver_returns()
     (priced,) = _rows(rt, "router.decline_priced", handle=handle)
     assert priced["penalty"] > 0
-    assert priced["reward"] == pytest.approx(state.neutral() - priced["penalty"])
+    assert priced["reward"] == pytest.approx(_learned(rt, state.neutral(), priced["penalty"]))
     assert priced["reward"] < 0.9
 
 

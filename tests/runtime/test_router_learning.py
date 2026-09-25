@@ -386,7 +386,8 @@ def test_a_pending_core_round_survives_replacement_and_resume_into_the_successor
     assert live.learner.inner.inner.state() != live_before
     assert retired.learner.inner.inner.state() == retired_before
     assert not retired.learner.inner.state()["snapshots"]
-    assert live.observed.state()[chosen] == [0.9, 1]
+    cap = restored.m.prices.penalty_cap  # the one affine map (ruling R10-g)
+    assert live.observed.state()[chosen] == [pytest.approx((0.9 + cap) / (1 + cap)), 1]
     assert old.learner.id not in restored.retired_routers  # drained once learned
 
 

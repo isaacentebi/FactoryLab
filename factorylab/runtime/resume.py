@@ -703,7 +703,7 @@ _RUNTIME_FIELDS = (
     "fee_schedule", "venue_marks", "funding_prints",
     # Wave 16 (D4): settled raw scores awaiting their router. An older checkpoint has
     # none: its routers learn effective scores until the next settlement.
-    "raw_scores",
+    "raw_scores", "round_penalties",
     # Wave 16 (D5): settlements waiting for their origin window's close. An older
     # checkpoint has none: nothing waits.
     "deferred_settlements",
