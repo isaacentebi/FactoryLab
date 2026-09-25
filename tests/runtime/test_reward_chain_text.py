@@ -70,7 +70,7 @@ def test_the_judge_is_told_what_to_give_and_the_decline_is_a_form_of_its_own(mon
     schema = answer["properties"]
     assert "status" not in schema and "payoff" not in schema
     assert set(answer["required"]) == {"verdict", "rationale"}
-    assert decline["required"] == ["status", "reason"]
+    assert decline["required"] == ["status"]  # a reason is optional (``declines``)
     assert decline["properties"]["status"] == {"enum": ["cannot"]}
     assert "fidelity_objection" not in schema and "realized_consequence" not in schema
 

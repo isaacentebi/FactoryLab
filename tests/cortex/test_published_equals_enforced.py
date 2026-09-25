@@ -23,7 +23,9 @@ from factorylab.cortex.assembly import (
     _check_child,
     _schema_definition,
     _validate_return,
+    declines,
     judging_contract,
+    reserved_return_fields,
     validate_proposal,
     validate_return_sections,
     validate_schema,
@@ -93,19 +95,25 @@ def test_a_judgement_without_its_value_fails_the_published_schema_the_wire_and_t
 
 def test_the_decline_is_its_own_form_and_classifies_alike_everywhere():
     schema, wire = contract("Verdict"), wire_schema(contract("Verdict"), ("Verdict",))
+    envelope = reserved_return_fields()
     answer, decline = schema["anyOf"]
     assert decline == DECLINE_FORM and "status" not in answer["properties"]
     assert set(answer["required"]) == {"verdict", "rationale"}
-    for reply in ({"status": "cannot", "reason": "out of scope"},
+    for reply in ({"status": "cannot", "reason": "out of scope"}, {"status": "cannot"},
                   {"verdict": 0.6, "status": "cannot", "reason": "r"}):
-        # A reply carrying status "cannot" and a string reason is a decline, as the
-        # decline form's own description states, on all three.
+        # A reply whose status is "cannot" is a decline (``declines``), a reason or
+        # not, as the decline form's own description states, on all three.
+        assert declines(reply)
         assert admitted(reply, schema) and admitted(reply, wire)
         assert kernel(reply, schema, "Verdict")[0] == "decline"
         assert admitted(reply, decline)
-    # status is the refusal flag and nothing else: the kernel's own "ok" is not an answer.
+    # status is the refusal flag and nothing else: the kernel's own "ok" is not an
+    # answer, and a reason that is not a string is no decline.
     for reply in ({"verdict": 0.6, "rationale": "r", "status": "ok"},
-                  {"status": "cannot"}):
+                  {"status": "cannot", "reason": 3}):
+        # The published envelope every return may carry says so (world.read
+        # reserved_return_fields), and so do the wire and the kernel.
+        assert not admitted(reply, {"type": "object", "properties": envelope})
         assert not admitted(reply, wire)
         assert kernel(reply, schema, "Verdict")[0] == "malformed"
 
@@ -125,7 +133,7 @@ def test_the_decline_is_published_once_in_a_judge_request(monkeypatch):
     assert "decline" not in sections["request"] and "cannot" not in sections["request"]
     assert "you_may" not in req.inputs["commission"]
     assert OUTCOME_CONTRACT_DECLINE not in sections["outcome_contract"]
-    assert req.outcome_schema["anyOf"][1]["required"] == ["status", "reason"]
+    assert req.outcome_schema["anyOf"][1]["required"] == ["status"]
     # A producer's schema publishes no decline form, so its OUTCOME CONTRACT states it.
     producer = Request("h", "d", {}, {}, {"type": "object"}, 1, 1, None, "c", "x", "h")
     assert OUTCOME_CONTRACT_DECLINE in dict(producer.sections())["outcome_contract"]

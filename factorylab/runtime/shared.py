@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from factorylab.cortex.assembly import declines
 from factorylab.cortex.registration import REWARD_SHAPES, reward_contracts
 
 NOOP = "NOOP"
@@ -199,14 +200,15 @@ def declined_reason(ret: Any) -> str | None:
     """The reason a return declined its commission, or None when it did not decline.
 
     Guarantees a decline is recognised in the form it actually arrives in: ``_invoke``
-    rewrites an answer of ``{"status": "cannot", "reason": <str>}`` to status
+    rewrites an answer whose ``status`` reads ``cannot`` (``declines``) to status
     ``refused`` (``ComputeMixin._invoke``), and a return handed in unrewritten keeps
-    status ``ok``. A provider's own refusal names no ``cannot`` and is not a decline:
-    it is a form failure, censored like any unusable judgement.
+    status ``ok``. A provider's own refusal names
+    no ``cannot`` and is not a decline: it is a form failure, censored like any
+    unusable judgement.
     """
     if ret.status not in ("ok", "refused") or not isinstance(ret.outputs, dict):
         return None
-    if str(ret.outputs.get("status", "")).strip().lower() != "cannot":
+    if not declines(ret.outputs):
         return None
     return str(ret.outputs.get("reason", ""))[:500] or "the seat declined this commission"
 
