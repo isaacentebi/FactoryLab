@@ -571,7 +571,15 @@ class PricingMixin:
         w = replace(self.window, forecast_skills=skills)
         history, series = self._early_warning_open(w)
         book = self.observations
-        named = {normalise(c.observation) for c in self.charter.cards}
+        # An observation is in use while a card names it: the charter's, a card a
+        # pending motion would add or put in place, or a challenge's replacement under
+        # trial. A motion's promise is framed on its card's observation at every ballot
+        # (``_promise_frame``), so one on the agenda keeps it alive.
+        agenda = [card for amendment in self.charter_book.pending()
+                  for card in (*getattr(amendment, "add", ()),
+                               *getattr(amendment, "replace", ()))]
+        named = {normalise(c.observation)
+                 for c in (*self.charter.cards, *agenda, *self._challenge_cards().values())}
         now, patience = self.ticks_consumed, self._patience()
         for oid, entry in self.registered_observations.items():
             if "trial_window" in entry and "trial_tick" not in entry:
