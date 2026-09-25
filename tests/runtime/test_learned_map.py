@@ -15,7 +15,8 @@ from tests.runtime.test_attributable_blame import _commitments
 from tests.runtime.test_refusal_price import _priced_runtime, _refuse
 
 
-def _assembly_round(monkeypatch, price: float, raw: float = 0.1, censored: int = 4):
+def _assembly_round(monkeypatch, price: float, raw: float = 0.1, censored: int = 4,
+                    router_first: bool = False):
     """One settled round of the seat's own learner: raw score ``raw``, the card priced
     from ``price`` at its window's close, violated while ``censored`` > 0."""
     rt = _priced_runtime(monkeypatch)
@@ -32,6 +33,8 @@ def _assembly_round(monkeypatch, price: float, raw: float = 0.1, censored: int =
                       sampling_ref=None, cards="producer")
     penalty = next(row["penalty"] for row in rt.ledger._recovery_items()
                    if row.get("kind") == "price.penalty" and row["handle"] == handle)
+    if router_first:
+        rt._deliver_returns()  # the router reads the round before the seat's learner
     rt._close_assembly_rounds()
     ((_h, fb),) = updates
     return rt, penalty, fb.reward, handle
@@ -70,3 +73,10 @@ def test_the_router_s_observed_mean_is_made_of_raw_scores(monkeypatch):
     assert rt.queue.history(handle)[-1].score < 0.7  # penalised as published
     rt._deliver_returns()
     assert state.definitions["verdict-v1"] == [1, pytest.approx(0.7)]
+
+
+def test_the_seat_s_learner_reads_the_penalty_after_the_router_has(monkeypatch):
+    """The router's read never consumes what the seat's own learner still needs."""
+    rt, penalty, learned, _ = _assembly_round(monkeypatch, price=0.0, router_first=True)
+    cap = rt.m.prices.penalty_cap
+    assert penalty > 0.1 and learned == pytest.approx((0.1 + cap - penalty) / (1 + cap))

@@ -420,16 +420,16 @@ class PricingMixin:
 
     def _prune_price_evidence(self) -> None:
         """Completed decisions release old attribution windows after their totals are frozen."""
-        for handle in tuple(self.raw_scores):
-            # A raw score waits for the router that drew its decision, and the seat's own
-            # learner, to read it; a decision no router drew, or one both have read,
-            # keeps nothing.
+        for handle in tuple({**self.raw_scores, **self.round_penalties}):
+            # A raw score and its penalty wait for the router that drew the decision, and
+            # the seat's own learner, to read them; a decision no router drew, or one
+            # both have read, keeps nothing.
             decision = self.queue.get(handle)
             if (decision.status not in (SettleStatus.PENDING, SettleStatus.TIMED_OUT)
                     and handle not in self.assembly_rounds
                     and self.queue.delivered_count(decision.actor)
                     <= self.delivered_seen.get(decision.actor, 0)):
-                del self.raw_scores[handle]
+                self.raw_scores.pop(handle, None)
                 self.round_penalties.pop(handle, None)
         for handle in tuple(self.thrash_charges):
             # A charge is spent when its round trains; a round that closed and whose
@@ -1241,11 +1241,13 @@ class PricingMixin:
         at the close, so whether it bites is not known before it. A niche decision
         bears nothing and waits for nothing.
         """
-        if handle is None or self._is_niche(handle):
+        if handle is None:
             return False
         origins = self.price_origins.get(handle, {})
         window = self.price_windows.get(origins.get("origin"))
         if window is None or window.closed_values is not None:
+            return False
+        if self._is_niche(handle, window):  # the origin window's record (Sol F3)
             return False
         return any(card.answers_for in (cards, "all") and card.id in self.regions
                    and observation.id not in _EXACT_SHARES and w is window

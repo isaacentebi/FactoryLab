@@ -45,6 +45,7 @@ def _learned(rt, r, p):
     cap = rt.m.prices.penalty_cap
     return (r + cap - p) / (1 + cap)
 
+
 REASON = "no concrete task was given"
 
 
@@ -604,7 +605,7 @@ def test_in_a_world_every_unjudged_refusal_and_decline_settles_at_the_abstention
     owed = {h for h in declined if h in rt.noop_credits}
     assert declined and {row["handle"] for row in judged} == declined - owed
     assert all(not rt._is_niche(h) for h in owed)
-    assert all(row["reward"] <= row["neutral"] for row in judged)
+    assert all(row["reward"] <= _learned(rt, row["neutral"], 0.0) for row in judged)
     assert all(row["penalty"] == 0 for row in judged if row["handle"] in niche)
 
 

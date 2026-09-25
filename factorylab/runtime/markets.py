@@ -243,12 +243,12 @@ class MarketsMixin:
     def _margin_horizon(self) -> int:
         """Closed windows until a window's decisions have their world-measured consequences.
 
-        A decision's consequence is fixed within its consequence patience plus the
-        verdict window at the latest (``_patience_ticks`` + ``verdict_timeout_ticks``;
-        wave 16, D2), converted to closed windows at the price loop's current period
-        in ticks, and never sooner than ``timing.min_ratio`` windows.
+        A decision's consequence is fixed within its consequence patience at the
+        latest (``_patience_ticks``: the horizon plus the verdict window, counted once;
+        wave 16, D2 and ruling R10-k), converted to closed windows at the price loop's
+        current period in ticks, and never sooner than ``timing.min_ratio`` windows.
         """
-        ticks = self._patience_ticks() + self.ev.verdict_timeout_ticks
+        ticks = self._patience_ticks()
         window = self.clockwork.period("price", default=self.m.timing.min_ratio)
         return max(int(self.m.timing.min_ratio), -(-ticks // window))
 

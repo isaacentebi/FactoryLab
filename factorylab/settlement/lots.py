@@ -139,6 +139,28 @@ RELEASED_COUNTS = ("accounts", "paid_off", "not_paid_off", "marked", "censored_o
 #: What a fill naming a released account's order is: a late realization of its owner
 #: (``LotTable.fill``), booked and never graded.
 RELEASED_ORDER = "the order's return was settled and released"
+#: Why a return's outcome is censored at its horizon when the venue never stated the
+#: taker rate its open lots exit at (wave 16, ruling R10-i): uninformative, not pending.
+FEE_UNKNOWN = "fee_unknown"
+
+
+def _exit_rates_for(exit_rates, lots, account, now_ns, horizon_ns) -> dict[str, str | None]:
+    """The exit rate of each market ``lots`` hold, at the return's horizon.
+
+    A mapping is read as stated (a market it does not list carries no fee: absent
+    here). A callable is asked for the rate at the account's opening plus
+    ``horizon_ns`` on the venue's clock, or at ``now_ns`` when either is unknown.
+    """
+    if exit_rates is None:
+        return {}
+    markets = {lot.market for lot in lots}
+    if callable(exit_rates):
+        at = (account.opened_at_ns + horizon_ns
+              if account.opened_at_ns is not None and horizon_ns is not None else now_ns)
+        if at is None:
+            return {}
+        return {market: exit_rates(market, at) for market in markets}
+    return {market: exit_rates[market] for market in markets if market in exit_rates}
 
 
 @dataclass(frozen=True)
@@ -547,12 +569,14 @@ class LotTable:
         result credited to it, as opener or closer, exceeds its own cost; a no-fill
         return cannot inherit anyone's P&L.
 
-        ``exit_rates`` (market -> the venue's taker rate, a decimal fraction of
-        notional) marks every open lot of a listed market to its liquidation value,
-        the mid less ``mid * size * rate`` (wave 16, D7); an open lot of a listed
-        market whose rate is None cannot be marked, and its return waits, as it
-        waits for a missing mid. A market the mapping does not list carries no exit
-        fee. The deduction is an estimate at the mark, never booked as money.
+        ``exit_rates`` marks every open lot to its liquidation value, the mid less
+        ``mid * size * rate`` (wave 16, D7): either a mapping (market -> the venue's
+        taker rate, a decimal fraction of notional; a market it does not list carries
+        no exit fee) or a callable ``(market, at_ns) -> rate``, asked for the rate at
+        the return's horizon (its opening plus ``horizon_ns``; ruling R10-i). The mid
+        is fixed when the horizon has passed whatever the rate read: a lot whose rate
+        is unknown (None) fixes the outcome censored, ``FEE_UNKNOWN``, never pending.
+        The deduction is an estimate at the mark, never booked as money.
 
         ``censored`` names returns that also sent an order nobody could observe
         (handle -> documented reason). Such a return resolves on its own schedule
@@ -580,13 +604,13 @@ class LotTable:
                 continue
             net = account.realized_micro
             exit_fee = Fraction(0)
+            unknown = False
             if lots:
                 if any(lot.coin not in mids for lot in lots):
                     continue
-                if exit_rates is not None and any(
-                        lot.market in exit_rates and exit_rates[lot.market] is None
-                        for lot in lots):
-                    continue
+                rates = _exit_rates_for(exit_rates, lots, account, now_ns, horizon_ns)
+                if any(rate is None for rate in rates.values()):
+                    unknown = True
                 for lot in lots:
                     mid = exact(mids[lot.coin])
                     if mid <= 0:
@@ -594,14 +618,14 @@ class LotTable:
                     net += (mid - lot.px) * lot.size * (
                         1 if lot.is_buy else -1
                     ) * 1_000_000 - lot.charges_micro
-                    if exit_rates is not None and lot.market in exit_rates:
-                        exit_fee += mid * lot.size * exact(exit_rates[lot.market]) * 1_000_000
+                    if rates.get(lot.market) is not None:
+                        exit_fee += mid * lot.size * exact(rates[lot.market]) * 1_000_000
                 net -= exit_fee
             micro = net.numerator // net.denominator
             # Everything the return cost: its own compute and tools.
             cost = account.cost_micro
             acted = account.opened_lots > 0 or account.closes > 0 or account.earnings > 0
-            reason = (censored or {}).get(account.handle)
+            reason = (censored or {}).get(account.handle) or (FEE_UNKNOWN if unknown else None)
             outcome = Payoff(
                 account.handle,
                 0 if reason else int(acted and micro + account.earned_micro > cost),

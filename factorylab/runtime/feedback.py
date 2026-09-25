@@ -1427,9 +1427,29 @@ class FeedbackMixin:
         """
         self.venue_marks[coin] = [int(ts_ns), str(mid)]
         for frozen in self.reference_mids.values():
-            if (frozen.get("coin") == coin and frozen.get("res") is None
-                    and frozen.get("due_ns") is not None and ts_ns >= frozen["due_ns"]):
+            if frozen.get("coin") != coin:
+                continue
+            if frozen.get("open_ns") is None and ts_ns >= frozen["ns"]:
+                # Ruling R10-h: a trade named before its coin's first venue mid opens at
+                # that coin's first venue mid at or after the decision, priced from it.
+                self._open_named_trade(frozen, int(ts_ns), str(mid))
+                continue
+            if (frozen.get("res") is None and frozen.get("due_ns") is not None
+                    and ts_ns >= frozen["due_ns"]):
                 frozen["res"] = [int(ts_ns), str(mid)]
+
+    def _open_named_trade(self, frozen: dict, ts_ns: int, mid: str) -> None:
+        """Open a frozen named trade at a venue mid of its own coin: ``t_open`` is that
+        mid's timestamp, the horizon counts from it and the trade is priced from it."""
+        coin = frozen["coin"]
+        frozen["open_ns"] = ts_ns
+        frozen["due_ns"] = ts_ns + self._horizon_ns()
+        frozen["mids"] = [[c, m] for c, m in frozen["mids"] if c != coin] + [[coin, mid]]
+        funding = frozen.get("funding")
+        if funding is not None:
+            # The funding times already assigned since the decision stay assigned (the
+            # cursor keeps counting); only those after t_open are the trade's.
+            funding["rates"] = [row for row in funding["rates"] if row[0] > ts_ns]
 
     def _observe_funding(self, coin: str, ts_ns: int, rate: str) -> None:
         """One venue funding-rate print: the rate in force at each funding time it passes.
@@ -1477,9 +1497,11 @@ class FeedbackMixin:
         funding rates otherwise.
         """
         due, res = frozen.get("due_ns"), frozen.get("res")
-        lapsed = (due is None or self.clock.now_ns
-                  > frozen["open_ns"] + self._patience_ns())
-        if res is None:
+        # A trade waiting for its coin's first venue mid is aged from its decision
+        # (ruling R10-h): it lapses a patience after it, never on another event's clock.
+        opened = frozen["open_ns"] if frozen.get("open_ns") is not None else frozen["ns"]
+        lapsed = self.clock.now_ns > opened + self._patience_ns()
+        if res is None or due is None:
             return ("none" if lapsed else "open"), None
         rates = funding_due(frozen.get("funding"), frozen["open_ns"], res[0])
         if rates == FUNDING_PENDING:
@@ -1579,10 +1601,14 @@ class FeedbackMixin:
         kept = self._keep_outcome(self.world_outcomes, about, "measured",
                                   float(priced["score"]), definition,
                                   subject=priced["attempted" if attempted else "declined"])
-        if not self.settler.uninformative(self._verdict_key(about, definition)):
+        key = self._verdict_key(about, definition)
+        if not self.settler.uninformative(key):
             # Published on its own (R-H): consequence_paid_off_rate counts acting returns.
             self.window.non_acting_informative += 1
             self.window.non_acting_paid_off += int(priced["score"] == 1)
+        # The keyed prevalence learns every fixed non-acting outcome, judged or not
+        # (ruling R10-j); a verdict about it is scored against the rate before it.
+        self.settler.record_outcome(key=key, about_handle=about, outcome=float(priced["score"]))
         return kept
 
     def _keep_outcome(self, kept: dict, about: str, state: str, y: float | None,
@@ -1658,9 +1684,10 @@ class FeedbackMixin:
         named = attempted or declined
         coin = named["coin"]
         # The named coin's opening on the venue's clock: the timestamp of the mid it is
-        # priced from, and the horizon H after it (wave 16, D2).
+        # priced from, and the horizon H after it (wave 16, D2). With no venue mid of the
+        # coin yet it opens at the coin's first one at or after now (ruling R10-h).
         mark = self.venue_marks.get(coin)
-        open_ns = int(mark[0]) if mark is not None else self.clock.now_ns
+        open_ns = int(mark[0]) if mark is not None else None
         interval = (None if "/" in coin else
                     getattr(self.exchange, "funding_interval_ns", None)
                     or self.m.timing.world_repricing_ns)
@@ -1670,11 +1697,13 @@ class FeedbackMixin:
             "tick": self.ticks_consumed, "ns": self.clock.now_ns,
             # The venue's taker rate for the named coin's market, frozen ex ante (D1).
             "taker_rate": self._taker_rate(coin),
-            "open_ns": open_ns, "due_ns": open_ns + self._horizon_ns(), "res": None,
+            "open_ns": open_ns,
+            "due_ns": None if open_ns is None else open_ns + self._horizon_ns(), "res": None,
             # The venue's funding times the named side would have paid at (perps only):
             # the rate in force at each is read from the venue's own prints.
             "funding": (None if interval is None else
-                        {"interval": int(interval), "cursor": open_ns,
+                        {"interval": int(interval),
+                         "cursor": self.clock.now_ns if open_ns is None else open_ns,
                          "rate": latest[1] if latest is not None else None, "rates": []}),
             **({"attempted": attempted} if attempted else {})}
 
@@ -1834,6 +1863,10 @@ class FeedbackMixin:
             self._settle_evaluation(rec)
         # Past a patience nothing opens on these any more: a judge reads a return
         # within its verdict window, and a named trade is priced within its patience.
+        # Ruling R10-j: every named trade's outcome is fixed at its horizon, judged or
+        # not, before anything frozen for it is pruned.
+        for handle in list(self.reference_mids):
+            self._final_outcome(handle)
         horizon = self.clock.now_ns - self._patience_ns()
         for kept in (self.consequence_scores, self.world_outcomes, self.reference_mids,
                      self.verdict_views):
@@ -2436,8 +2469,10 @@ class FeedbackMixin:
             self.clockwork.record(f"router:{state.kind}", ticks)
         if settled:
             target.observed.record(prop.chosen, reward)
+            # Read, not consumed: the seat's own learner reads it too (R10-g); the
+            # price evidence is pruned once both have (``_prune_price_evidence``).
             target.record_round(lr.definition_version,
-                                self.raw_scores.pop(lr.handle, float(lr.score)))
+                                self.raw_scores.get(lr.handle, float(lr.score)))
 
     def _abstention_owed_or_credited(self, lr: LearningReturn) -> bool:
         """Whether this abstention is already owed, or was credited on an earlier return.

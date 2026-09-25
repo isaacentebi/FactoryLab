@@ -460,11 +460,10 @@ class ContractConsequences(ReturnConsequences):
         consequence horizon is counted on (wave 16, D2), never the factory's ticks."""
         return self.runtime.clock.now_ns
 
-    def _exit_rates(self) -> dict[str, str | None]:
-        """The venue's taker rate per market as last read (wave 16, D7): an open lot of
-        a market whose rate the venue did not state is not marked."""
-        schedule = self.runtime.fee_schedule or {}
-        return {market: schedule.get(market) for market in ("perp", "spot")}
+    def _exit_rates(self):
+        """The venue's taker rate per market at a horizon (wave 16, D7; ruling R10-i):
+        the most recent successfully read rate at or before it, None when none was."""
+        return self.runtime._rate_at
 
     def observe(self, kind, payload, event):
         if kind != "Fill" or payload.get("market") != "event":

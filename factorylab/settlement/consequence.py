@@ -4,7 +4,7 @@ from collections import Counter
 from dataclasses import asdict
 
 from factorylab.kernel.ledger import Ledger
-from factorylab.settlement.lots import RELEASED_ORDER, LotTable, Payoff
+from factorylab.settlement.lots import FEE_UNKNOWN, RELEASED_ORDER, LotTable, Payoff
 from factorylab.settlement.receipts import ExecutionReceipt, ReceiptBook
 from factorylab.settlement.vocabulary import _require_event_index
 
@@ -348,6 +348,12 @@ class ReturnConsequences:
         for before, after in zip(self.table.returns, table.returns, strict=True):
             if before.payoff is None and after.payoff is not None:
                 self.ledger.append({"kind": "consequence.outcome", **asdict(after.payoff)})
+                if after.payoff.censored == FEE_UNKNOWN:
+                    # Ruling R10-i: fixed at its horizon, and uninformative: the venue
+                    # never stated the rate its lots exit at by then.
+                    self.ledger.append({"kind": "consequence.uninformative",
+                                        "handle": after.payoff.handle,
+                                        "reason": FEE_UNKNOWN})
                 fixed.append(after.payoff)
         self.table = table
         return fixed

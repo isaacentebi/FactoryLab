@@ -174,6 +174,11 @@ class VenueMixin:
         unread rate is never a number. Read at the first broadcast and again once per
         ``timing.world_repricing``; a venue that re-reads its account's rates is asked
         to first. A change is ledgered as ``venue.fee_schedule``.
+
+        Ruling R10-i: a read that states no rate for a market keeps that market's last
+        successfully read rate, and every successful read is kept with its time
+        (``history``, two repricing periods deep) so a horizon's exit fee is the
+        venue's most recent successful rate at or before it (``_rate_at``).
         """
         refresh = getattr(self.exchange, "refresh_fee_rates", None)
         if callable(refresh):
@@ -190,9 +195,25 @@ class VenueMixin:
             rates = {str(row.get("taker_fee_rate")) for row in (listing.get(market) or [])
                      if isinstance(row, dict) and row.get("taker_fee_rate") is not None}
             schedule[market] = rates.pop() if len(rates) == 1 else None
-        previous = self.fee_schedule
-        self.fee_schedule = {**schedule, "read_ns": self.clock.now_ns}
-        if previous is None or any(previous.get(m) != schedule[m] for m in schedule):
+        previous = self.fee_schedule or {}
+        now = self.clock.now_ns
+        period = self.m.timing.world_repricing_ns
+        history = {m: [list(row) for row in (previous.get("history") or {}).get(m, [])]
+                   for m in ("perp", "spot")}
+        for market, rate in schedule.items():
+            if rate is not None:
+                history[market].append([now, rate])
+            else:
+                schedule[market] = previous.get(market)  # the last successful read
+            rows = history[market]
+            if period is not None:
+                # Keep what a horizon still open can ask for: the reads of the last two
+                # repricing periods and the one in force at their start.
+                recent = [i for i, row in enumerate(rows) if row[0] >= now - 2 * period]
+                start = max(0, (recent[0] if recent else len(rows)) - 1)
+                history[market] = rows[start:]
+        self.fee_schedule = {**schedule, "read_ns": now, "history": history}
+        if not previous or any(previous.get(m) != schedule[m] for m in schedule):
             self.ledger.append({"kind": "venue.fee_schedule", **schedule,
                                 "basis": "the venue's taker_fee_rate per market, a "
                                          "fraction of notional",
@@ -210,6 +231,13 @@ class VenueMixin:
         if self.fee_schedule is None:
             return None
         return self.fee_schedule.get("spot" if "/" in coin else "perp")
+
+    def _rate_at(self, market: str, at_ns: int) -> str | None:
+        """The venue's most recent successfully read taker rate for ``market`` at or
+        before ``at_ns``, or None when none was read by then (ruling R10-i)."""
+        rows = ((self.fee_schedule or {}).get("history") or {}).get(market) or []
+        before = [rate for ns, rate in rows if ns <= at_ns]
+        return before[-1] if before else None
 
     def _trading_markets(self) -> tuple[str, ...]:
         """Return the markets this world trades: the manifest seed plus every registration.

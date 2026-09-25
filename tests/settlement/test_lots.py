@@ -345,15 +345,42 @@ def test_the_mark_waits_for_the_horizon_on_the_venue_clock_not_for_events_or_tic
                          exit_rates=TAKER).account("opener").payoff is not None
 
 
-def test_an_open_lot_of_a_market_whose_rate_is_unread_is_not_marked():
-    """An unread rate is never a number: the return waits, as it waits for a mid."""
+def test_an_unread_exit_rate_fixes_the_outcome_uninformative_never_pending():
+    """Ruling R10-i: the mid is fixed at the horizon whatever the fee read; with no
+    rate read the outcome is censored fee_unknown, never left waiting."""
+    from factorylab.settlement.lots import FEE_UNKNOWN
+
     table = _open_long().resolve(2, 20, {"BTC": "100"}, now_ns=1_060, horizon_ns=60,
                                  exit_rates={"perp": None, "spot": "0.0007"})
-    assert table.account("opener").payoff is None
+    payoff = table.account("opener").payoff
+    assert payoff is not None and payoff.censored == FEE_UNKNOWN and payoff.y == 0
     # A market the rates do not list (an event token) carries no exit fee.
     table = _open_long().resolve(2, 20, {"BTC": "100"}, now_ns=1_060, horizon_ns=60,
                                  exit_rates={"spot": "0.0007"})
     assert table.account("opener").payoff.exit_fee_micro == 0
+
+
+def test_the_exit_rate_is_the_one_read_at_or_before_the_horizon():
+    """Ruling R10-i: asked at the return's opening plus H, a later read never applies,
+    and a horizon before any read is fee_unknown."""
+    from factorylab.settlement.lots import FEE_UNKNOWN
+
+    reads = [(900, "0.00045"), (1_100, "0.0009")]  # a read after the horizon (1_060)
+
+    def rate_at(market, at_ns):
+        before = [rate for ns, rate in reads if ns <= at_ns]
+        return before[-1] if before else None
+
+    asked = []
+    table = _open_long().resolve(
+        2, 20, {"BTC": "100"}, now_ns=1_200, horizon_ns=60,
+        exit_rates=lambda market, at: asked.append((market, at)) or rate_at(market, at))
+    assert asked == [("perp", 1_060)]
+    assert table.account("opener").payoff.exit_fee_micro == 45_000  # 0.00045, not 0.0009
+    reads[:] = [(1_100, "0.0009")]
+    table = _open_long().resolve(2, 20, {"BTC": "100"}, now_ns=1_200, horizon_ns=60,
+                                 exit_rates=rate_at)
+    assert table.account("opener").payoff.censored == FEE_UNKNOWN
 
 
 def test_the_exit_fee_is_never_booked_as_money_and_the_real_close_is_booked_once():

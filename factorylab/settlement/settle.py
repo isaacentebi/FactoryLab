@@ -314,6 +314,26 @@ class Settler:
                 count += 1
         return count
 
+    def record_outcome(self, *, key: str, about_handle: str, outcome: float) -> None:
+        """Enter one decision's measured outcome in ``key``'s base rate, once.
+
+        Wave 16, ruling R10-j: the keyed prevalence learns every fixed outcome, judged
+        or not. Guarantees the question's pre-outcome snapshot (base rate and whether
+        it was uninformative) is taken first, so a verdict about the decision scored
+        later is scored against the rate before this outcome entered it, exactly as if
+        it had been scored first; and that the outcome enters the rate once.
+        """
+        _require_probability(outcome, "outcome")
+        question = f"{key}:{about_handle}"
+        if question not in self.__snapshots:
+            self.__snapshots[question] = self.__baseline.baseline_q(key)
+        if question not in self.__retired:
+            self.__retired[question] = [self.__baseline.uninformative(key),
+                                        self.__baseline.support(key)]
+        if question not in self.__recorded:
+            self.__recorded[question] = outcome
+            self.__baseline.record_fraction(key, outcome)
+
     def settle_verdict(
         self, *, evaluator_id: str, about_handle: str, q: float, outcome: float, key: str
     ) -> SettledVerdict:
