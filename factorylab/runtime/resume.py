@@ -100,6 +100,7 @@ def _record_types() -> dict[str, type]:
         FundingEvent,
         FundingPayment,
         Order,
+        OrderKind,
         OrderResult,
         Position,
         SpotBalance,
@@ -121,6 +122,9 @@ def _record_types() -> dict[str, type]:
         Lot,
         LotOrder, LotTable, Payoff, ReturnAccount, _Standing, WorldEvent, WorldEventKind,
         AccountState, Fill, FundingEvent, FundingPayment, Order, OrderResult, Position,
+        # An order the simulated venue holds resting carries its kind: without it a
+        # fake world checkpointed with a resting order could not be restored.
+        OrderKind,
         SpotBalance, SellerModel, Commitment, ExecutionReceipt, LearningReceipt,
         CatalogueEntry, ModelRequest, ModelResponse, TokenPrice, PaymentQuote, Clockwork,
     )
@@ -1323,20 +1327,25 @@ def checkpoint_state(ledger, snapshot: dict) -> dict:
 
 
 def resume_runtime(manifest, ledger_path: str, *, provider=None, market=None, exchange=None,
-                   clock_source=None, now_ns=None, _lock=None):
-    """Hold exclusive ownership before reading recovery evidence or contacting a provider."""
+                   clock_source=None, now_ns=None, before_replay=None, _lock=None):
+    """Hold exclusive ownership before reading recovery evidence or contacting a provider.
+
+    ``before_replay``, when given, is called with the restored runtime before any
+    reader is admitted or any recorded item replayed: an offline harness binds its
+    stand-ins there (``scripts/fastloop.py``), exactly where a launch binds them.
+    """
     lock = _lock or LedgerLock(ledger_path)
     try:
         return _resume_runtime(manifest, ledger_path, provider=provider, market=market,
                                exchange=exchange, clock_source=clock_source, now_ns=now_ns,
-                               lock=lock)
+                               lock=lock, before_replay=before_replay)
     except BaseException:
         lock.close()
         raise
 
 
 def _resume_runtime(manifest, ledger_path, *, provider, market, exchange, clock_source,
-                    now_ns, lock):
+                    now_ns, lock, before_replay=None):
     """Authenticate, restore, replay and reconcile before admitting another world event."""
     from factorylab.runtime.loop import Runtime
     from factorylab.runtime.shared import SimClock
@@ -1448,6 +1457,8 @@ def _resume_runtime(manifest, ledger_path, *, provider, market, exchange, clock_
     journal.bootstrap = False
     from factorylab.runtime import polymarket
 
+    if before_replay is not None:
+        before_replay(rt)
     # A live Polymarket reader is admitted, and holds the host's IP, before the replay:
     # the tail's last event runs on past the diary's end and may read the network.
     polymarket.arm(rt)

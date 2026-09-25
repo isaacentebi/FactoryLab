@@ -96,6 +96,30 @@ class MainnetRailRequiresALedger(ValueError):
     """A live world with a mainnet treasury rail was given no ledger: nothing started."""
 
 
+class TapeMismatch(ValueError):
+    """The venue's recorded tape is not the one the manifest names: nothing started."""
+
+
+def check_tape(manifest: WorldManifest, exchange: Any) -> None:
+    """The venue replays exactly the tape the manifest fixes, or no tape at all.
+
+    Guarantees, at launch and on every resume (both build the runtime here), that a
+    world whose manifest names a tape runs on a venue whose tape has that SHA-256,
+    and that a venue replaying a tape runs only under a manifest that names it: the
+    tape is part of the world's identity (``[exchange.tape]``), never a swappable input.
+    """
+    named = manifest.exchange.tape
+    held = getattr(getattr(exchange, "target", exchange), "tape_sha256", None)
+    if named is None and held is None:
+        return
+    if named is None:
+        raise TapeMismatch("tape_mismatch: the venue replays a tape this manifest does not "
+                           "name ([exchange.tape])")
+    if held != named.sha256:
+        raise TapeMismatch(f"tape_mismatch: the manifest fixes tape {named.sha256[:12]}, the "
+                           f"venue replays {str(held)[:12]}")
+
+
 class BootstrapMixin:
     """Preserve runtime state and behavior for bootstrap operations."""
 
@@ -138,6 +162,7 @@ class BootstrapMixin:
             problem = manifest.host_disk_problem(ledger_path)
         if problem is not None:
             raise ValueError(problem)
+        check_tape(manifest, exchange)
         if self.live and not ledger_path and _journal is None and mainnet_rail(manifest):
             # Every reserve-key entry of a world names its diary: without one, a used
             # authorization could never be shown booked (a false recovery), and a
@@ -192,6 +217,11 @@ class BootstrapMixin:
                 self.tick_clock.now_ns() if wall_paced(self.tick_clock)
                 else self.tick_clock.start_ns
             )
+        elif _journal is None and getattr(exchange, "opens_ns", None) is not None:
+            # A recorded market opens when its recording starts: the world launches
+            # there, so launch-anchored schedules (releases, fill cursors) count from
+            # the tape's first instant, never from the epoch (world/tape.py).
+            self.clock.now_ns = int(exchange.opens_ns)
         self.stats = RunStats()
         self.ev = manifest.evaluation
         self.charter: Charter = manifest.charter

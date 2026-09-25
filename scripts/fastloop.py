@@ -19,6 +19,20 @@ of ticking at exactly the declared interval: the virtual clock at the declared
 tick hid every timing failure the wall clock produced (Chapter II §IV.b-c; time
 audit T3). The scorecard's ``clock`` block reads the loops, cutoffs and rounds.
 
+``--tape-from <diary>`` replays a past paid run's recorded market instead of the
+seeded random walk: its mids, funding rates and delivered tick stamps
+(``factorylab/world/tape.py``). The venue stays the fake one (``exchange.kind`` is
+``fake``, never a live adapter), its prices a function of time read at or before
+the world's own tick; the world's tick is the manifest's and the charter may amend
+it; the run ends when the tape does, and the tape never loops. The tape's SHA-256
+is fixed in the manifest (``[exchange.tape]``), so it is in the Launch record and a
+resume on another tape is refused. ``tape <diary> -o tape.json`` cuts the compact
+tape once, so later runs do not re-read a large diary.
+
+A tape run's profit and loss is an observation about one recorded market. It is
+never evidence for a code change: iterating code against a tape until its card
+looks right is the architect optimizing toward its own "better" (AGENTS.md rule 2).
+
 Examples::
 
     uv run python scripts/fastloop.py score work/population-pr121/live/events.json
@@ -26,6 +40,9 @@ Examples::
     uv run python scripts/fastloop.py run --ticks 120 --gaps-from work/population-e5a/events.json
     uv run python scripts/fastloop.py run --provider live --ticks 30 --cap-usd 2
     uv run python scripts/fastloop.py run --provider live --ticks 30 --seeds 1,2,3,4
+    uv run python scripts/fastloop.py tape work/capital-loop/run3/events.json -o run3.tape.json
+    uv run python scripts/fastloop.py run --tape-from run3.tape.json
+    uv run python scripts/fastloop.py resume work/fastloop/scripted-<stamp>-s1
 
 Nothing here touches a real venue, a reserve or a transfer rail.
 """
@@ -46,7 +63,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from factorylab.runtime.worlds import load_manifest  # noqa: E402
+from factorylab.runtime.worlds import TapeSpec, load_manifest  # noqa: E402
 from factorylab.world.clock import ClockSource  # noqa: E402
 from factorylab.world.events import WorldEvent, WorldEventKind  # noqa: E402
 from factorylab.world.models import CatalogueEntry, ModelRequest, ModelResponse  # noqa: E402
@@ -56,6 +73,7 @@ from factorylab.world.scripted import (  # noqa: E402
     _inputs_from_prompt,
     names_declined_trade,
 )
+from factorylab.world.tape import Tape, TapeVenue  # noqa: E402
 from scripts import edition4_rehearsal as rehearsal  # noqa: E402
 
 DEFAULT_WORLD = ROOT / "work/population-pr121/world-edition4-rehearsal.toml"
@@ -369,7 +387,25 @@ def scorecard(events: list[dict[str, Any]]) -> dict[str, Any]:
                    "refused": kinds.get("order.refused", 0),
                    "infeasible": kinds.get("order.infeasible", 0)},
         "clock": clock(events),
+        "tape": tape_card(events),
     }
+
+
+def tape_card(events: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The recorded market a diary's world replayed, from its Launch record alone.
+
+    None for a world on the seeded random walk. The identity is the manifest's
+    ``[exchange.tape]``: what the diary says it ran on, not what a harness claims.
+    """
+    manifest = _launch_manifest(events) or {}
+    tape = (manifest.get("exchange") or {}).get("tape")
+    if not isinstance(tape, dict):
+        return None
+    return {"sha256": tape["sha256"], "venue": f"tape:{tape['sha256'][:8]}",
+            "start_ns": tape["start_ns"], "end_ns": tape["end_ns"],
+            "hours": round((tape["end_ns"] - tape["start_ns"]) / 3.6e12, 3),
+            "markets": tape.get("markets"),
+            "spread_bps": dict(tape.get("spread_bps") or ())}
 
 
 def clock(events: list[dict[str, Any]]) -> dict[str, Any]:
@@ -793,7 +829,8 @@ def print_card(card: dict[str, Any]) -> None:
 
 # --- running ------------------------------------------------------------------------
 
-def simulation_manifest(world: Path, seed: int, vault_tools: bool = False) -> Any:
+def simulation_manifest(world: Path, seed: int, vault_tools: bool = False,
+                        tape: Tape | None = None) -> Any:
     """The launch identity with only the venue swapped for the deterministic fake.
 
     ``effective_manifest`` freezes the roster, charter, seed lenses, prompts and
@@ -802,6 +839,10 @@ def simulation_manifest(world: Path, seed: int, vault_tools: bool = False) -> An
     a virtual clock (no sleeping between ticks), a moving market whose resting
     orders fill, and the fake treasury. Everything the population is shown and
     graded by is the launch path's.
+
+    With ``tape``, the fake venue replays that recorded market, and the tape's
+    identity joins the manifest (``[exchange.tape]``): its SHA-256, span, markets and
+    spreads, so the Launch record carries it and a resume on another tape is refused.
     """
     from dataclasses import replace
 
@@ -814,59 +855,68 @@ def simulation_manifest(world: Path, seed: int, vault_tools: bool = False) -> An
                                             capital_loop=hybrid)
     exchange = replace(manifest.exchange, kind="fake", mainnet=False, seed=seed,
                        spot_pairs=(), client_namespace=None,
-                       vault_tools=vault_tools or manifest.exchange.vault_tools)
+                       vault_tools=vault_tools or manifest.exchange.vault_tools,
+                       tape=None if tape is None else tape_spec(tape))
     manifest = replace(manifest, exchange=exchange, seed=seed)
     manifest.validate()
     return manifest
 
 
-def run(provider_kind: str, ticks: int, world: Path, out: Path, cap_usd: str,
-        seed: int, vault_depositor_usd: str | None = None,
-        gaps_from: Path | None = None) -> dict[str, Any]:
-    """``vault_depositor_usd`` opts the world into the vault surface and scripts one
-    outside depositor into every vault the factory creates, who leaves ten steps later;
-    the fake's vaults earn nothing on their own, so the depositor pays no commission
-    unless a vault's equity moved."""
-    from factorylab.runtime.loop import Runtime
+def tape_spec(tape: Tape) -> TapeSpec:
+    """The manifest's ``[exchange.tape]`` for a tape: its identity, fixed for the world."""
+    return TapeSpec(sha256=tape.sha256, start_ns=tape.start_ns, end_ns=tape.end_ns,
+                    markets=tape.markets,
+                    spread_bps=tuple((m, str(tape.spread_bps(m)[0])) for m in tape.markets))
 
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    target = out / f"{provider_kind}-{stamp}-s{seed}"
-    target.mkdir(parents=True, exist_ok=True)
-    manifest = simulation_manifest(world, seed, vault_tools=bool(vault_depositor_usd))
+
+def tape_venue(tape: Tape, manifest: Any) -> TapeVenue:
+    """The fake venue replaying ``tape`` for the manifest's markets, funded as bootstrap
+    funds the seeded fake."""
+    from factorylab.kernel.money import money_to_usd
+
+    return TapeVenue(tape, coins=manifest.exchange.coins,
+                     spot_pairs=manifest.exchange.spot_pairs, seed=manifest.exchange.seed,
+                     start_cash_usd=money_to_usd(manifest.initial_balance_micro))
+
+
+def tape_clock(tape: Tape, manifest: Any, ticks: int | None) -> ClockSource:
+    """The world's own clock over a tape: the manifest's tick from the tape's first
+    instant, ending before the first tick past its last (Chapter II §IV.c: the world
+    keeps its own period, and the charter may amend it; the tape is sampled at it)."""
+    bound = (tape.end_ns - tape.start_ns) // manifest.clock.min_tick_ns + 1
+    return ClockSource(tape.start_ns, manifest.tick_interval_ns,
+                       bound if ticks is None else min(ticks, bound),
+                       deadline_ns=tape.end_ns + 1)
+
+
+def _world_parts(provider_kind: str, world: Path, seed: int, cap_usd: str,
+                 vault_depositor_usd: str | None, tape: Tape | None) -> tuple:
+    manifest = simulation_manifest(world, seed, vault_tools=bool(vault_depositor_usd),
+                                   tape=tape)
     admission = rehearsal.Admission(cap_micro=int(Decimal(cap_usd) * 1_000_000),
                                     max_calls=10_000, recover_provider_failures=True)
     inner = (PolicyProvider(world) if provider_kind == "scripted"
              else rehearsal.build_prepaid_provider(manifest))
     provider = rehearsal.PrepaidProvider(inner, manifest, admission)
-    started = time.monotonic()
-    card: dict[str, Any] = {"provider": provider_kind, "out": str(target)}
-    clock_source = None
-    if gaps_from is not None:
-        interval = manifest.tick_interval_ns
-        clock_source = ReplayClock(interval, interval, ticks, delivered_gaps(gaps_from))
-        card["gaps_from"] = str(gaps_from)
-    try:
-        runtime = Runtime(manifest, events=ticks, seed=manifest.seed,
-                          initial_balance_micro=None,
-                          ledger_path=str(target / "ledger.jsonl"), router_gamma=0.1,
-                          provider=provider, kill_at_end=True, clock_source=clock_source)
-        surface = getattr(runtime, "polymarket", None)
-        if surface is not None and not surface.writes:
-            # A live-read world's Polymarket reads are answered by the seeded simulated
-            # venue, as its exchange is: the whole run stays simulated and offline.
-            from factorylab.runtime.polymarket import simulate_reads
+    exchange = None if tape is None else tape_venue(tape, manifest)
+    return manifest, admission, provider, exchange
 
-            simulate_reads(runtime)
-        if vault_depositor_usd:
-            runtime.exchange.vault_depositor_usd = Decimal(vault_depositor_usd)
-            runtime.exchange.vault_depositor_steps = 10
-        summary = runtime.run()
-        card["status"] = "completed"
-        card["terminated"] = summary.get("terminated")
-    except Exception as exc:  # the scorecard still reads what was written
-        card["status"] = "failed"
-        card["error"] = f"{type(exc).__name__}: {exc}"[:500]
-        runtime = locals().get("runtime")
+
+def _prepare(runtime: Any, vault_depositor_usd: str | None) -> None:
+    surface = getattr(runtime, "polymarket", None)
+    if surface is not None and not surface.writes:
+        # A live-read world's Polymarket reads are answered by the seeded simulated
+        # venue, as its exchange is: the whole run stays simulated and offline.
+        from factorylab.runtime.polymarket import simulate_reads
+
+        simulate_reads(runtime)
+    if vault_depositor_usd:
+        runtime.exchange.vault_depositor_usd = Decimal(vault_depositor_usd)
+        runtime.exchange.vault_depositor_steps = 10
+
+
+def _finish(card: dict[str, Any], runtime: Any, target: Path, admission: Any,
+            started: float) -> dict[str, Any]:
     card["wall_seconds"] = round(time.monotonic() - started, 1)
     if runtime is not None:
         events = [i for i in runtime.ledger._recovery_items() if i.get("kind") != "snapshot"]
@@ -876,6 +926,99 @@ def run(provider_kind: str, ticks: int, world: Path, out: Path, cap_usd: str,
     card["admission_stop"] = admission.stop_reason
     (target / "scorecard.json").write_text(json.dumps(card, indent=2, default=str) + "\n")
     return card
+
+
+def run(provider_kind: str, ticks: int | None, world: Path, out: Path, cap_usd: str,
+        seed: int, vault_depositor_usd: str | None = None,
+        gaps_from: Path | None = None, tape_from: Path | None = None) -> dict[str, Any]:
+    """``vault_depositor_usd`` opts the world into the vault surface and scripts one
+    outside depositor into every vault the factory creates, who leaves ten steps later;
+    the fake's vaults earn nothing on their own, so the depositor pays no commission
+    unless a vault's equity moved.
+
+    ``tape_from`` (a diary or a cut tape) replays that recorded market; ``ticks``
+    then bounds the run, which otherwise ends when the tape does."""
+    from factorylab.runtime.loop import Runtime
+
+    if tape_from is not None and gaps_from is not None:
+        raise ValueError("a tape world keeps its own tick; --gaps-from does not apply")
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    target = out / f"{provider_kind}-{stamp}-s{seed}"
+    target.mkdir(parents=True, exist_ok=True)
+    tape = None if tape_from is None else Tape.load(tape_from)
+    manifest, admission, provider, exchange = _world_parts(
+        provider_kind, world, seed, cap_usd, vault_depositor_usd, tape)
+    started = time.monotonic()
+    card: dict[str, Any] = {"provider": provider_kind, "out": str(target)}
+    clock_source = None
+    if gaps_from is not None:
+        ticks = 20 if ticks is None else ticks
+        interval = manifest.tick_interval_ns
+        clock_source = ReplayClock(interval, interval, ticks, delivered_gaps(gaps_from))
+        card["gaps_from"] = str(gaps_from)
+    elif tape is not None:
+        clock_source = tape_clock(tape, manifest, ticks)
+        ticks = clock_source.count
+        card["tape_from"] = str(tape_from)
+    ticks = 20 if ticks is None else ticks
+    # What a resume needs to rebuild this world exactly (``resume``).
+    (target / "run.json").write_text(json.dumps({
+        "provider": provider_kind, "world": str(world), "seed": seed, "cap_usd": cap_usd,
+        "vault_depositor_usd": vault_depositor_usd,
+        "tape_from": None if tape_from is None else str(tape_from),
+        "tape_sha256": None if tape is None else tape.sha256}, indent=2) + "\n")
+    runtime = None
+    try:
+        runtime = Runtime(manifest, events=ticks, seed=manifest.seed,
+                          initial_balance_micro=None,
+                          ledger_path=str(target / "ledger.jsonl"), router_gamma=0.1,
+                          provider=provider, exchange=exchange, kill_at_end=True,
+                          clock_source=clock_source)
+        _prepare(runtime, vault_depositor_usd)
+        summary = runtime.run()
+        card["status"] = "completed"
+        card["terminated"] = summary.get("terminated")
+    except Exception as exc:  # the scorecard still reads what was written
+        card["status"] = "failed"
+        card["error"] = f"{type(exc).__name__}: {exc}"[:500]
+    return _finish(card, runtime, target, admission, started)
+
+
+def resume(target: Path, tape_from: Path | None = None) -> dict[str, Any]:
+    """Continue a killed run in ``target`` from its diary, on the world it launched.
+
+    Guarantees the tape a tape world resumes on is the one it launched on: its SHA-256
+    is compared with the one recorded at launch before the diary is touched, and the
+    runtime compares it again with the manifest's ``[exchange.tape]``.
+    """
+    from factorylab.runtime.bootstrap import TapeMismatch
+    from factorylab.runtime.resume import resume_runtime
+
+    spec = json.loads((target / "run.json").read_text())
+    source = tape_from or (spec["tape_from"] and Path(spec["tape_from"]))
+    tape = None if source is None else Tape.load(source)
+    if (tape and tape.sha256) != spec.get("tape_sha256"):
+        raise TapeMismatch(f"tape_mismatch: launched on {str(spec.get('tape_sha256'))[:12]}, "
+                           f"resumed on {str(tape and tape.sha256)[:12]}")
+    manifest, admission, provider, exchange = _world_parts(
+        spec["provider"], Path(spec["world"]), spec["seed"], spec["cap_usd"],
+        spec.get("vault_depositor_usd"), tape)
+    clock_source = None if tape is None else tape_clock(tape, manifest, None)
+    started = time.monotonic()
+    card: dict[str, Any] = {"provider": spec["provider"], "out": str(target), "resumed": True}
+    runtime = None
+    try:
+        runtime = resume_runtime(
+            manifest, str(target / "ledger.jsonl"), provider=provider, exchange=exchange,
+            clock_source=clock_source,
+            before_replay=lambda rt: _prepare(rt, spec.get("vault_depositor_usd")))
+        summary = runtime.run()
+        card["status"] = "completed"
+        card["terminated"] = summary.get("terminated")
+    except Exception as exc:  # the scorecard still reads what was written
+        card["status"] = "failed"
+        card["error"] = f"{type(exc).__name__}: {exc}"[:500]
+    return _finish(card, runtime, target, admission, started)
 
 
 def combine(cards: list[dict[str, Any]]) -> dict[str, Any]:
@@ -952,8 +1095,11 @@ def combine(cards: list[dict[str, Any]]) -> dict[str, Any]:
         role: int(statistics.median(c["prompt_bytes"][role]["median"] for c in cards
                                     if role in c.get("prompt_bytes", {})))
         for role in {r for c in cards for r in c.get("prompt_bytes", {})}}
-    total["seeds"] = [{k: c.get(k) for k in ("status", "error", "out",
-                                             "learning_signal_rate", "billed_usd")}
+    total["seeds"] = [{**{k: c.get(k) for k in ("status", "error", "out",
+                                                "learning_signal_rate", "billed_usd")},
+                       # Seeds on one tape vary the routers, not the market: each seed
+                       # names its tape so seeds are read nested within tapes.
+                       "tape": (c.get("tape") or {}).get("sha256")}
                       for c in cards]
     return total
 
@@ -964,11 +1110,13 @@ def run_seeds(args: argparse.Namespace, seeds: list[int]) -> dict[str, Any]:
 
     procs = [subprocess.Popen(
         [sys.executable, __file__, "run", "--provider", args.provider,
-         "--ticks", str(args.ticks), "--world", str(args.world), "--out", str(args.out),
+         *(["--ticks", str(args.ticks)] if args.ticks is not None else []),
+         "--world", str(args.world), "--out", str(args.out),
          "--cap-usd", args.cap_usd, "--seed", str(seed),
          *(["--vault-depositor-usd", args.vault_depositor_usd]
            if args.vault_depositor_usd else []),
-         *(["--gaps-from", str(args.gaps_from)] if args.gaps_from else [])],
+         *(["--gaps-from", str(args.gaps_from)] if args.gaps_from else []),
+         *(["--tape-from", str(args.tape_from)] if args.tape_from else [])],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=ROOT) for seed in seeds]
     cards = []
     for seed, proc in zip(seeds, procs, strict=True):
@@ -988,7 +1136,8 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("events", type=Path)
     r = sub.add_parser("run", help="run the edition-4 world offline")
     r.add_argument("--provider", choices=("scripted", "live"), default="scripted")
-    r.add_argument("--ticks", type=int, default=20)
+    r.add_argument("--ticks", type=int, default=None,
+                   help="ticks to run (default 20; on a tape, until the tape ends)")
     r.add_argument("--world", type=Path, default=DEFAULT_WORLD)
     r.add_argument("--out", type=Path, default=DEFAULT_OUT)
     r.add_argument("--cap-usd", default="2")
@@ -1000,16 +1149,35 @@ def main(argv: list[str] | None = None) -> int:
                    help="comma-separated seeds run in parallel processes, e.g. 1,2,3,4")
     r.add_argument("--gaps-from", type=Path, default=None,
                    help="replay the tick gaps this diary (events.json) delivered, in order")
+    r.add_argument("--tape-from", type=Path, default=None,
+                   help="replay the market this diary (events.json, a directory split by "
+                        "kind, or a cut tape) recorded; the run ends when the tape does")
+    t = sub.add_parser("tape", help="cut a compact tape from a diary and print its identity")
+    t.add_argument("diary", type=Path)
+    t.add_argument("-o", "--output", type=Path, required=True)
+    u = sub.add_parser("resume", help="continue a killed run from its directory")
+    u.add_argument("target", type=Path)
+    u.add_argument("--tape-from", type=Path, default=None,
+                   help="the tape to resume on (default: the one it launched on)")
     args = parser.parse_args(argv)
     if args.command == "score":
         print_card(scorecard(json.loads(args.events.read_text())))
         return 0
+    if args.command == "tape":
+        tape = Tape.load(args.diary)
+        tape.write(args.output)
+        print_card(tape.summary())
+        return 0
+    if args.command == "resume":
+        card = resume(args.target, args.tape_from)
+        print_card(card)
+        return 0 if card.get("status") == "completed" else 1
     if args.seeds:
         card = run_seeds(args, [int(x) for x in args.seeds.split(",")])
         print_card(card)
         return 0 if all(c.get("status") == "completed" for c in card["seeds"]) else 1
     card = run(args.provider, args.ticks, args.world, args.out, args.cap_usd, args.seed,
-               args.vault_depositor_usd, args.gaps_from)
+               args.vault_depositor_usd, args.gaps_from, args.tape_from)
     print_card(card)
     return 0 if card.get("status") == "completed" else 1
 

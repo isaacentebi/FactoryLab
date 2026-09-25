@@ -53,6 +53,26 @@ class Shock:
 
 
 @dataclass(frozen=True)
+class TapeSpec:
+    """``[exchange.tape]``: the recorded market this world's venue replays.
+
+    A tape is the world, not architecture: a past paid run's recorded mids, funding
+    rates and tick stamps (``factorylab/world/tape.py``). Its identity is fixed for the
+    world's life: the SHA-256 of the compact tape, its recorded span, the markets it
+    recorded and each market's spread as the tape states it. The manifest hash covers
+    all of it, so a resume on a different tape is a different world and is refused.
+    """
+
+    sha256: str
+    start_ns: int
+    end_ns: int
+    markets: tuple[str, ...]
+    # Each market's spread in basis points, as the tape states it (a recorded book's
+    # median top-of-book spread, or the fake's own when none was recorded), as text.
+    spread_bps: tuple[tuple[str, str], ...] = ()
+
+
+@dataclass(frozen=True)
 class ExchangeSpec:
     kind: str  # "fake" | "hyperliquid"
     mainnet: bool = False
@@ -81,6 +101,9 @@ class ExchangeSpec:
     # registers all the same, without the venue read tools. Each slot's share is the
     # read budget over this count.
     max_readers: int = 16
+    # ``[exchange.tape]``: the recorded market a fake venue replays (TapeSpec), or None
+    # for the seeded random walk. Only a fake venue replays one.
+    tape: TapeSpec | None = None
 
 
 @dataclass(frozen=True)
@@ -1096,6 +1119,31 @@ class WorldManifest:
                     f"host's free disk ({free_bytes} bytes free): at most {ceiling}")
         return None
 
+    def _validate_tape(self) -> None:
+        """A tape is replayed only by the fake venue, whole, for the markets it recorded.
+
+        Guarantees a tape world never reaches a live adapter, a live rail or a
+        real-money branch (the venue kind stays ``fake``), carries no scripted shock
+        (its prices are the recording's), and trades only markets the tape recorded.
+        """
+        tape = self.exchange.tape
+        if tape is None:
+            return
+        if self.exchange.kind != "fake":
+            raise ValueError("exchange.tape is replayed only by the fake venue")
+        if self.exchange.shocks:
+            raise ValueError("a tape's prices are recorded; exchange.shocks cannot apply")
+        if (not isinstance(tape.sha256, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", tape.sha256)):
+            raise ValueError("exchange.tape.sha256 must be a lowercase SHA-256 hex digest")
+        if (type(tape.start_ns) is not int or type(tape.end_ns) is not int
+                or not 0 < tape.start_ns < tape.end_ns):
+            raise ValueError("exchange.tape span must be two increasing ns instants")
+        missing = set(self.exchange.coins) | set(self.exchange.spot_pairs)
+        missing -= set(tape.markets)
+        if missing:
+            raise ValueError(f"exchange.tape recorded no mids for {sorted(missing)}")
+
     def validate(self) -> None:
         problem = self.read_share_problem() or self.storage_problem()
         if problem is not None:
@@ -1286,6 +1334,7 @@ class WorldManifest:
             self._validate_funded_admission()
         if self.exchange.shocks and self.exchange.kind != "fake":
             raise ValueError("price shocks exist only on the fake venue")
+        self._validate_tape()
         for sh in self.exchange.shocks:
             if sh.step < 1 or Decimal(sh.multiplier) <= 0:
                 raise ValueError("shock step must be >= 1 and multiplier positive")
@@ -1563,8 +1612,20 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             or not p.split("/")[0] for p in spot_pairs)
             or len(set(spot_pairs)) != len(spot_pairs)):
         raise ValueError("venue.spot_pairs must be a unique list of BASE/USDC pairs")
+    tape = ex.get("tape")
+    if tape is not None:
+        if not isinstance(tape, dict) or set(tape) - {
+                "sha256", "start_ns", "end_ns", "markets", "spread_bps"}:
+            raise ValueError("unknown exchange.tape manifest key")
+        spreads = tape.get("spread_bps") or {}
+        tape = TapeSpec(
+            sha256=tape.get("sha256"), start_ns=tape.get("start_ns"),
+            end_ns=tape.get("end_ns"), markets=tuple(tape.get("markets") or ()),
+            spread_bps=tuple(sorted((str(k), str(v)) for k, v in (
+                spreads.items() if isinstance(spreads, dict) else spreads))))
     exchange = ExchangeSpec(
         kind=ex.get("kind", "fake"),
+        tape=tape,
         client_namespace=ex.get("client_namespace"),
         mainnet=bool(ex.get("mainnet", False)),
         coins=tuple(ex.get("coins", ["BTC", "ETH"])),

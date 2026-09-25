@@ -146,14 +146,16 @@ def test_a_manifest_hashes_what_it_says_and_a_default_is_no_exception():
     (read_requests_per_minute 900, kernel_reserve_per_minute 300), and again when that
     budget came to be counted over Polymarket's own sliding 10 s
     (read_requests_per_10s 200, kernel_reserve_per_10s 100) and watcher work gained its
-    hard limit ([subscriptions] max_watcher_evaluations_per_sweep); each time it is a
-    new v0."""
+    hard limit ([subscriptions] max_watcher_evaluations_per_sweep), and again when a
+    fake venue could replay a recorded tape ([exchange.tape], absent by default); each
+    time it is a new v0."""
     scripted = load_manifest("scripted")
     assert '"forecast_horizon_events":10' in scripted.canonical_json()
     assert '"chaos":{"connector_timeout":0.0' in scripted.canonical_json()
     assert '"contract":"json_object"' in scripted.canonical_json()
+    assert '"tape":null' in scripted.canonical_json()
     assert scripted.manifest_hash() == (
-        "2d88ce5a0d65a7039e2f52079e4a534e39f2d8177c73ab215290e866b3738e1a"
+        "78db707bacd488bc32e976d818572dcfc7b7209f2962b23d47078b55536314f0"
     )
 
     implicit = manifest_from_dict(_base())

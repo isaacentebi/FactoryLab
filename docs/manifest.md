@@ -1608,6 +1608,48 @@ are allowed).
 USDC through the same intent, submission and receipt journal. Venue pots show
 `perps` and `spot` as components of `venue`, never additional capital.
 
+## Recorded tapes: `[exchange.tape]`
+
+`exchange.tape` is absent by default (the fake venue walks its seeded random
+path) and fixed for the world's life when present. It names the recorded market a
+fake venue replays: a past paid run's diary, cut to its market data
+(`factorylab/world/tape.py`, `scripts/fastloop.py tape`). A tape is the world, not
+architecture. The keys:
+
+| Key | Meaning |
+|---|---|
+| `sha256` | SHA-256 of the compact tape's canonical JSON: the tape's identity |
+| `start_ns`, `end_ns` | The first and last recorded tick stamps |
+| `markets` | The perps and pairs whose mids the tape recorded |
+| `spread_bps` | Each market's spread as the tape states it: the median recorded top-of-book spread, else the median over the tape's other recorded books, else the fake's own 2 bps |
+
+Load-time invariants: only `exchange.kind = "fake"` replays a tape (a tape world
+never reaches a live adapter, a live rail or a real-money branch); a tape world has
+no `exchange.shocks`; every seeded coin and pair is one the tape recorded. The
+runtime refuses a venue whose tape's SHA-256 is not the manifest's, and a tape venue
+under a manifest that names none, at launch and on every resume (`tape_mismatch`).
+Because the key is hashed, the Launch record carries the tape's identity and a
+resume on another tape is a different world.
+
+What the venue replays, and how:
+
+- The tape holds what the diary recorded and nothing else: the delivered tick
+  stamps; each market's mids and each perp's funding-rate observations, stamped as
+  delivered; the order books the run happened to read, stamped with the venue's own
+  book time; its first instrument listing. A funding row that moved money was the
+  recording account's payment, not market data, and is left out.
+- Every read answers the latest recorded row at or before the venue's instant, and
+  nothing before a series' first row. Past the last row the last row holds; the tape
+  never loops.
+- The venue's instant is the world's tick. The world keeps the manifest's
+  `tick_interval` and the charter may amend it; the tape is sampled at the tick, never
+  the reverse. A tape world launches at the tape's first instant and ends before the
+  first tick past its last.
+- Funding is charged once per hour boundary of tape time, on the position held at
+  the boundary, at the last recorded rate and mid at or before it: never once per
+  recorded row.
+- The venue is named `tape:<first 8 hex of sha256>`.
+
 ## Vaults
 
 `venue.vault_tools` is a boolean, default `false`, fixed at launch. When

@@ -46,7 +46,10 @@ class ClockIterator(Iterator[WorldEvent]):
 class ClockSource:
     """Emits one ``Tick`` per ``interval_ns`` from ``start_ns`` for ``count`` ticks.
 
-    Guarantees strictly increasing timestamps and exactly ``count`` events.
+    Guarantees strictly increasing timestamps and exactly ``count`` events, or fewer
+    when ``deadline_ns`` is set: the stream then ends before the first tick at or
+    after it, however the interval was amended on the way (a recorded tape's world
+    ends when its tape does, ``factorylab/world/tape.py``).
     """
 
     start_ns: int
@@ -56,6 +59,7 @@ class ClockSource:
     index: int = 0
     last_ns: int | None = None
     last_event_ns: int | None = None
+    deadline_ns: int | None = None
 
     def __post_init__(self) -> None:
         self.set_interval(self.interval_ns)
@@ -89,6 +93,8 @@ class ClockSource:
                 self.last_event_ns = drip.ts_ns
                 yield drip
                 drip = next(drips, None)
+            if self.deadline_ns is not None and ts >= self.deadline_ns:
+                return
             self.last_ns = self.last_event_ns = ts
             i = self.index
             self.index += 1
@@ -96,9 +102,13 @@ class ClockSource:
 
     def state(self) -> dict:
         """Retain the amended interval, budget and exact tick/drip continuation point."""
+        # The deadline is carried only when set, so a clock without one checkpoints
+        # exactly as it always has.
         return {"start_ns": self.start_ns, "interval_ns": self.interval_ns,
                 "count": self.count, "source": self.source, "index": self.index,
-                "last_ns": self.last_ns, "last_event_ns": self.last_event_ns}
+                "last_ns": self.last_ns, "last_event_ns": self.last_event_ns,
+                **({"deadline_ns": self.deadline_ns} if self.deadline_ns is not None
+                   else {})}
 
     @classmethod
     def restore(cls, state: dict) -> ClockSource:
