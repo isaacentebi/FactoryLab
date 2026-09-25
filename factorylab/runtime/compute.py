@@ -979,9 +979,28 @@ class ComputeMixin:
 
         self._init_connectors()
         self.tool_specs.setdefault("connector.fetch", connector_spec())
+        self._ensure_treasury_tool()
         self._ensure_web_tool()
         self._ensure_calc_tool()
         self._ensure_directory_tools()
+
+    def _ensure_treasury_tool(self) -> None:
+        """Publish ``treasury.transfer`` as this world's rail admits it, or not at all.
+
+        Chapter II §II.b: guarantees the published enum, examples and description are
+        ``transfer_tool_spec`` of the rail's ``admitted_directions`` now, so a rail a
+        rehearsal wraps after launch to refuse directions publishes only the ones it
+        runs, and a world that admits none publishes no transfer tool.
+        """
+        from factorylab.world.treasury import admitted_directions, transfer_tool_spec
+
+        spec = transfer_tool_spec(
+            admitted_directions(self.treasury.rail),
+            hybrid=getattr(self.m.treasury, "venice_network", None) == "base-mainnet")
+        if spec is None:
+            self.tool_specs.pop("treasury.transfer", None)
+        elif self.tool_specs.get("treasury.transfer") != spec:
+            self.tool_specs["treasury.transfer"] = spec
 
     def _ensure_calc_tool(self) -> None:
         """Publish ``calc`` wherever the fixed primitives are published (R3-E).

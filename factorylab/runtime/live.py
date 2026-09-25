@@ -309,7 +309,17 @@ class LiveVenue:
 
 @dataclass
 class Reconciler:
-    """Compares the wallet with the real pots every ``every`` ticks."""
+    """Reads the real pots and the venue's positions every ``every`` ticks.
+
+    It no longer compares the compute wallet with the pots. The wallet is spending
+    authority, not cash (``kernel.wallet``: the pots are what back it, and it is not
+    one of them), so ``wallet - sum(pots)`` compared a $300 authority with about
+    $1,020 of venue, reserve and provider money: every row of ``reconcile.drift`` in
+    a 6 h run was that gap, never a drift, and nothing read it. The comparison is
+    deleted rather than kept as an alarm that cannot pass; like quantities are
+    reconciled where they live (the treasury's receipts, the venue's own books,
+    ``polymarket.reconcile``).
+    """
 
     every: int = 10
     _ticks: int = 0
@@ -345,20 +355,15 @@ class Reconciler:
         values.extend(pots_view["sellers"].values())
         complete = not pots_view.get("pending", False) and all(type(v) is int for v in values)
         pots = sum(values) if complete else None
-        discrepancy = wallet_balance_micro - pots if pots is not None else None
-        within = abs(discrepancy) <= 500_000 if discrepancy is not None else None
-        if ledger is not None and within is False:
-            ledger.append({"kind": "reconcile.drift", "wallet_micro": wallet_balance_micro,
-                           "pots_micro": pots, "discrepancy_micro": discrepancy,
-                           "tolerance_micro": 500_000, "pots": pots_view})
+        del ledger  # nothing here is a drift to ledger: see the class docstring
         return {
+            # Authority, beside the money and never compared with it.
             "wallet_micro": wallet_balance_micro,
             "positions": positions,
             "openrouter_remaining_micro": pots_view["seed"],
             "venue_equity_usd": str(Decimal(pots_view["venue"]) / 1_000_000)
             if pots_view["venue"] is not None else None,
-            "pots": pots_view, "pots_micro": pots, "discrepancy_micro": discrepancy,
-            "within_tolerance": within, "tolerance_micro": 500_000,
+            "pots": pots_view, "pots_micro": pots,
         }
 
 

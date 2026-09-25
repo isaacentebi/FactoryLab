@@ -288,6 +288,8 @@ class DeniedTransferRail:
     """Preserve venue balance reads while refusing every treasury transfer direction."""
 
     name = "edition4-denied"
+    #: No direction: the world publishes none (``treasury.admitted_directions``).
+    ALLOWED: tuple[str, ...] = ()
 
     def __init__(self, reader: Any):
         self.reader = reader

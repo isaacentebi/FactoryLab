@@ -117,15 +117,22 @@ def test_live_venue_emits_mids_funding_and_new_fills_once() -> None:
     assert not [e for e in third if e.kind is WorldEventKind.FILL]  # not re-emitted
 
 
-def test_reconciler_snapshot_reports_discrepancy() -> None:
+def test_reconciler_snapshot_never_compares_authority_with_money() -> None:
+    """The compute wallet is authority, not cash: the snapshot reports it beside the pots
+    and never as a drift against them (the $300-against-$1,020 false alarm)."""
+    from factorylab.kernel.ledger import Ledger
+
     class P:
         def balance_micro(self):
             return 40_000_000
 
-    snap = Reconciler.snapshot(100_000_000, P(), StubExchange())
+    ledger = Ledger()
+    snap = Reconciler.snapshot(100_000_000, P(), StubExchange(), ledger=ledger)
     assert snap["openrouter_remaining_micro"] == 40_000_000
     assert snap["venue_equity_usd"] == "100"
-    assert snap["pots_micro"] == 140_000_000 and snap["discrepancy_micro"] == -40_000_000
+    assert snap["pots_micro"] == 140_000_000 and snap["wallet_micro"] == 100_000_000
+    assert "discrepancy_micro" not in snap and "within_tolerance" not in snap
+    assert not [i for i in ledger.items() if i.get("kind") == "reconcile.drift"]
 
 
 def test_build_provider_needs_key_for_openrouter(monkeypatch) -> None:

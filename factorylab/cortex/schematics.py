@@ -26,6 +26,7 @@ from factorylab.runtime.propensity import MIN_DECLARED_MASS, action_vocabulary
 from factorylab.runtime.shared import work_disclosure
 from factorylab.runtime.summary import _duration_str, _price_str
 from factorylab.settlement.vocabulary import COMMISSIONED_JUDGE_REFUSAL
+from factorylab.world.treasury import admitted_directions, venice_conversion_text
 
 _ADDRESSING = (
     "inputs.you is your own assembly id. catalogue lists every live assembly "
@@ -647,10 +648,15 @@ class SchematicsMixin:
             "compute_supply": {
                 "openrouter": "Prepaid credit on the OpenRouter account. No tool tops it up; "
                               "when it is gone, OpenRouter model ids cannot be called.",
-                "venice": "Credit on a separate Venice account. Base USDC and Venice credit "
-                          "are different pots: treasury.transfer with direction to_venice "
-                          "converts $5 of reserve USDC into Venice credit, which converts "
-                          "principal into compute and is not income.",
+                # The one statement treasury.transfer also makes, for this world's rail
+                # (Chapter II §II.b: a published fact is the enforced one).
+                "venice": "Credit on a separate Venice account; USDC and Venice credit are "
+                          "different pots. " + (
+                              venice_conversion_text(getattr(
+                                  self.m.treasury, "venice_network", None) == "base-mainnet")
+                              if "to_venice" in admitted_directions(self.treasury.rail)
+                              else "No treasury.transfer direction converts to Venice credit "
+                                   "in this world."),
                 "discovery": "catalogue.search returns model prices per million tokens, and "
                              "the full args_schema of any registered tool and the full shape "
                              "of any proposal kind; world.tools and world.proposal_shapes "
@@ -1508,31 +1514,26 @@ class SchematicsMixin:
                         "before the release changes the divisor"}
 
     def _provider_inventory(self) -> dict[str, Any]:
-        """Each rail's inventory: what the manifest committed, and what was last observed.
+        """Each rail's inventory, as last observed.
 
-        Guarantees the prompt builder performs no network I/O: the observed
-        numbers come from ``Treasury.pots``, the cached read the treasury
-        refreshed on its own schedule, and an unobserved balance is published as
-        ``None`` rather than as zero. The committed side is the manifest's
-        ``[providers]`` block (edition 3, C5), which is what the world was funded
-        with; the two are shown apart because they answer different questions and
-        because neither rail's balance can refill the other.
+        Guarantees the prompt builder performs no network I/O: the numbers come
+        from ``Treasury.pots``, the cached read the treasury refreshed on its own
+        schedule, and an unobserved balance is published as ``None`` rather than as
+        zero. The manifest's ``[providers]`` block is not published beside them: it
+        states what a world was meant to be funded with, not what a rail holds, and a
+        live world showed a Venice $80 there while the account held $0.098 (a false
+        published fact; Chapter II §II.b). What a rail held when the world first read
+        it is the treasury's ``subsidy`` record, observed, not declared.
         """
         pots = self.wallet.pots()
         sellers = pots.get("sellers") or {}
-        providers = getattr(self.m, "providers", None)
         return {"openrouter_usd": _usd(pots.get("seed")),
                 "venice_usd": _usd(sellers.get("venice")),
                 "x402_sellers_usd": {name: _usd(value) for name, value in sorted(sellers.items())
                                      if name != "venice"},
-                "committed_at_launch": {
-                    "openrouter_usd": _usd(getattr(providers, "openrouter_micro", None)),
-                    "venice_usd": _usd(getattr(providers, "venice_micro", None)),
-                },
                 "complete": bool(pots.get("complete")),
                 "as_of": "observed values are the runtime's last treasury read; the prompt "
-                         "reads no rail. Committed values are the manifest's [providers] "
-                         "block. An OpenRouter balance cannot pay for a Venice model."}
+                         "reads no rail. An OpenRouter balance cannot pay for a Venice model."}
 
     def _world_resources(self) -> dict[str, Any]:
         """The factory's money, by class, with principal and income kept apart."""
