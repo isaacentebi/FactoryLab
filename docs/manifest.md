@@ -1650,6 +1650,40 @@ What the venue replays, and how:
   recorded row.
 - The venue is named `tape:<first 8 hex of sha256>`.
 
+Fills are the recording's and never kinder (money path). Every rule below is
+published, as a fact and without advice, in each instrument record the venue lists
+(`execution`, with `spread_bps`, `spread_source`, `synthetic_level_size`, the fee
+rates and `fee_basis`):
+
+- An order is acknowledged `resting` and executes when the recording first shows its
+  market after the instant it was sent: at least one world tick later, and never
+  against the book or mid its sender was shown.
+- The book it meets is the recorded order book when that is at least as recent as the
+  recorded mid; otherwise one level each side at the mid plus or minus half the tape's
+  spread, as deep as the recorded books' median top level for that market (unbounded
+  when the tape recorded no book for it). `venue.order_book` answers this same book.
+- A market order is immediate-or-cancel within 5% of the mid it was sent at
+  (Hyperliquid's market order); what it cannot fill is cancelled (`OrderRejected`,
+  reason `immediate-or-cancel remainder cancelled`), never rested. An
+  immediate-or-cancel order in flight cannot be cancelled; a limit in flight can.
+- A limit order that crosses on arrival fills at the book's prices at the taker rate
+  and rests the remainder. A resting limit fills only when a level is strictly better
+  than its price (a trade-through, never a touch), at its own price, at the maker
+  rate, up to that level's size.
+- Size taken from one recorded snapshot is not offered again.
+- Every order below the venue's order floor is refused when sent: the recorded
+  listing's `min_order_value_usd`, else Hyperliquid's 10 USD.
+- Fee rates are the recorded account's (`userFees` in the recorded listing), else
+  Hyperliquid's published base tier (perp 0.045% taker, 0.015% maker; spot 0.07% and
+  0.04%). A pair trades on spot rates.
+- Orders in flight hold margin in `collateral_view` as resting orders do.
+
+The harness's scorecard carries a `fill_band`: the venue P&L the tape's rules booked,
+and beside it the same recomputed with an extra adverse slippage of half the market's
+stated spread on every fill. Both numbers are always shown. Tape P&L is never evidence
+for a code change: iterating code against a tape until its card looks right is the
+architect optimizing toward its own "better" (AGENTS.md rule 2).
+
 ## Vaults
 
 `venue.vault_tools` is a boolean, default `false`, fixed at launch. When

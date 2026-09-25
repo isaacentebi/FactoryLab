@@ -388,7 +388,71 @@ def scorecard(events: list[dict[str, Any]]) -> dict[str, Any]:
                    "infeasible": kinds.get("order.infeasible", 0)},
         "clock": clock(events),
         "tape": tape_card(events),
+        "fill_band": fill_band(events),
     }
+
+
+def fill_band(events: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The venue's profit and loss on a tape, and the same recomputed pessimistically.
+
+    Both numbers, always together (critique H1): ``pnl_usd`` is what the tape's fill
+    rules booked -- realized P&L less fees less funding, plus what the positions still
+    open were worth at the last recorded mid -- and ``pessimistic_pnl_usd`` charges every
+    fill an extra adverse slippage of half the market's spread as the tape states it
+    (``[exchange.tape] spread_bps``). An observation about one recorded market, never
+    evidence for a code change (AGENTS.md rule 2). None off a tape. Integer micro-USD
+    throughout; the extra slippage rounds against the factory.
+    """
+    from factorylab.kernel.money import money_to_usd, usd_to_micro
+
+    tape = ((_launch_manifest(events) or {}).get("exchange") or {}).get("tape")
+    if not isinstance(tape, dict):
+        return None
+    spreads = {market: Decimal(bps) for market, bps in (tape.get("spread_bps") or ())}
+    realized = fees = funding = extra = notional = 0
+    positions: dict[str, tuple[Decimal, Decimal]] = {}  # coin -> (signed size, entry)
+    last_mid: dict[str, Decimal] = {}
+    fills = 0
+    for e in events:
+        kind = e.get("kind")
+        if kind == "event":
+            event = e.get("event") or {}
+            payload = event.get("payload") or {}
+            if event.get("kind") == "MarketMid":
+                last_mid[payload["coin"]] = Decimal(str(payload["mid"]))
+            elif event.get("kind") == "Funding" and payload.get("paid_usd") is not None:
+                funding += usd_to_micro(str(payload["paid_usd"]), rounding="nearest")
+            continue
+        if kind != "fill.counted":
+            continue
+        fills += 1
+        realized += int(e.get("realized_micro") or 0)
+        fees += int(e.get("fee_micro") or 0)
+        notional += int(e.get("notional_micro") or 0)
+        half = spreads.get(e["coin"], Decimal(0)) / 20_000
+        cost = Decimal(int(e.get("notional_micro") or 0)) * half
+        extra += int(cost.to_integral_value(rounding="ROUND_CEILING"))
+        size, px = Decimal(str(e["size"])), Decimal(str(e["px"]))
+        signed = size if e.get("is_buy") else -size
+        held, entry = positions.get(e["coin"], (Decimal(0), Decimal(0)))
+        new = held + signed
+        if held == 0 or (held > 0) == (signed > 0):
+            entry = (entry * abs(held) + px * size) / abs(new) if new else Decimal(0)
+        elif (new > 0) != (held > 0) and new != 0:
+            entry = px  # through zero: the residual opened at this fill
+        positions[e["coin"]] = (new, entry if new else Decimal(0))
+    unrealized = sum((usd_to_micro((last_mid[coin] - entry) * size, rounding="nearest")
+                      for coin, (size, entry) in positions.items()
+                      if size and coin in last_mid), 0)
+    pnl = realized - fees - funding + unrealized
+    return {"fills": fills, "notional_usd": str(money_to_usd(notional)),
+            "realized_usd": str(money_to_usd(realized)), "fees_usd": str(money_to_usd(fees)),
+            "funding_usd": str(money_to_usd(funding)),
+            "unrealized_usd": str(money_to_usd(unrealized)),
+            "pnl_usd": str(money_to_usd(pnl)),
+            "pessimistic_pnl_usd": str(money_to_usd(pnl - extra)),
+            "extra_slippage_usd": str(money_to_usd(extra)),
+            "half_spread_bps": {m: str(bps / 2) for m, bps in sorted(spreads.items())}}
 
 
 def tape_card(events: list[dict[str, Any]]) -> dict[str, Any] | None:

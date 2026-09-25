@@ -69,6 +69,72 @@ def test_a_scripted_world_runs_on_a_diarys_tape_at_its_own_tick_until_the_tape_e
         coin = mid["payload"]["coin"]
         assert mid["source"] == f"tape:{tape.sha256[:8]}"
         assert mid["payload"]["mid"] == str(tape.mid_at(coin, mid["ts_ns"])[1])
+    band = card["fill_band"]
+    assert band["pnl_usd"] is not None and band["pessimistic_pnl_usd"] is not None
+
+
+@pytest.mark.gate
+def test_a_market_decision_fills_a_tick_later_and_is_accounted_to_its_decision(
+        tmp_path, monkeypatch):
+    """Through the whole runtime: the answer's market order is acknowledged resting, fills
+    at a later tick against a newer recorded row than the one its decision was shown,
+    at the taker rate, and its fill is booked to the decision that sent it."""
+    tape = _short_tape(tmp_path / "short.tape.json", 12)
+    decide = fastloop.PolicyProvider._decide_trade
+
+    def buys_once(self, inputs, n):
+        if n == 2:
+            return {"action": "order", "coin": "BTC", "side": "buy", "size": "0.001",
+                    "rationale": "scripted market order"}
+        return decide(self, inputs, n)
+
+    monkeypatch.setattr(fastloop.PolicyProvider, "_decide_trade", buys_once)
+    card = fastloop.run("scripted", None, WORLD, tmp_path / "out", cap_usd="2", seed=1,
+                        tape_from=tmp_path / "short.tape.json")
+    assert card["status"] == "completed", card.get("error")
+    events = _events(card)
+    [intent] = [e for e in events if e.get("kind") == "order.intent"
+                and e["operation"] == "venue.place_market"]
+    [ack] = [e for e in events if e.get("kind") == "order.acknowledged"
+             and e["client_id"] == intent["client_id"]]
+    assert ack["result"]["status"] == "resting"
+    [fill] = [e for e in events if e.get("kind") == "fill.counted"
+              and e["order_id"] == ack["result"]["order_id"]]
+    sent = intent["ts"]
+    assert fill["ts"] > sent
+    assert tape.mid_at("BTC", fill["ts"])[0] > tape.mid_at("BTC", sent)[0]
+    assert fill["fee_micro"] == round(fill["notional_micro"] * 0.00045)
+    receipts = [e for e in events if e.get("kind") == "consequence.fill"
+                and e["payload"]["order_id"] == fill["order_id"]]
+    assert receipts, "the fill is booked to the decision that sent it"
+    assert card["fill_band"]["fills"] == 1
+
+
+def test_the_fill_band_shows_the_tapes_pnl_beside_a_pessimistic_shadow_of_it():
+    """Both numbers, always: the P&L the tape's fill rules booked, and the same with
+    every fill charged an extra half of the tape's stated spread, in integer micro-USD."""
+    tape = {"sha256": "ab" * 32, "start_ns": 1, "end_ns": 2, "markets": ["BTC"],
+            "spread_bps": [["BTC", "2"]]}
+    events = [
+        {"kind": "event", "event": {"kind": "Launch", "payload": {
+            "manifest": {"exchange": {"tape": tape}}}}},
+        {"kind": "fill.counted", "coin": "BTC", "is_buy": True, "size": "0.1", "px": "100",
+         "notional_micro": 10_000_000, "realized_micro": 0, "fee_micro": 4_500},
+        {"kind": "fill.counted", "coin": "BTC", "is_buy": False, "size": "0.05", "px": "110",
+         "notional_micro": 5_500_000, "realized_micro": 500_000, "fee_micro": 2_475},
+        {"kind": "event", "event": {"kind": "MarketMid", "payload": {"coin": "BTC",
+                                                                      "mid": "120"}}},
+        {"kind": "event", "event": {"kind": "Funding", "payload": {"coin": "BTC",
+                                                                    "paid_usd": "0.01"}}},
+    ]
+    band = fastloop.fill_band(events)
+    # 0.5 realized - 0.006975 fees - 0.01 funding + 0.05 x (120 - 100) still open.
+    assert band["pnl_usd"] == "1.483025"
+    # Half of 2 bps on 15.5 USD of fills.
+    assert band["extra_slippage_usd"] == "0.001550"
+    assert band["pessimistic_pnl_usd"] == "1.481475"
+    assert fastloop.fill_band(events[1:]) is None  # off a tape there is no band
+    assert fastloop.scorecard(events)["fill_band"] == band
 
 
 class _Died(BaseException):

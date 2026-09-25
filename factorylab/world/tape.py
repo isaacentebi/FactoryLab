@@ -19,17 +19,22 @@ import hashlib
 import json
 import re
 from collections.abc import Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 from factorylab.world.events import WorldEvent, WorldEventKind
 from factorylab.world.exchange import (
+    MIN_ORDER_VALUE_USD,
     NS_PER_HOUR,
     FakeExchange,
     FundingEvent,
     FundingPayment,
+    Order,
+    OrderKind,
+    OrderResult,
+    _check_count,
 )
 
 #: The compact tape's format tag. A tape file carries it; a diary does not.
@@ -371,6 +376,21 @@ class Tape:
             return _median(every).quantize(Decimal("0.0001")), "recorded_other_markets"
         return ASSUMED_SPREAD_BPS, "assumed"
 
+    def level_size(self, market: str) -> Decimal | None:
+        """The median top-of-book size the recorded books showed for ``market``, or None
+        when none was recorded: the size of one synthetic level (``TapeVenue._book``)."""
+        sizes = [Decimal(side[0][1]) for row in self.data.get("books", {}).get(market, [])
+                 for side in (row[1], row[2]) if side]
+        return _median(sizes) if sizes else None
+
+    def min_order_value(self, market: str) -> Decimal:
+        """The venue's order floor for ``market``: the recorded listing's, else Hyperliquid's."""
+        kind = "spot" if "/" in market else "perp"
+        for row in self.instrument_rows(kind):
+            if row.get("coin") == market and row.get("min_order_value_usd") is not None:
+                return Decimal(str(row["min_order_value_usd"]))
+        return Decimal(MIN_ORDER_VALUE_USD)
+
     def summary(self) -> dict:
         """What a scorecard and a Launch record say about this tape."""
         return {"sha256": self.sha256, "venue": self.data.get("venue"),
@@ -394,10 +414,29 @@ class TapeVenue(FakeExchange):
     and never once per recorded row; past the tape's last row the last row holds and
     the tape never loops. Its name, ``tape:<sha8>``, says what it is.
 
+    Fills are the recording's, never kinder (money path; Chapter II §II.b, the hard
+    cast): an order is acknowledged as resting and executes only when the recording
+    first shows its market after the instant it was sent, never against the quote
+    current when it was sent; the book it meets is the recorded one when that is at
+    least as recent as the recorded mid, otherwise one level each side at the mid plus
+    or minus half the tape's spread, as deep as the recorded books' median top level
+    (unbounded when the tape recorded none); a market order is immediate-or-cancel
+    within Hyperliquid's 5% of the mid it was sent at, and what it cannot fill is
+    cancelled; a limit that crosses on arrival takes at the book's prices, at the taker
+    rate, and rests the remainder; a resting limit fills only when the book trades
+    through its price (a level strictly better), at its price, at the maker rate, up
+    to that level's size; liquidity taken from one recorded snapshot is not offered
+    again; every order is refused below the venue's order floor. The rules are
+    published with the instrument listing (``instruments``) as facts.
+
     The tape itself is held outside the instance dictionary, so a checkpoint carries
     the venue's state and not a copy of the recording: a resume rebuilds the venue
     from the same tape, whose SHA-256 the world's manifest fixes.
     """
+
+    #: Hyperliquid's market order is an immediate-or-cancel limit this far through the
+    #: mid its sender read (the SDK's DEFAULT_SLIPPAGE; ``HyperliquidExchange``).
+    MARKET_SLIPPAGE = Decimal("0.05")
 
     __slots__ = ("_tape",)
 
@@ -424,6 +463,14 @@ class TapeVenue(FakeExchange):
                     self._mids[market.split("/")[0]] = row[1]
         self._now_ns = tape.start_ns
         self._last_funding_ns = tape.start_ns - tape.start_ns % NS_PER_HOUR
+        # Orders sent and not yet arrived: id -> the order, the recorded row its sender
+        # read (its instant and mid) and the instant it was sent.
+        self._inflight: dict[str, dict] = {}
+        # Liquidity taken, by (market, snapshot instant, side, price): what one recorded
+        # snapshot offered is offered once.
+        self._taken: dict[tuple[str, int, str, str], Decimal] = {}
+        # Orders the venue refused on arrival, with the reason it gave.
+        self._rejected: dict[str, str] = {}
 
     @property
     def tape(self) -> Tape:
@@ -452,8 +499,10 @@ class TapeVenue(FakeExchange):
         """Move the venue to ``ts_ns`` and answer what the tape recorded up to it.
 
         Returns a ``MarketMid`` per recorded market (its latest row at or before
-        ``ts_ns``), a ``Funding`` per perp for each hour boundary crossed, then any
-        fills, in that order. Guarantees time never moves backwards.
+        ``ts_ns``), a ``Funding`` per perp for each hour boundary crossed (on the
+        positions held at it, before anything fills at ``ts_ns``), then the fills and
+        refusals of resting orders the book traded through, then those of orders that
+        arrived, then any liquidation. Guarantees time never moves backwards.
         """
         if ts_ns < self._now_ns:
             raise ValueError("TapeVenue time cannot move backwards")
@@ -473,6 +522,7 @@ class TapeVenue(FakeExchange):
                                      {"coin": market, "mid": str(mid)}))
         events.extend(self._settle_funding(ts_ns))
         events.extend(self._cross_resting())
+        events.extend(self._arrive())
         events.extend(self._liquidate_if_needed())
         if self.__dict__.get("_vaults"):
             self._advance_vaults()
@@ -517,3 +567,306 @@ class TapeVenue(FakeExchange):
             if row is not None:
                 out.append(FundingEvent(coin, row[1], row[2], row[0]))
         return out
+
+    # ---- the venue's terms, published as facts (Chapter II §I.b)
+
+    def _rates(self, market: str) -> tuple[Decimal, Decimal]:
+        """(taker, maker) for an order on ``market`` (a pair trades on spot rates)."""
+        taker, maker, _source = self._tape.fees("spot" if "/" in market else "perp")
+        return taker, maker
+
+    def instruments(self) -> dict:
+        """Each listed market's record as the recording's listing stated it (lot and tick
+        sizes, the order floor), with the fee rates every fill here is charged, the
+        spread and book the tape states, and the rules its fills follow."""
+        out: dict[str, list[dict]] = {}
+        for kind, markets in (("perp", dict.fromkeys((*self.coins, *self.listed_coins))),
+                              ("spot", dict.fromkeys((*self.spot_pairs,
+                                                      *self.listed_spot_pairs)))):
+            recorded = {row.get("coin"): row for row in self._tape.instrument_rows(kind)}
+            taker, maker, source = self._tape.fees(kind)
+            rows = []
+            for market in markets:
+                row = dict(recorded.get(market) or {"coin": market, "lot_size": "0.000001",
+                                                    "tick_size": "0.01"})
+                spread, spread_source = self._tape.spread_bps(market)
+                depth = self._tape.level_size(market)
+                row.update({
+                    "min_order_value_usd": str(self._tape.min_order_value(market)),
+                    "taker_fee_rate": str(taker), "maker_fee_rate": str(maker),
+                    "fee_basis": ("fraction of notional, the recorded account's userFees"
+                                  if source == "recorded" else
+                                  "fraction of notional, Hyperliquid's published base tier"),
+                    "spread_bps": str(spread), "spread_source": spread_source,
+                    "synthetic_level_size": None if depth is None else str(depth),
+                    "execution": self.EXECUTION})
+                rows.append(row)
+            out[kind] = rows
+        return out
+
+    #: The fill rules, as facts about this venue (never advice).
+    EXECUTION = (
+        "A recorded market. An order is acknowledged as resting and executes when the "
+        "recording first shows its market after the instant it was sent. The book is "
+        "the recorded order book when it is at least as recent as the recorded mid, "
+        "otherwise one level each side at the mid plus or minus half of spread_bps, "
+        "holding synthetic_level_size (unbounded when null). A market order is "
+        "immediate-or-cancel within 5% of the mid when it was sent; any part not filled "
+        "is cancelled. A limit order that crosses on arrival fills at the book's prices "
+        "at taker_fee_rate and rests the rest; a resting limit fills only when a level "
+        "is strictly better than its price, at its price, at maker_fee_rate, up to that "
+        "level's size. Size taken from one recorded snapshot is not offered again. "
+        "Funding settles at each UTC hour on the position then held, at the last "
+        "recorded rate and mid.")
+
+    # ---- the book an arriving or resting order meets
+
+    def _book(self, market: str) -> tuple[int, list, list, str]:
+        """(snapshot instant, bids, asks, source) at the venue's instant, best first.
+
+        Each level is ``[price, available]``: what the snapshot offered less what was
+        already taken from it, ``None`` for a synthetic level of unbounded size.
+        """
+        mid_row = self._tape.mid_at(market, self._now_ns)
+        if mid_row is None:
+            raise ValueError(f"the tape has recorded no price for {market} yet")
+        recorded = self._tape.book_at(market, self._now_ns)
+        if recorded is not None and recorded[0] >= mid_row[0]:
+            snapshot, bids, asks = recorded
+            source = "recorded"
+        else:
+            snapshot, mid = mid_row
+            half = mid * self._tape.spread_bps(market)[0] / 20_000
+            size = self._tape.level_size(market)
+            bids, asks, source = [(mid - half, size)], [(mid + half, size)], "synthetic"
+        # Keys of older snapshots can never be met again: the tape only moves forward.
+        for key in [k for k in self._taken if k[0] == market and k[1] != snapshot]:
+            del self._taken[key]
+
+        def left(side: str, levels: list) -> list:
+            out = []
+            for px, size in levels:
+                taken = self._taken.get((market, snapshot, side, str(px)), Decimal(0))
+                out.append([px, None if size is None else max(Decimal(0), size - taken)])
+            return out
+
+        return snapshot, left("bid", bids), left("ask", asks), source
+
+    def order_book(self, coin: str, depth: int) -> dict:
+        """The book an order sent now would meet, at most ``depth`` levels a side."""
+        _check_count(depth, 20)
+        snapshot, bids, asks, source = self._book(coin)
+        return {"coin": coin, "ts_ns": snapshot, "source": source,
+                "bids": [{"price": px, "size": size} for px, size in bids[:depth]],
+                "asks": [{"price": px, "size": size} for px, size in asks[:depth]]}
+
+    @staticmethod
+    def _walk(levels: list, size: Decimal, limit: Decimal, *, buy: bool,
+              strict: bool) -> list[tuple[Decimal, Decimal]]:
+        """What ``size`` would take from ``levels`` at prices within ``limit``: at or inside
+        it, or strictly inside it when ``strict`` (a trade-through, not a touch)."""
+        takes: list[tuple[Decimal, Decimal]] = []
+        remaining = size
+        for px, available in levels:
+            inside = (px < limit if strict else px <= limit) if buy else (
+                px > limit if strict else px >= limit)
+            if remaining <= 0 or not inside:
+                break
+            take = remaining if available is None else min(remaining, available)
+            if take > 0:
+                takes.append((px, take))
+                remaining -= take
+        return takes
+
+    def _commit(self, market: str, snapshot: int, side: str, takes: list) -> None:
+        for px, take in takes:
+            key = (market, snapshot, side, str(px))
+            self._taken[key] = self._taken.get(key, Decimal(0)) + take
+
+    # ---- orders
+
+    def _place(self, order: Order) -> OrderResult:
+        """Refuse what the venue refuses now; send the rest, acknowledged as resting."""
+        if order.coin not in (self.spot_pairs if order.market == "spot" else self.coins):
+            return OrderResult(None, "rejected", Decimal(0), None, "unknown coin")
+        if order.market == "spot" and (order.size % Decimal("0.000001")
+                or order.limit_px is not None and order.limit_px % Decimal("0.01")):
+            return OrderResult(None, "rejected", Decimal(0), None, "invalid spot tick or lot size")
+        read = self._tape.mid_at(order.coin, self._now_ns)
+        if read is None:
+            return OrderResult(None, "rejected", Decimal(0), None, "no recorded price yet")
+        px = order.limit_px if order.limit_px is not None else read[1]
+        if order.size * px < self._tape.min_order_value(order.coin):
+            return OrderResult(None, "rejected", Decimal(0), None,
+                               "order below the venue minimum value")
+        oid = str(self._next_oid)
+        self._next_oid += 1
+        self._inflight[oid] = {"order": order, "read_ns": read[0], "read_mid": read[1],
+                               "sent_ns": self._now_ns}
+        return OrderResult(oid, "resting", Decimal(0), None)
+
+    def _arrive(self) -> list[WorldEvent]:
+        """Execute every order whose market the recording has shown anew since it was sent."""
+        events: list[WorldEvent] = []
+        for oid, flight in list(self._inflight.items()):
+            row = self._tape.mid_at(flight["order"].coin, self._now_ns)
+            if row is None or row[0] <= flight["read_ns"]:
+                continue  # nothing recorded after what its sender read: still in flight
+            del self._inflight[oid]
+            events.extend(self._execute(oid, flight))
+        return events
+
+    def _refuse(self, oid: str, order: Order, reason: str) -> list[WorldEvent]:
+        self._rejected[oid] = reason
+        return [WorldEvent(WorldEventKind.ORDER_REJECTED, self._now_ns, self.name,
+                           {"order_id": oid, "coin": order.coin, "reason": reason})]
+
+    def _execute(self, oid: str, flight: dict) -> list[WorldEvent]:
+        order: Order = flight["order"]
+        market, buy = order.coin, order.is_buy
+        size = order.size
+        if order.market == "perp" and order.reduce_only:
+            pos = self._positions.get(market)
+            if pos is None or (pos.size > 0) == buy:
+                return self._refuse(oid, order, "not reducing position")
+            size = min(size, abs(pos.size))
+        snapshot, bids, asks, _source = self._book(market)
+        side, levels = ("ask", asks) if buy else ("bid", bids)
+        if order.kind is OrderKind.MARKET:
+            factor = 1 + self.MARKET_SLIPPAGE if buy else 1 - self.MARKET_SLIPPAGE
+            bound = flight["read_mid"] * factor
+        else:
+            bound = order.limit_px
+        takes = self._walk(levels, size, bound, buy=buy, strict=False)
+        filled = sum((take for _px, take in takes), Decimal(0))
+        events: list[WorldEvent] = []
+        if filled > 0:
+            notional = sum((px * take for px, take in takes), Decimal(0))
+            vwap = (notional / filled).quantize(Decimal("1e-10"))
+            taker, _maker = self._rates(market)
+            result = self._fill(oid, replace_size(order, filled), vwap, fee_rate=taker)
+            events.extend(self.drain_events())
+            if result.status != "filled":
+                if order.market == "spot":  # the spot book refuses without an event
+                    events.extend(self._refuse(oid, order, result.error or "rejected"))
+                else:
+                    self._rejected[oid] = result.error or "rejected"
+                return events
+            self._commit(market, snapshot, side, takes)
+        remainder = size - filled
+        if remainder <= 0:
+            return events
+        if order.kind is OrderKind.MARKET:
+            # Immediate-or-cancel: what the book could not fill is cancelled, never rested.
+            if filled > 0:
+                self._cancelled.add(oid)
+                events.append(WorldEvent(WorldEventKind.ORDER_REJECTED, self._now_ns, self.name,
+                                         {"order_id": oid, "coin": market,
+                                          "reason": "immediate-or-cancel remainder cancelled",
+                                          "cancelled_size": str(remainder)}))
+                return events
+            return events + self._refuse(
+                oid, order, "immediate-or-cancel: no liquidity within 5% of the mid sent at")
+        if order.market == "spot" and not self._spot_affordable(order, order.limit_px):
+            return events + self._refuse(oid, order, "insufficient spot balance")
+        self._resting[oid] = replace_size(order, remainder)
+        return events
+
+    def _cross_resting(self) -> list[WorldEvent]:
+        """Fill resting limits the book trades through, at their price, at the maker rate."""
+        events: list[WorldEvent] = []
+        for oid, order in list(self._resting.items()):
+            assert order.limit_px is not None
+            snapshot, bids, asks, _source = self._book(order.coin)
+            side, levels = ("ask", asks) if order.is_buy else ("bid", bids)
+            takes = self._walk(levels, order.size, order.limit_px, buy=order.is_buy,
+                               strict=True)
+            filled = sum((take for _px, take in takes), Decimal(0))
+            if filled <= 0:
+                continue
+            _taker, maker = self._rates(order.coin)
+            result = self._fill(oid, replace_size(order, filled), order.limit_px,
+                                fee_rate=maker)
+            events.extend(self.drain_events())
+            if result.status != "filled":
+                del self._resting[oid]
+                if order.market == "spot":
+                    events.extend(self._refuse(oid, order, result.error or "rejected"))
+                else:
+                    self._rejected[oid] = result.error or "rejected"
+                continue
+            self._commit(order.coin, snapshot, side, takes)
+            if filled < order.size:
+                self._resting[oid] = replace_size(order, order.size - filled)
+            else:
+                del self._resting[oid]
+        return events
+
+    def _spot_affordable(self, order: Order, px: Decimal) -> bool:
+        """A spot buy is affordable with its cost and the spot taker fee on it."""
+        taker, _maker = self._rates(order.coin)
+        fee = (order.size * px * taker).quantize(Decimal("0.000001"))
+        return ((not order.reduce_only and order.size * px + fee <= self._spot_available("USDC"))
+                if order.is_buy else order.size <= self._spot_available(order.coin))
+
+    def open_orders(self) -> list[dict]:
+        """Resting orders, then orders sent and not yet arrived (``in_flight``)."""
+        return [*super().open_orders(), *(
+            {"order_id": oid, "coin": f["order"].coin,
+             "side": "buy" if f["order"].is_buy else "sell", "size": f["order"].size,
+             "price": f["order"].limit_px, "in_flight": True}
+            for oid, f in self._inflight.items())]
+
+    def cancel(self, order_id: str, *, coin: str | None = None,
+               client_id: str | None = None) -> dict:
+        """A resting or in-flight limit is cancellable; an immediate-or-cancel is not."""
+        if client_id is not None and client_id in self._cancel_results:
+            return dict(self._cancel_results[client_id])
+        flight = self._inflight.get(order_id)
+        if flight is None or coin is not None and flight["order"].coin != coin:
+            return super().cancel(order_id, coin=coin, client_id=client_id)
+        if flight["order"].kind is OrderKind.MARKET:
+            result = {"status": "rejected",
+                      "error": "an immediate-or-cancel order cannot be cancelled"}
+        else:
+            del self._inflight[order_id]
+            self._cancelled.add(order_id)
+            result = {"status": "cancelled", "order_id": order_id}
+        if client_id is not None:
+            self._cancel_results[client_id] = result
+        return dict(result)
+
+    def lookup(self, client_id: str, *, order_id: str | None = None) -> OrderResult:
+        """What became of an order: in flight or resting, filled, cancelled (with any
+        part filled first), or refused on arrival."""
+        result = self._client_results.get(client_id)
+        oid = order_id or (result.order_id if result else None)
+        fills = [f for f in self._fills if f.order_id == oid]
+        size = sum((f.size for f in fills), Decimal(0))
+        avg = sum((f.size * f.px for f in fills), Decimal(0)) / size if size else None
+        if oid in self._inflight:
+            return OrderResult(oid, "resting", Decimal(0), None)
+        if oid in self._resting:
+            return OrderResult(oid, "resting", size, avg)
+        if oid in self._cancelled:
+            return OrderResult(oid, "cancelled", size, avg)
+        if oid in self._rejected:
+            return OrderResult(oid, "rejected", Decimal(0), None, self._rejected[oid])
+        if fills:
+            return OrderResult(oid, "filled", size, avg)
+        return result or OrderResult(oid, "uncertain", Decimal(0), None, "order not observed")
+
+    def collateral_view(self, coin: str, market: str = "perp") -> dict:
+        """As the fake's, with orders in flight holding margin as resting ones do."""
+        view = super().collateral_view(coin, market)
+        view["open_order_holds_usd"] += sum((
+            f["order"].size * (f["order"].limit_px or f["read_mid"])
+            / self._leverage.get(f["order"].coin, self.max_leverage)
+            for f in self._inflight.values()
+            if f["order"].market == "perp" and not f["order"].reduce_only), Decimal(0))
+        return view
+
+
+def replace_size(order: Order, size: Decimal) -> Order:
+    """The same order for ``size``: a partial fill, or what rests after one."""
+    return replace(order, size=size)
