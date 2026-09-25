@@ -145,8 +145,10 @@ def public_window_item(rt, *, window: int, event: int) -> dict:
                                   if (region := rt.regions.get(card.id)) is not None else None),
                        # Charter audit M7 and wave 16 R-E: the card's bound, its
                        # windows at it and its saturated run, and the
-                       # current run of windows in violation.
-                       **rt.controller.saturation(card.id)}
+                       # current run of windows in violation, and its consecutive
+                       # unmeasured windows (wave 16, R10-f).
+                       **rt.controller.saturation(card.id),
+                       **rt._card_observed(card.id)}
                       for card in rt.charter.cards],
         },
         "pots": {"venue": pots.get("venue"), "reserve": pots.get("reserve"),

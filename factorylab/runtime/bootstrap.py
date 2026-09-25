@@ -180,6 +180,9 @@ class BootstrapMixin:
         self.ticks_consumed = 0
         # card id -> the tick its price last moved (time audit T2).
         self.card_clock: dict[str, int] = {}
+        # card id -> its consecutive closed windows with no reading (wave 16, R10-f):
+        # a dark card is published to governance, never coerced.
+        self.card_unmeasured: dict[str, int] = {}
         # Whether a governance tier fits between the slowest loop and the world (T7).
         self.governance_viable = True
         # event kind -> the tick a grown menu started waiting for its epoch (T6).

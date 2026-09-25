@@ -587,6 +587,12 @@ class PricingMixin:
         # The viability of a governance tier against the slowest loop, whose settling
         # time the live versioning measures at this close (time audit T7).
         self._check_viability()
+        # Wave 16, R10-f (§III early warning): a card no window measures stays not
+        # failing (M-6); how long it has been dark is published to governance, and
+        # nothing is added or redefined to make it measurable (that would be Class 2).
+        self.card_unmeasured = {card.id: (0 if card.id in card_values
+                                          else self.card_unmeasured.get(card.id, 0) + 1)
+                                for card in self.charter.cards}
         # A decision settling late is priced on the window it worked in.
         self.window.closed_relief = self._relief_sets(w.index)
         self.window.closed_values = dict(card_values)
@@ -618,7 +624,8 @@ class PricingMixin:
         )
         cards = {c.id: c for c in self.charter.cards}
         # The total pressure on the reward of each card's roles at the prices in force
-        # now: at ``penalty_cap`` the controller freezes the card's integrator (R-E).
+        # now: at ``penalty_cap`` the window is published at the bound (R-E); only the
+        # card's own bound freezes its integrator (R10-e).
         pressure = self._card_pressure(card_values, holdouts)
         for card_id in sorted(card_values):
             held = self._price_held(cards[card_id], w)
@@ -661,6 +668,11 @@ class PricingMixin:
         # its decisions settle now, on the count frozen at its close.
         self._settle_deferred(w.index)
         self._prune_price_evidence()
+
+    def _card_observed(self, card_id: str) -> dict[str, int]:
+        """A card's consecutive closed windows with no reading (``unmeasured_windows``;
+        wave 16, R10-f): 0 for a card measured at the last close or not yet closed."""
+        return {"unmeasured_windows": self.card_unmeasured.get(card_id, 0)}
 
     def _card_pressure(self, card_values: dict[str, float],
                        holdouts: dict[str, float]) -> dict[str, float]:

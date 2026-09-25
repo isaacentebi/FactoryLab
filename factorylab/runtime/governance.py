@@ -1804,11 +1804,15 @@ class GovernanceMixin:
         price at its bound).
 
         Beside the controller's lambda stands the price the factory posted
-        (charter audit M1), when any seat posted one.
+        (charter audit M1), when any seat posted one, and beside its saturation the
+        card's observation and its consecutive unmeasured windows (wave 16, R10-f).
         """
+        observations = {card.id: card.observation for card in self.charter.cards}
         return [{"card_id": card_id, "lambda": self.controller.price(card_id),
                  **({"posted": posted} if (posted := self._posted_lambda(card_id)) else {}),
-                 **self.controller.saturation(card_id)}
+                 **({"observation": observations[card_id]} if card_id in observations
+                    else {}),
+                 **self.controller.saturation(card_id), **self._card_observed(card_id)}
                 for card_id in sorted(self.priced)]
 
     def _posted_lambda(self, card_id: str) -> dict | None:

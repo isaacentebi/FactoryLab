@@ -531,7 +531,7 @@ def test_every_wave_16_formula_is_published_in_world_scoring():
         "No consequence score enters a card, a lambda or a posted lambda",  # section 9
         "priced at the router's observed average raw score less the same penalty",  # D4
         "unhistoried niche", "non-relieving",  # D5
-        "whose penalty sits at penalty_cap is not raised",  # R-E
+        "another card's pressure never stops it",  # R-E, R10-e
     ):
         assert fact in text, fact
     for advice in ("you should", "try to", "aim to", "it is best"):

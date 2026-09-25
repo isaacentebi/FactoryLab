@@ -150,9 +150,9 @@ def test_a_niche_decision_waits_for_no_close(monkeypatch):
     assert not _rows(rt, "price.deferred", handle=explored)
 
 
-def test_the_integrator_freezes_on_the_roles_pressure_at_the_cap(monkeypatch):
-    """R-E anti-windup through the runtime: the pressure the close hands the controller
-    is the total over the cards of the card's roles, at the prices in force."""
+def test_the_integrator_freezes_at_the_card_s_own_bound(monkeypatch):
+    """R-E anti-windup through the runtime: the close hands the controller the roles'
+    total pressure, published with the window; the card at its own bound freezes."""
     rt = _runtime(monkeypatch)
     rt.controller.set_price(HOLDS.id, 100.0, amendment_id="at-the-cap")
     for _ in range(3):
@@ -241,3 +241,30 @@ def test_lambda_max_is_refused_by_name():
     raw = tomllib.loads((WORLDS_DIR / "scripted.toml").read_text())
     with pytest.raises(ValueError, match="prices.lambda_max was removed"):
         manifest_from_dict({**raw, "prices": {**raw["prices"], "lambda_max": 1.0}})
+
+
+# --- R10-f: a dark card is published, never coerced -------------------------------------
+
+
+def test_a_card_with_no_readings_for_n_windows_publishes_unmeasured_windows_n(monkeypatch):
+    """Wave 16, ruling R10-f (§III early warning): each card's consecutive unmeasured
+    windows reach governance with its observation; a reading resets the run."""
+    from factorylab.runtime.pricing import MeasureWindow
+    from factorylab.runtime.wake import public_window_item
+
+    rt = _runtime(monkeypatch)
+    for _ in range(4):  # no producer return: noop_share has no reading
+        rt._close_price_window()
+        rt.window = MeasureWindow(rt.window.index + 1, rt.wallet.balance)
+    assert rt._card_observed(HOLDS.id) == {"unmeasured_windows": 4}
+    world = {row["card_id"]: row for row in rt._world_block()["card_prices"]}
+    assert world[HOLDS.id]["unmeasured_windows"] == 4
+    agenda = {row["card_id"]: row for row in rt._card_statistics()}
+    assert agenda[HOLDS.id]["unmeasured_windows"] == 4
+    assert agenda[HOLDS.id]["observation"] == "noop_share"
+    public = {row["id"]: row for row in
+              public_window_item(rt, window=1, event=rt.n)["charter"]["cards"]}
+    assert public[HOLDS.id]["unmeasured_windows"] == 4
+    _producer(rt, "seed-decider", "hold")
+    rt._close_price_window()
+    assert rt._card_observed(HOLDS.id) == {"unmeasured_windows": 0}

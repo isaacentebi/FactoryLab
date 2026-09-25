@@ -794,6 +794,9 @@ _RUNTIME_FIELDS = (
     # tier is taken as viable until measured, no epoch waits, and the anchor is
     # rebuilt from the treasury's own window.
     "card_clock", "governance_viable", "pending_epochs", "cap_anchor_ns",
+    # Each card's consecutive unmeasured windows (wave 16, R10-f). An older checkpoint
+    # has none: the run counts from the next close.
+    "card_unmeasured",
 )
 # Runtime fields read through a property with no setter, and the attribute behind it.
 _RUNTIME_BACKING = {

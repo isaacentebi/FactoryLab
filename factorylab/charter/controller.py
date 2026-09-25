@@ -197,13 +197,17 @@ class PriceController:
     price is clipped to ``[0, penalty_cap / v]`` while it violates (``v > 0``): above
     it, ``lambda * v`` would take more than the capped penalty any reward can bear,
     and no decision's reward would change. There is no ``lambda_max``. While the
-    penalty sits at the cap (the card's own ``lambda * v``, or the total pressure the
-    runtime reads over the cards of its roles, at or above ``penalty_cap``) the
-    integrator is frozen: essay II.IV.b, "gain ramped high enough to kick a system
+    card's own price sits at its bound (``lambda >= penalty_cap / v``) the integrator
+    is frozen: essay II.IV.b, "gain ramped high enough to kick a system
     out of an overdamped attractor will, if unchecked, overshoot into an oscillation
     condition (thrash)", and a wound-up integral would keep the price high long after
-    the attractor was left. Saturation is counted (``saturated_windows``,
-    ``windows_at_bound``) and published, never answered with more gain.
+    the attractor was left. The gate is the card's own bound only (wave 16, ruling
+    R10-e): the total pressure of its roles clips each decision's penalty and is
+    published, but another card's saturation never freezes this card's integrator or
+    ratchet, which would be a safe harbour for its failure (§II.b: "price the duration
+    of failure"). Saturation, the card's or its roles', is counted
+    (``saturated_windows``, ``windows_at_bound``) and published, never answered with
+    more gain.
     """
 
     def __init__(
@@ -285,10 +289,10 @@ class PriceController:
         (``penalty_cap / v``), so the raise persists through later windows until the
         violation ends and the ordinary decay unwinds it.
 
-        At saturation the ratchet stops (wave 16, ruling R-E): when the card's
-        penalty already sits at ``penalty_cap`` (its own ``lambda * v``, or the total
-        pressure of its roles at its last observation), no gain on the price's level
-        exists, so the integral and the price are left unchanged, the duration keeps
+        At saturation the ratchet stops (wave 16, ruling R-E): when the card's own
+        price sits at its bound (its own penalty at ``penalty_cap``; ruling R10-e: never
+        on another card's pressure), no gain on the price's level exists, so the
+        integral and the price are left unchanged, the duration keeps
         counting, and ``immune.price_ratchet_saturated`` is ledgered (card, window,
         duration, the price at its bound). Either entry is ledgered before any state
         changes.
@@ -327,9 +331,15 @@ class PriceController:
         return self.__cap / violation if violation > 0 else None
 
     def _at_cap(self, state: _CardState) -> bool:
-        """Whether a card's penalty sits at ``penalty_cap``: its own price times its
-        violation, or the total pressure of its roles at its last observation."""
-        return self._presses(state.price, state.previous_violation, state.last_pressure)
+        """Whether a card's own price sits at its bound at its last violation: the gate
+        on its ratchet (ruling R10-e), never its roles' pressure."""
+        return self._own_bound(state.price, state.previous_violation)
+
+    def _own_bound(self, price: float, violation: float) -> bool:
+        """Whether a violating card at ``price`` is at its own bound ``cap / v`` (compared
+        as a price, so a price clipped to the bound is at it whatever the float product
+        rounds to)."""
+        return violation > 0 and price >= self.__cap / violation
 
     def _presses(self, price: float, violation: float, pressure: float) -> bool:
         """Whether a violating card at ``price`` presses the cap: its price at or above
@@ -397,9 +407,10 @@ class PriceController:
         ``anticipated`` is the market's expected change
         in the violation, for the feed-forward term (see the class docstring).
         ``pressure`` is the total ``sum(lambda * v)`` over the cards of the roles
-        this card answers for, at the prices in force before this update; with it at
-        ``penalty_cap`` the integrator is frozen (anti-windup, ruling R-E). Without
-        it the card's own ``lambda * v`` is the pressure.
+        this card answers for, at the prices in force before this update: with it at
+        ``penalty_cap`` the window is counted and published as at the bound. The
+        integrator freezes on the card's own bound only (anti-windup, rulings R-E,
+        R10-e). Without it the card's own ``lambda * v`` is the pressure.
         """
         holdout = _number(holdout, "holdout")
         if anticipated is not None:
@@ -427,9 +438,9 @@ class PriceController:
         violation = self.violation(card_id, value) + holdout
         if pressure is not None:
             pressure = _number(pressure, "pressure")
-        # The penalty the card presses on the reward at the prices in force now: at the
-        # cap, no gain on the price's level exists, and the integrator holds.
-        frozen = self._presses(state.price, violation, pressure or 0.0)
+        # At its own bound no gain on the card's price exists, and the integrator
+        # holds; another card's pressure never holds it (ruling R10-e).
+        frozen = self._own_bound(state.price, violation)
         requested, integral, terms = self._pid(state, value, violation, frozen=frozen)
         if anticipated is not None and violation > 0:
             feed_forward = self.__kp * max(anticipated, -violation)

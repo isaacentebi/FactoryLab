@@ -106,18 +106,44 @@ def test_the_integral_is_frozen_while_the_penalty_sits_at_the_cap():
     assert prices.price("c") == pytest.approx(0.5 * 0.2 + 0.5 * 0.2)
 
 
-def test_the_runtime_s_pressure_on_the_role_freezes_the_integrator_too():
-    """The penalty a decision bears is the sum over the cards of its role; with that
-    sum at the cap, no card's integrator winds up, though its own lambda * v is low."""
+def test_another_card_s_pressure_never_freezes_the_integrator():
+    """Ruling R10-e: the roles' total pressure at the cap is published (the window is at
+    the bound) but only the card's own bound freezes its integrator: one saturated card
+    is no safe harbour for another's failure."""
     ledger = Ledger()
     prices = _pid(ledger, kp=0.0, eta=0.1)
     prices.observe("c", 2.0, 0, pressure=0.0)
     prices.observe("c", 2.0, 1, pressure=0.9)
     prices.observe("c", 2.0, 2, pressure=0.95)
     rows = _updates(ledger)
-    assert [row["i"] for row in rows] == pytest.approx([0.1, 0.1, 0.1])
-    assert [row["integrator_frozen"] for row in rows] == [False, True, True]
+    assert [row["i"] for row in rows] == pytest.approx([0.1, 0.2, 0.3])
+    assert [row["integrator_frozen"] for row in rows] == [False, False, False]
+    assert [row["at_cap"] for row in rows] == [False, True, True]  # published
     assert prices.saturation("c")["saturated_windows"] == 2
+
+
+def test_a_card_below_its_own_bound_ratchets_whatever_its_roles_pressure():
+    """Ruling R10-e, the violation attempt: card A saturates the roles' pressure; card B
+    fails with its own price below its bound, and still ratchets on every stable-failure
+    window until it reaches its own bound, and only then is ledgered saturated."""
+    ledger = Ledger()
+    prices = _pid(ledger, kp=0.0, eta=0.1)
+    prices.register(CardRegion("b", "max", None, 1.0, 1.0))
+    prices.observe("c", 100.0, 0)  # card A: violation 99, priced at its bound
+    prices.observe("b", 2.0, 0, pressure=0.9)  # the roles' pressure at the cap
+    seen = []
+    for window in range(1, 8):
+        prices.ratchet("b", window=window, step=0.05)
+        seen.append(prices.price("b"))
+    ratchets = [r for r in ledger._recovery_items()
+                if r["kind"] == "immune.price_ratchet" and r["card_id"] == "b"]
+    saturated = [r for r in ledger._recovery_items()
+                 if r["kind"] == "immune.price_ratchet_saturated" and r["card_id"] == "b"]
+    # 0.1 + 0.05, + 0.10, + 0.15, + 0.20, then clipped to its own bound 0.9.
+    assert seen[:5] == pytest.approx([0.15, 0.25, 0.40, 0.60, 0.85])
+    assert seen[5] == pytest.approx(0.9) and seen[6] == pytest.approx(0.9)
+    assert [r["window"] for r in ratchets] == [1, 2, 3, 4, 5, 6]
+    assert [r["window"] for r in saturated] == [7]
 
 
 def test_derivative_is_on_the_measurement_so_a_moved_region_cannot_kick_the_price():

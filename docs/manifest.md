@@ -935,7 +935,10 @@ Charter audit C1, C2, P3, P4, M4, M6, M7 (essay II.IV.a, II.IV.c).
   reward channel can express) and `violation_windows` (the current run of
   consecutive observed windows in violation) are in `world.card_prices`, the
   public window item and every ballot's `inputs.agenda` (which also carries
-  `penalty_cap`). They kill nothing: the kernel's three deaths are unchanged.
+  `penalty_cap`), with `unmeasured_windows`, the card's consecutive closed windows
+  with no reading (wave 16, R10-f; the agenda also names each card's observation). A
+  dark card stays not failing (M-6); nothing is added or redefined to make it
+  measurable. They kill nothing: the kernel's three deaths are unchanged.
 
 ## Committee liability
 
@@ -1208,7 +1211,7 @@ parameters; the observer never substitutes a second set of thresholds.
 | `prices.eta` | finite positive number | Derived: `(penalty_cap - kp) / (timing.min_ratio * immune.k)` (`0.5 / 9` at the defaults) | Yes: the PID's integral gain. Unstated, it is derived from the SF-0 relation (wave 16), so the price law alone presses a unit violation onto the cap in exactly `min_ratio` times the windows stable failure is diagnosed in; stated, the manifest is refused unless the relation holds (`gain_headroom`). A `kp` at or above `penalty_cap` saturates in one window whatever `eta` is and is refused. |
 | `prices.penalty_cap` | finite number strictly between 0 and 1 | `0.5` | Yes: maximum penalty before attribution, and the one bound on a card's price (wave 16, ruling R-E): a card is priced at most `penalty_cap / v`, the price at which its own penalty takes the whole cap. `prices.lambda_max` is refused by name. |
 | `prices.min_blame_share` | finite number in [0, 1] | `0.1` | Yes: floor on one decision's share of a generic (non-attributable) violation. |
-| `prices.kp` | finite nonnegative number | `0.0` | Yes: the PID's proportional gain. The PID is the only price law (charter audit U3): `lambda = kp*v + I + D`, where `I` accumulates `eta*v` while violating, never integrating past the bound `B = penalty_cap / v`, and leaks `decay` once compliant; it is frozen (held, not cut) while the penalty sits at `penalty_cap` (the card's own `lambda * v`, or the total `S` over the cards of its roles, at the prices in force: anti-windup, ruling R-E) or while `P + I` already reaches `B` and the violation is growing; `lambda = clip(P + I + D, 0, B)` while violating; `D = kd * max(0, d(measurement))/scale`, on the measurement rather than the error, signed toward violation, applied only while violating and only its positive part (Stooke et al. 2020), so a card still out of its region is never priced below `P + I`. With `kp = kd = 0` the law is the integral alone. `prices.controller` and `prices.kappa` are refused. |
+| `prices.kp` | finite nonnegative number | `0.0` | Yes: the PID's proportional gain. The PID is the only price law (charter audit U3): `lambda = kp*v + I + D`, where `I` accumulates `eta*v` while violating, never integrating past the bound `B = penalty_cap / v`, and leaks `decay` once compliant; it is frozen (held, not cut) while the card's own price sits at `B` (its own `lambda * v` at `penalty_cap`: anti-windup, rulings R-E, R10-e; the total `S` over the cards of its roles clips each decision's penalty and is published, but never freezes another card) or while `P + I` already reaches `B` and the violation is growing; `lambda = clip(P + I + D, 0, B)` while violating; `D = kd * max(0, d(measurement))/scale`, on the measurement rather than the error, signed toward violation, applied only while violating and only its positive part (Stooke et al. 2020), so a card still out of its region is never priced below `P + I`. With `kp = kd = 0` the law is the integral alone. `prices.controller` and `prices.kappa` are refused. |
 | `prices.kd` | finite nonnegative number | `0.0` | Yes: the PID's derivative-on-measurement gain. |
 | `immune.k` | integer, at least 2 | `3` | Yes: windows of evidence for every diagnosis; the live versioning retains `timing.min_ratio × k` windows. |
 | `immune.registration_bins` | increasing nonnegative numeric array | `[0, 2]` | Yes: zero, 1–2, 3+ registrations. Values equal to a cut enter the lower bin. |
@@ -1228,8 +1231,9 @@ state. Stable failure is priced by its duration (essay II.II.b): the n-th
 consecutive diagnosed window adds `n * immune.price_step` to each violated card's
 price and accumulated pressure, bounded by the card's bound `penalty_cap / v`
 (`immune.price_ratchet`). At saturation the ratchet stops (wave 16, ruling R-E):
-a card whose penalty already sits at `penalty_cap` (its own `lambda * v`, or the
-total pressure of its roles at its last observation) keeps its price and integral,
+a card whose own price already sits at its bound (its own `lambda * v` at
+`penalty_cap`; ruling R10-e: another card's saturation of the roles' pressure never
+stops it, which would be a safe harbour for its failure) keeps its price and integral,
 its duration keeps counting, and `immune.price_ratchet_saturated` is ledgered with
 the price at its bound; the card's saturation is published to governance (above).
 Whether the duration price has room to exist is published as

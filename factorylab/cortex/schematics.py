@@ -626,8 +626,10 @@ class SchematicsMixin:
                     ),
                     # Charter audit M7 and wave 16 R-E: the card's bound
                     # (penalty_cap / v), its closed windows at it and its current
-                    # saturated run, and the current run of windows in violation.
+                    # saturated run, and the current run of windows in violation;
+                    # and its consecutive unmeasured windows (R10-f).
                     **self.controller.saturation(cid),
+                    **self._card_observed(cid),
                 }
                 for cid in sorted(self.priced)
             ],
@@ -1830,12 +1832,13 @@ class SchematicsMixin:
                 "B = penalty_cap / v, the price at which the card's own penalty lambda * v "
                 "takes the whole cap; S = sum(lambda_j * v_j) over the cards of the roles "
                 "the card answers for (the least over roles for a card that answers for "
-                "all), at the prices in force. If v > 0: I' = I while max(lambda * v, S) "
-                ">= penalty_cap (the integrator is frozen at the cap) or while kp*v + I >= "
-                "B and v > v_previous, else I' = min(B, I + eta*v); otherwise I' = max(0, "
-                "I-decay). D = kd*max(0, the measurement's move deeper outside the region "
-                "since the previous window)/scale while v > 0, else 0. lambda' = clip(kp*v "
-                "+ I' + D, 0, B) while v > 0, else max(0, I'). A window closing with "
+                "all), at the prices in force. If v > 0: I' = I while lambda >= B (the "
+                "integrator is frozen at the card's own bound; S never freezes it) or while "
+                "kp*v + I >= B and v > v_previous, else I' = min(B, I + eta*v); otherwise "
+                "I' = max(0, I-decay). D = kd*max(0, the measurement's move deeper outside "
+                "the region since the previous window)/scale while v > 0, else 0. "
+                "lambda' = clip(kp*v + I' + D, 0, B) while v > 0, else max(0, I'). A window "
+                "closing with "
                 "max(lambda * v, S) >= penalty_cap is a window at the bound, counted and "
                 "published with the card (world.card_prices: bound, windows_at_bound, "
                 "saturated_windows)",
@@ -2205,7 +2208,8 @@ class SchematicsMixin:
                 "card_prices. "
                 "Stable failure raises each violated card's lambda by n * immune.price_step in "
                 "its n-th consecutive failing window, bounded by B = penalty_cap / v; a card "
-                "whose penalty sits at penalty_cap is not raised, and the ratchet ledgers "
+                "whose own price sits at B (its own penalty at penalty_cap; another card's "
+                "pressure never stops it) is not raised, and the ratchet ledgers "
                 "immune.price_ratchet_saturated instead. Duplicate "
                 "observations on overlapping roles are refused in amendments."
             ),
