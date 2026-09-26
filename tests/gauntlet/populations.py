@@ -606,6 +606,37 @@ def molt_arm(*, every: int, child: str = "molt-judge") -> Arm:
     return arm
 
 
+def reversion_arm(*, seat: str = "molt-seat", card_id: str = "independent-uptake") -> Arm:
+    """Re-version one seat as fast as the kernel admits: register ``seat``, propose its
+    retirement, and once retired register its next version, alternating, every decision.
+    A retired id takes its next version from its owner (``_register``), so each version
+    is a configuration of ``seat:<id>`` whose decisions are corrected on the consequence
+    loop; its life is the time between two versions (time audit T14)."""
+    def arm(view: View) -> dict:
+        reply = hold(view)
+        if "tool_results" in view.inputs:
+            return reply
+        if view.calls % 2 == 0:
+            reply["register"] = [{
+                "kind": "assembly", "id": seat, "role": "evaluator",
+                "model_id": "fake-molt", "system_prompt": "Reply with a JSON verdict.",
+                "accepts": ["ProducerReturn"], "emits": ["Verdict"], "max_tokens": 128}]
+        else:
+            reply["register"] = [{
+                "kind": "retire", "assembly_id": seat,
+                "predicted_effect": {"card_id": card_id, "direction": "increase",
+                                     "window": 1}}]
+        return reply
+    return arm
+
+
+def th2_reversion() -> tuple[Any, Population]:
+    """TH-2 on a seat-driven path: a producer re-versions one seat through retirement and
+    re-registration, as fast as the committee's vote and the next window boundary let it."""
+    seats = [producer("molt", reversion_arm()), producer("steady", hold), *honest_panel()]
+    return world(seats, cards=[UPTAKE, WELL_FORMED]), Population(seats)
+
+
 def th2(*, every: int = 3) -> tuple[Any, Population]:
     """TH-2: a producer refactors a configuration faster than its correcting loop."""
     seats = [producer("molt", molt_arm(every=every)), producer("steady", hold),
@@ -835,4 +866,5 @@ def seat_shares(result: Run, router_kind: str) -> dict[int, Counter]:
 
 
 #: The populations ``scripts/gauntlet.py sweep`` runs by name, each at its defaults.
-SWEEPABLE = frozenset({"sf1", "th1", "th2", "th3", "th4", "ld1", "of2", "i10"})
+SWEEPABLE = frozenset({"sf1", "th1", "th2", "th2_reversion", "th3", "th4", "ld1", "of2",
+                       "i10"})

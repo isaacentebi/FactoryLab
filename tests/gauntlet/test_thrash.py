@@ -112,14 +112,12 @@ def th2(shared_run):
     return shared_run("th2", lambda: P.run(*P.th2(every=3), events=300))
 
 
-def test_th2_every_refactor_is_admitted_and_read_against_its_loop(th2):
-    """The population registers a fresh judge every third decision; each registration
-    that passes admission is admitted (no speed limit is committed, so none is
-    enforced), and each change of the judges' router menu is read as a lifespan against
-    the loop that corrects it. The kernel defers its own epochs to ``min_ratio`` × that
-    loop (``_epoch_due``), so its configuration never outruns its correction: no
-    lifespan is short, so TH-2's reading is not exercised (unsupported), and nothing
-    was refused for its speed."""
+def test_th2_the_epoch_speed_limit_keeps_a_growing_menu_from_outrunning_its_loop(th2):
+    """Not TH-2's detector: the kernel's own speed limit. The population registers a fresh
+    judge every third decision; each is admitted (no speed limit is committed on the
+    population), and each growth of the judges' router menu waits ``min_ratio`` measured
+    router periods (``RoutingMixin._epoch_due``), so every lifespan of that loop is at
+    least its correcting loop: no short lifespan exists for TH-2 to read (unsupported)."""
     result = g.th2_short_lived(th2.events, th2.manifest, loop="router:ProducerReturn")
     assert result.status == g.UNSUPPORTED, result.evidence
     assert result.evidence["lifespans"] > 0 and result.evidence["speed_refusals"] == 0
@@ -127,11 +125,45 @@ def test_th2_every_refactor_is_admitted_and_read_against_its_loop(th2):
                   if r["contract"]["id"].startswith("molt-judge")]
     refused = [r for r in th2.rows("registration.rejected")]
     assert registered and not refused
-    ratio = th2.physics.r
-    assert all(row["ratio"] >= 1 for row in th2.rows("config.lifespan")
+    assert th2.physics.r >= 3
+    assert all(row["ratio"] >= th2.physics.r for row in th2.rows("config.lifespan")
                if row["loop"] == "router:ProducerReturn")
-    assert all(row["lifespan_ticks"] >= row["latency_ticks"] * 1 for row in
-               th2.rows("config.lifespan")) and ratio >= 3
+
+
+@pytest.fixture(scope="module")
+def th2r(shared_run):
+    return shared_run("th2-reversion", lambda: P.run(*P.th2_reversion(), events=300))
+
+
+@pytest.mark.parametrize("loop", ["seat:molt-seat", "router:ProducerReturn"])
+def test_th2_a_seat_driven_reversion_is_read_as_thrash(th2r, loop):
+    """TH-2 exercised on the path a seat drives: retire a seat (the committee votes, the
+    next window boundary activates it) and register its next version (``_register``),
+    again and again. Each version of ``seat:<id>`` lives shorter than the consequence
+    loop that corrects it, and each shrink of the router's menu opens its epoch at once
+    (only growth waits, ``_open_epoch``); the organ reads every such lifespan as thrash
+    with ``unsettled >= 1 − ratio`` in the windows whose tail holds it, and nothing is
+    refused for its speed."""
+    short = [row for row in th2r.rows("config.lifespan")
+             if row["loop"] == loop and row["ratio"] < 1]
+    assert short, "the population produced no short-lived configuration"
+    result = g.th2_short_lived(th2r.events, th2r.manifest, loop=loop)
+    assert result.ok, result.evidence
+    assert result.evidence["short_checked"] >= 1 and result.evidence["speed_refusals"] == 0
+
+
+def _ignore_lifespans(original):
+    """A mutant organ that diagnoses without reading configuration lifespans."""
+    def diagnose(windows, state, **kw):
+        return original([{**w, "lifespans": []} for w in windows], state, **kw)
+    return diagnose
+
+
+def test_th2_negative_control_an_organ_blind_to_lifespans_fails():
+    mutant = P.run(*P.th2_reversion(), events=300,
+                   patches=[(immune, "diagnose", _ignore_lifespans(immune.diagnose))])
+    result = g.th2_short_lived(mutant.events, mutant.manifest, loop="seat:molt-seat")
+    assert result.status == g.FAIL and result.evidence["misread"], result.evidence
 
 
 # --- TH-3: iatrogenic thrash from population governance -----------------------------------
