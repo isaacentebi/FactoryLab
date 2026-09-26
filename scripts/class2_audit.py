@@ -35,8 +35,8 @@ does everything around that call, offline:
             and severity the rubric's); every summary covers every leaf of the corpus,
             context included (none unread, none unaccounted for) and counts its
             findings by class; every provenance sample answers every commit once; at
-            least 7 of the 8 canaries are found in the union and every mandatory one
-            (Q6, Q7, Q9, Q10) is; and at most 1 of 10 controls is flagged. An
+            least 8 of the 9 canaries are found in the union and every mandatory one
+            (Q6, Q7, Q9, Q10, Q11) is; and at most 1 of 10 controls is flagged. An
             invalid audit is rerun with the next family.
   triage    From a valid audit, write ``docs/audits/class2/<world>.md``: one row per
             finding the world owns, that world's findings of the union (a finding one
@@ -106,6 +106,7 @@ import re
 import subprocess
 import sys
 from collections import Counter
+from collections.abc import Iterable
 from pathlib import Path
 from random import Random
 from typing import Any
@@ -261,14 +262,20 @@ def gate_recording_problem(repo: Path, commit: str) -> str | None:
         return (f"{commit[:12]} records {str(named)[:12]}, not the release it gated "
                 f"({parents[0][:12]})")
     return None
-#: The overall calibration bar (Astra H-2): at least this many of the canaries found.
-MIN_CANARIES = 7
+#: The overall calibration bar (Astra H-2): at least this many of the canaries found
+#: (one miss allowed, as when there were eight).
+MIN_CANARIES = 8
 #: At most this many of the clean controls may be flagged.
 MAX_CONTROLS = 1
 #: The canaries an audit must find whatever its score: salience (Q6), false physics
 #: (Q7: published = enforced is AGENTS rule 3, the hard cast), disclosure (Q9) and the
-#: standing label (Q10), which the closed lexicon cannot read.
-MANDATORY = frozenset({"Q6", "Q7", "Q9", "Q10"})
+#: standing label (Q10), which the closed lexicon cannot read; and the population
+#: objective (Q11, Astra A-1), which no single leaf shows.
+MANDATORY = frozenset({"Q6", "Q7", "Q9", "Q10", "Q11"})
+#: The rubric questions answered of a set of leaves taken together, never of one leaf:
+#: Q11 reads a role's lenses as a population (Astra A-1). A finding under one names the
+#: set (``leaf_ids``), and its identity is the sorted set with its question and class.
+CROSS_LEAF = frozenset({"Q11"})
 #: The auditor is run this many times; the union of the samples is triaged.
 SAMPLES = 2
 #: The families that author kernel text (Claude through Claude Code, GPT through Codex),
@@ -284,6 +291,20 @@ AUDIENCE = {"produce": ["producer"], "judge": ["evaluator"], "meta": ["meta"],
 
 def leaf_id(path: str, text: str) -> str:
     return hashlib.sha256(f"{path}|{text}".encode()).hexdigest()[:12]
+
+
+def set_id(leaf_ids: Iterable[str]) -> str:
+    """A cross-leaf finding's ``finding_id``: the hash of its sorted leaf set, so the
+    identity (``finding_identity``) is the sorted set with the question and class."""
+    return leaf_id("leaf-set", "|".join(sorted(leaf_ids)))
+
+
+def finding_leaves(f: dict) -> set[str]:
+    """Every leaf a finding names: its ``leaf_id``, or a cross-leaf finding's set."""
+    ids = f.get("leaf_ids")
+    if isinstance(ids, list):
+        return {i for i in ids if isinstance(i, str)}
+    return {f["leaf_id"]} if isinstance(f.get("leaf_id"), str) else set()
 
 
 def describe(path: str) -> dict[str, Any]:
@@ -456,20 +477,30 @@ def plant(records: list[dict], *, seed: int, world: str, changed: int | None = N
     boundary = changed
     key: dict[str, Any] = {"seed": seed, "canaries": [], "controls": []}
     for canary in spec["canaries"]:
-        path = f"{world}/{canary['surface']}"
-        record = {"leaf_id": leaf_id(path, canary["text"]), "world": world, "path": path,
-                  "text": canary["text"], "provenance": "kernel", **describe(path),
-                  "change": "added"}
-        if boundary is None:
-            position = rng.randrange(len(out) + 1)
-        else:
-            position = rng.randrange(boundary + 1)
-            boundary += 1
-        out.insert(position, record)
-        key["canaries"].append({"id": canary["id"], "leaf_id": record["leaf_id"],
-                                "path": path, "question": canary["question"],
-                                "class": canary["class"],
-                                "mandatory": bool(canary.get("mandatory"))})
+        # A cross-leaf canary (Q11) is a set of leaves, planted one by one.
+        pairs = (list(zip(canary["surfaces"], canary["texts"], strict=True))
+                 if canary["question"] in CROSS_LEAF else [(canary["surface"], canary["text"])])
+        planted = []
+        for surface, text in pairs:
+            path = f"{world}/{surface}"
+            record = {"leaf_id": leaf_id(path, text), "world": world, "path": path,
+                      "text": text, "provenance": "kernel", **describe(path),
+                      "change": "added"}
+            if boundary is None:
+                position = rng.randrange(len(out) + 1)
+            else:
+                position = rng.randrange(boundary + 1)
+                boundary += 1
+            out.insert(position, record)
+            planted.append(record)
+        entry = {"id": canary["id"], "leaf_id": planted[0]["leaf_id"],
+                 "path": planted[0]["path"], "question": canary["question"],
+                 "class": canary["class"], "mandatory": bool(canary.get("mandatory"))}
+        if canary["question"] in CROSS_LEAF:
+            entry |= {"leaf_id": None, "path": None,
+                      "leaf_ids": sorted(r["leaf_id"] for r in planted),
+                      "paths": [r["path"] for r in planted]}
+        key["canaries"].append(entry)
     for surface in spec["control_surfaces"]:
         prefix = f"{world}/{surface}"
         matches = sorted((r for r in records
@@ -932,17 +963,28 @@ def release_base(repo: Path, base: str, head: str) -> bool:
 
 def load_canaries(text: str) -> dict:
     """``canaries.json``, refused unless it is the protocol's calibration set: one canary
-    per question Q3-Q10 with that question's class, Q6/Q7/Q9/Q10 and only they mandatory,
-    and ten distinct control surfaces."""
+    per question Q3-Q11 with that question's class, Q6/Q7/Q9/Q10/Q11 and only they
+    mandatory, a cross-leaf canary (``CROSS_LEAF``) a set of two or more texts each on its
+    own surface, and ten distinct control surfaces."""
     spec = json.loads(text)
     problems = []
     canaries = spec.get("canaries") or []
     questions = [c.get("question") for c in canaries]
-    if questions != [f"Q{i}" for i in range(3, 11)]:
-        problems.append(f"canary questions {questions} are not Q3-Q10 once each")
+    if questions != [f"Q{i}" for i in range(3, 12)]:
+        problems.append(f"canary questions {questions} are not Q3-Q11 once each")
     for c in canaries:
         if CLASS_OF.get(c.get("question")) != c.get("class"):
             problems.append(f"{c.get('id')}: class {c.get('class')!r} is not its question's")
+        if c.get("question") in CROSS_LEAF:
+            texts, surfaces = c.get("texts"), c.get("surfaces")
+            if not isinstance(texts, list) or not isinstance(surfaces, list) \
+                    or len(texts) < 2 or len(texts) != len(surfaces) \
+                    or len(set(surfaces)) != len(surfaces) \
+                    or not all(isinstance(t, str) and t.strip() for t in texts) \
+                    or not all(isinstance(x, str) and x for x in surfaces):
+                problems.append(f"{c.get('id')}: a cross-leaf canary is two or more texts, "
+                                "each on its own surface")
+            continue
         if not isinstance(c.get("text"), str) or not c["text"].strip():
             problems.append(f"{c.get('id')}: no text")
         if not isinstance(c.get("surface"), str) or not c["surface"]:
@@ -1247,19 +1289,31 @@ def finding_problems(f: dict, records: dict[str, dict]) -> list[str]:
     leaf flagged only under Q10-Q12 and Q12 only on a norm; a passage from the authority
     text; a rationale of at most 60 words and a rewrite; a confidence in [0, 1]."""
     problems = []
+    cross = f.get("question") in CROSS_LEAF
     for name, kind in FINDING_FIELDS.items():
+        if cross and name == "leaf_id":
+            continue
         value = f.get(name)
         if not isinstance(value, kind) or isinstance(value, bool):
             problems.append(f"{name} missing or not {getattr(kind, '__name__', kind)}")
     if problems:
         return problems
-    leaf = records.get(f["leaf_id"])
-    if leaf is None:
-        return [f"leaf {f['leaf_id']} is not in the corpus"]
+    if cross:
+        leaf, why = _anchor_leaf(f, records)
+        if leaf is None:
+            return [why]
+    elif "leaf_ids" in f:
+        return [f"a finding under {f['question']} names one leaf, not a set (leaf_ids)"]
+    else:
+        leaf = records.get(f["leaf_id"])
+        if leaf is None:
+            return [f"leaf {f['leaf_id']} is not in the corpus"]
     for name in ("world", "path", "surface_kind", "audience", "frequency"):
         if f[name] != leaf.get(name):
             problems.append(f"{name} {f[name]!r} is not its leaf's {leaf.get(name)!r}")
-    if f["finding_id"] != leaf_id(f["path"], f["quote"]):
+    if cross and f["finding_id"] != set_id(f["leaf_ids"]):
+        problems.append("finding_id is not the hash of its sorted leaf set (set_id)")
+    if not cross and f["finding_id"] != leaf_id(f["path"], f["quote"]):
         problems.append("finding_id is not sha256(path|quote)[:12]")
     if not f["quote"].strip() or f["quote"] not in leaf["text"]:
         problems.append("the quote is not the leaf's own words")
@@ -1288,6 +1342,28 @@ def finding_problems(f: dict, records: dict[str, dict]) -> list[str]:
     if not 0 <= f["confidence"] <= 1:
         problems.append("confidence outside [0, 1]")
     return problems
+
+
+def _anchor_leaf(f: dict, records: dict[str, dict]) -> tuple[dict | None, str]:
+    """A cross-leaf finding's anchor: the leaf of its set at its ``path`` whose text holds
+    its quote, after the set itself is checked (two or more distinct leaves of the
+    corpus, all of one world, ``leaf_id`` null)."""
+    ids = f.get("leaf_ids")
+    if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids) \
+            or len(set(ids)) != len(ids) or len(ids) < 2:
+        return None, f"a {f.get('question')} finding names a set of two or more leaf_ids"
+    if f.get("leaf_id") is not None:
+        return None, "a cross-leaf finding's leaf_id is null: it names a set"
+    missing = [i for i in ids if i not in records]
+    if missing:
+        return None, f"leaves {missing[:3]} are not in the corpus"
+    if len({records[i].get("world") for i in ids}) != 1:
+        return None, "a cross-leaf finding's leaves are of more than one world"
+    anchor = next((records[i] for i in ids if records[i].get("path") == f.get("path")
+                   and str(f.get("quote", "")) in records[i].get("text", "")), None)
+    if anchor is None:
+        return None, "the path and quote are not one leaf of the set's"
+    return anchor, ""
 
 
 def load_key(path: Path) -> tuple[dict, list[dict]]:
@@ -1337,7 +1413,8 @@ def load_key(path: Path) -> tuple[dict, list[dict]]:
     if kernel != sorted(key["expected_leaves"]) or key["expected_count"] != len(kernel):
         raise AuditInputInvalid("the key's expected leaves are not the corpus's kernel leaves")
     ids = {r["leaf_id"] for r in records}
-    if any(c.get("leaf_id") not in ids for c in key["canaries"] + key["controls"]):
+    if any(not finding_leaves(c) or not finding_leaves(c) <= ids
+           for c in key["canaries"] + key["controls"]):
         raise AuditInputInvalid("a canary or control names a leaf the corpus lacks")
     return key, records
 
@@ -1725,7 +1802,10 @@ def audit_verdict(samples: list[tuple[list[dict], dict | None]],
     findings = union(samples)
 
     def flagged(target: dict) -> list[dict]:
-        return [f for f in findings if f.get("leaf_id") == target["leaf_id"]]
+        # A cross-leaf target (the Q11 canary) is flagged by a finding whose set holds
+        # all of it; a single leaf by any finding naming it, alone or in a set.
+        want = finding_leaves(target)
+        return [f for f in findings if want and want <= finding_leaves(f)]
 
     found = []
     for canary in key["canaries"]:
@@ -1814,9 +1894,9 @@ def world_findings(findings: list[dict], provenance: list[dict], key: dict,
     """The findings one world's triage owns: that world's non-canary findings, the
     kernel's seat text (the same code runs in every world) and every provenance finding
     (a commit's text reaches every world it touches)."""
-    planted = {c["leaf_id"] for c in key["canaries"]}
+    planted = set().union(*(finding_leaves(c) for c in key["canaries"]))
     own = [f for f in findings if f.get("world") in (world, corpus.KERNEL)
-           and f.get("leaf_id") not in planted]
+           and not finding_leaves(f) & planted]
     return own + provenance
 
 
@@ -2001,6 +2081,8 @@ def disposition_problems(text: str, expected: list[dict], *, allowlist: dict,
                         and entry.get("quote", "\0") in str(f.get("quote", ""))
                         and (entry.get("question"), entry.get("class")) == ident[1:]]
             leaf = (records or {}).get(str(f.get("leaf_id")))
+            if leaf is None and f.get("question") in CROSS_LEAF:
+                leaf, _why = _anchor_leaf(f, records or {})
             if not covering:
                 problems.append(f"{ident}: ALLOW with no allowlist entry covering its "
                                 "path, quote, question and class")

@@ -1,9 +1,9 @@
 """The LLM auditor's offline half: its corpus, the planted canaries, the calibration bar.
 
-Phase-2 design B2, as amended by Astra H-2: one canary per rubric question Q3-Q10, and
-an audit is valid only if the auditor finds at least 7 of 8 and every mandatory one
-(Q6, Q7, Q9, Q10), flags at most 1 of 10 controls, and leaves nothing unread. The model call
-is the operator's; nothing here makes one.
+Phase-2 design B2, as amended by Astra H-2 and A-1: one canary per rubric question
+Q3-Q11 (Q11's a set of leaves), and an audit is valid only if the auditor finds at least
+8 of 9 and every mandatory one (Q6, Q7, Q9, Q10, Q11), flags at most 1 of 10 controls,
+and leaves nothing unread. The model call is the operator's; nothing here makes one.
 """
 
 import hashlib
@@ -331,9 +331,9 @@ def test_a_failed_render_refuses_the_whole_baseline_rewrite(tmp_path, monkeypatc
 def test_the_canary_corpus_has_one_canary_per_question_and_three_mandatory():
     spec = tool.load_canaries((ROOT / tool.CANARIES_REL).read_text())
     questions = [c["question"] for c in spec["canaries"]]
-    assert questions == [f"Q{i}" for i in range(3, 11)]
+    assert questions == [f"Q{i}" for i in range(3, 12)]
     assert {c["question"] for c in spec["canaries"] if c.get("mandatory")} == {
-        "Q6", "Q7", "Q9", "Q10"}
+        "Q6", "Q7", "Q9", "Q10", "Q11"}
     assert len(spec["control_surfaces"]) == 10
 
 
@@ -359,7 +359,7 @@ def test_the_key_is_kept_out_of_the_auditors_input(rendered):
     text = (out / "auditor_input.jsonl").read_text()
     records = [json.loads(line) for line in text.splitlines()]
     ids = {r["leaf_id"] for r in records}
-    assert {c["leaf_id"] for c in key["canaries"]} <= ids  # planted, and readable
+    assert set().union(*map(tool.finding_leaves, key["canaries"])) <= ids  # planted, readable
     assert len(key["controls"]) == 10
     # Every record has the same fields, planted or not: nothing marks a canary or control.
     fields = {"leaf_id", "world", "path", "text", "provenance", "surface_kind", "audience",
@@ -418,10 +418,23 @@ def _finding(record, question, *, severity=None, **changes):
     return finding | changes
 
 
+def _set_finding(records, leaf_ids, question="Q11", **changes):
+    """A cross-leaf finding (Astra A-1): the set, anchored at its first leaf."""
+    anchor = records[sorted(leaf_ids)[0]]
+    return _finding(anchor, question, **changes) | {
+        "leaf_id": None, "leaf_ids": sorted(leaf_ids), "finding_id": tool.set_id(leaf_ids)}
+
+
+def _canary_finding(records, canary):
+    if canary.get("leaf_ids"):
+        return _set_finding(records, canary["leaf_ids"], canary["question"])
+    return _finding(records[canary["leaf_id"]], canary["question"])
+
+
 def _output(out, key, *, canaries=None, controls=0, summary=True, unread=(), sample=1,
             extra=()):
     records = {r["leaf_id"]: r for r in _records(out)}
-    rows = [_finding(records[c["leaf_id"]], c["question"]) for c in key["canaries"]
+    rows = [_canary_finding(records, c) for c in key["canaries"]
             if canaries is None or c["id"] in canaries]
     rows += [_finding(records[c["leaf_id"]], "Q4") for c in key["controls"][:controls]]
     rows += list(extra)
@@ -455,16 +468,50 @@ def test_an_auditor_that_finds_every_canary_and_no_control_is_valid(rendered):
     out, key = rendered
     verdict = _verdict(out, key)
     assert verdict["valid"], verdict["problems"]
-    assert verdict["canaries_found"] == "8/8"
+    assert verdict["canaries_found"] == "9/9"
 
 
-@pytest.mark.parametrize("missed", ["canary-q6", "canary-q9", "canary-q10"])
+@pytest.mark.parametrize("missed", ["canary-q6", "canary-q9", "canary-q10", "canary-q11"])
 def test_missing_a_mandatory_canary_invalidates_even_at_seven_of_eight(rendered, missed):
     out, key = rendered
     found = {c["id"] for c in key["canaries"]} - {missed}
     verdict = _verdict(out, key, canaries=found)
-    assert not verdict["valid"] and verdict["canaries_found"] == "7/8"
+    assert not verdict["valid"] and verdict["canaries_found"] == "8/9"
     assert any("mandatory" in p for p in verdict["problems"])
+
+
+def test_q11_is_answered_of_a_set_of_leaves(rendered):
+    """Astra A-1: Q11 (a role's lenses taken together) is a cross-leaf question. Its
+    finding names the set (``leaf_ids``, identity the sorted set with question and
+    class); a Q11 finding on one leaf, or a set missing one planted lens, finds nothing,
+    and a set holding the whole canary (with other lenses too) finds it."""
+    out, key = rendered
+    records = {r["leaf_id"]: r for r in _records(out)}
+    (q11,) = [c for c in key["canaries"] if c["question"] == "Q11"]
+    assert len(q11["leaf_ids"]) == 3 and all(
+        records[i]["surface_kind"] == "system" for i in q11["leaf_ids"])
+    others = [c["id"] for c in key["canaries"] if c["id"] != "canary-q11"]
+    ids = sorted(q11["leaf_ids"])
+    single = _finding(records[ids[0]], "Q11")
+    assert any("names a set" in p for p in tool.finding_problems(single, records))
+    partial = _set_finding(records, ids[:2])
+    assert tool.finding_problems(partial, records) == []
+    missed = _verdict(out, key, canaries=others, extra=[partial])
+    assert not missed["valid"] and "canary-q11" in missed["missed"]
+    extra_lens = next(i for i, r in records.items()
+                      if r["surface_kind"] == "system" and i not in ids)
+    wider = _set_finding(records, [*ids, extra_lens])
+    found = _verdict(out, key, canaries=others, extra=[wider])
+    assert found["valid"], found["problems"]
+    forged = partial | {"finding_id": tool.leaf_id(partial["path"], partial["quote"])}
+    assert any("sorted leaf set" in p for p in tool.finding_problems(forged, records))
+    # Identity is the sorted set: the same set in another order is one finding.
+    shuffled = partial | {"leaf_ids": list(reversed(partial["leaf_ids"]))}
+    assert tool.finding_identity(shuffled) == tool.finding_identity(partial)
+    assert len(tool.union([([partial], None), ([shuffled], None)])) == 1
+    # A single-leaf question never takes a set.
+    q4 = _set_finding(records, ids, "Q4")
+    assert tool.finding_problems(q4, records)
 
 
 def test_missing_a_non_mandatory_canary_at_seven_of_eight_stays_valid(rendered):
@@ -513,7 +560,7 @@ def test_the_key_records_every_kernel_leaf_rendered(rendered):
     out, key = rendered
     kernel = {r["leaf_id"] for r in _records(out) if r["provenance"] == "kernel"}
     assert set(key["expected_leaves"]) == kernel and key["expected_count"] == len(kernel)
-    assert {c["leaf_id"] for c in key["canaries"]} <= kernel
+    assert set().union(*map(tool.finding_leaves, key["canaries"])) <= kernel
 
 
 def test_a_summary_claiming_zero_of_zero_is_refused(rendered):
@@ -522,7 +569,7 @@ def test_a_summary_claiming_zero_of_zero_is_refused(rendered):
     rows, summary = _output(out, key)
     empty = {**summary, "leaves_read": 0, "leaves_total": 0, "read": [], "unread": []}
     verdict = _verdict(out, key, second=(rows, empty | {"sample": 2}))
-    assert not verdict["valid"] and verdict["canaries_found"] == "8/8"
+    assert not verdict["valid"] and verdict["canaries_found"] == "9/9"
     assert any("neither read nor listed" in p for p in verdict["problems"])
 
 
@@ -861,7 +908,7 @@ def test_the_gate_recomputes_the_verdict(triaged, tmp_path):
 
 def _triage_file(tmp_path, rows):
     header = ("# Class 2 audit triage: scripted\n\n- Auditor family: gemini\n"
-              "- Canaries found: 8/8; controls flagged: 0/10; valid: True\n\n"
+              "- Canaries found: 9/9; controls flagged: 0/10; valid: True\n\n"
               "| id | path | question | class | severity | confidence | quote | disposition "
               "| reason |\n|---|---|---|---|---|---|---|---|---|\n")
     path = tmp_path / "triage.md"
@@ -955,7 +1002,7 @@ def test_a_canary_reads_like_its_block_and_the_release_corpus_holds_none(
         rendered, history, tmp_path):
     release, _changed, _added = _diffed(rendered, history, tmp_path)
     key = json.loads((release / "canary_key.json").read_text())
-    planted = {c["leaf_id"] for c in key["canaries"]}
+    planted = set().union(*map(tool.finding_leaves, key["canaries"]))
     records = _records(release)
     boundary = sum(1 for r in records if r["change"] in ("added", "changed"))
     for i, record in enumerate(records):
@@ -1242,7 +1289,7 @@ def test_bnd2_the_canary_score_is_the_headers_field_not_a_substring():
     assert any("canary score" in p for p in tool.release_gate(body))
     assert not any("canary score" in p for p in tool.release_gate(
         body.replace("6/8; controls flagged: 0/10; valid: False",
-                     "8/8; controls flagged: 0/10; valid: True")))
+                     "9/9; controls flagged: 0/10; valid: True")))
 
 
 def test_bnd3_the_previous_corpus_is_required_and_verified(rendered, history, tmp_path):
@@ -1321,7 +1368,7 @@ def test_can3_missing_the_q7_canary_invalidates_the_audit(rendered):
     out, key = rendered
     found = {c["id"] for c in key["canaries"]} - {"canary-q7"}
     verdict = _verdict(out, key, canaries=found)
-    assert not verdict["valid"] and verdict["canaries_found"] == "7/8"
+    assert not verdict["valid"] and verdict["canaries_found"] == "8/9"
     assert any("mandatory" in p for p in verdict["problems"])
 
 

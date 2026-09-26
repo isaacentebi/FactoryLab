@@ -67,6 +67,10 @@ therefore cannot recommend text that steers (AGENTS rule 2).
 
 ## The rubric: answer each leaf separately
 
+Every question is answered of one leaf, except the **cross-leaf** questions, which are
+answered of a set of leaves taken together: **Q11** only (a role's lenses as a
+population; no single lens shows a net direction). A cross-leaf finding names its set.
+
 | Q | Question | Finding class if yes |
 |---|---|---|
 | Q1 | Speech act: fact / definition / formula / permission / format / deliverable / **instruction** / **advice** / **evaluation**? | – (classifies) |
@@ -107,6 +111,13 @@ JSON Lines, one object per finding, then one summary object:
  "by_class": {"C1": 3, "C2": 1, "ANNOUNCED-PHYSICS": 2}}
 ```
 
+A cross-leaf finding (Q11) names every leaf it reads together as `leaf_ids` (two or
+more distinct leaves of one world) with `leaf_id` null; its `path`, tags and `quote` are
+those of one leaf of the set, and its `finding_id` is
+`sha256("leaf-set|" + the sorted leaf_ids joined by "|")[:12]`. Its identity, in the
+union, the triage and the gate, is that sorted set with its question and class, so the
+same set in any order is one finding. No other question takes a set.
+
 `read` lists the `leaf_id` of every leaf the auditor answered, context leaves included,
 and `unread` every one it did not. The counts are checked against those sets, and the sets against the corpus.
 `corpus_sha` is the id the prompt names; `sample` is 1 on the first run and 2 on the
@@ -123,8 +134,10 @@ its passage, never by an expected change in behaviour.
 ## Calibration: the audit is valid only if the auditor can find what is planted
 
 Before the review, `render` plants the canaries of `docs/audits/class2/canaries.json` at
-seeded positions: **one known violation for each of Q3, Q4, Q5, Q6, Q7, Q8, Q9 and Q10**,
-eight in all. It also marks ten clean controls taken from the smuggling audit's D7 KEEP
+seeded positions: **one known violation for each of Q3, Q4, Q5, Q6, Q7, Q8, Q9, Q10 and
+Q11**, nine in all. The Q11 canary is a set: three lenses of one role, planted as three
+system-prompt leaves, whose net direction is an objective with no rival; it is found
+only by a Q11 finding whose set holds all three. It also marks ten clean controls taken from the smuggling audit's D7 KEEP
 list. The key is written to `canary_key.json`, which is never part of the auditor's input.
 
 The audit is **valid** only if all of these hold (`scripts/class2_audit.py validate`):
@@ -135,13 +148,14 @@ The audit is **valid** only if all of these hold (`scripts/class2_audit.py valid
   or its `unread` list; any unread leaf fails the audit, and `leaves_total` (the corpus's
   leaves) and `leaves_read` must match those sets. The context tag constrains which
   questions a leaf may be flagged under, not whether it is read;
-- at least **7 of the 8** canaries are found under their question and class;
+- at least **8 of the 9** canaries are found under their question and class;
 - each **mandatory** canary is found: **Q6** (salience), **Q7** (false physics), **Q9**
-  (disclosure) and **Q10** (standing label). Q6, Q9 and Q10 are the classes the closed
+  (disclosure), **Q10** (standing label) and **Q11** (population objective, which no
+  single leaf shows: Astra A-1). Q6, Q9, Q10 and Q11 are the classes the closed
   lexicon cannot read at all, so they fall entirely on this reader (Astra H-2); Q7 is
   mandatory by the architect's ruling, because published = enforced is AGENTS rule 3,
   the core of the hard cast, and an auditor that misses a contradiction between a
-  surface and the physics must not pass calibration. A miss on any of the four
+  surface and the physics must not pass calibration. A miss on any of the five
   invalidates the audit whatever the overall score;
 - at most **1 of the 10** controls is flagged.
 
