@@ -74,6 +74,7 @@ def test_controller_ledger_first_bounds_history_and_removal(monkeypatch):
     assert controller.snapshot()["cards"]["card"] == {
         # An adopted price becomes the card's accumulated pressure (bumpless for the PID).
         **before["cards"]["card"], "lambda": 0.8, "integral": 0.8,
+        "declared": 0.8,  # the charter's declared price, a redefinition's restart
     }
     for value in (True, -1, float("nan"), float("inf")):  # no upper bound (R-E)
         with pytest.raises(ValueError):

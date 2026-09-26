@@ -155,6 +155,7 @@ def test_an_attempt_beyond_the_bound_is_saturation_and_the_bound_moves_with_v(le
         "failing_windows": 0,
         "bound": 0.02, "windows_at_bound": 3, "saturated_windows": 3,
         "violation_windows": 3,
+        "declared": None,  # no price was ever adopted for it
     })
     entries = evidence(ledger)
     assert [item["lambda_after"] for item in entries] == pytest.approx([0.45, 0.02, 0.02])
