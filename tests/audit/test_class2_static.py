@@ -463,3 +463,47 @@ def test_cov5_a_tool_result_under_any_key_is_seat_text(seat):
     assert ("factorylab/runtime/compute.py::ComputeMixin._run_tool.execute",
             "rejected") in payloads
     assert not any(t.kind == "result" and t.text == "rejected" for t in seat.texts)
+
+
+# --- Codex pass on 5ba444a: seat-bound calls read from their real signatures -------------
+
+
+def test_a_positional_child_request_reaches_the_scan(seat):
+    """Codex P2 (class2_seat_text.py:77): ``_invoke_child`` builds its ``Request``
+    positionally. Its description, inputs, schema (``with_counterfactual``'s published
+    field) and completion criterion are all seat text."""
+    child = "factorylab/runtime/composition.py::CompositionMixin._invoke_child"
+    texts = {(t.source, t.text) for t in seat.texts}
+    assert (child, "a JSON object satisfying the outcome schema") in texts
+    assert ("factorylab/cortex/assembly.py::with_counterfactual",
+            "a declined trade, coin and side") in texts
+    # The inputs, ``{**item.inputs, "world": self._world_block()}``: the world block's
+    # builder is followed.
+    assert "factorylab/cortex/schematics.py::SchematicsMixin._world_block" \
+        in seat.payload_builders
+
+
+def test_every_seat_bound_call_is_mapped_from_its_real_signature():
+    """The general fix: positions and keywords come from each constructor's or builder's
+    signature at scan time, so positional and keyword arguments are both covered, and a
+    renamed or reordered parameter changes the mapping (or fails the scan) instead of
+    dropping coverage."""
+    import dataclasses
+    import inspect
+
+    from factorylab.cortex.request import Request
+    from tests.audit import class2_seat_text as st
+
+    fields = [f.name for f in dataclasses.fields(Request)]
+    positions, keywords = st.PAYLOAD_CALLS["Request"]
+    assert positions == {fields.index(n) for n in ("description", "inputs", "outcome_schema",
+                                                   "completion_criterion", "settlement")}
+    assert {"description", "inputs", "outcome_schema", "completion_criterion"} <= keywords
+    for name, path in st.SINK_TARGETS.items():
+        params = [p for p in inspect.signature(st._target(path)).parameters if p != "self"]
+        assert st.SINKS[name] == params.index("reason"), name
+    with pytest.raises(ValueError, match="no parameter"):
+        st.call_mapping("factorylab.cortex.request:Request", frozenset({"prompt"}))
+    positions, keywords = st.call_mapping("factorylab.runtime.compute:ComputeMixin._request",
+                                          frozenset({"description", "settlement"}))
+    assert positions == {1, 7} and keywords == {"description", "settlement"}

@@ -42,16 +42,19 @@ import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from tests.audit.class2_corpus import PACKAGE, ROOT  # the corpus's own sources
 
-#: Functions that deliver their reason argument to a seat, by name, and the index of
-#: that argument among the call's positional arguments (``self`` not counted).
-SINKS: dict[str, int] = {
-    "_refusal_to_owner": 2,   # compute.py: into the decision owner's inbox
-    "_refuse_request": 2,     # composition.py: a child request's tool result
-    "_refuse_order": 1,       # venue.py: an order refusal, result and inbox
-    "_connector_refused": 1,  # compute.py: a connector's tool result
+#: Functions that deliver their ``reason`` argument to a seat, by the name they are
+#: called by, and the object each names (``module:qualname``). The argument's position
+#: is read from the function's real signature at scan time (``SINKS``), never written
+#: here, so a reordered signature cannot drop it.
+SINK_TARGETS: dict[str, str] = {
+    "_refusal_to_owner": "factorylab.runtime.compute:ComputeMixin._refusal_to_owner",
+    "_refuse_request": "factorylab.runtime.composition:CompositionMixin._refuse_request",
+    "_refuse_order": "factorylab.runtime.venue:VenueMixin._refuse_order",
+    "_connector_refused": "factorylab.runtime.compute:ComputeMixin._connector_refused",
 }
 #: Where seat-bound work starts: every tool call, connector fetch, web search and
 #: child request a seat makes runs under one of these.
@@ -65,19 +68,76 @@ ROOTS = frozenset({
 })
 #: The keys of a dict whose value a seat reads as a reason.
 SEAT_KEYS = frozenset({"error", "reason"})
-#: Calls that hand a seat a payload, and where it goes: (positional indexes, keyword
-#: names), the receiver-less name as called. ``*`` for keywords means every keyword.
-#: A request's text and inputs (``_request``, ``Request``, a tool round's
-#: ``continuation``), a seat's inbox (``outcomes.append``'s ``outcome``, a fact
-#: addressed to the owner by ``_note_to_owner``).
-PAYLOAD_CALLS: dict[str, tuple[frozenset[int], frozenset[str]]] = {
-    "_request": (frozenset({1, 2, 3}), frozenset({"description", "inputs", "schema",
-                                                  "settlement"})),
-    "Request": (frozenset(), frozenset({"description", "inputs", "outcome_schema",
-                                        "completion_criterion"})),
-    "continuation": (frozenset(), frozenset({"inputs"})),
-    "_note_to_owner": (frozenset({2}), frozenset({"*"})),
+#: Constructors and builders that hand a seat a payload: the name as called, the object
+#: it names (``module:qualname``) and the parameters (or dataclass fields) that reach
+#: the seat; ``**`` names a function's ``**kwargs``. A request's text, inputs, schema,
+#: completion criterion and scoring (``Request``, ``_request``, a tool round's
+#: ``continuation``), a fact addressed to the owner (``_note_to_owner``). Which
+#: positional index and which keyword carries each is read from the real signature at
+#: scan time (``PAYLOAD_CALLS``), so positional and keyword arguments are both covered
+#: and a signature change cannot silently drop coverage.
+PAYLOAD_TARGETS: dict[str, tuple[str, frozenset[str]]] = {
+    "_request": ("factorylab.runtime.compute:ComputeMixin._request",
+                 frozenset({"description", "inputs", "schema", "settlement"})),
+    "Request": ("factorylab.cortex.request:Request",
+                frozenset({"description", "inputs", "outcome_schema",
+                           "completion_criterion", "settlement"})),
+    "continuation": ("factorylab.cortex.request:Request.continuation",
+                     frozenset({"inputs"})),
+    "_note_to_owner": ("factorylab.runtime.compute:ComputeMixin._note_to_owner",
+                       frozenset({"kind", "**"})),
 }
+
+
+def _target(path: str) -> Any:
+    """The object ``module:qualname`` names, imported."""
+    import importlib
+
+    module, _, qualname = path.partition(":")
+    obj: Any = importlib.import_module(module)
+    for part in qualname.split("."):
+        obj = getattr(obj, part)
+    return obj
+
+
+def call_mapping(path: str, names: frozenset[str]) -> tuple[frozenset[int], frozenset[str]]:
+    """Where the parameters ``names`` of the object at ``path`` sit in a call: their
+    positional indexes (``self`` not counted) and their keyword names, from its real
+    signature (a dataclass's is its fields in order). ``**`` in ``names`` makes every
+    keyword the function collects in its ``**kwargs`` a seat's. Raises when a name is
+    no parameter of it, so a renamed field fails the scan instead of dropping out."""
+    import inspect
+
+    params = list(inspect.signature(_target(path)).parameters.values())
+    if params and params[0].name == "self":
+        params = params[1:]
+    known = {p.name for p in params} | {"**"}
+    if names - known:
+        raise ValueError(f"{path} has no parameter {sorted(names - known)}")
+    positional = [p for p in params if p.kind in (p.POSITIONAL_ONLY,
+                                                  p.POSITIONAL_OR_KEYWORD)]
+    positions = frozenset(i for i, p in enumerate(positional) if p.name in names)
+    keywords = {p.name for p in params if p.name in names and p.kind in (
+        p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)}
+    if "**" in names and any(p.kind is p.VAR_KEYWORD for p in params):
+        keywords.add("*")
+    return positions, frozenset(keywords)
+
+
+def _signature_tables() -> tuple[dict[str, int], dict[str, tuple[frozenset[int],
+                                                                  frozenset[str]]]]:
+    sinks = {}
+    for name, path in SINK_TARGETS.items():
+        (index,), _keywords = call_mapping(path, frozenset({"reason"}))
+        sinks[name] = index
+    payloads = {name: call_mapping(path, names)
+                for name, (path, names) in PAYLOAD_TARGETS.items()}
+    return sinks, payloads
+
+
+#: The sinks' ``reason`` positions and the payload calls' seat-bound positions and
+#: keywords, read from the real signatures (``call_mapping``).
+SINKS, PAYLOAD_CALLS = _signature_tables()
 #: A receiver whose ``append(owner, …, outcome=…)`` is a seat's inbox.
 INBOX_RECEIVERS = ("outcomes",)
 #: Receivers that name the runtime itself (``rt.f`` in a module the runtime calls).
@@ -721,6 +781,10 @@ class Scan:
             if isinstance(node, ast.Name):
                 bound = renderers[key].local.get(node.id, [])
                 work += [(key, v) for v in bound + self._mutations(fn, node.id)]
+                if node.id not in renderers[key].local:
+                    # A module-level dict the payload carries (its own module's, or an
+                    # import's: ``COUNTERFACTUAL_FIELD`` in a schema), read by its values.
+                    work += [(key, v) for v in self._module_dict(fn.module, node.id)]
             if isinstance(node, ast.Call):
                 name = _call_name(node)
                 if name in ("dict", "list", "tuple", "sorted", "deepcopy", "copy"):
@@ -737,6 +801,19 @@ class Scan:
                     texts[("payload", key, text)] = SeatText("payload", key, text)
         self.payload_builders = builders
         return texts
+
+    def _module_dict(self, file: str, name: str) -> list[ast.AST]:
+        """The values of the module-level dict ``name`` means in ``file``: its own, or the
+        one an import binds it to; none when it names no such dict."""
+        module = self.modules[file]
+        if name in module.dicts:
+            return module.dicts[name]
+        if name in module.names:
+            other_file, real = module.names[name]
+            other = self.modules.get(other_file)
+            if other is not None and real in other.dicts:
+                return other.dicts[real]
+        return []
 
     @property
     def sources(self) -> set[str]:

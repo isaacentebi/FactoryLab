@@ -418,6 +418,9 @@ def test_the_entity_builders_read_every_source():
     assert g.diary_loops([lifespan, {"kind": "config.lifespan", "loop": "gain"}]) == [
         "gain", "price"]
     assert set(g.ENTITY_SETS) and all(v.strip() for v in g.ENTITY_SETS.values())
+    # The prefix is removed only in fields the organ writes with it (immune.py:303).
+    assert all(path in g.CARD_SOURCES.get(kind, ()) for kind, path in g.CARD_PREFIXED)
+    assert g.diary_cards([{"kind": "price.update", "card_id": "card:x"}]) == ["card:x"]
 
 
 # --- Codex pass on 7c714a2: the loader drops nothing a criterion reads ---------------------

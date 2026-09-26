@@ -475,7 +475,8 @@ def _runs(indexes: list[int]) -> list[tuple[int, int]]:
 #: saturated, posted, refused) is judged. Enumerated from the emitting code (every
 #: ``ledger.append`` whose row carries ``card_id``) and pinned against it by
 #: tests/gauntlet/test_criteria_schema.py. ``values.*``/``regions.*`` are id-keyed
-#: mappings; ``card:`` prefixes (the organ's profile keys) are stripped.
+#: mappings. A card id is kept verbatim, except in the fields ``CARD_PREFIXED`` names,
+#: where the kernel's encoding adds one ``card:`` prefix that is removed once.
 CARD_SOURCES: dict[str, tuple[str, ...]] = {
     "price.register": ("card_id",),
     "price.proposed": ("card_id",),
@@ -567,11 +568,32 @@ def _entities(events: Iterable[Mapping], sources: Mapping[str, tuple[str, ...]]
                     yield row, name
 
 
+#: The card fields whose kernel encoding prefixes the id with ``card:``, each with the
+#: line that writes it. Only here is one prefix removed; everywhere else the id is the
+#: card's own, verbatim (a card registered as ``card:latency`` keeps that id).
+CARD_PREFIXED: dict[tuple[str, str], str] = {
+    ("immune.window", "regions.*"):
+        'immune.py close_window: "regions": {f"card:{cid}": ...} (immune.py:303)',
+    ("immune.window", "violated_cards[]"):
+        "live.persistent_violations returns the window's regions keys, f\"card:{cid}\" "
+        "(immune.py:303); the organ removes the prefix once to ratchet (immune.py:359)",
+}
+
+
 def diary_cards(events: Iterable[Mapping]) -> list[str]:
     """Every card the diary names, from every kind that names one (``CARD_SOURCES``),
-    pathology cards (``pathology:thrash``, the thrash price's own) included."""
-    return sorted({name.removeprefix("card:") for _row, name in _entities(events,
-                                                                          CARD_SOURCES)})
+    pathology cards (``pathology:thrash``, the thrash price's own) included. Ids are
+    verbatim, except one ``card:`` prefix removed where the kernel adds it
+    (``CARD_PREFIXED``)."""
+    names = set()
+    for row in events:
+        kind = row.get("kind")
+        for path in CARD_SOURCES.get(kind, ()):
+            for name in _named(row, path):
+                if isinstance(name, str) and name:
+                    names.add(name.removeprefix("card:") if (kind, path) in CARD_PREFIXED
+                              else name)
+    return sorted(names)
 
 
 def diary_loops(events: Iterable[Mapping]) -> list[str]:
@@ -721,6 +743,7 @@ def sf1b_ratchet_cadence(events: list[Mapping], manifest: Mapping) -> Result:
     closes = windows(events)
     acting = [w["window"] for w in closes if need(w, "acts")]
     thrash = set(flagged(events, "thrash"))
+    # One prefix removed, as the organ does (CARD_PREFIXED; immune.py:359).
     holding = {w["window"]: {c.removeprefix("card:") for c in need(w, "violated_cards")}
                for w in closes if need(w, "flags.stable_failure")
                and w["window"] not in thrash}

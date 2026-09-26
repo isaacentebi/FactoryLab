@@ -1704,6 +1704,31 @@ def test_every_replayed_criterion_fails_on_a_thin_diary_with_one_violation():
             if isinstance(r.evidence.get("malformed"), dict)] == []
 
 
+# --- Codex pass on 5ba444a ----------------------------------------------------------------
+
+
+def test_a_card_whose_id_starts_with_card_keeps_its_id_through_replay():
+    """Codex P2 (gauntlet.py:574): only the organ's fields prefix a card id with
+    ``card:`` (immune.py:303), so only there is one prefix removed. A card registered as
+    ``card:latency`` keeps that id, and its per-card criteria read its own rows."""
+    cid = "card:latency"
+    region = {"kind": "min", "lo": 0.2, "hi": None, "scale": 0.2}
+    rows = [_launch(), {"kind": "price.register", "card_id": cid}]
+    for i in range(1, 15):
+        rows.append({"kind": "price.window", "window": i, "values": {cid: 0.0},
+                     "regions": {cid: region}})
+        close = _w(i, sf=i >= 4, violated=[f"card:{cid}"])
+        close["regions"] = {f"card:{cid}": region}
+        rows.append(close)
+    rows += _updates(cid, [(0.5, 1.0, 0.5), (0.5, 1.0, 0.5)])
+    rows = _seq(rows)
+    assert g.diary_cards(rows) == [cid]
+    results = {r.name: r for r in g.replay(rows, M)}
+    assert "SF-1a[latency]" not in results
+    assert results[f"SF-1a[{cid}]"].ok, results[f"SF-1a[{cid}]"].evidence
+    assert results[f"SF-1c[{cid}]"].ok, results[f"SF-1c[{cid}]"].evidence
+
+
 def test_s4_an_unresolved_penalty_row_may_carry_no_raw_score():
     row = {"kind": "price.penalty", "handle": "d", "penalty": 0.1, "raw": None,
            "effective": None}
