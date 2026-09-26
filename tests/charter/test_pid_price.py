@@ -272,3 +272,28 @@ def test_at_saturation_the_ratchet_stops_and_the_fact_is_ledgered():
     assert all(r["lambda"] == pytest.approx(0.9) and r["bound"] == pytest.approx(0.9)
                and r["penalty_cap"] == 0.9 for r in saturated)
 
+
+
+@pytest.mark.parametrize("first", [1.1, 2.0], ids=["mild", "spike"])
+def test_a_redefined_card_is_priced_from_its_price_with_no_old_integral(first):
+    """A redefined card is a new metric: the old integral never measured it. Its first
+    window is priced exactly as a card adopted at the same price and never observed:
+    the integral restarts from the price, the episode and last reading reset."""
+    ledger = Ledger()
+    old = _pid(ledger)
+    for event in range(3):
+        old.observe("c", 1.4, event)  # violation 0.4: I = 0.6, P = 0.2
+    carried = old.price("c")
+    assert carried == pytest.approx(0.8)
+    old.redefine("c", edition=2)
+    (row,) = [i for i in ledger._recovery_items() if i["kind"] == "price.redefined"]
+    assert row["integral"] == pytest.approx(0.6)
+    fresh_ledger = Ledger()
+    fresh = _pid(fresh_ledger)
+    fresh.set_price("c", carried, amendment_id="t")
+    old.observe("c", first, 3)
+    fresh.observe("c", first, 0)
+    assert old.price("c") == pytest.approx(fresh.price("c"))
+    terms = [{k: u[k] for k in ("p", "i", "d")} for u in (_updates(ledger)[-1],
+                                                           _updates(fresh_ledger)[-1])]
+    assert terms[0] == pytest.approx(terms[1])

@@ -422,16 +422,21 @@ class PriceController:
                                   or pressure >= self.__cap)
 
     def redefine(self, card_id: str, *, edition: int | str | None = None) -> None:
-        """A card redefined under the same id with a different observation is a new
+        """A card redefined under the same id (a new ``metric_identity``) is a new
         metric (Codex on #152): its failing-attractor duration, its failure episode
         (``episode_bound``, R10-n), its runs of violating and saturated windows and its
-        last reading reset; its price and cumulative counts stay, the charter's to set.
-        Ledgered first."""
+        last reading reset. The old integral measured the old metric, never this one,
+        so it restarts from the card's price in force (bumpless, as ``set_price``
+        does): the new metric's first window is priced from that price, with no
+        pressure the old one accumulated carried over. Its price and cumulative counts
+        stay, the charter's to set. Ledgered first."""
         state = self.__cards[card_id]
         self.__ledger.append({"kind": "price.redefined", "card_id": card_id,
                               "edition": edition, "failing_windows": state.failing_windows,
-                              "episode_bound": state.episode_bound})
-        self.__cards[card_id] = replace(state, failing_windows=0, episode_bound=0.0,
+                              "episode_bound": state.episode_bound,
+                              "integral": state.integral})
+        self.__cards[card_id] = replace(state, integral=state.price,
+                                        failing_windows=0, episode_bound=0.0,
                                         violation_windows=0, saturated_windows=0,
                                         previous_value=None, previous_violation=0.0)
 
