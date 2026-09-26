@@ -893,9 +893,9 @@ def sample_problems(findings: list[dict], summary: dict | None, key: dict,
             counts[f["class"]] = counts.get(f["class"], 0) + 1
     if summary.get("by_class") != counts:
         problems.append(f"by_class {summary.get('by_class')!r} is not the findings' {counts}")
-    ids = [f.get("finding_id") for f in findings]
+    ids = [finding_identity(f) for f in findings]
     if len(ids) != len(set(ids)):
-        problems.append("a finding is given twice")
+        problems.append("a finding (id, question, class) is given twice")
     return problems
 
 
@@ -935,9 +935,15 @@ def provenance_problems(rows: list[dict], summary: dict | None, key: dict) -> li
     return problems
 
 
+def finding_identity(finding: dict) -> tuple:
+    """A finding's identity everywhere (union, triage, gate): its protocol
+    ``finding_id`` (``sha256(path|quote)[:12]``) with its question and class, so one
+    quote read under two questions is two findings, never one."""
+    return (finding.get("finding_id"), finding.get("question"), finding.get("class"))
+
+
 def _finding_key(finding: dict) -> tuple:
-    return (finding.get("finding_id") or None, finding.get("leaf_id"), finding.get("path"),
-            finding.get("question"), finding.get("class"))
+    return finding_identity(finding)
 
 
 def union(samples: list[tuple[list[dict], dict | None]]) -> list[dict]:
@@ -1158,18 +1164,20 @@ def release_gate(text: str, *, expected: list[dict] | None = None) -> list[str]:
             problems.append("the triage file records no valid canary score")
     rows = table_rows(text)
     if expected is not None:
-        want = {f["finding_id"]: f for f in expected}
-        seen: dict[str, int] = {}
+        # A row names its finding by the finding's identity (``finding_identity``): the
+        # id, question and class columns together.
+        want = {finding_identity(f): f for f in expected}
+        seen: dict[tuple, int] = {}
         for row in rows:
-            seen[row.get("id", "")] = seen.get(row.get("id", ""), 0) + 1
-            f = want.get(row.get("id", ""))
+            ident = (row.get("id", ""), row.get("question", ""), row.get("class", ""))
+            seen[ident] = seen.get(ident, 0) + 1
+            f = want.get(ident)
             if f is None:
-                problems.append(f"a row names no finding of this audit: {row.get('id')!r}")
+                problems.append(f"a row names no finding of this audit: {ident!r}")
                 continue
-            for column in ("severity", "question", "class"):
-                if row.get(column) != f.get(column):
-                    problems.append(f"{row.get('id')}: {column} {row.get(column)!r} is not "
-                                    f"the finding's {f.get(column)!r}")
+            if row.get("severity") != f.get("severity"):
+                problems.append(f"{ident}: severity {row.get('severity')!r} is not the "
+                                f"finding's {f.get('severity')!r}")
         problems += [f"finding {i} ({want[i]['severity']}) has no row" for i in want
                      if i not in seen]
         problems += [f"finding {i} has {n} rows" for i, n in seen.items() if n > 1]

@@ -23,7 +23,8 @@ every mixin's ``f``, ``self.f`` elsewhere to the class's own ``f``, a bare or im
 name to its definition, a module attribute to that module's function, and any other
 receiver by name across the package (which over-reaches rather than under-reaches).
 Container and builtin method names (``STOP``) are not followed. A source is
-``file::qualname``; its texts are rendered with each interpolation shown as ``{…}``.
+``file::qualname``; its texts are every alternative ``Renderer`` finds, each interpolation shown as
+``{expression}``.
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ from __future__ import annotations
 import ast
 import functools
 import hashlib
+import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -105,7 +107,10 @@ class _Module:
     names: dict[str, tuple[str, str]] = field(default_factory=dict)
     #: A local name bound to a factorylab module -> its file.
     modules: dict[str, str] = field(default_factory=dict)
-    consts: dict[str, str] = field(default_factory=dict)
+    #: A module- or class-level name bound to an expression (a string, or one built).
+    consts: dict[str, ast.AST] = field(default_factory=dict)
+    #: A module- or class-level name bound to a dict literal: its values.
+    dicts: dict[str, list[ast.AST]] = field(default_factory=dict)
 
 
 def _module_file(dotted: str) -> str | None:
@@ -117,30 +122,133 @@ def _module_file(dotted: str) -> str | None:
     return None
 
 
-def _render(node: ast.AST, consts: dict[str, str]) -> str | None:
-    """A string expression as a seat reads it, interpolations as ``{…}``; None when it
-    carries no literal text."""
-    if isinstance(node, ast.Constant) and isinstance(node.value, str):
-        return node.value
-    if isinstance(node, ast.JoinedStr):
-        text = "".join(str(v.value) if isinstance(v, ast.Constant) else "{…}"
-                       for v in node.values)
-        return text if text.replace("{…}", "").strip(" :,.;()") else None
-    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add | ast.Mod):
-        left, right = _render(node.left, consts), _render(node.right, consts)
-        if left is None and right is None:
-            return None
-        return (left or "{…}") + ("" if isinstance(node.op, ast.Mod) else (right or "{…}"))
-    if isinstance(node, ast.Name):
-        return consts.get(node.id)
-    if isinstance(node, ast.Attribute):
-        return consts.get(f".{node.attr}")
-    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
-            and node.func.attr == "format":
-        return _render(node.func.value, consts)
-    if isinstance(node, ast.IfExp):
-        return _render(node.body, consts) or _render(node.orelse, consts)
-    return None
+#: At most this many alternatives are kept for one expression (a cartesian product of
+#: concatenated alternatives stops here; none of the kernel's reasons comes close).
+MAX_ALTERNATIVES = 256
+_PLACEHOLDER = re.compile(r"\{[^{}]*\}")
+
+
+def _placeholder(node: ast.AST) -> str:
+    """An interpolation as ``{expression}`` (braces inside it dropped, so a nested
+    f-string cannot unbalance the text)."""
+    return "{" + re.sub(r"[{}]", "", ast.unparse(node))[:40] + "}"
+
+
+def has_literal_text(text: str) -> bool:
+    """Whether a rendered string carries words of its own, not only interpolations."""
+    return bool(_PLACEHOLDER.sub("", text).strip(" \t\n:,.;()[]'\"-=/|"))
+
+
+class Renderer:
+    """Every string an expression can evaluate to, as a seat reads it.
+
+    Guarantees every renderable alternative of every shape that builds a seat-bound
+    string: a constant; an f-string, each interpolation shown as ``{expression}``; ``+``
+    (every combination of the operands' alternatives), ``%`` and ``.format`` (the
+    template); both branches of a conditional expression; every operand of ``or`` and
+    ``and``; a name bound in the enclosing function (every assignment, in any branch),
+    at module or class level, or imported; an attribute naming a module- or class-level
+    constant; a lookup (``[…]`` or ``.get``) in a constant dict (every value, and a
+    ``.get`` default). ``str(exc)`` renders nothing of its own: an exception's messages
+    are collected where it is raised.
+    """
+
+    def __init__(self, scan: Scan, module: str, local: dict[str, list[ast.AST]] | None = None):
+        self.scan, self.module, self.local = scan, module, local or {}
+
+    def render(self, node: ast.AST, depth: int = 0) -> list[str]:
+        if depth > 12:
+            return []
+        out = self._render(node, depth + 1)
+        return list(dict.fromkeys(out))[:MAX_ALTERNATIVES]
+
+    def _in(self, module: str) -> Renderer:
+        return self if module == self.module else Renderer(self.scan, module)
+
+    def _named(self, name: str, depth: int) -> list[str] | None:
+        """A bare name's alternatives: local bindings, then the module's, then an
+        import's; None when the name is bound to no string anywhere it can be read."""
+        if name in self.local:
+            return [t for value in self.local[name] for t in self.render(value, depth)]
+        module = self.scan.modules[self.module]
+        if name in module.consts:
+            return self.render(module.consts[name], depth)
+        if name in module.names:
+            file, real = module.names[name]
+            other = self.scan.modules.get(file)
+            if other is not None and real in other.consts:
+                return self._in(file).render(other.consts[real], depth)
+        return None
+
+    def _dict_values(self, node: ast.AST, depth: int) -> list[str] | None:
+        """Every value of the constant dict ``node`` names, or None."""
+        module = self.scan.modules[self.module]
+        if isinstance(node, ast.Name):
+            if node.id in module.dicts:
+                return [t for v in module.dicts[node.id] for t in self.render(v, depth)]
+            if node.id in module.names:
+                file, real = module.names[node.id]
+                other = self.scan.modules.get(file)
+                if other is not None and real in other.dicts:
+                    inner = self._in(file)
+                    return [t for v in other.dicts[real] for t in inner.render(v, depth)]
+        if isinstance(node, ast.Attribute):
+            found = self.scan.dict_attrs.get(node.attr)
+            if found:
+                return [t for file, values in found for v in values
+                        for t in self._in(file).render(v, depth)]
+        return None
+
+    def _render(self, node: ast.AST, depth: int) -> list[str]:
+        if isinstance(node, ast.Constant):
+            return [node.value] if isinstance(node.value, str) else []
+        if isinstance(node, ast.JoinedStr):
+            parts = [[str(v.value)] if isinstance(v, ast.Constant)
+                     else [_placeholder(v.value)] for v in node.values]
+            return _product(parts)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            left = self.render(node.left, depth) or [_placeholder(node.left)]
+            right = self.render(node.right, depth) or [_placeholder(node.right)]
+            return _product([left, right])
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
+            return self.render(node.left, depth)
+        if isinstance(node, ast.IfExp):
+            return self.render(node.body, depth) + self.render(node.orelse, depth)
+        if isinstance(node, ast.BoolOp):
+            return [t for value in node.values for t in self.render(value, depth)]
+        if isinstance(node, ast.Name):
+            return self._named(node.id, depth) or []
+        if isinstance(node, ast.Attribute):
+            receiver = node.value
+            module = self.scan.modules[self.module]
+            if isinstance(receiver, ast.Name) and receiver.id in module.modules:
+                file = module.modules[receiver.id]
+                other = self.scan.modules.get(file)
+                if other is not None and node.attr in other.consts:
+                    return self._in(file).render(other.consts[node.attr], depth)
+            return [t for file, value in self.scan.const_attrs.get(node.attr, ())
+                    for t in self._in(file).render(value, depth)]
+        if isinstance(node, ast.Subscript):
+            return self._dict_values(node.value, depth) or []
+        if isinstance(node, ast.Call):
+            f = node.func
+            if isinstance(f, ast.Attribute) and f.attr == "format":
+                return self.render(f.value, depth)
+            if isinstance(f, ast.Attribute) and f.attr == "get":
+                values = self._dict_values(f.value, depth)
+                if values is not None:
+                    default = self.render(node.args[1], depth) if len(node.args) > 1 else []
+                    return values + default
+            # ``str(exc)`` and every other call: the text is its callee's, collected there.
+            return []
+        return []
+
+
+def _product(parts: list[list[str]]) -> list[str]:
+    out = [""]
+    for options in parts:
+        out = [a + b for a in out for b in options][:MAX_ALTERNATIVES]
+    return out
 
 
 def _own_nodes(fn: ast.AST):
@@ -151,6 +259,63 @@ def _own_nodes(fn: ast.AST):
         yield node
         if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda):
             stack.extend(ast.iter_child_nodes(node))
+
+
+def _read_constants(tree: ast.Module, module: _Module) -> None:
+    """Module- and class-level bindings only: a local variable is not a constant another
+    function's name can mean. A dict literal is kept by its values."""
+    bodies = [tree.body] + [c.body for c in ast.walk(tree) if isinstance(c, ast.ClassDef)]
+    for body in bodies:
+        for stmt in body:
+            targets, value = [], None
+            if isinstance(stmt, ast.Assign):
+                targets, value = stmt.targets, stmt.value
+            elif isinstance(stmt, ast.AnnAssign) and stmt.value is not None:
+                targets, value = [stmt.target], stmt.value
+            for t in targets:
+                if not isinstance(t, ast.Name):
+                    continue
+                if isinstance(value, ast.Dict):
+                    module.dicts.setdefault(t.id, [v for v in value.values if v])
+                else:
+                    module.consts.setdefault(t.id, value)
+
+
+def snippet_texts(source: str, function: str = "f") -> set[str]:
+    """Every text ``Renderer`` finds in the values ``function`` returns, in a one-module
+    ``source`` read as the scan reads the package (its constants, constant dicts and
+    local bindings): the renderer's shapes, testable one by one."""
+    tree = ast.parse(source)
+    module = _Module()
+    _read_constants(tree, module)
+    fake = type("_OneModule", (), {})()
+    fake.modules = {"m": module}
+    fake.const_attrs = defaultdict(list)
+    fake.dict_attrs = defaultdict(list)
+    for name, value in module.consts.items():
+        fake.const_attrs[name].append(("m", value))
+    for name, values in module.dicts.items():
+        fake.dict_attrs[name].append(("m", values))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == function)
+    renderer = Renderer(fake, "m", local_bindings(fn))
+    return {t for node in _own_nodes(fn) if isinstance(node, ast.Return) and node.value
+            for t in renderer.render(node.value) if has_literal_text(t)}
+
+
+def local_bindings(fn: ast.AST) -> dict[str, list[ast.AST]]:
+    """Every value a name is bound to in a function's own body, in any branch: plain,
+    annotated and augmented assignments (an augmented one adds its right-hand side)."""
+    out: dict[str, list[ast.AST]] = defaultdict(list)
+    for node in _own_nodes(fn):
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name):
+                    out[t.id].append(node.value)
+        elif isinstance(node, ast.AnnAssign | ast.AugAssign) and node.value is not None \
+                and isinstance(node.target, ast.Name):
+            out[node.target.id].append(node.value)
+    return dict(out)
 
 
 def _call_name(call: ast.Call) -> str | None:
@@ -179,9 +344,15 @@ class Scan:
             head, _, _ = key.rpartition(".")
             if "::" in head:
                 self.children[head].append(key)
-        # An attribute (``self.WRITE_REFUSAL``, ``module.NAME``) names a module- or
-        # class-level constant anywhere; a bare name, its own module's or an import's.
-        self.consts = {f".{k}": v for m in self.modules.values() for k, v in m.consts.items()}
+        # An attribute (``self.WRITE_REFUSAL``) names a module- or class-level constant
+        # (or constant dict) anywhere; a bare name, its own module's or an import's.
+        self.const_attrs: dict[str, list[tuple[str, ast.AST]]] = defaultdict(list)
+        self.dict_attrs: dict[str, list[tuple[str, list[ast.AST]]]] = defaultdict(list)
+        for file, module in self.modules.items():
+            for name, value in module.consts.items():
+                self.const_attrs[name].append((file, value))
+            for name, values in module.dicts.items():
+                self.dict_attrs[name].append((file, values))
         self.runtime_classes = {c for c, m in self.classes.items()
                                 if m.startswith("factorylab/runtime/")
                                 and (c.endswith("Mixin") or c == "Runtime")}
@@ -214,20 +385,7 @@ class Scan:
                             target = _module_file(alias.name)
                             if target is not None:
                                 module.modules[alias.asname or alias.name] = target
-            # String constants at module and class level only: a local variable is not
-            # a constant another function's name can mean.
-            bodies = [tree.body] + [c.body for c in ast.walk(tree) if isinstance(c, ast.ClassDef)]
-            for body in bodies:
-                for stmt in body:
-                    if isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.Constant) \
-                            and isinstance(stmt.value.value, str):
-                        for t in stmt.targets:
-                            if isinstance(t, ast.Name):
-                                module.consts.setdefault(t.id, stmt.value.value)
-                    elif isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name) \
-                            and isinstance(stmt.value, ast.Constant) \
-                            and isinstance(stmt.value.value, str):
-                        module.consts.setdefault(stmt.target.id, stmt.value.value)
+            _read_constants(tree, module)
             self._visit(tree, rel, "", None)
 
     def _visit(self, node: ast.AST, rel: str, prefix: str, cls: str | None) -> None:
@@ -449,21 +607,15 @@ class Scan:
         texts: dict[tuple[str, str, str], SeatText] = {}
         for key, fn in self.fns.items():
             bound = key in self.reachable or key in self.reason_fns
-            module = self.modules[fn.module]
-            imported = {local: self.modules[file].consts[real]
-                        for local, (file, real) in module.names.items()
-                        if real in self.modules.get(file, _Module()).consts}
-            consts = {**self.consts, **imported, **module.consts}
-            for kind, value in self._positions(fn, bound):
-                text = _render(value, consts)
-                if text is not None:
-                    texts[(kind, key, text)] = SeatText(kind, key, text)
+            renderer = Renderer(self, fn.module, local_bindings(fn.node))
+            found = [(kind, value) for kind, value in self._positions(fn, bound)]
             if key in self.reason_fns:
-                for node in _own_nodes(fn.node):
-                    if isinstance(node, ast.Return) and node.value is not None:
-                        text = _render(node.value, consts)
-                        if text is not None:
-                            texts[("returned", key, text)] = SeatText("returned", key, text)
+                found += [("returned", node.value) for node in _own_nodes(fn.node)
+                          if isinstance(node, ast.Return) and node.value is not None]
+            for kind, value in found:
+                for text in renderer.render(value):
+                    if has_literal_text(text):
+                        texts[(kind, key, text)] = SeatText(kind, key, text)
         return sorted(texts.values(), key=lambda t: (t.kind, t.source, t.text))
 
     @property

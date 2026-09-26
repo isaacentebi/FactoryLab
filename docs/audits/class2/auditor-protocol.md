@@ -157,7 +157,9 @@ the skeleton):
   and the four sample files, it checks that the triage file names the world, the key's
   corpus and range and exactly those samples (by sha256), recomputes the audit's
   validity and the world's findings from the samples, and requires each finding to have
-  exactly one row with the severity, question and class it carries. A commit the
+  exactly one row with the severity, question and class it carries. A finding's identity
+  is its `finding_id` with its question and class: one quote read under two questions
+  is two findings, each with its own row and disposition. A commit the
   provenance pass flagged is a HIGH finding (P1, BEHAVIOUR-MIX) of every world's triage.
 - The triage file is committed, recording the family used, the canary score and each
   finding with its disposition. The four sample files are kept with the release

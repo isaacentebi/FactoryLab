@@ -339,3 +339,59 @@ def test_a_seat_text_source_the_registry_lacks_fails_the_check(seat, monkeypatch
     monkeypatch.setattr(audit, "load_surfaces", lambda: dropped)
     with pytest.raises(AssertionError, match="unregistered seat-text source"):
         test_every_seat_text_source_is_registered_and_rendered(seat)
+
+
+
+# --- the seat-text renderer: every alternative of every shape (Codex P2) --------------------
+
+
+@pytest.mark.parametrize("source, expected", [
+    # A conditional expression: both branches (composition.py's missed refusal).
+    ("def f(e, kind):\n    return 'a judge refusal' if e else f'no contract emits {kind}'",
+     {"a judge refusal", "no contract emits {kind}"}),
+    # ``or`` / ``and``: every operand.
+    ("def f(x):\n    return x or 'first fallback' or 'second fallback'",
+     {"first fallback", "second fallback"}),
+    ("def f(x):\n    return x and 'only when x'", {"only when x"}),
+    # An f-string: its placeholders by name.
+    ("def f(n, cap):\n    return f'{n} exceeds the cap of {cap} tokens'",
+     {"{n} exceeds the cap of {cap} tokens"}),
+    # ``+``: every combination of the operands' alternatives.
+    ("def f(e):\n    return 'refused: ' + ('stale' if e else 'unknown')",
+     {"refused: stale", "refused: unknown"}),
+    # ``%`` and ``.format``: the template.
+    ("def f(n):\n    return 'size %s is below the minimum' % n",
+     {"size %s is below the minimum"}),
+    ("def f(n):\n    return 'size {} is below the minimum'.format(n)",
+     {"size {} is below the minimum"}),
+    # A local name, every assignment in any branch.
+    ("def f(e):\n    if e:\n        why = 'the window is closed'\n    else:\n"
+     "        why = 'the seat is retired'\n    return why",
+     {"the window is closed", "the seat is retired"}),
+    # A module-level constant by name, and a constant built from others.
+    ("PREFIX = 'refused'\nWHY = PREFIX + ': no route'\ndef f():\n    return WHY",
+     {"refused: no route"}),
+    # A class-level constant by attribute.
+    ("class C:\n    WRITE_REFUSAL = 'judges do not trade'\n"
+     "def f(self):\n    return self.WRITE_REFUSAL", {"judges do not trade"}),
+    # A lookup in a constant dict of messages: every value, and a .get default.
+    ("MESSAGES = {'a': 'no such market', 'b': 'market closed'}\ndef f(k):\n"
+     "    return MESSAGES[k]", {"no such market", "market closed"}),
+    ("MESSAGES = {'a': 'no such market'}\ndef f(k):\n"
+     "    return MESSAGES.get(k, 'unknown reason')", {"no such market", "unknown reason"}),
+    # ``str(exc)``: nothing of its own; the exception's messages are collected at raise.
+    ("def f(exc):\n    return str(exc)", set()),
+    ("def f(exc):\n    return f'refused: {exc}'", {"refused: {exc}"}),
+])
+def test_the_renderer_collects_every_alternative_of_every_shape(source, expected):
+    from tests.audit import class2_seat_text
+
+    assert class2_seat_text.snippet_texts(source) == expected
+
+
+def test_the_composition_refusal_the_first_branch_hid_is_in_the_corpus(seat):
+    """Codex P2: composition.py's ``_draw_executor`` returns one of three refusals; the
+    one in the conditional's second branch is in the corpus too."""
+    texts = {t.text for t in seat.texts
+             if t.source == "factorylab/runtime/composition.py::CompositionMixin._draw_executor"}
+    assert "no live contract other than the requester emits or accepts {kind}" in texts

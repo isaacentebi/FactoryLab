@@ -880,3 +880,57 @@ def test_the_gate_refuses_a_key_of_another_release(triaged):
     assert _gate(triaged) == []
     other = "0" * 40
     assert any("not the release gated" in p for p in _gate(triaged, release=other))
+
+
+
+# --- a finding's identity is its id with its question and class (Codex P2) -----------------
+
+
+def test_one_quote_under_two_questions_is_two_findings_through_triage_and_gate(
+        with_commit, tmp_path, monkeypatch):
+    """The same quote at the same path, flagged under Q3 and Q6, is two findings: both
+    are unioned, both get a row, both need a disposition, and neither row stands for
+    the other."""
+    out, key = with_commit
+    monkeypatch.setattr(tool, "TRIAGE_DIR", tmp_path)
+    real = next(r for r in _records(out) if r["provenance"] == "kernel"
+                and r["leaf_id"] not in {c["leaf_id"] for c in key["canaries"] + key["controls"]})
+    q3, q6 = _finding(real, "Q3"), _finding(real, "Q6")
+    assert q3["finding_id"] == q6["finding_id"]
+    samples, prov = _paths(tmp_path, out, key, extra=[q3, q6])
+    verdict = tool.audit_verdict([tool.read_output(p) for p in samples],
+                                 [tool.read_output(p) for p in prov], key, _records(out))
+    assert verdict["valid"], verdict["problems"]
+    merged = [f for f in tool.union([tool.read_output(p) for p in samples])
+              if f["finding_id"] == q3["finding_id"]]
+    assert {(f["question"], f["class"]) for f in merged} == {("Q3", "ANNOUNCED-PHYSICS"),
+                                                              ("Q6", "C1")}
+    argv = ["triage", *map(str, samples), "--provenance-samples", *map(str, prov),
+            "--key", str(out / "canary_key.json"), "--world", WORLD, "--family", "fam-x"]
+    assert tool.main(argv) == 0
+    path = tmp_path / f"{WORLD}.md"
+    rows = [r for r in tool.table_rows(path.read_text()) if r["id"] == q3["finding_id"]]
+    assert {(r["question"], r["class"]) for r in rows} == {("Q3", "ANNOUNCED-PHYSICS"),
+                                                           ("Q6", "C1")}
+
+    def gate():
+        return tool.gate(WORLD, path, out / "canary_key.json", samples, prov,
+                         release=key["release_commit"])
+
+    disposed = _dispose(path.read_text())
+    path.write_text(disposed)
+    assert gate() == []
+    q6_row = next(line for line in disposed.splitlines()
+                  if q3["finding_id"] in line and "| Q6 |" in line)
+    path.write_text(disposed.replace(q6_row + "\n", ""))
+    assert any("has no row" in p and "'Q6'" in p for p in gate())
+    # The Q3 row cannot stand for the Q6 finding twice over.
+    q3_row = next(line for line in disposed.splitlines()
+                  if q3["finding_id"] in line and "| Q3 |" in line)
+    path.write_text(disposed.replace(q6_row, q3_row))
+    problems = gate()
+    assert any("has 2 rows" in p for p in problems) and any("'Q6'" in p for p in problems)
+    # A sample that gives one identity twice is invalid; two questions are not twice.
+    rows_, summary = _output(out, key, sample=2, extra=[q3, q3])
+    twice = _verdict(out, key, second=(rows_, summary))
+    assert any("given twice" in p for p in twice["problems"])
