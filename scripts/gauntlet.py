@@ -438,7 +438,8 @@ def _event_of(row: Any) -> Mapping:
         return {}
     if not isinstance(event, Mapping):
         raise DiaryInvalid(f"an event row's event is a {type(event).__name__}, not an object")
-    if event.get("payload") is not None and not isinstance(event["payload"], Mapping):
+    payload = event.get("payload")
+    if payload is not None and not isinstance(payload, Mapping):
         raise DiaryInvalid("an event's payload is not an object")
     return event
 
