@@ -2175,31 +2175,109 @@ def of2d_authorship(events: list[Mapping], manifest: Mapping, *,
                    traced=len(proposals) - len(bad), bad=bad[:5])
 
 
+#: The world-fact row a ``verdict.consequence`` row's ``y`` is measured from, by its
+#: (``outcome``, ``phase``): feedback.py ``_reward_outcome`` / ``_final_outcome`` ledger
+#: exactly one of these for the judged return before scoring any verdict on it.
+CONSEQUENCE_FACTS = {
+    ("return_paid_off", "final"): "consequence.outcome",
+    ("return_paid_off", "mark"): "consequence.marked",
+    ("opportunity-cost-v2", "final"): "consequence.opportunity",
+    ("opportunity-cost-v2", "mark"): "consequence.opportunity_mark",
+    ("attempted-trade-v1", "final"): "consequence.attempted",
+    ("attempted-trade-v1", "mark"): "consequence.attempted_mark",
+}
+
+
+def consequence_y(fact: Mapping, outcome: str, manifest: Mapping) -> float | None:
+    """The ``y`` the kernel's own formula gives from one world-fact row, or None when the
+    row does not carry the facts it needs (so ``y`` is not derivable from the world).
+
+    * ``return_paid_off`` (settlement/lots.py ``Payoff``: ``int(acted and net + earned >
+      cost)``): the realised or marked P&L net of fees and funding (``net_micro``), the
+      return's service income (``earned_micro``; a mark row records none, read as 0)
+      and its compute and tool cost (``cost_micro``); a censored outcome has no ``y``.
+    * ``opportunity-cost-v2`` / ``attempted-trade-v1`` (runtime/grounded.py
+      ``opportunity_cost`` / ``attempted_cost``): the named trade's move from the mids
+      at open to the mids at the horizon (``moves``), signed by its side, as
+      ``round(0.5 ∓ 0.5·tanh(gross_bps / scale_bps), 6)``, with ``scale_bps`` the
+      world's ``evaluation.opportunity_scale_bps``.
+    """
+    try:
+        if outcome == "return_paid_off":
+            if fact.get("censored") is not None:
+                return None
+            net, cost = int(need(fact, "net_micro")), int(need(fact, "cost_micro"))
+            earned = int(fact.get("earned_micro") or 0)
+            return float(int(net + earned > cost))
+        trade = need(fact, "attempted" if outcome == "attempted-trade-v1" else "declined")
+        moves = {need(m, "coin"): Decimal(str(need(m, "move_bps")))
+                 for m in need(fact, "moves")}
+        move = moves.get(need(trade, "coin"))
+        side = need(trade, "side")
+        recorded = float(need(fact, "scale_bps"))
+        scale = float(_section(manifest, "evaluation").get("opportunity_scale_bps")
+                      or recorded)
+        if move is None or recorded != scale or side not in ("buy", "sell"):
+            return None
+        gross = move if side == "buy" else -move
+        sign = 1.0 if outcome == "attempted-trade-v1" else -1.0
+        return round(0.5 + sign * 0.5 * math.tanh(float(gross) / scale), 6)
+    except (Malformed, KeyError, TypeError, ValueError, ArithmeticError):
+        return None
+
+
 @criterion("OF-1a")
 def of1a_outside_the_loop(events: list[Mapping], manifest: Mapping) -> Result:
-    """OF-1a: the realized consequence of a return is a fact of the world, the same for
-    every judge that read it: every ``verdict.consequence`` row on one return, in one
-    phase, carries the same ``y`` whatever that judge's ``q`` (§III.b: "from outside the
-    factory's input"). A ``y`` that moved with a verdict would be the verdict grading
-    itself.
+    """OF-1a: the realized consequence of a return is a fact of the world (§III.b: "from
+    outside the factory's input"), in two parts.
 
-    Repetition is the count of consequence rows on one (return, phase) that carry a
-    ``y``: two rows or more are checked, and any difference in ``y`` fails, whether or
-    not their ``q`` differ. A row with ``y`` null (not yet known) is not a reading."""
+    Origin: every ``verdict.consequence`` row's ``y`` equals the ``y`` the kernel's own
+    formula gives from the world-fact row ledgered for that return before it
+    (``CONSEQUENCE_FACTS``, ``consequence_y``): mids at open and at the horizon, fee
+    and funding legs in the net, cost. A ``y`` with no such row, or not derivable from
+    it, fails: an internally consistent ``y`` the world did not measure is the loop
+    grading itself.
+
+    Consistency: every row on one return, in one phase, carries the same ``y`` whatever
+    that judge's ``q``. Repetition is the count of consequence rows on one (return,
+    phase): two rows or more are checked, and any difference in ``y`` fails."""
     by_return: dict[tuple, list] = defaultdict(list)
-    for row in rows_of(events, "verdict.consequence"):
+    facts: dict[tuple[str, str], Mapping] = {}
+    wanted = set(CONSEQUENCE_FACTS.values())
+    underived = []
+    for row in events:
+        kind = row.get("kind")
+        if kind in wanted:
+            facts[(kind, str(row.get("handle")))] = row
+            continue
+        if kind != "verdict.consequence":
+            continue
         # feedback.py ``_score_verdict`` writes ``y`` (a measured float) and ``phase``
         # in every row: a null or absent one is malformed, never "not yet known".
         y = need(row, "y")
         if y is None:
             raise Malformed(row, "y")
-        by_return[(need(row, "about_handle"), need(row, "phase"))].append(y)
+        about, phase = need(row, "about_handle"), need(row, "phase")
+        by_return[(about, phase)].append(y)
+        outcome = row.get("outcome")
+        fact = facts.get((CONSEQUENCE_FACTS.get((outcome, phase), ""), str(about)))
+        derived = None if fact is None else consequence_y(fact, str(outcome), manifest)
+        if derived is None or float(y) != derived:
+            underived.append({"about": about, "phase": phase, "outcome": outcome, "y": y,
+                              "derived": derived, "fact": fact is not None})
+    if not by_return:
+        return _unsupported("OF-1a", "no verdict was scored on a consequence")
     shared = {key: ys for key, ys in by_return.items() if len(ys) > 1}
-    if not shared:
-        return _unsupported("OF-1a", "no return carries two consequence rows in one phase")
     split = {str(key): sorted(set(ys), key=str) for key, ys in shared.items()
              if len(set(ys)) > 1}
-    return _result("OF-1a", not split, returns=len(shared), split=list(split.items())[:5])
+    evidence = {"returns": len(shared), "split": list(split.items())[:5],
+                "underived": underived[:5], "rows": sum(map(len, by_return.values()))}
+    if split or underived:
+        return _result("OF-1a", False, **evidence)
+    if not shared:
+        return _unsupported("OF-1a", "no return carries two consequence rows in one phase",
+                            **evidence)
+    return _result("OF-1a", True, **evidence)
 
 
 @criterion("OF-3a")

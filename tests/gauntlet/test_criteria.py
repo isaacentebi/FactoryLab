@@ -872,29 +872,67 @@ def test_sf1f_without_a_reserve_window_is_unsupported():
     assert g.sf1f_route_open([_w(1)], M).status == g.UNSUPPORTED
 
 
-def _consequence(about, q, y, phase="final"):
+def _consequence(about, q, y, phase="final", outcome="opportunity-cost-v2"):
     return {"kind": "verdict.consequence", "about_handle": about, "q": q, "y": y,
-            "phase": phase}
+            "phase": phase, "outcome": outcome}
+
+
+def _y(gross="20.00", scale=50.0):
+    """``opportunity_cost``'s y for a declined buy whose coin moved ``gross`` bps."""
+    return round(0.5 - 0.5 * math.tanh(float(gross) / scale), 6)
+
+
+def _opportunity(about, gross="20.00", phase="final"):
+    """The world-fact row ``_final_outcome`` / ``_reward_outcome`` ledgers for a declined
+    trade, as ``opportunity_cost`` prices it from the mids at open and at the horizon."""
+    return {"kind": "consequence.opportunity" + ("_mark" if phase == "mark" else ""),
+            "handle": about, "declined": {"coin": "BTC", "side": "buy"},
+            "moves": [{"coin": "BTC", "move_bps": gross}], "gross_bps": gross,
+            "scale_bps": 50.0, "score": _y(gross)}
 
 
 def test_of1a_y_is_one_fact_per_return_whatever_the_verdict():
-    same = [_consequence("r1", 0.9, 0.2), _consequence("r1", 0.1, 0.2)]
+    same = [_opportunity("r1"), _consequence("r1", 0.9, _y()), _consequence("r1", 0.1, _y())]
     assert g.of1a_outside_the_loop(same, M).ok
-    moved = [_consequence("r1", 0.9, 0.55), _consequence("r1", 0.1, 0.15)]
+    moved = [_opportunity("r1"), _consequence("r1", 0.9, 0.55), _consequence("r1", 0.1, 0.15)]
     assert g.of1a_outside_the_loop(moved, M).status == g.FAIL
-    assert g.of1a_outside_the_loop([same[0]], M).status == g.UNSUPPORTED
+    assert g.of1a_outside_the_loop(same[:2], M).status == g.UNSUPPORTED
 
 
 def test_of1a_repetition_is_counted_in_rows_not_in_distinct_verdicts():
     """Codex P2: two judges with the same q still read one return; a y that differs
     between them fails."""
-    same_q = [_consequence("r1", 0.5, 0.2), _consequence("r1", 0.5, 0.7)]
+    same_q = [_opportunity("r1"), _consequence("r1", 0.5, _y()), _consequence("r1", 0.5, 0.7)]
     result = g.of1a_outside_the_loop(same_q, M)
     assert result.status == g.FAIL and result.evidence["returns"] == 1
-    assert g.of1a_outside_the_loop([same_q[0], dict(same_q[0])], M).ok
+    assert g.of1a_outside_the_loop([*same_q[:2], dict(same_q[1])], M).ok
     # Different phases of one return are different facts.
-    phased = [_consequence("r1", 0.5, 0.2), _consequence("r1", 0.5, 0.7, phase="early")]
+    phased = [_opportunity("r1"), _consequence("r1", 0.5, _y()),
+              _opportunity("r1", "-10.00", phase="mark"),
+              _consequence("r1", 0.5, _y("-10.00"), phase="mark")]
     assert g.of1a_outside_the_loop(phased, M).status == g.UNSUPPORTED
+
+
+def test_of1a_a_consistent_y_the_world_did_not_measure_fails():
+    """Astra G-3 (§III.b): every judge reads the same y, but no world-fact row derives
+    it: the y is the loop's own, and OF-1a fails. So does a y beside a fact row whose
+    mids give another value, and one scored before its fact was ledgered."""
+    y = 0.37
+    internal = [_consequence("r1", 0.9, y), _consequence("r1", 0.1, y)]
+    result = g.of1a_outside_the_loop(internal, M)
+    assert result.status == g.FAIL and result.evidence["split"] == []
+    assert result.evidence["underived"][0]["fact"] is False
+    assert g.of1a_outside_the_loop([_opportunity("r1"), *internal], M).status == g.FAIL
+    late = [_consequence("r1", 0.9, _y()), _consequence("r1", 0.1, _y()), _opportunity("r1")]
+    assert g.of1a_outside_the_loop(late, M).status == g.FAIL
+    # The paid-off rule: y is int(net + earned > cost), fees and funding in the net.
+    paid = {"kind": "consequence.outcome", "handle": "r2", "y": 1, "net_micro": 900,
+            "earned_micro": 200, "cost_micro": 1000, "censored": None}
+    rows = [paid, _consequence("r2", 0.9, 1.0, outcome="return_paid_off"),
+            _consequence("r2", 0.2, 1.0, outcome="return_paid_off")]
+    assert g.of1a_outside_the_loop(rows, M).ok
+    unpaid = [{**paid, "earned_micro": 0}, *rows[1:]]
+    assert g.of1a_outside_the_loop(unpaid, M).status == g.FAIL
 
 
 def _returned_event(handle, about, seq):
@@ -1426,10 +1464,11 @@ def test_j1_of1a_a_null_y_is_a_malformed_row_not_a_pending_one():
     ``verdict.consequence`` row only on a measured outcome, with its float ``y``
     (feedback.py ``_settle_evaluations``: ``if state == "measured": _score_verdict``), so a
     null ``y`` is a malformed row and fails, never a reading to skip."""
-    pending = [_consequence("h5", 0.6, None), _consequence("h5", 0.8, 0.7)]
+    pending = [_opportunity("h5"), _consequence("h5", 0.6, None),
+               _consequence("h5", 0.8, _y())]
     result = g.of1a_outside_the_loop(pending, M)
     assert result.status == g.FAIL and result.evidence["malformed"]["field"] == "y"
-    settled = [_consequence("h5", 0.8, 0.7), _consequence("h5", 0.2, 0.7)]
+    settled = [_opportunity("h5"), _consequence("h5", 0.8, _y()), _consequence("h5", 0.2, _y())]
     assert g.of1a_outside_the_loop(settled, M).ok
 
 
