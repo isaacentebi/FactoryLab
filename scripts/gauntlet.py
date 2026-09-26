@@ -103,9 +103,11 @@ def need(row: Mapping, path: str) -> Any:
 
 
 def criterion(name: str) -> Callable[[Callable[..., Result]], Callable[..., Result]]:
-    """Guarantees the criterion fails, naming the row and field, when a row it reads
-    lacks a field the kernel always writes (``Malformed``), instead of reading the
-    absence as a value."""
+    """Guarantees a criterion always returns a reading and never raises: a row lacking a
+    field the kernel always writes (``Malformed``) fails it naming the row and field;
+    any other exception raised inside it fails it naming the exception's type and
+    message. So a replay always reports every criterion, and a diary a criterion
+    cannot read is a failure of that criterion, never an abort of the rest."""
     def wrap(fn: Callable[..., Result]) -> Callable[..., Result]:
         @functools.wraps(fn)
         def run(*args: Any, **kwargs: Any) -> Result:
@@ -114,6 +116,10 @@ def criterion(name: str) -> Callable[[Callable[..., Result]], Callable[..., Resu
             except Malformed as exc:
                 return _result(name, False, malformed=exc.evidence,
                                why="a row lacks a field its kind's emitter always writes")
+            except Exception as exc:  # every other failure, reported, never raised
+                return _result(name, False, error=type(exc).__name__,
+                               message=str(exc)[:300],
+                               why="the criterion raised on this diary")
         run.criterion = name  # type: ignore[attr-defined]
         return run
     return wrap
@@ -2461,9 +2467,12 @@ def s5b_observed_neutral(events: list[Mapping], manifest: Mapping) -> Result:
             if need(row, "raw") is not None and seats.get(handle) != "NOOP":
                 actor = actors.get(handle)
                 if not isinstance(actor, str):
-                    # A penalized handle with no draw (no decision.open, or no actor) is
-                    # counted untraced, never read as a NOOP.
-                    # A round no router drew (S1's rule: untraceable) is no router's mean.
+                    # A settled score with no draw behind it (no decision.open, or none
+                    # naming an actor). The kernel always writes one first: queue.open
+                    # refuses a decision without a non-empty actor (queue.py:255) and
+                    # ledgers ``decision.open`` with it (queue.py:279) before any
+                    # settlement, which needs that decision (``_decision``). So an
+                    # untraced score is a failure, never a round to skip.
                     untraced += 1
                     continue
                 raws[actor].append(float(need(row, "raw")))
@@ -2476,9 +2485,12 @@ def s5b_observed_neutral(events: list[Mapping], manifest: Mapping) -> Result:
                 if abs(float(need(row, "neutral")) - mean) > 1e-9:
                     bad.append({"handle": need(row, "handle"), "neutral": need(row, "neutral"),
                                 "observed_mean": mean, "rounds": len(observed)})
+    if untraced:
+        return _result("S5b", False, untraced=untraced, checked=checked,
+                       mismatched=len(bad), example=bad[:3],
+                       why="a settled score traces to no decision.open with an actor")
     if not checked:
-        return _unsupported("S5b", "no abstention was priced after a settled round",
-                            untraced=untraced)
+        return _unsupported("S5b", "no abstention was priced after a settled round")
     return _result("S5b", not bad, checked=checked, mismatched=len(bad), example=bad[:3],
                    untraced=untraced)
 
@@ -2503,6 +2515,15 @@ def s8_gain_rows_uniform(events: list[Mapping], manifest: Mapping) -> Result:
     gains = rows_of(events, "immune.gain")
     if not gains:
         return _unsupported("S8", "no gain row")
+    # One γ per base before and after (immune.py ``_gain``: ``after`` is built from
+    # ``before`` base by base): vectors of different lengths are a malformed row, and
+    # the other rows are still read.
+    uneven = [{"router": need(row, "router"), "window": need(row, "window"),
+               "gamma_before": len(need(row, "gamma_before")),
+               "gamma_after": len(need(row, "gamma_after"))}
+              for row in gains if len(need(row, "gamma_before")) != len(need(row, "gamma_after"))]
+    gains = [row for row in gains
+             if len(need(row, "gamma_before")) == len(need(row, "gamma_after"))]
     # A router's seed γ, where the diary shows it: its first gain row raised γ from the
     # seed (a lowering needs an earlier raise, and γ never goes below the seed).
     seeds: dict[str, list[float]] = {}
@@ -2514,6 +2535,10 @@ def s8_gain_rows_uniform(events: list[Mapping], manifest: Mapping) -> Result:
         pairs = list(zip(need(row, "gamma_before"), need(row, "gamma_after"), strict=True))
         steps = {b - a for a, b in pairs}
         seed = seeds[need(row, "router")]
+        if seed and len(seed) != len(pairs):
+            uneven.append({"router": need(row, "router"), "window": need(row, "window"),
+                           "seed": len(seed), "gamma_after": len(pairs)})
+            continue
         # ``immune._gain``'s own step, exactly (immune.py:145-148): up is
         # max(old, min(gamma_max, old + gain_step)); down is
         # min(old, max(seed_gamma, old − gain_step)), a partial step only onto the seed.
@@ -2541,6 +2566,10 @@ def s8_gain_rows_uniform(events: list[Mapping], manifest: Mapping) -> Result:
         if len(steps) != 1 or wrong or below:
             bad.append({"router": need(row, "router"), "window": need(row, "window"),
                         "steps": sorted(steps), "wrong": wrong[:3]})
+    if uneven:
+        return _result("S8", False, uneven=uneven[:5], bad=bad[:5],
+                       why="a gain row's γ vectors differ in length from each other or "
+                           "from the router's seed")
     if not bad and unverified:
         # A lowering stops at the seed; with the seed not in the diary a lowering's lower
         # bound (and a partial step onto it) cannot be verified.

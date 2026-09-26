@@ -1332,15 +1332,17 @@ def test_j1_of1a_a_null_y_is_a_malformed_row_not_a_pending_one():
 
 
 def test_l1_s5b_an_untraceable_round_is_no_routers_mean():
-    """Sol L1: a settled round whose decision names no router (S1: untraceable) joins no
-    router's mean, and an abstention naming no router reads none."""
+    """Sol L1, corrected by Codex's pass on 56cf3ff: a settled round whose decision
+    names no actor joins no router's mean, and is never a pass: the kernel ledgers
+    every decision's open with its actor before it can settle (queue.py:255, :279), so
+    an untraced settled score fails S5b."""
     rows = [{"kind": "decision.open", "handle": "h_old2",
              "propensity": {"chosen": "seat_x"}},
             _penalty("h_old2", 0.0) | {"raw": 0.2},
             {"kind": "router.abstention_priced", "handle": "h_abs", "router": None,
              "neutral": 0.5, "penalty": 0.0, "reward": 0.5}]
     result = g.s5b_observed_neutral(rows, M)
-    assert result.status == g.UNSUPPORTED and result.evidence["untraced"] == 1
+    assert result.status == g.FAIL and result.evidence["untraced"] == 1
 
 
 
@@ -1903,6 +1905,53 @@ def test_s5_a_row_missing_a_field_fails_as_malformed_never_raises():
            "neutral": 0.5, "penalty": 0.2}
     result = g.s5_neutral_imputation([row], M)
     assert result.status == g.FAIL and result.evidence["malformed"]["field"] == "reward"
+
+
+# --- Codex pass on 56cf3ff ----------------------------------------------------------------
+
+
+def test_s5b_an_untraced_settled_score_is_never_a_pass():
+    """Codex P2 (gauntlet.py:2483): an untraced settled score beside a matching mean
+    used to pass with a counter; it fails."""
+    rows = [_open("s0", "seat"), _penalty("s0", 0.0) | {"raw": 0.3},
+            _penalty("orphan", 0.0) | {"raw": 0.9},
+            {"kind": "router.abstention_priced", "handle": "z", "router": "router:Tick",
+             "neutral": 0.3, "penalty": 0.0, "reward": 0.3}]
+    result = g.s5b_observed_neutral(rows, M)
+    assert result.status == g.FAIL and result.evidence["untraced"] == 1
+    assert g.s5b_observed_neutral([r for r in rows if r.get("handle") != "orphan"], M).ok
+
+
+def test_a_criterion_that_raises_fails_and_replay_reports_the_rest(monkeypatch):
+    """Codex P2 (gauntlet.py:2514), the class: any exception inside a criterion is a
+    FAIL naming its type and message; replay reports every criterion after it."""
+    @g.criterion("RAISES")
+    def raises(events, manifest):
+        raise RuntimeError("no reading")
+
+    result = raises([], M)
+    assert result.status == g.FAIL
+    assert (result.evidence["error"], result.evidence["message"]) == ("RuntimeError",
+                                                                      "no reading")
+    generic = dict(g.GENERIC)
+    monkeypatch.setattr(g, "GENERIC", {"RAISES": raises, **generic})
+    results = {r.name: r for r in g.replay(_seq([_launch(), _w(1)]), M)}
+    assert results["RAISES"].status == g.FAIL
+    assert set(generic) <= set(results)  # every criterion after it still reported
+
+
+def test_s8_gamma_vectors_of_different_lengths_fail_with_a_clear_reason():
+    """S8 validates the vectors before pairing them: a row whose before and after differ
+    in length fails naming it, and the other rows are still read."""
+    uneven = {"kind": "immune.gain", "router": "router:Tick", "window": 2,
+              "pathology": "stable_failure", "gamma_before": [0.1, 0.1], "gamma_after": [0.15]}
+    result = g.s8_gain_rows_uniform([_gain(1, 0.1, 0.15), uneven], M)
+    assert result.status == g.FAIL
+    assert result.evidence["uneven"] == [{"router": "router:Tick", "window": 2,
+                                          "gamma_before": 2, "gamma_after": 1}]
+    names = {r.name: r for r in g.replay(_seq([_launch(), _w(1), uneven]), M)}
+    assert names["S8"].status == g.FAIL and "error" not in names["S8"].evidence
+    assert names["LD-1f"].status in (g.PASS, g.FAIL, g.UNSUPPORTED)
 
 
 def test_s4_an_unresolved_penalty_row_may_carry_no_raw_score():
