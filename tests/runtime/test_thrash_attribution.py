@@ -143,14 +143,17 @@ def test_thrash_from_before_a_redefinition_is_charged_to_the_old_role_only(new_o
 
 
 def test_a_redefined_observation_is_a_new_metric_and_its_state_resets():
-    """Under the same id, a new observation is a new metric: the card's duration and
-    episode and its unmeasured count reset, the organ's own step drops it from the
-    failing set it holds (``versions.organ_step``, which replay runs too), and the
-    diagnosis reads it only from windows that measured what it measures now. With the
-    observation unchanged (a new role), all of it is kept."""
+    """Under the same id, a new identity (``metric_identity``: a new observation, or
+    the same observation answering for a new role) is a new metric: the card's
+    duration and episode and its unmeasured count reset, the organ's own step drops it
+    from the failing set it holds (``versions.organ_step``, which replay runs too), and
+    the diagnosis reads it only from windows that measured what it measures now. With
+    the identity unchanged (only the region restated), all of it is kept."""
     from factorylab.versioning import live
 
-    for new_observation, resets in (("noop_share", True), ("well_formed_rate", False)):
+    for new_observation, role, resets in (("noop_share", "producer", True),
+                                          ("well_formed_rate", "producer", True),
+                                          ("well_formed_rate", "evaluator", False)):
         rt = make_runtime()
         old = _card("moving", "well_formed_rate", "evaluator")
         rt.charter = replace(rt.charter, cards=(old,))
@@ -161,8 +164,9 @@ def test_a_redefined_observation_is_a_new_metric_and_its_state_resets():
             rt.controller.ratchet("moving", window=window, step=0.05)
         rt.card_unmeasured["moving"] = 4
         rt.stats.versions = {"failing": ["card:moving"]}
-        rt.charter = replace(rt.charter, cards=(_card("moving", new_observation,
-                                                      "producer"),))
+        rt.charter = replace(rt.charter, cards=(replace(
+            _card("moving", new_observation, role),
+            acceptable_region={"rule": "at least", "lo": 0.6}),))
         rt._derive_regions()
         card = rt.controller.snapshot()["cards"]["moving"]
         if resets:
@@ -178,3 +182,17 @@ def test_a_redefined_observation_is_a_new_metric_and_its_state_resets():
     windows = _recorded(_windows((old,), "c", n=2), old) + _recorded(_windows((new,), "none",
                                                                              n=1), new)
     assert live.redefined(windows, "card:c") and not live.redefined(windows[:2], "card:c")
+
+
+def test_a_meaning_checkpointed_as_an_observation_alone_is_compared_as_one():
+    """A checkpoint written before identities were kept holds the observation only: an
+    unchanged observation is no redefinition on resume, a changed one still is."""
+    for checkpointed, resets in (("well_formed_rate", False), ("noop_share", True)):
+        rt = make_runtime()
+        rt.charter = replace(rt.charter, cards=(_card("c", "well_formed_rate", "evaluator"),))
+        rt._derive_regions()
+        rt.card_unmeasured["c"] = 2
+        rt.card_meanings["c"] = checkpointed
+        rt._derive_regions()
+        assert ("c" not in rt.card_unmeasured) is resets
+        assert rt.card_meanings["c"] == ["well_formed_rate", "evaluator", "windows", None]

@@ -17,7 +17,14 @@ from factorylab.charter.controller import (
     violation,
 )
 from factorylab.charter.controller import pressure as card_pressure
-from factorylab.charter.measurement import _groups, _horizon, _rows, is_response, measure_cards
+from factorylab.charter.measurement import (
+    _groups,
+    _horizon,
+    _rows,
+    is_response,
+    measure_cards,
+    metric_identity,
+)
 from factorylab.cortex.registration import measured_role
 from factorylab.kernel.events import Event, EventKind
 from factorylab.kernel.money import usd_to_micro
@@ -520,22 +527,30 @@ class PricingMixin:
             self._observe_positions()
 
     def _reset_redefined_cards(self) -> None:
-        """A card whose observation changed under the same id is a new metric (Codex on
-        #152): the evidence of its old meaning stops counting for it. Guarantees its
-        controller duration and episode reset (``PriceController.redefine``), its
-        consecutive unmeasured windows (R10-f) restart; the organ's own step drops it
-        from the failing set it holds (M-6; ``versions.organ_step``, which replay runs
-        too), so no stable-failure duration spans the redefinition.
-        A card whose observation is unchanged keeps all of it; old windows are read
+        """A card whose identity (``metric_identity``: the rows it measures, so its
+        observation, the role it answers for, its sample kind and scope) changed under
+        the same id is a new metric (Codex on #152): the evidence of its old meaning
+        stops counting for it. Guarantees its controller duration and episode reset
+        (``PriceController.redefine``), its consecutive unmeasured windows (R10-f)
+        restart; the organ's own step drops it from the failing set it holds (M-6;
+        ``versions.organ_step``, which replay runs too), so no stable-failure duration
+        spans the redefinition.
+        A card whose identity is unchanged keeps all of it; old windows are read
         under the meaning they recorded (``immune.thrash_roles``,
         ``live.current_metrics``), and a closed price window prices on the cards it froze.
+        A meaning checkpointed before identities were kept is its observation alone,
+        and is compared as such.
         """
         known = getattr(self, "card_meanings", None)
         if known is None:
             known = self.card_meanings = {}
         for card in self.charter.cards:
-            meaning = card.observation.strip().lower()
-            if card.id in known and known[card.id] != meaning:
+            # A list, not a tuple, so it compares equal after a checkpoint's JSON.
+            meaning = list(metric_identity(card))
+            was = known.get(card.id)
+            if isinstance(was, str):
+                was = [was, *meaning[1:]]
+            if card.id in known and was != meaning:
                 if card.id in self.controller.card_ids():
                     self.controller.redefine(card.id, edition=self.charter.edition)
                 self.card_unmeasured.pop(card.id, None)
