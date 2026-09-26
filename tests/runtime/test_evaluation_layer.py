@@ -27,7 +27,7 @@ from factorylab.runtime.feedback import counter_score, exposure_score
 from factorylab.runtime.shared import CH_COUNTER, NOOP
 from factorylab.runtime.worlds import AssemblySeed, load_manifest, manifest_from_dict
 from factorylab.settlement import Observer, WindowFacts
-from tests.runtime.test_loop import _consequence_decision, _consequence_runtime
+from tests.runtime.test_loop import _consequence_decision, _consequence_runtime, lists_nothing
 from tests.runtime.test_reward_chain import (
     Population,
     _horizon,
@@ -337,7 +337,7 @@ def test_an_adversarial_judge_is_paid_by_how_far_it_beat_the_verdict_it_read():
 
 
 def test_a_counter_on_a_return_the_world_never_measures_is_censored():
-    rt = _adversarial_runtime(verdicts=(0.9,))
+    rt = lists_nothing(_adversarial_runtime(verdicts=(0.9,)))
     _producer, event = _produce_hold(rt)  # a bare hold: no world outcome
     judge = _judge(rt, event, "eval-c")
     rt._settle_arrived_verdicts()

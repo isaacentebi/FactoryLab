@@ -29,6 +29,7 @@ from tests.runtime.test_loop import (
     _consequence_runtime,
     _pending_meta,
     _recursive_runtime,
+    lists_nothing,
 )
 
 
@@ -196,7 +197,7 @@ def test_one_judge_settles_its_return_on_its_verdict_alone():
 
 
 def test_a_verdict_on_a_bare_hold_has_no_world_outcome_and_settles_on_its_grade():
-    rt = _runtime(verdicts=(0.8, 0.4))
+    rt = lists_nothing(_runtime(verdicts=(0.8, 0.4)))
     _producer, event = _consequence_produce(rt)
     graded, ungraded = _judge(rt, event, "eval-a"), _judge(rt, event, "eval-b")
     rt._settle_arrived_verdicts()
@@ -513,7 +514,7 @@ def test_the_antagonist_earns_by_how_wrong_the_judge_was_and_only_with_a_world_o
     assert exposure["score"] > 0.5
     assert rt.queue.history(antagonist)[0].definition_version == "exposure-v2"
     # A bare hold has no world outcome, so its antagonist earns nothing and loses nothing.
-    bare = _runtime(verdicts=(0.9,))
+    bare = lists_nothing(_runtime(verdicts=(0.9,)))
     antagonist, event = _consequence_produce(bare, "antagonist-a", CH_EXPOSURE)
     _judge(bare, event)
     bare._settle_arrived_verdicts()
@@ -570,7 +571,7 @@ def test_a_malformed_meta_is_censored_and_a_decline_costs_only_the_call():
 
 
 def test_an_evaluator_decision_trains_its_router_on_the_combined_reward():
-    rt = _runtime(verdicts=(0.8,))
+    rt = lists_nothing(_runtime(verdicts=(0.8,)))
     _producer, event = _consequence_produce(rt)
     state = rt.routers["ProducerReturn"][0]
     feasible = lambda a: (a == "eval-a", "")  # noqa: E731 - one seat may be woken

@@ -528,18 +528,21 @@ answer of ProducerReturn, Exposure or a declared kind whose reward shape is
 `judged` or `exposure`, from a decision that executed no venue operation (no venue
 write the venue accepted or left `uncertain`, and no answer order it may place),
 carries `counterfactual
-{coin, side}`: `side` is `buy` or `sell`, and `coin` is a key of `recent_mids` (the
-world's broadcast mids, the record the trade is priced from) when the return is
-made. Without it the return is `malformed`, as it is with a coin the world does
-not list or any other shape; the seat's inbox and `return.validation_failed` carry
-the reason, which names the fields that failed. Nothing is required while
-`recent_mids` is empty. A return that executed venue operations needs none.
+{coin, side}`: `side` is `buy` or `sell`, and `coin` is an instrument the venue lists
+when the return is made: a perp coin or spot pair its last instrument listing named
+(`venue.instruments`, read at the first broadcast mid and once per
+`timing.world_repricing`; `venue.fee_schedule` ledgers it as `listed`), and before
+one the manifest's `exchange.coins` and `exchange.spot_pairs`. A listed coin with no
+mid yet is nameable: the trade opens at its first mid (ruling R10-h). Without it the
+return is `malformed`, as it is with a coin the venue does not list or any other
+shape; the seat's inbox and `return.validation_failed` carry the reason, which names
+the fields that failed. Nothing is required while nothing is listed. A return that executed venue operations needs none.
 
 The request states this contract as structure, and the published schema is the
 enforced one (§II.b). Every round's `outcome_schema` is rebuilt by one function
 (`producing_contract`) from the facts the kernel checks: before the decision
 acts, a producing answer is `anyOf` (a) the kind's answer with `counterfactual`
-required and its `coin` an `enum` of the coins `recent_mids` lists, or, when the
+required and its `coin` an `enum` of the instruments the venue lists, or, when the
 decision may place an answer order and the kind owns one, (b) `action: "order"`
 with `coin`, `side` and `size` required. After a venue write the venue accepted or
 left `uncertain`, the field is optional. With nothing listed it is absent. The kernel

@@ -1760,11 +1760,14 @@ class FeedbackMixin:
         """
         from factorylab.cortex.assembly import ANSWER_ORDER_KINDS
 
-        mids = latest_mids(self)
-        if not mids:
+        # Held to what the venue lists, never to what it has quoted (Codex on #152): a
+        # listed coin with no mid yet freezes unopened and opens at its first mid
+        # (ruling R10-h, ``_observe_mid``).
+        listed = self._listed_instruments()
+        if not listed:
             return
+        mids = latest_mids(self)
         outputs = outputs if isinstance(outputs, dict) else {}
-        listed = [coin for coin, _ in mids]
         kind = self.return_kinds.get(handle)
         if kind is None:
             owner = self.assemblies.get(self.handle_to_assembly.get(handle, ""))

@@ -86,8 +86,8 @@ def counterfactual_refusal(outputs: Mapping, listed: Iterable[str]) -> str | Non
     Essay II.III.b: an evaluator is graded by realized consequence, which includes
     the priced road not taken, benchmarked ex ante; ``opportunity_cost`` prices it
     from the trade the return names. Guarantees None exactly when the return names a
-    side and a coin in ``listed`` (the coins the world lists when the return is made,
-    ``latest_mids``), or when the field is absent and the world lists no coin at all,
+    side and a coin in ``listed`` (the instruments the venue lists when the return is
+    made, ``_listed_instruments``), or when the field is absent and the world lists no coin at all,
     where no trade can be named. The field is the published object form alone. A
     named coin the world does not list is refused whether or not any is listed. The
     reason is a fact about the return, never advice.
@@ -233,8 +233,8 @@ def attempted_trade(outputs: Mapping, listed: Iterable[str]) -> dict[str, str] |
     """The trade an answer order named, as ``{coin, side}`` in the world's spelling, or None.
 
     Guarantees a trade only for an answer ``{"action": "order", "coin", "side", ...}``
-    whose side is buy or sell and whose coin the world lists (``listed``, the coins
-    of ``latest_mids``); the caller says whether the answer's kind owns the answer
+    whose side is buy or sell and whose coin the venue lists (``listed``,
+    ``_listed_instruments``); the caller says whether the answer's kind owns the answer
     order. Nothing is inferred: the coin and side are the seat's own.
     """
     if not isinstance(outputs, Mapping) or outputs.get("action") != "order":

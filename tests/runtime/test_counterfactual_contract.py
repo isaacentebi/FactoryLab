@@ -107,7 +107,7 @@ def test_the_refusal_reasons_state_facts_and_give_no_advice():
             "should", "must", "please", "score", "reward", "consider", "try", "you"))
 
 
-@pytest.mark.parametrize("coin", ["ETH", "DOGE"])
+@pytest.mark.parametrize("coin", ["SOL", "DOGE", "PM:1"])
 def test_a_counterfactual_naming_a_coin_the_world_does_not_list_is_malformed(coin):
     rt = _world({"action": "hold", "counterfactual": {"coin": coin, "side": "buy"}})
     handle, _event = _consequence_produce(rt)
@@ -335,10 +335,49 @@ def test_nothing_is_required_while_the_world_lists_no_coin():
 
     rt = _consequence_runtime(provider=Seat({"action": "hold"}))
     rt._manage_reserve_window()
-    assert not rt.recent_mids
+    rt._listed_instruments = lambda: ()
     handle, _event = _consequence_produce(rt)
     assert _returned(rt, handle) == ("ok", None)
     assert handle not in rt.reference_mids
+
+
+@pytest.mark.parametrize("read", [False, True])
+def test_a_listed_coin_with_no_mid_yet_freezes_a_trade_that_opens_at_its_first_mid(read):
+    """Codex on #152: a named trade is held to what the venue lists, never to what it
+    has quoted. ETH is listed (by the venue's listing read, or before one by the
+    manifest) but has no mid: a return naming it is well formed, freezes unopened, and
+    opens at ETH's first mid (ruling R10-h); a bare return is still malformed, and a
+    coin the venue does not list is refused."""
+    from tests.runtime.test_reward_chain import _consequence_runtime
+
+    rt = _consequence_runtime(provider=Seat(
+        {"action": "hold"}, {"action": "hold", "counterfactual": {"coin": "DOGE", "side": "buy"}},
+        {"action": "hold", "counterfactual": {"coin": "ETH", "side": "sell"}}))
+    rt._manage_reserve_window()
+    if read:
+        # The venue's listing names a coin the manifest does not trade: the read, not
+        # the manifest, is the listing once there is one.
+        rt.exchange.listed_coins = (*rt.exchange.listed_coins, "XRP")
+        _mids(rt, BTC="100")
+        assert "XRP" in rt._listed_instruments()
+    else:
+        assert rt.fee_schedule is None
+    assert "ETH" in rt._listed_instruments() and "ETH" not in rt.recent_mids
+    bare, _event = _consequence_produce(rt)
+    assert _returned(rt, bare) == ("malformed", ABSENT_ON_SCHEMA)
+    unlisted, _event = _consequence_produce(rt)
+    assert _returned(rt, unlisted) == ("malformed", UNLISTED_ON_SCHEMA)
+    assert unlisted not in rt.reference_mids
+    named, _event = _consequence_produce(rt)
+    assert _returned(rt, named) == ("ok", None)
+    frozen = rt.reference_mids[named]
+    assert frozen["declined"] == {"coin": "ETH", "side": "sell"}
+    assert frozen["open_ns"] is None and frozen["due_ns"] is None
+    rt.clock.now_ns += 1_000
+    _mids(rt, ETH="50")
+    assert frozen["open_ns"] == rt.clock.now_ns
+    assert frozen["due_ns"] == rt.clock.now_ns + rt._horizon_ns()
+    assert ["ETH", "50"] in frozen["mids"]
 
 
 def test_the_contract_is_checked_against_the_listing_alone():
@@ -371,7 +410,9 @@ def test_a_producing_request_publishes_the_contract_the_kernel_enforces():
     (prompt,) = rt.provider.prompts
     named, order = _published(prompt)["anyOf"]
     assert "counterfactual" in named["required"]
-    assert named["properties"]["counterfactual"]["properties"]["coin"]["enum"] == ["BTC"]
+    # The venue's listing (the scripted world's coins and pair), quoted or not.
+    assert named["properties"]["counterfactual"]["properties"]["coin"]["enum"] == [
+        "BTC", "BTC/USDC", "ETH"]
     assert named["properties"]["emits"] == {"enum": ["ProducerReturn"]}
     assert order["properties"]["action"]["enum"] == ["order"]
     assert {"action", "coin", "side", "size"} <= set(order["required"])
@@ -515,8 +556,8 @@ def test_the_schematics_publish_the_field_as_a_contract_fact_without_advice():
     rt = _world()
     text = rt.institution_section("a_return_may_include")["counterfactual"]
     for fact in ("ProducerReturn", "Exposure", "judged", "exposure", '"side": "buy" | "sell"',
-                 "recent_mids", "required", "no venue operation", "malformed",
-                 "not required while recent_mids is empty"):
+                 "venue.instruments", "required", "no venue operation", "malformed",
+                 "not required while nothing is listed"):
         assert fact in text, fact
     lowered = text.lower()
     # "reward shape" is the published name of a kind's settlement; no scoring is here.

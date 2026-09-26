@@ -355,13 +355,17 @@ class SchematicsMixin:
         "counterfactual": (
             'ProducerReturn, Exposure and a declared kind whose reward shape is judged or '
             'exposure: {"coin", "side": "buy" | "sell"}, a trade the return declined; coin '
-            "is a key of public_observations.recent_mids when the return is made. It is "
+            "is an instrument the venue lists when the return is made: a perp coin or spot "
+            "pair its last instrument listing named (venue.instruments; the listing is "
+            "read at the first broadcast mid and once per timing.world_repricing), and "
+            "before one the manifest's exchange.coins and exchange.spot_pairs; a listed "
+            "coin with no mid yet opens at its first mid. It is "
             "required on a final answer of those kinds from a decision that executed no "
             "venue operation (no venue write the venue accepted or left uncertain, a "
             "rejected write executing nothing, and no answer order with coin, side and "
             "size that the decision may place), and "
-            "optional otherwise. Without it, or with a coin recent_mids does not list, the "
-            "return is malformed. It is not required while recent_mids is empty. Each "
+            "optional otherwise. Without it, or with a coin the venue does not list, the "
+            "return is malformed. It is not required while nothing is listed. Each "
             "request's outcome schema states this for that request as a union: an answer "
             "with counterfactual required, its coin one of the listed coins, or, where an "
             "answer order may be placed, an answer order with coin, side and size"

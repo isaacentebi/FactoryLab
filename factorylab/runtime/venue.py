@@ -284,6 +284,11 @@ class VenueMixin:
         wave 17b pins its books: per instrument, the latest read at or before the
         earliest instant an open consequence can still ask for (``_fee_needs``) and
         every read after it; with none open, only the latest read.
+
+        The same read states the venue's instrument listing (Codex on #152): every perp
+        and spot row it names, rate or none, kept as ``listed`` and read by
+        ``_listed_instruments``. A read that names no instrument (unanswered, or a
+        recording with no row yet) keeps the last listing a read stated.
         """
         refresh = getattr(self.exchange, "refresh_fee_rates", None)
         if callable(refresh):
@@ -296,12 +301,16 @@ class VenueMixin:
         except Exception:  # noqa: BLE001 - an unanswered listing states no rate
             listing = {}
         read: dict[str, str] = {}
+        named: list[str] = []
         for market in ("perp", "spot"):
             for row in listing.get(market) or []:
-                if (isinstance(row, dict) and row.get("coin") is not None
-                        and row.get("taker_fee_rate") is not None):
-                    read[str(row["coin"])] = str(row["taker_fee_rate"])
+                if isinstance(row, dict) and row.get("coin") is not None:
+                    named.append(str(row["coin"]))
+                    if row.get("taker_fee_rate") is not None:
+                        read[str(row["coin"])] = str(row["taker_fee_rate"])
         previous = self.fee_schedule or {}
+        before_listed = list(previous.get("listed") or [])
+        listed = list(dict.fromkeys(named)) if named else before_listed
         before = dict(previous.get("rates") or {})
         now = self.clock.now_ns
         history = {name: [list(row) for row in rows]
@@ -319,9 +328,11 @@ class VenueMixin:
             in_force = [i for i, row in enumerate(rows) if row[0] <= floor]
             history[instrument] = rows[in_force[-1] if in_force else 0:]
         rates = {**before, **read}  # an instrument this read left unstated keeps its last
-        self.fee_schedule = {"rates": rates, "read_ns": now, "history": history}
-        if not previous or rates != before:
+        self.fee_schedule = {"rates": rates, "read_ns": now, "history": history,
+                             "listed": listed}
+        if not previous or rates != before or listed != before_listed:
             self.ledger.append({"kind": "venue.fee_schedule", "rates": dict(rates),
+                                "listed": list(listed),
                                 "basis": "the venue's taker_fee_rate per instrument, a "
                                          "fraction of notional",
                                 "ts": self.clock.now_ns})
@@ -332,6 +343,21 @@ class VenueMixin:
             return True
         period = self.m.timing.world_repricing_ns
         return period is not None and self.clock.now_ns - self.fee_schedule["read_ns"] >= period
+
+    def _listed_instruments(self) -> tuple[str, ...]:
+        """The instruments the venue lists: what its last listing read named, else the
+        manifest's markets.
+
+        Codex on #152: a named trade is held to what the venue lists, never to what it
+        has quoted, so a listed instrument with no mid yet is still nameable and opens
+        at its first mid (ruling R10-h). Guarantees the perp coins and spot pairs of the
+        venue's last listing read that named any (``_read_fee_schedule``), and before
+        one the manifest's coins and spot pairs plus every registered market
+        (``_trading_markets``). A Polymarket token is never listed here: no venue mid
+        of one is broadcast, so a trade named on it could never open.
+        """
+        listed = (self.fee_schedule or {}).get("listed")
+        return tuple(listed) if listed else tuple(self._trading_markets())
 
     def _taker_rate(self, coin: str) -> str | None:
         """The taker rate in force for ``coin`` (a perp coin or spot pair) as last read:

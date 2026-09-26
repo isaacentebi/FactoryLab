@@ -228,6 +228,18 @@ def _pending_meta(runtime):
     return handle
 
 
+def lists_nothing(runtime):
+    """``runtime`` as a world whose venue lists no instrument, so no declined trade can
+    be named and a producing return need name none.
+
+    Codex on #152: the counterfactual contract reads the venue's listing (and before
+    one the manifest's markets), never whether a mid has been broadcast yet. Tests
+    written when an unquoted world listed nothing state that premise here.
+    """
+    runtime._listed_instruments = lambda: ()
+    return runtime
+
+
 def _consequence_runtime(*, provider=None, exchange=None, manifest=None):
     from factorylab.runtime.loop import Runtime
 

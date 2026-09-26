@@ -6,6 +6,7 @@ from factorylab.runtime.resume import restore_runtime, runtime_state
 from factorylab.runtime.shared import CH_VERDICT
 from factorylab.world.models import ModelResponse
 from tests.conftest import make_runtime
+from tests.runtime.test_loop import lists_nothing
 
 
 def parent_request(rt, ceiling=2_000_000):
@@ -21,7 +22,7 @@ def parent_request(rt, ceiling=2_000_000):
 
 
 def test_child_and_grandchild_are_judged_and_returned_to_parent(monkeypatch):
-    rt = make_runtime()
+    rt = lists_nothing(make_runtime())
     spec = rt.assemblies['seed-decider'].spec
     rt._instantiate(replace(spec, id='helper'))
     # A request names a kind (primitive audit F5): with the observer retired, the
@@ -72,7 +73,7 @@ def test_child_and_grandchild_are_judged_and_returned_to_parent(monkeypatch):
     event = next(ev for ev in rt.internal if ev.payload.get('about_handle') == child['handle'])
     assert str(event.kind) == 'ProducerReturn' and event.payload['outputs']['answer'] == 42
     assert dict(event.payload['inputs']) == {'question': 'value'}
-    restored = make_runtime()
+    restored = lists_nothing(make_runtime())
     monkeypatch.undo()
     rt.provider.target.__dict__.pop("complete", None)
     restore_runtime(restored, runtime_state(rt))
@@ -83,7 +84,7 @@ def test_child_and_grandchild_are_judged_and_returned_to_parent(monkeypatch):
 
 
 def test_self_request_runs_and_an_unserved_kind_is_refused_before_any_decision(monkeypatch):
-    rt = make_runtime()
+    rt = lists_nothing(make_runtime())
     req = parent_request(rt)
     rt.handle_to_assembly[req.handle] = 'seed-decider'
     calls = []

@@ -13,6 +13,7 @@ from factorylab.runtime.worlds import ConnectorsSpec
 from factorylab.world.connector import ConnectorProxy
 from factorylab.world.models import ModelResponse
 from tests.conftest import make_runtime
+from tests.runtime.test_loop import lists_nothing
 from tests.world.test_connector import Transport
 
 
@@ -263,7 +264,7 @@ def test_short_body_cannot_rewrite_an_order_side_into_a_different_action(monkeyp
     A body at the threshold is text and stays off every durable surface."""
     from factorylab.runtime.compute import MIN_PROTECTED_BODY_CHARS
 
-    rt = make_runtime()
+    rt = lists_nothing(make_runtime())
     register(rt, monkeypatch)
     rt.connector_proxy = ConnectorProxy(rt.m.connectors, Transport(b"buy"))
     handle = decision(rt)
