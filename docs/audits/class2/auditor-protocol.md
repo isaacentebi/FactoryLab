@@ -144,7 +144,11 @@ The architect triages; the auditor and the implementer do not. Each finding gets
 disposition in `docs/audits/class2/<world>.md` (`scripts/class2_audit.py triage` writes
 the skeleton):
 
-- **FIX.** A rewrite or a deletion, plus a regression entry: a lexicon pattern when the
+- **FIX.** Not a releasable disposition: the key audits the very commit being gated, so
+  a finding marked FIX is still in the gated corpus, and the gate fails while any HIGH or
+  MED finding is marked FIX ("fix, re-render, re-audit"). FIX resolves by the fix
+  itself: the leaf changes, and the finding is gone from the next render and audit.
+  The fix is a rewrite or a deletion, plus a regression entry: a lexicon pattern when the
   finding generalises, or a mutation-test case, so the next B1 run catches the class
   without a model. A fix to a world file (lens, `system_prompt`, seat id) goes into a
   **new world file**: it changes the roster digest and forces re-ratification. A
@@ -164,7 +168,10 @@ the skeleton):
 
 ## The release gate
 
-- Zero untriaged HIGH or MED findings, and a reason on every non-FIX disposition
+- Zero untriaged HIGH or MED findings and none marked FIX: a release passes only when
+  every HIGH or MED finding present is ALLOW (backed by the allowlist), REJECT (backed
+  by `rejected.jsonl`) or CHARTER (a charter leaf), and a reason on every non-FIX
+  disposition
   (`scripts/class2_audit.py gate`). The gate recomputes rather than reads: given the key
   and the four sample files, it checks that the triage file names the world, the key's
   corpus and range and exactly those samples (by sha256), recomputes the audit's

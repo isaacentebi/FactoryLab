@@ -1303,6 +1303,59 @@ def returned_handles(events: Iterable[Mapping]) -> set[str]:
     return {row["handle"] for row in rows_of(events, "invocation") if row.get("handle")}
 
 
+def act_traces(events: list[Mapping], kinds: Mapping[str, str]) -> list[dict]:
+    """Each act row of ``kinds`` (kind -> the field naming its decision), in ledger order,
+    with ``traced``: whether the seat whose decision it names took it. Read in ledger
+    order (the diary's ``seq``), since the kernel ledgers an act at one of two points:
+
+    * **an answer's act**, after the decision's invocation returned ``ok``: an answer's
+      order (venue.py ``_execute_outputs``: "nothing is placed for a return that is not
+      ``ok``") or registration (``_apply_registrations``: ``if ret.status != "ok"``);
+    * **a tool call's act**, inside the decision's invocation: the seat's own admitted
+      tool call (compute.py ``_run_tool`` -> ``_venue_write``, ``treasury.intent``) is
+      ledgered before the ``tool.call`` row that records the call and before the
+      ``invocation`` row ``_invoke`` writes when the wake ends, whatever its status.
+
+    So an act traces when a ``decision.open`` for its handle comes before it and either
+    that decision's (first) invocation came before it with status ``ok``, or no
+    invocation has closed yet and a ``tool.call`` of that handle follows it no later than
+    the invocation. A later invocation alone, a failed or malformed one before it, or an
+    act naming no opened decision does not trace."""
+    opened: dict[str, int] = {}
+    invoked: dict[str, tuple[int, Any]] = {}
+    tool_calls: dict[str, list[int]] = defaultdict(list)
+    for i, row in enumerate(events):
+        kind, handle = row.get("kind"), row.get("handle")
+        if not isinstance(handle, str):
+            continue
+        if kind == "decision.open":
+            opened.setdefault(handle, i)
+        elif kind == "invocation":
+            invoked.setdefault(handle, (i, row.get("status")))
+        elif kind == "tool.call":
+            tool_calls[handle].append(i)
+    out = []
+    for i, row in enumerate(events):
+        if row.get("kind") not in kinds:
+            continue
+        handle = row.get(kinds[row["kind"]])
+        entry: dict[str, Any] = {"kind": row["kind"], "handle": handle}
+        inv = invoked.get(handle) if isinstance(handle, str) else None
+        if not isinstance(handle, str) or opened.get(handle, len(events)) > i:
+            entry.update(traced=False, why="no decision opened before it")
+        elif inv is not None and inv[0] < i:
+            entry.update(traced=inv[1] == "ok", path="answer")
+            if inv[1] != "ok":
+                entry["why"] = f"its decision's invocation returned {inv[1]!r}"
+        elif inv is not None and any(i < t <= inv[0] for t in tool_calls[handle]):
+            entry.update(traced=True, path="tool call")
+        else:
+            entry.update(traced=False, why="no ok invocation before it and no tool call "
+                                           "of the decision's invocation after it")
+        out.append(entry)
+    return out
+
+
 # --- thrash (§3.2) --------------------------------------------------------------------------
 
 
@@ -1857,15 +1910,18 @@ def of2d_authorship(events: list[Mapping], manifest: Mapping, *,
     decision on which a seat returned; when ``seats`` is given, that decision's drawn arm
     is one of them. A proposing row with no handle is a failure, not a skip.
     """
-    returned = returned_handles(events)
     drawn = decision_seats(events)
     proposals = rows_of(events, "holdout.proposed", "challenge.proposed")
     if not proposals:
         return _unsupported("OF-2d", "no holdout or challenge was proposed")
-    bad = [row.get("handle") for row in proposals
-           if not isinstance(row.get("handle"), str) or row["handle"] not in returned
-           or (seats is not None and drawn.get(row["handle"]) not in seats
-               and not _child_of_seat(events, row["handle"], seats))]
+    # The same trace as S1's acts (``act_traces``): after an ok invocation of the
+    # decision it names, or inside that invocation's own tool call.
+    traced = act_traces(events, {"holdout.proposed": "handle",
+                                 "challenge.proposed": "handle"})
+    bad = [t["handle"] for t in traced
+           if not t["traced"]
+           or (seats is not None and drawn.get(t["handle"]) not in seats
+               and not _child_of_seat(events, t["handle"], seats))]
     return _result("OF-2d", not bad, proposals=len(proposals),
                    traced=len(proposals) - len(bad), bad=bad[:5])
 
@@ -2050,11 +2106,10 @@ def s1_draw_sovereignty(events: list[Mapping], manifest: Mapping | None = None) 
         drawn = Random(prop["rng_seed"]).choices(ids, weights=probs, k=1)[0]
         if drawn != prop["chosen"]:
             bad.append(row["handle"])
-    returned = returned_handles(events)
-    acts = [(row["kind"], row.get(ACT_KINDS[row["kind"]]))
-            for row in rows_of(events, *ACT_KINDS)]
-    unreturned = [{"kind": kind, "handle": h} for kind, h in acts
-                  if not isinstance(h, str) or h not in returned]
+    traces = act_traces(events, ACT_KINDS)
+    acts = [(t["kind"], t["handle"]) for t in traces]
+    unreturned = [{"kind": t["kind"], "handle": t["handle"], "why": t["why"]}
+                  for t in traces if not t["traced"]]
     evidence = {"draws": checked, "bad_draws": bad[:5], "acts": len(acts),
                 "unreturned": unreturned[:5], "malformed_propensities": malformed[:5]}
     if bad or unreturned:

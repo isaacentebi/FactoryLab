@@ -50,8 +50,11 @@ does everything around that call, offline:
             and range and exactly those samples by sha256; recomputes the audit (valid)
             and the world's findings from the samples; and requires each finding to
             have exactly one row with its severity, question and class, every HIGH or
-            MED finding a disposition, a non-FIX disposition a reason, and no charter
-            card marked FIX. It re-verifies the range's base against the last release
+            MED finding a releasable disposition: FIX is not one (the key audits the
+            commit being gated, so a finding marked FIX still ships), and a release
+            passes only when every HIGH or MED finding is ALLOW, REJECT (each backed)
+            or CHARTER (a charter leaf), with its reason. A fixed finding is gone from
+            the next render. It re-verifies the range's base against the last release
             and, when it passes, writes the release to ``LAST_RELEASE``. Nothing the
             gate trusts is stored beside the triage file.
   baseline  Recompute the static audit's findings and surface registry after the
@@ -1418,10 +1421,13 @@ def triage_skeleton(rows: list[dict], verdict: dict, *, world: str, family: str,
              f"{verdict.get('provenance_samples')}",
              f"- Canaries found: {verdict['canaries_found']}; controls flagged: "
              f"{verdict['controls_flagged']}; valid: {verdict['valid']}",
-             "- Dispositions: FIX (a rewrite or deletion, plus a regression entry), ALLOW (an "
-             "allowlist entry with a reason and a passage), REJECT (the auditor is wrong; "
-             "copied to rejected.jsonl with the reason), CHARTER (a charter card or norm: "
-             "sent to the charter's next revision, never fixed in code).", "",
+             "- Dispositions: FIX (a rewrite or deletion, plus a regression entry; not "
+             "releasable: the gate fails while a HIGH or MED finding is marked FIX, so fix, "
+             "re-render, re-audit, and the fixed finding is gone from the next triage), "
+             "ALLOW (an allowlist entry with a reason and a passage), REJECT (the auditor is "
+             "wrong; copied to rejected.jsonl with the reason), CHARTER (a charter card or "
+             "norm: sent to the charter's next revision, never fixed in code). A release "
+             "passes only when every HIGH or MED finding is ALLOW, REJECT or CHARTER.", "",
              "| id | path | question | class | severity | confidence | quote | disposition "
              "| reason |",
              "|---|---|---|---|---|---|---|---|---|"]
@@ -1470,12 +1476,15 @@ def table_rows(text: str) -> list[dict[str, str]]:
 def release_gate(text: str, *, expected: list[dict] | None = None) -> list[str]:
     """Why a triage file's rows do not pass the release gate (none when they do).
 
-    The protocol's gate: zero untriaged HIGH or MED findings; each disposition is one of
-    ``DISPOSITIONS`` and a non-FIX one carries its reason; a charter card or norm is
-    never FIX; every severity is from the enum. With ``expected`` (the findings ``gate``
-    recomputed from the bound samples), the rows are exactly those findings, one row
-    each, with the severity, question and class each carries; without it (a bare
-    reading of a file), the file must also record its family and a valid canary score.
+    The protocol's gate: zero untriaged HIGH or MED findings, and none marked FIX (FIX
+    is not releasable: the key audits the very commit being gated, so a FIX'd finding
+    still ships; it resolves by being fixed, re-rendered and gone from the next audit);
+    each disposition is one of ``DISPOSITIONS`` and a non-FIX one carries its reason; a
+    charter card or norm is never FIX; every severity is from the enum. With
+    ``expected`` (the findings ``gate`` recomputed from the bound samples), the rows
+    are exactly those findings, one row each, with the severity, question and class
+    each carries; without it (a bare reading of a file), the file must also record its
+    family and a valid canary score.
     """
     problems = []
     header = triage_header(text)
@@ -1514,6 +1523,9 @@ def release_gate(text: str, *, expected: list[dict] | None = None) -> list[str]:
             problems.append(f"{where}: severity {severity!r} is not one of {SEVERITIES}")
         if severity in ("HIGH", "MED") and not disposition:
             problems.append(f"untriaged {severity} finding {where}")
+        if severity in ("HIGH", "MED") and disposition == "FIX":
+            problems.append(f"{severity} finding {where} is marked FIX and is still in the "
+                            "gated corpus: fix, re-render, re-audit")
         if disposition and disposition not in DISPOSITIONS:
             problems.append(f"unknown disposition {disposition!r} on {where}")
         if disposition in DISPOSITIONS - {"FIX"} and not row.get("reason"):

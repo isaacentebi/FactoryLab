@@ -766,14 +766,19 @@ def _triage_file(tmp_path, rows):
 def test_the_release_gate_row_rules(tmp_path):
     """The protocol's release gate: zero untriaged HIGH or MED findings; a valid canary
     score recorded; a charter card is not the kernel's to fix; a severity from the enum."""
-    done = ["| f1 | `scripted/tools/a` | Q4 | C1 | MED | low | Read it. | FIX |  |",
+    done = ["| f1 | `scripted/tools/a` | Q4 | C1 | MED | low | Read it. | REJECT | x |",
             "| f2 | `scripted/tools/b` | Q5 | C2 | HIGH | both samples | Best. | REJECT "
             "| a formula \\| exact |",
-            "| f3 | `scripted/tools/c` | Q8 | C1 | LOW | low | x |  |  |"]
+            "| f3 | `scripted/tools/c` | Q8 | C1 | LOW | low | x |  |  |",
+            "| f7 | `scripted/tools/d` | Q8 | C1 | LOW | low | x | FIX |  |"]
     assert tool.release_gate(_triage_file(tmp_path, done).read_text()) == []
-    open_med = [done[0].replace("| FIX |", "|  |")]
+    open_med = [done[0].replace("| REJECT | x |", "|  |  |")]
     assert any("untriaged MED" in p
                for p in tool.release_gate(_triage_file(tmp_path, open_med).read_text()))
+    # FIX is not releasable on a HIGH or MED finding: it is still in the gated corpus.
+    fixed = [done[0].replace("| REJECT | x |", "| FIX |  |")]
+    assert any("fix, re-render, re-audit" in p
+               for p in tool.release_gate(_triage_file(tmp_path, fixed).read_text()))
     charter = ["| f4 | `scripted/charter/cards/c` | Q10 | C2 | MED | low | x | FIX |  |"]
     assert any("not the kernel's to fix" in p
                for p in tool.release_gate(_triage_file(tmp_path, charter).read_text()))
@@ -1306,6 +1311,57 @@ def test_a_release_after_the_first_needs_the_gated_previous_files(released, tmp_
     with pytest.raises(tool.AuditInputInvalid, match="triage file of 'scripted'"):
         render(previous=edited, previous_corpus=prior)
     assert not (tmp_path / "out").exists()
+
+
+# --- Codex pass on 4024237: FIX is not releasable --------------------------------------------
+
+
+def test_a_fix_disposition_fails_until_the_fixed_leaf_is_re_rendered_and_re_audited(
+        triaged, history, tmp_path, monkeypatch):
+    """Codex P1 (class2_audit.py:1516): the key audits the very commit being gated, so a
+    HIGH or MED finding marked FIX still ships, and the gate fails ("fix, re-render,
+    re-audit"). Once the leaf is changed and the corpus re-rendered, the finding is
+    gone from the new audit and the release gates on the remaining dispositions."""
+    out, key, path, sha, _samples, _prov = triaged
+    rejected = path.parent / "rejected.jsonl"
+    reviewed = _dispose(path.read_text(), rejected=rejected)
+    kernel_row = next(line for line in reviewed.splitlines() if "| Q4 | C1 | HIGH |" in line)
+    fixed = reviewed.replace(kernel_row, kernel_row.replace("| REJECT |", "| FIX |"))
+    path.write_text(fixed)
+    assert any("fix, re-render, re-audit" in p
+               for p in _gate(triaged, reviewed=tool.sha256_file(path)))
+    # The fix: the leaf the finding quoted now reads otherwise, and the corpus is
+    # rendered again from it.
+    leaf = tool._cells(kernel_row)[1].strip("`")
+    original = tool.corpus_records
+
+    def fixed_corpus(worlds, *, rendered):
+        records = original(worlds, rendered=rendered)
+        return [r | {"text": "A declarative fact.",
+                     "leaf_id": tool.leaf_id(r["path"], "A declarative fact.")}
+                if r["path"] == leaf else r for r in records]
+
+    monkeypatch.setattr(tool, "corpus_records", fixed_corpus)
+    repo, base, _surface, head = history
+    again = tmp_path / "again"
+    key2 = tool.render([WORLD], again, seed=7, rendered=False, essay=ESSAY,
+                       release_range=f"{base}..{head}", repo=repo)
+    assert leaf in {r["path"] for r in _records(again)}
+    samples, prov = _paths(tmp_path / "again", again, key2, flag={sha})
+    second = tmp_path / "second"
+    second.mkdir()
+    monkeypatch.setattr(tool, "TRIAGE_DIR", second)
+    argv = ["triage", *map(str, samples), "--provenance-samples", *map(str, prov),
+            "--key", str(again / "canary_key.json"), "--world", WORLD, "--family", "fam-x"]
+    assert tool.main(argv) == 0
+    retriaged = second / f"{WORLD}.md"
+    assert "| Q4 | C1 | HIGH |" not in retriaged.read_text()  # the fixed finding is gone
+    rejected2 = second / "rejected.jsonl"
+    retriaged.write_text(_dispose(retriaged.read_text(), rejected=rejected2))
+    problems = tool.gate(WORLD, retriaged, again / "canary_key.json", samples, prov,
+                         release=key2["release_commit"], repo=REPO[0],
+                         triage_sha256=tool.sha256_file(retriaged), rejected=rejected2)
+    assert problems == []
 
 
 # --- Codex pass on 1de5c37: last_release edited only by gate-recording commits; rotation --

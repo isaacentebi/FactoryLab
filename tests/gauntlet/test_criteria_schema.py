@@ -30,6 +30,8 @@ NOT_EMITTED = {
                       "(the fields the fixture uses); the captured set holds none",
     "router.created": "emitted by routing._build_router with learner_id, event_kind and "
                       "replaces (the fields the fixture uses); the captured set holds none",
+    "tool.call": "emitted by compute.py _invoke's tool loop with kind and handle (the "
+                 "fields the fixture uses); the captured set holds none",
     "uptake.anticipated": "emitted by runtime/uptake.py; no captured run reached it",
     "uptake.forecast": "emitted by runtime/uptake.py; no captured run reached it",
 }

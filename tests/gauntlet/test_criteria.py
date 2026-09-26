@@ -783,7 +783,7 @@ def test_s8_instrumented_with_no_base_is_unsupported():
 
 def test_of2d_every_challenge_traces_to_a_seats_return():
     opened = [_open("d1", "adv", actor="router:Verdict")]
-    ret = {"kind": "invocation", "handle": "d1", "assembly_id": "adv"}
+    ret = {"kind": "invocation", "handle": "d1", "assembly_id": "adv", "status": "ok"}
     challenge = {"kind": "challenge.proposed", "handle": "d1"}
     assert g.of2d_authorship(opened + [ret, challenge], M, seats={"adv"}).ok
     kernel = {"kind": "challenge.proposed", "handle": "decision-99"}
@@ -880,7 +880,8 @@ def test_i3c_and_i4a_niche_against_noop_and_the_blind_actuator():
 
 
 def test_s1_every_draw_replays_from_its_seed_and_every_act_traces_to_a_return():
-    good = [_open("decision-1", "a"), {"kind": "invocation", "handle": "decision-1"},
+    good = [_open("decision-1", "a"),
+            {"kind": "invocation", "handle": "decision-1", "status": "ok"},
             {"kind": "order.intent", "handle": "decision-1"}]
     assert g.s1_draw_sovereignty(good).ok
     forced = [dict(_open("decision-1", "a"))]
@@ -900,12 +901,14 @@ def test_s1_every_draw_replays_from_its_seed_and_every_act_traces_to_a_return():
 
 def test_s1_an_act_whose_handle_is_not_a_returned_decision_fails():
     """Codex P2: no act row is dropped before the check; a system handle or none fails."""
-    good = [_open("decision-1", "a"), {"kind": "invocation", "handle": "decision-1"}]
+    good = [_open("decision-1", "a"),
+            {"kind": "invocation", "handle": "decision-1", "status": "ok"}]
     system = g.s1_draw_sovereignty(good + [{"kind": "order.intent",
                                             "handle": "system-generated"}])
     assert system.status == g.FAIL
-    assert system.evidence["unreturned"] == [{"kind": "order.intent",
-                                              "handle": "system-generated"}]
+    (unreturned,) = system.evidence["unreturned"]
+    assert (unreturned["handle"], unreturned["why"]) == ("system-generated",
+                                                         "no decision opened before it")
     nameless = g.s1_draw_sovereignty(good + [{"kind": "treasury.intent"}])
     assert nameless.status == g.FAIL
 
@@ -1755,6 +1758,39 @@ def test_s1_a_propensity_breaking_its_contract_fails_as_malformed(change, why):
     result = g.s1_draw_sovereignty([row])
     assert result.status == g.FAIL, result.evidence
     assert why in result.evidence["malformed_propensities"][0]["why"]
+
+
+# --- Codex pass on 4024237: an act follows its decision and the seat's own return ------
+
+
+@pytest.mark.parametrize("rows, ok", [
+    # An answer's act: after the decision's invocation returned ok.
+    ([("open",), ("invocation", "ok"), ("act",)], True),
+    # A later invocation alone does not make an earlier act the seat's.
+    ([("open",), ("act",), ("invocation", "ok")], False),
+    # A failed or malformed invocation before it does not either.
+    ([("open",), ("invocation", "failed"), ("act",)], False),
+    ([("open",), ("invocation", "malformed"), ("act",)], False),
+    # An act before any decision was opened for it.
+    ([("act",), ("open",), ("invocation", "ok")], False),
+    # A tool call's act: inside the invocation, recorded by its tool.call row, whatever
+    # the final answer's status (compute.py ``_run_tool`` -> ``_venue_write``).
+    ([("open",), ("act",), ("tool.call",), ("invocation", "malformed")], True),
+    # A tool.call after the invocation closed is not the call that made it.
+    ([("open",), ("act",), ("invocation", "ok"), ("tool.call",)], False),
+])
+def test_s1_an_act_follows_its_decision_and_the_seats_own_return(rows, ok):
+    """Codex P2 (gauntlet.py:2057): an act traces only in ledger order: after a
+    ``decision.open`` for its handle and either after that decision's ok invocation (an
+    answer's act) or inside that invocation, before its ``tool.call`` row (a tool call's
+    act). A later, failed or malformed invocation does not trace it."""
+    build = {"open": lambda: _open("d1", "a"),
+             "act": lambda: {"kind": "order.intent", "handle": "d1"},
+             "tool.call": lambda: {"kind": "tool.call", "handle": "d1"},
+             "invocation": lambda status: {"kind": "invocation", "handle": "d1",
+                                           "status": status}}
+    diary = _seq([build[kind](*rest) for kind, *rest in rows])
+    assert g.s1_draw_sovereignty(diary).status == (g.PASS if ok else g.FAIL)
 
 
 def test_s4_an_unresolved_penalty_row_may_carry_no_raw_score():
