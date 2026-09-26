@@ -818,6 +818,21 @@ def _groups(card: MetricCard, rows: list[dict]) -> dict[str, list[dict]]:
     return dict(groups)
 
 
+def metric_identity(card: MetricCard) -> tuple[str, str, str, str | None]:
+    """The card fields that choose the population of rows a card measures.
+
+    Guarantees two cards with equal identities select the same rows and group them
+    into the same scopes: the observation (``_selected``, ``_rows``), the role it
+    answers for (``_groups``, ``_scope_rows``), the sample kind (returns, forecasts
+    or windows) and the scope (``per``). The sample count ``n`` and the precision
+    ``interval`` size or qualify a sample of that population, never choose another,
+    so they are not part of it. A card whose identity changes under the same id is a
+    new metric (Codex on #152).
+    """
+    return (card.observation.strip().lower(), card.answers_for, card.window.kind,
+            card.window.per)
+
+
 def _cost_responses(observation: str, rows: list[dict]) -> list[dict]:
     """The responses a cost selection divides over: successful ones per return, every
     attempt per attempt.

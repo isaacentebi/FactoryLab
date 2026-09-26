@@ -4,6 +4,7 @@
 its meaning for every ratified charter; ``tool_calls`` is a mean per return.
 """
 
+from dataclasses import replace
 
 import pytest
 
@@ -11,6 +12,7 @@ from factorylab.charter.charter import MetricCard
 from factorylab.charter.measurement import (
     CardSamples,
     measure_card,
+    metric_identity,
 )
 from factorylab.charter.windows import MetricWindow
 from factorylab.cortex.request import Return
@@ -345,3 +347,19 @@ def test_a_card_naming_delivered_verdicts_over_a_scope_is_refused_and_pointed_to
     if window.kind != "returns":
         preflight_card(replace(card, observation=f"resolved_{name}"))
     preflight_card(replace(card, window=MetricWindow("windows", 5, None)))
+
+
+def test_metric_identity_changes_exactly_when_the_selected_population_does():
+    """Observation, role, sample kind and scope choose rows; n and interval do not."""
+    card = MetricCard("c", "care", "A reading.", "fraction",
+                      MetricWindow("returns", 4, "role"), {"rule": "at least", "lo": 0.9},
+                      "well_formed_rate", "evaluator")
+    same = [replace(card, observation=" Well_Formed_Rate "),
+            replace(card, window=replace(card.window, n=8)),
+            replace(card, description="Another reading.")]
+    other = [replace(card, observation="noop_share"),
+             replace(card, answers_for="producer"),
+             replace(card, window=replace(card.window, kind="windows")),
+             replace(card, window=replace(card.window, per="assembly"))]
+    assert all(metric_identity(c) == metric_identity(card) for c in same)
+    assert all(metric_identity(c) != metric_identity(card) for c in other)
