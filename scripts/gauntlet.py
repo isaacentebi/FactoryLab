@@ -1312,9 +1312,12 @@ def act_traces(events: list[Mapping], kinds: Mapping[str, str]) -> list[dict]:
       order (venue.py ``_execute_outputs``: "nothing is placed for a return that is not
       ``ok``") or registration (``_apply_registrations``: ``if ret.status != "ok"``);
     * **a tool call's act**, inside the decision's invocation: the seat's own admitted
-      tool call (compute.py ``_run_tool`` -> ``_venue_write``, ``treasury.intent``) is
-      ledgered before the ``tool.call`` row that records the call and before the
-      ``invocation`` row ``_invoke`` writes when the wake ends, whatever its status.
+      tool call is ledgered before the ``tool.call`` row that records the call and
+      before the ``invocation`` row ``_invoke`` writes when the wake ends, whatever its
+      status: compute.py:1982 (``_run_tool`` -> ``_venue_write``, which ledgers
+      ``order.intent`` at venue.py:835) and compute.py:2025 (``treasury.intent``), then
+      the ``tool.call`` row at compute.py:2425, then the ``invocation`` row at
+      compute.py:2616.
 
     So an act traces when a ``decision.open`` for its handle comes before it and either
     that decision's (first) invocation came before it with status ``ok``, or no

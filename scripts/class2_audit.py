@@ -52,11 +52,12 @@ does everything around that call, offline:
             have exactly one row with its severity, question and class, every HIGH or
             MED finding a releasable disposition: FIX is not one (the key audits the
             commit being gated, so a finding marked FIX still ships), and a release
-            passes only when every HIGH or MED finding is ALLOW, REJECT (each backed)
-            or CHARTER (a charter leaf), with its reason. A fixed finding is gone from
-            the next render. It re-verifies the range's base against the last release
-            and, when it passes, writes the release to ``LAST_RELEASE``. Nothing the
-            gate trusts is stored beside the triage file.
+            passes only when every HIGH or MED finding is ALLOW, REJECT (each backed),
+            CHARTER (a charter leaf) or REVERTED (a flagged commit whose seat-visible
+            text the gate finds gone from the release), with its reason. A fixed
+            finding is gone from the next render. It re-verifies the range's base
+            against the last release and, when it passes, writes the release to
+            ``LAST_RELEASE``. Nothing the gate trusts is stored beside the triage file.
   baseline  Recompute the static audit's findings and surface registry after the
             architect's triage (tests/audit/class2_findings.json, class2_surfaces.toml).
 
@@ -174,7 +175,7 @@ SAMPLES = 2
 AUTHOR_FAMILIES = frozenset({"claude", "gpt"})
 #: The dispositions a triaged finding may carry. CHARTER: a charter card or norm finding,
 #: sent to the charter's next revision as an observation, never fixed in code.
-DISPOSITIONS = frozenset({"FIX", "ALLOW", "REJECT", "CHARTER"})
+DISPOSITIONS = frozenset({"FIX", "ALLOW", "REJECT", "CHARTER", "REVERTED"})
 
 AUDIENCE = {"produce": ["producer"], "judge": ["evaluator"], "meta": ["meta"],
             "counter": ["adversary"], "vote": ["committee"], "testify": ["committee"]}
@@ -1426,8 +1427,10 @@ def triage_skeleton(rows: list[dict], verdict: dict, *, world: str, family: str,
              "re-render, re-audit, and the fixed finding is gone from the next triage), "
              "ALLOW (an allowlist entry with a reason and a passage), REJECT (the auditor is "
              "wrong; copied to rejected.jsonl with the reason), CHARTER (a charter card or "
-             "norm: sent to the charter's next revision, never fixed in code). A release "
-             "passes only when every HIGH or MED finding is ALLOW, REJECT or CHARTER.", "",
+             "norm: sent to the charter's next revision, never fixed in code), REVERTED (a "
+             "flagged commit only: every seat-visible line it added is gone from the "
+             "release, which the gate verifies from the repository). A release passes only "
+             "when every HIGH or MED finding is ALLOW, REJECT, CHARTER or REVERTED.", "",
              "| id | path | question | class | severity | confidence | quote | disposition "
              "| reason |",
              "|---|---|---|---|---|---|---|---|---|"]
@@ -1538,23 +1541,27 @@ def release_gate(text: str, *, expected: list[dict] | None = None) -> list[str]:
 def allowed_dispositions(finding: dict) -> frozenset[str]:
     """The dispositions the rubric allows a finding: a charter card or norm is sent to
     the charter (never FIX); a kernel leaf is FIX, ALLOW or REJECT (never CHARTER); a
-    commit the provenance pass flagged is FIX or REJECT (an allowlist excuses text, not
-    a commit's reasons)."""
+    commit the provenance pass flagged is FIX, REJECT (it is not a behaviour mix) or
+    REVERTED (it is, and its seat-visible text is gone from the release: the gate
+    verifies it, ``reverted_problems``); an allowlist excuses text, not a commit's
+    reasons, and REVERTED is a commit's alone."""
     if finding.get("provenance_pass"):
-        return frozenset({"FIX", "REJECT"})
+        return frozenset({"FIX", "REJECT", "REVERTED"})
     if "/charter/" in str(finding.get("path", "")):
         return frozenset({"ALLOW", "REJECT", "CHARTER"})
     return frozenset({"FIX", "ALLOW", "REJECT"})
 
 
 def disposition_problems(text: str, expected: list[dict], *, allowlist: dict,
-                         rejected: list[dict]) -> list[str]:
+                         rejected: list[dict], repo: Path | None = None,
+                         release: str | None = None) -> list[str]:
     """Why a row's disposition is not one the rubric allows its finding, or is not
     backed where the protocol says it lands: an ALLOW by an allowlist entry covering
     the finding's path and quote and naming its question and class; a REJECT by a
     ``rejected.jsonl`` row naming the finding by its full identity (``finding_identity``)
-    with its reason. A disposition of one question never backs the same quote read under
-    another."""
+    with its reason; a REVERTED by the repository itself: the flagged commit's
+    seat-visible text is absent at ``release`` (``reverted_problems``), recomputed here.
+    A disposition of one question never backs the same quote read under another."""
     import fnmatch
 
     want = {finding_identity(f): f for f in expected}
@@ -1579,6 +1586,55 @@ def disposition_problems(text: str, expected: list[dict], *, allowlist: dict,
         if disposition == "REJECT" and finding_identity(f) not in rejected_ids:
             problems.append(f"{ident}: REJECT not recorded in rejected.jsonl under its "
                             "identity")
+        if disposition == "REVERTED" and f.get("provenance_pass"):
+            if repo is None or release is None:
+                problems.append(f"{ident}: REVERTED needs the repository and the release "
+                                "to verify it")
+            else:
+                commit = str(f.get("path", "")).removeprefix("commit:")
+                problems += [f"{ident}: REVERTED, but {why}"
+                             for why in reverted_problems(repo, commit, release)]
+    return problems
+
+
+def _added_lines(repo: Path, commit: str) -> dict[str, list[str]]:
+    """The lines ``commit`` added to each seat-visible file (``SURFACE_PATHS``), against
+    its first parent (the whole tree for a root commit), whitespace-normalised. A line
+    with no letter or digit (a bracket, a blank) carries no text and is left out."""
+    parents = _git(repo, "rev-list", "--parents", "-n", "1", commit).split()[1:]
+    diff = (_git(repo, "diff", "--no-color", "--unified=0", parents[0], commit, "--",
+                 *SURFACE_PATHS) if parents else
+            _git(repo, "show", "--no-color", "--format=", "--unified=0", commit, "--",
+                 *SURFACE_PATHS))
+    added: dict[str, list[str]] = {}
+    path = None
+    for line in diff.splitlines():
+        if line.startswith("+++ "):
+            target = line[4:]
+            path = target[2:] if target.startswith("b/") else None
+        elif line.startswith("+") and path is not None:
+            text = " ".join(line[1:].split())
+            if any(c.isalnum() for c in text):
+                added.setdefault(path, []).append(text)
+    return added
+
+
+def reverted_problems(repo: Path, commit: str, release: str) -> list[str]:
+    """Why ``commit``'s seat-visible text is not reverted at ``release`` (none when it
+    is): every line it added to a seat-visible path (``_added_lines``) must be absent,
+    whitespace-normalised, from that file at ``release``, or the file gone. Recomputed
+    from the repository, never read from a triage row."""
+    problems = []
+    for path, lines in _added_lines(repo, commit).items():
+        try:
+            now = _git(repo, "show", f"{release}:{path}")
+        except subprocess.CalledProcessError:
+            continue  # the file is gone at the release
+        present = {" ".join(line.split()) for line in now.splitlines()}
+        kept = [line for line in lines if line in present]
+        if kept:
+            problems.append(f"{commit[:12]}'s text is still in {path} at the release: "
+                            f"{kept[0][:80]!r}")
     return problems
 
 
@@ -1708,6 +1764,7 @@ def gate(world: str, triage: Path, key_path: Path, samples: list[Path],
 
     return (problems + release_gate(text, expected=expected)
             + disposition_problems(text, expected, allowlist=lexicon.load_allowlist(),
+                                   repo=repo, release=key["release_commit"],
                                    rejected=read_rejected(rejected or REJECTED)))
 
 

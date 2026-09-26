@@ -1364,6 +1364,79 @@ def test_a_fix_disposition_fails_until_the_fixed_leaf_is_re_rendered_and_re_audi
     assert problems == []
 
 
+# --- REVERTED: a true behaviour-mix commit whose seat-visible text is gone --------------
+
+
+def _flagged_repo(tmp_path):
+    """A repository with a behaviour-mix commit adding seat-visible text, and a later
+    commit removing it: (repo, flagged, still, reverted)."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _commit(repo, "factorylab/cortex/schematics.py", "HOLD = 'hold'\n", "root")
+    flagged = _commit(repo, "factorylab/cortex/schematics.py",
+                      "HOLD = 'hold'\nADVICE = 'you should hold when unsure'\n)\n",
+                      BEHAVIOUR_MIX)
+    still = _commit(repo, "docs/notes.md", "notes\n", "notes only")
+    reverted = _commit(repo, "factorylab/cortex/schematics.py", "HOLD = 'hold'\n)\n",
+                       "Revert the advice")
+    return repo, flagged, still, reverted
+
+
+def _provenance_row(sha, disposition):
+    path = f"commit:{sha}"
+    finding = {"finding_id": tool.leaf_id(path, ""), "path": path, "question": "P1",
+               "class": "BEHAVIOUR-MIX", "severity": "HIGH", "provenance_pass": True}
+    row = (f"| {finding['finding_id']} | `{path}` | P1 | BEHAVIOUR-MIX | HIGH | both "
+           f"samples | {BEHAVIOUR_MIX[:20]} | {disposition} | undone |")
+    return finding, row
+
+
+def test_a_flagged_commit_whose_text_is_gone_passes_as_reverted(tmp_path):
+    """A true behaviour-mix commit stays in the range, but when every seat-visible line it
+    added is gone from the release (whitespace-normalised; a line of punctuation carries
+    no text), REVERTED is backed, recomputed from the repository."""
+    repo, flagged, still, reverted = _flagged_repo(tmp_path)
+    assert tool.reverted_problems(repo, flagged, reverted) == []
+    finding, row = _provenance_row(flagged, "REVERTED")
+    text = _triage_file(tmp_path, [row]).read_text()
+    assert tool.release_gate(text, expected=[finding]) == []
+    assert tool.disposition_problems(text, [finding], allowlist={"allow": []}, rejected=[],
+                                     repo=repo, release=reverted) == []
+
+
+def test_a_flagged_commit_whose_text_is_still_present_fails_reverted(tmp_path):
+    repo, flagged, still, _reverted = _flagged_repo(tmp_path)
+    problems = tool.reverted_problems(repo, flagged, still)
+    assert problems and "you should hold when unsure" in problems[0]
+    finding, row = _provenance_row(flagged, "REVERTED")
+    text = _triage_file(tmp_path, [row]).read_text()
+    assert any("REVERTED, but" in p for p in tool.disposition_problems(
+        text, [finding], allowlist={"allow": []}, rejected=[], repo=repo, release=still))
+
+
+def test_reverted_on_a_corpus_finding_is_refused(tmp_path):
+    finding = {"finding_id": "f1", "path": "scripted/tools/a", "question": "Q4",
+               "class": "C1", "severity": "HIGH"}
+    row = "| f1 | `scripted/tools/a` | Q4 | C1 | HIGH | low | Read it. | REVERTED | gone |"
+    text = _triage_file(tmp_path, [row]).read_text()
+    assert any("REVERTED is not a disposition the rubric allows" in p
+               for p in tool.disposition_problems(text, [finding], allowlist={"allow": []},
+                                                  rejected=[]))
+
+
+def test_the_gate_recomputes_reverted_from_the_repository(triaged):
+    """The triage row is never trusted: the history's flagged commit added ``HOLD =
+    'hold'``, which is still at the release, so REVERTED on it fails the gate."""
+    _out, _key, path, sha, _samples, _prov = triaged
+    reviewed = _dispose(path.read_text(), rejected=path.parent / "rejected.jsonl")
+    commit_row = next(line for line in reviewed.splitlines() if f"commit:{sha}" in line)
+    path.write_text(reviewed.replace(commit_row,
+                                     commit_row.replace("| REJECT |", "| REVERTED |")))
+    assert any("REVERTED, but" in p and "HOLD = 'hold'" in p
+               for p in _gate(triaged, reviewed=tool.sha256_file(path)))
+
+
 # --- Codex pass on 1de5c37: last_release edited only by gate-recording commits; rotation --
 
 
