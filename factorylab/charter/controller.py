@@ -378,6 +378,20 @@ class PriceController:
         whatever the float product rounds to), or the roles' pressure at the cap."""
         return violation > 0 and (price >= self.__cap / violation or pressure >= self.__cap)
 
+    def redefine(self, card_id: str, *, edition: int | str | None = None) -> None:
+        """A card redefined under the same id with a different observation is a new
+        metric (Codex on #152): its failing-attractor duration, its failure episode
+        (``episode_bound``, R10-n), its runs of violating and saturated windows and its
+        last reading reset; its price and cumulative counts stay, the charter's to set.
+        Ledgered first."""
+        state = self.__cards[card_id]
+        self.__ledger.append({"kind": "price.redefined", "card_id": card_id,
+                              "edition": edition, "failing_windows": state.failing_windows,
+                              "episode_bound": state.episode_bound})
+        self.__cards[card_id] = replace(state, failing_windows=0, episode_bound=0.0,
+                                        violation_windows=0, saturated_windows=0,
+                                        previous_value=None, previous_violation=0.0)
+
     def end_failure(self, card_id: str, *, window: int) -> None:
         """Reset a card's failing-attractor duration; its price is left to the controller.
 

@@ -87,15 +87,29 @@ MEASURED_TIER = {"verdict_mean": "evaluator", "verdict_std": "evaluator",
                  "meta_verdict_mean": "meta", "exposure_win_rate": "antagonist"}
 
 
+def card_semantics(card) -> dict[str, str]:
+    """What a card measures, as a window records it at its close: the observation and
+    the role whose behaviour that observation is (``MEASURED_TIER``, else the role the
+    card answers for)."""
+    observation = card.observation.strip().lower()
+    return {"observation": observation,
+            "role": MEASURED_TIER.get(observation, card.answers_for)}
+
+
 def thrash_roles(rt, windows: list[dict]) -> list[str]:
     """The roles whose behaviour the thrash signals read as moving.
 
-    Guarantees the roles measured by the cards whose region-relative cell took more
-    than one value over the retained horizon the diagnosis read (``live.cells`` over
-    ``timing.min_ratio × immune.k`` windows): a card on ``MEASURED_TIER``'s
-    observations names that tier, any other card the role it answers for. A card
-    answering for ``all``, and movement in activity alone, name no role: then the
-    price lands where essay II.II.b puts it, on the no-swap-regret core.
+    Guarantees the roles measured by the cards whose region-relative cell changed
+    between two consecutive windows of the retained horizon the diagnosis read
+    (``live.cells`` over ``timing.min_ratio × immune.k`` windows), each read under the
+    semantics the window RECORDED at its close (``semantics``), never the charter in
+    force now (Codex on #152): an amendment that redefines a card under the same id
+    cannot move old movement onto its new role. A change between two windows that
+    recorded different meanings for the card (observation or role) compares two
+    tiers' behaviour or two metrics: its redefinition, not movement.
+    A card answering for ``all``, and movement in activity alone, name no role: then
+    the price lands where essay II.II.b puts it, on the no-swap-regret core. A window
+    recorded before semantics were kept is read under the current card.
     """
     horizon = rt.m.timing.min_ratio * rt.m.immune.k
     span = windows[-horizon:]
@@ -104,16 +118,23 @@ def thrash_roles(rt, windows: list[dict]) -> list[str]:
     bins = {"registration_bins": rt.m.immune.registration_bins,
             "revision_bins": rt.m.immune.revision_bins}
     dims, series = live.cells(span, activity=False, **bins)
-    cards = {f"card:{card.id}": card for card in rt.charter.cards}
+    current = {f"card:{card.id}": card_semantics(card) for card in rt.charter.cards}
+
+    def meaning(window: dict, name: str) -> dict | None:
+        recorded = window.get("semantics")
+        return (recorded or {}).get(name) if recorded is not None else current.get(name)
+
     roles = set()
     for i, name in enumerate(dims):
-        card = cards.get(name)
-        if card is None or len({cell[i] for cell in series}) < 2:
-            continue
-        observation = card.observation.strip().lower()
-        role = MEASURED_TIER.get(observation, card.answers_for)
-        if role != "all":
-            roles.add(role)
+        for before, after, cell_before, cell_after in zip(span, span[1:], series,
+                                                          series[1:], strict=False):
+            if cell_before[i] == cell_after[i]:
+                continue
+            was, now = meaning(before, name), meaning(after, name)
+            if was is None or now is None or was != now:
+                continue  # a redefinition (a new observation or role), not movement
+            if now["role"] != "all":
+                roles.add(now["role"])
     return sorted(roles)
 
 
@@ -341,6 +362,9 @@ def close_window(rt, values: dict[str, float]) -> None:
     current = {
         "index": rt.window.index, "tick": now, "charter_edition": rt.charter.edition,
         "terms": terms_digest(rt), "profile": profile,
+        # What each card measured when this window closed (Codex on #152): its old
+        # evidence is read under this meaning, whatever the charter later says.
+        "semantics": {f"card:{c.id}": card_semantics(c) for c in rt.charter.cards},
         # The frontier signal (ruling R9; versioning P1, U1): each router's draws this
         # window, its NOOP floor and its draw mass on unhistoried seats.
         "frontier_invocation": rt.frontier_invocation(),
@@ -354,7 +378,10 @@ def close_window(rt, values: dict[str, float]) -> None:
     # The previous diagnosis's failing set: a card in it that this tail leaves
     # unmeasured holds its state (wave 16, second addendum, M-6).
     held = list((rt.stats.versions or {}).get("failing", []))
-    state, events = live.advance(rt.stats.versions or live.fresh(), windows, k=k,
+    # A redefined card is a new metric: the versions and the diagnosis read each card
+    # only from windows that measured what it measures now (``live.current_metrics``).
+    metrics = live.current_metrics(windows)
+    state, events = live.advance(rt.stats.versions or live.fresh(), metrics, k=k,
                                  horizon=horizon, tv_threshold=spec.tv_threshold, **bins)
     for event in events:
         kind = event["kind"]
@@ -366,7 +393,7 @@ def close_window(rt, values: dict[str, float]) -> None:
     rt.cadence.track_version(version=state["version"], opened=state["start_tick"],
                              settled=(state["settled_tick"] is not None
                                       or state["cause"] not in REVISIONS))
-    diagnosed = diagnose(windows, state, k=k, tv_threshold=spec.tv_threshold,
+    diagnosed = diagnose(metrics, state, k=k, tv_threshold=spec.tv_threshold,
                          gap_threshold=spec.gap_threshold, held=held, **bins)
     state["failing"] = list(diagnosed["violated_cards"])
     flags = diagnosed.pop("flags")

@@ -803,6 +803,9 @@ _RUNTIME_FIELDS = (
     # Each card's consecutive unmeasured windows (wave 16, R10-f). An older checkpoint
     # has none: the run counts from the next close.
     "card_unmeasured",
+    # Codex on #152: each card's observation as last derived, so a redefinition under
+    # the same id is recognised across a resume.
+    "card_meanings",
     # Wave 17b: each seat's ballot cursor over its own deliveries, the committee
     # eligibility tally and the evidence it counted, and released decisions' order
     # intents as counts. An older checkpoint has none: its seats have read nothing, its

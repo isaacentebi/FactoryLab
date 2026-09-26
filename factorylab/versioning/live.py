@@ -331,6 +331,38 @@ def advance(state: dict, windows: list[dict], *, k: int, horizon: int, tv_thresh
     return state, events
 
 
+def current_metrics(windows: list[dict]) -> list[dict]:
+    """``windows`` with each card kept only where it measured what it measures now.
+
+    Guarantees a window keeps a card's reading and region only when the observation it
+    recorded for that card (``semantics``) is the one the newest window recorded: a
+    card redefined under the same id is a new metric, so its old readings are neither
+    violation nor movement of the new one (Codex on #152), and a card the newest window
+    no longer carries is gone. Windows recorded before semantics were kept, and a
+    newest window without them, are returned as they are.
+    """
+    if not windows or windows[-1].get("semantics") is None:
+        return windows
+    newest = windows[-1]["semantics"]
+    result = []
+    for window in windows:
+        recorded = window.get("semantics")
+        if recorded is None:
+            result.append(window)
+            continue
+        stale = {name for name, meaning in recorded.items()
+                 if (newest.get(name) or {}).get("observation") != meaning.get("observation")}
+        if not stale:
+            result.append(window)
+            continue
+        result.append({**window,
+                       "profile": {k: v for k, v in window["profile"].items()
+                                   if k not in stale},
+                       "regions": {k: v for k, v in window.get("regions", {}).items()
+                                   if k not in stale}})
+    return result
+
+
 def persistent_violations(tail: list[dict]) -> list[str]:
     """Cards violated in every tail window that measured them, measured at least once.
 

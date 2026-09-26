@@ -109,3 +109,70 @@ def test_the_roles_are_published_with_the_price():
     rt = make_runtime()
     rt.stats.thrash = {"lambda": 0.1, "penalty": 0.0, "roles": ["evaluator"]}
     assert rt._adaptive_scoring_block()["thrash_price"]["roles"] == ["evaluator"]
+
+
+# --- a redefined card's old evidence keeps its old meaning (Codex on #152) ---------------
+
+
+def _recorded(windows, *cards):
+    """Each window as the organ records it at its close: with each card's semantics."""
+    return [{**w, "semantics": {f"card:{c.id}": immune.card_semantics(c) for c in cards}}
+            for w in windows]
+
+
+@pytest.mark.parametrize("new_observation", ["well_formed_rate", "noop_share"])
+def test_thrash_from_before_a_redefinition_is_charged_to_the_old_role_only(new_observation):
+    """A card answering for the evaluators oscillates for six windows; the charter then
+    redefines it, under the same id, to answer for the producers (with the same
+    observation, or a new one). The old movement is charged to the evaluator routers
+    only, read under what each window recorded, never the card in force now; the
+    redefinition itself is not movement."""
+    rt = make_runtime()
+    old = _card("moving", "well_formed_rate", "evaluator")
+    new = _card("moving", new_observation, "producer")
+    steady = _card("steady", "noop_share", "producer")
+    before = _recorded(_windows((old, steady), "moving", n=6), old, steady)
+    after = _recorded(_windows((new, steady), "none", n=3), new, steady)
+    for i, window in enumerate(after):
+        window["index"] = 6 + i
+    rt.charter = replace(rt.charter, cards=(new, steady))
+    assert immune.thrash_roles(rt, before + after) == ["evaluator"]
+    # Without the recorded meaning, the current card would have named the producers.
+    unrecorded = [{k: v for k, v in w.items() if k != "semantics"} for w in before + after]
+    assert immune.thrash_roles(rt, unrecorded) == ["producer"]
+
+
+def test_a_redefined_observation_is_a_new_metric_and_its_state_resets():
+    """Under the same id, a new observation is a new metric: the card's duration and
+    episode, its unmeasured count and its place in the failing set reset, and the
+    diagnosis reads it only from windows that measured what it measures now. With the
+    observation unchanged (a new role), all of it is kept."""
+    from factorylab.versioning import live
+
+    for new_observation, resets in (("noop_share", True), ("well_formed_rate", False)):
+        rt = make_runtime()
+        old = _card("moving", "well_formed_rate", "evaluator")
+        rt.charter = replace(rt.charter, cards=(old,))
+        rt._derive_regions()
+        rt.controller.set_price("moving", 0.3, amendment_id="t")
+        for window in range(3):
+            rt.controller.observe("moving", 0.1, window)  # violating
+            rt.controller.ratchet("moving", window=window, step=0.05)
+        rt.card_unmeasured["moving"] = 4
+        rt.stats.versions = {"failing": ["card:moving"]}
+        rt.charter = replace(rt.charter, cards=(_card("moving", new_observation,
+                                                      "producer"),))
+        rt._derive_regions()
+        card = rt.controller.snapshot()["cards"]["moving"]
+        if resets:
+            assert (card["failing_windows"], card["episode_bound"]) == (0, 0.0)
+            assert "moving" not in rt.card_unmeasured
+            assert rt.stats.versions["failing"] == []
+        else:
+            assert card["failing_windows"] == 3 and card["episode_bound"] > 0
+            assert rt.card_unmeasured["moving"] == 4
+            assert rt.stats.versions["failing"] == ["card:moving"]
+    old, new = _card("c", "well_formed_rate", "evaluator"), _card("c", "noop_share", "all")
+    kept = live.current_metrics(_recorded(_windows((old,), "c", n=2), old)
+                                + _recorded(_windows((new,), "none", n=1), new))
+    assert [("card:c" in w["regions"]) for w in kept] == [False, False, True]

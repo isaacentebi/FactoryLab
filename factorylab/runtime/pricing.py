@@ -508,6 +508,31 @@ class PricingMixin:
         elif ev.kind is EventKind.MARKET_MID:
             self._observe_positions()
 
+    def _reset_redefined_cards(self) -> None:
+        """A card whose observation changed under the same id is a new metric (Codex on
+        #152): the evidence of its old meaning stops counting for it. Guarantees its
+        controller duration and episode reset (``PriceController.redefine``), its
+        consecutive unmeasured windows (R10-f) restart, and it leaves the failing set a
+        diagnosis holds (M-6), so no stable-failure duration spans the redefinition.
+        A card whose observation is unchanged keeps all of it; old windows are read
+        under the meaning they recorded (``immune.thrash_roles``,
+        ``live.current_metrics``), and a closed price window prices on the cards it froze.
+        """
+        known = getattr(self, "card_meanings", None)
+        if known is None:
+            known = self.card_meanings = {}
+        for card in self.charter.cards:
+            meaning = card.observation.strip().lower()
+            if card.id in known and known[card.id] != meaning:
+                if card.id in self.controller.card_ids():
+                    self.controller.redefine(card.id, edition=self.charter.edition)
+                self.card_unmeasured.pop(card.id, None)
+                versions = getattr(self.stats, "versions", None) or {}
+                name = f"card:{card.id}"
+                if name in versions.get("failing", []):
+                    versions["failing"] = [c for c in versions["failing"] if c != name]
+            known[card.id] = meaning
+
     def _derive_regions(self) -> None:
         """Every readable card of the current edition holds a region; unreadable ones hold none.
 
@@ -517,6 +542,7 @@ class PricingMixin:
         card per edition as ``price.unparsed``.
         """
         regions: dict[str, CardRegion] = {}
+        self._reset_redefined_cards()
         for card in self.charter.cards:
             region = region_for(card, rolling=self.rolling, observations=self.observations)
             if region is None:
