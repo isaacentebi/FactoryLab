@@ -87,7 +87,7 @@ def fresh_sample(card: MetricCard, samples: CardSamples, window) -> bool:
     elif observation in RETURN_OBSERVATIONS:
         rows = _rows(samples, "returns", observation)
     elif observation in FORECAST_OBSERVATIONS:
-        rows = samples.forecasts
+        rows = _rows(samples, "forecasts", observation)
     else:
         return True
     if observation in PROMPT_OBSERVATIONS or observation == READ_OBSERVATION:
@@ -201,7 +201,7 @@ def window_resolved_verdicts(samples, index: int) -> list[float]:
     window's own value (the runtime sets it as the window's ``resolved_verdicts``) and
     a card over closed windows or over forecasts (the same rows).
     """
-    return [row["verdict"] for row in samples.forecasts
+    return [row["verdict"] for row in _rows(samples, "forecasts", "resolved_verdict_mean")
             if row["window"] == index and row.get("verdict") is not None]
 
 
@@ -218,7 +218,7 @@ def window_forecast_skills(samples, index: int) -> list[float]:
     window's own value (the runtime sets it as the window's ``forecast_skills``) and a
     card over closed windows (``measure_card`` reads the same rows).
     """
-    return [row["skill"] for row in samples.forecasts
+    return [row["skill"] for row in _rows(samples, "forecasts", "forecast_skill")
             if row["window"] == index and row["skill"] is not None]
 
 #: What each row-measured seed computes from its inputs. Its inputs are stated only by
@@ -551,20 +551,19 @@ class CardSamples:
         self.windows[:] = self.windows[-windows_n:] if windows_n else []
         first_window = self.windows[0]["index"] if self.windows else None
         for kind in ("returns", "forecasts"):
-            rows = getattr(self, kind)
             keep = set()
             for card in cards:
                 if card.window.kind != kind:
                     continue
-                for group in _groups(card, rows).values():
-                    # Retain the horizon measurement would select, including a
-                    # partly filled one.
+                # Codex on #152: the horizon measurement would select, over the rows it
+                # selects (``_rows``: responses only), partly filled ones included. A
+                # non-response never takes a response's retained slot.
+                for group in _groups(card, _rows(self, kind, card.observation)).values():
                     keep.update(id(row) for row in _horizon(
                         card.observation, group, card.window.n, partial=True))
-            rows[:] = [row for row in rows if (
+            self._keep(kind, lambda row, keep=keep: (
                 row["handle"] in pending_handles or id(row) in keep
-                or (first_window is not None and row["window"] >= first_window)
-            )]
+                or (first_window is not None and row["window"] >= first_window)))
         # Readings: kept from the window of each horizon's first response on (above).
         keep = set()
         rows = _selected(READ_OBSERVATION, _rows(self, "returns", READ_OBSERVATION))
@@ -578,8 +577,17 @@ class CardSamples:
                     start = horizon[0]["window"]
                     keep.update(id(row) for row in group
                                 if row.get("reading") and row["window"] >= start)
-        self.readings[:] = [row for row in self.readings if (
-            id(row) in keep or (first_window is not None and row["window"] >= first_window))]
+        self._keep("readings", lambda row: (
+            id(row) in keep or (first_window is not None and row["window"] >= first_window)))
+
+    def _keep(self, kind: str, kept) -> None:
+        """Retain exactly the stored rows of ``kind`` that ``kept`` accepts.
+
+        The one place that writes the stored row lists after recording: it must see
+        every row, non-responses included, so that it can drop them too.
+        """
+        rows = getattr(self, kind)
+        rows[:] = [row for row in rows if kept(row)]
 
 
 def record_card_forecasts(runtime, pending, baseline) -> None:
@@ -588,7 +596,8 @@ def record_card_forecasts(runtime, pending, baseline) -> None:
     from factorylab.kernel.events import EventKind
 
     samples = runtime.card_samples
-    returns = {row["handle"]: row for row in samples.returns}
+    # A forecast's judge and its subject are responses (``is_response``).
+    returns = {row["handle"]: row for row in samples.returns if is_response(row)}
     for event in runtime.internal:
         if event.kind is not EventKind.FORECAST_SETTLED:
             continue
@@ -691,8 +700,9 @@ def preflight_measurement(card: MetricCard, observations=None, *,
         samples.read(handle=kind, assembly=kind, role=role, window=1, read_bytes=1)
     # Use the real row constructor, with judge and subject separated. The card
     # cannot manufacture either identity by assigning its answers_for to a row.
-    for source in samples.returns:
-        for subject in samples.returns:
+    responses = [row for row in samples.returns if is_response(row)]
+    for source in responses:
+        for subject in responses:
             forecast = Forecast(
                 f"forecast-{source['handle']}-{subject['handle']}", source["assembly"],
                 subject["handle"], "return_paid_off", {"horizon_events": 1}, 0.5, 0, 1,
@@ -751,11 +761,16 @@ def _selected(observation: str, rows: list[dict]) -> list[dict]:
 
 
 def _rows(samples: CardSamples, kind: str, observation: str) -> list[dict]:
-    """The sample rows an observation selects from: reading rows join only its own."""
-    rows = getattr(samples, kind)
-    if kind == "returns" and observation.strip().lower() == READ_OBSERVATION:
-        return rows + samples.readings
-    return rows
+    """The sample rows an observation measures: its selection (``_selected``) of the
+    stored rows of ``kind``, reading rows joining only its own.
+
+    Guarantees every consumer that measures, prices or retains card rows reads them
+    through the one response selector (Codex on #152; ``is_response``): a
+    non-response never enters a mean, a median, a share or a retained horizon.
+    """
+    reads = kind == "returns" and observation.strip().lower() == READ_OBSERVATION
+    return _selected(observation,
+                     getattr(samples, kind) + (samples.readings if reads else []))
 
 
 def _horizon(observation: str, group: list[dict], n: int, *,
@@ -923,11 +938,9 @@ def measure_card(card: MetricCard, samples: CardSamples, observations=None) -> d
             if observation.id in ROWS_ON_CLOSED_WINDOWS:
                 # A closed record keeps no per-response attribution, so these
                 # are measured from the samples the selected windows retained.
-                source = samples.forecasts if observation.id == "forecast_skill" else (
-                    samples.returns)
-                rows = _selected(observation.id, [
-                    r for r in source
-                    if selected[0]["index"] <= r["window"] <= selected[-1]["index"]])
+                source = "forecasts" if observation.id == "forecast_skill" else "returns"
+                rows = [r for r in _rows(samples, source, observation.id)
+                        if selected[0]["index"] <= r["window"] <= selected[-1]["index"]]
                 value = _measure_rows(observation.id, rows)
                 spread = _sample_values(observation.id, rows)
             else:
@@ -993,11 +1006,14 @@ def _measure_scoped(card: MetricCard, observation, book, samples: CardSamples,
     files under the scope. A scope whose code returns nothing is unmeasured.
     """
     first, last = selected[0]["index"], selected[-1]["index"]
-    returns = _scope_rows(card, [r for r in samples.returns if first <= r["window"] <= last])
+    # Responses only (``is_response``): a scope whose only row is a non-response is
+    # no scope the population's code measures.
+    returns = _scope_rows(card, [r for r in samples.returns
+                                 if is_response(r) and first <= r["window"] <= last])
     forecasts = _scope_rows(card, [r for r in samples.forecasts
-                                   if first <= r["window"] <= last])
-    readings = _scope_rows(card, [r for r in samples.readings
-                                  if first <= r["window"] <= last])
+                                   if is_response(r) and first <= r["window"] <= last])
+    readings = _scope_rows(card, _selected(READ_OBSERVATION, [
+        r for r in samples.readings if first <= r["window"] <= last]))
     result = {}
     # A reading can be its author's only row in the selected windows: the scope is
     # still one the population's code measures, on facts that carry that reading.
@@ -1041,7 +1057,9 @@ def measure_cards(cards, samples: CardSamples, window, observations=None) -> dic
             card.window.kind == "returns" or card.window.per is not None
             or observation == "cost_per_attempt"
         ):
-            rows = samples.returns
+            # Codex on #152: the same responses the card measured; a zero-cost
+            # non-response never moves the median its region rolls on.
+            rows = _rows(samples, "returns", observation)
             if card.window.kind == "windows":
                 first = samples.windows[-card.window.n]["index"]
                 last = samples.windows[-1]["index"]

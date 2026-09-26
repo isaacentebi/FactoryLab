@@ -17,7 +17,7 @@ from factorylab.charter.controller import (
     violation,
 )
 from factorylab.charter.controller import pressure as card_pressure
-from factorylab.charter.measurement import _groups, _horizon, measure_cards
+from factorylab.charter.measurement import _groups, _horizon, _rows, is_response, measure_cards
 from factorylab.cortex.registration import measured_role
 from factorylab.kernel.events import Event, EventKind
 from factorylab.kernel.money import usd_to_micro
@@ -808,7 +808,8 @@ class PricingMixin:
         close (wave 16, D5).
         """
         rows = [row for row in self.card_samples.returns
-                if row.get("window") == index and row.get("role") == "producer"]
+                if is_response(row) and row.get("window") == index
+                and row.get("role") == "producer"]
         return {
             "revision_rate": {"members": sorted({r["handle"] for r in rows}),
                               "hits": sorted({r["handle"] for r in rows if r["revision"]})},
@@ -1184,7 +1185,9 @@ class PricingMixin:
         """
         samples = self.card_samples
         supported = None if live else samples.scopes.get(card.id, {})
-        rows = samples.returns
+        # The responses the card measures (``_rows``, Codex on #152): a non-response
+        # never takes a horizon slot or a share.
+        rows = _rows(samples, "returns", card.observation)
         if card.window.kind == "windows":
             if live:
                 first = last = self.window.index
