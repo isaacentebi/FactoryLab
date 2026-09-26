@@ -19,7 +19,9 @@ on a stand-in carrying only their state, so 200 variants fit in the check tier.
 Assumed of the venue, as every venue in this repository delivers: facts arrive in
 fact-time order across batches (a batch holds the facts through its instant), and two
 fills of one instant keep the venue's own order (their order is itself a fact); a
-funding payment is stated at its funding time (``funding_ns``).
+funding payment is stated at its funding time (``funding_ns``). Half the variants read
+a polled venue whose fills and funding arrive only at polls that lag the ticks, with the
+venue's delivered-through watermark at each poll (ruling R10-o).
 """
 
 from __future__ import annotations
@@ -72,9 +74,16 @@ class _Book(ReturnConsequences):
         super().__init__(Ledger(), 1, horizon_ns=H)
         self.clock_ns = T0
         self.history = history
+        # A polled venue's delivered-through instant of its fills and funding (ruling
+        # R10-o); None for a venue whose advance delivers everything at once.
+        self.stream_ns: int | None = None
 
     def _now_ns(self) -> int:
         return self.clock_ns
+
+    def _stream_through_ns(self) -> int | None:
+        # A poll at an instant may miss a fact of that very instant.
+        return None if self.stream_ns is None else self.stream_ns - 1
 
     def _patience_ns(self) -> int:
         return PATIENCE
@@ -130,6 +139,17 @@ def _facts() -> list[tuple]:
     return facts
 
 
+def _pay(book, fact: tuple, event: int) -> None:
+    book.observe("Funding", {"coin": fact[2], "paid_usd": fact[3], "rate": "0",
+                             "ts_ns": fact[0]}, event)
+
+
+def _fill(book, fact: tuple, event: int) -> None:
+    book.observe("Fill", {"order_id": fact[2], "coin": fact[3], "is_buy": fact[4],
+                          "size": fact[5], "px": fact[6], "fee_usd": "0", "ts_ns": fact[0]},
+                 event)
+
+
 def _groups(facts: list[tuple], rng: random.Random) -> list[tuple]:
     """``facts`` with every same-instant group shuffled, except the venue's own order of
     two fills of one instant, and decisions kept before the facts of their instant."""
@@ -153,7 +173,20 @@ def _groups(facts: list[tuple], rng: random.Random) -> list[tuple]:
 def _run(rng: random.Random) -> dict:
     history: dict = {}
     named, book = _Named(history), _Book(history)
-    sequence = _groups(_facts(), rng)
+    # Half the variants read a polled venue (ruling R10-o): fills and funding payments
+    # are reported only at polls at random instants, which lag the ticks; each poll
+    # delivers what executed by then and raises the venue's watermark to its time.
+    lag = rng.random() < 0.5
+    facts = _facts()
+    if lag:
+        at = T0
+        while at < _t(330):
+            at += rng.randint(5, 70) * S
+            facts.append((at, "poll"))
+        facts.sort(key=lambda fact: (fact[0], fact[1] != "decide" and fact[1] != "open"))
+        book.stream_ns = T0
+    polled: list[tuple] = []
+    sequence = _groups(facts, rng)
     cuts = sorted(rng.sample(range(1, len(sequence)), rng.randint(3, 40)))
     batches = [sequence[a:b] for a, b in zip([0, *cuts], [*cuts, len(sequence)],
                                              strict=True)]
@@ -199,13 +232,17 @@ def _run(rng: random.Random) -> dict:
                 named._observe_mid(fact[2], at, fact[3])
                 book.observe("MarketMid", {"coin": fact[2], "mid": fact[3], "ts_ns": at},
                              event)
+            elif kind in ("funding", "fill") and lag:
+                polled.append(fact)  # executed now, reported at the next poll
             elif kind == "funding":
-                book.observe("Funding", {"coin": fact[2], "paid_usd": fact[3],
-                                         "rate": "0", "ts_ns": at}, event)
+                _pay(book, fact, event)
             elif kind == "fill":
-                book.observe("Fill", {"order_id": fact[2], "coin": fact[3], "is_buy": fact[4],
-                                      "size": fact[5], "px": fact[6], "fee_usd": "0",
-                                      "ts_ns": at}, event)
+                _fill(book, fact, event)
+            elif kind == "poll":
+                for reported in sorted(polled, key=lambda f: f[0]):
+                    (_fill if reported[1] == "fill" else _pay)(book, reported, event)
+                polled.clear()
+                book.stream_ns = at
             elif kind == "decide":
                 # A decision is the runtime's own act at its instant.
                 named.clock.now_ns = at
@@ -229,6 +266,10 @@ def _run(rng: random.Random) -> dict:
             settle()
     # The world goes on: a tick long after every patience, and every outcome is fixed.
     book.tick_through_ns = named.tick_through_ns = _t(10_000)
+    for reported in sorted(polled, key=lambda f: f[0]):
+        (_fill if reported[1] == "fill" else _pay)(book, reported, event)
+    if lag:
+        book.stream_ns = _t(10_000)
     settle()
     rows = [dict(row) for row in book.ledger._recovery_items()
             if row.get("kind") in ("consequence.outcome", "consequence.uninformative")]

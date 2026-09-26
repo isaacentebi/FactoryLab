@@ -95,7 +95,7 @@ def close_recorded_market(rt, *, through_tape_end: bool = False) -> None:
     try:
         closes = int(exchange.closes_ns)
         if through_tape_end or getattr(rt, "_safety_stop", None) == TAPE_ENDED:
-            rt._settle_exchange_effects(exchange.advance(closes), observe_positions=False)
+            rt._settle_exchange_effects(rt._advance_venue(closes), observe_positions=False)
             rt.clock.now_ns = max(rt.clock.now_ns, closes)
         rt._settle_exchange_effects(
             exchange.close_recording(min(rt.clock.now_ns, closes)), observe_positions=False)
@@ -220,7 +220,8 @@ class VenueMixin:
         if self.venue is not None:
             self._reconcile_orders(final=True)
             try:
-                fills = self.consequence_fills.poll(self.exchange, strict=True)
+                fills = self.consequence_fills.poll(self.exchange, strict=True,
+                                                    now_ns=self.clock.now_ns)
             except Exception as exc:
                 # A failed read cannot turn into evidence of an empty fill set.
                 report["fill_read_error"] = type(exc).__name__
@@ -311,6 +312,39 @@ class VenueMixin:
         """The taker rate in force for ``coin`` (a perp coin or spot pair) as last read:
         its own rate, never another instrument's or a market's pooled one."""
         return ((self.fee_schedule or {}).get("rates") or {}).get(coin)
+
+    def _advance_venue(self, ts_ns: int) -> list[WorldEvent]:
+        """Advance a fake or recorded venue to ``ts_ns``: every fact it holds through
+        that instant is delivered by the call, so every stream is delivered through it
+        (``advance_through_ns``; ruling R10-o)."""
+        events = self.exchange.advance(ts_ns)
+        self.advance_through_ns = max(getattr(self, "advance_through_ns", None) or ts_ns,
+                                      ts_ns)
+        return events
+
+    def _stream_through(self, streams: tuple[str, ...]) -> int | float | None:
+        """The earliest instant through which the venue has delivered every fact of
+        ``streams``, or None when this runtime keeps no venue watermark (ruling R10-o).
+
+        Guarantees, for a live venue, the instant before the request time of the latest
+        successful read of each polled stream (``LiveVenue.through``; fills from the fill
+        cursor), and
+        minus infinity for a stream never read successfully (nothing waits on an
+        unread stream as if it were empty); for a fake or recorded venue, the time it
+        was last advanced to (``advance_through_ns``), every stream alike.
+        """
+        venue = getattr(self, "venue", None)
+        if venue is None:
+            return getattr(self, "advance_through_ns", None)
+        through = dict(getattr(venue, "through", {}) or {})
+        cursor = getattr(self, "consequence_fills", None)
+        through["fills"] = getattr(cursor, "through_ns", None)
+        values = [through.get(stream) for stream in streams]
+        if any(value is None for value in values):
+            return float("-inf")
+        # A read made at an instant may miss a fact of that very instant: delivered
+        # through the instant before it.
+        return min(values) - 1
 
     def _fee_needs(self) -> dict[str, int]:
         """The earliest instant, per instrument, an open consequence can still read the
@@ -621,9 +655,10 @@ class VenueMixin:
                     # or after it (wave 16, D2), never by the event that follows it.
                     payload["ts_ns"] = we.ts_ns
                 elif we.kind is WorldEventKind.FILL:
-                    # The fill's own venue time: a fill after a return's horizon is
-                    # late money for it (``ReturnConsequences._freeze_past_horizon``).
-                    payload["ts_ns"] = we.ts_ns
+                    # The fill's own venue time (a polled venue stamps the event when
+                    # read; ``fill_ns`` is the execution's): a fill after a return's
+                    # horizon is late money for it (``_freeze_past_horizon``).
+                    payload["ts_ns"] = int(we.payload.get("fill_ns", we.ts_ns))
                 elif we.kind is WorldEventKind.FUNDING:
                     # The funding time the payment is for (R10-m: an outcome accrues
                     # funding only for funding times at or before its horizon).

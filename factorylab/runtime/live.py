@@ -324,6 +324,11 @@ class LiveVenue:
     last_funding_ns: int | None = None
     seen_funding: set[str] = field(default_factory=set)
     markets: Callable[[], tuple[str, ...]] | None = None
+    # Ruling R10-o: per polled fact stream (``mids``, ``rates``, ``funding``, ``fills``),
+    # the request time of its latest SUCCESSFUL read: every fact of that stream with
+    # fact-time at or before it has been delivered. A failed or skipped read does not
+    # advance it.
+    through: dict[str, int] = field(default_factory=dict)
 
     def funding_payments(self, now_ns: int) -> list[WorldEvent]:
         """Emit post-launch funding once, with an inclusive cursor that keeps timestamp peers."""
@@ -333,11 +338,13 @@ class LiveVenue:
             self.last_funding_ns = now_ns
         method = getattr(self.exchange, "funding_payments", None)
         if method is None:
+            self.through["funding"] = now_ns  # no payment stream to wait for
             return []  # read-only legacy/test adapter
         try:
             payments = method(self.last_funding_ns)
         except (RuntimeError, OSError, ValueError, ArithmeticError):
             return []  # no key or transient venue outage: preserve cursor
+        self.through["funding"] = max(self.through.get("funding", now_ns), now_ns)
         payments = sorted((p for p in payments if p.ts_ns >= self.last_funding_ns
                            and p.id not in self.seen_funding), key=lambda p: (p.ts_ns, p.id))
         if not payments:
@@ -365,6 +372,7 @@ class LiveVenue:
         out: list[WorldEvent] = []
         try:
             mids = self.exchange.mids()
+            self.through["mids"] = now_ns
         except (RuntimeError, OSError, ValueError, ArithmeticError):
             mids = {}
         for coin, mid in mids.items():
@@ -380,6 +388,7 @@ class LiveVenue:
             )
         try:
             funding = self.exchange.funding()
+            self.through["rates"] = now_ns
         except (RuntimeError, OSError, ValueError, ArithmeticError):
             # VenueUnavailable is a RuntimeError: an unanswered funding read emits no
             # funding event this tick, which is true, and says nothing about rates.
@@ -404,6 +413,8 @@ class LiveVenue:
             )
         try:
             fills = self.exchange.fills(self.last_fill_ns) if include_fills else []
+            if include_fills:
+                self.through["fills"] = now_ns
         except (RuntimeError, OSError, ValueError, ArithmeticError):  # no account: read-only venue
             fills = []
         for fl in fills:
@@ -427,6 +438,9 @@ class LiveVenue:
                         "market": getattr(fl, "market", "perp"),
                         "inventory_size": str(getattr(fl, "inventory_size", None) or fl.size),
                         "liquidation": fl.liquidation,
+                        # The execution's own venue time; the event is stamped when it
+                        # was read (R10-o).
+                        "fill_ns": int(fl.ts_ns),
                     },
                 )
             )

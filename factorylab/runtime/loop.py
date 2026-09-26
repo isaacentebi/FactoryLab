@@ -437,7 +437,8 @@ class Runtime(
                     WorldEvent(
                         WorldEventKind.FILL, max(self.clock.now_ns, ts), self.exchange.name, payload
                     )
-                    for ts, payload in self.consequence_fills.poll(self.exchange)
+                    for ts, payload in self.consequence_fills.poll(
+                        self.exchange, now_ns=self.clock.now_ns)
                 )
                 self._settle_exchange_effects(observed)
                 if self.reconciler.due():
@@ -451,7 +452,7 @@ class Runtime(
                     self.stats.reconciliations += 1
                     self._emit(EventKind.RECONCILED, snap, source="kernel")
             else:
-                self._settle_exchange_effects(self.exchange.advance(self.clock.now_ns))
+                self._settle_exchange_effects(self._advance_venue(self.clock.now_ns))
             # C2: the kernel settles every registered watcher from world state, then
             # offers one coalesced update to the seats that asked
             # for one. Both are queued behind this tick's own routing.
@@ -580,12 +581,13 @@ class Runtime(
         self.clock.now_ns = max(self.clock.now_ns, now)
         if self.live:
             fills = [WorldEvent(WorldEventKind.FILL, max(now, ts), self.exchange.name, payload)
-                     for ts, payload in self.consequence_fills.poll(self.exchange)]
+                     for ts, payload in self.consequence_fills.poll(self.exchange,
+                                                                     now_ns=now)]
         else:
             # The recorded market moved while a model thought: whatever it filled,
             # refused or charged by now settles here. Its mids are read afresh by the
             # next read; as on the live path, the pass delivers no mid of its own.
-            fills = [we for we in self.exchange.advance(now)
+            fills = [we for we in self._advance_venue(now)
                      if we.kind is not WorldEventKind.MARKET_MID]
         self._settle_exchange_effects(fills)
         self._reconcile_orders()
@@ -907,7 +909,7 @@ class Runtime(
         if self.live:
             observed = [
                 WorldEvent(WorldEventKind.FILL, max(now_ns, ts), self.exchange.name, payload)
-                for ts, payload in self.consequence_fills.poll(self.exchange)
+                for ts, payload in self.consequence_fills.poll(self.exchange, now_ns=now_ns)
             ]
             observed.extend(self.venue.funding_payments(now_ns))
             self._settle_exchange_effects(observed)

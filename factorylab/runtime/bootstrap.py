@@ -618,6 +618,8 @@ class BootstrapMixin:
         # or the previous tick (every fact through it was delivered before this tick's).
         # A named trade's lapse and horizon pass on it, never on the processing clock.
         self.facts_seen_ns: int | None = None
+        # Ruling R10-o: the time a fake or recorded venue was last advanced to.
+        self.advance_through_ns: int | None = None
         self.tick_through_ns: int | None = None
         self.last_tick_ns: int | None = None
         self.consequence_mix: float = self.ev.consequence_share  # live sampling actuator

@@ -706,7 +706,7 @@ _RUNTIME_FIELDS = (
     # the next broadcast reads them.
     "fee_schedule", "venue_marks", "funding_prints",
     # Codex on #152: the venue time facts were delivered through, and the last tick.
-    "facts_seen_ns", "tick_through_ns", "last_tick_ns",
+    "facts_seen_ns", "tick_through_ns", "last_tick_ns", "advance_through_ns",
     # Wave 16 (D4): settled raw scores awaiting their router. An older checkpoint has
     # none: its routers learn effective scores until the next settlement.
     "raw_scores", "round_penalties",
@@ -928,7 +928,7 @@ _COMPONENT_FIELDS = (
                           # Codex on #152: the facts seen through, and returns' economics
                           # frozen at their horizon.
                           "facts_ns", "tick_through_ns", "horizon_state")),
-    ("consequence_fills", "", ("since_ns", "seen")),
+    ("consequence_fills", "", ("since_ns", "seen", "through_ns")),
     ("reconciler", "", ("every", "_ticks")),
     # The artifact archive's index (C9): hash -> owner, kind, size, time, published.
     # The bytes stay beside the ledger and are found again by hash.
@@ -1030,7 +1030,8 @@ def runtime_state(rt) -> Checkpoint:
         "venue": encode({"last_fill_ns": rt.venue.last_fill_ns,
                          "seen_fills": rt.venue.seen_fills,
                          "last_funding_ns": rt.venue.last_funding_ns,
-                         "seen_funding": rt.venue.seen_funding}) if rt.venue else None,
+                         "seen_funding": rt.venue.seen_funding,
+                         "through": rt.venue.through}) if rt.venue else None,
         "venue_tool_log": encode(rt.venue_tools.log) if rt.venue_tools else None,
         "fake_exchange": encode(vars(rt.exchange.target)) if rt.exchange.deterministic else None,
         "fake_provider": encode(vars(rt.provider.target)) if rt.provider.deterministic else None,

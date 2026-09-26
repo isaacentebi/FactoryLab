@@ -1458,7 +1458,11 @@ class FeedbackMixin:
         seen = getattr(self, "facts_seen_ns", None)
         known = [v for v in (None if seen is None else seen - 1,
                              getattr(self, "tick_through_ns", None)) if v is not None]
-        return max(known) if known else self.clock.now_ns
+        through = max(known) if known else self.clock.now_ns
+        # Ruling R10-o: never after the venue's own delivered-through instant of the
+        # streams a named trade reads (mids, funding-rate prints).
+        venue = self._stream_through(("mids", "rates"))
+        return through if venue is None else min(through, venue)
 
     def _open_named_trade(self, frozen: dict, ts_ns: int, mid: str) -> None:
         """Open a frozen named trade at a venue mid of its own coin: ``t_open`` is that

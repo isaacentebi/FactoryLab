@@ -382,18 +382,30 @@ class ReturnConsequences:
         """Raise the venue time this book has seen facts through to ``at_ns``."""
         self.facts_ns = at_ns if self.facts_ns is None else max(self.facts_ns, at_ns)
 
-    def _through_ns(self) -> int | None:
+    def _through_ns(self) -> int | float | None:
         """The venue time every world fact has been delivered through, inclusive.
 
         Guarantees a value ``C`` such that no fact with fact-time at or before ``C``
         is still to come: the instant before the latest fact seen (facts at that very
-        instant may still be in flight), or the runtime's previous tick (every fact
-        through it was delivered before this tick's), whichever is later; the clock
-        only when neither is known. A horizon has passed once ``C`` reaches it.
+        instant may still be in flight), or the runtime's previous tick, whichever is
+        later (the clock only when neither is known), and never after the venue's own
+        delivered-through instant of the streams an outcome reads (mids, fills,
+        funding; ``_stream_through_ns``, ruling R10-o): a polled venue can report a
+        fact after a later tick, so the tick is only an upper bound. A horizon has
+        passed once ``C`` reaches it.
         """
         known = [v for v in (None if self.facts_ns is None else self.facts_ns - 1,
                              self.tick_through_ns) if v is not None]
-        return max(known) if known else self._now_ns()
+        through = max(known) if known else self._now_ns()
+        venue = self._stream_through_ns()
+        if venue is not None and through is not None:
+            through = min(through, venue)
+        return through
+
+    def _stream_through_ns(self) -> int | float | None:
+        """The earliest delivered-through instant of the venue streams an outcome reads,
+        or None when the venue states none (a runtime overrides it; ruling R10-o)."""
+        return None
 
     def _freeze_past_horizon(self, at_ns: int) -> None:
         """Freeze, before a fill at ``at_ns`` is applied, the economics of every open
@@ -612,15 +624,27 @@ class FillCursor:
         self.ledger = ledger
         self.since_ns = start_ns
         self.seen: dict[tuple, int] = {}
+        # Ruling R10-o: the request time of the latest successful fills read, the
+        # instant every execution at or before it has been delivered through.
+        self.through_ns: int | None = None
 
-    def poll(self, exchange, *, strict: bool = False) -> list[tuple[int, dict]]:
-        """Return unseen executions in timestamp order, persisting the cursor before advance."""
+    def poll(self, exchange, *, strict: bool = False,
+             now_ns: int | None = None) -> list[tuple[int, dict]]:
+        """Return unseen executions in timestamp order, persisting the cursor before advance.
+
+        Guarantees each execution's payload states its own venue time (``fill_ns``),
+        and that a successful read made at ``now_ns`` advances ``through_ns`` to it; a
+        failed read advances nothing (ruling R10-o).
+        """
         try:
             fills = exchange.fills(self.since_ns)
         except RuntimeError:  # read-only venue without an account
             if strict:
                 raise
             return []
+        if now_ns is not None:
+            self.through_ns = now_ns if self.through_ns is None else max(self.through_ns,
+                                                                          now_ns)
         counts = Counter()
         result = []
         for fill in sorted(fills, key=lambda f: f.ts_ns):
@@ -641,7 +665,8 @@ class FillCursor:
             key = (fill.ts_ns, *payload.values())
             counts[key] += 1
             if counts[key] > self.seen.get(key, 0):
-                result.append((fill.ts_ns, payload))
+                # Its own venue time, outside the cursor's identity key (R10-o).
+                result.append((fill.ts_ns, {**payload, "fill_ns": fill.ts_ns}))
         if result:
             latest = max(ts for ts, _ in result)
             seen = {key: count for key, count in counts.items() if key[0] == latest}

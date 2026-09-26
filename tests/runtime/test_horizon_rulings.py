@@ -207,6 +207,114 @@ def test_an_instrument_never_priced_after_h_fixes_the_outcome_as_none_after_pati
     assert rt.consequences.releasable(handle)
 
 
+class _PolledVenue:
+    """A live-like venue: mids at the request time, fills only as the venue reports them
+    (``reported``), and a fills read that can fail (``down``)."""
+
+    name = "polled"
+
+    def __init__(self):
+        self.reported: list = []
+        self.down = False
+        self.mid = "100"
+
+    def mids(self):
+        from decimal import Decimal
+
+        return {"BTC": Decimal(self.mid)}
+
+    def funding(self):
+        return []
+
+    def funding_payments(self, _since):
+        return []
+
+    def fills(self, _since):
+        if self.down:
+            raise RuntimeError("the venue did not answer")
+        return list(self.reported)
+
+
+def _polled_runtime():
+    """A runtime reading a polled venue (ruling R10-o), with one resting BTC buy open."""
+    from factorylab.kernel.queue import PropensityRecord
+    from factorylab.runtime.live import LiveVenue
+    from factorylab.settlement.consequence import FillCursor
+    from tests.conftest import make_runtime
+
+    rt = make_runtime()
+    rt.fee_schedule = {"rates": {}, "read_ns": 0, "history": {"BTC": [[0, "0"]]}}
+    start = rt.clock.now_ns
+    venue = _PolledVenue()
+    rt.venue = LiveVenue(venue, last_fill_ns=start, last_funding_ns=start)
+    rt.consequence_fills = FillCursor(rt.ledger, start_ns=start)
+    prop = PropensityRecord(("seed-decider",), (1.0,), "seed-decider", 0, "router:Tick", "t")
+    handle = rt.queue.open(actor="router:Tick", event_id="polled", propensity=prop,
+                           channel="verdict", deadline_ns=start + 10**18, parent_handle=None,
+                           cost_ceiling=0)
+    rt.consequences.start(handle, rt.n)
+    rt.consequences.order_result(handle, {"status": "resting", "order_id": "o-polled",
+                                          "filled_size": "0"}, {"size": "0.001"}, rt.n)
+    rt.consequences.finish(handle, 0)
+    return rt, venue, handle, start
+
+
+def _polled_tick(rt, venue, now, *, poll=True):
+    """One live tick: the tick itself, the venue's mids, and (``poll``) a fills read."""
+    from factorylab.world.events import WorldEvent, WorldEventKind
+
+    rt.clock.now_ns = now
+    rt.tick_through_ns, rt.last_tick_ns = rt.last_tick_ns, now
+    rt.consequences.tick_through_ns = rt.tick_through_ns
+    events = rt.venue.on_tick(now, include_fills=False)
+    if poll:
+        events += [WorldEvent(WorldEventKind.FILL, max(now, ts), venue.name, payload)
+                   for ts, payload in rt.consequence_fills.poll(venue, now_ns=now)]
+    rt._settle_exchange_effects(events, observe_positions=False)
+    rt.consequences.resolve(rt.n)
+
+
+def test_a_fill_before_h_reported_after_the_tick_past_h_is_waited_for_and_graded():
+    """R10-o: fills are polled. The resting order filled 5 s before H, but no fills read
+    ran until well after the tick that passed H: the outcome waits for the fills stream
+    to be read through H, and then includes the fill, marked at the first mid after H."""
+    from decimal import Decimal
+
+    from factorylab.world.exchange import Fill
+
+    rt, venue, handle, start = _polled_runtime()
+    horizon = rt._horizon_ns()
+    _polled_tick(rt, venue, start)
+    venue.mid = "101"
+    for step in range(1, horizon // (10 * 10**9) + 3):  # ticks past H, no fills read
+        _polled_tick(rt, venue, start + step * 10 * 10**9, poll=False)
+    assert rt.tick_through_ns > start + horizon
+    assert rt.consequences.payoff(handle) is None  # the fills stream is read through start
+    venue.reported = [Fill("o-polled", "BTC", True, Decimal("0.001"), Decimal("100"),
+                           Decimal(0), start + horizon - 5 * 10**9)]
+    _polled_tick(rt, venue, start + horizon + 40 * 10**9)
+    payoff = rt.consequences.payoff(handle)
+    assert payoff is not None and payoff.marked
+    assert payoff.net_micro == 1_000  # (101 - 100) * 0.001: the pre-H fill is graded
+
+
+def test_a_failed_fills_read_holds_the_outcome():
+    """R10-o: a failed fills read advances nothing, so the outcome of a resting order
+    waits past every tick until a read succeeds through H."""
+    rt, venue, handle, start = _polled_runtime()
+    horizon = rt._horizon_ns()
+    _polled_tick(rt, venue, start)
+    venue.down = True
+    for step in range(1, horizon // (10 * 10**9) + 3):
+        _polled_tick(rt, venue, start + step * 10 * 10**9)
+    assert rt.consequence_fills.through_ns == start
+    assert rt.consequences.payoff(handle) is None
+    venue.down = False
+    _polled_tick(rt, venue, start + horizon + 40 * 10**9)
+    payoff = rt.consequences.payoff(handle)
+    assert payoff is not None and not payoff.marked and payoff.net_micro == 0  # no fill
+
+
 def test_a_tick_at_h_before_the_mid_at_h_marks_at_the_mid_at_h():
     """D2: the mark is the first venue mid timestamped at or after the horizon. The
     batch's Tick at H comes first, with an earlier instant's mid cached: nothing is
