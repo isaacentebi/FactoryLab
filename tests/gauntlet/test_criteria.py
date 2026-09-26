@@ -972,7 +972,9 @@ def test_s7_s8_gain_names_routers_and_moves_gamma_by_one_common_step():
     assert g.s8_gain_rows_uniform([_gain(1, 0.1, 0.1 + 0.05)], M).ok
     assert g.s8_gain_rows_uniform([_gain(1, 0.1, 0.15 + 1e-12)], M).status == g.FAIL
     down = _gain(2, 0.3, 0.3 - 0.05, "cleared")
-    assert g.s8_gain_rows_uniform([down], M).ok
+    assert g.s8_gain_rows_uniform([_gain(1, 0.1, 0.1 + 0.05), down], M).ok
+    # With the seed out of the diary a lowering's lower bound is not verified.
+    assert g.s8_gain_rows_uniform([down], M).status == g.UNSUPPORTED
     split = {"kind": "immune.gain", "router": "router:Tick", "window": 1,
              "gamma_before": [0.1, 0.1], "gamma_after": [0.15, 0.2]}
     assert g.s8_gain_rows_uniform([split], M).status == g.FAIL
@@ -1294,3 +1296,62 @@ def test_l1_s5b_an_untraceable_round_is_no_routers_mean():
              "neutral": 0.5, "penalty": 0.0, "reward": 0.5}]
     result = g.s5b_observed_neutral(rows, M)
     assert result.status == g.UNSUPPORTED and result.evidence["untraced"] == 1
+
+
+
+# --- Codex pass on b75003b ----------------------------------------------------------------
+
+
+def test_sf1e_the_deadline_is_the_organs_cadence_not_the_slow_rows_own_gaps():
+    """Codex P2: a router that climbs one step every 9 windows set its own deadline from
+    those gaps (1 + 10 × 9); the deadline is the organ's cadence (acts every 3rd window:
+    3 + 10 × 3 = 33), so reaching the top at 75 while the episode ran on fails."""
+    closes = [_w(i, acts=i % 3 == 0, sf=i >= 3) for i in range(1, 90)]
+    slow = [_gain(w, round(0.1 + 0.05 * n, 2), round(0.15 + 0.05 * n, 2))
+            for n, w in enumerate(range(3, 84, 9))]
+    result = g.sf1e_gain(closes + slow, M)
+    assert result.status == g.FAIL, result.evidence
+    assert result.evidence["problems"][0]["bound"] == 3 + 10 * 3
+
+
+@pytest.mark.parametrize("row, ok", [
+    ({"kind": "propensity.learned", "handle": "d", "reward": True}, False),
+    ({"kind": "evaluator.settled", "handle": "d", "grade": False}, False),
+    ({"kind": "counter.opened", "handle": "d", "q": True}, False),
+    ({"kind": "verdict.mean", "handle": "d", "score": True}, False),
+    ({"kind": "policy.outcome", "handle": "d", "y": False, "q": 0.5, "score": 0.25}, True),
+])
+def test_s4_a_boolean_passes_only_where_the_kernel_writes_a_boolean_outcome(row, ok):
+    """Codex P2: a reward, grade, probability or score that is a boolean fails; a
+    motion's kept promise (policy.outcome's y) is a boolean outcome by the kernel."""
+    assert g.s4_boundedness([row], M).status == (g.PASS if ok else g.FAIL)
+
+
+def test_s8_a_gamma_below_zero_fails_whatever_the_seed():
+    """Codex P2: the lower bound is checked too: γ below 0 fails outright; a lowering with
+    the seed unknown is unsupported, never a pass."""
+    negative = [_gain(1, 0.1, 0.1 + 0.05), _gain(3, 0.02, -0.03, "thrash")]
+    assert g.s8_gain_rows_uniform(negative, M).status == g.FAIL
+    assert g.s8_gain_rows_uniform([_gain(3, 0.02, -0.03, "thrash")], M).status == g.FAIL
+    assert g.s8_gain_rows_uniform([_gain(3, 0.3, 0.25, "cleared")], M).status == \
+        g.UNSUPPORTED
+
+
+
+def test_sf1e_a_routers_own_loop_is_read_from_its_rounds_not_its_gain_rows():
+    """The kernel steps a router's gain at most once per min_ratio of its measured round
+    periods (immune._gain, time audit T2): a router whose rounds settle 3 windows after
+    they open is allowed 3 x 3 = 9 windows a step, read from those rounds."""
+    closes = [_w(i, acts=i % 3 == 0, sf=i >= 3) for i in range(1, 120)]
+    rounds = []
+    for w in range(1, 118):
+        rounds.append({"kind": "price.window", "window": w})
+        if w % 5 == 0:
+            rounds.append(_open(f"r{w}", "a", actor="router:Slow"))
+        if w % 5 == 3 and w > 5:
+            rounds.append({"kind": "decision.settle", "return": {"handle": f"r{w - 3}"}})
+    assert g.router_round_periods(rounds)["router:Slow"] == 3
+    climb = [_gain(w, round(0.1 + 0.05 * n, 2), round(0.15 + 0.05 * n, 2),
+                   router="router:Slow") for n, w in enumerate(range(3, 84, 9))]
+    assert g.sf1e_gain(rounds + closes + climb, M).ok
+    assert g.sf1e_gain(closes + climb, M).status == g.FAIL  # no rounds: the organ's cadence

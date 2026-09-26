@@ -750,6 +750,31 @@ def router_presence(events: list[Mapping]) -> dict[str, int]:
     return first
 
 
+def router_round_periods(events: list[Mapping]) -> dict[str, int]:
+    """Each router's round period in windows: the p90 of its rounds' closures, from the
+    window a decision it drew opened in to the window the decision settled in
+    (``decision.settle``, when the router learns the round), never below 1. It is the
+    world's measure of the router's loop (``clockwork.record("router:<kind>")`` in
+    ``FeedbackMixin._learn_router_return``), read from the rounds, never from the gain
+    rows it bounds."""
+    opened = _decision_windows(events)
+    actor = {row["handle"]: row.get("actor") for row in rows_of(events, "decision.open")}
+    window, closures = 1, defaultdict(list)
+    for row in events:
+        if row.get("kind") == "price.window":
+            window = row["window"] + 1
+        elif row.get("kind") == "decision.settle":
+            handle = (row.get("return") or {}).get("handle")
+            router, start = actor.get(handle), opened.get(handle)
+            if isinstance(router, str) and start is not None:
+                closures[router].append(max(0, window - start))
+    out = {}
+    for router, values in closures.items():
+        ordered = sorted(values)
+        out[router] = max(1, ordered[min(len(ordered) - 1, math.ceil(0.9 * len(ordered)) - 1)])
+    return out
+
+
 def sf1e_gain(events: list[Mapping], manifest: Mapping) -> Result:
     """SF-1e: in each stable-failure episode, γ reaches ``gamma_max`` within
     ``(steps + 1)·A`` windows of the episode's first window, and never unwinds while
@@ -761,8 +786,12 @@ def sf1e_gain(events: list[Mapping], manifest: Mapping) -> Result:
     router's latest state before its bound starts (the last earlier gain row's
     ``gamma_after``, else the first row's ``gamma_before``), read as the kernel reads γ
     (``gamma_of``, the first base); ``steps`` is ``gain_steps(γ₀)``, the kernel's own
-    float loop (C); ``A`` is the organ's period, or the router's own gap between raises
-    inside the episode when longer. A router's bound starts at the episode's start, or
+    float loop (C); ``A`` is the cadence the kernel allows that router's gain
+    (``immune._gain``, time audit T2): the organ's own (``acting_period``, never below
+    ``min_ratio``), or ``min_ratio`` times the router's round period
+    (``router_round_periods``) when that is longer. Both are read from the organ's closes
+    and the router's rounds, never from the gain rows under test, which would let a slow
+    router set its own deadline. A router's bound starts at the episode's start, or
     at the router's first window (``router_presence``) when it was registered during
     the episode; a router that first appears after the episode is not judged by it. An
     unwind is a lowering of any base (``lowers``).
@@ -795,6 +824,7 @@ def sf1e_gain(events: list[Mapping], manifest: Mapping) -> Result:
     last = max(w["window"] for w in closes)
     problems, reached, pending, resolved = [], {}, [], 0
     presence = router_presence(events)
+    rounds = router_round_periods(events)
     for router, rows in by_router.items():
         born = presence.get(router, rows[0]["window"])
         for start, end in episodes:
@@ -806,8 +836,7 @@ def sf1e_gain(events: list[Mapping], manifest: Mapping) -> Result:
             gamma0 = (gamma_of(prior[-1]["gamma_after"]) if prior
                       else gamma_of(rows[0]["gamma_before"]))
             steps = gain_steps(ph, gamma0)
-            raised = [row["window"] for row in inside if raises(row)]
-            own = max([period, *(b - a for a, b in zip(raised, raised[1:], strict=False))])
+            own = max(period, ph.r * rounds.get(router, 1))
             top = begin if steps == 0 else next(
                 (row["window"] for row in inside
                  if gamma_of(row["gamma_after"]) >= ph.gamma_max), None)
@@ -1701,6 +1730,11 @@ UNIT_FIELDS: dict[str, tuple[str, ...]] = {
 #: may pass the cap by an ulp, so it alone is compared with 1e-12 of slack. Every other
 #: capped field is ``min(…, penalty_cap)`` times a share ≤ 1 and is compared exactly.
 WEIGHTED_PENALTY_KINDS = frozenset({"router.abstention_priced", "router.decline_priced"})
+#: The unit fields the kernel writes as a boolean outcome: a motion's kept promise
+#: (``policy.outcome``'s ``y = promise_kept(...)``, governance.py). Every other unit
+#: field (a reward, a grade, a probability, a score, a realized y) is a number, and a
+#: boolean there fails S4.
+BOOLEAN_OUTCOMES = frozenset({("policy.outcome", "y")})
 #: The penalty a settlement or an abstention bears is bounded by ``penalty_cap``.
 CAPPED_FIELDS: dict[str, tuple[str, ...]] = {
     "price.penalty": ("penalty",),
@@ -1737,9 +1771,9 @@ def s4_boundedness(events: list[Mapping], manifest: Mapping) -> Result:
                 if value is None:
                     continue
                 checked += 1
-                if isinstance(value, bool):
-                    continue  # a boolean outcome is 0 or 1
-                if not isinstance(value, int | float) or not 0 <= value <= 1:
+                if isinstance(value, bool) and (kind, name) in BOOLEAN_OUTCOMES:
+                    continue  # a boolean outcome is 0 or 1 by the kernel's schema
+                if not _bounded(value, 0.0, 1.0):
                     bad.append({"kind": kind, "field": name, "value": value,
                                 "handle": row.get("handle")})
     for kind, fields in CAPPED_FIELDS.items():
@@ -1863,13 +1897,20 @@ def s8_gain_rows_uniform(events: list[Mapping], manifest: Mapping) -> Result:
                         unverified.append({"router": row["router"], "window": row["window"]})
                     else:
                         wrong.append(b)
-        if len(steps) != 1 or wrong or max(row["gamma_after"]) > ph.gamma_max:
+        # γ is an exploration rate: below 0 is never a γ, whatever the seed.
+        below = [b for b in row["gamma_after"] if not _bounded(b, 0.0, ph.gamma_max)]
+        if not seed and not wrong and not below:
+            # The seed is the floor a lowering stops at; with it out of the diary the
+            # lower bound of this row is not verified.
+            if row.get("pathology") != "stable_failure":
+                unverified.append({"router": row["router"], "window": row["window"]})
+        if len(steps) != 1 or wrong or below:
             bad.append({"router": row["router"], "window": row["window"],
                         "steps": sorted(steps), "wrong": wrong[:3]})
     if not bad and unverified:
-        # A partial step lands on the seed only; with the seed not in the diary it cannot
-        # be told from a short step.
-        return _unsupported("S8", "a partial down step with the router's seed unknown",
+        # A lowering stops at the seed; with the seed not in the diary a lowering's lower
+        # bound (and a partial step onto it) cannot be verified.
+        return _unsupported("S8", "a lowering with the router's seed unknown",
                             unverified=unverified[:5])
     return _result("S8", not bad, gains=len(gains), bad=bad[:5])
 
