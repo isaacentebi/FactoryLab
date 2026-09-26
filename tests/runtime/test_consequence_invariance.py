@@ -103,6 +103,8 @@ class _Book(ReturnConsequences):
         # advancing venue's: the time it was last advanced to, every stream alike.
         self.hl_ns: int | None = None
         self.pm_ns: int | None = None
+        # Hyperliquid's funding poll on its own, when a test stops it (else as fills).
+        self.funding_ns: int | None = None
         self.advance_ns: int | None = None
         # Polymarket: each token's book, read at its instant (a failed read reads
         # nothing), and its events feed (fills and resolutions).
@@ -115,6 +117,8 @@ class _Book(ReturnConsequences):
         if stream.startswith("pm:book:"):
             read = self.books.get(stream.removeprefix("pm:book:"))
             return float("-inf") if read is None else read - 1
+        if stream == "hl:funding" and self.funding_ns is not None:
+            return self.funding_ns - 1
         polled = {"pm:events": self.pm_ns, "hl:fills": self.hl_ns,
                   "hl:funding": self.hl_ns}
         if stream not in polled:
@@ -209,7 +213,19 @@ def _facts() -> list[tuple]:
         facts.append((_t(10 * step), "pmbook", "PM:C", "0.5" if step < 3 else ""))
     facts.append((_t(24), "open", "P4", "o-P4", "filled"))
     facts.append((_t(24), "fill", "o-P4", "PM:C", True, "10", "0.50", "event"))
-    facts.sort(key=lambda fact: (fact[0], fact[1] != "decide" and fact[1] != "open"))
+    # PM:D's book is read until 60 s, then never again (Codex on #152): P5 bought 10 of
+    # PM:D and 10 of PM:A at 26 s, and P6's sell closed its PM:D lot at 40 s, before P5's
+    # H (116 s). P5 holds PM:A at H, so it waits on PM:A's book through H; it needs
+    # PM:D's streams only through 40 s, so the dead book never holds it.
+    for step in range(0, 28):
+        facts.append((_t(10 * step), "pmbook", "PM:D",
+                      str(0.50 + step * 0.01) if step <= 6 else None))
+    facts.append((_t(26), "openpair", "P5", "o-P5", "o-P5a"))
+    facts.append((_t(26), "fill", "o-P5", "PM:D", True, "10", "0.52", "event"))
+    facts.append((_t(26), "fill", "o-P5a", "PM:A", True, "10", "0.53", "event"))
+    facts.append((_t(40), "open", "P6", "o-P6", "filled"))
+    facts.append((_t(40), "fill", "o-P6", "PM:D", False, "10", "0.55", "event"))
+    facts.sort(key=lambda fact: (fact[0], fact[1] not in ("decide", "open", "openpair")))
     return facts
 
 
@@ -242,8 +258,8 @@ def _groups(facts: list[tuple], rng: random.Random) -> list[tuple]:
         while j < len(facts) and facts[j][0] == facts[i][0]:
             j += 1
         group = facts[i:j]
-        actions = [f for f in group if f[1] in ("decide", "open")]
-        world = [f for f in group if f[1] not in ("decide", "open")]
+        actions = [f for f in group if f[1] in ("decide", "open", "openpair")]
+        world = [f for f in group if f[1] not in ("decide", "open", "openpair")]
         fills = [f for f in world if f[1] == "fill"]
         rng.shuffle(world)
         order = iter(fills)
@@ -281,7 +297,7 @@ def _run(rng: random.Random) -> dict:
                 at += rng.randint(5, 70) * S
                 if not (kind == "poll" and outage and _t(80) < at < _t(220)):
                     facts.append((at, kind))
-        facts.sort(key=lambda fact: (fact[0], fact[1] != "decide" and fact[1] != "open"))
+        facts.sort(key=lambda fact: (fact[0], fact[1] not in ("decide", "open", "openpair")))
         book.hl_ns = book.pm_ns = T0
     polled: list[tuple] = []
     pm_polled: list[tuple] = []
@@ -381,6 +397,14 @@ def _run(rng: random.Random) -> dict:
                                             "filled_size": size if fact[4] == "filled"
                                             else "0"}, {"size": size}, event)
                 book.finish(fact[2], 0)
+            elif kind == "openpair":
+                # One return, two orders filled at once, on two instruments.
+                book.clock_ns = at
+                book.start(fact[2], event)
+                for order in fact[3:]:
+                    book.order_result(fact[2], {"status": "filled", "order_id": order,
+                                                "filled_size": "10"}, {"size": "10"}, event)
+                book.finish(fact[2], 0)
             if rng.random() < per_fact and not final_advance:
                 settle()
         if not lag:
@@ -414,6 +438,66 @@ def _run(rng: random.Random) -> dict:
     return {"named": outcomes,
             "rows": sorted(rows, key=lambda r: (r.get("handle"), r["kind"])),
             "late": late}
+
+
+def _acting(book, handle: str, order: str, status: str, at_ns: int) -> None:
+    book.clock_ns = at_ns
+    book.start(handle, 0)
+    book.order_result(handle, {"status": status, "order_id": order,
+                               "filled_size": "0.001" if status == "filled" else "0"},
+                      {"size": "0.001"}, 0)
+    book.finish(handle, 0)
+
+
+def _fill_at(book, order: str, is_buy: bool, px: str, at_ns: int) -> None:
+    book.observe("Fill", {"order_id": order, "coin": "BTC", "is_buy": is_buy,
+                          "size": "0.001", "px": px, "fee_usd": "0", "ts_ns": at_ns,
+                          "market": "perp", "inventory_size": "0.001"}, 0)
+
+
+def test_a_position_closed_before_h_never_waits_on_a_funding_poll_that_stopped():
+    """Codex on #152: a return needs an instrument's streams only through min(H, t_flat).
+    C1 bought BTC and a spot pair at 1 s; C2's sell closed its BTC lot at 5 s, and the
+    funding poll stops at 10 s, for good. C1 holds only the spot pair at H, which pays
+    no funding: it is fixed at H; before, its closed BTC position held it on the funding
+    stream forever."""
+    book = _Book({"BTC": [[T0, "0"]], "PURR/USDC": [[T0, "0"]]})
+    book.clock_ns = _t(1)
+    book.start("C1", 0)
+    for order in ("o-C1", "o-C1s"):
+        book.order_result("C1", {"status": "filled", "order_id": order,
+                                 "filled_size": "0.001"}, {"size": "0.001"}, 0)
+    book.finish("C1", 0)
+    _fill_at(book, "o-C1", True, "100", _t(1))
+    book.observe("Fill", {"order_id": "o-C1s", "coin": "PURR/USDC", "is_buy": True,
+                          "size": "0.001", "px": "0.2", "fee_usd": "0", "ts_ns": _t(1),
+                          "market": "spot", "inventory_size": "0.001"}, 0)
+    _acting(book, "C2", "o-C2", "filled", _t(5))
+    _fill_at(book, "o-C2", False, "101", _t(5))
+    book.funding_ns = _t(10)  # delivered through 10 s, then never again
+    book.hl_ns = _t(10_000)
+    book.clock_ns = book.tick_through_ns = _t(10_000)
+    book.observe("MarketMid", {"coin": "PURR/USDC", "mid": "0.21", "ts_ns": _t(100)}, 1)
+    book.resolve(1)
+    payoff = book.payoff("C1")
+    assert payoff is not None and payoff.censored is None and payoff.marked
+
+
+def test_a_resting_order_still_waits_on_its_fills_through_h():
+    """A return with an order resting in an instrument needs its fills through H, flat
+    or not: a fills poll that stopped before H holds it, and it is fixed once the fills
+    are delivered through H."""
+    book = _Book({"BTC": [[T0, "0"]]})
+    _acting(book, "C3", "o-C3", "resting", _t(1))
+    book.hl_ns = _t(10)  # fills (and funding) delivered through 10 s only
+    book.funding_ns = _t(10_000)
+    book.clock_ns = book.tick_through_ns = _t(10_000)
+    book.observe("MarketMid", {"coin": "BTC", "mid": "101", "ts_ns": _t(9_000)}, 1)
+    book.resolve(1)
+    assert book.payoff("C3") is None
+    book.hl_ns = _t(10_000)
+    book.resolve(2)
+    assert book.payoff("C3") is not None
 
 
 def test_every_batching_of_the_same_world_facts_gives_the_same_outcomes():
@@ -455,3 +539,6 @@ def test_every_batching_of_the_same_world_facts_gives_the_same_outcomes():
     # P3's held fill counts: its lot was redeemed at 114 s, before its own H (115 s).
     assert fixed["P3"]["marked"] is False and fixed["P3"]["net_micro"] == 3_900_000
     assert fixed["P4"]["censored"] == "no_mark"  # its empty book was read through H
+    # P5 was flat in PM:D from 40 s, whose book died at 70 s, and held PM:A at H: fixed,
+    # marked on PM:A, never held by PM:D's dead book.
+    assert fixed["P5"]["censored"] is None and fixed["P5"]["marked"] is True

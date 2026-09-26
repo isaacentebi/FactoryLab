@@ -445,35 +445,101 @@ class ReturnConsequences:
     def _through_for(self, handle: str, base: int | float | None) -> int | float | None:
         """The instant every fact the return ``handle`` reads has been delivered
         through: ``base`` (the facts seen and the ticks), never after the watermark of
-        any stream of an instrument it holds or an order it rests (Codex on #152).
+        any stream it still needs (``_stream_needs``; Codex on #152).
 
         Guarantees each open consequence waits on exactly its own instruments'
-        streams: a Polymarket book that fails to read holds the event lots on it,
-        never an unrelated perp's outcome, and never lets it lapse into ``no_mark``.
+        streams, each only as far as it needs it: a Polymarket book that fails to read
+        holds the event lots on it, never an unrelated perp's outcome; and a stream a
+        return needs only up to the instant it became flat in that instrument, once
+        delivered through that instant, holds nothing, so a funding poll that stops
+        after a position was closed never holds the return that closed it.
         """
+        stated, unstated = [], False
+        for stream, until in sorted(self._stream_needs(handle).items()):
+            mark = self._stream_watermark(stream)
+            if mark is None:
+                unstated = True
+            elif until is None or mark < until:
+                stated.append(mark)
+            # else: delivered through all this return needs of it; it holds nothing.
+        if stated and not unstated:
+            # Every stream it still waits on states its own watermark: they alone say
+            # how far its facts are delivered (the ticks and facts seen are a proxy).
+            return min(stated)
+        if base is None or not stated:
+            return base
+        return min(base, *stated)
+
+    def _stream_needs(self, handle: str) -> dict[str, int | None]:
+        """Each fact stream the return ``handle`` reads, and the fact time through which
+        it needs it: None for through its horizon H.
+
+        Guarantees, per instrument (Codex on #152), derived from the return's recorded
+        facts as its state at H is (``_states_at_horizon``), never from a snapshot:
+        through H for an instrument it holds at H or has an order resting in (its
+        mids mark it at H, its funding accrues to H, and its fills may still come);
+        through ``t_flat``, the fact time at which it became flat in it, for one it
+        held before H and not at H with no order resting in it (nothing after that
+        instant changes what H grades); and nothing for one it first held after H
+        (late money). A resting order's own fill stream is needed through H. A return
+        with no venue clock needs every stream of everything it holds or held through
+        its horizon, as the table stands.
+        """
+        account = next((a for a in self.table.returns if a.handle == handle), None)
+        horizon = (account.opened_at_ns + self.horizon_ns
+                   if account is not None and account.opened_at_ns is not None
+                   and self.horizon_ns is not None else None)
+        resting = [order for order in self.table.orders
+                   if order.handle == handle and order.remaining]
+        rested = {order.coin for order in resting if order.coin is not None}
+        needs: dict[str, int | None] = {}
+
+        def need(stream: str, until: int | None) -> None:
+            if stream in needs and (needs[stream] is None or until is None):
+                needs[stream] = None
+            else:
+                needs[stream] = until if stream not in needs else max(needs[stream], until)
+
         held = self._instruments_of(handle)
-        streams = {s for coin, market in held for s in instrument_streams(coin, market)}
-        for order in self.table.orders:
-            if order.handle != handle or not order.remaining:
-                continue
+        for coin, market in held:
+            until = None
+            if horizon is not None and coin not in rested:
+                until = self._flat_at_horizon(handle, coin, horizon)
+                if until is False:
+                    continue  # first held after H: late money, nothing to wait on
+            for stream in instrument_streams(coin, market):
+                need(stream, until)
+        for order in resting:
             if order.coin is not None:
-                # A resting order fills on its own venue's feed only (Codex on #152).
-                streams.add(fill_stream(instrument_market(order.coin)))
+                # A resting order fills on its own venue's feed only (Codex on #152),
+                # and may yet open a position graded at H.
+                market = instrument_market(order.coin)
+                for stream in (*instrument_streams(order.coin, market), fill_stream(market)):
+                    need(stream, None)
             else:
                 # An order bound before instruments were recorded: the venues of the
                 # instruments its return holds, else every venue's feed.
                 held_markets = {market for _coin, market in held}
-                streams |= ({fill_stream(m) for m in held_markets} if held_markets
-                            else {"hl:fills", "pm:events"})
-        stated = [self._stream_watermark(s) for s in sorted(streams)]
-        marks = [m for m in stated if m is not None]
-        if marks and len(marks) == len(stated):
-            # Every stream it reads states its own watermark: they alone say how far
-            # its facts are delivered (the ticks and facts seen are only a proxy).
-            return min(marks)
-        if base is None or not marks:
-            return base
-        return min(base, *marks)
+                for stream in ({fill_stream(m) for m in held_markets} if held_markets
+                               else {"hl:fills", "pm:events"}):
+                    need(stream, None)
+        return needs
+
+    def _flat_at_horizon(self, handle: str, coin: str, horizon: int) -> int | None | bool:
+        """When the return ``handle`` became flat in ``coin`` for good before its
+        horizon: the fact time of its last recorded change in ``coin`` at or before H
+        when that change left it holding nothing; None when it holds ``coin`` at H;
+        False when it held ``coin`` only after H."""
+        changes = [entry for entry in self.history.get(handle, ())
+                   if entry.get("coin") == coin and "lots" in entry]
+        if not changes:
+            return None  # held with no recorded fact: as the table stands, through H
+        before = [entry for entry in changes if entry["ns"] <= horizon]
+        if not before:
+            return False
+        # The latest in fact time (arrival order among equal times): the state at H.
+        last = sorted(before, key=lambda entry: entry["ns"])[-1]
+        return None if last["lots"] else int(last["ns"])
 
     def _record_effects(self, at_ns: int | None, coin: str | None, before: LotTable,
                         after: LotTable) -> None:
