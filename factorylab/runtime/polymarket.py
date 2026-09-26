@@ -1271,23 +1271,26 @@ def mark(rt: Any) -> None:
     Polymarket nothing, so it needs no share of the request budget.
     """
     surface = rt.polymarket
-    # Every token a lot holds, and every token an open outcome was frozen holding at
-    # its horizon (its lot may since have been redeemed): each needs its mark.
-    frozen = [lot for state in rt.consequences.horizon_state.values()
-              for lot in state["lots"]]
-    for coin in sorted({lot.coin for lot in (*rt.consequences.table.lots, *frozen)
-                        if lot.market == "event"}):
+    # Every token a lot holds, and every token an open outcome held at any recorded
+    # fact (its lot may since have been redeemed): each needs its mark.
+    for coin in sorted({coin for coin, market in rt.consequences.graded_instruments()
+                        if market == "event"}):
         try:
-            mid = _decimal(surface.venue.order_book(coin.removeprefix("PM:"), 1)["midpoint"])
-        except Exception:  # noqa: BLE001 - an unread price is an absent price
+            book = surface.venue.order_book(coin.removeprefix("PM:"), 1)
+        except Exception:  # noqa: BLE001 - an unread book advances nothing
+            book = None
+        if book is not None:
+            # A successful read is the token's book stream read through now, whatever
+            # it states (Codex on #152): an empty or one-sided book is read, and states
+            # no price; only an unanswered read holds the lots on the token.
+            surface.through[coin] = rt.clock.now_ns
+        try:
+            mid = _decimal(book["midpoint"]) if book is not None else None
+        except Exception:  # noqa: BLE001 - an unreadable price is an absent price
             mid = None
         if mid is not None and 0 < mid < 1:
             rt.consequences.observe("MarketMid", {"coin": coin, "mid": str(mid),
                                                   "ts_ns": rt.clock.now_ns}, rt.n)
-        if mid is not None:
-            # A book read (two-sided or not) is the token's book stream read through
-            # now; an unreadable book advances nothing and holds its lots.
-            surface.through[coin] = rt.clock.now_ns
         elif rt.consequences.mids.pop(coin, None) is not None:
             rt.ledger.append({"kind": "polymarket.mark_unavailable", "coin": coin,
                               "ts": rt.clock.now_ns})

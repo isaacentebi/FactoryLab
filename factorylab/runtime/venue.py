@@ -714,7 +714,7 @@ class VenueMixin:
                 elif we.kind is WorldEventKind.FILL:
                     # The fill's own venue time (a polled venue stamps the event when
                     # read; ``fill_ns`` is the execution's): a fill after a return's
-                    # horizon is late money for it (``_freeze_past_horizon``).
+                    # horizon is late money for it (``_states_at_horizon``).
                     payload["ts_ns"] = int(we.payload.get("fill_ns", we.ts_ns))
                 elif we.kind is WorldEventKind.FUNDING:
                     # The funding time the payment is for (R10-m: an outcome accrues

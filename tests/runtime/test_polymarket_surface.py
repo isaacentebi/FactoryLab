@@ -994,3 +994,20 @@ def test_a_failed_polymarket_book_read_holds_the_event_lot_never_no_mark():
     advance(rt, 2)
     payoff = rt.consequences.payoff(handle)
     assert payoff is not None and payoff.marked and payoff.censored is None
+
+
+def test_an_empty_polymarket_book_is_read_and_its_lot_reaches_patience():
+    """Codex on #152 (7677eaa): a book read that succeeds but states no midpoint (an
+    empty or one-sided book) is the token's book stream read through its instant; it
+    marks nothing, so the lot reaches its patience and is no_mark, never held."""
+    rt = world()
+    handle = collateral_decision(rt)
+    assert buy(rt, handle)["status"] == "filled"
+    rt.consequences.finish(handle, 1_000)
+    venue = rt.polymarket.venue.target
+    venue.order_book = lambda *_args, **_kwargs: {"midpoint": None, "bids": [], "asks": []}
+    for _ in range(rt._patience_ticks() + 5):
+        advance(rt, 1)
+        rt.tick_through_ns = rt.consequences.tick_through_ns = rt.clock.now_ns
+    payoff = rt.consequences.payoff(handle)
+    assert payoff is not None and payoff.censored == "no_mark"

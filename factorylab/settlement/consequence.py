@@ -11,7 +11,6 @@ from factorylab.settlement.lots import (
     RELEASED_ORDER,
     LotTable,
     Payoff,
-    exact,
     instrument_streams,
 )
 from factorylab.settlement.receipts import ExecutionReceipt, ReceiptBook
@@ -47,12 +46,12 @@ class ReturnConsequences:
         # never on when ``resolve`` runs.
         self.facts_ns: int | None = None
         self.tick_through_ns: int | None = None
-        # Each return's economics frozen before the first fill after its horizon was
-        # applied: a fill after H is late money, booked and never graded.
-        self.horizon_state: dict[str, dict] = {}
-        # Ruling R10-m: funding charged to an open return's lots for a funding time
-        # after its horizon (micro-USD, exact), added back when its outcome is fixed.
-        self.after_horizon: dict[str, Fraction] = {}
+        # Codex on #152 (7677eaa): each open return's position-changing facts with their
+        # fact times (fills it opened or closed, funding on its lots, redemptions,
+        # service income): its lots per instrument after each, and what each realised
+        # and earned. Its state at H is derived from these at fix time, applying every
+        # fact at or before H, so what arrived when, on which stream, cannot matter.
+        self.history: dict[str, list[dict]] = {}
         self.pending_orders: dict[str, dict] = {}
         # R4-C: intents the venue never answered and never will. The hold on
         # consequence resolution is released for them, but the exposure is not
@@ -204,12 +203,11 @@ class ReturnConsequences:
         handle = self.table.service_return(service)
         if handle is None or not self.account_open(handle):
             return None
-        now = self._now_ns()
-        if now is not None:
-            # Income after a return's H is late money for it, like any mutation after H.
-            self._freeze_past_horizon(int(now))
+        table = self.table.income(service, micro)
+        # Income is a fact at the runtime's instant: after a return's H, late money.
+        self._record_effects(self._now_ns(), None, self.table, table)
         self._apply("income", {"service": service, "handle": handle, "micro": micro,
-                               "event": event}, self.table.income(service, micro))
+                               "event": event}, table)
         return handle
 
     def settle_late(self, event: int) -> dict[str, int]:
@@ -303,9 +301,6 @@ class ReturnConsequences:
         elif kind == "Fill":
             at = payload.get("ts_ns", self._now_ns())
             if at is not None:
-                # Every return whose horizon this fill is after keeps the economics it
-                # had at H (Codex on #152): the fill is late money for it.
-                self._freeze_past_horizon(int(at))
                 self._saw_fact(int(at))
             try:
                 table = self.table.fill(
@@ -344,6 +339,8 @@ class ReturnConsequences:
                 self.ledger.append({"kind": "consequence.released_fill", "event": event,
                                     "order_id": str(payload["order_id"]), "handle": released,
                                     "reason": RELEASED_ORDER})
+            # What the fill did to every open return, at its own fact time.
+            self._record_effects(at, str(payload["coin"]), self.table, table)
             self._apply("fill", {"event": event, "payload": dict(payload)}, table)
             order = next((o for o in table.orders if o.order_id == str(payload["order_id"])), None)
             handle = order.handle if order is not None else self.table.service_return(
@@ -357,11 +354,13 @@ class ReturnConsequences:
                     "liquidation": bool(payload.get("liquidation", False)),
                 })
         elif kind == "Funding" and payload.get("paid_usd") is not None:
-            self._set_aside_after_horizon(payload)
             at = payload.get("ts_ns", self._now_ns())
             if at is not None:
                 self._saw_fact(int(at))
             table = self.table.funding(payload["coin"], str(payload["paid_usd"]))
+            # Funding at its funding time: charged to the lots of the returns holding
+            # them then; a funding time after a return's H is late money (R10-m).
+            self._record_effects(at, str(payload["coin"]), self.table, table)
             self._apply("funding", {"event": event, "payload": dict(payload)}, table)
         elif kind == "OrderRejected" and payload.get("order_id") is not None:
             self.cancel(str(payload["order_id"]), event)
@@ -375,12 +374,11 @@ class ReturnConsequences:
         naming what it held, the payout and what that realised: a resolution is a
         fact about the world, addressed to the decisions it settled. Returns the
         signed micro-USD realised per handle, floored once. ``at_ns`` is the
-        resolution's own fact time: every return whose horizon it is after keeps its
-        economics at H first (``_freeze_past_horizon``), so a resolution after H is late
-        money, never its grade (Codex on #152).
+        resolution's own fact time: what it did to each return is recorded at it
+        (``_record_effects``), so a resolution after a return's H is late money for it,
+        never its grade (Codex on #152).
         """
         if at_ns is not None:
-            self._freeze_past_horizon(int(at_ns))
             # The resolution is the token's price at its instant: the first price at
             # or after a horizon when no book read came before it.
             self._mark_horizons(coin, int(at_ns), str(payout))
@@ -388,6 +386,8 @@ class ReturnConsequences:
         table, credited = self.table.redeem(coin, payout)
         if table is self.table:
             return {}
+        self._record_effects(at_ns if at_ns is not None else self._now_ns(), coin,
+                             self.table, table)
         self._apply("resolution", {"coin": coin, "payout": str(payout), "event": event,
                                    **facts}, table)
         realized = {}
@@ -441,10 +441,8 @@ class ReturnConsequences:
         streams: a Polymarket book that fails to read holds the event lots on it,
         never an unrelated perp's outcome, and never lets it lapse into ``no_mark``.
         """
-        frozen = self.horizon_state.get(handle)
-        held = frozen["lots"] if frozen is not None else [
-            lot for lot in self.table.lots if lot.handle == handle]
-        streams = {s for lot in held for s in instrument_streams(lot.coin, lot.market)}
+        held = self._instruments_of(handle)
+        streams = {s for coin, market in held for s in instrument_streams(coin, market)}
         if any(o.handle == handle and o.remaining for o in self.table.orders):
             # A resting order can fill on any venue's feed.
             streams |= {"hl:fills", "pm:events"}
@@ -458,51 +456,88 @@ class ReturnConsequences:
             return base
         return min(base, *marks)
 
-    def _freeze_past_horizon(self, at_ns: int) -> None:
-        """Freeze, before a fill at ``at_ns`` is applied, the economics of every open
-        return whose horizon it is after and that has none frozen yet: its lots, its
-        realised money and the funding after H already set aside. Guarantees the graded
-        outcome is a function of fills at or before H only (Codex on #152)."""
-        if self.horizon_ns is None:
-            return
-        for account in self.table.returns:
-            if (account.payoff is None and not account.voided
-                    and account.opened_at_ns is not None
-                    and at_ns > account.opened_at_ns + self.horizon_ns
-                    and account.handle not in self.horizon_state):
-                self.horizon_state[account.handle] = {
-                    "lots": [lot for lot in self.table.lots if lot.handle == account.handle],
-                    "realized": account.realized_micro,
-                    "set_aside": self.after_horizon.get(account.handle, Fraction(0)),
-                    "earned": account.earned_micro,
-                }
+    def _record_effects(self, at_ns: int | None, coin: str | None, before: LotTable,
+                        after: LotTable) -> None:
+        """Record, at ``at_ns``, what one fact did to each open return.
 
-    def _set_aside_after_horizon(self, payload: dict) -> None:
-        """Set aside each open return's share of a funding payment made after its horizon.
-
-        Wave 16, ruling R10-m: an outcome accrues funding only for funding times at or
-        before its horizon, however late its mark arrives. Guarantees each open
-        return's share is exactly the share ``LotTable.funding`` allocates to its lots
-        (by open quantity), taken at the payment's funding time (``ts_ns``, else the
-        venue's clock) on the venue's clock.
+        Guarantees every open return the fact changed gets one history entry: its lots
+        on ``coin`` after the fact (when they changed), and the money it realised and
+        earned by it. A return's facts on one instrument arrive in the venue's order,
+        which is their fact-time order; across instruments their order is irrelevant.
+        Nothing is recorded for a return with no venue clock (its outcome is fixed on
+        ticks, from the table as it stands).
         """
-        at = payload.get("ts_ns", self._now_ns())
-        if self.horizon_ns is None or at is None:
+        if at_ns is None or self.horizon_ns is None:
             return
-        coin = payload["coin"]
-        lots = [lot for lot in self.table.lots if lot.coin == coin]
-        total = sum((lot.size for lot in lots), Fraction(0))
-        paid = exact(str(payload["paid_usd"])) * 1_000_000
-        if not total or not paid:
-            return
-        accounts = {account.handle: account for account in self.table.returns}
-        for lot in lots:
-            account = accounts.get(lot.handle)
-            if (account is not None and account.payoff is None and not account.voided
-                    and account.opened_at_ns is not None
-                    and int(at) > account.opened_at_ns + self.horizon_ns):
-                self.after_horizon[lot.handle] = (self.after_horizon.get(lot.handle, 0)
-                                                  + paid * lot.size / total)
+        previous = {account.handle: account for account in before.returns}
+        for account in after.returns:
+            if (account.payoff is not None or account.voided
+                    or account.opened_at_ns is None):
+                continue
+            prior = previous.get(account.handle)
+            entry: dict = {}
+            if coin is not None:
+                was = [lot for lot in before.lots if lot.handle == account.handle
+                       and lot.coin == coin]
+                now = [lot for lot in after.lots if lot.handle == account.handle
+                       and lot.coin == coin]
+                if was != now:
+                    entry["lots"] = now
+            realized = account.realized_micro - (prior.realized_micro if prior else 0)
+            earned = account.earned_micro - (prior.earned_micro if prior else 0)
+            if realized:
+                entry["realized"] = realized
+            if earned:
+                entry["earned"] = earned
+            if entry:
+                self.history.setdefault(account.handle, []).append(
+                    {"ns": int(at_ns), "coin": coin, **entry})
+
+    def _states_at_horizon(self) -> dict[str, dict]:
+        """Every open return's economics at its horizon, derived from its history.
+
+        Guarantees each is what applying every fact of the return with fact-time at or
+        before H, in fact-time order, gives: per instrument, its lots after the last
+        such fact; the money those facts realised and earned. A fact after H is late
+        money by definition, whenever and on whatever stream it arrived (Codex on
+        #152). A return with no venue clock is absent (graded from the table).
+        """
+        states: dict[str, dict] = {}
+        if self.horizon_ns is None:
+            return states
+        for account in self.table.returns:
+            if (account.payoff is not None or account.voided
+                    or account.opened_at_ns is None):
+                continue
+            horizon = account.opened_at_ns + self.horizon_ns
+            lots: dict[str, list] = {}
+            realized, earned = Fraction(0), 0
+            for entry in self.history.get(account.handle, ()):
+                if entry["ns"] > horizon:
+                    continue
+                if "lots" in entry:
+                    lots[entry["coin"]] = entry["lots"]
+                realized += entry.get("realized", 0)
+                earned += entry.get("earned", 0)
+            states[account.handle] = {"lots": [lot for held in lots.values() for lot in held],
+                                      "realized": realized, "set_aside": Fraction(0),
+                                      "earned": earned}
+        return states
+
+    def _instruments_of(self, handle: str) -> set[tuple[str, str]]:
+        """Every (instrument, market) a return holds now or held at any recorded fact."""
+        held = {(lot.coin, lot.market) for lot in self.table.lots if lot.handle == handle}
+        for entry in self.history.get(handle, ()):
+            held |= {(lot.coin, lot.market) for lot in entry.get("lots", ())}
+        return held
+
+    def graded_instruments(self) -> set[tuple[str, str]]:
+        """Every (instrument, market) an open return holds or held: each needs its mark."""
+        held = {(lot.coin, lot.market) for lot in self.table.lots}
+        for entries in self.history.values():
+            for entry in entries:
+                held |= {(lot.coin, lot.market) for lot in entry.get("lots", ())}
+        return held
 
     def _mark_horizons(self, coin: str, ts_ns: int, mid: str) -> None:
         """Fix ``mid`` as the horizon mark of ``coin`` for every open return whose
@@ -513,7 +548,7 @@ class ReturnConsequences:
         (Codex on #152): a return is marked whether or not it holds ``coin`` yet, so
         a resting order filled at H, whose Fill a venue emits after MarketMid(H) in
         the same batch, inherits MarketMid(H). A fill whose fact-time is after H is
-        late money and never enters the graded outcome (``_freeze_past_horizon``).
+        late money and never enters the graded outcome (``_states_at_horizon``).
         """
         if self.horizon_ns is None:
             return
@@ -533,10 +568,8 @@ class ReturnConsequences:
         fixed, self.censored_payoffs = self.censored_payoffs, []
         if self.pending_orders:
             for payoff in fixed:
-                self.horizon_marks.pop(payoff.handle, None)
-                self.horizon_mark_ns.pop(payoff.handle, None)
-                self.horizon_state.pop(payoff.handle, None)
-                self.after_horizon.pop(payoff.handle, None)
+                for kept in (self.horizon_marks, self.horizon_mark_ns, self.history):
+                    kept.pop(payoff.handle, None)
             return fixed  # Unknown inventory ownership cannot manufacture a no-fill outcome.
         through = self._through_ns()
         by_handle = {account.handle: self._through_for(account.handle, through)
@@ -547,11 +580,10 @@ class ReturnConsequences:
                                    now_ns=self._now_ns(), through_ns=through,
                                    through_by_handle=by_handle,
                                    horizon_ns=self.horizon_ns,
-                                   horizon_state=self.horizon_state,
+                                   horizon_state=self._states_at_horizon(),
                                    exit_rates=self._exit_rates(),
                                    horizon_marks=self.horizon_marks,
                                    horizon_mark_ns=self.horizon_mark_ns,
-                                   after_horizon=self.after_horizon,
                                    patience_ns=self._patience_ns())
         for before, after in zip(self.table.returns, table.returns, strict=True):
             if before.payoff is None and after.payoff is not None:
@@ -566,11 +598,11 @@ class ReturnConsequences:
                     # Fixed a patience past its opening, uninformative: the venue never
                     # priced these instruments at or after its horizon by then.
                     marked = self.horizon_marks.get(after.payoff.handle, {})
-                    frozen = self.horizon_state.get(after.payoff.handle)
-                    graded = (frozen["lots"] if frozen is not None else
-                              [lot for lot in self.table.lots
-                               if lot.handle == after.payoff.handle])
-                    held = sorted({lot.coin for lot in graded if lot.coin not in marked})
+                    graded = self._states_at_horizon().get(after.payoff.handle)
+                    lots = (graded["lots"] if graded is not None else
+                            [lot for lot in self.table.lots
+                             if lot.handle == after.payoff.handle])
+                    held = sorted({lot.coin for lot in lots if lot.coin not in marked})
                     self.ledger.append({"kind": "consequence.uninformative",
                                         "handle": after.payoff.handle,
                                         "reason": NO_MARK, "instruments": held})
@@ -578,8 +610,7 @@ class ReturnConsequences:
         self.table = table
         # A horizon mark is pinned by its return's open outcome: fixed or voided, no
         # reader remains.
-        for kept in (self.horizon_marks, self.horizon_mark_ns, self.horizon_state,
-                     self.after_horizon):
+        for kept in (self.horizon_marks, self.horizon_mark_ns, self.history):
             for handle in [h for h in kept if not self.account_open(h)]:
                 del kept[handle]
         return fixed

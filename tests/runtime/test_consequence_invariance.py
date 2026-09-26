@@ -89,10 +89,12 @@ class _Book(ReturnConsequences):
     def __init__(self, history: dict) -> None:
         super().__init__(_Rows(), 1, horizon_ns=H)
         self.clock_ns = T0
-        self.history = history
-        # A polled venue's delivered-through instant of its fills and funding (ruling
-        # R10-o), and an advancing venue's: the time it was last advanced to.
-        self.stream_ns: int | None = None
+        self.fee_history = history
+        # Each polled stream's delivered-through instant (ruling R10-o): Hyperliquid's
+        # fills and funding, Polymarket's events, each polled on its own; and an
+        # advancing venue's: the time it was last advanced to, every stream alike.
+        self.hl_ns: int | None = None
+        self.pm_ns: int | None = None
         self.advance_ns: int | None = None
         # Polymarket: each token's book, read at its instant (a failed read reads
         # nothing), and its events feed (fills and resolutions).
@@ -105,13 +107,12 @@ class _Book(ReturnConsequences):
         if stream.startswith("pm:book:"):
             read = self.books.get(stream.removeprefix("pm:book:"))
             return float("-inf") if read is None else read - 1
-        if stream == "pm:events":
-            return self._stream_through_ns()
-        return None
-
-    def _stream_through_ns(self) -> int | None:
-        if self.stream_ns is not None:
-            return self.stream_ns - 1  # a poll may miss a fact of its very instant
+        polled = {"pm:events": self.pm_ns, "hl:fills": self.hl_ns,
+                  "hl:funding": self.hl_ns}
+        if stream not in polled:
+            return None  # mids: stamped when read, covered by the facts seen
+        if polled[stream] is not None:
+            return polled[stream] - 1  # a poll may miss a fact of its very instant
         return self.advance_ns
 
     def _patience_ns(self) -> int:
@@ -119,7 +120,8 @@ class _Book(ReturnConsequences):
 
     def _exit_rates(self):
         def rate_at(instrument: str, at_ns: int) -> str | None:
-            before = [rate for ns, rate in self.history.get(instrument, []) if ns <= at_ns]
+            before = [rate for ns, rate in self.fee_history.get(instrument, [])
+                      if ns <= at_ns]
             return before[-1] if before else None
         return rate_at
 
@@ -185,6 +187,12 @@ def _facts() -> list[tuple]:
     facts.append((_t(35), "fill", "o-P3", "PM:B", True, "10", "0.61", "event"))
     facts.append((_t(60), "ack", "c-held"))
     facts.append((_t(114), "pmresolve", "PM:B", "1"))
+    # PM:C's book is read on time but is empty from 30 s on: read, it states no price, so
+    # P4 reaches its patience (154 s) and is no_mark, never held forever.
+    for step in range(0, 28):
+        facts.append((_t(10 * step), "pmbook", "PM:C", "0.5" if step < 3 else ""))
+    facts.append((_t(24), "open", "P4", "o-P4", "filled"))
+    facts.append((_t(24), "fill", "o-P4", "PM:C", True, "10", "0.50", "event"))
     facts.sort(key=lambda fact: (fact[0], fact[1] != "decide" and fact[1] != "open"))
     return facts
 
@@ -246,13 +254,21 @@ def _run(rng: random.Random) -> dict:
     lag = mode == "lag"
     facts = _facts()
     if lag:
-        at = T0
-        while at < _t(330):
-            at += rng.randint(5, 70) * S
-            facts.append((at, "poll"))
+        # Hyperliquid's fills and funding, and Polymarket's events, are each polled on
+        # their own schedule. In half, Hyperliquid's fills read is unavailable from 80 s
+        # to 220 s, across the horizons, while Polymarket's events (a resolution after
+        # H) keep arriving: its pre-H fills are delivered after the resolution.
+        outage = rng.random() < 0.5
+        for kind in ("poll", "pmpoll"):
+            at = T0
+            while at < _t(330):
+                at += rng.randint(5, 70) * S
+                if not (kind == "poll" and outage and _t(80) < at < _t(220)):
+                    facts.append((at, kind))
         facts.sort(key=lambda fact: (fact[0], fact[1] != "decide" and fact[1] != "open"))
-        book.stream_ns = T0
+        book.hl_ns = book.pm_ns = T0
     polled: list[tuple] = []
+    pm_polled: list[tuple] = []
     sequence = _groups(facts, rng)
     # An advance delivers every fact through its instant, so it never splits an instant.
     boundaries = [i for i in range(1, len(sequence))
@@ -304,18 +320,25 @@ def _run(rng: random.Random) -> dict:
                 book.observe("MarketMid", {"coin": fact[2], "mid": fact[3], "ts_ns": at},
                              event)
             elif kind in ("funding", "fill", "pmresolve") and lag:
-                polled.append(fact)  # executed now, reported at the next poll
+                # Executed now, reported at its own venue's next poll.
+                on_pm = kind == "pmresolve" or (kind == "fill" and len(fact) > 7)
+                (pm_polled if on_pm else polled).append(fact)
             elif kind in ("funding", "fill", "pmresolve"):
                 _deliver(book, fact, event)
-            elif kind == "poll":
-                for reported in sorted(polled, key=lambda f: f[0]):
+            elif kind in ("poll", "pmpoll"):
+                buffer = polled if kind == "poll" else pm_polled
+                for reported in sorted(buffer, key=lambda f: f[0]):
                     _deliver(book, reported, event)
-                polled.clear()
-                book.stream_ns = at
+                buffer.clear()
+                if kind == "poll":
+                    book.hl_ns = at
+                else:
+                    book.pm_ns = at
             elif kind == "pmbook":
                 if fact[3] is not None:  # a failed read delivers nothing and reads nothing
-                    book.observe("MarketMid", {"coin": fact[2], "mid": fact[3], "ts_ns": at},
-                                 event)
+                    if fact[3]:  # an empty book is read, and states no price
+                        book.observe("MarketMid", {"coin": fact[2], "mid": fact[3],
+                                                   "ts_ns": at}, event)
                     book.books[fact[2]] = at
             elif kind == "intent":
                 book.order_intent(fact[2], fact[3], fact[4])
@@ -351,12 +374,12 @@ def _run(rng: random.Random) -> dict:
     else:
         # The world goes on: a tick long after every patience, and every outcome is fixed.
         book.tick_through_ns = named.tick_through_ns = _t(10_000)
-    for reported in sorted(polled, key=lambda f: f[0]):
+    for reported in sorted(polled + pm_polled, key=lambda f: f[0]):
         _deliver(book, reported, event)
-    for coin in ("PM:A", "PM:B"):
+    for coin in ("PM:A", "PM:B", "PM:C"):
         book.books[coin] = _t(10_000)  # the books are read long after, one last time
     if lag:
-        book.stream_ns = _t(10_000)
+        book.hl_ns = book.pm_ns = _t(10_000)
     settle()
     rows = [dict(row) for row in book.ledger._recovery_items()
             if row.get("kind") in ("consequence.outcome", "consequence.uninformative")]
@@ -404,3 +427,4 @@ def test_every_batching_of_the_same_world_facts_gives_the_same_outcomes():
     assert outcome["late"]["P2"] == 4_000_000  # (1 - 0.60) * 10, paid at the resolution
     # P3's held fill counts: its lot was redeemed at 114 s, before its own H (115 s).
     assert fixed["P3"]["marked"] is False and fixed["P3"]["net_micro"] == 3_900_000
+    assert fixed["P4"]["censored"] == "no_mark"  # its empty book was read through H

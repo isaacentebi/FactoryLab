@@ -589,7 +589,6 @@ class LotTable:
                 exit_rates: Mapping[str, str | None] | None = None,
                 horizon_marks: Mapping[str, Mapping[str, str]] | None = None,
                 horizon_mark_ns: Mapping[str, Mapping[str, int]] | None = None,
-                after_horizon: Mapping[str, Fraction] | None = None,
                 patience_ns: int | None = None,
                 through_ns: int | None = None,
                 horizon_state: Mapping[str, Mapping[str, Any]] | None = None,
@@ -624,21 +623,15 @@ class LotTable:
         without its mark fixes the outcome censored, ``NO_MARK``, uninformative, with
         the lots that were marked still valued.
 
-        ``after_horizon`` (handle -> micro-USD): funding the venue charged a return's
-        lots for funding times after its horizon. It is added back, so an outcome
-        accrues funding only for funding times at or before its horizon, however late
-        the mark that fixes it arrives (wave 16, ruling R10-m). The money itself is
-        booked as charged.
-
         ``through_ns`` is the venue time through which every world fact has been
         delivered, inclusive. With it, a return's horizon has passed once
         ``through_ns`` reaches it, and its patience once ``through_ns`` is after it, so
         an outcome never depends on how the venue's facts were batched or when this
         runs. ``horizon_state`` (handle ->
-        ``{"lots", "realized", "set_aside"}``) is a return's economics frozen before the
-        first fill after its horizon was applied: a fill after H is late money, never
-        graded, so the outcome values the frozen lots and realised money instead of the
-        table's.
+        ``{"lots", "realized", "set_aside", "earned"}``) is a return's economics at its
+        horizon, derived from its facts at or before H (``ReturnConsequences.
+        _states_at_horizon``): a fact after H is late money, never graded, so the
+        outcome values those lots and that money instead of the table's.
 
         ``through_by_handle`` overrides ``through_ns`` per return: the watermark of
         exactly the fact streams of what that return holds (``instrument_streams``).
@@ -684,7 +677,7 @@ class LotTable:
                 net = state["realized"] + state["set_aside"]
                 earned = state.get("earned", account.earned_micro)
             else:
-                net = account.realized_micro + (after_horizon or {}).get(account.handle, 0)
+                net = account.realized_micro
                 earned = account.earned_micro
             exit_fee = Fraction(0)
             unknown = False

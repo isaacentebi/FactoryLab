@@ -704,8 +704,7 @@ def test_a_tape_advance_past_an_hour_boundary_grades_both_roads_at_that_boundary
     (priced,) = _rows(rt, "consequence.opportunity", handle=producer)
     assert priced["funding_payments"] == 1
     assert Decimal(priced["funding_bps"]) == -Decimal(new) * 10_000  # the buy pays 9 bp
-    assert lot not in rt.consequences.after_horizon  # the boundary is inside the lot's H
-    payoff = rt.consequences.payoff(lot)
+    payoff = rt.consequences.payoff(lot)  # the boundary is inside the lot's H
     assert payoff is not None and payoff.censored is None
     # The lot bore that very payment: its size times the tape's mark at the boundary
     # times the new rate, in micro-USD, beside the same exit fee.
