@@ -771,7 +771,7 @@ def test_the_provenance_finding_reaches_the_triage_and_the_gate(triaged, monkeyp
 def test_the_gate_recomputes_the_findings_from_the_bound_samples(triaged, tmp_path):
     """Codex P1: the gate trusts no stored findings. It recomputes them from the samples
     the triage file records by hash, so rewriting the table (and its header) cannot drop
-    a finding, and a sample file that changed is not the one the triage read."""
+    a finding."""
     out, key, path, sha, samples, prov = triaged
     path.write_text(_dispose(path.read_text(), rejected=path.parent / "rejected.jsonl"))
     assert _gate(triaged) == []
@@ -787,6 +787,15 @@ def test_the_gate_recomputes_the_findings_from_the_bound_samples(triaged, tmp_pa
     assert any("(HIGH) has no row" in p for p in _gate(triaged))
     path.write_text(text + "| ffffffffffff | `scripted/x` | Q4 | C1 | MED | low | x | FIX |  |\n")
     assert any("names no finding of this audit" in p for p in _gate(triaged))
+    path.write_text(text)
+    assert _gate(triaged) == []
+
+
+def test_the_gate_reads_only_the_samples_and_family_the_triage_records(triaged, tmp_path):
+    """Codex P1, continued: a sample file that changed is not the one the triage read,
+    and a recorded family must be one that may audit the world."""
+    out, key, path, sha, samples, prov = triaged
+    text = _dispose(path.read_text(), rejected=path.parent / "rejected.jsonl")
     path.write_text(text)
     # A sample edited after triage (a finding removed) is not the sample the file records.
     rows, summary = _output(out, key, sample=2)
@@ -1736,6 +1745,7 @@ def test_no_policy_or_evidence_read_bypasses_the_release_commit():
         "previous_problems": ["read_text("],     # the same file, digest-checked
         "load_key": ["read_text("],              # bound to its corpus and prompts
         "calibration_problems": ["read_bytes("],  # the input, compared to its recompute
+        "beside_text": ["read_bytes("],          # a prompt, compared to its recompute
         "gate": ["read_text("],                  # the triage file, by its sha256
         "write_last_release": ["read_text("],    # the record the gate writes
         "corpus_records": ["raw_world("],        # the render, pinned by release_commit
@@ -1816,6 +1826,81 @@ def test_an_auditor_input_missing_an_ordinary_leaf_is_refused(rendered, tmp_path
     key["corpus_sha"] = tool.sha256_file(tmp_path / "auditor_input.jsonl")
     path.write_text(json.dumps(key))
     with pytest.raises(tool.AuditInputInvalid, match="auditor_input.jsonl beside the key"):
+        tool.load_calibrated_key(path, REPO[0])
+
+
+# --- Codex pass on 38b4789: the gate trusts nothing it can recompute from the release ----
+
+
+def _jsonl_of(records):
+    """A corpus written as render writes it."""
+    return "".join(json.dumps(r, sort_keys=True, ensure_ascii=False) + "\n" for r in records)
+
+
+def test_a_leaf_removed_from_both_corpora_and_the_key_is_refused(rendered, tmp_path):
+    """Codex P1 (class2_audit.py:1196): an ordinary leaf removed from the release corpus
+    and the auditor input together, planted again and the key rewritten to match, is
+    self-consistent; the corpus the release renders is recomputed, so it is refused."""
+    path = _key_copy(rendered, tmp_path)
+    key = json.loads(path.read_text())
+    planted_ids = {c["leaf_id"] for c in key["canaries"] + key["controls"]}
+    records = tool.read_corpus(tmp_path / "release_corpus.jsonl")
+    gone = next(r["leaf_id"] for r in records
+                if r["provenance"] == "kernel" and r["leaf_id"] not in planted_ids)
+    records = [r for r in records if r["leaf_id"] != gone]
+    (tmp_path / "release_corpus.jsonl").write_text(_jsonl_of(records))
+    ordered, _ = tool.changed_first(records, tool.corpus_diff(None, records))
+    spec = tool.load_canaries(tool.committed_text(REPO[0], key["release_commit"],
+                                                  tool.CANARIES_REL))
+    planted, expected = tool.plant(ordered, seed=key["seed"], world=key["worlds"][0],
+                                   spec=spec, control_seed=key["release_commit"])
+    (tmp_path / "auditor_input.jsonl").write_text(_jsonl_of(planted))
+    key |= {field: expected[field] for field in ("canaries", "controls", "expected_leaves",
+                                                  "expected_count")}
+    key["corpus_sha"] = tool.sha256_file(tmp_path / "auditor_input.jsonl")
+    key["release_corpus_sha"] = tool.sha256_file(tmp_path / "release_corpus.jsonl")
+    path.write_text(json.dumps(key))
+    tool.load_key(path)  # consistent with itself
+    with pytest.raises(tool.AuditInputInvalid,
+                       match="release corpus beside the key is not the corpus the release"):
+        tool.load_calibrated_key(path, REPO[0])
+
+
+def test_an_emptied_commit_list_with_a_rewritten_provenance_prompt_is_refused(
+        with_commit, tmp_path):
+    """Codex P1 (class2_audit.py:1036): the key's provenance_commits emptied and the
+    provenance prompt rendered again without them (its digest rewritten, the id kept) is
+    self-consistent; the range's commits and the prompt are recomputed, so it is
+    refused."""
+    path = _key_copy(with_commit, tmp_path)
+    key = json.loads(path.read_text())
+    assert key["provenance_commits"]
+    tool.load_calibrated_key(path, REPO[0])
+    agents = tool.committed_text(REPO[0], key["release_commit"], tool.AGENTS_REL)
+    tool.write_provenance_prompt(tmp_path, tool.provenance_section(key["range"], []),
+                                 provenance_id=key["provenance_id"], agents=agents)
+    key["provenance_commits"] = []
+    key["provenance_prompt_sha"] = tool.sha256_file(tmp_path / "provenance_prompt.md")
+    path.write_text(json.dumps(key))
+    tool.load_key(path)  # consistent with itself
+    with pytest.raises(tool.AuditInputInvalid,
+                       match="provenance_commits are not the range's.*provenance_prompt.md"):
+        tool.load_calibrated_key(path, REPO[0])
+
+
+def test_a_rewritten_corpus_prompt_is_refused(rendered, tmp_path):
+    """The same class: prompt.md is rendered again from the release (only its authority
+    text, from the uncommitted essay, is read as given), so a rubric line dropped from
+    it, with the key's digest rewritten, is refused."""
+    path = _key_copy(rendered, tmp_path)
+    key = json.loads(path.read_text())
+    prompt = (tmp_path / "prompt.md").read_text()
+    line = next(x for x in prompt.splitlines() if x.startswith("| Q7"))
+    (tmp_path / "prompt.md").write_text(prompt.replace(line + "\n", ""))
+    key["prompt_sha"] = tool.sha256_file(tmp_path / "prompt.md")
+    path.write_text(json.dumps(key))
+    tool.load_key(path)  # consistent with itself
+    with pytest.raises(tool.AuditInputInvalid, match="prompt.md beside the key is not"):
         tool.load_calibrated_key(path, REPO[0])
 
 

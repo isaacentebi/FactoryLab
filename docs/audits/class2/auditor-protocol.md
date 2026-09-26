@@ -253,7 +253,8 @@ key names the canaries, and the unplanted corpus would reveal them by difference
 
 ## Threat model
 
-The tool defends against inconsistency, stale artifacts and operator error:
+The gate trusts nothing it can recompute from the release commit. The tool defends
+against inconsistency, stale artifacts, operator error and artifacts rewritten together:
 
 - **Bound.** Every artifact is bound by hash to its origin: the key to the release
   commit it audited and to the corpus and
@@ -270,12 +271,21 @@ The tool defends against inconsistency, stale artifacts and operator error:
   the repository that ran (read from the process's loaded modules, never a list) must
   be committed and unmodified at the release commit; the key records their paths and
   hashes, and the gate re-verifies them against that commit.
-- **Recomputed.** Derived values are recomputed from bound sources, never stored and
-  trusted: the gate recomputes the verdict and every finding from the samples; nothing
-  beside a triage file is authoritative. The key's calibration is recomputed too: at
-  validate, triage and gate the canaries and controls are planted again from the
-  release's committed `canaries.json`, the key's seed and release commit, over the
-  release corpus beside the key, and the key must equal them exactly.
+- **Recomputed.** At validate, triage and gate, with the worktree pinned to the
+  release and its executed code hash-bound to it, the tool recomputes from the release
+  commit and compares exactly: the corpus (a fresh render, byte for byte with
+  `release_corpus.jsonl`); the auditor input (planted again from that render with the
+  release's `canaries.json`, the key's seed and release commit, byte for byte with
+  `auditor_input.jsonl`, and the key's canaries, controls and expected leaves); the
+  corpus prompt (`prompt.md` rendered again from the release's protocol, AGENTS.md,
+  allowlist and `rejected.jsonl`, the last release's triage as its gate-recording
+  commit holds it, and the recomputed input); and the provenance pass (the range from
+  the last audited release, its commit shas and messages, the key's `provenance_id`,
+  and `provenance_prompt.md` rendered again). The verdict and every finding are
+  recomputed from the samples; nothing beside a triage file is authoritative.
+- **Taken as given.** Only what the release commit cannot produce: the auditor's
+  samples, validated against the recomputed inputs, and the authority text in
+  `prompt.md`, since the essay is never committed (its sha256 is in the key).
 - **Validated.** Every input is schema-validated before use; one invalid field refuses
   the artifact (exit 2) or invalidates the sample.
 
@@ -287,8 +297,8 @@ most recent gate-recording commit on the first-parent history wrote. The gate al
 re-reads the prior release's triage of the world from that commit, verified against its
 recorded digest, and refuses the family it records (rotation).
 
-It does **not** defend against an adversary with write access to every artifact and to
-the repository: such a writer can re-render, re-sample and re-triage consistently. Git
-history, pull-request review and the rotated auditor family cover that. So a gap is
-closed by recomputing from a bound source, not by storing another digest: a digest
-written beside the thing it vouches for is rewritten with it.
+Rewriting several artifacts together (a corpus, the key and the auditor input; the
+provenance prompt and the key's commit list) does not pass: each is recomputed from
+the release commit. What remains outside the tool is the repository itself: a commit
+that changes the code or the policy files is the release, and git history,
+pull-request review and the rotated auditor family cover it.

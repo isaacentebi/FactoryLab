@@ -64,9 +64,10 @@ does everything around that call, offline:
 Every artifact this tool reads is refused (exit 2) unless it passes its schema and is
 bound to its origin: the key to its corpus and prompts, a sample to its prompt, a triage
 file to its key and samples, a previous corpus to its own hashes, rejected findings and a
-previous triage file to their fields. Derived values (the verdict, the findings) are
-recomputed from those sources, never stored and trusted (the threat model is in
-``docs/audits/class2/auditor-protocol.md``).
+previous triage file to their fields. Nothing the release commit determines is trusted:
+the corpus, the auditor input, both prompts and the provenance commits are recomputed
+from it and compared, and the verdict and findings from the samples (the threat model
+is in ``docs/audits/class2/auditor-protocol.md``).
 
 The model call itself is the operator's: send ``prompt.md`` with ``auditor_input.jsonl``
 to one model family that neither authored kernel text nor sits in the world, at
@@ -96,6 +97,7 @@ Examples::
 from __future__ import annotations
 
 import argparse
+import functools
 import hashlib
 import json
 import re
@@ -160,13 +162,26 @@ def executed_code_problems(repo: Path, release: str, files: dict[str, str]) -> l
     must be committed in ``release`` with exactly those bytes. At render the digests are
     the files that ran (an uncommitted edit, or a file never committed, is refused); at
     the gate they are the key's record, re-verified against the release commit."""
-    problems = []
-    for rel, digest in sorted(files.items()):
-        run = subprocess.run(["git", "-C", str(repo), "show", f"{release}:{rel}"],
-                             capture_output=True)
-        if run.returncode != 0:
+    names = sorted(files)
+    if not names:
+        return []
+    # One ``git cat-file --batch`` for every file: the gate recomputes this each time.
+    out = subprocess.run(["git", "-C", str(repo), "cat-file", "--batch"],
+                         input="".join(f"{release}:{rel}\n" for rel in names).encode(),
+                         capture_output=True, check=True).stdout
+    problems, pos = [], 0
+    for rel in names:
+        end = out.index(b"\n", pos)
+        header = out[pos:end].split()
+        pos = end + 1
+        blob = None
+        if len(header) == 3 and header[2].isdigit():
+            size = int(header[2])
+            blob = out[pos:pos + size] if header[1] == b"blob" else None
+            pos += size + 1
+        if blob is None:
             problems.append(f"{rel} ran but is not committed in {release[:12]}")
-        elif hashlib.sha256(run.stdout).hexdigest() != digest:
+        elif hashlib.sha256(blob).hexdigest() != files[rel]:
             problems.append(f"{rel} ran with bytes other than its commit in {release[:12]}")
     return problems
 
@@ -176,13 +191,23 @@ def committed_text(repo: Path, release: str, path: str, *, required: bool = True
     """The file ``path`` as committed in ``release`` (``git show <release>:<path>``), the
     one way the tool reads policy or evidence; None when the release has no such file
     and it is not ``required`` (refused when it is)."""
-    run = subprocess.run(["git", "-C", str(repo), "show", f"{release}:{path}"],
+    text = (_blob_at(str(repo), release, path) if re.fullmatch(r"[0-9a-f]{40}", release)
+            else _show(str(repo), release, path))
+    if text is None and required:
+        raise AuditInputInvalid(f"the release {release[:12]} has no {path}")
+    return text
+
+
+def _show(repo: str, release: str, path: str) -> str | None:
+    run = subprocess.run(["git", "-C", repo, "show", f"{release}:{path}"],
                          capture_output=True, text=True)
-    if run.returncode != 0:
-        if required:
-            raise AuditInputInvalid(f"the release {release[:12]} has no {path}")
-        return None
-    return run.stdout
+    return run.stdout if run.returncode == 0 else None
+
+
+@functools.cache
+def _blob_at(repo: str, commit: str, path: str) -> str | None:
+    """``_show`` at a full commit SHA, taken once: what a commit holds never changes."""
+    return _show(repo, commit, path)
 TRIAGE_DIR = ROOT / "docs/audits/class2"
 #: The last audited release, tracked in the repository and written by the gate when a
 #: release passes it: a JSON object naming its commit (``release_commit``), the digest
@@ -285,6 +310,32 @@ def describe(path: str) -> dict[str, Any]:
     # A surface kind this tool does not know has no audience or reach it could tell the
     # auditor: refused, so a new kind is described before it is audited.
     raise AuditInputInvalid(f"unknown surface kind {kind!r} at {path!r}: describe() needs it")
+
+
+def corpus_text(records: list[dict]) -> str:
+    """A corpus as its JSON Lines file holds it: one sorted-key object per line. Render
+    writes both corpora with it, and the gate compares its recomputation with it."""
+    return "".join(json.dumps(record, sort_keys=True, ensure_ascii=False) + "\n"
+                   for record in records)
+
+
+def _source_state() -> tuple:
+    """The state of every file a corpus render reads: the package, the world files and
+    the audit and script code this process runs (paths, modification times, sizes)."""
+    code = Path(__file__).resolve().parents[1]
+    files = [p for base in ("factorylab", "tests/audit", "scripts")
+             for p in sorted((code / base).rglob("*.py"))]
+    files += sorted((code / "worlds").glob("*.toml"))
+    return tuple((str(p), p.stat().st_mtime_ns, p.stat().st_size) for p in files)
+
+
+@functools.cache
+def _rendered_corpus(render, worlds: tuple[str, ...], rendered: bool, state: tuple) -> str:
+    """A corpus render (``render``, which is ``corpus_records``) as text, taken once per
+    renderer and state of its sources: the render is a pure function of them (as
+    ``class2_seat_text.scan`` is of the package), so a gate that recomputes it several
+    times renders it once."""
+    return corpus_text(render(list(worlds), rendered=rendered))
 
 
 def corpus_records(worlds: list[str], *, rendered: bool) -> list[dict]:
@@ -560,6 +611,15 @@ def write_provenance_prompt(out: Path, provenance: str, *, provenance_id: str,
     Commit messages can carry behaviour data, which the corpus prompt never holds. Its
     answer is read back (``provenance_problems``), so the prompt states the format and
     the id every answer echoes."""
+    path = out / "provenance_prompt.md"
+    path.write_text(provenance_prompt_text(provenance, provenance_id=provenance_id,
+                                           agents=agents))
+    return path
+
+
+def provenance_prompt_text(provenance: str, *, provenance_id: str, agents: str) -> str:
+    """The provenance prompt's text (``write_provenance_prompt``), so the gate can
+    render it again from the release and compare."""
     rule2 = _agents_rules(agents).split("2. **Robust simplicity", 1)[-1].split("3. **Physics", 1)[0]
     parts = ["# Class 2 audit: provenance pass", "",
              "AGENTS.md rule 2, Robust simplicity" + rule2.rstrip(), "", provenance, "",
@@ -573,14 +633,24 @@ def write_provenance_prompt(out: Path, provenance: str, *, provenance_id: str,
              "```", "",
              f"`provenance_id` is `{provenance_id}`. `sample` is 1 on the first run and "
              "2 on the second."]
-    path = out / "provenance_prompt.md"
-    path.write_text("\n".join(parts) + "\n")
+    return "\n".join(parts) + "\n"
+
+
+def write_prompt(out: Path, **inputs) -> Path:
+    """The corpus prompt (``prompt_text``) written to ``out``."""
+    path = out / "prompt.md"
+    path.write_text(prompt_text(**inputs))
     return path
 
 
-def write_prompt(out: Path, *, authority: str, previous_text: str | None,
-                 diff: str, rejected: list[dict], corpus_sha: str, protocol: str,
-                 agents: str, allowlist: str) -> Path:
+#: The headings that bound the authority text in the corpus prompt.
+AUTHORITY_OPEN = "## Authority text (verbatim)\n\n"
+AUTHORITY_CLOSE = "\n\n## AGENTS.md rules 1-5\n"
+
+
+def prompt_text(*, authority: str, previous_text: str | None, diff: str,
+                rejected: list[dict], corpus_sha: str, protocol: str, agents: str,
+                allowlist: str) -> str:
     """The corpus prompt: protocol inputs 1-5, the corpus diff before last release's
     triage so a rejected finding's leaf can be read against its change, and the corpus
     id every sample's summary echoes. The protocol, rules and allowlist are the texts
@@ -629,9 +699,7 @@ def write_prompt(out: Path, *, authority: str, previous_text: str | None,
         f"The corpus id is `{corpus_sha}`: your summary carries it as `corpus_sha`, and "
         "`sample` is 1 on the first run and 2 on the second.",
     ]
-    path = out / "prompt.md"
-    path.write_text("\n".join(parts) + "\n")
-    return path
+    return "\n".join(parts) + "\n"
 
 
 class AuditInputInvalid(ValueError):
@@ -680,6 +748,19 @@ def last_release(repo: Path, commit: str) -> dict | None:
     commit), or None when ``commit`` has no such file (the first release). Refused
     unless it is the gate's record: a full commit SHA that is an ancestor of ``commit``,
     the release corpus's sha256, and a sha256 per world's gated triage file."""
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        return _last_release(repo, commit)
+    # A full commit SHA fixes its whole history, so its record is read once.
+    record = _last_release_at(str(repo), commit)
+    return None if record is None else {**record, "triages": dict(record["triages"])}
+
+
+@functools.cache
+def _last_release_at(repo: str, commit: str) -> dict | None:
+    return _last_release(Path(repo), commit)
+
+
+def _last_release(repo: Path, commit: str) -> dict | None:
     exists = subprocess.run(["git", "-C", str(repo), "cat-file", "-e",
                              f"{commit}:{LAST_RELEASE}"], capture_output=True)
     if exists.returncode != 0:
@@ -989,7 +1070,9 @@ def render(worlds: list[str], out: Path, *, seed: int, rendered: bool, release_r
     spec = load_canaries(committed_text(repo, released, CANARIES_REL))
     authority = authority_text(essay)
     # Rendered before anything is written: a failed render leaves no corpus behind.
-    records = corpus_records(worlds, rendered=rendered)
+    records = [json.loads(line) for line in
+               _rendered_corpus(corpus_records, tuple(worlds), rendered,
+                                _source_state()).splitlines()]
     # The code that rendered the corpus is the release's: every repository module that
     # ran (``executed_code``), committed and unmodified (seat-visible text is the
     # dirty check's, ``SURFACE_PATHS``; the renderer's own code is this one's).
@@ -1004,12 +1087,8 @@ def render(worlds: list[str], out: Path, *, seed: int, rendered: bool, release_r
                          changed=changed if prior is not None else None, spec=spec,
                          control_seed=released)
     out.mkdir(parents=True, exist_ok=True)
-    with (out / "auditor_input.jsonl").open("w") as handle:
-        for record in planted:
-            handle.write(json.dumps(record, sort_keys=True, ensure_ascii=False) + "\n")
-    with (out / "release_corpus.jsonl").open("w") as handle:
-        for record in records:
-            handle.write(json.dumps(record, sort_keys=True, ensure_ascii=False) + "\n")
+    (out / "auditor_input.jsonl").write_text(corpus_text(planted))
+    (out / "release_corpus.jsonl").write_text(corpus_text(records))
     corpus_sha = sha256_file(out / "auditor_input.jsonl")
     write_prompt(out, authority=authority, previous_text=previous_text,
                  diff=diff_section(planted, diff, rejected_rows), rejected=rejected_rows,
@@ -1190,42 +1269,114 @@ def load_key(path: Path) -> tuple[dict, list[dict]]:
 
 
 def calibration_problems(key_path: Path, key: dict, repo: Path) -> list[str]:
-    """Why the key's calibration is not the one the release makes (none when it is):
-    recomputed, never trusted. The whole auditor input is planted again (``plant``)
-    from the release's committed ``canaries.json`` (``committed_text``), the key's seed
-    and release commit (CAN-1: controls rotate with the release), over the release corpus
-    beside the key (bound by its sha256) ordered as render ordered it (``corpus_diff``
-    against the previous corpus the key names, ``changed_first``); the key's canaries
-    (count, questions, classes, mandatory flags, leaves), controls and expected leaves
-    must equal them exactly, and ``auditor_input.jsonl`` must be the recomputed planted
-    corpus byte for byte (every leaf, its text, tags and order, and the canaries)."""
-    corpus_path = Path(key_path).parent / "release_corpus.jsonl"
-    if not corpus_path.exists() or sha256_file(corpus_path) != key.get("release_corpus_sha"):
-        return ["the release corpus beside the key is not the one it records"]
+    """Why the audit's inputs are not the ones the release commit makes (none when they
+    are). The gate trusts nothing it can recompute from the release commit: every input
+    below is recomputed from it and compared exactly; only the auditor's samples, which
+    cannot be recomputed, are taken as given (and validated against these).
+
+    * the corpus: a fresh render (``corpus_records``) of the key's worlds, with the
+      worktree pinned to the release (``release_commit``: HEAD is the release, no
+      seat-visible path dirty) and the code that ran hash-bound to it
+      (``executed_code``), equal byte for byte to ``release_corpus.jsonl``;
+    * the auditor input: planted again (``plant``) from that render, the release's
+      committed ``canaries.json``, the key's seed and release commit, ordered as render
+      ordered it (against the previous corpus the key names, bound by the gate's record),
+      equal byte for byte to ``auditor_input.jsonl``, with the key's canaries, controls
+      and expected leaves equal to the plant's;
+    * the corpus prompt: rendered again (``prompt_text``) from the release's committed
+      protocol, AGENTS.md, allowlist and ``rejected.jsonl``, the last release's triage
+      as its gate-recording commit holds it, and the recomputed input, equal to
+      ``prompt.md``; its authority text alone is read from the prompt, since the essay
+      is never committed;
+    * the range and the provenance: the range and the previous files are the release's
+      (``range_commits``), the key's record of the code that ran is the release's
+      bytes, and the commit list (shas and messages) of the range, the key's
+      ``provenance_commits`` and the provenance prompt rendered again from them
+      (``provenance_prompt_text``) equal ``provenance_prompt.md``."""
+    here = Path(key_path).parent
     if type(key.get("seed")) is not int:
         return ["the key records no integer seed"]
-    records = read_corpus(corpus_path)
+    release = key["release_commit"]
+    try:
+        pinned = release_commit(repo, "..".join(key["range_shas"]))
+    except (AuditInputInvalid, ValueError) as exc:
+        return [f"the worktree is not the release, so nothing can be recomputed: {exc}"]
+    if pinned != release:
+        return ["the key's range does not end at its release commit"]
+    problems = []
+    # (a) The corpus, rendered again from the release.
+    fresh = _rendered_corpus(corpus_records, tuple(key["worlds"]),
+                             bool(key.get("rendered")), _source_state())
+    problems += [f"the code that renders the corpus: {p}" for p in
+                 executed_code_problems(repo, release, executed_code(repo))]
+    corpus_path = here / "release_corpus.jsonl"
+    if not corpus_path.exists() or corpus_path.read_bytes() != fresh.encode():
+        problems.append("the release corpus beside the key is not the corpus the release "
+                        "renders")
+    if key.get("release_corpus_sha") != hashlib.sha256(fresh.encode()).hexdigest():
+        problems.append("the key's release_corpus_sha is not the corpus the release renders")
+    records = [json.loads(line) for line in fresh.splitlines()]
+    # (b) The auditor input, planted again from that render.
     prior = read_corpus(Path(key["previous_corpus"])) if key.get("previous_corpus") else None
-    ordered, changed = changed_first(records, corpus_diff(prior, records))
-    spec = load_canaries(committed_text(repo, key["release_commit"], CANARIES_REL))
+    diff = corpus_diff(prior, records)
+    ordered, changed = changed_first(records, diff)
+    spec = load_canaries(committed_text(repo, release, CANARIES_REL))
     planted, expected = plant(ordered, seed=key["seed"], world=key["worlds"][0],
                               changed=changed if prior is not None else None, spec=spec,
-                              control_seed=key["release_commit"])
-    problems = []
+                              control_seed=release)
     for field in ("canaries", "controls", "expected_leaves", "expected_count"):
         if key.get(field) != expected[field]:
             count = len(expected[field]) if isinstance(expected[field], list) else ""
             problems.append(f"the key's {field} are not the ones the release plants "
                             f"({count} planted)".replace(" ()", ""))
-    # The auditor's input itself, byte for byte as render writes it: every leaf, its
-    # text, tags and order, with the canaries where they were planted.
-    rendered = "".join(json.dumps(record, sort_keys=True, ensure_ascii=False) + "\n"
-                       for record in planted).encode()
-    beside = Path(key_path).parent / "auditor_input.jsonl"
-    if not beside.exists() or beside.read_bytes() != rendered:
+    beside = here / "auditor_input.jsonl"
+    if not beside.exists() or beside.read_bytes() != corpus_text(planted).encode():
         problems.append("the auditor_input.jsonl beside the key is not the corpus the "
-                        "release plants from its release corpus")
+                        "release plants")
+    # (c) The corpus prompt, rendered again: the essay is not in the release commit, so
+    # its authority text is the one section read from the prompt as given.
+    given = beside_text(here / "prompt.md")
+    authority = (given.split(AUTHORITY_OPEN, 1)[1].split(AUTHORITY_CLOSE, 1)[0]
+                 if AUTHORITY_OPEN in given and AUTHORITY_CLOSE in given else "")
+    rejected_rows = read_rejected(committed_text(repo, release, REJECTED_REL,
+                                                 required=False))
+    try:
+        previous_text = previous_triage_text(repo, key)
+    except AuditInputInvalid as exc:
+        problems.append(str(exc))
+        previous_text = None
+    prompt = prompt_text(authority=authority, previous_text=previous_text,
+                         diff=diff_section(planted, diff, rejected_rows),
+                         rejected=rejected_rows,
+                         corpus_sha=hashlib.sha256(corpus_text(planted).encode()).hexdigest(),
+                         protocol=committed_text(repo, release, PROTOCOL_REL),
+                         agents=committed_text(repo, release, AGENTS_REL),
+                         allowlist=committed_text(repo, release, ALLOWLIST_REL))
+    if given != prompt:
+        problems.append("the prompt.md beside the key is not the one the release renders")
+    # (d) The range and the provenance pass, from the range the release commit fixes.
+    ranged, commits = range_commits(repo, key)
+    problems += ranged
+    problems += [f"the key's executed code: {p}" for p in
+                 executed_code_problems(repo, release, key["executed_code"])]
+    if ranged:
+        return problems
+    if key.get("provenance_commits") != [{"sha": c["sha"], "message": c["message"]}
+                                         for c in commits]:
+        problems.append("the key's provenance_commits are not the range's")
+    section = provenance_section(key["range"], commits)
+    prompt = provenance_prompt_text(section, provenance_id=key["provenance_id"],
+                                    agents=committed_text(repo, release, AGENTS_REL))
+    if beside_text(here / "provenance_prompt.md") != prompt:
+        problems.append("the provenance_prompt.md beside the key is not the one the "
+                        "range renders")
     return problems
+
+
+def beside_text(path: Path) -> str:
+    """A prompt beside the key, as text, or empty when there is none (so it differs from
+    any recomputation)."""
+    return path.read_bytes().decode() if path.exists() else ""
 
 
 def load_calibrated_key(key_path: Path, repo: Path) -> tuple[dict, list[dict]]:
@@ -1809,31 +1960,56 @@ def _hashes(value: str | None) -> list[str]:
 
 
 def range_problems(repo: Path, key: dict) -> list[str]:
-    """Why the key's range is not the release's, re-verified in ``repo`` at gate time:
-    its head is the release it audited, its base the last audited release as committed
-    there (``release_base``), and the provenance prompt the auditor answered is the one
-    that range yields now (its ``provenance_id``)."""
+    """Why the key's range is not the release's (``range_commits``)."""
+    return range_commits(repo, key)[0]
+
+
+def range_commits(repo: Path, key: dict) -> tuple[list[str], list[dict]]:
+    """Why the key's range is not the release's, re-verified in ``repo``: its head is
+    the release it audited, its base the last audited release as committed there
+    (``release_base``), its previous corpus and triage the ones that release's gate
+    recorded, and the provenance prompt the auditor answered is the one that range
+    yields now (its ``provenance_id``); and the range's provenance commits."""
     base, head = key["range_shas"]
     if head != key["release_commit"]:
         return [f"the key's range ends at {head[:12]}, not its release "
-                f"{key['release_commit'][:12]}"]
+                f"{key['release_commit'][:12]}"], []
     try:
         first = release_base(repo, base, head)
     except AuditInputInvalid as exc:
-        return [f"the key's range is not the release's: {exc}"]
+        return [f"the key's range is not the release's: {exc}"], []
     record = None if first else last_release(repo, head)
     if first and (key["previous_corpus_sha"] or key["previous_triage_sha256"]):
-        return ["the key of a first release names a previous release"]
+        return ["the key of a first release names a previous release"], []
     if record is not None and (key["previous_corpus_sha"] != record["release_corpus_sha"]
                                or key["previous_triage_sha256"]
                                not in record["triages"].values()):
         return ["the key's previous corpus or triage is not the one the last release's "
-                "gate recorded"]
-    section = provenance_section(key["range"], provenance_commits(
-        repo, f"{base}..{head}", from_root=first))
+                "gate recorded"], []
+    commits = provenance_commits(repo, f"{base}..{head}", from_root=first)
+    section = provenance_section(key["range"], commits)
     if hashlib.sha256(section.encode()).hexdigest() != key["provenance_id"]:
-        return ["the provenance prompt the key binds is not the one its range yields"]
-    return []
+        return ["the provenance prompt the key binds is not the one its range yields"], []
+    return [], commits
+
+
+def previous_triage_text(repo: Path, key: dict) -> str | None:
+    """The last release's triage the key's render read (``--previous``), from the
+    gate-recording commit that holds it, by the digest the key and that gate's record
+    share; None for a first release."""
+    if key["previous_triage_sha256"] is None:
+        return None
+    record = last_release(repo, key["release_commit"])
+    world = next((w for w, h in (record or {}).get("triages", {}).items()
+                  if h == key["previous_triage_sha256"]), None)
+    if world is None:
+        raise AuditInputInvalid("the key's previous triage is not one the last release's "
+                                "gate recorded")
+    text = committed_text(repo, record["recorded_at"], f"{TRIAGE_REL}/{world}.md")
+    if hashlib.sha256(text.encode()).hexdigest() != key["previous_triage_sha256"]:
+        raise AuditInputInvalid(f"the last release's triage of {world} is not the one its "
+                                "gate recorded")
+    return text
 
 
 def write_last_release(repo: Path, key: dict, *, world: str, triage_sha256: str) -> Path:
@@ -1866,8 +2042,8 @@ def gate(world: str, triage: Path, key_path: Path, samples: list[Path],
 
     Guarantees: the key is bound to its corpus and prompts (``load_key``) and audited
     the release being gated (``release``, or ``repo``'s HEAD: the key's
-    ``release_commit``) over the range from the last audited release, re-verified in
-    ``repo`` (``range_problems``); the triage
+    ``release_commit``) over the range from the last audited release, and every input
+    the release commit determines is recomputed (``load_calibrated_key``); the triage
     file names ``world`` (rendered by the key), the key's corpus and range, and exactly
     the corpus and provenance sample files given, by sha256; the audit those samples
     make is recomputed and must be valid (``audit_verdict``); the recorded family may
@@ -1899,11 +2075,6 @@ def gate(world: str, triage: Path, key_path: Path, samples: list[Path],
     if key["release_commit"] != gated:
         problems.append(f"the key audited {key['release_commit'][:12]}, not the release "
                         f"gated {gated[:12]}")
-    problems += range_problems(repo, key)
-    # The code that rendered the corpus, re-verified: the key's record of it is the
-    # release commit's bytes.
-    problems += [f"the key's executed code: {p}" for p in
-                 executed_code_problems(repo, key["release_commit"], key["executed_code"])]
     if header.get("World") != world or world not in key["worlds"]:
         problems.append(f"the triage file is of {header.get('World')!r}, not {world!r} of "
                         f"the rendered worlds {key['worlds']}")
