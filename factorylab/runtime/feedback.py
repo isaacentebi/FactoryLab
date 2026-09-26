@@ -1194,6 +1194,12 @@ class FeedbackMixin:
             # nobody observed: an unknown consequence ends no novelty trial.
             if top_level and payoff.censored is None:
                 self._count_consequence(self.handle_to_assembly.get(payoff.handle))
+            if self._acted(payoff.handle):
+                # Ruling R10-j, for acting returns too (Codex on #152): every fixed
+                # outcome, judged or not, is kept once in ``world_outcomes`` (so the
+                # lambda margin reads it, ``_capture_consequences``) and enters its
+                # keyed prevalence, at the moment the book fixes it.
+                self._final_outcome(payoff.handle)
             if payoff.censored is None and self._acted(payoff.handle):
                 # The world's paid-off rate is read from every return that acted on
                 # it, whoever forecast it (the seed observation consequence_paid_off_rate).
@@ -1619,9 +1625,14 @@ class FeedbackMixin:
                 return "open", None, None
             if payoff.censored is not None:
                 return self._keep_outcome(self.world_outcomes, about, "none", None, None)
-            return self._keep_outcome(self.world_outcomes, about, "measured",
+            kept = self._keep_outcome(self.world_outcomes, about, "measured",
                                       float(payoff.y), RETURN_PAID_OFF.id,
                                       subject=self._acted_trade(about))
+            # The keyed prevalence learns every fixed acting outcome, judged or not
+            # (ruling R10-j), as it learns every non-acting one below.
+            self.settler.record_outcome(key=self._verdict_key(about, RETURN_PAID_OFF.id),
+                                        about_handle=about, outcome=float(payoff.y))
+            return kept
         frozen = self.reference_mids.get(about)
         if frozen is None:
             return self._keep_outcome(self.world_outcomes, about, "none", None, None)

@@ -95,6 +95,39 @@ def _open_long(rt, coin="BTC", px="60000", fee_usd="0"):
     return handle
 
 
+def test_an_unjudged_acting_return_s_outcome_is_kept_once_in_all_three():
+    """Codex on #152: R10-j for acting returns. No judge read the long; once the book
+    fixes its payoff it is kept in ``world_outcomes``, read into the lambda margin
+    (``_capture_consequences``) and entered in its keyed prevalence, each once."""
+    from factorylab.settlement.vocabulary import RETURN_PAID_OFF
+    from tests.conftest import make_runtime
+
+    rt = make_runtime()
+    rt.fee_schedule = {"rates": {}, "read_ns": 0, "history": {"BTC": [[0, "0"]]}}
+    handle = _open_long(rt)
+    rt.margin_windows[0] = {"due": 0, "cards": {},
+                            "decisions": {handle: {"assembly": "seed-decider",
+                                                   "role": "producer", "cost": 0}}}
+    at_h = rt.clock.now_ns + rt._horizon_ns()
+    rt.consequences.observe("MarketMid", {"coin": "BTC", "mid": "61000", "ts_ns": at_h}, rt.n)
+    rt.consequences.observe("MarketMid", {"coin": "BTC", "mid": "60500", "ts_ns": at_h + 6},
+                            rt.n)
+    rt.clock.now_ns = at_h + 6
+    assert not any(h == handle for h in rt.pending)  # unjudged
+    for _ in range(2):  # a second pass records nothing again
+        rt._settle_due_forecasts()
+        rt._final_outcome(handle)
+        rt._capture_consequences()
+    assert rt.consequences.payoff(handle).y == 1
+    assert (rt.world_outcomes[handle]["state"], rt.world_outcomes[handle]["y"]) == (
+        "measured", 1.0)
+    assert rt.measured_consequences[handle] == 1.0
+    key = rt._verdict_key(handle, RETURN_PAID_OFF.id)
+    later = rt.settler.settle_verdict(evaluator_id="eval-a", about_handle="another-return",
+                                      q=0.5, outcome=1.0, key=key)
+    assert later.base_rate == 1.0 and later.support == 1  # entered, and once
+
+
 def test_a_resting_order_filled_at_h_in_the_batch_of_the_mid_at_h_is_marked_by_it():
     """A venue emits MarketMid(H) before the Fill a resting order makes at H, in the
     same batch (Codex on #152, fee12ff). The lot did not exist when the mid arrived,
