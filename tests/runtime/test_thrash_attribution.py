@@ -105,6 +105,26 @@ def test_a_charge_never_raises_a_reward_on_any_router():
             assert _charged(rt, state, f"c{i}-{r}", r) < unattributed
 
 
+def test_a_niche_round_bears_no_thrash_charge_however_far_it_moved():
+    """Essay II.I.a, R-E as amended: failed exploration is never worse than a NOOP. A
+    round drawn in the unhistoried niche that moved the policy far, under a positive
+    thrash price, learns exactly what a round with no charge learns; its movement is
+    still recorded."""
+    rt = make_runtime()
+    rt.m = replace(rt.m, evaluation=replace(rt.m.evaluation, no_swap_regret_kinds=("Tick",)))
+    core = rt.routers["Tick"][0]
+    for r in (0.0, 0.3, 1.0):
+        rt.stats.thrash = {"lambda": 0.4}
+        rt._record_movement(core, _draw(core, (0.8, 0.1, 0.1)), f"a{r}")
+        rt._record_movement(core, _draw(core, (0.1, 0.8, 0.1)), f"niche{r}")  # TV 0.7
+        rt._record_movement(core, _draw(core, (0.1, 0.8, 0.1)), f"still{r}")  # no charge
+        assert rt.thrash_charges[f"niche{r}"] == pytest.approx(0.4 * 0.7)  # recorded
+        rt._contribution(f"niche{r}", "producer")["niche"] = True  # a protected trial
+        assert (_charged(rt, core, f"niche{r}", r)
+                == _charged(rt, core, f"still{r}", r))
+        assert f"niche{r}" not in rt.thrash_charges  # taken once, as any charge
+
+
 def test_the_roles_are_published_with_the_price():
     rt = make_runtime()
     rt.stats.thrash = {"lambda": 0.1, "penalty": 0.0, "roles": ["evaluator"]}

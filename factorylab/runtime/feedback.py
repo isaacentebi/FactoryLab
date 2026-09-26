@@ -2741,8 +2741,15 @@ class FeedbackMixin:
         charged: the thrash price lands on the tier whose behaviour moved (I-10;
         ``RoutingMixin._thrash_attributed``). Guarantees 0 for a round with none, and
         that a round's charge is returned at most once.
+
+        Guarantees 0 for a round drawn in the unhistoried niche (``_is_niche``, the one
+        predicate the card penalty reads): the niche is "delivered as a fact about the
+        world" (essay II.I.a; wave 16, R-E as amended), so failed exploration is never
+        learned as worse than a NOOP, however far the draw moved. Its movement is
+        still recorded (``RoutingMixin._record_movement``) for the diagnosis.
         """
-        return float(self.thrash_charges.pop(handle, 0.0))
+        charge = float(self.thrash_charges.pop(handle, 0.0))
+        return 0.0 if self._is_niche(handle) else charge
 
     def _learning_value(self, handle: str, raw: float, penalty: float, *,
                         router: Any = None) -> float:
