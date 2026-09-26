@@ -631,7 +631,7 @@ def test_the_published_net_evaluates_to_what_the_road_not_taken_is_priced_at(ent
     rt = make_runtime()
     text = rt._scoring_block()["verdict_is_a_prediction"]
     formula = _formula(text, "net = ", " bp")
-    assert "f0 + f1" in formula
+    assert "f0 + f1 * m1 / m0" in formula  # D7: the exit leg on the exit notional
     for side, s in (("buy", 1), ("sell", -1)):
         priced = opportunity_cost([("BTC", "100")], [("BTC", "100.3")], entry, exit_,
                                   {"coin": "BTC", "side": side}, rates)

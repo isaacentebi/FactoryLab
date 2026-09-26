@@ -492,7 +492,8 @@ consequence mix and ledgers `sampling.blind` (published in
 - for a return that executed nothing and named a declined trade
   (`counterfactual {coin, side}`): `declined-trade-net-v1` (wave 16, D1; ruling
   R2: "net of fees, priced ex ante on the named trade"). `net = s * (m1 - m0) / m0
-  * 10^4 - (f0 + f1) * 10^4` bp, `s` = +1 for a buy and -1 for a sell, `m0` the coin's
+  * 10^4 - (f0 + f1 * m1 / m0) * 10^4` bp (each fee leg on its own notional: the exit
+  leg on the exit notional, `m1 / m0` of the entry's), `s` = +1 for a buy and -1 for a sell, `m0` the coin's
   mid the world had broadcast when the return was made, `m1` its mid at the
   horizon, `f0` and `f1` the venue's taker fee rate for the coin's market (the spot
   schedule for a pair, the perp schedule otherwise; ruling R-I), each leg at its own

@@ -70,7 +70,9 @@ def test_the_same_prices_at_10s_and_30s_ticks_give_the_same_y_at_the_same_venue_
         results.append((priced["resolved_ns"] - start, priced["net_bps"], scored["y"],
                         scored["score"], rt.ticks_consumed - ticks_before))
     (fast, slow) = results
-    assert fast[:4] == slow[:4] == (90 * S, "11.0000", 0.0, fast[3])
+    # 18 bp against 3.5 bp in and 3.5 bp on the exit notional, 100.18 / 100 of the entry's
+    # (D7, Codex on #152): 18 - 3.5 - 3.5063.
+    assert fast[:4] == slow[:4] == (90 * S, "10.9937", 0.0, fast[3])
     assert fast[4] != slow[4]  # different tick counts, one venue-clock fact
 
 
@@ -100,7 +102,8 @@ def test_a_funding_time_inside_the_window_is_charged_at_the_venues_rate():
     _walk(rt, start, 10, 90, lambda s: "100.1")
     (priced,) = _rows(rt, "consequence.opportunity", handle=producer)
     assert priced["funding_payments"] == 1 and priced["funding_bps"] == "-4.0000"
-    assert priced["net_bps"] == "-1.0000" and priced["score"] == 1.0
+    # 10 bp - 3.5 bp - 3.5 * 100.1 / 100 bp - 4 bp (D7: the exit leg on the exit notional).
+    assert priced["net_bps"] == "-1.0035" and priced["score"] == 1.0
     assert rt.world_outcomes[producer]["y"] == 1.0
 
 

@@ -32,15 +32,27 @@ def _price(side, bps):
     return [("BTC", "10000")], [("BTC", str(Decimal(10_000) + move))]
 
 
+def _round_trip(side, bps, entry=TAKER, exit_=TAKER):
+    """The venue's round trip in bp of the entry notional (D7, Codex on #152): the entry
+    leg on the entry notional, the exit leg on the exit notional, after / before of it."""
+    (_, before), = _price(side, bps)[0]
+    (_, after), = _price(side, bps)[1]
+    return (Decimal(entry) + Decimal(exit_) * Decimal(after) / Decimal(before)) * 10_000
+
+
 @pytest.mark.parametrize("side", [BUY, SELL])
 @pytest.mark.parametrize("bps", ["0.01", "1", "4.5", "8.99", "9"])
 def test_a_move_the_round_trip_would_have_eaten_is_declining_right(side, bps):
     """Money sign: every 0 < g <= fee gives y = 1. The v2 tanh read such moves as the
-    hold being wrong, on trades that would have lost money after the venue's fee."""
+    hold being wrong, on trades that would have lost money after the venue's fee. The
+    fee is the round trip on each leg's own notional: 9 bp and 4.5 bp times the move on
+    the exit leg, so a 9 bp short's exit costs a little less and beats it."""
     priced = opportunity_cost(*_price(side, bps), TAKER, TAKER, side)
+    fee = _round_trip(side, bps)
     assert Decimal(priced["gross_bps"]) > 0
-    assert priced["round_trip_fee_bps"] == "9"
-    assert priced["score"] == 1.0
+    assert Decimal(priced["round_trip_fee_bps"]) == fee.quantize(Decimal("0.0001"))
+    assert priced["score"] == (1.0 if Decimal(bps) <= fee else 0.0)
+    assert priced["score"] == (0.0 if (side is SELL and bps == "9") else 1.0)
 
 
 @pytest.mark.parametrize("side", [BUY, SELL])
@@ -82,7 +94,9 @@ def test_a_funding_payment_inside_the_window_flips_y_where_its_term_crosses_zero
     assert doubled["score"] == (1.0 if flips else 0.0)
     assert doubled["funding_payments"] == 2
     # The rate term alone decides the flip: at a net of exactly zero declining is right.
-    exact = opportunity_cost(*path, TAKER, TAKER, side, ["0.0003" if side is BUY else "-0.0003"])
+    sign = 1 if side is BUY else -1
+    zero = sign * (Decimal("12") - _round_trip(side, "12")) / 10_000
+    exact = opportunity_cost(*path, TAKER, TAKER, side, [str(zero)])
     assert Decimal(exact["net_bps"]) == 0 and exact["score"] == 1.0
 
 
@@ -101,7 +115,7 @@ def test_the_attempted_trade_is_one_when_it_would_have_beaten_the_round_trip(sid
     for bps in ("-20", "0", "5", "9", "9.01", "40"):
         attempted = attempted_cost(*_price(side, bps), TAKER, TAKER, side)
         declined = opportunity_cost(*_price(side, bps), TAKER, TAKER, side)
-        assert attempted["score"] == (1.0 if Decimal(bps) > 9 else 0.0)
+        assert attempted["score"] == (1.0 if Decimal(bps) > _round_trip(side, bps) else 0.0)
         assert attempted["score"] + declined["score"] == 1.0
         assert attempted["attempted"] == side and attempted["net_bps"] == declined["net_bps"]
 
@@ -185,3 +199,65 @@ def test_a_listing_that_states_no_rate_prices_nothing():
     rt, _rows = _schedule_runtime(None, None)
     rt._read_fee_schedule()
     assert rt._taker_rate("BTC") is None and rt._taker_rate("PURR/USDC") is None
+
+
+# --- D7: the road not taken nets exactly what the same acting lot nets -----------------
+
+
+def _acting_net_micro(side, before, after, size, entry_rate, exit_rate):
+    """The net micro-USD of an acting lot opened at ``before`` (paying the entry leg on
+    its fill notional) and marked at ``after`` at the horizon (the exit leg on the mark's
+    notional, ``LotTable.resolve``), at the same instants and size."""
+    from factorylab.settlement.lots import LotTable
+
+    fee = Decimal(entry_rate) * Decimal(before) * Decimal(size)
+    table = LotTable().start("acting", 1, ns=1_000).finish("acting", 0).order(
+        "1", "acting", size)
+    table = table.fill(order_id="1", coin="BTC", is_buy=side is BUY, size=size, px=before,
+                       fee_usd=str(fee))
+    table = table.resolve(2, 20, {"BTC": after}, now_ns=1_060, horizon_ns=60,
+                          exit_rates={"perp": exit_rate})
+    return table.account("acting").payoff.net_micro
+
+
+def _counterfactual_micro(side, before, after, size, entry_rate, exit_rate):
+    """The named trade's exact net, in micro-USD of the same size."""
+    from factorylab.runtime.grounded import _net
+
+    priced = _net([("BTC", before)], [("BTC", after)], entry_rate, exit_rate, side, ())
+    return priced["_net"] / 10_000 * Decimal(before) * Decimal(size) * 1_000_000
+
+
+def test_codex_case_a_move_that_beats_the_entry_notional_round_trip_is_still_a_loss():
+    """Codex on #152: 100 -> 102.005 at 1% each way. On the entry notional the round
+    trip is 200 bp and the move 200.5 bp, a win; the exit leg is paid on 102.005, so the
+    round trip is 202.005 bp and the trade loses, as the same acting lot does."""
+    priced = opportunity_cost([("BTC", "100")], [("BTC", "102.005")], "0.01", "0.01", BUY)
+    assert Decimal(priced["exit_fee_bps"]) == Decimal("102.005")
+    assert Decimal(priced["net_bps"]) == Decimal("-1.505")
+    assert priced["score"] == 1.0  # declining was right
+    assert attempted_cost([("BTC", "100")], [("BTC", "102.005")], "0.01", "0.01",
+                          BUY)["score"] == 0.0
+    acting = _acting_net_micro(BUY, "100", "102.005", "1", "0.01", "0.01")
+    assert acting == -15_050 and (acting < 0) == (Decimal(priced["net_bps"]) < 0)
+
+
+def test_the_counterfactual_net_is_the_acting_lots_net_to_the_micro_usd():
+    """D7 as a property: over random entry and exit mids, sizes, sides and fee rates on
+    each leg, the named trade's net equals the net of an acting lot opened and marked at
+    the same instants and size, to the micro-USD (the lot's outcome is whole micro-USD,
+    rounded down)."""
+    import random
+
+    rng = random.Random(152)
+    for _ in range(400):
+        side = rng.choice((BUY, SELL))
+        before = Decimal(rng.randint(1, 10_000_000)) / 100
+        after = (before * Decimal(rng.randint(8_000, 12_000)) / 10_000).quantize(
+            Decimal("0.0001"))
+        size = str(Decimal(rng.randint(1, 100_000)) / 1_000)
+        entry, exit_ = (str(Decimal(rng.randint(0, 100)) / 10_000) for _ in range(2))
+        counterfactual = _counterfactual_micro(side, str(before), str(after), size, entry,
+                                               exit_)
+        acting = _acting_net_micro(side, str(before), str(after), size, entry, exit_)
+        assert 0 <= counterfactual - acting < 1, (side, before, after, size, entry, exit_)

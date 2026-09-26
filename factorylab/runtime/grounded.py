@@ -109,19 +109,22 @@ def _net(open_mids: Iterable[tuple[str, str]], due_mids: Iterable[tuple[str, str
          funding_rates: Iterable[Decimal | str]) -> dict[str, Any] | None:
     """The named trade's move over the horizon, net of the venue's round trip and funding.
 
-    Guarantees ``net_bps = s * (due - open) / open * 10^4 - (entry_rate + exit_rate) *
-    10^4 - s * sum(funding_rates) * 10^4`` in exact decimals, ``s`` = +1 for a buy and
-    -1 for a sell (longs pay a positive funding rate), or None when no trade is named,
-    a price is missing or unusable, or either leg's taker rate was never read (an
-    unread rate is never a number). Each leg pays its own rate (wave 16, D7: the road
-    not taken pays the round trip an acting lot opened and marked at the same instants
-    pays).
+    Guarantees ``net_bps = s * (due - open) / open * 10^4 - (entry_rate + exit_rate *
+    due / open) * 10^4 - s * sum(funding_rates) * 10^4`` in exact decimals, ``s`` = +1
+    for a buy and -1 for a sell (longs pay a positive funding rate), or None when no
+    trade is named, a price is missing or unusable, or either leg's taker rate was never
+    read (an unread rate is never a number). Each leg pays its own rate on its own
+    notional (wave 16, D7: the road not taken pays the round trip an acting lot opened
+    and marked at the same instants pays; Codex on #152): the entry leg on the entry
+    notional, the exit leg on the exit notional, as ``LotTable.resolve`` charges
+    ``mid * size * rate``, so in basis points of the entry notional the exit leg
+    scales by ``due / open``.
     """
     if named is None or entry_rate is None or exit_rate is None:
         return None
     opened = dict(open_mids)
     due = dict(due_mids)
-    moves = {}
+    moves, ratios = {}, {}
     for coin in sorted(set(opened) & set(due)):
         try:
             before, after = Decimal(opened[coin]), Decimal(due[coin])
@@ -129,6 +132,7 @@ def _net(open_mids: Iterable[tuple[str, str]], due_mids: Iterable[tuple[str, str
             continue
         if before > 0 and after > 0:
             moves[coin] = (after - before) / before * Decimal(10_000)
+            ratios[coin] = after / before
     move = moves.get(named["coin"])
     try:
         legs = (Decimal(str(entry_rate)), Decimal(str(exit_rate)))
@@ -140,16 +144,18 @@ def _net(open_mids: Iterable[tuple[str, str]], due_mids: Iterable[tuple[str, str
         return None
     sign = 1 if named["side"] == "buy" else -1
     gross = sign * move
-    entry_fee, exit_fee = (leg * Decimal(10_000) for leg in legs)
+    # The exit leg is paid on the exit notional: after / before of the entry's.
+    entry_fee = legs[0] * Decimal(10_000)
+    exit_fee = legs[1] * ratios[named["coin"]] * Decimal(10_000)
     fee = entry_fee + exit_fee
     funding = -sign * sum(rates, Decimal(0)) * Decimal(10_000)
     net = gross - fee + funding
     return {"moves": [{"coin": c, "move_bps": str(m.quantize(Decimal("0.01")))}
                       for c, m in moves.items()],
             "gross_bps": str(gross.quantize(Decimal("0.01"))),
-            "round_trip_fee_bps": str(fee.normalize()),
+            "round_trip_fee_bps": str(fee.quantize(Decimal("0.0001")).normalize()),
             "entry_fee_bps": str(entry_fee.normalize()),
-            "exit_fee_bps": str(exit_fee.normalize()),
+            "exit_fee_bps": str(exit_fee.quantize(Decimal("0.0001")).normalize()),
             "funding_bps": str(funding.quantize(Decimal("0.0001"))),
             "funding_payments": len(rates),
             "net_bps": str(net.quantize(Decimal("0.0001"))),
@@ -213,8 +219,9 @@ def opportunity_cost(open_mids: Iterable[tuple[str, str]],
     named trade would not have beaten the venue's round trip over the horizon
     (``net_bps <= 0``, declining was right in money) and ``y = 0`` otherwise, with
     ``net_bps`` from ``_net``: the gross move signed by the named side, less the
-    venue's taker rate on each leg (``entry_rate`` in force at the decision, the ex-ante
-    element; ``exit_rate`` in force at the horizon), less the funding the named side
+    venue's taker rate on each leg's own notional (``entry_rate`` in force at the
+    decision, the ex-ante element, on the entry notional; ``exit_rate`` in force at the
+    horizon, on the exit notional), less the funding the named side
     would have paid at the venue's funding times inside the horizon. Every term is a
     money fact the venue states; no scale is an architect's. Returns None when no trade
     is named, a price is missing or either leg's taker rate is unread: a bare hold has

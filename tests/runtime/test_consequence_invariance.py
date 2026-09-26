@@ -433,7 +433,11 @@ def test_every_batching_of_the_same_world_facts_gives_the_same_outcomes():
     # still resolves, since it never waits on them.
     assert named["N-PURR2"][0] == "measured"
     btc = named["N-BTC"][2]
-    assert (btc["entry_fee_bps"], btc["exit_fee_bps"]) == ("4.5", "3.5")
+    # Each leg at its own rate on its own notional (D7): the exit leg's 3.5 bp is paid on
+    # the exit notional, the entry's scaled by the move (Codex on #152).
+    (move,) = [float(m["move_bps"]) for m in btc["moves"] if m["coin"] == "BTC"]
+    assert btc["entry_fee_bps"] == "4.5"
+    assert abs(float(btc["exit_fee_bps"]) - 3.5 * (1 + move / 10_000)) <= 1e-4
     assert btc["funding_payments"] == 1  # the hour boundary at 60 s, inside its window
     fixed = {row["handle"]: row for row in outcome["rows"]
              if row["kind"] == "consequence.outcome"}
