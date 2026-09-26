@@ -211,6 +211,19 @@ def _context(text: str, quote: str) -> str:
     return " ".join(parts[max(0, hit - 2):hit + 3])
 
 
+def allowed_in_context(text: str, entry: dict) -> bool:
+    """Whether ``entry`` excuses its quote in the leaf ``text``: the quote stands in it
+    and every ``context_words`` word stands within two sentences of it (Astra M-4). An
+    entry with no context words excuses nothing."""
+    quote, words = str(entry.get("quote", "")), entry.get("context_words")
+    if not quote.strip() or quote.casefold() not in text.casefold():
+        return False
+    if not isinstance(words, list) or not words:
+        return False
+    context = _context(text, quote)
+    return all(isinstance(w, str) and w.casefold() in context for w in words)
+
+
 @dataclass(frozen=True)
 class Triaged:
     """The lint after the allowlist: what remains, what each entry excused, what drifted."""
@@ -236,9 +249,7 @@ def apply_allowlist(findings: Iterable[Finding], leaves: Iterable[tuple[str, str
                     or entry["quote"].casefold() not in finding.quote):
                 continue
             used.add(index)
-            context = " ".join(_context(t, entry["quote"]) for t in texts.get(finding.path, ())
-                               if entry["quote"].casefold() in t.casefold())
-            if all(w.casefold() in context for w in entry["context_words"]):
+            if any(allowed_in_context(t, entry) for t in texts.get(finding.path, ())):
                 excused = True
             else:
                 review.append(finding)

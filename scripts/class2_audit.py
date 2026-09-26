@@ -33,10 +33,11 @@ does everything around that call, offline:
             ``provenance_id``) and its sample number (1 and 2, once each); every corpus
             finding passes its schema (fields, enums, its leaf in the corpus, its class
             and severity the rubric's); every summary covers every leaf of the corpus,
-            context included (none unread, none unaccounted for) and counts its findings by class; every
-            provenance sample answers every commit once; at least 7 of the 8 canaries
-            are found in the union and every mandatory one (Q6, Q7, Q9, Q10) is; and at most
-            1 of 10 controls is flagged. An invalid audit is rerun with the next family.
+            context included (none unread, none unaccounted for) and counts its
+            findings by class; every provenance sample answers every commit once; at
+            least 7 of the 8 canaries are found in the union and every mandatory one
+            (Q6, Q7, Q9, Q10) is; and at most 1 of 10 controls is flagged. An
+            invalid audit is rerun with the next family.
   triage    From a valid audit, write ``docs/audits/class2/<world>.md``: one row per
             finding the world owns, that world's findings of the union (a finding one
             sample alone made is low confidence) and every commit the provenance pass
@@ -115,6 +116,7 @@ if str(ROOT) not in sys.path:
 
 from tests.audit import class2_corpus as corpus  # noqa: E402
 from tests.audit.class2_corpus import RenderFailed  # noqa: E402
+from tests.audit.class2_lexicon import allowed_in_context  # noqa: E402
 
 #: The policy and evidence the tool reads, as repository paths. Every one is read from
 #: the release commit being audited or gated (``committed_text``: ``git show
@@ -1885,10 +1887,14 @@ def allowed_dispositions(finding: dict) -> frozenset[str]:
 
 def disposition_problems(text: str, expected: list[dict], *, allowlist: dict,
                          rejected: list[dict], repo: Path | None = None,
-                         release: str | None = None) -> list[str]:
+                         release: str | None = None,
+                         records: dict[str, dict] | None = None) -> list[str]:
     """Why a row's disposition is not one the rubric allows its finding, or is not
     backed where the protocol says it lands: an ALLOW by an allowlist entry covering
-    the finding's path and quote and naming its question and class; a REJECT by a
+    the finding's path and quote and naming its question and class, whose quote stands
+    in the finding's current corpus leaf (``records``, by leaf id) with its
+    ``context_words`` within two sentences of it (``class2_lexicon.allowed_in_context``,
+    the check the lint applies), so an entry whose context drifted backs nothing; a REJECT by a
     ``rejected.jsonl`` row naming the finding by its full identity (``finding_identity``)
     with its reason; a REVERTED by the repository itself: the flagged commit's
     seat-visible text is absent at ``release`` (``reverted_problems``), recomputed here.
@@ -1907,13 +1913,22 @@ def disposition_problems(text: str, expected: list[dict], *, allowlist: dict,
         if disposition not in allowed_dispositions(f):
             problems.append(f"{ident}: {disposition} is not a disposition the rubric allows "
                             f"this finding ({sorted(allowed_dispositions(f))})")
-        if disposition == "ALLOW" and not any(
-                fnmatch.fnmatchcase(str(f.get("path")), entry.get("path", ""))
-                and entry.get("quote", "\0") in str(f.get("quote", ""))
-                and (entry.get("question"), entry.get("class")) == ident[1:]
-                for entry in allowlist.get("allow", ())):
-            problems.append(f"{ident}: ALLOW with no allowlist entry covering its path, "
-                            "quote, question and class")
+        if disposition == "ALLOW":
+            covering = [entry for entry in allowlist.get("allow", ())
+                        if fnmatch.fnmatchcase(str(f.get("path")), entry.get("path", ""))
+                        and entry.get("quote", "\0") in str(f.get("quote", ""))
+                        and (entry.get("question"), entry.get("class")) == ident[1:]]
+            leaf = (records or {}).get(str(f.get("leaf_id")))
+            if not covering:
+                problems.append(f"{ident}: ALLOW with no allowlist entry covering its "
+                                "path, quote, question and class")
+            elif leaf is None or not any(
+                    allowed_in_context(str(leaf.get("text", "")), entry)
+                    for entry in covering):
+                # Astra M-4: an entry excuses its quote only in the context it was
+                # written for; the leaf read is the corpus's, never the finding's copy.
+                problems.append(f"{ident}: ALLOW whose allowlist entry's quote or "
+                                "context_words no longer stand in the finding's leaf")
         if disposition == "REJECT" and finding_identity(f) not in rejected_ids:
             problems.append(f"{ident}: REJECT not recorded in rejected.jsonl under its "
                             "identity")
@@ -2171,7 +2186,8 @@ def gate(world: str, triage: Path, key_path: Path, samples: list[Path],
     return (problems + release_gate(text, expected=expected)
             + disposition_problems(text, expected, allowlist=allowlist,
                                    repo=repo, release=key["release_commit"],
-                                   rejected=rejected))
+                                   rejected=rejected,
+                                   records={r["leaf_id"]: r for r in records}))
 
 
 def build_parser() -> argparse.ArgumentParser:

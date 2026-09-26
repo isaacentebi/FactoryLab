@@ -1811,15 +1811,40 @@ def _q4_allowed(triaged):
     return reviewed.replace(row, row.replace("| REJECT |", "| ALLOW |")), finding
 
 
+def _leaf_words(records, finding):
+    """Two words of the finding's own leaf, near its quote."""
+    return finding["quote"].split()[:2]
+
+
 def test_an_allowlist_entry_backs_only_the_finding_of_its_question_and_class(triaged):
     text, finding = _q4_allowed(triaged)
     expected = [finding]
+    records = {r["leaf_id"]: r for r in _records(triaged[0])}
     for question, ok in (("Q6", False), ("Q4", True)):
         entry = {"path": finding["path"], "quote": finding["quote"], "question": question,
-                 "class": "C1"}
-        problems = tool.disposition_problems(text, expected, rejected=[],
+                 "class": "C1", "context_words": _leaf_words(records, finding)}
+        problems = tool.disposition_problems(text, expected, rejected=[], records=records,
                                              allowlist={"collocation": [], "allow": [entry]})
         assert any("no allowlist entry" in p for p in problems) is not ok, problems
+        assert bool(problems) is not ok, problems
+
+
+def test_an_allow_whose_context_drifted_is_refused_at_gate(triaged):
+    """Codex on d1f0903: the gate re-reads the finding's current corpus leaf; an entry
+    whose context_words no longer stand near its quote, or whose quote is gone from the
+    leaf, backs no ALLOW, whatever the finding's own copy of the quote says."""
+    text, finding = _q4_allowed(triaged)
+    records = {r["leaf_id"]: r for r in _records(triaged[0])}
+    entry = {"path": finding["path"], "quote": finding["quote"], "question": "Q4",
+             "class": "C1", "context_words": _leaf_words(records, finding)}
+    drifted = {**entry, "context_words": ["zzqx-not-in-this-leaf"]}
+    leaf = records[finding["leaf_id"]]
+    moved = {**records, finding["leaf_id"]: {**leaf, "text": "Rewritten entirely."}}
+    for allow, recs in ((drifted, records), (entry, moved), (entry, None),
+                        ({k: v for k, v in entry.items() if k != "context_words"}, records)):
+        problems = tool.disposition_problems(text, [finding], rejected=[], records=recs,
+                                             allowlist={"collocation": [], "allow": [allow]})
+        assert any("no longer stand" in p for p in problems), problems
 
 
 def test_no_policy_or_evidence_read_bypasses_the_release_commit():
