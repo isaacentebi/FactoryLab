@@ -212,12 +212,16 @@ uv run python scripts/class2_audit.py gate --world <world> --release <release sh
 `render` audits the repository it runs in: the range's head must be the commit checked
 out (HEAD), with no uncommitted change under a seat-visible path, and the key records
 that commit (`release_commit`); `gate` refuses a key of any other release (`--release`,
-default HEAD). The range's base is the last audited release: the SHA
-`docs/audits/class2/last_release` holds as committed at the release (before the first
+default HEAD). The range's base is the last audited release: the commit
+`docs/audits/class2/last_release` records as committed at the release (before the first
 release there is no such file, and the base is the repository root, whose own commit the
-provenance pass also reads). `render` refuses any other base, and a `--previous` triage
-file of any other release; `gate` re-verifies the base and recomputes the provenance
-prompt from the range. When a gate passes it writes the release's SHA to
+provenance pass also reads). After the first release `--previous` and
+`--previous-corpus` are required, and each must be the file the last release's gate
+recorded: `last_release` holds the release corpus's sha256 and each gated world's triage
+sha256. `render` refuses any other base or previous file (and any previous file on the
+first release); `gate` re-verifies the base and the previous digests the key names, and
+recomputes the provenance prompt from the range. When a gate passes it writes the
+release, its release corpus's digest and the gated triage file's digest to
 `last_release`; commit it with the triage files. `render` fills the authority text from `--essay` (default `docs/essay.md`, which is
 copied into the worktree and never committed) and refuses to render without it, or when
 it lacks a heading that bounds the text. No prompt is ever edited after rendering: both

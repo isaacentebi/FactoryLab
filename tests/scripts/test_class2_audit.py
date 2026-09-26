@@ -78,6 +78,34 @@ def history(tmp_path_factory):
     return repo, base, surface, head
 
 
+def _triage_text(base, rel, world=WORLD):
+    """A gated triage file of ``world`` for the release ``rel`` (its range base..rel)."""
+    return (f"# Class 2 audit triage: {world}\n\n- Auditor family: fam-x\n"
+            f"- World: {world}\n- Corpus: abc\n- Release range: r ({base}..{rel})\n\n"
+            "| id | path | question | class | severity | confidence | quote | "
+            "disposition | reason |\n|---|---|---|---|---|---|---|---|---|\n")
+
+
+def _release_repo(where, prior):
+    """A repository whose last audited release is ``rel``, gated with ``prior`` as its
+    release corpus and a triage file of WORLD, both recorded in ``LAST_RELEASE`` at the
+    head; one surface commit before the release and one after."""
+    repo = where / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    root = _commit(repo, "README.md", "x\n", "root")
+    early = _commit(repo, "factorylab/cortex/schematics.py", "HOLD = 'hold'\n", "early")
+    rel = _commit(repo, "docs/notes.md", "release\n", "the release audited last")
+    later = _commit(repo, "factorylab/cortex/schematics.py", "HOLD = 'keep'\n", "later")
+    triage = where / f"{WORLD}.md"
+    triage.write_text(_triage_text(root, rel))
+    record = {"release_commit": rel, "release_corpus_sha": tool.sha256_file(prior),
+              "triages": {WORLD: tool.sha256_file(triage)}}
+    head = _commit(repo, tool.LAST_RELEASE, json.dumps(record) + "\n",
+                   "record the last release")
+    return repo, (root, early, rel, later, head), triage
+
+
 @pytest.fixture(scope="module")
 def rendered(tmp_path_factory, history):
     repo, base, _surface, head = history
@@ -655,8 +683,12 @@ def test_the_provenance_finding_reaches_the_triage_and_the_gate(triaged, monkeyp
     last = REPO[0] / tool.LAST_RELEASE
     try:
         assert tool.main(gate()) == 0
-        # The gate records the release it passed, for the next range to start at.
-        assert last.read_text() == key["release_commit"] + "\n"
+        # The gate records the release it passed, for the next range to start at,
+        # with its release corpus's digest and the triage file it gated.
+        assert json.loads(last.read_text()) == {
+            "release_commit": key["release_commit"],
+            "release_corpus_sha": key["release_corpus_sha"],
+            "triages": {WORLD: tool.sha256_file(path)}}
     finally:
         last.unlink(missing_ok=True)
 
@@ -762,9 +794,11 @@ def _diffed(rendered, history, tmp_path):
     (tmp_path / "rejected.jsonl").write_text(json.dumps(
         {"finding_id": "f1", "path": changed["path"], "question": "Q4", "class": "C1",
          "reason": "a formula"}) + "\n")
+    repo, (_root, _early, rel, _later, head), triage = _release_repo(
+        tmp_path, tmp_path / "prior.jsonl")
     release = tmp_path / "release"
     tool.render([WORLD], release, seed=7, rendered=False, essay=ESSAY,
-                release_range=f"{base}..{head}", repo=repo,
+                release_range=f"{rel}..{head}", repo=repo, previous=triage,
                 previous_corpus=tmp_path / "prior.jsonl", rejected=tmp_path / "rejected.jsonl")
     return release, changed, added
 
@@ -829,10 +863,16 @@ def test_render_refuses_an_unbound_or_malformed_input(rendered, history, tmp_pat
     written."""
     repo, base, _surface, head = history
     (tmp_path / name).write_text(content)
+    read = {"prior.jsonl": tool.read_corpus, "rejected.jsonl": tool.read_rejected,
+            "previous.md": lambda path: tool.read_previous_triage(path, [WORLD])}[name]
+    with pytest.raises(tool.AuditInputInvalid, match=why):
+        read(tmp_path / name)
     kw = {"prior.jsonl": {"previous_corpus": tmp_path / name},
           "rejected.jsonl": {"rejected": tmp_path / name},
           "previous.md": {"previous": tmp_path / name}}[name]
-    with pytest.raises(tool.AuditInputInvalid, match=why):
+    # On a first release a previous file is refused before it is read at all.
+    refused = why if name == "rejected.jsonl" else "the first release has no previous"
+    with pytest.raises(tool.AuditInputInvalid, match=refused):
         tool.render([WORLD], tmp_path / "out", seed=7, rendered=False, essay=ESSAY,
                     release_range=f"{base}..{head}", repo=repo, **kw)
     assert not (tmp_path / "out").exists()
@@ -1087,12 +1127,13 @@ def test_bnd3_the_previous_corpus_is_required_and_verified(rendered, history, tm
     """Sol BND-3: the key names the previous corpus it diffed against; a key without the
     field, or a previous corpus changed since, is refused."""
     out, _key = rendered
-    repo, base, _surface, head = history
     prior = tmp_path / "prior.jsonl"
     prior.write_bytes((out / "release_corpus.jsonl").read_bytes())
+    repo, (_root, _early, rel, _later, head), triage = _release_repo(tmp_path, prior)
     release = tmp_path / "release"
     tool.render([WORLD], release, seed=7, rendered=False, essay=ESSAY,
-                release_range=f"{base}..{head}", repo=repo, previous_corpus=prior)
+                release_range=f"{rel}..{head}", repo=repo, previous=triage,
+                previous_corpus=prior)
     key, _records = tool.load_key(release / "canary_key.json")
     assert key["previous_corpus"] == str(prior.resolve())
     prior.write_text(prior.read_text() + "\n")
@@ -1199,33 +1240,73 @@ def test_bnd1_a_disposition_must_be_one_the_rubric_allows_and_the_protocol_backs
 
 
 @pytest.fixture(scope="module")
-def released(tmp_path_factory):
+def released(tmp_path_factory, rendered):
     """A repository whose last audited release is ``rel`` (``LAST_RELEASE`` committed at
-    the head), with one surface commit before it and one after."""
-    repo = tmp_path_factory.mktemp("released")
-    _git(repo, "init", "-q")
-    root = _commit(repo, "README.md", "x\n", "root")
-    early = _commit(repo, "factorylab/cortex/schematics.py", "HOLD = 'hold'\n", "early")
-    rel = _commit(repo, "docs/notes.md", "release\n", "the release audited last")
-    later = _commit(repo, "factorylab/cortex/schematics.py", "HOLD = 'keep'\n", "later")
-    head = _commit(repo, tool.LAST_RELEASE, rel + "\n", "record the last release")
-    return repo, root, early, rel, later, head
+    the head, with its gated release corpus and triage file), with one surface commit
+    before it and one after. Returns the repository, its commits and the two files."""
+    where = tmp_path_factory.mktemp("released")
+    prior = where / "prior.jsonl"
+    prior.write_bytes((rendered[0] / "release_corpus.jsonl").read_bytes())
+    repo, (root, early, rel, later, head), triage = _release_repo(where, prior)
+    return repo, root, early, rel, later, head, prior, triage
+
+
+def _previous(released):
+    """The previous files a render of ``released``'s next release must name."""
+    return {"previous": released[7], "previous_corpus": released[6]}
 
 
 def test_the_range_base_is_the_last_audited_release(released, tmp_path):
     """Codex P1 (class2_audit.py:670): a base after the last release (``HEAD^``) would
     hide the commits between them from the provenance pass; the base is the release
     ``LAST_RELEASE`` names as committed at the head, and nothing else."""
-    repo, root, early, rel, later, head = released
+    repo, root, early, rel, later, head, *_files = released
     for base in (later, root, early):
         with pytest.raises(tool.AuditInputInvalid, match="not the last audited release"):
             tool.render([WORLD], tmp_path / "out", seed=7, rendered=False, essay=ESSAY,
-                        release_range=f"{base}..{head}", repo=repo)
+                        release_range=f"{base}..{head}", repo=repo, **_previous(released))
         assert not (tmp_path / "out").exists()
     key = tool.render([WORLD], tmp_path / "out", seed=7, rendered=False, essay=ESSAY,
-                      release_range=f"{rel}..{head}", repo=repo)
+                      release_range=f"{rel}..{head}", repo=repo, **_previous(released))
     assert [c["sha"] for c in key["provenance_commits"]] == [later]
     assert tool.range_problems(repo, key) == []
+
+
+def test_a_release_after_the_first_needs_the_gated_previous_files(released, tmp_path):
+    """Codex P1 (class2_audit.py:782): after the first release ``--previous`` and
+    ``--previous-corpus`` are required, and each must be the file the last release's
+    gate recorded (``LAST_RELEASE``: the corpus digest and the world's triage digest);
+    a schema-valid corpus of another release, or another triage, is refused."""
+    repo, _root, _early, rel, _later, head, prior, triage = released
+    render = lambda **kw: tool.render([WORLD], tmp_path / "out", seed=7,  # noqa: E731
+                                      rendered=False, essay=ESSAY,
+                                      release_range=f"{rel}..{head}", repo=repo, **kw)
+    for kw in ({}, {"previous": triage}, {"previous_corpus": prior}):
+        with pytest.raises(tool.AuditInputInvalid, match="needs the last release's"):
+            render(**kw)
+    other = tmp_path / "other.jsonl"
+    other.write_text("\n".join(prior.read_text().splitlines()[1:]) + "\n")
+    assert tool.read_corpus(other)  # schema-valid, and still not the release's corpus
+    with pytest.raises(tool.AuditInputInvalid, match="release corpus the last release"):
+        render(previous=triage, previous_corpus=other)
+    edited = tmp_path / f"{WORLD}.md"
+    edited.write_text(triage.read_text() + "\n")
+    with pytest.raises(tool.AuditInputInvalid, match="triage file of 'scripted'"):
+        render(previous=edited, previous_corpus=prior)
+    assert not (tmp_path / "out").exists()
+    key = render(previous=triage, previous_corpus=prior)
+    assert key["previous_corpus_sha"] == tool.sha256_file(prior)
+    assert key["previous_triage_sha256"] == tool.sha256_file(triage)
+
+
+def test_the_gate_record_adds_each_world_of_one_release(tmp_path):
+    key = {"release_commit": "a" * 40, "release_corpus_sha": "b" * 64}
+    tool.write_last_release(tmp_path, key, world="w1", triage_sha256="c" * 64)
+    path = tool.write_last_release(tmp_path, key, world="w2", triage_sha256="d" * 64)
+    assert json.loads(path.read_text())["triages"] == {"w1": "c" * 64, "w2": "d" * 64}
+    later = key | {"release_commit": "e" * 40}
+    tool.write_last_release(tmp_path, later, world="w1", triage_sha256="f" * 64)
+    assert json.loads(path.read_text())["triages"] == {"w1": "f" * 64}
 
 
 def test_the_first_release_starts_at_the_repository_root(history, tmp_path):
@@ -1251,13 +1332,23 @@ def test_a_malformed_or_foreign_last_release_is_refused(tmp_path):
     _git(repo, "init", "-q")
     root = _commit(repo, "README.md", "x\n", "root")
     head = _commit(repo, tool.LAST_RELEASE, "HEAD~1\n", "not a sha")
+    with pytest.raises(tool.AuditInputInvalid, match="not the gate's record"):
+        tool.release_base(repo, root, head)
+    head = _commit(repo, tool.LAST_RELEASE, json.dumps({"release_commit": "HEAD~1"}),
+                   "not a sha either")
     with pytest.raises(tool.AuditInputInvalid, match="not one commit SHA"):
+        tool.release_base(repo, root, head)
+    head = _commit(repo, tool.LAST_RELEASE, json.dumps({"release_commit": root}),
+                   "a release with no digests")
+    with pytest.raises(tool.AuditInputInvalid, match="no release corpus digest"):
         tool.release_base(repo, root, head)
     main = _git(repo, "rev-parse", "--abbrev-ref", "HEAD")
     _git(repo, "checkout", "-q", "-b", "side", root)
     stray = _commit(repo, "README.md", "y\n", "a commit on another line")
     _git(repo, "checkout", "-q", main)
-    head = _commit(repo, tool.LAST_RELEASE, stray + "\n", "a release not in this history")
+    record = {"release_commit": stray, "release_corpus_sha": "0" * 64,
+              "triages": {WORLD: "1" * 64}}
+    head = _commit(repo, tool.LAST_RELEASE, json.dumps(record), "a release not in this history")
     with pytest.raises(tool.AuditInputInvalid, match="not a commit before"):
         tool.release_base(repo, stray, head)
 
@@ -1266,10 +1357,14 @@ def test_the_gate_re_verifies_the_range_against_the_last_release(released, tmp_p
     """The gate recomputes the range's base from the release commit and the provenance
     prompt from the range: a key naming another base, or a prompt of another range, is
     refused at gate time."""
-    repo, _root, _early, rel, later, head = released
+    repo, _root, _early, rel, later, head, *_files = released
     key = tool.render([WORLD], tmp_path / "out", seed=7, rendered=False, essay=ESSAY,
-                      release_range=f"{rel}..{head}", repo=repo)
+                      release_range=f"{rel}..{head}", repo=repo, **_previous(released))
     assert tool.range_problems(repo, key) == []
+    for field in ("previous_corpus_sha", "previous_triage_sha256"):
+        other = key | {field: "2" * 64}
+        assert any("last release's gate recorded" in p
+                   for p in tool.range_problems(repo, other)), field
     moved = key | {"range_shas": [later, head], "range": f"{later}..{head}"}
     assert any("not the last audited release" in p for p in tool.range_problems(repo, moved))
     other = key | {"provenance_id": "0" * 64}
@@ -1279,17 +1374,14 @@ def test_the_gate_re_verifies_the_range_against_the_last_release(released, tmp_p
 def test_a_previous_triage_must_be_the_last_releases(released, tmp_path):
     """``--previous`` is the last release's triage: one recording another release is
     refused, and so is any on the first release."""
-    repo, root, early, rel, _later, head = released
-    header = ("# Class 2 audit triage: scripted\n\n- Auditor family: fam-x\n"
-              "- World: scripted\n- Corpus: abc\n- Release range: r ({}..{})\n\n"
-              "| id | path | question | class | severity | confidence | quote | "
-              "disposition | reason |\n|---|---|---|---|---|---|---|---|---|\n")
-    stale = tmp_path / "stale.md"
-    stale.write_text(header.format(root, early))
-    with pytest.raises(tool.AuditInputInvalid, match="not the last audited release"):
+    repo, root, early, rel, _later, head, prior, _triage = released
+    stale = tmp_path / f"{WORLD}.md"
+    stale.write_text(_triage_text(root, early))
+    with pytest.raises(tool.AuditInputInvalid, match="the last release's gate recorded"):
         tool.render([WORLD], tmp_path / "out", seed=7, rendered=False, essay=ESSAY,
-                    release_range=f"{rel}..{head}", repo=repo, previous=stale)
-    assert tool.triage_release(header.format(root, rel)) == rel
+                    release_range=f"{rel}..{head}", repo=repo, previous=stale,
+                    previous_corpus=prior)
+    assert tool.triage_release(_triage_text(root, rel)) == rel
 
 
 def test_a_rejected_record_backs_only_the_finding_of_its_question_and_class(triaged):

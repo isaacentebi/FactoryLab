@@ -113,10 +113,14 @@ CANARIES = ROOT / "docs/audits/class2/canaries.json"
 REJECTED = ROOT / "docs/audits/class2/rejected.jsonl"
 PROTOCOL = ROOT / "docs/audits/class2/auditor-protocol.md"
 TRIAGE_DIR = ROOT / "docs/audits/class2"
-#: The last audited release's commit, one SHA on one line, tracked in the repository and
-#: written by the gate when a release passes it. A release's range starts there; before
-#: the first release it is absent and the range starts at the repository root.
+#: The last audited release, tracked in the repository and written by the gate when a
+#: release passes it: a JSON object naming its commit (``release_commit``), the digest
+#: of the release corpus the next release diffs against (``release_corpus_sha``) and
+#: the sha256 of each world's triage file as gated (``triages``). A release's range
+#: starts at that commit, and its ``--previous-corpus`` and ``--previous`` must be those
+#: files; before the first release it is absent and the range starts at the root.
 LAST_RELEASE = "docs/audits/class2/last_release"
+SHA256 = re.compile(r"[0-9a-f]{64}")
 #: The overall calibration bar (Astra H-2): at least this many of the canaries found.
 MIN_CANARIES = 7
 #: At most this many of the clean controls may be flagged.
@@ -562,24 +566,71 @@ def release_commit(repo: Path, release_range: str) -> str:
     return head
 
 
-def prior_release(repo: Path, commit: str) -> str | None:
-    """The release audited before ``commit``: the SHA ``LAST_RELEASE`` holds as committed
-    in ``commit`` (never a worktree copy, so the value is the one reviewed with that
+def last_release(repo: Path, commit: str) -> dict | None:
+    """The release audited before ``commit``, as ``LAST_RELEASE`` records it committed in
+    ``commit`` (never a worktree copy, so the record is the one reviewed with that
     commit), or None when ``commit`` has no such file (the first release). Refused
-    unless it is one full commit SHA and an ancestor of ``commit``."""
+    unless it is the gate's record: a full commit SHA that is an ancestor of ``commit``,
+    the release corpus's sha256, and a sha256 per world's gated triage file."""
     exists = subprocess.run(["git", "-C", str(repo), "cat-file", "-e",
                              f"{commit}:{LAST_RELEASE}"], capture_output=True)
     if exists.returncode != 0:
         return None
-    sha = _git(repo, "show", f"{commit}:{LAST_RELEASE}").strip()
-    if not re.fullmatch(r"[0-9a-f]{40}", sha):
-        raise AuditInputInvalid(f"{LAST_RELEASE} holds {sha[:60]!r}, not one commit SHA")
+    text = _git(repo, "show", f"{commit}:{LAST_RELEASE}")
+    try:
+        record = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise AuditInputInvalid(f"{LAST_RELEASE} is not the gate's record: {exc}") from exc
+    sha = record.get("release_commit") if isinstance(record, dict) else None
+    triages = record.get("triages") if isinstance(record, dict) else None
+    if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise AuditInputInvalid(f"{LAST_RELEASE} holds {text[:60]!r}, not one commit SHA")
+    if (not SHA256.fullmatch(str(record.get("release_corpus_sha")))
+            or not isinstance(triages, dict) or not triages
+            or not all(isinstance(w, str) and SHA256.fullmatch(str(h))
+                       for w, h in triages.items())):
+        raise AuditInputInvalid(f"{LAST_RELEASE} records no release corpus digest or no "
+                                "gated triage digests")
     ancestor = subprocess.run(["git", "-C", str(repo), "merge-base", "--is-ancestor", sha,
                                commit], capture_output=True)
     if ancestor.returncode != 0:
         raise AuditInputInvalid(f"{LAST_RELEASE} names {sha[:12]}, which is not a commit "
                                 f"before {commit[:12]}")
-    return sha
+    return record
+
+
+def prior_release(repo: Path, commit: str) -> str | None:
+    """The commit of the release audited before ``commit`` (``last_release``), or None."""
+    record = last_release(repo, commit)
+    return None if record is None else record["release_commit"]
+
+
+def previous_problems(repo: Path, head: str, *, first: bool, previous: Path | None,
+                      previous_corpus: Path | None) -> list[str]:
+    """Why ``previous`` and ``previous_corpus`` are not the last release's, as its gate
+    recorded them (``last_release``): after the first release both are required, the
+    corpus must hash to the recorded ``release_corpus_sha`` and the triage file to the
+    recorded digest of its world's gated triage; the first release has neither."""
+    if first:
+        given = [n for n, v in (("--previous", previous),
+                                ("--previous-corpus", previous_corpus)) if v is not None]
+        return [f"{', '.join(given)}: the first release has no previous release"] if given \
+            else []
+    record = last_release(repo, head)
+    if previous is None or previous_corpus is None:
+        return ["a release after the first needs the last release's --previous triage "
+                "file and --previous-corpus, as its gate recorded them"]
+    problems = []
+    if sha256_file(previous_corpus) != record["release_corpus_sha"]:
+        problems.append(f"{previous_corpus} is not the release corpus the last release's "
+                        f"gate recorded ({record['release_corpus_sha'][:12]})")
+    text = Path(previous).read_text()
+    world = text.splitlines()[0].removeprefix("# Class 2 audit triage: ").strip() \
+        if text else ""
+    if record["triages"].get(world) != sha256_file(previous):
+        problems.append(f"{previous} is not the triage file of {world!r} the last "
+                        "release's gate recorded")
+    return problems
 
 
 def release_base(repo: Path, base: str, head: str) -> bool:
@@ -777,6 +828,10 @@ def render(worlds: list[str], out: Path, *, seed: int, rendered: bool, release_r
     commits = provenance_commits(repo, release_range, from_root=first)
     provenance = provenance_section(release_range, commits)
     provenance_id = hashlib.sha256(provenance.encode()).hexdigest()
+    bound = previous_problems(repo, range_shas[1], first=first, previous=previous,
+                              previous_corpus=previous_corpus)
+    if bound:
+        raise AuditInputInvalid("; ".join(bound))
     prior = read_corpus(previous_corpus) if previous_corpus is not None else None
     rejected_rows = read_rejected(rejected)
     previous_text = read_previous_triage(previous, worlds)
@@ -820,6 +875,8 @@ def render(worlds: list[str], out: Path, *, seed: int, rendered: bool, release_r
                                 if previous_corpus is not None else None),
         "previous_corpus": (str(Path(previous_corpus).resolve())
                             if previous_corpus is not None else None),
+        "previous_triage_sha256": (sha256_file(previous)
+                                   if previous is not None else None),
         "essay_sha": sha256_file(essay) if essay is not None and essay.exists() else None,
     })
     (out / "canary_key.json").write_text(json.dumps(key, indent=1, sort_keys=True) + "\n")
@@ -946,8 +1003,10 @@ def load_key(path: Path) -> tuple[dict, list[dict]]:
     bad = [n for n, t in required.items() if not isinstance(key.get(n), t)]
     if bad or key.get("schema") != KEY_SCHEMA:
         raise AuditInputInvalid(f"the key is not a schema-{KEY_SCHEMA} key: {bad}")
-    if "previous_corpus_sha" not in key or "previous_corpus" not in key:
-        raise AuditInputInvalid("the key records no previous corpus (null for a first audit)")
+    if ("previous_corpus_sha" not in key or "previous_corpus" not in key
+            or "previous_triage_sha256" not in key):
+        raise AuditInputInvalid("the key records no previous corpus or triage (null for a "
+                                "first audit)")
     if (key["previous_corpus_sha"] is None) != (key["previous_corpus"] is None):
         raise AuditInputInvalid("the key's previous corpus and its hash disagree")
     if key["previous_corpus"] is not None:
@@ -1450,6 +1509,14 @@ def range_problems(repo: Path, key: dict) -> list[str]:
         first = release_base(repo, base, head)
     except AuditInputInvalid as exc:
         return [f"the key's range is not the release's: {exc}"]
+    record = None if first else last_release(repo, head)
+    if first and (key["previous_corpus_sha"] or key["previous_triage_sha256"]):
+        return ["the key of a first release names a previous release"]
+    if record is not None and (key["previous_corpus_sha"] != record["release_corpus_sha"]
+                               or key["previous_triage_sha256"]
+                               not in record["triages"].values()):
+        return ["the key's previous corpus or triage is not the one the last release's "
+                "gate recorded"]
     section = provenance_section(key["range"], provenance_commits(
         repo, f"{base}..{head}", from_root=first))
     if hashlib.sha256(section.encode()).hexdigest() != key["provenance_id"]:
@@ -1457,12 +1524,25 @@ def range_problems(repo: Path, key: dict) -> list[str]:
     return []
 
 
-def write_last_release(repo: Path, key: dict) -> Path:
-    """Record the release just gated as the last audited one (``LAST_RELEASE``), for the
-    next release's range to start at; the operator commits it with the triage files."""
+def write_last_release(repo: Path, key: dict, *, world: str, triage_sha256: str) -> Path:
+    """Record the release just gated as the last audited one (``LAST_RELEASE``): its
+    commit, its release corpus's digest and each gated world's triage digest (a second
+    world gated on the same release is added to the record), for the next release to
+    start at and bind its ``--previous`` files to. The operator commits it with the
+    triage files."""
     path = Path(repo) / LAST_RELEASE
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(key["release_commit"] + "\n")
+    record = {"release_commit": key["release_commit"],
+              "release_corpus_sha": key["release_corpus_sha"], "triages": {}}
+    if path.exists():
+        try:
+            held = json.loads(path.read_text())
+        except json.JSONDecodeError:
+            held = None
+        if isinstance(held, dict) and held.get("release_commit") == key["release_commit"]:
+            record["triages"] = dict(held.get("triages") or {})
+    record["triages"][world] = triage_sha256
+    path.write_text(json.dumps(record, indent=1, sort_keys=True) + "\n")
     return path
 
 
@@ -1628,7 +1708,8 @@ def _run(args: argparse.Namespace) -> int:
             print(problem, file=sys.stderr)
         if problems:
             return 1
-        written = write_last_release(ROOT, load_key(args.key)[0])
+        written = write_last_release(ROOT, load_key(args.key)[0], world=args.world,
+                                     triage_sha256=args.triage_sha256)
         print(f"gate passed; {written} names the release: commit it with the triage files")
         return 0
     key, records = load_key(args.key)

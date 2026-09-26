@@ -690,10 +690,12 @@ def test_th3_boundaries_and_activations_respect_the_cascade_ratio():
     off_boundary = [_boundary(30, 0), _cadence(30), _cadence(45)]
     assert g.th3_governance_gap(off_boundary, M).status == g.FAIL
     assert g.th3_governance_gap([_cadence(30)], M).status == g.UNSUPPORTED
-    # Codex P2: cadence rows alone, however many, carry no boundary evidence.
+    # Codex P2: cadence rows alone, however many, carry no boundary evidence for a pass.
     spaced = [_cadence(30), _cadence(60), _cadence(90)]
     assert g.th3_governance_gap(spaced, M).status == g.UNSUPPORTED
-    assert g.th3_governance_gap([_cadence(30), _cadence(31)], M).status == g.UNSUPPORTED
+    # Codex pass on b1e3bae: but two activations 1 ns apart violate the ratio whatever
+    # the boundaries show, and an observed violation fails.
+    assert g.th3_governance_gap([_cadence(30), _cadence(31)], M).status == g.FAIL
 
 
 def test_th3_reads_the_kernels_own_cadence_rows():
@@ -1578,6 +1580,128 @@ def test_a_window_missing_an_always_written_field_fails_every_criterion_that_rea
         result = fn(rows, M)
         assert result.status == g.FAIL, (field, result.evidence)
         assert result.evidence["malformed"]["field"].split(".")[0] == field
+
+
+# --- Codex pass on b1e3bae: an observed violation fails, whatever else is missing ------
+
+
+def test_s1_an_orphaned_act_fails_with_no_sampled_decision_at_all():
+    """Codex P1 (gauntlet.py:1981): an act no seat's return traces to is the kernel acting
+    for a seat; with no sampled decision to replay it still fails. Only a diary with
+    neither draws nor acts is unsupported."""
+    orphan = [{"kind": "order.intent", "handle": "system-generated"}]
+    result = g.s1_draw_sovereignty(orphan)
+    assert result.status == g.FAIL and result.evidence["unreturned"]
+    assert g.s1_draw_sovereignty([]).status == g.UNSUPPORTED
+
+
+def test_sf1d_a_broken_saturation_count_fails_before_any_sustained_run():
+    broken = _saturated((5, 1), (6, 3))
+    result = g.sf1d_escalation(broken, M, card="c")
+    assert result.status == g.FAIL and result.evidence["malformed"]
+    assert g.sf1d_escalation(_saturated((5, 1), (6, 2)), M,
+                             card="c").status == g.UNSUPPORTED
+
+
+def test_sf1f_a_wrong_accrual_or_a_shut_route_fails_with_thin_evidence():
+    wrong = [_novelty(amount=1)]
+    result = g.sf1f_route_open(wrong, M)
+    assert result.status == g.FAIL and result.evidence["accrual"] == g.FAIL
+    shut = [_w(1, profile={"access:registration_route": 0.0})]
+    assert g.sf1f_route_open(shut, M).status == g.FAIL
+
+
+def test_th2_a_refusal_for_speed_fails_with_no_lifespan_row():
+    refused = [{"kind": "registration.rejected", "reason": "too fast"}]
+    result = g.th2_short_lived(refused, M, loop="price")
+    assert result.status == g.FAIL and result.evidence["speed_refusals"] == 1
+    assert g.th2_short_lived([], M, loop="price").status == g.UNSUPPORTED
+
+
+def test_ld1d_one_penalized_niche_decision_fails_below_the_minimum():
+    thin = [{"kind": "niche.action", "handle": "n1"}, _penalty("n1", 0.4)]
+    result = g.ld1d_exemption(thin, M)
+    assert result.status == g.FAIL and result.evidence["penalized"] == ["n1"]
+    free = [{"kind": "niche.action", "handle": "n1"}, _penalty("n1", 0.0)]
+    assert g.ld1d_exemption(free, M).status == g.UNSUPPORTED
+
+
+def _thin_violations():
+    """For every replayed criterion, the thinnest diary that holds one violation of it
+    and nothing else a pass would need. SF-1a and LD-1e need their horizon to show a
+    missed detection at all (a violation there is a deadline passed), so theirs run it."""
+    niche = [{"kind": "niche.action", "handle": "n1"}, _penalty("n1", 0.4)]
+    quarantined = {"router": "router:r1", "quarantined": True, "core": False}
+    cleared = [_w(i, frontier=[quarantined] if i <= 3 else []) for i in range(1, 5)]
+    return {
+        "SF-1a": (g.sf1a_detection, [*(_price_window(i, 0.0) for i in range(1, 15)),
+                                     *(_w(i) for i in range(1, 15))], {"card": "c"}),
+        "SF-1b": (g.sf1b_ratchet_cadence, [_w(3, acts=True), *_ratchets((3, 1))], {}),
+        "SF-1c": (g.sf1c_anti_windup, _updates("c", [(0.5, 1.0, 0.5), (0.5, 1.0, 0.6)]),
+                  {"card": "c"}),
+        "SF-1d": (g.sf1d_escalation, _saturated((5, 1), (6, 3)), {"card": "c"}),
+        "SF-1e": (g.sf1e_gain, [_w(1, sf=True), _gain(1, 0.2, 0.15, "cleared")], {}),
+        "SF-1f": (g.sf1f_route_open, [_novelty(amount=1)], {}),
+        "SF-2b": (g.sf2b_order_blind, [_penalty("a", 0.5), _penalty("b", 0.25)],
+                  {"card": "c"}),
+        "LD-1a": (g.ld1a_accrual, [_novelty(amount=1)], {}),
+        "LD-1d": (g.ld1d_exemption, niche, {}),
+        "LD-1e": (g.ld1e_detection, cleared, {}),
+        "LD-1f": (g.ld1f_hold, [_w(1, ld=True), _gain(1, 0.2, 0.15, "cleared")], {}),
+        "TH-1b": (g.th1b_duration, [_w(1, lam=0.3), _w(2, thrash=True, lam=0.2)], {}),
+        "TH-1b-antiwindup": (g.th1b2_frozen, _updates("pathology:thrash",
+                                                      [(0.5, 1.0, 0.5), (0.5, 1.0, 0.6)]),
+                             {}),
+        "TH-1c": (g.th1c_movement, [{"kind": "thrash.charged", "handle": "x",
+                                     "router": "router:Tick", "charge": 0.1}], {}),
+        "TH-1d": (g.th1d_frontier, [{"kind": "thrash.charged", "handle": "x",
+                                     "router": "router:WorldUpdate", "charge": 0.1}], {}),
+        "TH-1f": (g.th1f_priority, [_w(1, thrash=True, sf=True), _gain(1, 0.1, 0.15)], {}),
+        "TH-2": (g.th2_short_lived, [{"kind": "registration.rejected", "reason": "too fast"}],
+                 {"loop": "price"}),
+        "TH-3": (g.th3_governance_gap, [_cadence(30), _cadence(31)], {}),
+        "OF-1a": (g.of1a_outside_the_loop, [_consequence("r", 0.5, 0.2),
+                                            _consequence("r", 0.5, 0.3)], {}),
+        "OF-2d": (g.of2d_authorship, [{"kind": "holdout.proposed", "card_id": "c"}], {}),
+        "OF-3a": (g.of3a_sampling_behind_return,
+                  [_returned_event("e", "p1", 2), {"kind": "decision.open", "handle": "j1",
+                                                   "event_id": "producerreturn-2", "seq": 3},
+                   {"kind": "invocation", "handle": "p1", "seq": 4}], {}),
+        "I-3c": (g.i3c_niche_no_worse_than_noop,
+                 [_open("n1", "seat"), _open("z1", "NOOP"), *niche,
+                  {"kind": "router.abstention_priced", "handle": "z1", "penalty": 0.1,
+                   "reward": 0.4, "neutral": 0.5}], {}),
+        "I-4a": (g.i4a_no_blind_step_back,
+                 [{"kind": "sampling.lower", "outcome_slope": None, "verdict_slope": None}],
+                 {}),
+        "S1": (g.s1_draw_sovereignty, [{"kind": "order.intent", "handle": "x"}], {}),
+        "S4": (g.s4_boundedness, [{"kind": "propensity.learned", "handle": "d",
+                                   "reward": 1.5}], {}),
+        "S5": (g.s5_neutral_imputation, [{"kind": "router.abstention_priced", "handle": "d",
+                                          "router": "router:Tick", "neutral": 0.5,
+                                          "penalty": 0.2, "reward": 0.5}], {}),
+        "S5b": (g.s5b_observed_neutral,
+                [_open("d0", "seat"), _penalty("d0", 0.0) | {"raw": 0.3},
+                 {"kind": "router.abstention_priced", "handle": "d", "router": "router:Tick",
+                  "neutral": 0.5, "penalty": 0.2, "reward": 0.3}], {}),
+        "S7": (g.s7_gain_targets, [_gain(1, 0.1, 0.15, router="learner:seat")], {}),
+        "S8": (g.s8_gain_rows_uniform, [_gain(3, 0.02, -0.03, "thrash")], {}),
+    }
+
+
+def test_every_replayed_criterion_fails_on_a_thin_diary_with_one_violation():
+    """Codex P1 (b1e3bae), the general rule: an observed violation is FAIL whatever other
+    evidence is missing; ``unsupported`` is only for no relevant evidence and no
+    violation. Every replayed criterion is exercised by a diary holding one violation and
+    as little else as the violation allows."""
+    cases = _thin_violations()
+    replayed = {*g.GENERIC, *g.PER_CARD, *g.PER_LOOP}
+    assert replayed <= set(cases), sorted(replayed - set(cases))
+    results = {name: fn(rows, M, **kw) for name, (fn, rows, kw) in cases.items()}
+    assert {n: r.status for n, r in results.items() if r.status != g.FAIL} == {}
+    # Each fails on its violation, never on a malformed fixture row.
+    assert [n for n, r in results.items()
+            if isinstance(r.evidence.get("malformed"), dict)] == []
 
 
 def test_s4_an_unresolved_penalty_row_may_carry_no_raw_score():

@@ -866,9 +866,6 @@ def sf1d_escalation(events: list[Mapping], manifest: Mapping, *, card: str) -> R
     at = update_windows(events)
     sustained = [run for run in capped_runs(events, card, ph) if len(run) >= ph.r]
     longest = max((len(run) for run in capped_runs(events, card, ph)), default=0)
-    if not sustained:
-        return _unsupported("SF-1d", "the penalty never sat at the cap for min_ratio "
-                            "consecutive updates", card=card, longest_run=longest)
     rows = [row for row in events if str(row.get("kind", "")).endswith("saturated")
             and row.get("card_id") == card]
     episodes: list[list[Mapping]] = []
@@ -891,6 +888,13 @@ def sf1d_escalation(events: list[Mapping], manifest: Mapping, *, card: str) -> R
             current = None
     spans = [(min(r["window"] for r in e), max(r["window"] for r in e), e[-1]["duration"])
              for e in episodes]
+    if not sustained:
+        if malformed:
+            # A broken saturation count is observed whatever the runs show.
+            return _result("SF-1d", False, card=card, saturated_rows=len(rows),
+                           malformed=malformed[:5], longest_run=longest)
+        return _unsupported("SF-1d", "the penalty never sat at the cap for min_ratio "
+                            "consecutive updates", card=card, longest_run=longest)
     unmatched = []
     for run in sustained:
         windows_of = [at[id(row)] for row in run if id(row) in at]
@@ -1145,8 +1149,6 @@ def sf1f_route_open(events: list[Mapping], manifest: Mapping) -> Result:
     route, the result is ``unsupported``.
     """
     closes = windows(events)
-    if not closes:
-        return _unsupported("SF-1f", "no window closed")
     # The profile is always written; an ``access:`` key absent from it is the organ's own
     # "unknown" (versions.py ``ACCESS``: "absent unknown"), read as unmeasured.
     readings = {w["window"]: need(w, "profile").get("access:registration_route")
@@ -1154,6 +1156,13 @@ def sf1f_route_open(events: list[Mapping], manifest: Mapping) -> Result:
     measured = {w: v for w, v in readings.items() if v is not None}
     shut = [w for w, v in measured.items() if v != 1.0]
     accrual = ld1a_accrual(events, manifest)
+    if shut or accrual.status == FAIL:
+        # An observed violation (a shut route, a wrong accrual) fails whatever else is
+        # missing.
+        return _result("SF-1f", False, closed=shut[:10], measured=len(measured),
+                       accrual=accrual.status)
+    if not closes:
+        return _unsupported("SF-1f", "no window closed", accrual=accrual.status)
     if not shut and not measured:
         return _unsupported("SF-1f", "no window measured the registration route",
                             unmeasured=len(readings))
@@ -1554,7 +1563,13 @@ def th2_short_lived(events: list[Mapping], manifest: Mapping, *, loop: str) -> R
     """
     ph = physics(manifest)
     rows = [row for row in rows_of(events, "config.lifespan") if row.get("loop") == loop]
+    speed = [row for row in rows_of(events, "registration.rejected")
+             if any(word in str(need(row, "reason")).lower()
+                    for word in ("too soon", "too fast", "lifespan", "speed", "rate limit"))]
     if not rows:
+        if speed:
+            # A refusal for speed is observed whatever the loop's lifespans show.
+            return _result("TH-2", False, loop=loop, speed_refusals=len(speed))
         return _unsupported("TH-2", "the loop was never refactored twice", loop=loop)
     closes = windows(events)
     unread, misread, checked = [], [], 0
@@ -1577,9 +1592,6 @@ def th2_short_lived(events: list[Mapping], manifest: Mapping, *, loop: str) -> R
             if not need(w, "flags.thrash") or w["unsettled"] < 1.0 - row["ratio"]:
                 misread.append({"window": w["window"], "ratio": row["ratio"],
                                 "unsettled": w["unsettled"]})
-    speed = [row for row in rows_of(events, "registration.rejected")
-             if any(word in str(need(row, "reason")).lower()
-                    for word in ("too soon", "too fast", "lifespan", "speed", "rate limit"))]
     worst = min(rows, key=lambda row: row["ratio"])
     evidence = {"lifespans": len(rows), "worst_ratio": worst["ratio"],
                 "short_checked": checked, "unread": unread[:5], "misread": misread[:5],
@@ -1616,11 +1628,6 @@ def th3_governance_gap(events: list[Mapping], manifest: Mapping) -> Result:
     boundaries = rows_of(events, "charter.boundary")
     cadence = rows_of(events, "charter.cadence")
     instants = sorted({row["activation_ns"] for row in cadence})
-    if not boundaries:
-        # (B): the gap is read at boundaries; activations alone cannot show that each
-        # stands at one, so without boundary rows there is no evidence either way.
-        return _unsupported("TH-3", "no governance boundary", activations=len(cadence),
-                            instants=len(instants))
     bad = []
     for row in boundaries:
         gap = row["boundary_ns"] - row["previous_ns"]
@@ -1634,7 +1641,9 @@ def th3_governance_gap(events: list[Mapping], manifest: Mapping) -> Result:
         instant = row["activation_ns"]
         slowest[instant] = max(slowest.get(instant, 0), row["slowest_period_ns"])
     for row in cadence:
-        if row["activation_ns"] not in at_boundary:
+        # Without boundary rows, "at a boundary" is unread (B); the other two readings
+        # need only the activations, and a violation of either fails regardless.
+        if boundaries and row["activation_ns"] not in at_boundary:
             bad.append({"activation_ns": row["activation_ns"], "not_at_a_boundary": True})
         if row["activation_ns"] < row["previous_activation_ns"]:
             bad.append({"activation_ns": row["activation_ns"], "before_its_anchor": True})
@@ -1642,6 +1651,11 @@ def th3_governance_gap(events: list[Mapping], manifest: Mapping) -> Result:
         if later - earlier < ph.r * slowest[later]:
             bad.append({"activations": [earlier, later], "gap": later - earlier,
                         "required": ph.r * slowest[later]})
+    if not boundaries and not bad:
+        # (B): the gap is read at boundaries; activations alone cannot show that each
+        # stands at one, so without boundary rows and no violation there is no evidence.
+        return _unsupported("TH-3", "no governance boundary", activations=len(cadence),
+                            instants=len(instants))
     return _result("TH-3", not bad, boundaries=len(boundaries), activations=len(cadence),
                    instants=len(instants), bad=bad[:5])
 
@@ -1662,10 +1676,11 @@ def ld1d_exemption(events: list[Mapping], manifest: Mapping, *, minimum: int = 1
     """LD-1d: every niche decision bears no card penalty, exactly (wave 16 R-E amended)."""
     niche = niche_handles(events)
     priced = [row for row in rows_of(events, "price.penalty") if row["handle"] in niche]
-    if len(priced) < minimum:
+    bad = [row["handle"] for row in priced if row["penalty"] != 0]
+    if len(priced) < minimum and not bad:
+        # The minimum is evidence for a pass; one penalized niche decision fails alone.
         return _unsupported("LD-1d", "fewer than the required niche decisions settled",
                             niche=len(priced), minimum=minimum)
-    bad = [row["handle"] for row in priced if row["penalty"] != 0]
     return _result("LD-1d", not bad, niche=len(priced), penalized=bad[:10])
 
 
@@ -1977,10 +1992,15 @@ def s1_draw_sovereignty(events: list[Mapping], manifest: Mapping | None = None) 
             for row in rows_of(events, *ACT_KINDS)]
     unreturned = [{"kind": kind, "handle": h} for kind, h in acts
                   if not isinstance(h, str) or h not in returned]
-    if not checked:
-        return _unsupported("S1", "no sampled decision")
-    return _result("S1", not bad and not unreturned, draws=checked, bad_draws=bad[:5],
-                   acts=len(acts), unreturned=unreturned[:5])
+    evidence = {"draws": checked, "bad_draws": bad[:5], "acts": len(acts),
+                "unreturned": unreturned[:5]}
+    if bad or unreturned:
+        # An observed violation fails whatever else the diary lacks: an act no seat's
+        # return traces to is the kernel acting for a seat.
+        return _result("S1", False, **evidence)
+    if not checked and not acts:
+        return _unsupported("S1", "no sampled decision and no act", **evidence)
+    return _result("S1", True, **evidence)
 
 
 #: Every ledger kind that carries a learned, settled or graded score, and the fields that
