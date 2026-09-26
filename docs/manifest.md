@@ -1542,10 +1542,11 @@ or by its width for a band. A zero one-sided bound falls back to the
 observation's declared unit width. The resulting scale is frozen with the
 card's region. Doubling a positive 500-micro-USD cap therefore has violation 1.
 
-For card j, `v_j = distance_outside_region / card_region.scale`, and
-`S = sum(lambda_j * v_j)`. A settlement receives
+For card j, `v_j = distance_outside_region / card_region.scale` plus the
+violation its failed holdouts add, `p_j = min(lambda_j * v_j, prices.penalty_cap)`
+(0 while `v_j` is 0), and `S = sum(p_j)`. A settlement receives
 `min(S, prices.penalty_cap) * share`. When cards measure different quantities,
-`share = sum(lambda_j * v_j * share_j) / S`, or zero when S is zero.
+`share = sum(p_j * share_j) / S`, or zero when S is zero.
 
 Cost shares use the card's selected scopes. For `cost_per_return` only
 successful returns own cost; for `cost_per_attempt` every invocation's cost is
@@ -1555,7 +1556,9 @@ a scope with no response of its own is measured nowhere and attributed nowhere. 
 normalised across supported scopes. Evaluator and meta cost cards therefore
 charge those roles. Global window cost retains the producer-cost sufficient
 statistics. Tool attempts and turnover use the decision's contribution divided
-by the window total. A lower-bound well-formedness violation is allocated by
+by the total of the window's decisions outside the unhistoried niche (the split),
+never the window's own total, which a niche decision's calls or notional would
+dilute; so do cost and well-formedness. A lower-bound well-formedness violation is allocated by
 malformed invocations, so a correct return does not pay for someone else's
 malformed one; an upper-bound violation uses well-formed invocations. A zero
 attributable total contributes zero. Other observations use `1/n` decisions
