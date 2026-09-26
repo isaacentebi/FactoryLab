@@ -7,6 +7,7 @@ rule the world did not run under.
 """
 
 from collections import Counter
+from copy import deepcopy
 from math import fsum
 from statistics import fmean, pvariance
 
@@ -204,27 +205,51 @@ def frontier_evidence(tail: list[dict]) -> dict:
     }
 
 
+def organ_step(state: dict, retained: list[dict], held: list[str], *, k: int, horizon: int,
+               tv_threshold: float, gap_threshold: float,
+               registration_bins: tuple[float, ...],
+               revision_bins: tuple[float, ...]) -> tuple[dict, list[dict], dict]:
+    """One closed window through the organ: the ONE function the live organ and every
+    forensic replay run, so they cannot diverge (Codex on #152).
+
+    Guarantees, over the retained windows (the newest last): each card is read only
+    from windows that measured what it measures now (``live.current_metrics``); a card
+    the newest window redefined leaves the held failing set (a new metric, M-6); the
+    versions advance and the window is diagnosed on those metrics; and the state's
+    ``failing`` is the diagnosis's violated cards. Returns (state, events, diagnosis).
+    """
+    bins = {"registration_bins": registration_bins, "revision_bins": revision_bins}
+    metrics = live.current_metrics(retained)
+    held = [name for name in held if not live.redefined(retained, name)]
+    state, events = live.advance(state, metrics, k=k, horizon=horizon,
+                                 tv_threshold=tv_threshold, **bins)
+    diagnosis = diagnose(metrics, state, k=k, tv_threshold=tv_threshold,
+                         gap_threshold=gap_threshold, held=held, **bins)
+    state["failing"] = list(diagnosis["violated_cards"])
+    return state, events, diagnosis
+
+
 def replay(windows: list[dict], *, k: int, horizon: int, tv_threshold: float,
            gap_threshold: float, registration_bins: tuple[float, ...],
            revision_bins: tuple[float, ...]) -> list[dict]:
     """Every window read through the live versioning and diagnosis, in order.
 
     Returns, per window, the versioning state after it, the events it produced
-    and the diagnosis: the forensic reconstruction of what the live organ saw.
+    and the diagnosis: the forensic reconstruction of what the live organ saw, by the
+    organ's own step (``organ_step``) over the same retention.
     """
-    bins = {"registration_bins": registration_bins, "revision_bins": revision_bins}
     state = live.fresh()
     retained: list[dict] = []
     result = []
     held: list[str] = []
     for window in windows:
         retained = [*retained, window][-live.retention(horizon, k):]
-        state, events = live.advance(state, retained, k=k, horizon=horizon,
-                                     tv_threshold=tv_threshold, **bins)
-        diagnosis = diagnose(retained, state, k=k, tv_threshold=tv_threshold,
-                             gap_threshold=gap_threshold, held=held, **bins)
+        state, events, diagnosis = organ_step(
+            state, retained, held, k=k, horizon=horizon, tv_threshold=tv_threshold,
+            gap_threshold=gap_threshold, registration_bins=registration_bins,
+            revision_bins=revision_bins)
         held = diagnosis["violated_cards"]
-        result.append({"state": state, "events": events, "diagnosis": diagnosis})
+        result.append({"state": deepcopy(state), "events": events, "diagnosis": diagnosis})
     return result
 
 

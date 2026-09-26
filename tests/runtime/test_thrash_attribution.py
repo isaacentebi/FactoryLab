@@ -144,7 +144,8 @@ def test_thrash_from_before_a_redefinition_is_charged_to_the_old_role_only(new_o
 
 def test_a_redefined_observation_is_a_new_metric_and_its_state_resets():
     """Under the same id, a new observation is a new metric: the card's duration and
-    episode, its unmeasured count and its place in the failing set reset, and the
+    episode and its unmeasured count reset, the organ's own step drops it from the
+    failing set it holds (``versions.organ_step``, which replay runs too), and the
     diagnosis reads it only from windows that measured what it measures now. With the
     observation unchanged (a new role), all of it is kept."""
     from factorylab.versioning import live
@@ -167,12 +168,13 @@ def test_a_redefined_observation_is_a_new_metric_and_its_state_resets():
         if resets:
             assert (card["failing_windows"], card["episode_bound"]) == (0, 0.0)
             assert "moving" not in rt.card_unmeasured
-            assert rt.stats.versions["failing"] == []
         else:
             assert card["failing_windows"] == 3 and card["episode_bound"] > 0
             assert rt.card_unmeasured["moving"] == 4
-            assert rt.stats.versions["failing"] == ["card:moving"]
     old, new = _card("c", "well_formed_rate", "evaluator"), _card("c", "noop_share", "all")
     kept = live.current_metrics(_recorded(_windows((old,), "c", n=2), old)
                                 + _recorded(_windows((new,), "none", n=1), new))
     assert [("card:c" in w["regions"]) for w in kept] == [False, False, True]
+    windows = _recorded(_windows((old,), "c", n=2), old) + _recorded(_windows((new,), "none",
+                                                                             n=1), new)
+    assert live.redefined(windows, "card:c") and not live.redefined(windows[:2], "card:c")

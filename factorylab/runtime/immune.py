@@ -42,7 +42,7 @@ from dataclasses import asdict
 from factorylab.charter.controller import CardRegion, PriceController, pressure
 from factorylab.versioning import live
 from factorylab.versioning.series import CHANNELS
-from factorylab.versioning.versions import diagnose
+from factorylab.versioning.versions import organ_step
 
 #: The version causes whose settling times governance: a revision of the input, by
 #: the charter or by the world's terms. Essay II.IV.c: "inject a small, deliberate
@@ -378,11 +378,11 @@ def close_window(rt, values: dict[str, float]) -> None:
     # The previous diagnosis's failing set: a card in it that this tail leaves
     # unmeasured holds its state (wave 16, second addendum, M-6).
     held = list((rt.stats.versions or {}).get("failing", []))
-    # A redefined card is a new metric: the versions and the diagnosis read each card
-    # only from windows that measured what it measures now (``live.current_metrics``).
-    metrics = live.current_metrics(windows)
-    state, events = live.advance(rt.stats.versions or live.fresh(), metrics, k=k,
-                                 horizon=horizon, tv_threshold=spec.tv_threshold, **bins)
+    # The one step a forensic replay runs too (``versions.organ_step``): a redefined
+    # card is a new metric, read only from windows that measured what it measures now.
+    state, events, diagnosed = organ_step(
+        rt.stats.versions or live.fresh(), windows, held, k=k, horizon=horizon,
+        tv_threshold=spec.tv_threshold, gap_threshold=spec.gap_threshold, **bins)
     for event in events:
         kind = event["kind"]
         rt.ledger.append({"kind": f"version.{kind}", **{n: v for n, v in event.items()
@@ -393,9 +393,6 @@ def close_window(rt, values: dict[str, float]) -> None:
     rt.cadence.track_version(version=state["version"], opened=state["start_tick"],
                              settled=(state["settled_tick"] is not None
                                       or state["cause"] not in REVISIONS))
-    diagnosed = diagnose(metrics, state, k=k, tv_threshold=spec.tv_threshold,
-                         gap_threshold=spec.gap_threshold, held=held, **bins)
-    state["failing"] = list(diagnosed["violated_cards"])
     flags = diagnosed.pop("flags")
     evidence = {"window": current["index"], **diagnosed}
     rt.stats.immune_windows = windows
@@ -418,6 +415,7 @@ def close_window(rt, values: dict[str, float]) -> None:
                       "regions": current["regions"], "charter_edition": rt.charter.edition,
                       "tick": now, "terms": current["terms"],
                       "frontier_invocation": current["frontier_invocation"],
+                      "semantics": current["semantics"],
                       "lifespans": current["lifespans"], "thrash": rt.stats.thrash,
                       "acts": acts})
     if not acts:

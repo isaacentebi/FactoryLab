@@ -172,3 +172,41 @@ def test_a_seed_gamma_outside_the_organ_s_bound_is_refused_at_load(seed):
                 router_gamma=seed)
     Runtime(manifest, events=1, seed=1, initial_balance_micro=None, ledger_path=None,
             router_gamma=0.5)  # at the bound: accepted
+
+
+def test_a_replay_of_the_diary_diagnoses_every_window_as_the_live_organ_did():
+    """Codex on #152 (735d50a): live and replay run one step (``versions.organ_step``).
+    A world fails a card for five windows, the charter then redefines that card under
+    the same id to a new observation, and seven more windows close. Replaying the
+    organ's own ledgered windows gives, window by window, exactly the flags, violated
+    cards, held cards and gaps the live organ ledgered."""
+    from factorylab.versioning.live import organ_record
+    from factorylab.versioning.versions import replay
+
+    rt = _runtime()
+    for _ in range(5):
+        _close(rt, 0.2)
+    redefined = replace(next(c for c in rt.charter.cards if c.id == "well_formed_rate"),
+                        observation="noop_share")
+    rt.charter = replace(rt.charter, cards=tuple(
+        redefined if c.id == "well_formed_rate" else c for c in rt.charter.cards))
+    rt._derive_regions()
+    for i in range(7):
+        _close(rt, 0.2 if i % 3 else 1.0)
+    rows = _items(rt, "immune.window")
+    assert len(rows) == 12
+    assert rows[4]["semantics"]["card:well_formed_rate"]["observation"] == "well_formed_rate"
+    assert rows[5]["semantics"]["card:well_formed_rate"]["observation"] == "noop_share"
+    spec = rt.m.immune
+    readings = replay([organ_record(row) for row in rows], k=spec.k,
+                      horizon=rt.m.timing.min_ratio * spec.k,
+                      tv_threshold=spec.tv_threshold, gap_threshold=spec.gap_threshold,
+                      registration_bins=tuple(spec.registration_bins),
+                      revision_bins=tuple(spec.revision_bins))
+    for row, reading in zip(rows, readings, strict=True):
+        diagnosis = reading["diagnosis"]
+        for name in ("violated_cards", "unmeasured_held", "gap", "card_gap", "rolling_gap",
+                     "volatility", "version"):
+            assert diagnosis[name] == row[name], (row["window"], name)
+        assert diagnosis["flags"] == row["flags"], row["window"]
+    assert any(row["violated_cards"] for row in rows[:5])  # the old metric failed

@@ -512,8 +512,9 @@ class PricingMixin:
         """A card whose observation changed under the same id is a new metric (Codex on
         #152): the evidence of its old meaning stops counting for it. Guarantees its
         controller duration and episode reset (``PriceController.redefine``), its
-        consecutive unmeasured windows (R10-f) restart, and it leaves the failing set a
-        diagnosis holds (M-6), so no stable-failure duration spans the redefinition.
+        consecutive unmeasured windows (R10-f) restart; the organ's own step drops it
+        from the failing set it holds (M-6; ``versions.organ_step``, which replay runs
+        too), so no stable-failure duration spans the redefinition.
         A card whose observation is unchanged keeps all of it; old windows are read
         under the meaning they recorded (``immune.thrash_roles``,
         ``live.current_metrics``), and a closed price window prices on the cards it froze.
@@ -527,10 +528,6 @@ class PricingMixin:
                 if card.id in self.controller.card_ids():
                     self.controller.redefine(card.id, edition=self.charter.edition)
                 self.card_unmeasured.pop(card.id, None)
-                versions = getattr(self.stats, "versions", None) or {}
-                name = f"card:{card.id}"
-                if name in versions.get("failing", []):
-                    versions["failing"] = [c for c in versions["failing"] if c != name]
             known[card.id] = meaning
 
     def _derive_regions(self) -> None:

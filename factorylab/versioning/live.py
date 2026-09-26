@@ -331,6 +331,43 @@ def advance(state: dict, windows: list[dict], *, k: int, horizon: int, tv_thresh
     return state, events
 
 
+#: What the live organ records per window beside its profile and regions (the
+#: ``immune.window`` row), and so what a forensic reader of that row must carry into the
+#: window it replays: the routers' draws, the configuration lifespans, the world's terms,
+#: the tick it closed at and each card's meaning at its close.
+ORGAN_RECORD = ("frontier_invocation", "lifespans", "terms", "tick", "semantics")
+
+
+def organ_record(row: dict) -> dict:
+    """The window the live organ read, rebuilt from its ``immune.window`` ledger row.
+
+    Guarantees exactly the fields the organ's own window carried (``ORGAN_RECORD`` with
+    its index, charter edition, profile and regions), so a replay reads what the live
+    organ read.
+    """
+    record = {"index": row["window"], "charter_edition": row.get("charter_edition"),
+              "profile": dict(row.get("profile") or {}),
+              "regions": dict(row.get("regions") or {})}
+    for name in ORGAN_RECORD:
+        if name in row:
+            record[name] = row[name]
+    record.setdefault("tick", row["window"])
+    record.setdefault("lifespans", [])
+    return record
+
+
+def redefined(windows: list[dict], name: str) -> bool:
+    """Whether card ``name`` measured a different observation in the newest window than in
+    the one before it: a new metric under the same id (Codex on #152)."""
+    if len(windows) < 2:
+        return False
+    before, after = windows[-2].get("semantics"), windows[-1].get("semantics")
+    if before is None or after is None:
+        return False
+    return ((before.get(name) or {}).get("observation")
+            != (after.get(name) or {}).get("observation"))
+
+
 def current_metrics(windows: list[dict]) -> list[dict]:
     """``windows`` with each card kept only where it measured what it measures now.
 
