@@ -2083,6 +2083,16 @@
    "status": "untriaged"
   },
   {
+   "id": "24f695b45d4e",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/exception/factorylab:runtime:compute::ComputeMixin._validate_output_contract/054734e5",
+   "quote": "call it again next round",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
    "id": "69e018700297",
    "world": "kernel",
    "surface": "static",
@@ -2169,6 +2179,36 @@
    "rule": "IMP",
    "path": "kernel/seat_text/exception/factorylab:world:exchange::HyperliquidExchange.account/10401d83",
    "quote": "account() needs an address or a private key",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "2ce02815af6c",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/exception/factorylab:world:openrouter::OpenRouterProvider._request/a8fbcae8",
+   "quote": "call deadline expired",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "bffbb7c04894",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/exception/factorylab:world:venice::VeniceProvider._request/81962da3",
+   "quote": "check authentication and status",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "deb86605826e",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/exception/factorylab:world:venice::VeniceProvider._request/a8fbcae8",
+   "quote": "call deadline expired",
    "design_ref": null,
    "status": "untriaged"
   },

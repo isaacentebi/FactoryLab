@@ -468,6 +468,23 @@ def test_cov5_a_tool_result_under_any_key_is_seat_text(seat):
 # --- Codex pass on 5ba444a: seat-bound calls read from their real signatures -------------
 
 
+def test_a_multi_argument_exception_is_scanned_by_its_message_arguments(seat):
+    """Codex P2 (class2_seat_text.py:652): an exception is scanned by the arguments its
+    constructor makes its message of, not its first. ``SectionError(section, reason,
+    index)`` hands ``reason`` to ``Exception``, so the reason is seat text and the
+    section name is not; a provider error's message template is seat text too."""
+    compute = "factorylab/runtime/compute.py::ComputeMixin._validate_output_contract"
+    by_source: dict[str, set[str]] = {}
+    for t in seat.texts:
+        if t.kind == "exception":
+            by_source.setdefault(t.source, set()).add(t.text)
+    assert "more than {limit} {section} in one turn; call it again next round" \
+        in by_source[compute]
+    assert "tool_calls" not in by_source[compute]
+    assert "Venice error ({status}): {message}" in by_source[
+        "factorylab/world/venice.py::VeniceError.__init__"]
+
+
 def test_a_positional_child_request_reaches_the_scan(seat):
     """Codex P2 (class2_seat_text.py:77): ``_invoke_child`` builds its ``Request``
     positionally. Its description, inputs, schema (``with_counterfactual``'s published

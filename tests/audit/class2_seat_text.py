@@ -418,6 +418,7 @@ class Scan:
         self.by_name: dict[str, list[str]] = defaultdict(list)
         self.modules: dict[str, _Module] = {}
         self.classes: dict[str, str] = {}  # class name -> module (first definition)
+        self.class_nodes: dict[tuple[str, str], ast.ClassDef] = {}  # (module, name)
         self._index()
         self.children: dict[str, list[str]] = defaultdict(list)
         for key in self.fns:
@@ -440,6 +441,9 @@ class Scan:
         self._close_sinks()
         self.reachable = self._reach()
         self.reason_fns: set[str] = set()
+        #: A seat-raised package exception's message template: the ``__init__`` (or
+        #: ``__str__``) that builds it -> the expressions it is built from.
+        self.message_templates: dict[str, list[ast.AST]] = {}
         self.texts = self._collect()
 
     # --- the index -----------------------------------------------------------------------
@@ -472,6 +476,7 @@ class Scan:
         for child in ast.iter_child_nodes(node):
             if isinstance(child, ast.ClassDef):
                 self.classes.setdefault(child.name, rel)
+                self.class_nodes.setdefault((rel, child.name), child)
                 self._visit(child, rel, f"{prefix}{child.name}.", child.name)
             elif isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef):
                 key = f"{rel}::{prefix}{child.name}"
@@ -648,12 +653,121 @@ class Scan:
                     out.append(("sink", arg))
             if not seat_bound:
                 continue
-            if isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call) and node.exc.args:
-                out.append(("exception", node.exc.args[0]))
+            if isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call):
+                out += [("exception", arg) for arg in self._exception_args(fn, node.exc)]
             if isinstance(node, ast.Dict) and id(node) not in ledger_dicts:
                 out += [("result", v) for k, v in zip(node.keys, node.values, strict=True)
                         if isinstance(k, ast.Constant) and k.value in SEAT_KEYS]
         return out
+
+    # --- exceptions: the arguments that become the message a seat reads -----------------
+
+    def _exception_args(self, fn: _Fn, call: ast.Call) -> list[ast.AST]:
+        """The arguments of ``raise X(...)`` that become the exception's message: for a
+        package class, those its constructor passes to ``Exception.__init__`` or its
+        ``__str__`` reads (``_message_params``, e.g. ``SectionError``'s ``reason``);
+        otherwise every argument (``BaseException`` keeps them all in ``args``)."""
+        found = self._exception_class(fn, call.func)
+        message = self._message_params(*found) if found else None
+        if message is None:
+            return [*call.args, *(kw.value for kw in call.keywords)]
+        params, template_key, template = message
+        self.message_templates[template_key] = template
+        init = self._init_of(*found, set())
+        order = init.params if init is not None else []
+        out = [arg for i, arg in enumerate(call.args)
+               if i < len(order) and order[i] in params]
+        return out + [kw.value for kw in call.keywords if kw.arg in params]
+
+    def _exception_class(self, fn: _Fn, func: ast.AST) -> tuple[str, str] | None:
+        """The package class a raise constructs, as (module, name), or None."""
+        return self._class_ref(fn.module, func)
+
+    def _class_ref(self, file: str, expr: ast.AST) -> tuple[str, str] | None:
+        """The package class ``expr`` names in module ``file``, as (module, name): its
+        own module's class, then the one its import binds (an alias resolved), then an
+        attribute of an imported module; None for any other (a builtin)."""
+        module = self.modules[file]
+        if isinstance(expr, ast.Name):
+            if (file, expr.id) in self.class_nodes:
+                return file, expr.id
+            if expr.id in module.names:
+                target, real = module.names[expr.id]
+                return (target, real) if (target, real) in self.class_nodes else None
+            return None
+        if isinstance(expr, ast.Attribute) and isinstance(expr.value, ast.Name) \
+                and expr.value.id in module.modules:
+            target = module.modules[expr.value.id]
+            return (target, expr.attr) if (target, expr.attr) in self.class_nodes else None
+        return None
+
+    def _bases(self, module: str, name: str) -> list[tuple[str, str]] | None:
+        """The package base classes of a class, or None when one base is not the
+        package's (a builtin exception, whose message is every argument)."""
+        node = self.class_nodes.get((module, name))
+        if node is None:
+            return None
+        bases = [self._class_ref(module, base) for base in node.bases]
+        return None if None in bases else bases
+
+    def _method(self, module: str, name: str, method: str, seen: set) -> _Fn | None:
+        """``method`` as the class defines it or inherits it from a package base."""
+        if (module, name) in seen:
+            return None
+        seen.add((module, name))
+        own = self.fns.get(f"{module}::{name}.{method}")
+        if own is not None:
+            return own
+        for base in self._bases(module, name) or []:
+            found = self._method(*base, method, seen)
+            if found is not None:
+                return found
+        return None
+
+    def _init_of(self, module: str, name: str, seen: set) -> _Fn | None:
+        return self._method(module, name, "__init__", seen)
+
+    def _message_params(self, module: str, name: str
+                        ) -> tuple[set[str], str, list[ast.AST]] | None:
+        """The constructor parameters the message is made of, with the function that
+        builds it and the expressions it builds it from (its template, seat text in its
+        own right); or None when every argument is the message.
+
+        A ``__str__`` (the class's or a package base's) makes the message of the
+        attributes it reads, each traced to the parameters ``__init__`` assigns it
+        from. Otherwise the message is what ``__init__`` hands ``super().__init__``.
+        With neither, ``BaseException`` keeps every argument, so every one is read."""
+        init = self._init_of(module, name, set())
+        if init is None:
+            return None
+        params = set(init.params) | {a.arg for a in init.node.args.kwonlyargs}
+        text = self._method(module, name, "__str__", set())
+        if text is not None:
+            attrs = {n.attr for n in ast.walk(text.node) if isinstance(n, ast.Attribute)
+                     and isinstance(n.value, ast.Name) and n.value.id == "self"}
+            sources: set[str] = set()
+            for node in ast.walk(init.node):
+                if not isinstance(node, ast.Assign):
+                    continue
+                for target in node.targets:
+                    pairs = (zip(target.elts, node.value.elts, strict=False)
+                             if isinstance(target, ast.Tuple)
+                             and isinstance(node.value, ast.Tuple) else [(target, node.value)])
+                    for t, v in pairs:
+                        if isinstance(t, ast.Attribute) and t.attr in attrs:
+                            sources |= {n.id for n in ast.walk(v)
+                                        if isinstance(n, ast.Name) and n.id in params}
+            return sources, text.key, [n.value for n in _own_nodes(text.node)
+                                       if isinstance(n, ast.Return) and n.value is not None]
+        for node in ast.walk(init.node):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                    and node.func.attr == "__init__" and isinstance(node.func.value, ast.Call) \
+                    and isinstance(node.func.value.func, ast.Name) \
+                    and node.func.value.func.id == "super":
+                built = [*node.args, *(k.value for k in node.keywords)]
+                return ({n.id for arg in built for n in ast.walk(arg)
+                         if isinstance(n, ast.Name) and n.id in params}, init.key, built)
+        return None
 
     def _collect(self) -> list[SeatText]:
         # Reason functions: a call whose result lands in a seat position, directly or
@@ -696,6 +810,12 @@ class Scan:
                 for text in renderer.render(value):
                     if has_literal_text(text):
                         texts[(kind, key, text)] = SeatText(kind, key, text)
+        for key, values in self.message_templates.items():
+            renderer = Renderer(self, self.fns[key].module, local_bindings(self.fns[key].node))
+            for value in values:
+                for text in renderer.render(value):
+                    if has_literal_text(text):
+                        texts[("exception", key, text)] = SeatText("exception", key, text)
         texts.update(self._payloads())
         return sorted(texts.values(), key=lambda t: (t.kind, t.source, t.text))
 
