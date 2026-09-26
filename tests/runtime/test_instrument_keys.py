@@ -52,3 +52,32 @@ def test_a_write_kind_with_no_identity_is_refused_not_pooled():
     rt = make_runtime()
     with pytest.raises(ValueError, match="no instrument identity"):
         rt._instrument({"operation": "venue.teleport", "args": {}, "status": "ok"})
+
+
+def test_a_multi_leg_return_keys_by_its_complete_exposure():
+    """Codex on #152: an accepted batch was keyed by its first leg only, so BTC+ETH
+    and BTC+SOL pooled into BTC's prevalence. The key is every executed (instrument,
+    side) leg, sorted; a single BTC leg keeps exactly its old key; a refused leg is
+    not exposure."""
+    rt = make_runtime()
+
+    def order(coin, is_buy=True, status="ok"):
+        return {"operation": "venue.place_market", "status": status,
+                "args": {"coin": coin, "is_buy": is_buy, "size": "0.001"}}
+
+    operations = {"eth": [order("BTC"), order("ETH", False)],
+                  "eth-reversed": [order("ETH", False), order("BTC")],
+                  "sol": [order("BTC"), order("SOL", False)],
+                  "btc": [order("BTC")],
+                  "btc-twice": [order("BTC"), order("BTC")],
+                  "btc-refused": [order("BTC"), order("SOL", status="rejected")]}
+    rt.executed_operations = lambda handle: operations[handle]
+    for handle in operations:
+        rt.world_outcomes[handle] = {"subject": rt._acted_trade(handle)}
+    key = {h: rt._verdict_key(h, "return_paid_off") for h in operations}
+    assert key["eth"] != key["sol"] and key["eth"] == key["eth-reversed"]
+    assert ":BTC:buy|ETH:sell:" in key["eth"]
+    old = f"verdict:return_paid_off:BTC:buy:{rt._horizon_ns()}"
+    assert key["btc"] == key["btc-twice"] == old
+    assert rt._acted_trade("btc") == {"coin": "BTC", "side": "buy"}  # unchanged
+    assert "rejected" in rt.REFUSED_WRITES and key["btc-refused"] == old

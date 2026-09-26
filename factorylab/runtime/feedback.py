@@ -1700,14 +1700,18 @@ class FeedbackMixin:
                        "ns": self.clock.now_ns, **({"subject": dict(subject)} if subject else {})}
         return state, y, kind
 
-    def _acted_trade(self, about: str) -> dict[str, str]:
-        """The trade an acting return took, ``{coin, side}``: its first venue write the
-        venue did not refuse, keyed by that write's own instrument (``_instrument``).
-        A return that earned without a venue write (a service receipt) names none."""
+    def _acted_trade(self, about: str) -> dict:
+        """The exposure an acting return took: ``{coin, side}`` of its first venue write
+        the venue did not refuse, keyed by that write's own instrument
+        (``_instrument``), and, when it executed more than one distinct (instrument,
+        side) leg (an accepted batch), ``legs``: every such leg, sorted, as
+        ``instrument:side``. A return that earned without a venue write (a service
+        receipt) names none."""
         try:
             operations = self.executed_operations(about)
         except (AttributeError, KeyError):
             operations = []
+        legs = []
         for row in operations:
             if row.get("status") in self.REFUSED_WRITES:
                 continue
@@ -1715,8 +1719,16 @@ class FeedbackMixin:
             side = args.get("side")
             if side is None and isinstance(args.get("is_buy"), bool):
                 side = "buy" if args["is_buy"] else "sell"
-            return {"coin": self._instrument(row), "side": str(side or row["operation"])}
-        return {"coin": "-", "side": "-"}
+            leg = (self._instrument(row), str(side or row["operation"]))
+            if leg not in legs:
+                legs.append(leg)
+        if not legs:
+            return {"coin": "-", "side": "-"}
+        (coin, side), rest = legs[0], legs[1:]
+        if not rest:
+            return {"coin": coin, "side": side}
+        return {"coin": coin, "side": side,
+                "legs": [f"{c}:{s}" for c, s in sorted(legs)]}
 
     def _instrument(self, row: dict) -> str:
         """The instrument one executed venue write acted on, by its own identity.
@@ -1757,14 +1769,18 @@ class FeedbackMixin:
         """The base rate a verdict on ``about`` is scored against (wave 16, D3).
 
         ``verdict:<definition>:<coin>:<side>:<horizon ns>``: per kind of measured
-        outcome, per named or taken trade, per horizon. A judge that knows only which
-        coins or sides the world usually proves right knows the base rate, and earns
-        exactly its score, 0.5, and nothing else (section 1: a pooled key paid
-        predictable prevalence).
+        outcome, per named or taken trade, per horizon. A return that executed several
+        legs is keyed by its complete exposure, every ``<instrument>:<side>`` leg
+        sorted and joined by ``|`` in place of ``<coin>:<side>`` (Codex on #152), so
+        two batches sharing a first leg never pool; a single leg's key is unchanged. A
+        judge that knows only which coins or sides the world usually proves right
+        knows the base rate, and earns exactly its score, 0.5, and nothing else
+        (section 1: a pooled key paid predictable prevalence).
         """
         subject = (self.world_outcomes.get(about) or {}).get("subject") or {}
-        return (f"{VERDICT_BASE}{kind}:{subject.get('coin', '-')}:{subject.get('side', '-')}:"
-                f"{self._horizon_ns()}")
+        exposure = ("|".join(subject["legs"]) if subject.get("legs")
+                    else f"{subject.get('coin', '-')}:{subject.get('side', '-')}")
+        return f"{VERDICT_BASE}{kind}:{exposure}:{self._horizon_ns()}"
 
     def _freeze_declined_trade(self, handle: str, outputs: Any) -> None:
         """Freeze the mids a named trade is priced from, when the return names one.
