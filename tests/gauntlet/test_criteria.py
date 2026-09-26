@@ -1953,6 +1953,18 @@ def test_a_criterion_that_raises_fails_and_replay_reports_the_rest(monkeypatch):
     assert set(generic) <= set(results)  # every criterion after it still reported
 
 
+def test_a_regionless_price_window_fails_sf0_and_replay_reports_the_rest():
+    """Codex P2 (gauntlet.py:2811): SF-0 reads the diary's regions inside its criterion,
+    so a ``price.window`` without ``regions`` is an SF-0 FAIL naming the row and field,
+    and every other criterion is still reported."""
+    regionless = {k: v for k, v in _price_window(1, 0.0).items() if k != "regions"}
+    whole = {r.name for r in g.replay(_seq([_launch(), _price_window(1, 0.0), _w(1)]), M)}
+    results = {r.name: r for r in g.replay(_seq([_launch(), regionless, _w(1)]), M)}
+    assert results["SF-0"].status == g.FAIL
+    assert "regions" in json.dumps(results["SF-0"].evidence["malformed"])
+    assert {n for n in results if "[" not in n} == {n for n in whole if "[" not in n}
+
+
 def test_s8_gamma_vectors_of_different_lengths_fail_with_a_clear_reason():
     """S8 validates the vectors before pairing them: a row whose before and after differ
     in length fails naming it, and the other rows are still read."""

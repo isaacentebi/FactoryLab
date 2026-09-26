@@ -321,7 +321,8 @@ def reference_violation(region: Mapping) -> float:
 
 @criterion("SF-0")
 def sf0_relation(manifest: Mapping, *, regions: Mapping[str, Mapping] | None = None,
-                 cards: Iterable[Mapping] | None = None) -> Result:
+                 cards: Iterable[Mapping] | None = None,
+                 events: list[Mapping] | None = None) -> Result:
     """SF-0: the integrator still has headroom at the detection horizon, per card kind.
 
     Chapter II §II.b prices stable failure by "ratcheting up penalties the longer the
@@ -330,8 +331,14 @@ def sf0_relation(manifest: Mapping, *, regions: Mapping[str, Mapping] | None = N
     (Astra C-1: conditioned on the card's region kind through ``v_ref``, and on its
     window kind: a ``returns``- or ``forecasts``-kind card's price moves only on a
     new settled sample, at most once a window, so the windows-kind bound — one
-    update per window — is the binding one and is the one checked).
+    update per window — is the binding one and is the one checked). With ``events``,
+    the regions are every region the diary's ``price.window`` rows measured, read
+    inside the criterion so a malformed row fails SF-0 rather than aborting a replay.
     """
+    if events is not None:
+        regions = dict(regions or {})
+        for row in card_windows(events):
+            regions.update(need(row, "regions"))
     ph = physics(manifest)
     charter = _section(manifest, "charter")
     cards = list(cards if cards is not None else charter.get("cards") or ())
@@ -2806,10 +2813,7 @@ def replay(events: list[Mapping], manifest: Mapping | None = None, *,
 
 
 def _sf0_parts(manifest: Mapping, events: list[Mapping]) -> tuple[str, dict]:
-    regions = {}
-    for row in card_windows(events):
-        regions.update(need(row, "regions"))
-    result = sf0_relation(manifest, regions=regions)
+    result = sf0_relation(manifest, events=events)
     return result.status, result.evidence
 
 
