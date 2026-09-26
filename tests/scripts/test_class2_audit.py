@@ -1522,6 +1522,51 @@ def test_a_flagged_line_moved_to_another_seat_visible_module_fails_reverted(tmp_
     assert tool.reverted_problems(repo, flagged, elsewhere) == []
 
 
+def _schematics_repo(tmp_path, *texts):
+    """A repository whose seat-visible file takes each of ``texts`` in turn, one commit
+    each: (repo, [commit, ...])."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    return repo, [_commit(repo, "factorylab/cortex/schematics.py", text, f"step {i}")
+                  for i, text in enumerate(texts)]
+
+
+DISCLOSURE = "FEE = 'every fill pays the venue fee'\n"
+
+
+def test_a_deletion_only_commit_fails_reverted_until_the_line_is_restored(tmp_path):
+    """Codex P1 (class2_audit.py:1974): a flagged commit that deletes seat-visible text
+    (a disclosure) adds nothing, yet its effect stands while the deletion does. REVERTED
+    holds only once the deleted line is back somewhere in the seat-visible scope."""
+    repo, (_root, flagged, restored) = _schematics_repo(
+        tmp_path, "HOLD = 'hold'\n" + DISCLOSURE, "HOLD = 'hold'\n",
+        "HOLD = 'hold'\n" + DISCLOSURE)
+    problems = tool.reverted_problems(repo, flagged, flagged)
+    assert problems and "every fill pays the venue fee" in problems[0]
+    assert "not back" in problems[0]
+    assert tool.reverted_problems(repo, flagged, restored) == []
+    # Back in another seat-visible file counts; back outside the scope does not.
+    _commit(repo, "factorylab/cortex/schematics.py", "HOLD = 'hold'\n", "drop it again")
+    docs = _commit(repo, "docs/fees.md", DISCLOSURE, "fees in the docs")
+    assert tool.reverted_problems(repo, flagged, docs)
+    world = _commit(repo, "worlds/fees.toml", "  " + DISCLOSURE, "fees in a world")
+    assert tool.reverted_problems(repo, flagged, world) == []
+
+
+def test_a_replacement_passes_reverted_only_with_the_old_line_back_and_the_new_gone(
+        tmp_path):
+    """A flagged replacement is two changes: its new line must be gone AND its old line
+    back. Either half alone still stands."""
+    old, new = DISCLOSURE, "FEE = 'fees are small, trade freely'\n"
+    repo, (_root, flagged, both_gone, both_back, reverted) = _schematics_repo(
+        tmp_path, "HOLD = 'hold'\n" + old, "HOLD = 'hold'\n" + new, "HOLD = 'hold'\n",
+        "HOLD = 'hold'\n" + old + new, "HOLD = 'hold'\n" + old)
+    assert any("not back" in p for p in tool.reverted_problems(repo, flagged, both_gone))
+    assert any("still in" in p for p in tool.reverted_problems(repo, flagged, both_back))
+    assert tool.reverted_problems(repo, flagged, reverted) == []
+
+
 def test_reverted_on_a_corpus_finding_is_refused(tmp_path):
     finding = {"finding_id": "f1", "path": "scripted/tools/a", "question": "Q4",
                "class": "C1", "severity": "HIGH"}

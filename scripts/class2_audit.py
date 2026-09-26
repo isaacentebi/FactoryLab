@@ -1923,26 +1923,37 @@ def disposition_problems(text: str, expected: list[dict], *, allowlist: dict,
     return problems
 
 
-def _added_lines(repo: Path, commit: str) -> dict[str, list[str]]:
-    """The lines ``commit`` added to each seat-visible file (``SURFACE_PATHS``), against
-    its first parent (the whole tree for a root commit), whitespace-normalised. A line
-    with no letter or digit (a bracket, a blank) carries no text and is left out."""
+def _changed_lines(repo: Path, commit: str
+                   ) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """The lines ``commit`` added to, and deleted from, each file of the provenance
+    scope (``PROVENANCE_PATHS``), against its first parent (the whole tree for a root
+    commit), whitespace-normalised. A line with no letter or digit (a bracket, a blank)
+    carries no text and is left out. File headers are read only outside a hunk, so a
+    changed line that starts with ``--`` or ``++`` is a line, not a header."""
     parents = _git(repo, "rev-list", "--parents", "-n", "1", commit).split()[1:]
     diff = (_git(repo, "diff", "--no-color", "--unified=0", parents[0], commit, "--",
                  *PROVENANCE_PATHS) if parents else
             _git(repo, "show", "--no-color", "--format=", "--unified=0", commit, "--",
                  *PROVENANCE_PATHS))
     added: dict[str, list[str]] = {}
-    path = None
+    deleted: dict[str, list[str]] = {}
+    old = new = None
+    in_hunk = False
     for line in diff.splitlines():
-        if line.startswith("+++ "):
-            target = line[4:]
-            path = target[2:] if target.startswith("b/") else None
-        elif line.startswith("+") and path is not None:
+        if line.startswith("diff "):
+            in_hunk, old, new = False, None, None
+        elif not in_hunk and line.startswith("--- "):
+            old = line[6:] if line.startswith("--- a/") else None
+        elif not in_hunk and line.startswith("+++ "):
+            new = line[6:] if line.startswith("+++ b/") else None
+        elif line.startswith("@@"):
+            in_hunk = True
+        elif in_hunk and line[:1] in ("+", "-"):
             text = " ".join(line[1:].split())
-            if any(c.isalnum() for c in text):
-                added.setdefault(path, []).append(text)
-    return added
+            path, into = (new, added) if line[0] == "+" else (old, deleted)
+            if path is not None and any(c.isalnum() for c in text):
+                into.setdefault(path, []).append(text)
+    return added, deleted
 
 
 def _seat_visible_lines(repo: Path, release: str) -> dict[str, str]:
@@ -1963,19 +1974,27 @@ def _seat_visible_lines(repo: Path, release: str) -> dict[str, str]:
 
 
 def reverted_problems(repo: Path, commit: str, release: str) -> list[str]:
-    """Why ``commit``'s seat-visible text is not reverted at ``release`` (none when it
-    is): every line it added to a seat-visible path (``_added_lines``) must be absent,
-    as a whole whitespace-normalised line, from EVERY seat-visible file at ``release``
-    (``_seat_visible_lines``), not only the one it was added to: moving the text to
-    another module is not reverting it. Recomputed from the repository, never read
-    from a triage row."""
+    """Why ``commit``'s seat-visible effect is not undone at ``release`` (none when it
+    is), over its lines (``_changed_lines``) and every seat-visible file at ``release``
+    (``_seat_visible_lines``), each line whole and whitespace-normalised: every line it
+    added must be absent from EVERY file, not only the one it was added to (moving the
+    text to another module is not reverting it), and every line it deleted must be
+    present again in SOME file (a deleted disclosure, or the old half of a
+    replacement, still standing is not reverted). Recomputed from the repository,
+    never read from a triage row."""
     present = _seat_visible_lines(repo, release)
+    added, deleted = _changed_lines(repo, commit)
     problems = []
-    for path, lines in _added_lines(repo, commit).items():
+    for path, lines in added.items():
         kept = [line for line in lines if line in present]
         if kept:
             problems.append(f"{commit[:12]}'s text from {path} is still in "
                             f"{present[kept[0]]} at the release: {kept[0][:80]!r}")
+    for path, lines in deleted.items():
+        gone = [line for line in lines if line not in present]
+        if gone:
+            problems.append(f"{commit[:12]} deleted text from {path} that is not back at "
+                            f"the release: {gone[0][:80]!r}")
     return problems
 
 
