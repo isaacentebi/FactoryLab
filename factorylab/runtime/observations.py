@@ -142,15 +142,13 @@ def _cost_per_attempt(w: MeasureWindow) -> float | None:
     """Mean cost of every invocation the window made, failed ones included.
 
     A tolerated failure is compute the window spent: nine cheap successes and
-    one expensive failure cost what all ten cost, not what the nine did. A
-    closed record keeps no attribution, so it is measured from the window's return samples instead
-    (``charter.measurement``), and a window with no invocation has no cost
-    per attempt.
+    one expensive failure cost what all ten cost, not what the nine did. Guarantees
+    the window's metered compute over its invocations, the two counters every
+    invocation moves together (``compute_spend_micro``, ``invocations``), so a closed
+    record, a scope's facts and a card's response rows give one number (Codex on
+    #152); a window with no invocation has no cost per attempt.
     """
-    decisions = getattr(w, "decisions", None)
-    if not decisions or not w.invocations:
-        return None
-    return sum(d["cost"] for d in decisions.values()) / w.invocations
+    return _ratio(getattr(w, "compute_spend_micro", 0) or 0, w.invocations)
 
 
 def _disagreement(w: MeasureWindow) -> float | None:
@@ -499,7 +497,7 @@ CATALOGUE: tuple[Observation, ...] = (
 #: verdicts it never read).
 WINDOW_INPUTS: Mapping[str, tuple[str, ...]] = MappingProxyType({
     "cost_per_return": ("costs",),
-    "cost_per_attempt": ("decisions", "invocations"),
+    "cost_per_attempt": ("compute_spend_micro", "invocations"),
     "well_formed_rate": ("ok", "invocations"),
     "forecast_skill": ("forecast_skills",),
     "turnover": ("notional_micro", "equity_start_micro"),
@@ -539,8 +537,6 @@ WINDOW_INPUTS: Mapping[str, tuple[str, ...]] = MappingProxyType({
 #: where the runtime counts it, never what it is for.
 WINDOW_FIELD_MEANINGS: Mapping[str, str] = MappingProxyType({
     "costs": "the metered cost of each well-formed producer return",
-    "decisions": "each decision's metered cost, by decision, on the runtime's own window "
-                 "only: a closed record keeps no attribution",
     "invocations": "the invocations the window made",
     "ok": "the well-formed returns among them",
     "forecast_skills": "the skill of each forecast the window settled, in settlement "

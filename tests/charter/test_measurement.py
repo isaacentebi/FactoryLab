@@ -234,8 +234,10 @@ def test_a_card_over_one_closed_window_computes_the_window_published_value():
         samples.returns.append({"handle": "h", "assembly": "a", "role": "producer",
                                 "window": 1, "cost": cost, "ok": invoked, "invoked": invoked,
                                 "noop": False, "revision": False, "tool_calls": 0})
-    # The window the runtime closes: its forecast skills are the window's own rows.
-    window = replace(_full_window(), forecast_skills=window_forecast_skills(samples, 1))
+    # The window the runtime closes over those rows: its forecast skills are the window's
+    # own rows, and its three invocations spent what their responses cost.
+    window = replace(_full_window(), compute_spend_micro=5,
+                     forecast_skills=window_forecast_skills(samples, 1))
     book = seed_book()
     published = {seed: book.value(SEEDS[seed], window) for seed in SEED_IDS}
     cards = [MetricCard(id=f"card-{seed}", norm="n", description="d",
@@ -249,3 +251,69 @@ def test_a_card_over_one_closed_window_computes_the_window_published_value():
         if seed in CLOSED_WINDOW_DIFFERS:
             continue
         assert carded.get(f"card-{seed}") == published[seed], seed
+
+
+def test_a_card_over_returns_or_forecasts_computes_what_a_window_of_the_same_responses_does():
+    """Codex on #152: the same set of responses gives the same value by every path. A
+    card over returns or forecasts (the row calculators) and the window calculator on
+    those rows' window facts (``scope_facts``, the kernel's own statement of what a
+    window of them counts) agree for every row-measured seed, unless ``ROWS_DIFFER``
+    declares why not. The rows carry what a runtime records: a response whose prompt
+    could not be rendered, a ballot whose assembly was unavailable (no invocation, so no
+    response), a reading, a censored forecast, a consequence of a return that did not
+    act, and a commitment excluded from its owner's sample."""
+    from types import SimpleNamespace
+
+    from factorylab.charter.measurement import (
+        RETURN_OBSERVATIONS,
+        ROW_INPUTS,
+        ROWS_DIFFER,
+        CardSamples,
+        _rows,
+        _selected,
+        measure_card,
+        scope_facts,
+    )
+    from factorylab.runtime.observations import SEEDS, seed_book
+
+    samples = CardSamples()
+    for i, (cost, ok, noop, revision, calls, prompt, you, inputs, invoked) in enumerate((
+            (7, True, True, False, 2, 100, 10, 30, True),
+            (3, False, False, True, 0, None, None, None, True),  # could not be rendered
+            (5, True, False, False, 1, 80, 0, 20, True),
+            (0, False, False, False, 0, None, None, None, False))):  # assembly unavailable
+        samples.returns.append({
+            "handle": f"h{i}", "assembly": "a", "role": "producer", "window": 1,
+            "cost": cost, "ok": ok, "noop": noop, "revision": revision, "tool_calls": calls,
+            "prompt_bytes": prompt, "you_bytes": you, "inputs_bytes": inputs,
+            "verdict": None, "invoked": invoked})
+    samples.readings.append({"handle": "h0", "assembly": "a", "role": "producer",
+                             "window": 1, "read_bytes": 40, "reading": True})
+    for i, (skill, status, y, acted, excluded) in enumerate((
+            (0.2, "settled", 1, True, None), (-0.4, "settled", 0, False, None),
+            (None, "censored", None, True, None), (None, "censored", None, True, "external"))):
+        samples.forecasts.append({
+            "handle": f"f{i}", "assembly": "a", "role": "evaluator", "window": 1,
+            "subject_handle": "s", "subject_assembly": "a", "subject_role": "producer",
+            "skill": skill, "status": status, "y": y, "subject_acted": acted,
+            "predicate": "return_paid_off", "verdict": 0.5 + i / 10, "excluded": excluded})
+    window = SimpleNamespace(**scope_facts([{"index": 1, "equity_start_micro": None}],
+                                           samples.returns, samples.forecasts,
+                                           samples.readings))
+    book = seed_book()
+    compared = 0
+    for observation in sorted(ROW_INPUTS):
+        kind = "returns" if observation in RETURN_OBSERVATIONS else "forecasts"
+        responses = [row for row in _selected(observation, _rows(samples, kind, observation))
+                     if not row.get("reading")]
+        card = MetricCard(id=f"card-{observation}", norm="n", description="d",
+                          units=SEEDS[observation].units,
+                          window=MetricWindow(kind, len(responses), None),
+                          acceptable_region="at most 1", observation=observation,
+                          answers_for="all")
+        carded = measure_card(card, samples, book).get("all")
+        if observation in ROWS_DIFFER:
+            continue
+        assert carded is not None and carded == SEEDS[observation].measure(window), observation
+        compared += 1
+    assert compared == len(ROW_INPUTS) - len(ROWS_DIFFER)
