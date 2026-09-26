@@ -88,8 +88,16 @@ def test_the_forecast_skill_a_card_prices_is_the_forecasts_alone(monkeypatch):
     closes = [i for i in rt.ledger._recovery_items() if i.get("kind") == "price.window"]
     assert "forecast_skill" not in closes[-1]["observations"]
     assert "skill-floor" not in closes[-1]["values"]
-    rt.standing.record(judge, 0.64, 0.75)  # one settled forecast, below its base rate
-    rt._manage_reserve_window()
+    # One settled forecast, below its base rate: since c04dbd6 ``forecast_skill`` is
+    # the mean skill of the forecasts the window settled (``window_forecast_skills``),
+    # read from their rows, never an evaluator's cumulative standing.
+    rt.standing.record(judge, 0.64, 0.75)
+    rt._manage_reserve_window()  # the window it settles in is the one now open
+    rt.card_samples.forecasts.append({
+        "handle": "f-0", "assembly": judge, "role": "evaluator", "subject_handle": "s",
+        "subject_assembly": "seed-decider", "subject_role": "producer",
+        "window": rt.window.index, "skill": 0.64 - 0.75, "predicate": "return_paid_off",
+        "y": 1, "status": "settled", "verdict": None, "excluded": None})
     rt._close_price_window()
     closes = [i for i in rt.ledger._recovery_items() if i.get("kind") == "price.window"]
     assert closes[-1]["observations"]["forecast_skill"] == pytest.approx(0.64 - 0.75)
