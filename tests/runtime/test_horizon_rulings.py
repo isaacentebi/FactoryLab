@@ -84,8 +84,8 @@ def _open_long(rt, coin="BTC", px="60000", fee_usd="0"):
 
     prop = PropensityRecord(("seed-decider",), (1.0,), "seed-decider", 0, "router:Tick", "t")
     handle = rt.queue.open(actor="router:Tick", event_id=f"trade-{coin}", propensity=prop,
-                           channel="verdict", deadline_ns=10**18, parent_handle=None,
-                           cost_ceiling=0)
+                           channel="verdict", deadline_ns=rt.clock.now_ns + 10**18,
+                           parent_handle=None, cost_ceiling=0)
     rt.consequences.start(handle, rt.n)
     rt.consequences.order_result(handle, {"status": "filled", "order_id": f"o-{coin}",
                                           "filled_size": "0.001"}, {"size": "0.001"}, rt.n)
@@ -352,3 +352,60 @@ def test_a_funding_boundary_past_h_changes_neither_road_however_late_the_mark():
     assert (late_lot.y, late_lot.cost_micro) == (on_time_lot.y, on_time_lot.cost_micro)
     # (100.1 - 100) * 0.001 BTC, less the $0.00002 paid before H and the exit fee at H.
     assert on_time_lot.net_micro == 100 - 20 - on_time_lot.exit_fee_micro
+
+
+def test_a_tape_advance_past_an_hour_boundary_grades_both_roads_at_that_boundary_s_rate():
+    """A tape reports a crossed hour boundary's payment at its advance time, with the
+    boundary itself as ``funding_ns`` (Codex on #152, c92a7b8). The rate changes at
+    the boundary; the named trade spanning it is graded at the new rate, the rate the
+    acting lot's payment was charged at, and the lot's payment counts as inside H."""
+    from decimal import Decimal
+
+    from factorylab.world.exchange import Position
+    from factorylab.world.tape import Tape, TapeVenue
+    from tests.runtime.test_consequence_horizon import _named_hold
+    from tests.runtime.test_reward_chain import _advance, _rows
+    from tests.world.test_tape import BOUNDARY, LONGRUN
+
+    tape = Tape.load(LONGRUN)
+    old, new = "0.0001", "0.0009"
+    funding = dict(tape.data["funding"], BTC=[[tape.start_ns, old, None],
+                                               [BOUNDARY, new, None]])
+    fees = {"BTC": {"venue_read": {side: [[tape.start_ns, "0.00045", ["test read"]]]
+                                   for side in ("taker", "maker")}}}
+    venue = TapeVenue(Tape.from_data(dict(tape.data, funding=funding, fees=fees)),
+                      coins=("BTC",), start_cash_usd=Decimal(120))
+    rt = _world(10)
+    rt.exchange, rt.fee_schedule = venue, None
+    start = BOUNDARY - 30 * S
+    venue.advance(start)
+    rt._observe_funding("BTC", start - 10 * S, old)  # the rate in force at the decision
+    producer, _judge = _named_hold(rt, start)
+    lot = _open_long(rt, "BTC", "100")
+    venue._positions["BTC"] = Position("BTC", Decimal("0.001"), Decimal("100"))
+    reported = BOUNDARY + 20 * S  # the tick that advances past the boundary
+    rt.clock.now_ns = reported
+    rt.internal.clear()
+    events = venue.advance(reported)
+    (paid,) = [e for e in events if e.kind == "Funding" and e.payload["coin"] == "BTC"]
+    assert (paid.ts_ns, paid.payload["funding_ns"], paid.payload["rate"]) == (
+        reported, BOUNDARY, new)
+    rt._settle_exchange_effects(events)
+    while rt.internal:
+        rt._process_event(rt.internal.popleft())
+    assert rt.reference_mids[producer]["funding"]["rates"] == [[BOUNDARY, new]]
+    rt.clock.now_ns = start + rt._horizon_ns()
+    _mids(rt, BTC="100")
+    _advance(rt, 1)
+    rt._settle_evaluations()
+    (priced,) = _rows(rt, "consequence.opportunity", handle=producer)
+    assert priced["funding_payments"] == 1
+    assert Decimal(priced["funding_bps"]) == -Decimal(new) * 10_000  # the buy pays 9 bp
+    assert lot not in rt.consequences.after_horizon  # the boundary is inside the lot's H
+    payoff = rt.consequences.payoff(lot)
+    assert payoff is not None and payoff.censored is None
+    # The lot bore that very payment: its size times the tape's mark at the boundary
+    # times the new rate, in micro-USD, beside the same exit fee.
+    charged = Decimal("0.001") * tape.mid_at("BTC", BOUNDARY)[1] * Decimal(new) * 10**6
+    assert payoff.net_micro == int(-(charged + payoff.exit_fee_micro).to_integral_value(
+        rounding="ROUND_CEILING"))

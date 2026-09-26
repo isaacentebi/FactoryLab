@@ -10,7 +10,7 @@ from factorylab.cortex.request import Return
 from factorylab.kernel.money import usd_to_micro
 from factorylab.runtime.shared import _to_plain
 from factorylab.settlement.lots import VENUE_FEE_MARKETS, LotTable
-from factorylab.world.events import WorldEvent, WorldEventKind
+from factorylab.world.events import WorldEvent, WorldEventKind, funding_instant
 from factorylab.world.exchange import (
     AccountState,
     Order,
@@ -608,7 +608,8 @@ class VenueMixin:
             elif we.kind is WorldEventKind.FUNDING:
                 paid = usd_to_micro(we.payload["paid_usd"], rounding="nearest")
                 if paid:
-                    settlements.append((-paid, f"funding:{we.payload['coin']}:{we.ts_ns}",
+                    at = funding_instant(we.payload, we.ts_ns)
+                    settlements.append((-paid, f"funding:{we.payload['coin']}:{at}",
                                         "funding", "venue_perps", None))
         if settlements:
             self._settle_venue(settlements)
@@ -622,7 +623,7 @@ class VenueMixin:
                 elif we.kind is WorldEventKind.FUNDING:
                     # The funding time the payment is for (R10-m: an outcome accrues
                     # funding only for funding times at or before its horizon).
-                    payload["ts_ns"] = int(we.payload.get("funding_ns", we.ts_ns))
+                    payload["ts_ns"] = funding_instant(we.payload, we.ts_ns)
                 self.consequences.observe(str(we.kind), payload, self.n)
         for we in evs:
             if id(we) in refused:

@@ -827,7 +827,10 @@ class FakeExchange:
                     WorldEventKind.FUNDING,
                     self._now_ns,
                     self.name,
-                    {"coin": coin, "rate": str(self.funding_rate), "paid_usd": str(paid)},
+                    # The hour boundary this payment is for, which the advance that
+                    # applies it may have passed.
+                    {"coin": coin, "rate": str(self.funding_rate), "paid_usd": str(paid),
+                     "funding_ns": self._last_funding_ns},
                 )
             )
         return events

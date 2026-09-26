@@ -18,6 +18,7 @@ from factorylab.kernel.queue import SettleStatus
 from factorylab.runtime.cards import parses, region_for
 from factorylab.runtime.immune import close_window
 from factorylab.runtime.observations import ObservationBook, normalise, trim_series
+from factorylab.world.events import funding_instant
 
 
 @dataclass
@@ -479,7 +480,8 @@ class PricingMixin:
             value = (usd_to_micro(Decimal(str(ev.payload["mid"])), rounding="nearest")
                      if key == "mids" else float(ev.payload["rate"]))
             series = getattr(self.window, key)
-            series.append({"coin": str(ev.payload["coin"]), "ts_ns": ev.ts_ns, "value": value})
+            at = ev.ts_ns if key == "mids" else funding_instant(ev.payload, ev.ts_ns)
+            series.append({"coin": str(ev.payload["coin"]), "ts_ns": at, "value": value})
             trim_series(self.window, key, per_coin=True)
         elif ev.kind is EventKind.TICK:
             self.window.tick_timestamps_ns.append(ev.ts_ns)

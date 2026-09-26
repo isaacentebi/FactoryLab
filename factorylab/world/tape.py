@@ -24,7 +24,7 @@ from decimal import ROUND_CEILING, Decimal
 from pathlib import Path
 from typing import Any
 
-from factorylab.world.events import WorldEvent, WorldEventKind
+from factorylab.world.events import WorldEvent, WorldEventKind, funding_instant
 from factorylab.world.exchange import (
     NS_PER_HOUR,
     FakeExchange,
@@ -366,7 +366,8 @@ def cut(path: str | Path) -> dict:
         elif event.get("kind") == "Fill":
             fills.append((ts, payload))
         elif event.get("kind") == "Funding" and not _nonzero(payload.get("paid_usd", "0")):
-            funding.setdefault(str(payload["coin"]), {})[ts] = [
+            # The rate's own instant, when the diary's venue stated one.
+            funding.setdefault(str(payload["coin"]), {})[funding_instant(payload, ts)] = [
                 str(payload["rate"]),
                 None if payload.get("premium") is None else str(payload["premium"])]
     exchange = manifest.get("exchange") or {}

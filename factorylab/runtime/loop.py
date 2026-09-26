@@ -91,7 +91,7 @@ from factorylab.runtime.venue import VenueMixin
 from factorylab.runtime.worlds import WorldManifest
 from factorylab.settlement.vocabulary import commission_block
 from factorylab.world.clock import ClockSource, merge_sources
-from factorylab.world.events import WorldEvent, WorldEventKind
+from factorylab.world.events import WorldEvent, WorldEventKind, funding_instant
 from factorylab.world.market import X402Provider
 
 #: What a return carries that is not the work under judgement: its propensity, which
@@ -387,7 +387,10 @@ class Runtime(
             # its horizon (wave 16, D2).
             self._observe_mid(coin, ev.ts_ns, str(ev.payload.get("mid")))
         elif ev.kind is EventKind.FUNDING and ev.payload.get("rate") is not None:
-            self._observe_funding(str(ev.payload.get("coin")), ev.ts_ns,
+            # At the funding time the rate is for, never the instant the venue reported
+            # it (a tape reports a crossed boundary at its advance time).
+            self._observe_funding(str(ev.payload.get("coin")),
+                                  funding_instant(ev.payload, ev.ts_ns),
                                   str(ev.payload.get("rate")))
 
         # Due tranches are mandatory even while dormant; each released tranche is then

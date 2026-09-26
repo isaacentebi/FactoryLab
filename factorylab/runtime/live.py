@@ -397,6 +397,8 @@ class LiveVenue:
                         "rate": str(f.rate),
                         "premium": str(f.premium),
                         "paid_usd": "0",
+                        # The instant the venue stated this rate at.
+                        "funding_ns": int(f.ts_ns),
                     },
                 )
             )
