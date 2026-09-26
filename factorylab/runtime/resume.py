@@ -922,7 +922,7 @@ _COMPONENT_FIELDS = (
                           "unresolved_orders", "censored_payoffs",
                           # Wave 16, D2: open returns' horizon marks; R10-m: the
                           # funding after their horizons, set aside.
-                          "horizon_marks", "after_horizon")),
+                          "horizon_marks", "horizon_mark_ns", "after_horizon")),
     ("consequence_fills", "", ("since_ns", "seen")),
     ("reconciler", "", ("every", "_ticks")),
     # The artifact archive's index (C9): hash -> owner, kind, size, time, published.

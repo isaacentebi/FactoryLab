@@ -620,6 +620,10 @@ class VenueMixin:
                     # The mid's own venue time: a horizon is marked by the first mid at
                     # or after it (wave 16, D2), never by the event that follows it.
                     payload["ts_ns"] = we.ts_ns
+                elif we.kind is WorldEventKind.FILL:
+                    # The fill's own venue time: a lot is never marked by a mid older
+                    # than it (``ReturnConsequences._unmark_before``).
+                    payload["ts_ns"] = we.ts_ns
                 elif we.kind is WorldEventKind.FUNDING:
                     # The funding time the payment is for (R10-m: an outcome accrues
                     # funding only for funding times at or before its horizon).

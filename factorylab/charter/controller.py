@@ -109,8 +109,9 @@ class _CardState:
     last_window_end_event: int | None = None
     previous_violation: float = 0.0
     # The integral term: accumulated pressure. It integrates only up to the bound of
-    # the window it integrates in (penalty_cap / v) and is held, never cut, while the
-    # penalty sits at the cap, so a violation that spikes and subsides keeps its memory.
+    # the window it integrates in (penalty_cap / v), and is clamped to that bound, never
+    # held above it, while the penalty sits at the cap (ruling R10-e refined): a value
+    # above the bound prices nothing more and ``decay`` could never unwind it.
     integral: float = 0.0
     # The last accepted observation, for the PID's derivative on measurement.
     previous_value: float | None = None
@@ -214,16 +215,17 @@ class PriceController:
 
     Without ``anticipated`` the law is the backward PID above, unchanged.
 
-    One bound (wave 16, ruling R-E): ``penalty_cap``, the reward scale. A card's
-    price is clipped to ``[0, penalty_cap / v]`` while it violates (``v > 0``): above
-    it, ``lambda * v`` would take more than the capped penalty any reward can bear,
-    and no decision's reward would change. There is no ``lambda_max``. While the
-    card's own price sits at its bound (``lambda >= penalty_cap / v``) the integrator
-    is frozen: essay II.IV.b, "gain ramped high enough to kick a system
-    out of an overdamped attractor will, if unchecked, overshoot into an oscillation
-    condition (thrash)", and a wound-up integral would keep the price high long after
-    the attractor was left. The gate is the card's own bound only (wave 16, ruling
-    R10-e): the total pressure of its roles clips each decision's penalty and is
+    One bound (wave 16, ruling R-E): ``penalty_cap``, the reward scale. A card's price
+    is clipped to ``[0, penalty_cap / v]`` while it violates (``v > 0``): above it,
+    ``lambda * v`` would take more than the capped penalty any reward can bear, and no
+    decision's reward would change. There is no ``lambda_max``. While the card's own
+    price sits at its bound (``lambda >= penalty_cap / v``) the integrator is clamped to
+    that bound and held there (ruling R10-e refined: never frozen at a value above it,
+    which ``decay`` could not unwind): essay II.IV.b, "gain ramped high enough to kick a
+    system out of an overdamped attractor will, if unchecked, overshoot into an
+    oscillation condition (thrash)", and a wound-up integral would keep the price high
+    long after the attractor was left. The gate is the card's own bound only (wave 16,
+    ruling R10-e): the total pressure of its roles clips each decision's penalty and is
     published, but another card's saturation never freezes this card's integrator or
     ratchet, which would be a safe harbour for its failure (§II.b: "price the duration
     of failure"). Saturation, the card's or its roles', is counted
@@ -524,10 +526,15 @@ class PriceController:
         violates, and only its positive part: a card moving back toward its region
         but still outside it keeps ``P + I``, so a shrinking violation can lower the
         price only through ``P``, never to zero while it lasts. The integral never
-        integrates past ``penalty_cap / v``; it holds, unchanged, while the penalty
-        sits at the cap (``frozen``; ruling R-E), and while ``P`` plus the integral
-        already reaches the bound and the violation is still growing; it leaks
-        ``decay`` once the card stops violating.
+        integrates past ``penalty_cap / v``, and an integral above that bound (an
+        adopted price such as 1e308, or one held through a spike of ``v``) is clamped
+        to it before it is used (ruling R10-e refined): it holds, at most at the bound,
+        while the penalty sits at the cap (``frozen``; ruling R-E), and while ``P``
+        plus the integral already reaches the bound and the violation is still
+        growing; it leaks ``decay`` once the card stops violating, from at most the
+        bound of the last violation it saw. A stored value above its effective bound
+        can therefore never sit out of reach of ``decay`` (a float no-op at 1e308),
+        and the price always unwinds.
         """
         region = state.region
         derivative = 0.0
@@ -544,17 +551,22 @@ class PriceController:
                              / region.scale)
         proportional = self.__kp * violation
         if violation <= 0:
-            integral = max(0.0, state.integral - self.__decay)
+            held = state.integral
+            if state.previous_violation > 0:
+                held = min(held, self.__cap / state.previous_violation)
+            integral = max(0.0, held - self.__decay)
         else:
             bound = self.__cap / violation
-            if frozen or (proportional + state.integral >= bound
+            # Clamped to the card's own bound before it is used (ruling R10-e refined):
+            # an integral above it would price nothing more and could never decay.
+            held = min(bound, state.integral)
+            if frozen or (proportional + held >= bound
                           and violation > state.previous_violation):
                 # At the cap, or saturated high without any new integration and still
-                # climbing: hold, never wind up, and never cut: a spike's lower bound
-                # clips the price, not the pressure the card has accumulated.
-                integral = state.integral
+                # climbing: hold at the bound, never wind up.
+                integral = held
             else:
-                integral = min(bound, state.integral + self.__eta * violation)
+                integral = min(bound, held + self.__eta * violation)
         return (proportional + integral + derivative, integral,
                 {"p": proportional, "i": integral, "d": derivative})
 

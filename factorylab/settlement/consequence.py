@@ -28,6 +28,9 @@ class ReturnConsequences:
         # venue mid timestamped at or after its horizon, fixed when that mid arrives:
         # never the latest mid cached from an earlier event.
         self.horizon_marks: dict[str, dict[str, str]] = {}
+        # The venue time of each such mark (Codex on #152, fee12ff): a lot a fill opens
+        # after its mark's instant is never marked by it.
+        self.horizon_mark_ns: dict[str, dict[str, int]] = {}
         # Ruling R10-m: funding charged to an open return's lots for a funding time
         # after its horizon (micro-USD, exact), added back when its outcome is fixed.
         self.after_horizon: dict[str, Fraction] = {}
@@ -307,6 +310,9 @@ class ReturnConsequences:
                                     "reason": RELEASED_ORDER})
             self._apply("fill", {"event": event, "payload": dict(payload)}, table)
             order = next((o for o in table.orders if o.order_id == str(payload["order_id"])), None)
+            if order is not None:
+                self._unmark_before(order.handle, payload["coin"],
+                                    payload.get("ts_ns", self._now_ns()))
             handle = order.handle if order is not None else self.table.service_return(
                 str(payload["order_id"]))
             if handle is not None:
@@ -374,17 +380,36 @@ class ReturnConsequences:
                                                   + paid * lot.size / total)
 
     def _mark_horizons(self, coin: str, ts_ns: int, mid: str) -> None:
-        """Fix ``mid`` as the horizon mark of every open return holding ``coin`` whose
+        """Fix ``mid`` as the horizon mark of ``coin`` for every open return whose
         horizon it reaches (``ts_ns`` at or after its opening plus ``horizon_ns``) and
-        that has no mark of ``coin`` yet: the first venue mid at or after its horizon."""
+        that has no mark of ``coin`` yet: the first venue mid at or after its horizon.
+
+        Guarantees the mark does not depend on the order of events within a batch
+        (Codex on #152): a return is marked whether or not it holds ``coin`` yet, so
+        a resting order filled at H, whose Fill a venue emits after MarketMid(H) in
+        the same batch, inherits MarketMid(H). A fill after the mark's own instant
+        drops it (``_unmark_before``): a lot is never marked by a mid older than it.
+        """
         if self.horizon_ns is None:
             return
-        holding = {lot.handle for lot in self.table.lots if lot.coin == coin}
         for account in self.table.returns:
-            if (account.handle in holding and account.payoff is None and not account.voided
+            if (account.payoff is None and not account.voided
                     and account.opened_at_ns is not None
-                    and ts_ns >= account.opened_at_ns + self.horizon_ns):
-                self.horizon_marks.setdefault(account.handle, {}).setdefault(coin, mid)
+                    and ts_ns >= account.opened_at_ns + self.horizon_ns
+                    and coin not in self.horizon_marks.get(account.handle, {})):
+                self.horizon_marks.setdefault(account.handle, {})[coin] = mid
+                self.horizon_mark_ns.setdefault(account.handle, {})[coin] = int(ts_ns)
+
+    def _unmark_before(self, handle: str | None, coin: str, ts_ns: int | None) -> None:
+        """Drop ``handle``'s mark of ``coin`` when it predates a fill at ``ts_ns``: the
+        lot the fill opens is marked by the first mid at or after both its horizon and
+        its own existence."""
+        if handle is None or ts_ns is None:
+            return
+        marked = self.horizon_mark_ns.get(handle, {}).get(coin)
+        if marked is not None and marked < int(ts_ns):
+            self.horizon_marks.get(handle, {}).pop(coin, None)
+            self.horizon_mark_ns[handle].pop(coin, None)
 
     def resolve(self, event: int) -> list[Payoff]:
         """Persist all newly fixed outcomes before publishing the successor accounting state."""
@@ -394,6 +419,7 @@ class ReturnConsequences:
         if self.pending_orders:
             for payoff in fixed:
                 self.horizon_marks.pop(payoff.handle, None)
+                self.horizon_mark_ns.pop(payoff.handle, None)
                 self.after_horizon.pop(payoff.handle, None)
             return fixed  # Unknown inventory ownership cannot manufacture a no-fill outcome.
         table = self.table.resolve(event, self.backstop, self.mids,
@@ -415,7 +441,7 @@ class ReturnConsequences:
         self.table = table
         # A horizon mark is pinned by its return's open outcome: fixed or voided, no
         # reader remains.
-        for kept in (self.horizon_marks, self.after_horizon):
+        for kept in (self.horizon_marks, self.horizon_mark_ns, self.after_horizon):
             for handle in [h for h in kept if not self.account_open(h)]:
                 del kept[handle]
         return fixed

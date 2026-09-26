@@ -95,6 +95,71 @@ def _open_long(rt, coin="BTC", px="60000", fee_usd="0"):
     return handle
 
 
+def test_a_resting_order_filled_at_h_in_the_batch_of_the_mid_at_h_is_marked_by_it():
+    """A venue emits MarketMid(H) before the Fill a resting order makes at H, in the
+    same batch (Codex on #152, fee12ff). The lot did not exist when the mid arrived,
+    yet it is marked at MarketMid(H), never at the next mid: the mark does not depend
+    on the order of events within a batch."""
+    from factorylab.kernel.queue import PropensityRecord
+    from factorylab.world.events import WorldEvent, WorldEventKind
+    from tests.conftest import make_runtime
+
+    rt = make_runtime()
+    rt.fee_schedule = {"rates": {}, "read_ns": 0, "history": {"BTC": [[0, "0"]]}}
+    prop = PropensityRecord(("seed-decider",), (1.0,), "seed-decider", 0, "router:Tick", "t")
+    handle = rt.queue.open(actor="router:Tick", event_id="resting", propensity=prop,
+                           channel="verdict", deadline_ns=rt.clock.now_ns + 10**18,
+                           parent_handle=None, cost_ceiling=0)
+    rt.consequences.start(handle, rt.n)
+    rt.consequences.order_result(handle, {"status": "resting", "order_id": "o-rest",
+                                          "filled_size": "0"}, {"size": "0.001"}, rt.n)
+    rt.consequences.finish(handle, 0)
+    at_h = rt.clock.now_ns + rt._horizon_ns()
+    rt.clock.now_ns = at_h
+    rt._settle_exchange_effects([  # one batch, in the venue's own order
+        WorldEvent(WorldEventKind.MARKET_MID, at_h, "venue", {"coin": "BTC", "mid": "61000"}),
+        WorldEvent(WorldEventKind.FILL, at_h, "venue", {
+            "order_id": "o-rest", "coin": "BTC", "is_buy": True, "size": "0.001",
+            "px": "60000", "fee_usd": "0", "realized_usd": "0", "liquidation": False}),
+    ], observe_positions=False)
+    rt.clock.now_ns = at_h + 1
+    rt._settle_exchange_effects([WorldEvent(WorldEventKind.MARKET_MID, at_h + 1, "venue",
+                                            {"coin": "BTC", "mid": "59000"})],
+                                observe_positions=False)
+    rt.consequences.resolve(rt.n)
+    payoff = rt.consequences.payoff(handle)
+    assert payoff is not None and payoff.marked
+    assert payoff.net_micro == 1_000_000  # (61000 - 60000) * 0.001, at MarketMid(H)
+
+
+def test_a_fill_after_a_return_s_mark_is_marked_by_the_next_mid():
+    """The inherited mark never predates the lot: a fill after the first mid at or
+    after H is marked by the first mid at or after the fill."""
+    from factorylab.kernel.queue import PropensityRecord
+    from tests.conftest import make_runtime
+
+    rt = make_runtime()
+    rt.fee_schedule = {"rates": {}, "read_ns": 0, "history": {"BTC": [[0, "0"]]}}
+    prop = PropensityRecord(("seed-decider",), (1.0,), "seed-decider", 0, "router:Tick", "t")
+    handle = rt.queue.open(actor="router:Tick", event_id="late", propensity=prop,
+                           channel="verdict", deadline_ns=rt.clock.now_ns + 10**18,
+                           parent_handle=None, cost_ceiling=0)
+    rt.consequences.start(handle, rt.n)
+    rt.consequences.order_result(handle, {"status": "resting", "order_id": "o-late",
+                                          "filled_size": "0"}, {"size": "0.001"}, rt.n)
+    rt.consequences.finish(handle, 0)
+    at_h = rt.clock.now_ns + rt._horizon_ns()
+    rt.consequences.observe("MarketMid", {"coin": "BTC", "mid": "61000", "ts_ns": at_h}, rt.n)
+    rt.consequences.observe("Fill", {"order_id": "o-late", "coin": "BTC", "is_buy": True,
+                                     "size": "0.001", "px": "60000", "fee_usd": "0",
+                                     "ts_ns": at_h + 5}, rt.n)
+    rt.consequences.observe("MarketMid", {"coin": "BTC", "mid": "60500",
+                                          "ts_ns": at_h + 6}, rt.n)
+    rt.clock.now_ns = at_h + 6
+    rt.consequences.resolve(rt.n)
+    assert rt.consequences.payoff(handle).net_micro == 500_000  # marked at the later mid
+
+
 def test_a_tick_at_h_before_the_mid_at_h_marks_at_the_mid_at_h():
     """D2: the mark is the first venue mid timestamped at or after the horizon. The
     batch's Tick at H comes first, with an earlier instant's mid cached: nothing is

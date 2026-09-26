@@ -144,3 +144,18 @@ def test_an_unmeasured_failing_card_holds_its_duration():
     after = rt.controller.snapshot()["cards"]["well_formed_rate"]["failing_windows"]
     assert after >= before
     assert not _items(rt, "immune.price_ratchet_ended")
+
+
+@pytest.mark.parametrize("kind", ["stable_failure", "cleared", "thrash"])
+def test_the_organ_never_leaves_or_holds_a_gamma_above_gamma_max(kind):
+    """A router seeded (or restored) above ``gamma_max`` is clamped to it on the organ's
+    next step, whichever way it steps: a value above its bound would sit where no
+    step reaches it (Codex on #152, the R10-e sweep)."""
+    from factorylab.runtime.immune import _gain
+    from tests.conftest import make_runtime
+
+    rt = make_runtime()
+    router = rt._build_router("Tick", "exp3", 0.9)
+    assert gamma(router.learner) == 0.9 > rt.m.immune.gamma_max
+    _gain(rt, kind, 1)
+    assert gamma(router.learner) == rt.m.immune.gamma_max

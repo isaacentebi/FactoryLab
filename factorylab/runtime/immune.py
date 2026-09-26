@@ -169,7 +169,10 @@ def _gain(rt, kind: str, window: int) -> None:
     Up is bounded by ``gamma_max``; down (thrash, or ``cleared`` once no pathology
     that the gain answers is diagnosed) never goes below the router's own seed
     gamma, so a ratchet the organ raised unwinds after the attractor is left and a
-    router that was never raised is not touched. Each change is ledgered first.
+    router that was never raised is not touched. Guarantees no step leaves or holds
+    a gamma above ``gamma_max`` (a router restored or seeded above it is clamped to it
+    on the organ's next step, in either direction): a value above its bound would sit
+    where no step could reach it. Each change is ledgered first.
 
     A router's gain is an outer loop over that router's own rounds (time audit T2):
     a kind's routers step at most once per ``min_ratio`` times their measured round
@@ -187,8 +190,8 @@ def _gain(rt, kind: str, window: int) -> None:
         bases = _bases(saved["router"]["learner"])
         before = [base["gamma"] for base in bases]
         after = [
-            max(old, min(spec.gamma_max, old + spec.gain_step))
-            if kind == "stable_failure" else min(old, max(router.seed_gamma, old - spec.gain_step))
+            min(spec.gamma_max, old + spec.gain_step) if kind == "stable_failure"
+            else min(spec.gamma_max, old, max(router.seed_gamma, old - spec.gain_step))
             for old in before
         ]
         if before == after:
