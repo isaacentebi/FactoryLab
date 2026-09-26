@@ -1735,6 +1735,7 @@ def test_no_policy_or_evidence_read_bypasses_the_release_commit():
         "read_previous_triage": ["read_text("],  # bound by the recorded digest
         "previous_problems": ["read_text("],     # the same file, digest-checked
         "load_key": ["read_text("],              # bound to its corpus and prompts
+        "calibration_problems": ["read_bytes("],  # the input, compared to its recompute
         "gate": ["read_text("],                  # the triage file, by its sha256
         "write_last_release": ["read_text("],    # the record the gate writes
         "corpus_records": ["raw_world("],        # the render, pinned by release_commit
@@ -1784,6 +1785,38 @@ def test_a_key_whose_calibration_is_not_the_releases_is_refused(rendered, tmp_pa
             "--key", str(path)]
     assert tool.main(argv) == 2
     assert "not the ones the release plants" in capsys.readouterr().err
+
+
+def test_an_auditor_input_missing_an_ordinary_leaf_is_refused(rendered, tmp_path):
+    """Codex P1 (class2_audit.py:1218): the whole auditor input is recomputed and compared
+    byte for byte. One ordinary leaf removed from auditor_input.jsonl, with the key's
+    digests and expected leaves rewritten to match, is still refused."""
+    path = _key_copy(rendered, tmp_path)
+    key = json.loads(path.read_text())
+    planted = {c["leaf_id"] for c in key["canaries"] + key["controls"]}
+    lines = (tmp_path / "auditor_input.jsonl").read_text().splitlines()
+    victim = next(i for i, line in enumerate(lines)
+                  if json.loads(line)["provenance"] == "kernel"
+                  and json.loads(line)["leaf_id"] not in planted)
+    gone = json.loads(lines.pop(victim))["leaf_id"]
+    (tmp_path / "auditor_input.jsonl").write_text("\n".join(lines) + "\n")
+    key["corpus_sha"] = tool.sha256_file(tmp_path / "auditor_input.jsonl")
+    key["expected_leaves"] = [leaf for leaf in key["expected_leaves"] if leaf != gone]
+    key["expected_count"] = len(key["expected_leaves"])
+    path.write_text(json.dumps(key))
+    tool.load_key(path)  # consistent with itself: the old checks passed it
+    with pytest.raises(tool.AuditInputInvalid, match="expected_leaves|auditor_input"):
+        tool.load_calibrated_key(path, REPO[0])
+    # The same leaves in another order (the key's digest rewritten) are refused too.
+    path = _key_copy(rendered, tmp_path)
+    key = json.loads(path.read_text())
+    lines = (tmp_path / "auditor_input.jsonl").read_text().splitlines()
+    lines[-1], lines[-2] = lines[-2], lines[-1]
+    (tmp_path / "auditor_input.jsonl").write_text("\n".join(lines) + "\n")
+    key["corpus_sha"] = tool.sha256_file(tmp_path / "auditor_input.jsonl")
+    path.write_text(json.dumps(key))
+    with pytest.raises(tool.AuditInputInvalid, match="auditor_input.jsonl beside the key"):
+        tool.load_calibrated_key(path, REPO[0])
 
 
 # --- Codex pass on 50ce3f8: the renderer's own executed code is the release's ------------

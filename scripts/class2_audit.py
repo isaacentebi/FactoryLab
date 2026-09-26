@@ -1191,13 +1191,14 @@ def load_key(path: Path) -> tuple[dict, list[dict]]:
 
 def calibration_problems(key_path: Path, key: dict, repo: Path) -> list[str]:
     """Why the key's calibration is not the one the release makes (none when it is):
-    recomputed, never trusted. The canaries and controls are planted again (``plant``)
+    recomputed, never trusted. The whole auditor input is planted again (``plant``)
     from the release's committed ``canaries.json`` (``committed_text``), the key's seed
     and release commit (CAN-1: controls rotate with the release), over the release corpus
     beside the key (bound by its sha256) ordered as render ordered it (``corpus_diff``
     against the previous corpus the key names, ``changed_first``); the key's canaries
-    (count, questions, classes, mandatory flags, leaves) and controls must equal them
-    exactly."""
+    (count, questions, classes, mandatory flags, leaves), controls and expected leaves
+    must equal them exactly, and ``auditor_input.jsonl`` must be the recomputed planted
+    corpus byte for byte (every leaf, its text, tags and order, and the canaries)."""
     corpus_path = Path(key_path).parent / "release_corpus.jsonl"
     if not corpus_path.exists() or sha256_file(corpus_path) != key.get("release_corpus_sha"):
         return ["the release corpus beside the key is not the one it records"]
@@ -1207,15 +1208,23 @@ def calibration_problems(key_path: Path, key: dict, repo: Path) -> list[str]:
     prior = read_corpus(Path(key["previous_corpus"])) if key.get("previous_corpus") else None
     ordered, changed = changed_first(records, corpus_diff(prior, records))
     spec = load_canaries(committed_text(repo, key["release_commit"], CANARIES_REL))
-    _planted, expected = plant(ordered, seed=key["seed"], world=key["worlds"][0],
-                               changed=changed if prior is not None else None, spec=spec,
-                               control_seed=key["release_commit"])
+    planted, expected = plant(ordered, seed=key["seed"], world=key["worlds"][0],
+                              changed=changed if prior is not None else None, spec=spec,
+                              control_seed=key["release_commit"])
     problems = []
-    for field in ("canaries", "controls"):
+    for field in ("canaries", "controls", "expected_leaves", "expected_count"):
         if key.get(field) != expected[field]:
+            count = len(expected[field]) if isinstance(expected[field], list) else ""
             problems.append(f"the key's {field} are not the ones the release plants "
-                            f"({len(key.get(field) or [])} recorded, "
-                            f"{len(expected[field])} planted)")
+                            f"({count} planted)".replace(" ()", ""))
+    # The auditor's input itself, byte for byte as render writes it: every leaf, its
+    # text, tags and order, with the canaries where they were planted.
+    rendered = "".join(json.dumps(record, sort_keys=True, ensure_ascii=False) + "\n"
+                       for record in planted).encode()
+    beside = Path(key_path).parent / "auditor_input.jsonl"
+    if not beside.exists() or beside.read_bytes() != rendered:
+        problems.append("the auditor_input.jsonl beside the key is not the corpus the "
+                        "release plants from its release corpus")
     return problems
 
 
