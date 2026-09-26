@@ -919,7 +919,9 @@ _COMPONENT_FIELDS = (
     ("consequences", "", ("backstop", "table", "mids", "pending_orders", "deferred_events",
                           # R4-C: a released hold's exposure, and the censored
                           # outcomes not yet handed to the runtime.
-                          "unresolved_orders", "censored_payoffs")),
+                          "unresolved_orders", "censored_payoffs",
+                          # Wave 16, D2: open returns' horizon marks.
+                          "horizon_marks")),
     ("consequence_fills", "", ("since_ns", "seen")),
     ("reconciler", "", ("every", "_ticks")),
     # The artifact archive's index (C9): hash -> owner, kind, size, time, published.

@@ -169,7 +169,8 @@ def test_a_spot_coin_is_priced_at_the_venues_spot_taker_rate():
     rt._read_fee_schedule()
     assert rt._taker_rate("BTC") == "0.00045"
     assert rt._taker_rate("PURR/USDC") == "0.0007"
-    assert rows[0]["kind"] == "venue.fee_schedule" and rows[0]["spot"] == "0.0007"
+    assert rows[0]["kind"] == "venue.fee_schedule"
+    assert rows[0]["rates"] == {"BTC": "0.00045", "PURR/USDC": "0.0007"}
     # Read once per repricing period, and ledgered again only when it changed.
     assert not rt._fee_schedule_due()
     rt.clock.now_ns = 105

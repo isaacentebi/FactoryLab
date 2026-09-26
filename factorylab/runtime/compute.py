@@ -461,8 +461,9 @@ class ContractConsequences(ReturnConsequences):
         return self.runtime.clock.now_ns
 
     def _exit_rates(self):
-        """The venue's taker rate per market at a horizon (wave 16, D7; ruling R10-i):
-        the most recent successfully read rate at or before it, None when none was."""
+        """The venue's taker rate per instrument at a horizon (wave 16, D7; ruling
+        R10-i): the most recent successfully read rate at or before it, None when none
+        was; never pooled across instruments."""
         return self.runtime._rate_at
 
     def observe(self, kind, payload, event):

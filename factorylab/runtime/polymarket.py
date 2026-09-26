@@ -1271,7 +1271,8 @@ def mark(rt: Any) -> None:
         except Exception:  # noqa: BLE001 - an unread price is an absent price
             mid = None
         if mid is not None and 0 < mid < 1:
-            rt.consequences.observe("MarketMid", {"coin": coin, "mid": str(mid)}, rt.n)
+            rt.consequences.observe("MarketMid", {"coin": coin, "mid": str(mid),
+                                                  "ts_ns": rt.clock.now_ns}, rt.n)
         elif rt.consequences.mids.pop(coin, None) is not None:
             rt.ledger.append({"kind": "polymarket.mark_unavailable", "coin": coin,
                               "ts": rt.clock.now_ns})

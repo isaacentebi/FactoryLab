@@ -36,7 +36,7 @@ def test_a_trade_named_before_its_coin_s_first_venue_mid_opens_at_that_mid():
 
 def test_a_failed_fee_read_keeps_the_last_successful_rate_and_its_time():
     rt = _world(10)
-    listing = {"perp": [{"taker_fee_rate": "0.00045"}], "spot": []}
+    listing = {"perp": [{"coin": "BTC", "taker_fee_rate": "0.00045"}], "spot": []}
     rt.exchange.instruments = lambda: listing
     rt.clock.now_ns = 1_000
     rt._read_fee_schedule()
@@ -44,9 +44,9 @@ def test_a_failed_fee_read_keeps_the_last_successful_rate_and_its_time():
     rt.clock.now_ns = 2_000
     rt._read_fee_schedule()
     assert rt._taker_rate("BTC") == "0.00045"
-    assert rt._rate_at("perp", 999) is None
-    assert rt._rate_at("perp", 1_500) == rt._rate_at("perp", 2_500) == "0.00045"
-    assert rt._rate_at("spot", 2_500) is None
+    assert rt._rate_at("BTC", 999) is None
+    assert rt._rate_at("BTC", 1_500) == rt._rate_at("BTC", 2_500) == "0.00045"
+    assert rt._rate_at("PURR/USDC", 2_500) is None
 
 
 def test_an_unjudged_named_trade_is_fixed_at_its_horizon_and_counted():
@@ -74,3 +74,73 @@ def test_the_margin_horizon_counts_the_verdict_window_once():
     window = rt.clockwork.period("price", default=rt.m.timing.min_ratio)
     assert rt._margin_horizon() == max(rt.m.timing.min_ratio,
                                        -(-rt._patience_ticks() // window))
+
+
+# --- world truth at an instant (Codex on #152) -----------------------------------------
+
+
+def _open_long(rt, coin="BTC", px="60000"):
+    from factorylab.kernel.queue import PropensityRecord
+
+    prop = PropensityRecord(("seed-decider",), (1.0,), "seed-decider", 0, "router:Tick", "t")
+    handle = rt.queue.open(actor="router:Tick", event_id=f"trade-{coin}", propensity=prop,
+                           channel="verdict", deadline_ns=10**18, parent_handle=None,
+                           cost_ceiling=0)
+    rt.consequences.start(handle, rt.n)
+    rt.consequences.order_result(handle, {"status": "filled", "order_id": f"o-{coin}",
+                                          "filled_size": "0.001"}, {"size": "0.001"}, rt.n)
+    rt.consequences.observe("Fill", {"order_id": f"o-{coin}", "coin": coin, "is_buy": True,
+                                     "size": "0.001", "px": px, "fee_usd": "0"}, rt.n)
+    rt.consequences.finish(handle, 0)
+    return handle
+
+
+def test_a_tick_at_h_before_the_mid_at_h_marks_at_the_mid_at_h():
+    """D2: the mark is the first venue mid timestamped at or after the horizon. The
+    batch's Tick at H comes first, with an earlier instant's mid cached: nothing is
+    fixed on it, and the mid at H, when it arrives, is the mark."""
+    from tests.conftest import make_runtime
+
+    rt = make_runtime()
+    rt.fee_schedule = {"rates": {}, "read_ns": 0, "history": {"BTC": [[0, "0"]]}}
+    handle = _open_long(rt)
+    rt.consequences.observe("MarketMid", {"coin": "BTC", "mid": "60000",
+                                          "ts_ns": rt.clock.now_ns}, rt.n)
+    rt.clock.now_ns += rt._horizon_ns()
+    assert all(p.handle != handle for p in rt.consequences.resolve(rt.n))  # Tick(H)
+    rt.consequences.observe("MarketMid", {"coin": "BTC", "mid": "61000",
+                                          "ts_ns": rt.clock.now_ns}, rt.n)  # MarketMid(H)
+    rt.consequences.observe("MarketMid", {"coin": "BTC", "mid": "59000",
+                                          "ts_ns": rt.clock.now_ns + 1}, rt.n)  # later
+    (payoff,) = [p for p in rt.consequences.resolve(rt.n) if p.handle == handle]
+    assert payoff.net_micro == 1_000_000  # (61000 - 60000) * 0.001, marked at MarketMid(H)
+
+
+def test_a_tape_s_per_coin_rates_price_each_trade_at_its_own_rate():
+    """Fees are per instrument: a tape recording BTC at 4.5 bp and ETH at 3.5 bp prices
+    a BTC trade's round trip at 9 bp and an ETH trade's at 7, and a lot's exit at its
+    own coin's rate; neither is pooled into one schedule, nor censored for disagreeing."""
+    from decimal import Decimal
+
+    from factorylab.runtime.grounded import opportunity_cost
+    from factorylab.world.tape import Tape, TapeVenue
+    from tests.conftest import make_runtime
+    from tests.world.test_tape import LONGRUN
+
+    tape = Tape.load(LONGRUN)
+    fees = {coin: {"venue_read": {"taker": [[tape.start_ns, rate, ["test read"]]],
+                                  "maker": [[tape.start_ns, rate, ["test read"]]]}}
+            for coin, rate in (("BTC", "0.00045"), ("ETH", "0.00035"))}
+    venue = TapeVenue(Tape.from_data(dict(tape.data, fees=fees)), coins=("BTC", "ETH"),
+                      start_cash_usd=Decimal(120))
+    rt = make_runtime()
+    rt.exchange, rt.fee_schedule = venue, None
+    rt.clock.now_ns = tape.start_ns
+    rt._read_fee_schedule()
+    assert rt._taker_rate("BTC") == "0.00045" and rt._taker_rate("ETH") == "0.00035"
+    for coin, bps in (("BTC", "9"), ("ETH", "7")):
+        priced = opportunity_cost([(coin, "100")], [(coin, "100")], rt._taker_rate(coin),
+                                  {"coin": coin, "side": "buy"})
+        assert Decimal(priced["round_trip_fee_bps"]) == Decimal(bps), coin
+    assert rt._rate_at("BTC", tape.start_ns) == "0.00045"
+    assert rt._rate_at("ETH", tape.start_ns) == "0.00035"

@@ -23,6 +23,10 @@ class ReturnConsequences:
         self.horizon_ns = horizon_ns
         self.table = LotTable()
         self.mids: dict[str, str] = {}
+        # Wave 16, D2 (Codex on #152): each open return's mark per instrument, the first
+        # venue mid timestamped at or after its horizon, fixed when that mid arrives:
+        # never the latest mid cached from an earlier event.
+        self.horizon_marks: dict[str, dict[str, str]] = {}
         self.pending_orders: dict[str, dict] = {}
         # R4-C: intents the venue never answered and never will. The hold on
         # consequence resolution is released for them, but the exposure is not
@@ -256,6 +260,9 @@ class ReturnConsequences:
         if kind == "MarketMid":
             self.ledger.append({"kind": "consequence.mid", "event": event, **payload})
             self.mids[payload["coin"]] = str(payload["mid"])
+            ts = payload.get("ts_ns", self._now_ns())
+            if ts is not None:
+                self._mark_horizons(str(payload["coin"]), int(ts), str(payload["mid"]))
         elif kind == "Fill":
             try:
                 table = self.table.fill(
@@ -334,6 +341,19 @@ class ReturnConsequences:
                 "realized_micro": realized[handle]})
         return realized
 
+    def _mark_horizons(self, coin: str, ts_ns: int, mid: str) -> None:
+        """Fix ``mid`` as the horizon mark of every open return holding ``coin`` whose
+        horizon it reaches (``ts_ns`` at or after its opening plus ``horizon_ns``) and
+        that has no mark of ``coin`` yet: the first venue mid at or after its horizon."""
+        if self.horizon_ns is None:
+            return
+        holding = {lot.handle for lot in self.table.lots if lot.coin == coin}
+        for account in self.table.returns:
+            if (account.handle in holding and account.payoff is None and not account.voided
+                    and account.opened_at_ns is not None
+                    and ts_ns >= account.opened_at_ns + self.horizon_ns):
+                self.horizon_marks.setdefault(account.handle, {}).setdefault(coin, mid)
+
     def resolve(self, event: int) -> list[Payoff]:
         """Persist all newly fixed outcomes before publishing the successor accounting state."""
         # An outcome censored for documented unobservability was fixed the moment
@@ -344,7 +364,8 @@ class ReturnConsequences:
         table = self.table.resolve(event, self.backstop, self.mids,
                                    censored=self._unknown_portions(), tick=self._tick(event),
                                    now_ns=self._now_ns(), horizon_ns=self.horizon_ns,
-                                   exit_rates=self._exit_rates())
+                                   exit_rates=self._exit_rates(),
+                                   horizon_marks=self.horizon_marks)
         for before, after in zip(self.table.returns, table.returns, strict=True):
             if before.payoff is None and after.payoff is not None:
                 self.ledger.append({"kind": "consequence.outcome", **asdict(after.payoff)})
@@ -356,6 +377,8 @@ class ReturnConsequences:
                                         "reason": FEE_UNKNOWN})
                 fixed.append(after.payoff)
         self.table = table
+        for payoff in fixed:
+            self.horizon_marks.pop(payoff.handle, None)
         return fixed
 
     def payoff(self, handle: str) -> Payoff | None:

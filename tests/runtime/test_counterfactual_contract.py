@@ -65,6 +65,10 @@ def _world(*replies, verdicts=(0.8,), **mids):
 
     rt = _consequence_runtime(provider=Seat(*replies, verdicts=verdicts))
     rt._manage_reserve_window()
+    # The venue lists every coin it broadcasts, so each carries its own taker rate
+    # (fees are per instrument, never pooled; Codex on #152).
+    rt.exchange.listed_coins = tuple(dict.fromkeys((*rt.exchange.listed_coins,
+                                                    *(c for c in mids if "/" not in c))))
     _mids(rt, **(mids or {"BTC": "100"}))
     return rt
 

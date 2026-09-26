@@ -238,21 +238,23 @@ class VenueMixin:
         self.kill("explicit_kill:budget", through_tape_end=ran_out)
 
     def _read_fee_schedule(self) -> None:
-        """Read the venue's taker rate per market and ledger it as a world fact.
+        """Read the venue's taker rate per instrument and ledger it as a world fact.
 
         Wave 16, D1 and ruling R-I: the road not taken is priced net of the venue's
-        own round trip, taker because a named counterfactual has no limit price, the
-        spot schedule for a spot coin. Guarantees each market's rate is the one the
-        venue's listing states (``instruments``: ``taker_fee_rate``, a fraction of
-        notional), or None when the listing states none or disagrees with itself: an
-        unread rate is never a number. Read at the first broadcast and again once per
+        own round trip, taker because a named counterfactual has no limit price.
+        Guarantees each instrument's rate (a perp coin, a spot pair) is the one the
+        venue's listing states on that instrument's own row (``instruments``:
+        ``taker_fee_rate``, a fraction of notional), never pooled across instruments:
+        a tape that records a different rate per coin prices each coin at its own
+        (Codex on #152). An instrument whose row states no rate has none: an unread
+        rate is never a number. Read at the first broadcast and again once per
         ``timing.world_repricing``; a venue that re-reads its account's rates is asked
         to first. A change is ledgered as ``venue.fee_schedule``.
 
-        Ruling R10-i: a read that states no rate for a market keeps that market's last
+        Ruling R10-i: a read that states no rate for an instrument keeps its last
         successfully read rate, and every successful read is kept with its time
-        (``history``, two repricing periods deep) so a horizon's exit fee is the
-        venue's most recent successful rate at or before it (``_rate_at``).
+        (``history``, per instrument, two repricing periods deep) so a horizon's exit
+        fee is the venue's most recent successful rate at or before it (``_rate_at``).
         """
         refresh = getattr(self.exchange, "refresh_fee_rates", None)
         if callable(refresh):
@@ -264,32 +266,32 @@ class VenueMixin:
             listing = self.exchange.instruments()
         except Exception:  # noqa: BLE001 - an unanswered listing states no rate
             listing = {}
-        schedule: dict = {}
+        read: dict[str, str] = {}
         for market in ("perp", "spot"):
-            rates = {str(row.get("taker_fee_rate")) for row in (listing.get(market) or [])
-                     if isinstance(row, dict) and row.get("taker_fee_rate") is not None}
-            schedule[market] = rates.pop() if len(rates) == 1 else None
+            for row in listing.get(market) or []:
+                if (isinstance(row, dict) and row.get("coin") is not None
+                        and row.get("taker_fee_rate") is not None):
+                    read[str(row["coin"])] = str(row["taker_fee_rate"])
         previous = self.fee_schedule or {}
+        before = dict(previous.get("rates") or {})
         now = self.clock.now_ns
         period = self.m.timing.world_repricing_ns
-        history = {m: [list(row) for row in (previous.get("history") or {}).get(m, [])]
-                   for m in ("perp", "spot")}
-        for market, rate in schedule.items():
-            if rate is not None:
-                history[market].append([now, rate])
-            else:
-                schedule[market] = previous.get(market)  # the last successful read
-            rows = history[market]
+        history = {name: [list(row) for row in rows]
+                   for name, rows in (previous.get("history") or {}).items()}
+        for instrument, rate in read.items():
+            history.setdefault(instrument, []).append([now, rate])
+        for instrument, rows in history.items():
             if period is not None:
                 # Keep what a horizon still open can ask for: the reads of the last two
                 # repricing periods and the one in force at their start.
                 recent = [i for i, row in enumerate(rows) if row[0] >= now - 2 * period]
                 start = max(0, (recent[0] if recent else len(rows)) - 1)
-                history[market] = rows[start:]
-        self.fee_schedule = {**schedule, "read_ns": now, "history": history}
-        if not previous or any(previous.get(m) != schedule[m] for m in schedule):
-            self.ledger.append({"kind": "venue.fee_schedule", **schedule,
-                                "basis": "the venue's taker_fee_rate per market, a "
+                history[instrument] = rows[start:]
+        rates = {**before, **read}  # an instrument this read left unstated keeps its last
+        self.fee_schedule = {"rates": rates, "read_ns": now, "history": history}
+        if not previous or rates != before:
+            self.ledger.append({"kind": "venue.fee_schedule", "rates": dict(rates),
+                                "basis": "the venue's taker_fee_rate per instrument, a "
                                          "fraction of notional",
                                 "ts": self.clock.now_ns})
 
@@ -301,15 +303,14 @@ class VenueMixin:
         return period is not None and self.clock.now_ns - self.fee_schedule["read_ns"] >= period
 
     def _taker_rate(self, coin: str) -> str | None:
-        """The taker rate in force for ``coin``'s market: spot for a pair, perp otherwise."""
-        if self.fee_schedule is None:
-            return None
-        return self.fee_schedule.get("spot" if "/" in coin else "perp")
+        """The taker rate in force for ``coin`` (a perp coin or spot pair) as last read:
+        its own rate, never another instrument's or a market's pooled one."""
+        return ((self.fee_schedule or {}).get("rates") or {}).get(coin)
 
-    def _rate_at(self, market: str, at_ns: int) -> str | None:
-        """The venue's most recent successfully read taker rate for ``market`` at or
+    def _rate_at(self, instrument: str, at_ns: int) -> str | None:
+        """The venue's most recent successfully read taker rate for ``instrument`` at or
         before ``at_ns``, or None when none was read by then (ruling R10-i)."""
-        rows = ((self.fee_schedule or {}).get("history") or {}).get(market) or []
+        rows = ((self.fee_schedule or {}).get("history") or {}).get(instrument) or []
         before = [rate for ns, rate in rows if ns <= at_ns]
         return before[-1] if before else None
 
@@ -573,7 +574,12 @@ class VenueMixin:
             self._settle_venue(settlements)
         for we in evs:
             if id(we) not in refused:
-                self.consequences.observe(str(we.kind), dict(we.payload), self.n)
+                payload = dict(we.payload)
+                if we.kind is WorldEventKind.MARKET_MID:
+                    # The mid's own venue time: a horizon is marked by the first mid at
+                    # or after it (wave 16, D2), never by the event that follows it.
+                    payload["ts_ns"] = we.ts_ns
+                self.consequences.observe(str(we.kind), payload, self.n)
         for we in evs:
             if id(we) in refused:
                 self.internal.append(self._kernel_event(we))

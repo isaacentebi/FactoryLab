@@ -65,6 +65,11 @@ def test_the_consequence_horizon_marks_an_open_position_on_the_venue_clock():
     rt.clock.now_ns += rt._horizon_ns() - 1
     assert all(p.handle != handle for p in rt.consequences.resolve(rt.n))
     rt.clock.now_ns += 1
+    # The batch's Tick at H comes before its MarketMid at H: the cached 60000 is an
+    # earlier instant's price, so nothing is fixed until a mid at or after H arrives.
+    assert all(p.handle != handle for p in rt.consequences.resolve(rt.n))
+    rt.consequences.observe("MarketMid", {"coin": "BTC", "mid": "60000",
+                                          "ts_ns": rt.clock.now_ns}, rt.n)
     (payoff,) = [p for p in rt.consequences.resolve(rt.n) if p.handle == handle]
     assert payoff.marked
     # Marked to liquidation value: 60 USD of notional at the venue's 3.5 bp taker rate.

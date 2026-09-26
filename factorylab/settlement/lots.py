@@ -144,23 +144,29 @@ RELEASED_ORDER = "the order's return was settled and released"
 FEE_UNKNOWN = "fee_unknown"
 
 
-def _exit_rates_for(exit_rates, lots, account, now_ns, horizon_ns) -> dict[str, str | None]:
-    """The exit rate of each market ``lots`` hold, at the return's horizon.
+#: The markets whose exit a venue's taker schedule prices (an event token's is not).
+VENUE_FEE_MARKETS = ("perp", "spot")
 
-    A mapping is read as stated (a market it does not list carries no fee: absent
-    here). A callable is asked for the rate at the account's opening plus
-    ``horizon_ns`` on the venue's clock, or at ``now_ns`` when either is unknown.
+
+def _exit_rates_for(exit_rates, lots, account, now_ns, horizon_ns) -> dict[str, str | None]:
+    """The exit rate of each instrument ``lots`` hold, at the return's horizon.
+
+    A mapping is read per market as stated (a market it does not list carries no fee:
+    absent here). A callable ``(instrument, at_ns)`` is asked for each perp or spot
+    instrument's own rate at the account's opening plus ``horizon_ns`` on the venue's
+    clock, or at ``now_ns`` when either is unknown; an event token carries no venue
+    exit fee. Keyed by instrument (a lot's coin), never pooled across instruments.
     """
     if exit_rates is None:
         return {}
-    markets = {lot.market for lot in lots}
     if callable(exit_rates):
         at = (account.opened_at_ns + horizon_ns
               if account.opened_at_ns is not None and horizon_ns is not None else now_ns)
         if at is None:
             return {}
-        return {market: exit_rates(market, at) for market in markets}
-    return {market: exit_rates[market] for market in markets if market in exit_rates}
+        return {lot.coin: exit_rates(lot.coin, at) for lot in lots
+                if lot.market in VENUE_FEE_MARKETS}
+    return {lot.coin: exit_rates[lot.market] for lot in lots if lot.market in exit_rates}
 
 
 @dataclass(frozen=True)
@@ -557,7 +563,9 @@ class LotTable:
                 censored: Mapping[str, str] | None = None,
                 tick: int | None = None, now_ns: int | None = None,
                 horizon_ns: int | None = None,
-                exit_rates: Mapping[str, str | None] | None = None) -> "LotTable":
+                exit_rates: Mapping[str, str | None] | None = None,
+                horizon_marks: Mapping[str, Mapping[str, str]] | None = None
+                ) -> "LotTable":
         """Fix ready outcomes once; marks require a valid mid for every remaining coin.
 
         The backstop counts from the return's opening, including any time awaiting
@@ -577,6 +585,11 @@ class LotTable:
         is fixed when the horizon has passed whatever the rate read: a lot whose rate
         is unknown (None) fixes the outcome censored, ``FEE_UNKNOWN``, never pending.
         The deduction is an estimate at the mark, never booked as money.
+
+        ``horizon_marks`` (handle -> instrument -> mid): on the venue's clock a
+        return's open lots are marked at the first venue mid of each instrument
+        timestamped at or after its horizon (wave 16, D2), and it waits until every
+        instrument it holds has one; the latest cached ``mids`` never stand in for it.
 
         ``censored`` names returns that also sent an order nobody could observe
         (handle -> documented reason). Such a return resolves on its own schedule
@@ -606,20 +619,24 @@ class LotTable:
             exit_fee = Fraction(0)
             unknown = False
             if lots:
-                if any(lot.coin not in mids for lot in lots):
+                marked = mids
+                if (horizon_marks is not None and horizon_ns is not None
+                        and account.opened_at_ns is not None):
+                    marked = horizon_marks.get(account.handle, {})
+                if any(lot.coin not in marked for lot in lots):
                     continue
                 rates = _exit_rates_for(exit_rates, lots, account, now_ns, horizon_ns)
                 if any(rate is None for rate in rates.values()):
                     unknown = True
                 for lot in lots:
-                    mid = exact(mids[lot.coin])
+                    mid = exact(marked[lot.coin])
                     if mid <= 0:
                         raise ValueError("mark must be positive")
                     net += (mid - lot.px) * lot.size * (
                         1 if lot.is_buy else -1
                     ) * 1_000_000 - lot.charges_micro
-                    if rates.get(lot.market) is not None:
-                        exit_fee += mid * lot.size * exact(rates[lot.market]) * 1_000_000
+                    if rates.get(lot.coin) is not None:
+                        exit_fee += mid * lot.size * exact(rates[lot.coin]) * 1_000_000
                 net -= exit_fee
             micro = net.numerator // net.denominator
             # Everything the return cost: its own compute and tools.

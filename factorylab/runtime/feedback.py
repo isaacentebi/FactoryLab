@@ -1723,6 +1723,10 @@ class FeedbackMixin:
         # coin yet it opens at the coin's first one at or after now (ruling R10-h).
         mark = self.venue_marks.get(coin)
         open_ns = int(mark[0]) if mark is not None else None
+        if mark is not None:
+            # Priced from the very mid it opens at (the coin's own venue mark), never a
+            # cached copy from another record of the world (Codex on #152).
+            mids = tuple((c, str(mark[1]) if c == coin else m) for c, m in mids)
         interval = (None if "/" in coin else
                     getattr(self.exchange, "funding_interval_ns", None)
                     or self.m.timing.world_repricing_ns)

@@ -375,7 +375,7 @@ def test_the_exit_rate_is_the_one_read_at_or_before_the_horizon():
     table = _open_long().resolve(
         2, 20, {"BTC": "100"}, now_ns=1_200, horizon_ns=60,
         exit_rates=lambda market, at: asked.append((market, at)) or rate_at(market, at))
-    assert asked == [("perp", 1_060)]
+    assert asked == [("BTC", 1_060)]  # the instrument's own rate, at its horizon
     assert table.account("opener").payoff.exit_fee_micro == 45_000  # 0.00045, not 0.0009
     reads[:] = [(1_100, "0.0009")]
     table = _open_long().resolve(2, 20, {"BTC": "100"}, now_ns=1_200, horizon_ns=60,
