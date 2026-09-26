@@ -540,6 +540,11 @@ SURFACE_PATHS = corpus.corpus_sources()
 #: What the provenance pass reads: the seat-visible paths and the essay's committed
 #: digest (``ESSAY_DIGEST_REL``), since the essay's text is the prompt's authority.
 PROVENANCE_PATHS = (*SURFACE_PATHS, ESSAY_DIGEST_REL)
+#: Where an ALLOW or a REJECT is justified: the allowlist's entries and the rejected
+#: findings' reasons. A commit touching them is in the provenance pass too, in its own
+#: subsection, so the rotated auditor reviews each new justification (Astra R-2): the
+#: architect who triages never reviews its own excuse alone.
+JUSTIFICATION_PATHS = (ALLOWLIST_REL, REJECTED_REL)
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -566,17 +571,42 @@ def provenance_commits(repo: Path, release_range: str, *, from_root: bool = Fals
     # Full history: no commit on either side of a merge is simplified away.
     revs = release_range.split("..", 1)[1] if from_root else release_range
     shas = _git(repo, "rev-list", "--reverse", "--full-history", revs, "--",
-                *PROVENANCE_PATHS).split()
+                *PROVENANCE_PATHS, *JUSTIFICATION_PATHS).split()
     commits = []
     for sha in shas:
         message = _git(repo, "log", "-1", "--format=%B", sha).strip()
         merge = len(_git(repo, "rev-list", "--parents", "-n", "1", sha).split()) > 2
         diff = _git(repo, "show", "--no-color", "--format=", *(["--cc"] if merge else []),
-                    sha, "--", *PROVENANCE_PATHS)
+                    sha, "--", *PROVENANCE_PATHS, *JUSTIFICATION_PATHS)
+        justified = _file_hunks(diff, JUSTIFICATION_PATHS)
         if merge and not diff.strip():
             diff = "(merge: every surface hunk is one of its parents', shown with that commit)"
-        commits.append({"sha": sha, "message": message, "diff": diff, "merge": merge})
+        commits.append({"sha": sha, "message": message, "diff": diff, "merge": merge,
+                        "justification": bool(justified.strip()),
+                        "justification_text": "\n".join(
+                            line[1:] for line in justified.splitlines()
+                            if line.startswith("+") and not line.startswith("+++"))})
     return commits
+
+
+def _file_hunks(diff: str, paths: tuple[str, ...]) -> str:
+    """The part of a ``git show`` diff (plain or combined) that is about ``paths``."""
+    out, keep = [], False
+    for line in diff.splitlines():
+        if line.startswith(("diff --git ", "diff --cc ", "diff --combined ")):
+            keep = any(line.endswith((f" b/{p}", f" {p}")) for p in paths)
+        if keep:
+            out.append(line)
+    return "\n".join(out)
+
+
+def key_commits(commits: list[dict]) -> list[dict]:
+    """What the key records of each provenance commit: its sha and message, whether it
+    touched a justification (``JUSTIFICATION_PATHS``) and the text it added there, which
+    an unsound-justification answer must quote."""
+    return [{"sha": c["sha"], "message": c["message"],
+             "justification": bool(c.get("justification")),
+             "justification_text": c.get("justification_text", "")} for c in commits]
 
 
 def provenance_section(release_range: str, commits: list[dict]) -> str:
@@ -591,11 +621,28 @@ def provenance_section(release_range: str, commits: list[dict]) -> str:
     if not commits:
         lines.append("(no commit in this range touched a seat-visible surface or the "
                      "essay's digest)")
-    for commit in commits:
+
+    def show(commit: dict) -> list[str]:
         title = f"### {commit['sha']}" + (" (merge, combined diff)" if commit.get("merge")
                                              else "")
-        lines += [title, "", "```text", commit["message"], "```", "",
-                  "```diff", commit["diff"].rstrip(), "```", ""]
+        return [title, "", "```text", commit["message"], "```", "",
+                "```diff", commit["diff"].rstrip(), "```", ""]
+
+    for commit in commits:
+        if not commit.get("justification"):
+            lines += show(commit)
+    justified = [c for c in commits if c.get("justification")]
+    if justified:
+        lines += ["## Justifications: the allowlist and the rejected findings", "",
+                  f"Each commit below added or changed an ALLOW justification "
+                  f"({ALLOWLIST_REL}) or a REJECT reason ({REJECTED_REL}). Answer the "
+                  "question above of its message, and, as `unsound_justification`, "
+                  "whether any entry it adds or changes excuses text by anything but the "
+                  "passage it cites (a behaviour mix, a preference, a passage that does "
+                  "not say what the reason claims). A yes quotes the entry's own words "
+                  "from the diff.", ""]
+        for commit in justified:
+            lines += show(commit)
     return "\n".join(lines)
 
 
@@ -949,7 +996,8 @@ def read_corpus(path: Path) -> list[dict]:
 def identity_problem(question: Any, cls: Any) -> str | None:
     """Why ``(question, class)`` is not a finding's: a rubric question with its class
     (``CLASS_OF``), or the provenance pass's (``PROVENANCE``)."""
-    if (question, cls) == (PROVENANCE["question"], PROVENANCE["class"]):
+    if (question, cls) in ((PROVENANCE["question"], PROVENANCE["class"]),
+                           (JUSTIFICATION["question"], JUSTIFICATION["class"])):
         return None
     if CLASS_OF.get(question) != cls:
         return f"question {question!r} with class {cls!r} is not a finding's identity"
@@ -1125,7 +1173,7 @@ def render(worlds: list[str], out: Path, *, seed: int, rendered: bool, release_r
         "prompt_sha": sha256_file(out / "prompt.md"),
         "provenance_prompt_sha": sha256_file(out / "provenance_prompt.md"),
         "provenance_id": provenance_id,
-        "provenance_commits": [{"sha": c["sha"], "message": c["message"]} for c in commits],
+        "provenance_commits": key_commits(commits),
         "release_corpus_sha": sha256_file(out / "release_corpus.jsonl"),
         "previous_corpus_sha": (sha256_file(previous_corpus)
                                 if previous_corpus is not None else None),
@@ -1174,6 +1222,9 @@ CONTEXT_QUESTIONS = frozenset({"Q10", "Q11", "Q12"})
 #: The provenance pass's one question, its class and its severity (AGENTS rule 2 at the
 #: point of authorship reaches every seat the text reaches).
 PROVENANCE = {"question": "P1", "class": "BEHAVIOUR-MIX", "severity": "HIGH"}
+#: The justification subsection's question: an ALLOW or REJECT justification that
+#: excuses text by anything but the passage it cites (Astra R-2).
+JUSTIFICATION = {"question": "P2", "class": "UNSOUND-JUSTIFICATION", "severity": "HIGH"}
 #: A finding's passage names a section of the authority text or an AGENTS rule.
 PASSAGE = re.compile(r"^((Ch\. I )?§(I|II|III|IV)(\.[a-c])?(\(\d\))?|(AGENTS )?rule [1-5])"
                      r"( .*)?$")
@@ -1388,8 +1439,7 @@ def calibration_problems(key_path: Path, key: dict, repo: Path,
                  executed_code_problems(repo, release, key["executed_code"])]
     if ranged:
         return problems
-    if key.get("provenance_commits") != [{"sha": c["sha"], "message": c["message"]}
-                                         for c in commits]:
+    if key.get("provenance_commits") != key_commits(commits):
         problems.append("the key's provenance_commits are not the range's")
     section = provenance_section(key["range"], commits)
     prompt = provenance_prompt_text(section, provenance_id=key["provenance_id"],
@@ -1503,10 +1553,14 @@ def provenance_problems(rows: list[dict], summary: dict | None, key: dict) -> li
     """Why one provenance sample is invalid (none when it is): its summary echoes the
     prompt's ``provenance_id`` and its sample id and lists every commit asked about;
     every commit is answered exactly once, ``behaviour_mix`` a boolean, and a yes quotes
-    the commit's own message."""
+    the commit's own message; a commit that touched a justification also answers
+    ``unsound_justification`` (a boolean), and a yes quotes, as ``justification_quote``,
+    the text it added there."""
     if summary is None:
         return ["no summary object"]
     messages = {c["sha"]: c["message"] for c in key["provenance_commits"]}
+    justified = {c["sha"]: c.get("justification_text", "") for c in key["provenance_commits"]
+                 if c.get("justification")}
     problems = []
     if summary.get("provenance_id") != key["provenance_id"]:
         problems.append("the summary is not bound to this provenance prompt (provenance_id)")
@@ -1532,6 +1586,16 @@ def provenance_problems(rows: list[dict], summary: dict | None, key: dict) -> li
                 problems.append(f"{sha[:12]}: a yes that does not quote the message")
         if not isinstance(row.get("rationale"), str):
             problems.append(f"{sha[:12]}: no rationale")
+        if sha in justified:
+            unsound = row.get("unsound_justification")
+            if not isinstance(unsound, bool):
+                problems.append(f"{sha[:12]}: unsound_justification is not a boolean")
+            elif unsound:
+                quote = row.get("justification_quote")
+                if not isinstance(quote, str) or not quote.strip() \
+                        or quote not in justified[sha]:
+                    problems.append(f"{sha[:12]}: an unsound justification that does not "
+                                    "quote the entry")
     return problems
 
 
@@ -1569,19 +1633,28 @@ def union(samples: list[tuple[list[dict], dict | None]]) -> list[dict]:
 
 def provenance_findings(samples: list[tuple[list[dict], dict | None]]) -> list[dict]:
     """Each commit any sample read as justified by a behaviour mix, once, as a HIGH
-    finding (AGENTS rule 2); low confidence when not every sample said so."""
+    finding (AGENTS rule 2, ``PROVENANCE``), and each commit whose ALLOW or REJECT
+    justification any sample read as unsound, once (``JUSTIFICATION``); low confidence
+    when not every sample said so."""
     flagged: dict[str, list[dict]] = {}
     for rows, _summary in samples:
         for row in rows:
             if row.get("behaviour_mix") is True:
                 flagged.setdefault(row["sha"], []).append(row)
+    unsound: dict[str, list[dict]] = {}
+    for rows, _summary in samples:
+        for row in rows:
+            if row.get("unsound_justification") is True:
+                unsound.setdefault(row["sha"], []).append(row)
     out = []
-    for sha, rows in flagged.items():
-        path = f"commit:{sha}"
-        out.append({"finding_id": leaf_id(path, ""), "leaf_id": None, "world": "*",
-                    "path": path, "quote": rows[0]["quote"], **PROVENANCE,
-                    "rationale": rows[0].get("rationale", ""), "provenance_pass": True,
-                    "samples": len(rows), "low_confidence": len(rows) < len(samples)})
+    for identity, table, quote in ((PROVENANCE, flagged, "quote"),
+                                   (JUSTIFICATION, unsound, "justification_quote")):
+        for sha, rows in table.items():
+            path = f"commit:{sha}"
+            out.append({"finding_id": leaf_id(path, ""), "leaf_id": None, "world": "*",
+                        "path": path, "quote": rows[0][quote], **identity,
+                        "rationale": rows[0].get("rationale", ""), "provenance_pass": True,
+                        "samples": len(rows), "low_confidence": len(rows) < len(samples)})
     return out
 
 
@@ -1598,12 +1671,18 @@ def provenance_finding_problems(f: dict, key: dict) -> list[str]:
         return [f"the path {path!r} names no commit asked about"]
     if f.get("finding_id") != leaf_id(path, ""):
         problems.append("finding_id is not the commit path's id")
-    for name, want in PROVENANCE.items():
+    unsound = f.get("question") == JUSTIFICATION["question"]
+    for name, want in (JUSTIFICATION if unsound else PROVENANCE).items():
         if f.get(name) != want:
             problems.append(f"{name} {f.get(name)!r} is not {want!r}")
+    justified = {c["sha"]: c.get("justification_text", "") for c in key["provenance_commits"]
+                 if c.get("justification")}
+    source = justified.get(sha) if unsound else messages[sha]
     quote = f.get("quote")
-    if not isinstance(quote, str) or not quote.strip() or quote not in messages[sha]:
-        problems.append("the quote is not the commit message's own words")
+    if unsound and source is None:
+        problems.append("an unsound justification on a commit that touched none")
+    elif not isinstance(quote, str) or not quote.strip() or quote not in source:
+        problems.append("the quote is not the commit's own words")
     if not isinstance(f.get("rationale"), str):
         problems.append("no rationale")
     if not isinstance(f.get("samples"), int) or isinstance(f.get("samples"), bool) \
@@ -1878,6 +1957,9 @@ def allowed_dispositions(finding: dict) -> frozenset[str]:
     REVERTED (it is, and its seat-visible text is gone from the release: the gate
     verifies it, ``reverted_problems``); an allowlist excuses text, not a commit's
     reasons, and REVERTED is a commit's alone."""
+    if finding.get("provenance_pass") and finding.get("question") == JUSTIFICATION["question"]:
+        # An unsound justification is withdrawn or rewritten (FIX), or rejected.
+        return frozenset({"FIX", "REJECT"})
     if finding.get("provenance_pass"):
         return frozenset({"FIX", "REJECT", "REVERTED"})
     if "/charter/" in str(finding.get("path", "")):

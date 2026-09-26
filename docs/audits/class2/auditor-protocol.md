@@ -55,6 +55,15 @@ therefore cannot recommend text that steers (AGENTS rule 2).
    release that touched a seat-visible surface or the essay's committed digest
    (`essay.sha256`), with its message and its diff to those files. The question: does any message justify text by a behaviour mix ("seats held too
    much", "judges scored refusals high")? This enforces rule 2 at the point of authorship.
+   Every commit that touched the allowlist (`tests/audit/class2_allowlist.toml`) or
+   `docs/audits/class2/rejected.jsonl` is in the pass too, in its own subsection
+   ("Justifications"): the auditor answers the same question of its message and, as
+   `unsound_justification`, whether any ALLOW entry or REJECT reason it adds or changes
+   excuses text by anything but the passage it cites; a yes quotes the entry's own words
+   (`justification_quote`) from the diff. So the architect who triages never reviews its
+   own ALLOW or REJECT alone: the rotated auditor reads each new justification. An
+   unsound justification is a HIGH finding (P2, UNSOUND-JUSTIFICATION) of every world's
+   triage, disposed FIX (withdraw or rewrite it) or REJECT.
 
 ## The rubric: answer each leaf separately
 
@@ -198,7 +207,8 @@ the skeleton):
   exactly one row with the severity, question and class it carries. A finding's identity
   is its `finding_id` with its question and class: one quote read under two questions
   is two findings, each with its own row and disposition. A commit the
-  provenance pass flagged is a HIGH finding (P1, BEHAVIOUR-MIX) of every world's triage.
+  provenance pass flagged is a HIGH finding (P1, BEHAVIOUR-MIX) of every world's triage,
+  and so is a justification it read as unsound (P2, UNSOUND-JUSTIFICATION).
 - The triage file is committed, recording the family used, the canary score and each
   finding with its disposition. The four sample files are kept with the release
   artifacts: the gate reads them.

@@ -204,7 +204,10 @@ def test_the_provenance_pass_shows_a_commit_justified_by_a_behaviour_mix(history
     section = (tmp_path / "provenance_prompt.md").read_text().split("## Provenance pass", 1)[1]
     assert surface in section and BEHAVIOUR_MIX in section
     assert "+HOLD = 'hold'" in section
-    assert "notes only" not in section and f"### {head}" not in section
+    # The head records rejected.jsonl: it is read, but as a justification (Astra R-2).
+    surfaces, justified = section.split("## Justifications", 1)
+    assert "notes only" not in surfaces and f"### {head}" not in surfaces
+    assert f"### {head}" in justified
     # The protocol's second prompt: a commit message may carry behaviour data, which the
     # corpus prompt never holds ("It never sees behaviour data").
     prompt = (tmp_path / "prompt.md").read_text()
@@ -434,7 +437,8 @@ def _output(out, key, *, canaries=None, controls=0, summary=True, unread=(), sam
 
 def _provenance(key, *, sample=1, flag=()):
     rows = [{"sha": c["sha"], "behaviour_mix": c["sha"] in flag,
-             "quote": c["message"][:30] if c["sha"] in flag else "", "rationale": "..."}
+             "quote": c["message"][:30] if c["sha"] in flag else "", "rationale": "...",
+             **({"unsound_justification": False} if c.get("justification") else {})}
             for c in key["provenance_commits"]]
     return rows, {"summary": True, "provenance_id": key["provenance_id"], "sample": sample,
                   "commits_read": [c["sha"] for c in key["provenance_commits"]]}
@@ -2211,6 +2215,49 @@ def test_a_kernel_change_is_in_the_provenance_pass_and_a_dirty_one_is_refused(tm
     (repo / path).write_text("REASON = 'hold harder'\n")
     with pytest.raises(tool.AuditInputInvalid, match="uncommitted seat-visible"):
         tool.release_commit(repo, f"{root}..{head}")
+
+
+def test_an_allow_or_reject_justification_is_reviewed_in_the_provenance_pass(tmp_path):
+    """Astra R-2: a commit touching the allowlist or rejected.jsonl is in the provenance
+    pass, in its own subsection; the auditor answers whether each justification it adds
+    is sound, and an unsound one is a HIGH finding (P2) fixed or rejected, never ALLOWed."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    root = _commit(repo, "README.md", "x\n", "root")
+    entry = 'reason = "the seats held too much, so this text stays"\n'
+    allowed = _commit(repo, tool.ALLOWLIST_REL, entry, "excuse a leaf")
+    rejected = _commit(repo, tool.REJECTED_REL, '{"reason": "noise"}\n', "reject one")
+    head = _commit(repo, "docs/notes.md", "notes\n", "notes only")
+    commits = tool.provenance_commits(repo, f"{root}..{head}")
+    assert [c["sha"] for c in commits] == [allowed, rejected]
+    assert all(c["justification"] for c in commits)
+    section = tool.provenance_section(f"{root}..{head}", commits)
+    head_part, justified = section.split("## Justifications: the allowlist and the rejected "
+                                         "findings", 1)
+    assert f"### {allowed}" in justified and f"### {allowed}" not in head_part
+    assert "seats held too much" in justified
+    key = {"provenance_commits": tool.key_commits(commits), "provenance_id": "p"}
+    quote = "the seats held too much"
+    rows = [{"sha": allowed, "behaviour_mix": False, "quote": "", "rationale": "r",
+             "unsound_justification": True, "justification_quote": quote},
+            {"sha": rejected, "behaviour_mix": False, "quote": "", "rationale": "r",
+             "unsound_justification": False}]
+    summary = {"summary": True, "provenance_id": "p", "sample": 1,
+               "commits_read": [allowed, rejected]}
+    assert tool.provenance_problems(rows, summary, key) == []
+    silent = [{k: v for k, v in r.items() if k != "unsound_justification"} for r in rows]
+    assert any("unsound_justification" in p
+               for p in tool.provenance_problems(silent, summary, key))
+    forged = [rows[0] | {"justification_quote": "not in the entry"}, rows[1]]
+    assert any("does not quote the entry" in p
+               for p in tool.provenance_problems(forged, summary, key))
+    (finding,) = tool.provenance_findings([(rows, summary)])
+    assert (finding["question"], finding["class"], finding["severity"]) == (
+        "P2", "UNSOUND-JUSTIFICATION", "HIGH")
+    assert tool.provenance_finding_problems(finding, key) == []
+    assert tool.allowed_dispositions(finding) == {"FIX", "REJECT"}
+    assert tool.identity_problem("P2", "UNSOUND-JUSTIFICATION") is None
 
 
 def _documented_commands(text):
