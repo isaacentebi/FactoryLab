@@ -1612,10 +1612,18 @@ def sample_problems(findings: list[dict], summary: dict | None, key: dict,
     if not _sample_number(summary.get("sample")):
         problems.append(f"sample id {summary.get('sample')!r} is not 1..{SAMPLES}")
     problems += _completeness(summary, set(records))
+    planted = set().union(*(finding_leaves(c) for c in key["canaries"]))
     counts: dict[str, int] = {}
     for i, f in enumerate(findings, 1):
         for p in finding_problems(f, records):
             problems.append(f"finding {i} ({f.get('finding_id')}): {p}")
+        named = finding_leaves(f)
+        if named & planted and named - planted:
+            # A canary and a real finding are reported apart: a set mixing them would
+            # either hide the real objective with the canary or score a canary it
+            # did not isolate (Codex on 92ba879).
+            problems.append(f"finding {i} ({f.get('finding_id')}): its leaf set mixes "
+                            "planted and real leaves")
         if isinstance(f.get("class"), str):
             counts[f["class"]] = counts.get(f["class"], 0) + 1
     if summary.get("by_class") != counts:
@@ -1895,8 +1903,10 @@ def world_findings(findings: list[dict], provenance: list[dict], key: dict,
     kernel's seat text (the same code runs in every world) and every provenance finding
     (a commit's text reaches every world it touches)."""
     planted = set().union(*(finding_leaves(c) for c in key["canaries"]))
+    # A finding wholly on planted leaves is a canary hit, not the world's; one mixing
+    # planted and real leaves is refused at validate (``sample_problems``).
     own = [f for f in findings if f.get("world") in (world, corpus.KERNEL)
-           and not finding_leaves(f) & planted]
+           and not (finding_leaves(f) and finding_leaves(f) <= planted)]
     return own + provenance
 
 

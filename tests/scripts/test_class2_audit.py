@@ -480,6 +480,23 @@ def test_missing_a_mandatory_canary_invalidates_even_at_seven_of_eight(rendered,
     assert any("mandatory" in p for p in verdict["problems"])
 
 
+def test_a_wholly_planted_finding_is_dropped_and_a_real_set_is_triaged(rendered):
+    """Codex on 92ba879: a finding whose leaf set is wholly planted is a canary hit and
+    leaves the triage; a Q11 set of real lenses is the world's finding and stays."""
+    out, key = rendered
+    records = {r["leaf_id"]: r for r in _records(out)}
+    (q11,) = [c for c in key["canaries"] if c["question"] == "Q11"]
+    planted = set().union(*map(tool.finding_leaves, key["canaries"]))
+    real = sorted(i for i, r in records.items()
+                  if r["surface_kind"] == "system" and i not in planted)[:2]
+    assert len(real) == 2
+    canary = _set_finding(records, q11["leaf_ids"])
+    genuine = _set_finding(records, real)
+    world = records[real[0]]["world"]
+    kept = tool.world_findings([canary, genuine], [], key, world)
+    assert [f["finding_id"] for f in kept] == [genuine["finding_id"]]
+
+
 def test_q11_is_answered_of_a_set_of_leaves(rendered):
     """Astra A-1: Q11 (a role's lenses taken together) is a cross-leaf question. Its
     finding names the set (``leaf_ids``, identity the sorted set with question and
@@ -500,9 +517,15 @@ def test_q11_is_answered_of_a_set_of_leaves(rendered):
     assert not missed["valid"] and "canary-q11" in missed["missed"]
     extra_lens = next(i for i, r in records.items()
                       if r["surface_kind"] == "system" and i not in ids)
-    wider = _set_finding(records, [*ids, extra_lens])
-    found = _verdict(out, key, canaries=others, extra=[wider])
+    exact = _set_finding(records, ids)
+    found = _verdict(out, key, canaries=others, extra=[exact])
     assert found["valid"], found["problems"]
+    # Codex on 92ba879: a set mixing the planted lenses with a real one is refused; the
+    # auditor reports the canary and the real finding apart.
+    wider = _set_finding(records, [*ids, extra_lens])
+    mixed = _verdict(out, key, extra=[wider])
+    assert not mixed["valid"]
+    assert any("mixes planted and real leaves" in p for p in mixed["problems"])
     forged = partial | {"finding_id": tool.leaf_id(partial["path"], partial["quote"])}
     assert any("sorted leaf set" in p for p in tool.finding_problems(forged, records))
     # Identity is the sorted set: the same set in another order is one finding.

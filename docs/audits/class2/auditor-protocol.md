@@ -116,7 +116,10 @@ more distinct leaves of one world) with `leaf_id` null; its `path`, tags and `qu
 those of one leaf of the set, and its `finding_id` is
 `sha256("leaf-set|" + the sorted leaf_ids joined by "|")[:12]`. Its identity, in the
 union, the triage and the gate, is that sorted set with its question and class, so the
-same set in any order is one finding. No other question takes a set.
+same set in any order is one finding. No other question takes a set. A set never mixes
+planted leaves with real ones: report a canary and a real finding apart. A finding whose
+set is wholly planted is a canary hit and leaves the triage; one that mixes planted and
+real leaves invalidates its sample.
 
 `read` lists the `leaf_id` of every leaf the auditor answered, context leaves included,
 and `unread` every one it did not. The counts are checked against those sets, and the sets against the corpus.
