@@ -1220,6 +1220,46 @@ def penalty_by_handle(events: list[Mapping]) -> dict[str, Mapping]:
     return {need(row, "handle"): row for row in rows_of(events, "price.penalty")}
 
 
+#: The settlement channels the kernel settles with a score but no ``price.penalty`` row:
+#: policy decisions (governance.py ``_settle_policy``, markets.py lambda posts, uptake.py).
+UNPRICED_CHANNELS = frozenset({"policy"})
+
+
+def split_members(events: list[Mapping]) -> dict[int, dict[str, str | None]]:
+    """Per price window, the decisions a card's penalty is split across, from the
+    independent population (never from the pricing rows under test): each decision
+    opened in the window and invoked there, with its invocation's role. ``_invoke``
+    records every invoked decision in its window's ``decisions`` (pricing.py
+    ``_contribution``, pricing.py:169, called at pricing.py:193), which is what the
+    generic split counts (pricing.py:1021-1025). A niche decision is in no split (wave
+    16 R-E: ``PricingMixin._in_split``, 57aefe7 on wave16-reward-physics)."""
+    opened = _decision_windows(events)
+    roles = {need(row, "handle"): row.get("role") for row in rows_of(events, "invocation")
+             if isinstance(row.get("handle"), str)}
+    niche = niche_handles(events)
+    out: dict[int, dict[str, str | None]] = defaultdict(dict)
+    for row in rows_of(events, "decision.open"):
+        handle = need(row, "handle")
+        if handle in roles and handle not in niche and handle in opened:
+            out[opened[handle]][handle] = roles[handle]
+    return out
+
+
+def settled_unpriced(events: list[Mapping]) -> set[str]:
+    """Decisions settled with a score (``original_status`` settled) off the policy
+    channels and never priced. The kernel settles every such decision through
+    ``_settle_priced`` (pricing.py:1071), which ledgers its ``price.penalty`` row: every
+    other settlement path is censored or inapplicable at score 0 (loop.py NOOP paths,
+    feedback.py ``_censor_judgement``, compute.py ``_settle_unselected``, composition.py
+    with no reward) or priced as a decline. So each handle here is a split member the
+    kernel failed to price."""
+    priced = {need(row, "handle") for row in rows_of(events, "price.penalty")}
+    return {need(row, "return.handle") for row in rows_of(events, "decision.settle")
+            if need(row, "original_status") == "settled"
+            and need(row, "return.channel") not in UNPRICED_CHANNELS
+            and need(row, "return.handle") not in priced}
+
+
 @criterion("SF-2a")
 def sf2_gradient(events: list[Mapping], manifest: Mapping, *, card: str,
                  relievers: set[str], holders: set[str]) -> Result:
@@ -1227,61 +1267,84 @@ def sf2_gradient(events: list[Mapping], manifest: Mapping, *, card: str,
 
     Wave 16 D5: "A decision that relieved the card's violation bears 0; every
     non-relieving decision in the window … bears an equal share, frozen at window
-    close." So in each window where the card is violated and either arm was priced:
-    both arms were priced (a window that dropped every holder charge is a failure, not
-    a pass), every reliever's share of ``card`` is 0, and every holder's share is
-    ``1 / n_nonrelieving``, where the non-relieving set is complete: every decision
-    priced on the card in that window whose seat is not a reliever, plus every NOOP
-    drawn in that window by a router that drew either arm (R9: an abstention is a
-    non-relieving decision too).
+    close." Every set is read from the independent population, never from the pricing
+    rows under test: the window's split members (``split_members``: opened, invoked,
+    not niche), in each window the card was measured violated (``card_violations``).
+    There: every reliever or holder member settled with a score is priced
+    (``settled_unpriced`` fails it otherwise); a priced reliever bears 0 of the card
+    and a priced holder ``1 / n_nonrelieving``, where the non-relieving set is every
+    split member of the arms' role whose seat is not a reliever, plus every NOOP drawn
+    in the window by a router that drew either arm (R9: an abstention is a
+    non-relieving decision too). A member still open, censored or declined is missing
+    evidence. ``pass`` needs a window with a priced reliever and a priced holder.
     """
     seats = decision_seats(events)
     actors = {need(row, "handle"): row.get("actor") for row in rows_of(events, "decision.open")}
     opened_in = _decision_windows(events)
-    shares: dict[int, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
-    nonrelieving: dict[int, set[str]] = defaultdict(set)
-    routers: dict[int, set[str]] = defaultdict(set)
-    for handle, row in penalty_by_handle(events).items():
-        seat = seats.get(handle)
-        for term in need(row, "terms"):  # pricing.py ``_settle_priced``: always
-            if need(term, "card_id") != card or need(term, "violation") <= 0:
+    members = split_members(events)
+    violated = {w for w, v in card_violations(events, card).items() if v > 0}
+    priced = penalty_by_handle(events)
+    unpriced = settled_unpriced(events)
+    problems, comparable, pending = [], 0, 0
+    for window in sorted(violated & set(members)):
+        split = members[window]
+        arms = {h: "reliever" if seats.get(h) in relievers else "holder"
+                for h in split if seats.get(h) in relievers | holders}
+        if not arms:
+            continue
+        roles = {split[h] for h in arms}
+        routers = {actors.get(h) for h in arms}
+        nonrelieving = ({h for h, role in split.items()
+                         if role in roles and seats.get(h) not in relievers}
+                        | {h for h, w in opened_in.items() if w == window
+                           and seats.get(h) == "NOOP" and actors.get(h) in routers})
+        n = len(nonrelieving)
+        shares: dict[str, list[float]] = {"reliever": [], "holder": []}
+        for handle, side in arms.items():
+            if handle in unpriced:
+                problems.append({"window": window, "unpriced": handle, "side": side})
                 continue
-            if seat not in relievers:
-                nonrelieving[need(term, "window")].add(handle)
-            side = ("reliever" if seat in relievers else
-                    "holder" if seat in holders else None)
-            if side is not None:
-                shares[need(term, "window")][side].append(float(need(term, "share")))
-                routers[need(term, "window")].add(actors.get(handle))
-    if not shares:
-        return _unsupported("SF-2a", "no violated window priced either arm", card=card)
-    for row in rows_of(events, "router.abstention_priced"):
-        window = opened_in.get(need(row, "handle"))
-        # A NOOP is non-relieving in its window only for a router that drew either arm
-        # in that same window (R9, D5): the draws it abstained among.
-        if window in shares and need(row, "router") in routers.get(window, ()):
-            nonrelieving[window].add(need(row, "handle"))
-    problems = []
-    for window, sides in sorted(shares.items()):
-        missing = [side for side in ("reliever", "holder") if not sides.get(side)]
-        if missing:
-            problems.append({"window": window, "missing": missing})
-        if any(s != 0.0 for s in sides.get("reliever", ())):
-            problems.append({"window": window, "reliever_shares": need(sides, "reliever")[:4]})
-        n = len(nonrelieving[window])
-        wrong = [s for s in sides.get("holder", ()) if n == 0 or abs(s - 1 / n) > 1e-9]
+            row = priced.get(handle)
+            if row is None:
+                pending += 1  # still open, censored or declined: no share to read
+                continue
+            terms = [t for t in need(row, "terms") if need(t, "card_id") == card
+                     and need(t, "window") == window]
+            if not terms:
+                problems.append({"window": window, "no_term": handle, "side": side})
+                continue
+            shares[side] += [float(need(t, "share")) for t in terms]
+        reliever, holder = need(shares, "reliever"), need(shares, "holder")
+        if any(s != 0.0 for s in reliever):
+            problems.append({"window": window, "reliever_shares": reliever[:4]})
+        wrong = [s for s in holder if n == 0 or abs(s - 1 / n) > 1e-9]
         if wrong:
             problems.append({"window": window, "holder_shares": sorted(set(wrong))[:4],
                              "n_nonrelieving": n})
-    return _result("SF-2a", not problems, problems=problems[:10], windows=len(shares))
+        comparable += bool(reliever and holder)
+    evidence = {"problems": problems[:10], "windows": comparable, "pending": pending}
+    if problems:
+        return _result("SF-2a", False, **evidence)
+    if not comparable:
+        return _unsupported("SF-2a", "no violated window priced a reliever and a holder",
+                            card=card, **evidence)
+    return _result("SF-2a", True, **evidence)
 
 
 @criterion("SF-2b")
 def sf2b_order_blind(events: list[Mapping], manifest: Mapping, *, card: str,
                      role_of: Callable[[str], str | None] | None = None) -> Result:
     """SF-2b: two non-relieving decisions of one role in one window bear equal shares,
-    whatever their settlement order (wave 16 D5's test, read over a run)."""
+    whatever their settlement order (wave 16 D5's test, read over a run). A split member
+    of a window the card was violated in that settled with a score and was never priced
+    (``settled_unpriced``, from the independent population) fails: it is a share the
+    comparison could not see."""
     seats = decision_seats(events)
+    violated = {w for w, v in card_violations(events, card).items() if v > 0}
+    unseen = sorted(h for w, split in split_members(events).items() if w in violated
+                    for h in split if h in settled_unpriced(events))
+    if unseen:
+        return _result("SF-2b", False, card=card, unpriced=unseen[:5])
     groups: dict[tuple, set[float]] = defaultdict(set)
     order: dict[tuple, list[float]] = defaultdict(list)
     for row in rows_of(events, "price.penalty"):

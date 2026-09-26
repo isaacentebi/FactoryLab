@@ -411,34 +411,67 @@ def _penalty(handle, share, window=1, violation=1.0, obs="revision_rate", owner=
             "raw": min(1.0, 0.5 + 0.5 * share), "effective": 0.5, "terms": [term]}
 
 
+def _member(handle, seat, actor="router:Tick", role="producer"):
+    """A split member: a decision opened and invoked (``split_members``)."""
+    return [_open(handle, seat, actor=actor),
+            {"kind": "invocation", "handle": handle, "role": role, "status": "ok"}]
+
+
+def _settled(handle, channel="verdict"):
+    """A scored settlement (``decision.settle``, ``original_status`` settled)."""
+    return {"kind": "decision.settle", "original_status": "settled",
+            "return": {"handle": handle, "channel": channel, "status": "settled",
+                       "score": 0.5}}
+
+
+def _sf2_window(*members):
+    """Window 1: the members opened and invoked, then the window closed with card c
+    violated (``_price_window(1, 0.0)``: 0 under a floor of 0.2)."""
+    return [row for m in members for row in m] + [_price_window(1, 0.0)]
+
+
+KW = {"card": "c", "relievers": {"rel"}, "holders": {"hold"}}
+
+
 def test_sf2a_relievers_bear_nothing_and_holders_share_equally():
-    opens = [_open("d1", "rel"), _open("d2", "hold"), _open("d3", "hold")]
-    good = opens + [_penalty("d1", 0.0), _penalty("d2", 0.5), _penalty("d3", 0.5)]
-    assert g.sf2_gradient(good, M, card="c", relievers={"rel"}, holders={"hold"}).ok
-    generic = opens + [_penalty("d1", 1 / 3), _penalty("d2", 1 / 3), _penalty("d3", 1 / 3)]
-    result = g.sf2_gradient(generic, M, card="c", relievers={"rel"}, holders={"hold"})
-    assert result.status == g.FAIL
+    window = _sf2_window(_member("d1", "rel"), _member("d2", "hold"), _member("d3", "hold"))
+    good = window + [_penalty("d1", 0.0), _penalty("d2", 0.5), _penalty("d3", 0.5)]
+    assert g.sf2_gradient(good, M, **KW).ok
+    generic = window + [_penalty("d1", 1 / 3), _penalty("d2", 1 / 3), _penalty("d3", 1 / 3)]
+    assert g.sf2_gradient(generic, M, **KW).status == g.FAIL
 
 
 def test_sf2a_needs_both_arms_and_the_complete_non_relieving_count():
-    """Codex review: a window that dropped every holder charge fails, uniformly zero
-    holder shares fail, and 1/n counts every non-reliever, a NOOP of the same router
-    included (R9)."""
-    opens = [_open("d1", "rel"), _open("d2", "hold"), _open("d3", "hold")]
-    kw = {"card": "c", "relievers": {"rel"}, "holders": {"hold"}}
-    dropped = g.sf2_gradient(opens + [_penalty("d1", 0.0)], M, **kw)
+    """Codex review: uniformly zero holder shares fail, and 1/n counts every
+    non-reliever of the split, a NOOP of the same router included (R9)."""
+    window = _sf2_window(_member("d1", "rel"), _member("d2", "hold"), _member("d3", "hold"))
+    zero = window + [_penalty("d1", 0.0), _penalty("d2", 0.0), _penalty("d3", 0.0)]
+    assert g.sf2_gradient(zero, M, **KW).status == g.FAIL
+    noop = [_open("d4", "NOOP")]
+    with_noop = _sf2_window(_member("d1", "rel"), _member("d2", "hold"),
+                            _member("d3", "hold"), noop)
+    thirds = with_noop + [_penalty("d1", 0.0), _penalty("d2", 1 / 3), _penalty("d3", 1 / 3)]
+    assert g.sf2_gradient(thirds, M, **KW).ok
+    halves = with_noop + [_penalty("d1", 0.0), _penalty("d2", 0.5), _penalty("d3", 0.5)]
+    assert g.sf2_gradient(halves, M, **KW).status == g.FAIL
+
+
+def test_sf2a_a_holder_the_kernel_never_priced_fails():
+    """Codex P2 (gauntlet.py:1250): the expected holders are the window's split members
+    (opened, invoked, not niche), not the priced rows. A holder that settled with a
+    score and has no pricing row fails, even when another holder was priced; one still
+    open is missing evidence."""
+    window = _sf2_window(_member("d1", "rel"), _member("d2", "hold"), _member("d3", "hold"))
+    priced = [_penalty("d1", 0.0), _penalty("d2", 0.5)]
+    hidden = g.sf2_gradient(window + priced + [_settled("d3")], M, **KW)
+    assert hidden.status == g.FAIL
+    assert {"window": 1, "unpriced": "d3", "side": "holder"} in hidden.evidence["problems"]
+    assert g.sf2_gradient(window + priced, M, **KW).ok  # d3 still open: no share to read
+    dropped = g.sf2_gradient(window + [_penalty("d1", 0.0), _settled("d2"), _settled("d3")],
+                             M, **KW)
     assert dropped.status == g.FAIL
-    assert {"window": 1, "missing": ["holder"]} in dropped.evidence["problems"]
-    zero = opens + [_penalty("d1", 0.0), _penalty("d2", 0.0), _penalty("d3", 0.0)]
-    assert g.sf2_gradient(zero, M, **kw).status == g.FAIL
-    noop = [_open("d4", "NOOP"), {"kind": "router.abstention_priced", "handle": "d4",
-                                  "router": "router:Tick", "neutral": 0.5, "penalty": 0.1,
-                                  "reward": 0.4}]
-    thirds = opens + noop + [_penalty("d1", 0.0), _penalty("d2", 1 / 3),
-                             _penalty("d3", 1 / 3)]
-    assert g.sf2_gradient(thirds, M, **kw).ok
-    halves = opens + noop + [_penalty("d1", 0.0), _penalty("d2", 0.5), _penalty("d3", 0.5)]
-    assert g.sf2_gradient(halves, M, **kw).status == g.FAIL
+    # A holder priced in a policy settlement is no split pricing (governance settles it).
+    assert "d3" not in g.settled_unpriced([_settled("d3", channel="policy")])
 
 
 def test_sf2b_shares_are_order_blind_and_the_one_over_rank_shape_fails():
@@ -1217,19 +1250,16 @@ def test_c1_of2c_an_unmeasured_reference_window_is_missing_evidence():
 def test_d1_sf2a_a_noop_counts_only_for_a_router_that_drew_an_arm_that_window():
     """Sol D1: r1 drew both arms in window 1 and only a NOOP in window 2, where r2 drew
     the holder: window 2's non-relieving set is the holder alone (n = 1)."""
-    kw = {"card": "c", "relievers": {"rel"}, "holders": {"hold"}}
     rows = _seq([
-        _open("d1", "rel", actor="router:r1"), _open("d2", "hold", actor="router:r1"),
-        {"kind": "price.window", "window": 1},
-        _open("d3", "hold", actor="router:r2"), _open("d4", "NOOP", actor="router:r1"),
+        *_member("d1", "rel", actor="router:r1"), *_member("d2", "hold", actor="router:r1"),
+        _price_window(1, 0.0),
+        *_member("d3", "hold", actor="router:r2"), _open("d4", "NOOP", actor="router:r1"),
+        _price_window(2, 0.0),
         _penalty("d1", 0.0, window=1), _penalty("d2", 1.0, window=1),
-        _penalty("d3", 1.0, window=2),
-        {"kind": "router.abstention_priced", "handle": "d4", "router": "router:r1",
-         "neutral": 0.5, "penalty": 0.0, "reward": 0.5}])
-    result = g.sf2_gradient(rows, M, **kw)
-    assert {"window": 2, "missing": ["reliever"]} in result.evidence["problems"]
-    assert not [p for p in result.evidence["problems"] if "holder_shares" in p], \
-        result.evidence
+        _penalty("d3", 1.0, window=2)])
+    result = g.sf2_gradient(rows, M, **KW)
+    assert result.ok, result.evidence
+    assert result.evidence["windows"] == 1  # window 2 has no reliever to compare
 
 
 def test_e1_of3a_an_invocation_without_a_handle_returns_nothing():

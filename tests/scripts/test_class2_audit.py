@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -1741,6 +1742,65 @@ def test_no_policy_or_evidence_read_bypasses_the_release_commit():
     }, reads
     for gone in ("CANARIES", "REJECTED", "PROTOCOL"):
         assert not hasattr(tool, gone), gone
+
+
+# --- Codex pass on 50ce3f8: the renderer's own executed code is the release's ------------
+
+
+def test_the_executed_code_is_every_repository_module_that_ran():
+    """The set is read from ``sys.modules`` (the code that actually ran), never a list:
+    the corpus and seat-text renderers and the tool itself are in it; a virtualenv's
+    or a cache's files (ignored by git) are not."""
+    from tests.audit import class2_corpus, class2_seat_text  # noqa: F401  (they ran)
+
+    ran = tool.executed_code(ROOT)
+    assert {"tests/audit/class2_corpus.py", "tests/audit/class2_seat_text.py",
+            "scripts/class2_audit.py"} <= set(ran)
+    assert not any(rel.startswith(".venv/") or "__pycache__" in rel for rel in ran)
+    assert ran["scripts/class2_audit.py"] == tool.sha256_file(ROOT / "scripts/class2_audit.py")
+
+
+@pytest.fixture
+def renderer_repo(tmp_path, monkeypatch):
+    """A repository holding a copy of the corpus renderer at its own path, loaded as a
+    module of this process (it "ran"), committed at the head."""
+    import types
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _seed_policy(repo)
+    root = _commit(repo, "README.md", "x\n", "root")
+    module = repo / "tests/audit/class2_corpus.py"
+    head = _commit(repo, "tests/audit/class2_corpus.py",
+                   (ROOT / "tests/audit/class2_corpus.py").read_text(), "the renderer")
+    ran = types.ModuleType("class2_corpus_in_the_release_repo")
+    ran.__file__ = str(module)
+    monkeypatch.setitem(sys.modules, ran.__name__, ran)
+    return repo, root, head, module
+
+
+def test_an_uncommitted_edit_to_the_renderer_makes_render_refuse(renderer_repo, tmp_path):
+    """Codex P1 (class2_audit.py:427): the renderer's code is outside the seat-visible
+    scope, yet it made the corpus. Every repository module that ran must be committed
+    and unmodified at the release: an uncommitted edit to class2_corpus.py refuses the
+    render; committed, its path and hash are in the key."""
+    repo, root, head, module = renderer_repo
+    render = lambda out: tool.render([WORLD], out, seed=7, rendered=False,  # noqa: E731
+                                     essay=ESSAY, release_range=f"{root}..{head}",
+                                     repo=repo)
+    original = module.read_text()
+    module.write_text(original + "# an uncommitted edit\n")
+    with pytest.raises(tool.AuditInputInvalid, match="class2_corpus.py ran with bytes"):
+        render(tmp_path / "edited")
+    assert not (tmp_path / "edited").exists()
+    module.write_text(original)
+    key = render(tmp_path / "out")
+    assert key["executed_code"] == {"tests/audit/class2_corpus.py": tool.sha256_file(module)}
+    # The gate re-verifies the record against the release commit.
+    assert tool.executed_code_problems(repo, head, key["executed_code"]) == []
+    forged = {"tests/audit/class2_corpus.py": "0" * 64}
+    assert tool.executed_code_problems(repo, head, forged)
 
 
 def test_an_uncommitted_allowlist_entry_does_not_back_an_allow(triaged):

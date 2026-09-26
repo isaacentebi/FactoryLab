@@ -132,6 +132,45 @@ ALLOWLIST_REL = "tests/audit/class2_allowlist.toml"
 WORLD_REL = "worlds/{world}.toml"
 
 
+def executed_code(repo: Path) -> dict[str, str]:
+    """Every module file this process has loaded that lives inside ``repo`` and is the
+    repository's code (not ignored by git: a virtualenv or a cache is not), as its
+    repository path and the sha256 of the bytes that ran. Read from ``sys.modules``
+    after the corpus is rendered, it is the code that actually executed to produce it,
+    whatever imported it: no hand-kept list of the renderer's modules."""
+    root = Path(repo).resolve()
+    found: dict[str, Path] = {}
+    for module in list(sys.modules.values()):
+        file = getattr(module, "__file__", None)
+        if not file:
+            continue
+        path = Path(file).resolve()
+        if path.is_file() and path.is_relative_to(root):
+            found[path.relative_to(root).as_posix()] = path
+    if not found:
+        return {}
+    ignored = subprocess.run(["git", "-C", str(root), "check-ignore", "--stdin"],
+                             input="\n".join(sorted(found)), capture_output=True, text=True)
+    skip = set(ignored.stdout.split())
+    return {rel: sha256_file(path) for rel, path in sorted(found.items()) if rel not in skip}
+
+
+def executed_code_problems(repo: Path, release: str, files: dict[str, str]) -> list[str]:
+    """Why the executed code ``files`` (path -> sha256) is not the release's: each file
+    must be committed in ``release`` with exactly those bytes. At render the digests are
+    the files that ran (an uncommitted edit, or a file never committed, is refused); at
+    the gate they are the key's record, re-verified against the release commit."""
+    problems = []
+    for rel, digest in sorted(files.items()):
+        run = subprocess.run(["git", "-C", str(repo), "show", f"{release}:{rel}"],
+                             capture_output=True)
+        if run.returncode != 0:
+            problems.append(f"{rel} ran but is not committed in {release[:12]}")
+        elif hashlib.sha256(run.stdout).hexdigest() != digest:
+            problems.append(f"{rel} ran with bytes other than its commit in {release[:12]}")
+    return problems
+
+
 def committed_text(repo: Path, release: str, path: str, *, required: bool = True
                    ) -> str | None:
     """The file ``path`` as committed in ``release`` (``git show <release>:<path>``), the
@@ -951,6 +990,14 @@ def render(worlds: list[str], out: Path, *, seed: int, rendered: bool, release_r
     authority = authority_text(essay)
     # Rendered before anything is written: a failed render leaves no corpus behind.
     records = corpus_records(worlds, rendered=rendered)
+    # The code that rendered the corpus is the release's: every repository module that
+    # ran (``executed_code``), committed and unmodified (seat-visible text is the
+    # dirty check's, ``SURFACE_PATHS``; the renderer's own code is this one's).
+    executed = executed_code(repo)
+    ran = executed_code_problems(repo, released, executed)
+    if ran:
+        raise AuditInputInvalid("the code that rendered the corpus is not the release's: "
+                                + "; ".join(ran[:5]))
     diff = corpus_diff(prior, records)
     ordered, changed = changed_first(records, diff)
     planted, key = plant(ordered, seed=seed, world=worlds[0],
@@ -985,6 +1032,7 @@ def render(worlds: list[str], out: Path, *, seed: int, rendered: bool, release_r
         "previous_triage_sha256": (sha256_file(previous)
                                    if previous is not None else None),
         "essay_sha": sha256_file(essay) if essay is not None and essay.exists() else None,
+        "executed_code": executed,
     })
     (out / "canary_key.json").write_text(json.dumps(key, indent=1, sort_keys=True) + "\n")
     return key
@@ -1106,7 +1154,7 @@ def load_key(path: Path) -> tuple[dict, list[dict]]:
                 "provenance_prompt_sha": str,
                 "provenance_id": str, "provenance_commits": list,
                 "canaries": list, "controls": list, "expected_leaves": list,
-                "expected_count": int}
+                "expected_count": int, "executed_code": dict}
     bad = [n for n, t in required.items() if not isinstance(key.get(n), t)]
     if bad or key.get("schema") != KEY_SCHEMA:
         raise AuditInputInvalid(f"the key is not a schema-{KEY_SCHEMA} key: {bad}")
@@ -1803,6 +1851,10 @@ def gate(world: str, triage: Path, key_path: Path, samples: list[Path],
         problems.append(f"the key audited {key['release_commit'][:12]}, not the release "
                         f"gated {gated[:12]}")
     problems += range_problems(repo, key)
+    # The code that rendered the corpus, re-verified: the key's record of it is the
+    # release commit's bytes.
+    problems += [f"the key's executed code: {p}" for p in
+                 executed_code_problems(repo, key["release_commit"], key["executed_code"])]
     if header.get("World") != world or world not in key["worlds"]:
         problems.append(f"the triage file is of {header.get('World')!r}, not {world!r} of "
                         f"the rendered worlds {key['worlds']}")

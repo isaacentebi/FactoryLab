@@ -265,7 +265,11 @@ The tool defends against inconsistency, stale artifacts and operator error:
   this protocol's reviewer text, AGENTS.md's rules, the allowlist, the world files the
   family check reads, and `last_release`. The corpus is rendered from the worktree,
   which the render pins to the release (HEAD is the release, no seat-visible path is
-  dirty); the essay is never committed and is bound by its sha256 in the key.
+  dirty); the essay is never committed and is bound by its sha256 in the key. The
+  code that rendered the corpus is the release's too: after rendering, every module of
+  the repository that ran (read from the process's loaded modules, never a list) must
+  be committed and unmodified at the release commit; the key records their paths and
+  hashes, and the gate re-verifies them against that commit.
 - **Recomputed.** Derived values are recomputed from bound sources, never stored and
   trusted: the gate recomputes the verdict and every finding from the samples; nothing
   beside a triage file is authoritative.
