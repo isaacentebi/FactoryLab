@@ -1275,14 +1275,19 @@ def th3_governance_gap(events: list[Mapping], manifest: Mapping) -> Result:
     * every activation instant is a boundary instant, and distinct activation instants
       stand ``min_ratio`` × the later one's slowest period apart;
     * no activation is earlier than its own anchor.
+
+    Without a boundary row the result is ``unsupported``: activations alone cannot show
+    they stand at boundaries.
     """
     ph = physics(manifest)
     boundaries = rows_of(events, "charter.boundary")
     cadence = rows_of(events, "charter.cadence")
     instants = sorted({row["activation_ns"] for row in cadence})
-    if not boundaries and len(instants) < 2:
-        return _unsupported("TH-3", "no governance boundary and fewer than two activation "
-                            "instants", activations=len(cadence))
+    if not boundaries:
+        # (B): the gap is read at boundaries; activations alone cannot show that each
+        # stands at one, so without boundary rows there is no evidence either way.
+        return _unsupported("TH-3", "no governance boundary", activations=len(cadence),
+                            instants=len(instants))
     bad = []
     for row in boundaries:
         gap = row["boundary_ns"] - row["previous_ns"]
@@ -1292,7 +1297,7 @@ def th3_governance_gap(events: list[Mapping], manifest: Mapping) -> Result:
     at_boundary = {row["boundary_ns"] for row in boundaries}
     slowest = {row["activation_ns"]: row["slowest_period_ns"] for row in cadence}
     for row in cadence:
-        if boundaries and row["activation_ns"] not in at_boundary:
+        if row["activation_ns"] not in at_boundary:
             bad.append({"activation_ns": row["activation_ns"], "not_at_a_boundary": True})
         if row["activation_ns"] < row["previous_activation_ns"]:
             bad.append({"activation_ns": row["activation_ns"], "before_its_anchor": True})

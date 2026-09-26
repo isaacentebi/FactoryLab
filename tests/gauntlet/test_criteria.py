@@ -690,6 +690,10 @@ def test_th3_boundaries_and_activations_respect_the_cascade_ratio():
     off_boundary = [_boundary(30, 0), _cadence(30), _cadence(45)]
     assert g.th3_governance_gap(off_boundary, M).status == g.FAIL
     assert g.th3_governance_gap([_cadence(30)], M).status == g.UNSUPPORTED
+    # Codex P2: cadence rows alone, however many, carry no boundary evidence.
+    spaced = [_cadence(30), _cadence(60), _cadence(90)]
+    assert g.th3_governance_gap(spaced, M).status == g.UNSUPPORTED
+    assert g.th3_governance_gap([_cadence(30), _cadence(31)], M).status == g.UNSUPPORTED
 
 
 def test_th3_reads_the_kernels_own_cadence_rows():
