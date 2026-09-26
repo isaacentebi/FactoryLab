@@ -920,7 +920,9 @@ class TapeVenue(FakeExchange):
             # advance that emits it may have passed.
             events.append(WorldEvent(WorldEventKind.FUNDING, self._now_ns, self.name,
                                      {"coin": coin, "rate": str(rate), "paid_usd": str(paid),
-                                      "funding_ns": instant}))
+                                      "funding_ns": instant,
+                                      # The price the payment is on (size * it * rate).
+                                      "mark": str(mark_row[1])}))
         return events
 
     def settle_accrued_funding(self, ts_ns: int) -> list[WorldEvent]:

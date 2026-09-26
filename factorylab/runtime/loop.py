@@ -393,7 +393,7 @@ class Runtime(
             # it (a tape reports a crossed boundary at its advance time).
             self._observe_funding(str(ev.payload.get("coin")),
                                   funding_instant(ev.payload, ev.ts_ns),
-                                  str(ev.payload.get("rate")))
+                                  str(ev.payload.get("rate")), ev.payload.get("mark"))
 
         # Due tranches are mandatory even while dormant; each released tranche is then
         # classified (C10): base_share across live seats, the remainder unallocated.

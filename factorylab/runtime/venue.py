@@ -760,7 +760,7 @@ class VenueMixin:
                         and we.payload.get("rate") is not None):
                     self._observe_funding(str(we.payload["coin"]),
                                           funding_instant(we.payload, we.ts_ns),
-                                          str(we.payload["rate"]))
+                                          str(we.payload["rate"]), we.payload.get("mark"))
         for we in evs:
             if id(we) in refused:
                 self.internal.append(self._kernel_event(we))

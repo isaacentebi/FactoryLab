@@ -728,7 +728,9 @@ def test_a_tape_advance_past_an_hour_boundary_grades_both_roads_at_that_boundary
     start = BOUNDARY - 30 * S
     venue.advance(start)
     rt._observe_funding("BTC", start - 10 * S, old)  # the rate in force at the decision
-    producer, _judge = _named_hold(rt, start)
+    # Named at the tape's own mid, so its payment's price and the lot's are one tape.
+    m0 = tape.mid_at("BTC", start)[1]
+    producer, _judge = _named_hold(rt, start, str(m0))
     lot = _open_long(rt, "BTC", "100")
     venue._positions["BTC"] = Position("BTC", Decimal("0.001"), Decimal("100"))
     reported = BOUNDARY + 20 * S  # the tick that advances past the boundary
@@ -748,7 +750,11 @@ def test_a_tape_advance_past_an_hour_boundary_grades_both_roads_at_that_boundary
     rt._settle_evaluations()
     (priced,) = _rows(rt, "consequence.opportunity", handle=producer)
     assert priced["funding_payments"] == 1
-    assert Decimal(priced["funding_bps"]) == -Decimal(new) * 10_000  # the buy pays 9 bp
+    # The buy pays 9 bp on the notional at the boundary, at the price the tape states
+    # its payment used (D7): the acting lot's very payment, per unit of notional.
+    mark = tape.mid_at("BTC", BOUNDARY)[1]
+    assert Decimal(priced["funding_bps"]) == (-Decimal(new) * mark / m0 * 10_000).quantize(
+        Decimal("0.0001"))
     payoff = rt.consequences.payoff(lot)  # the boundary is inside the lot's H
     assert payoff is not None and payoff.censored is None
     # The lot bore that very payment: its size times the tape's mark at the boundary

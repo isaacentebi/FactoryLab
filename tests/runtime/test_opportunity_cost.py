@@ -89,21 +89,24 @@ def test_a_funding_payment_inside_the_window_flips_y_where_its_term_crosses_zero
     a winner."""
     path = _price(side, "12")
     assert opportunity_cost(*path, TAKER, TAKER, side)["score"] == 0.0
-    assert opportunity_cost(*path, TAKER, TAKER, side, [rate])["score"] == 0.0
-    doubled = opportunity_cost(*path, TAKER, TAKER, side, [rate, rate])
+    # Each payment on the notional at its funding time, here the entry's own price.
+    at = (rate, "10000")
+    assert opportunity_cost(*path, TAKER, TAKER, side, [at])["score"] == 0.0
+    doubled = opportunity_cost(*path, TAKER, TAKER, side, [at, at])
     assert doubled["score"] == (1.0 if flips else 0.0)
     assert doubled["funding_payments"] == 2
     # The rate term alone decides the flip: at a net of exactly zero declining is right.
     sign = 1 if side is BUY else -1
     zero = sign * (Decimal("12") - _round_trip(side, "12")) / 10_000
-    exact = opportunity_cost(*path, TAKER, TAKER, side, [str(zero)])
+    exact = opportunity_cost(*path, TAKER, TAKER, side, [(str(zero), "10000")])
     assert Decimal(exact["net_bps"]) == 0 and exact["score"] == 1.0
 
 
 def test_no_hold_y_is_ever_outside_zero_and_one():
     for bps in ("-500", "-9", "-0.5", "0", "0.5", "8.9", "9", "9.1", "500"):
         for side in (BUY, SELL):
-            for rates in ((), ["0.0001"], ["-0.0003", "0.0001"]):
+            for rates in ((), [("0.0001", "9990")],
+                          [("-0.0003", "10000"), ("0.0001", "10020")]):
                 for priced in (opportunity_cost(*_price(side, bps), TAKER, TAKER, side, rates),
                                attempted_cost(*_price(side, bps), TAKER, TAKER, side, rates)):
                     assert priced["score"] in (0.0, 1.0)
@@ -204,10 +207,12 @@ def test_a_listing_that_states_no_rate_prices_nothing():
 # --- D7: the road not taken nets exactly what the same acting lot nets -----------------
 
 
-def _acting_net_micro(side, before, after, size, entry_rate, exit_rate):
+def _acting_net_micro(side, before, after, size, entry_rate, exit_rate, funding=()):
     """The net micro-USD of an acting lot opened at ``before`` (paying the entry leg on
-    its fill notional) and marked at ``after`` at the horizon (the exit leg on the mark's
-    notional, ``LotTable.resolve``), at the same instants and size."""
+    its fill notional), paying each venue funding payment ``(rate, price)`` as the venue
+    charges it (the signed position size times the price times the rate,
+    ``FakeExchange._apply_funding``), and marked at ``after`` at the horizon (the exit
+    leg on the mark's notional, ``LotTable.resolve``), at the same instants and size."""
     from factorylab.settlement.lots import LotTable
 
     fee = Decimal(entry_rate) * Decimal(before) * Decimal(size)
@@ -215,16 +220,19 @@ def _acting_net_micro(side, before, after, size, entry_rate, exit_rate):
         "1", "acting", size)
     table = table.fill(order_id="1", coin="BTC", is_buy=side is BUY, size=size, px=before,
                        fee_usd=str(fee))
+    signed = Decimal(size) if side is BUY else -Decimal(size)
+    for rate, price in funding:
+        table = table.funding("BTC", str(signed * Decimal(price) * Decimal(rate)))
     table = table.resolve(2, 20, {"BTC": after}, now_ns=1_060, horizon_ns=60,
                           exit_rates={"perp": exit_rate})
     return table.account("acting").payoff.net_micro
 
 
-def _counterfactual_micro(side, before, after, size, entry_rate, exit_rate):
+def _counterfactual_micro(side, before, after, size, entry_rate, exit_rate, funding=()):
     """The named trade's exact net, in micro-USD of the same size."""
     from factorylab.runtime.grounded import _net
 
-    priced = _net([("BTC", before)], [("BTC", after)], entry_rate, exit_rate, side, ())
+    priced = _net([("BTC", before)], [("BTC", after)], entry_rate, exit_rate, side, funding)
     return priced["_net"] / 10_000 * Decimal(before) * Decimal(size) * 1_000_000
 
 
@@ -243,9 +251,10 @@ def test_codex_case_a_move_that_beats_the_entry_notional_round_trip_is_still_a_l
 
 
 def test_the_counterfactual_net_is_the_acting_lots_net_to_the_micro_usd():
-    """D7 as a property: over random entry and exit mids, sizes, sides and fee rates on
-    each leg, the named trade's net equals the net of an acting lot opened and marked at
-    the same instants and size, to the micro-USD (the lot's outcome is whole micro-USD,
+    """D7 as a property: over random entry and exit mids, sizes, sides, fee rates on each
+    leg and funding prints (a rate and the price moved to at each funding time), the
+    named trade's net equals the net of an acting lot opened, funded and marked at the
+    same instants and size, to the micro-USD (the lot's outcome is whole micro-USD,
     rounded down)."""
     import random
 
@@ -257,7 +266,13 @@ def test_the_counterfactual_net_is_the_acting_lots_net_to_the_micro_usd():
             Decimal("0.0001"))
         size = str(Decimal(rng.randint(1, 100_000)) / 1_000)
         entry, exit_ = (str(Decimal(rng.randint(0, 100)) / 10_000) for _ in range(2))
+        funding = [(str(Decimal(rng.randint(-300, 300)) / 1_000_000),
+                    str((before * Decimal(rng.randint(8_000, 12_000)) / 10_000).quantize(
+                        Decimal("0.0001"))))
+                   for _ in range(rng.randint(0, 4))]
         counterfactual = _counterfactual_micro(side, str(before), str(after), size, entry,
-                                               exit_)
-        acting = _acting_net_micro(side, str(before), str(after), size, entry, exit_)
-        assert 0 <= counterfactual - acting < 1, (side, before, after, size, entry, exit_)
+                                               exit_, funding)
+        acting = _acting_net_micro(side, str(before), str(after), size, entry, exit_,
+                                   funding)
+        assert 0 <= counterfactual - acting < 1, (side, before, after, size, entry, exit_,
+                                                  funding)

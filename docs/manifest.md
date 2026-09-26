@@ -501,10 +501,15 @@ consequence mix and ledgers `sampling.blind` (published in
   element), `f1` its latest successful read at or before `H` (ruling R10-i). That is
   the round trip an acting lot opened and marked at the same instants pays (D7). A
   leg with no rate read by its instant fixes the outcome as uninformative
-  (`consequence.uninformative`, reason `fee_unknown`). Less `s * sum(rho) * 10^4` for
-  the venue's funding rate `rho` in force at each
-  of its funding times after `m0` and at or before `H` (ruling R10-m; perps only; longs pay a positive rate;
-  the rate at a funding time is the venue's latest print at or before it); `y = 1`
+  (`consequence.uninformative`, reason `fee_unknown`). Less `s * sum(rho_i * m_i) / m0
+  * 10^4` for the venue's funding rate `rho_i` in force at its `i`-th funding time
+  after `m0` and at or before `H` (ruling R10-m; perps only; longs pay a positive rate;
+  the rate at a funding time is the venue's latest print at or before it), each paid on
+  the notional at that funding time (D7): `m_i` is the price the venue states its
+  payment used (the fake venue and a recorded tape state it on the funding event as
+  `mark`), else the coin's first venue mid at or after the funding time. The recorded
+  prices are kept with the frozen trade, at most one per funding time of its own
+  window; `y = 1`
   when `net <= 0` (declining was right in money), else `0`. The taker
   rate is read from the venue's own listing (`instruments`, `taker_fee_rate`) at the
   first broadcast and once per `timing.world_repricing`, and ledgered as

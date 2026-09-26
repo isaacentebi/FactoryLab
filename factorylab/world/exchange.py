@@ -830,7 +830,9 @@ class FakeExchange:
                     # The hour boundary this payment is for, which the advance that
                     # applies it may have passed.
                     {"coin": coin, "rate": str(self.funding_rate), "paid_usd": str(paid),
-                     "funding_ns": self._last_funding_ns},
+                     "funding_ns": self._last_funding_ns,
+                     # The price the payment is on: size times this times the rate.
+                     "mark": str(self._mids[coin])},
                 )
             )
         return events

@@ -22,6 +22,7 @@ from factorylab.runtime.grounded import (
     attempted_trade,
     declined_trade,
     funding_due,
+    funding_mark,
     latest_mids,
     opportunity_cost,
 )
@@ -1439,6 +1440,10 @@ class FeedbackMixin:
                 if ts_ns <= self._frozen_lapse_ns(frozen):
                     self._open_named_trade(frozen, int(ts_ns), str(mid))
                 continue
+            # The price of each funding time it has passed that the venue's print states
+            # none for: the first mid at or after it (wave 16, D7).
+            funding_mark(frozen.get("funding"), frozen.get("open_ns"), frozen.get("due_ns"),
+                         int(ts_ns), str(mid))
             if (frozen.get("res") is None and frozen.get("due_ns") is not None
                     and frozen["due_ns"] <= ts_ns <= self._frozen_lapse_ns(frozen)):
                 frozen["res"] = [int(ts_ns), str(mid)]
@@ -1481,13 +1486,16 @@ class FeedbackMixin:
             # The funding times already assigned since the decision stay assigned (the
             # cursor keeps counting); only those after t_open are the trade's.
             funding["rates"] = [row for row in funding["rates"] if row[0] > ts_ns]
+            funding["marks"] = [row for row in funding.get("marks") or [] if row[0] > ts_ns]
 
-    def _observe_funding(self, coin: str, ts_ns: int, rate: str) -> None:
+    def _observe_funding(self, coin: str, ts_ns: int, rate: str,
+                         mark: str | None = None) -> None:
         """One venue funding-rate print: the rate in force at each funding time it passes.
 
         Guarantees every open named trade on ``coin`` assigns the funding times this
         print passes (``grounded.advance_funding``), until its measuring mid's time is
-        covered, and that the latest print is kept for trades named later.
+        covered, with ``mark``, the price the venue states its payment at ``ts_ns`` used
+        (wave 16, D7), and that the latest print is kept for trades named later.
         """
         for frozen in self.reference_mids.values():
             funding = frozen.get("funding")
@@ -1496,7 +1504,7 @@ class FeedbackMixin:
             res = frozen.get("res")
             if res is not None and funding["cursor"] >= res[0]:
                 continue
-            advance_funding(funding, int(ts_ns), str(rate))
+            advance_funding(funding, int(ts_ns), str(rate), mark)
         self.funding_prints[coin] = [int(ts_ns), str(rate)]
         self._saw_fact(int(ts_ns))
 
@@ -1814,7 +1822,10 @@ class FeedbackMixin:
             "funding": (None if interval is None else
                         {"interval": int(interval),
                          "cursor": self.clock.now_ns if open_ns is None else open_ns,
-                         "rate": latest[1] if latest is not None else None, "rates": []}),
+                         "rate": latest[1] if latest is not None else None, "rates": [],
+                         # The price each funding time's payment is on (D7): bounded by
+                         # the funding times of this trade's own window.
+                         "marks": []}),
             **({"attempted": attempted} if attempted else {})}
 
     def _score_verdict(self, rec: PendingJudgement, y: float, kind: str) -> None:

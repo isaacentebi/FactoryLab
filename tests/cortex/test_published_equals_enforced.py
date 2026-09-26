@@ -616,13 +616,15 @@ def test_the_published_learned_map_evaluates_to_what_every_learner_learns(raw, c
         eval(formula, {}, {"r": raw, "B": bound["seat"], "p": card, "c": 0.0}))
 
 
-@pytest.mark.parametrize("entry,exit_,rates", [("0.00045", "0.00035", ()),
-                                               ("0.00045", "0.00045", ("0.0001",)),
-                                               ("0", "0.0007", ("-0.0002", "0.0001"))])
+@pytest.mark.parametrize("entry,exit_,rates", [
+    ("0.00045", "0.00035", ()),
+    ("0.00045", "0.00045", (("0.0001", "100.2"),)),
+    ("0", "0.0007", (("-0.0002", "99.1"), ("0.0001", "101.7")))])
 def test_the_published_net_evaluates_to_what_the_road_not_taken_is_priced_at(entry, exit_,
                                                                             rates):
-    """D1, D7 fee legs and R10-m: the net published in world.scoring, evaluated with its
-    own named terms, is ``opportunity_cost``'s net for the same mids, legs and funding."""
+    """D1, D7 fee legs and funding, R10-m: the net published in world.scoring, evaluated
+    with its own named terms, is ``opportunity_cost``'s net for the same mids, legs and
+    funding (each payment's rate and the price it is on)."""
     from decimal import Decimal
 
     from factorylab.runtime.grounded import opportunity_cost
@@ -632,12 +634,15 @@ def test_the_published_net_evaluates_to_what_the_road_not_taken_is_priced_at(ent
     text = rt._scoring_block()["verdict_is_a_prediction"]
     formula = _formula(text, "net = ", " bp")
     assert "f0 + f1 * m1 / m0" in formula  # D7: the exit leg on the exit notional
+    assert "sum(rho_i * m_i) / m0" in formula  # D7: each payment on its own notional
+    paid = sum(float(rate) * float(mark) for rate, mark in rates)
+    formula = formula.replace("sum(rho_i * m_i)", "paid")
     for side, s in (("buy", 1), ("sell", -1)):
         priced = opportunity_cost([("BTC", "100")], [("BTC", "100.3")], entry, exit_,
                                   {"coin": "BTC", "side": side}, rates)
-        expected = eval(formula, {"sum": sum}, {
+        expected = eval(formula, {}, {
             "s": s, "m0": 100.0, "m1": 100.3, "f0": float(entry), "f1": float(exit_),
-            "rho": [float(r) for r in rates]})
+            "paid": paid})
         assert float(Decimal(priced["net_bps"])) == pytest.approx(expected, abs=1e-4)
     assert "at or before H" in text  # R10-m: funding stops at H, on both roads
 

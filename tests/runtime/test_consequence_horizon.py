@@ -15,7 +15,7 @@ from decimal import Decimal
 
 import pytest
 
-from factorylab.runtime.grounded import FUNDING_PENDING, advance_funding, funding_due
+from factorylab.runtime.grounded import FUNDING_PENDING, advance_funding, funding_due, funding_mark
 from factorylab.runtime.worlds import load_manifest, manifest_from_dict
 from factorylab.world.exchange import NS_PER_HOUR
 from tests.runtime.test_loop import _consequence_produce, _consequence_runtime
@@ -101,9 +101,11 @@ def test_a_funding_time_inside_the_window_is_charged_at_the_venues_rate():
     rt._observe_funding("BTC", boundary + 5 * S, "0.0001")  # printed after the boundary
     _walk(rt, start, 10, 90, lambda s: "100.1")
     (priced,) = _rows(rt, "consequence.opportunity", handle=producer)
-    assert priced["funding_payments"] == 1 and priced["funding_bps"] == "-4.0000"
-    # 10 bp - 3.5 bp - 3.5 * 100.1 / 100 bp - 4 bp (D7: the exit leg on the exit notional).
-    assert priced["net_bps"] == "-1.0035" and priced["score"] == 1.0
+    # D7: the payment is on the notional at the funding time, priced (no venue-stated
+    # price here) at the first mid at or after it, 100.1: 4 bp * 100.1 / 100.
+    assert priced["funding_payments"] == 1 and priced["funding_bps"] == "-4.0040"
+    # 10 bp - 3.5 bp - 3.5 * 100.1 / 100 bp - 4.004 bp (each on its own notional).
+    assert priced["net_bps"] == "-1.0075" and priced["score"] == 1.0
     assert rt.world_outcomes[producer]["y"] == 1.0
 
 
@@ -172,13 +174,42 @@ def test_a_mark_in_ticks_is_refused():
         manifest_from_dict(raw)
 
 
+def test_a_funding_time_s_price_is_checkpointed_and_bounded_by_the_trade_s_window():
+    """D7 (Codex on #152): the price a funding payment is on is the first venue mid at or
+    after its funding time (no venue-stated one here). It is kept with the frozen trade,
+    survives a checkpoint, and is kept only for the funding times of the trade's own
+    window, however long the world runs on."""
+    from factorylab.runtime.resume import restore_runtime, runtime_state
+
+    rt = _world(10)
+    boundary = 5 * NS_PER_HOUR
+    start = boundary - 30 * S
+    rt._observe_funding("BTC", start - 10 * S, "0.0004")
+    producer, _judge = _named_hold(rt, start)
+    frozen = rt.reference_mids[producer]
+    for step in (1, 2, 3, 4):  # the third is at the boundary itself
+        rt._observe_mid("BTC", start + step * 10 * S, str(100 + step))
+    assert frozen["funding"]["marks"] == [[boundary, "103", False, boundary]]
+    rt._observe_mid("BTC", start + 30 * NS_PER_HOUR, "200")  # far past its horizon
+    assert len(frozen["funding"]["marks"]) == 1
+    restored = _world(10)
+    restore_runtime(restored, runtime_state(rt))
+    assert restored.reference_mids[producer]["funding"]["marks"] == frozen["funding"]["marks"]
+
+
 def test_funding_times_take_the_rate_of_the_latest_print_at_or_before_them():
     state = {"interval": 100, "cursor": 50, "rate": "0.1", "rates": []}
     assert funding_due(state, 50, 250) == FUNDING_PENDING
     advance_funding(state, 170, "0.2")  # passes 100: the print before it, 0.1
     advance_funding(state, 200, "0.3")  # a print at 200 is the rate at 200
     assert state["rates"] == [[100, "0.1"], [200, "0.3"]]
-    assert funding_due(state, 50, 250) == ["0.1", "0.3"]
+    # Each funding time's payment is on a price: none seen yet, so still pending.
+    assert funding_due(state, 50, 250) == FUNDING_PENDING
+    funding_mark(state, 50, 250, 130, "101")  # the first mid at or after 100
+    funding_mark(state, 50, 250, 120, "99")  # an earlier one, arriving later, wins
+    advance_funding(state, 200, "0.3", "105")  # the venue states 200's price: it wins
+    funding_mark(state, 50, 250, 201, "107")
+    assert funding_due(state, 50, 250) == [("0.1", "99"), ("0.3", "105")]
     assert funding_due(state, 150, 199) == []
     assert funding_due(None, 50, 250) == []  # a spot pair pays no funding
     unread = {"interval": 100, "cursor": 50, "rate": None, "rates": []}

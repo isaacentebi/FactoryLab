@@ -106,19 +106,24 @@ def counterfactual_refusal(outputs: Mapping, listed: Iterable[str]) -> str | Non
 def _net(open_mids: Iterable[tuple[str, str]], due_mids: Iterable[tuple[str, str]],
          entry_rate: Decimal | str | None, exit_rate: Decimal | str | None,
          named: Mapping[str, str] | None,
-         funding_rates: Iterable[Decimal | str]) -> dict[str, Any] | None:
+         funding: Iterable[tuple[Decimal | str, Decimal | str]]) -> dict[str, Any] | None:
     """The named trade's move over the horizon, net of the venue's round trip and funding.
 
     Guarantees ``net_bps = s * (due - open) / open * 10^4 - (entry_rate + exit_rate *
-    due / open) * 10^4 - s * sum(funding_rates) * 10^4`` in exact decimals, ``s`` = +1
-    for a buy and -1 for a sell (longs pay a positive funding rate), or None when no
-    trade is named, a price is missing or unusable, or either leg's taker rate was never
-    read (an unread rate is never a number). Each leg pays its own rate on its own
-    notional (wave 16, D7: the road not taken pays the round trip an acting lot opened
-    and marked at the same instants pays; Codex on #152): the entry leg on the entry
-    notional, the exit leg on the exit notional, as ``LotTable.resolve`` charges
-    ``mid * size * rate``, so in basis points of the entry notional the exit leg
-    scales by ``due / open``.
+    due / open) * 10^4 - s * sum(rho_i * m_i) / open * 10^4`` in exact decimals, ``s``
+    = +1 for a buy and -1 for a sell (longs pay a positive funding rate), ``funding``
+    the ``(rho_i, m_i)`` of each funding time in the window: its rate and the price the
+    payment is on. None when no trade is named, a price is missing or unusable, or a
+    rate or a funding price was never read (an unread number is never one).
+
+    Wave 16, D7 (Codex on #152): the road not taken is the same trade as an acting lot
+    opened and marked at the same instants and size, so it pays what that lot pays. The
+    entry leg is paid on the entry notional and the exit leg on the exit notional, as
+    ``LotTable.resolve`` charges ``mid * size * rate``, and each funding payment on
+    the notional at its funding time, ``size * m_i * rho_i``, as the venue charges it
+    (``FakeExchange._apply_funding``, ``TapeVenue._charge``). In basis points of the
+    entry notional the exit leg scales by ``due / open`` and payment i by ``m_i /
+    open``.
     """
     if named is None or entry_rate is None or exit_rate is None:
         return None
@@ -136,11 +141,11 @@ def _net(open_mids: Iterable[tuple[str, str]], due_mids: Iterable[tuple[str, str
     move = moves.get(named["coin"])
     try:
         legs = (Decimal(str(entry_rate)), Decimal(str(exit_rate)))
-        rates = [Decimal(str(r)) for r in funding_rates]
-    except (InvalidOperation, ValueError):
+        payments = [(Decimal(str(rate)), Decimal(str(mark))) for rate, mark in funding]
+    except (InvalidOperation, ValueError, TypeError):
         return None
     if (move is None or not all(leg.is_finite() and leg >= 0 for leg in legs)
-            or not all(r.is_finite() for r in rates)):
+            or not all(r.is_finite() and m.is_finite() and m > 0 for r, m in payments)):
         return None
     sign = 1 if named["side"] == "buy" else -1
     gross = sign * move
@@ -148,7 +153,9 @@ def _net(open_mids: Iterable[tuple[str, str]], due_mids: Iterable[tuple[str, str
     entry_fee = legs[0] * Decimal(10_000)
     exit_fee = legs[1] * ratios[named["coin"]] * Decimal(10_000)
     fee = entry_fee + exit_fee
-    funding = -sign * sum(rates, Decimal(0)) * Decimal(10_000)
+    # Each payment on the notional at its funding time: m_i / before of the entry's.
+    before = Decimal(opened[named["coin"]])
+    funding = -sign * sum((r * m for r, m in payments), Decimal(0)) / before * Decimal(10_000)
     net = gross - fee + funding
     return {"moves": [{"coin": c, "move_bps": str(m.quantize(Decimal("0.01")))}
                       for c, m in moves.items()],
@@ -157,44 +164,85 @@ def _net(open_mids: Iterable[tuple[str, str]], due_mids: Iterable[tuple[str, str
             "entry_fee_bps": str(entry_fee.normalize()),
             "exit_fee_bps": str(exit_fee.quantize(Decimal("0.0001")).normalize()),
             "funding_bps": str(funding.quantize(Decimal("0.0001"))),
-            "funding_payments": len(rates),
+            "funding_payments": len(payments),
             "net_bps": str(net.quantize(Decimal("0.0001"))),
             "_net": net}
 
 
-def advance_funding(state: dict, ts_ns: int, rate: str) -> None:
+def advance_funding(state: dict, ts_ns: int, rate: str, mark: str | None = None) -> None:
     """Assign the rate in force at every funding time a venue rate print has passed.
 
-    ``state`` is ``{"interval", "cursor", "rate", "rates"}``: the venue's funding
-    interval in nanoseconds, the time up to which funding times are assigned, the rate
-    of the latest print at or before it (None before any), and the ``[time, rate]``
-    pairs assigned so far. Guarantees every funding time ``t`` (a multiple of the
+    ``state`` is ``{"interval", "cursor", "rate", "rates", "marks"}``: the venue's
+    funding interval in nanoseconds, the time up to which funding times are assigned,
+    the rate of the latest print at or before it (None before any), the ``[time,
+    rate]`` pairs assigned so far, and the price each funding time's payment is on
+    (``funding_mark``). Guarantees every funding time ``t`` (a multiple of the
     interval) in ``(cursor, ts_ns]`` is assigned the rate of the latest print at or
     before ``t``: this print's own rate when ``t == ts_ns``, the previous one's
     otherwise (None when the world had read none: an unread rate is never a number).
+    ``mark`` is the price the venue states this print's payment used, at its own
+    funding time ``ts_ns``: it is that time's price, over any mid (D7).
     """
     interval = int(state["interval"])
     tau = (int(state["cursor"]) // interval + 1) * interval
     while tau <= ts_ns:
         state["rates"].append([tau, str(rate) if tau == ts_ns else state["rate"]])
         tau += interval
+    if mark is not None and ts_ns % interval == 0:
+        _set_mark(state, int(ts_ns), str(mark), int(ts_ns), stated=True)
     if ts_ns >= int(state["cursor"]):
         state["cursor"] = int(ts_ns)
         state["rate"] = str(rate)
+
+
+def _set_mark(state: dict, tau: int, mid: str, at_ns: int, *, stated: bool) -> None:
+    """Record the price funding time ``tau``'s payment is on: a venue-stated one always,
+    else the earliest venue mid at or after ``tau`` seen so far (fact time, so the
+    order facts arrive in never changes it)."""
+    marks = state.setdefault("marks", [])
+    for row in marks:
+        if row[0] == tau:
+            if stated or (not row[2] and at_ns < row[3]):
+                row[1:] = [mid, stated, at_ns]
+            return
+    marks.append([tau, mid, stated, at_ns])
+
+
+def funding_mark(state: dict | None, open_ns: int | None, due_ns: int | None, ts_ns: int,
+                 mid: str) -> None:
+    """A venue mid of the trade's coin at ``ts_ns``: the price of each of the trade's
+    funding times at or before it that the venue's print states none for.
+
+    Wave 16, D7 (Codex on #152): a funding payment is on the notional at its funding
+    time. Where the venue states the price its payment used (``advance_funding``'s
+    ``mark``), that price; else the first venue mid at or after the funding time, as
+    the horizon's mark is the first mid at or after H (D2). Guarantees marks only for
+    the funding times in ``(open_ns, due_ns]``: at most one per funding time of the
+    trade's own window, so what a trade keeps is bounded by its lifetime.
+    """
+    if state is None or open_ns is None or due_ns is None:
+        return
+    interval = int(state["interval"])
+    tau = (int(open_ns) // interval + 1) * interval
+    while tau <= min(int(due_ns), int(ts_ns)):
+        _set_mark(state, tau, str(mid), int(ts_ns), stated=False)
+        tau += interval
 
 
 #: A named trade's funding times not yet all assigned a rate (``funding_due``).
 FUNDING_PENDING = "funding-pending"
 
 
-def funding_due(state: dict | None, open_ns: int, due_ns: int) -> list[str] | str | None:
-    """The rates the named side would have paid at the venue's funding times in
-    ``(open_ns, due_ns]``, in order.
+def funding_due(state: dict | None, open_ns: int, due_ns: int
+                ) -> list[tuple[str, str]] | str | None:
+    """The ``(rate, price)`` of each venue funding time in ``(open_ns, due_ns]`` the
+    named side would have paid at, in order.
 
     Guarantees ``[]`` for a coin with no funding (``state`` None: a spot pair) or no
     funding time in the window, ``FUNDING_PENDING`` while a funding time in the window
-    has not yet been passed by a rate print, and None when one was passed with no
-    rate read before it (an unread rate is never a number).
+    has not yet been passed by a rate print or has no price yet (``funding_mark``), and
+    None when one was passed with no rate read before it (an unread rate is never a
+    number).
     """
     if state is None:
         return []
@@ -202,8 +250,13 @@ def funding_due(state: dict | None, open_ns: int, due_ns: int) -> list[str] | st
     last = (due_ns // interval) * interval
     if last > open_ns and last > int(state["cursor"]):
         return FUNDING_PENDING
-    rates = [rate for tau, rate in state["rates"] if open_ns < tau <= due_ns]
-    return None if any(rate is None for rate in rates) else rates
+    rates = [(tau, rate) for tau, rate in state["rates"] if open_ns < tau <= due_ns]
+    if any(rate is None for _tau, rate in rates):
+        return None
+    marks = {row[0]: row[1] for row in state.get("marks") or []}
+    if any(tau not in marks for tau, _rate in rates):
+        return FUNDING_PENDING
+    return [(rate, marks[tau]) for tau, rate in rates]
 
 
 def opportunity_cost(open_mids: Iterable[tuple[str, str]],
@@ -211,7 +264,8 @@ def opportunity_cost(open_mids: Iterable[tuple[str, str]],
                      entry_rate: Decimal | str | None,
                      exit_rate: Decimal | str | None,
                      declined: Mapping[str, str] | None,
-                     funding_rates: Iterable[Decimal | str] = ()) -> dict[str, Any] | None:
+                     funding: Iterable[tuple[Decimal | str, Decimal | str]] = ()
+                     ) -> dict[str, Any] | None:
     """Price the road not taken: the trade the decision itself said it declined.
 
     ``declined-trade-net-v1`` (wave 16, D1; ruling R2: "what the declined trade did,
@@ -221,13 +275,14 @@ def opportunity_cost(open_mids: Iterable[tuple[str, str]],
     ``net_bps`` from ``_net``: the gross move signed by the named side, less the
     venue's taker rate on each leg's own notional (``entry_rate`` in force at the
     decision, the ex-ante element, on the entry notional; ``exit_rate`` in force at the
-    horizon, on the exit notional), less the funding the named side
-    would have paid at the venue's funding times inside the horizon. Every term is a
+    horizon, on the exit notional), less the funding the named side would have paid at
+    the venue's funding times inside the horizon, each ``(rate, price)`` in ``funding``
+    paid on the notional at its funding time. Every term is a
     money fact the venue states; no scale is an architect's. Returns None when no trade
     is named, a price is missing or either leg's taker rate is unread: a bare hold has
     no world outcome.
     """
-    priced = _net(open_mids, due_mids, entry_rate, exit_rate, declined, funding_rates)
+    priced = _net(open_mids, due_mids, entry_rate, exit_rate, declined, funding)
     if priced is None:
         return None
     net = priced.pop("_net")
@@ -255,7 +310,8 @@ def attempted_cost(open_mids: Iterable[tuple[str, str]],
                    entry_rate: Decimal | str | None,
                    exit_rate: Decimal | str | None,
                    attempted: Mapping[str, str] | None,
-                   funding_rates: Iterable[Decimal | str] = ()) -> dict[str, Any] | None:
+                   funding: Iterable[tuple[Decimal | str, Decimal | str]] = ()
+                   ) -> dict[str, Any] | None:
     """Price the road a refused order tried to take: the trade it named, for its side.
 
     ``attempted-trade-net-v1`` (wave 16, D1). An answer order names its trade ex ante;
@@ -266,7 +322,7 @@ def attempted_cost(open_mids: Iterable[tuple[str, str]],
     (``net_bps > 0``) and ``y = 0`` otherwise. Returns None when no trade is named, a
     price is missing or either leg's taker rate is unread.
     """
-    priced = _net(open_mids, due_mids, entry_rate, exit_rate, attempted, funding_rates)
+    priced = _net(open_mids, due_mids, entry_rate, exit_rate, attempted, funding)
     if priced is None:
         return None
     net = priced.pop("_net")
