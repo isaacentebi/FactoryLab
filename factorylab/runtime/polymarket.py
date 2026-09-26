@@ -1188,7 +1188,8 @@ def _record(rt: Any, surface: PolymarketSurface, client_id: str,
         if result["status"] == "cancelled" and Decimal(str(result["filled_size"])) > 0:
             attributed = {**result, "status": "filled"}
         rt.consequences.order_result(intent["handle"], attributed,
-                                     {"size": str(intent["args"]["size"])}, rt.n)
+                                     {"size": str(intent["args"]["size"])}, rt.n,
+                                     coin=coin_of(intent["args"]["token_id"]))
     before = rt.consequences.table
     rt._replay_deferred(rt.consequences.order_acknowledged(client_id), before)
     return dict(result)

@@ -1438,11 +1438,14 @@ class WorldManifest:
         repricing = self.timing.world_repricing_ns
         if repricing is not None and (type(repricing) is not int or repricing <= 0):
             raise ValueError("timing.world_repricing must be a positive duration")
-        if repricing is None and (self.exchange.coins or self.exchange.spot_pairs):
-            # Wave 16, D2: a world that lists a venue grades its judges at
-            # world_repricing / min_ratio, so it must state the venue's repricing period.
+        if repricing is None and (self.exchange.coins or self.exchange.spot_pairs
+                                  or self.polymarket.enabled):
+            # Wave 16, D2: a world with any trading venue (Hyperliquid perps or spot, or
+            # Polymarket; Codex on #152) grades its consequences at world_repricing /
+            # min_ratio, so it must state the venue's repricing period.
             raise ValueError("timing.world_repricing is required in a world that lists a "
-                             "venue: the consequence horizon is world_repricing / min_ratio")
+                             "venue (exchange coins, spot pairs or polymarket): the "
+                             "consequence horizon is world_repricing / min_ratio")
         maximum = self.max_tick_ns
         if (type(self.tick_interval_ns) is not int
                 or self.tick_interval_ns < self.clock.min_tick_ns

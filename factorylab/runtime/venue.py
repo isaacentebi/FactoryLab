@@ -363,6 +363,10 @@ class VenueMixin:
         surface = getattr(self, "polymarket", None)
         if surface is None:
             return None
+        if stream == "pm:events" and not surface.writes:
+            # A read-only surface places no order and holds no position: it has no
+            # events feed for anything to wait on (Codex on #152).
+            return None
         key = "events" if stream == "pm:events" else stream.removeprefix("pm:book:")
         read = (getattr(surface, "through", None) or {}).get(key)
         if read is None:

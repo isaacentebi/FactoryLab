@@ -11,6 +11,8 @@ from factorylab.settlement.lots import (
     RELEASED_ORDER,
     LotTable,
     Payoff,
+    fill_stream,
+    instrument_market,
     instrument_streams,
 )
 from factorylab.settlement.receipts import ExecutionReceipt, ReceiptBook
@@ -233,8 +235,13 @@ class ReturnConsequences:
             return False
         return account.payoff is None and not account.voided
 
-    def order_result(self, handle: str, result: dict, args: dict, event: int) -> None:
-        """Attribute accepted market, limit and close orders before processing their fills."""
+    def order_result(self, handle: str, result: dict, args: dict, event: int, *,
+                     coin: str | None = None) -> None:
+        """Attribute accepted market, limit and close orders before processing their fills.
+
+        ``coin`` (else the order's ``args["coin"]``) is the instrument it was placed on,
+        kept with the order: a resting order waits on its own venue's fill stream only.
+        """
         if result.get("status") not in ("filled", "resting") or result.get("order_id") is None:
             return
         size = args.get("size") if result["status"] == "resting" else result.get("filled_size")
@@ -250,10 +257,13 @@ class ReturnConsequences:
                                 "order_id": oid, "reason": reason})
             self._execution("refusal", handle, event, {"order_id": oid, "reason": reason})
             return
+        coin = coin if coin is not None else args.get("coin")
         self._apply(
             "order",
-            {"handle": handle, "order_id": oid, "size": str(size), "event": event},
-            self.table.order(oid, handle, str(size)),
+            {"handle": handle, "order_id": oid, "size": str(size), "event": event,
+             **({"coin": str(coin)} if coin is not None else {})},
+            self.table.order(oid, handle, str(size),
+                             coin=None if coin is None else str(coin)),
         )
 
     def _unresolved_handles(self) -> set[str]:
@@ -443,9 +453,18 @@ class ReturnConsequences:
         """
         held = self._instruments_of(handle)
         streams = {s for coin, market in held for s in instrument_streams(coin, market)}
-        if any(o.handle == handle and o.remaining for o in self.table.orders):
-            # A resting order can fill on any venue's feed.
-            streams |= {"hl:fills", "pm:events"}
+        for order in self.table.orders:
+            if order.handle != handle or not order.remaining:
+                continue
+            if order.coin is not None:
+                # A resting order fills on its own venue's feed only (Codex on #152).
+                streams.add(fill_stream(instrument_market(order.coin)))
+            else:
+                # An order bound before instruments were recorded: the venues of the
+                # instruments its return holds, else every venue's feed.
+                held_markets = {market for _coin, market in held}
+                streams |= ({fill_stream(m) for m in held_markets} if held_markets
+                            else {"hl:fills", "pm:events"})
         stated = [self._stream_watermark(s) for s in sorted(streams)]
         marks = [m for m in stated if m is not None]
         if marks and len(marks) == len(stated):

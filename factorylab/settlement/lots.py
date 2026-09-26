@@ -132,6 +132,9 @@ class LotOrder:
     # the order is terminal (filled, cancelled or rejected), or None while the venue
     # has not said so. Only a venue-confirmed terminal order can no longer fill.
     confirmed: Fraction | None = None
+    # The instrument the order was placed on (Codex on #152): which venue's fill stream
+    # it can fill on. None for an order bound before instruments were recorded.
+    coin: str | None = None
 
 
 #: The per-account counts ``released`` keeps for accounts no longer in ``returns``.
@@ -168,6 +171,12 @@ def instrument_market(coin: str) -> str:
     if coin.startswith("PM:"):
         return "event"
     return "spot" if "/" in coin else "perp"
+
+
+def fill_stream(market: str) -> str:
+    """The stream an order on ``market`` fills on: Polymarket's events for an event
+    token, Hyperliquid's fills otherwise."""
+    return "pm:events" if market == "event" else "hl:fills"
 
 
 def instrument_streams(coin: str, market: str, *, acting: bool = True) -> tuple[str, ...]:
@@ -356,7 +365,8 @@ class LotTable:
         except KeyError:
             raise KeyError(handle) from None
 
-    def order(self, order_id: str, handle: str, size: str) -> "LotTable":
+    def order(self, order_id: str, handle: str, size: str, *,
+              coin: str | None = None) -> "LotTable":
         """Bind an accepted order to its calling return; ownership cannot be replaced."""
         _require_id(order_id)
         _require_id(handle)
@@ -368,7 +378,8 @@ class LotTable:
             raise ValueError("order already attributed")
         if not any(r.handle == handle for r in self.returns):
             raise ValueError("order requires an open consequence account")
-        return replace(self, orders=(*self.orders, LotOrder(order_id, handle, quantity, quantity)))
+        return replace(self, orders=(*self.orders, LotOrder(order_id, handle, quantity, quantity,
+                                                            coin=coin)))
 
     def cancel(self, order_id: str) -> "LotTable":
         """Clear unfilled liability without deleting the order's historical ownership."""

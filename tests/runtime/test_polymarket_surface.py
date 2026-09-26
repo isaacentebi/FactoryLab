@@ -996,6 +996,29 @@ def test_a_failed_polymarket_book_read_holds_the_event_lot_never_no_mark():
     assert payoff is not None and payoff.marked and payoff.censored is None
 
 
+@pytest.mark.parametrize("recorded", [True, False])
+def test_a_resting_hyperliquid_order_waits_on_hyperliquid_fills_alone(recorded):
+    """Codex on #152 (e428108): Polymarket enabled read-only never reads an events feed.
+    A resting Hyperliquid order waits only on its own venue's fills, so its return
+    resolves (no fill by H) on hl:fills alone; an order bound before instruments were
+    recorded does too, since a read-only surface has no events feed to wait on."""
+    rt = world(venue="live")
+    assert not rt.polymarket.writes
+    handle = collateral_decision(rt)
+    rt.consequences.order_result(handle, {"status": "resting", "order_id": "hl-rest",
+                                          "filled_size": "0"},
+                                 {"size": "0.001", **({"coin": "BTC"} if recorded else {})},
+                                 rt.n)
+    rt.consequences.finish(handle, 0)
+    [order] = [o for o in rt.consequences.table.orders if o.order_id == "hl-rest"]
+    assert order.coin == ("BTC" if recorded else None)
+    rt.clock.now_ns += rt._horizon_ns() + 10**9
+    rt.tick_through_ns = rt.consequences.tick_through_ns = rt.clock.now_ns
+    rt.consequences.resolve(rt.n)
+    payoff = rt.consequences.payoff(handle)
+    assert payoff is not None and payoff.net_micro == 0 and not payoff.marked
+
+
 def test_an_empty_polymarket_book_is_read_and_its_lot_reaches_patience():
     """Codex on #152 (7677eaa): a book read that succeeds but states no midpoint (an
     empty or one-sided book) is the token's book stream read through its instant; it

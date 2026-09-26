@@ -143,6 +143,23 @@ def test_a_world_that_lists_a_venue_must_state_its_repricing_period():
     assert manifest.max_tick_ns == manifest.consequence_horizon_ns // 3
 
 
+def test_a_world_whose_only_venue_is_polymarket_must_state_its_repricing_period():
+    """Codex on #152: any enabled trading venue fixes consequences at its horizon, so a
+    world with Polymarket alone (no coin, no spot pair) states world_repricing too;
+    without it the event lots would fall back to tick scheduling."""
+    from tests.runtime.test_manifests import _base
+
+    raw = _base()
+    raw.pop("timing")
+    raw["exchange"] = {"kind": "fake", "coins": [], "spot_pairs": []}
+    manifest_from_dict(raw)  # no venue at all: no horizon needed
+    raw["polymarket"] = {"enabled": True}
+    with pytest.raises(ValueError, match="world_repricing is required.*polymarket"):
+        manifest_from_dict(raw)
+    raw["timing"] = {"world_repricing": "1h"}
+    assert manifest_from_dict(raw).consequence_horizon_ns == 20 * 60 * S
+
+
 def test_a_mark_in_ticks_is_refused():
     from tests.runtime.test_manifests import _base
 
