@@ -17,6 +17,11 @@ reached by a short run, so it is found here, statically, in the source:
 * **Sources.** On those paths: every ``raise``'s message and every error/reason value;
   anywhere: every sink's reason argument; and every string a *reason function* returns
   (a function whose result is placed in a seat position).
+* **Payloads.** Every literal a seat receives in a request or its inbox, whatever its
+  key: the arguments of every payload call (``PAYLOAD_CALLS``: a request's description,
+  inputs and schema; a continuation's inputs; an inbox outcome; a fact noted to the
+  owner), followed through dict values, list items, ``**`` spreads, local bindings and
+  what is added to them, and into the return values of every function called there.
 
 Calls are resolved as far as the source says: ``self.f`` within the runtime's mixins to
 every mixin's ``f``, ``self.f`` elsewhere to the class's own ``f``, a bare or imported
@@ -60,6 +65,21 @@ ROOTS = frozenset({
 })
 #: The keys of a dict whose value a seat reads as a reason.
 SEAT_KEYS = frozenset({"error", "reason"})
+#: Calls that hand a seat a payload, and where it goes: (positional indexes, keyword
+#: names), the receiver-less name as called. ``*`` for keywords means every keyword.
+#: A request's text and inputs (``_request``, ``Request``, a tool round's
+#: ``continuation``), a seat's inbox (``outcomes.append``'s ``outcome``, a fact
+#: addressed to the owner by ``_note_to_owner``).
+PAYLOAD_CALLS: dict[str, tuple[frozenset[int], frozenset[str]]] = {
+    "_request": (frozenset({1, 2, 3}), frozenset({"description", "inputs", "schema",
+                                                  "settlement"})),
+    "Request": (frozenset(), frozenset({"description", "inputs", "outcome_schema",
+                                        "completion_criterion"})),
+    "continuation": (frozenset(), frozenset({"inputs"})),
+    "_note_to_owner": (frozenset({2}), frozenset({"*"})),
+}
+#: A receiver whose ``append(owner, …, outcome=…)`` is a seat's inbox.
+INBOX_RECEIVERS = ("outcomes",)
 #: Receivers that name the runtime itself (``rt.f`` in a module the runtime calls).
 RUNTIME_NAMES = frozenset({"self", "rt", "runtime"})
 #: Method names never followed: containers, strings, builtins and the ledger's append.
@@ -616,7 +636,101 @@ class Scan:
                 for text in renderer.render(value):
                     if has_literal_text(text):
                         texts[(kind, key, text)] = SeatText(kind, key, text)
+        texts.update(self._payloads())
         return sorted(texts.values(), key=lambda t: (t.kind, t.source, t.text))
+
+    # --- payloads: every literal a seat receives in a request or its inbox --------------
+
+    def _payload_args(self, call: ast.Call) -> list[ast.AST]:
+        """The expressions a payload call hands a seat (``PAYLOAD_CALLS``, the inbox)."""
+        name = _call_name(call)
+        f = call.func
+        if name == "append" and isinstance(f, ast.Attribute) \
+                and any(r in ast.unparse(f.value) for r in INBOX_RECEIVERS) \
+                and not _is_ledger_row(call):
+            return [kw.value for kw in call.keywords if kw.arg == "outcome"]
+        if name not in PAYLOAD_CALLS:
+            return []
+        positions, keywords = PAYLOAD_CALLS[name]
+        out = [a for i, a in enumerate(call.args) if i in positions]
+        out += [kw.value for kw in call.keywords
+                if kw.arg is None or "*" in keywords or kw.arg in keywords]
+        return out
+
+    def _mutations(self, fn: _Fn, name: str) -> list[ast.AST]:
+        """What a function adds to a local container after binding it: ``name[k] = v``,
+        ``name.update(…)``, ``name.setdefault(k, v)``, ``name.append(v)``/``extend``."""
+        out: list[ast.AST] = []
+        for node in _own_nodes(fn.node):
+            if isinstance(node, ast.Assign):
+                for t in node.targets:
+                    if isinstance(t, ast.Subscript) and isinstance(t.value, ast.Name) \
+                            and t.value.id == name:
+                        out.append(node.value)
+            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                    and isinstance(node.func.value, ast.Name) and node.func.value.id == name \
+                    and node.func.attr in ("update", "setdefault", "append", "extend"):
+                out += list(node.args) + [kw.value for kw in node.keywords]
+        return out
+
+    def _payloads(self) -> dict[tuple[str, str, str], SeatText]:
+        """Every string a payload can carry: from every payload call's arguments, through
+        dict values (any key), list and tuple items, ``**`` spreads, both branches and
+        every operand, local bindings and what is added to them, and into the return
+        values of every function called there (a payload builder), each leaf rendered
+        by ``Renderer``."""
+        texts: dict[tuple[str, str, str], SeatText] = {}
+        work: list[tuple[str, ast.AST]] = []
+        for key, fn in self.fns.items():
+            for node in _own_nodes(fn.node):
+                if isinstance(node, ast.Call):
+                    work += [(key, arg) for arg in self._payload_args(node)]
+        seen: set[tuple[str, int]] = set()
+        builders: set[str] = set()
+        renderers: dict[str, Renderer] = {}
+        while work:
+            key, node = work.pop()
+            if (key, id(node)) in seen:
+                continue
+            seen.add((key, id(node)))
+            fn = self.fns[key]
+            if key not in renderers:
+                renderers[key] = Renderer(self, fn.module, local_bindings(fn.node))
+            if isinstance(node, ast.Dict):
+                work += [(key, v) for v in node.values if v is not None]
+                continue
+            if isinstance(node, ast.List | ast.Tuple | ast.Set):
+                work += [(key, e.value if isinstance(e, ast.Starred) else e)
+                         for e in node.elts]
+                continue
+            if isinstance(node, ast.IfExp):
+                work += [(key, node.body), (key, node.orelse)]
+                continue
+            if isinstance(node, ast.BoolOp):
+                work += [(key, v) for v in node.values]
+                continue
+            if isinstance(node, ast.DictComp | ast.ListComp | ast.GeneratorExp | ast.SetComp):
+                work += [(key, node.value if isinstance(node, ast.DictComp) else node.elt)]
+                continue
+            if isinstance(node, ast.Name):
+                bound = renderers[key].local.get(node.id, [])
+                work += [(key, v) for v in bound + self._mutations(fn, node.id)]
+            if isinstance(node, ast.Call):
+                name = _call_name(node)
+                if name in ("dict", "list", "tuple", "sorted", "deepcopy", "copy"):
+                    work += [(key, a) for a in node.args]
+                    work += [(key, kw.value) for kw in node.keywords]
+                elif name not in ("str", "repr", "len", "int", "float", "round"):
+                    for target in self.resolve(fn, node):
+                        if target not in builders:
+                            builders.add(target)
+                            work += [(target, r.value) for r in _own_nodes(self.fns[target].node)
+                                     if isinstance(r, ast.Return) and r.value is not None]
+            for text in renderers[key].render(node):
+                if has_literal_text(text):
+                    texts[("payload", key, text)] = SeatText("payload", key, text)
+        self.payload_builders = builders
+        return texts
 
     @property
     def sources(self) -> set[str]:

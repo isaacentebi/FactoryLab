@@ -285,7 +285,8 @@ def _finding(record, question, *, severity=None, **changes):
                "surface_kind": record["surface_kind"], "audience": record["audience"],
                "frequency": record["frequency"], "quote": quote, "question": question,
                "class": tool.CLASS_OF[question],
-               "severity": severity or tool.SEVERITY_OF[question][0], "passage": "§I.a",
+               "severity": severity or tool.required_severity(question, record["frequency"]),
+               "passage": "§I.a",
                "rationale": "It addresses the seat.", "rewrite": "delete", "confidence": 0.8}
     return finding | changes
 
@@ -934,3 +935,34 @@ def test_one_quote_under_two_questions_is_two_findings_through_triage_and_gate(
     rows_, summary = _output(out, key, sample=2, extra=[q3, q3])
     twice = _verdict(out, key, second=(rows_, summary))
     assert any("given twice" in p for p in twice["problems"])
+
+
+
+# --- severity is fixed by the question and the leaf's reach (Codex P2) ----------------------
+
+
+@pytest.mark.parametrize("question, frequency, severity", [
+    ("Q4", "every call", "HIGH"), ("Q3", "every judge request", "HIGH"),
+    ("Q5", "every wake (stable prefix) or on demand (world.read)", "HIGH"),
+    ("Q4", "on refusal", "MED"), ("Q5", "on that refusal or error", "MED"),
+    ("Q7", "every call", "MED"), ("Q9", "on refusal", "MED"),
+    ("Q6", "unknown", "MED"), ("Q11", "unknown", "LOW"), ("Q12", "unknown", "LOW"),
+])
+def test_the_severity_is_derived_from_question_and_reach(question, frequency, severity):
+    assert tool.required_severity(question, frequency) == severity
+
+
+def test_a_q3_to_q5_finding_on_an_every_call_leaf_below_high_is_invalid(rendered):
+    """Codex P2: a Q4 finding on a system prompt (every call) filed LOW or MED fails its
+    sample; on a refusal (on refusal) HIGH fails."""
+    out, key = rendered
+    records = {r["leaf_id"]: r for r in _records(out)}
+    system = next(r for r in records.values() if r["frequency"] == "every call"
+                  and r["provenance"] == "kernel" and r["text"].strip())
+    refusal = next(r for r in records.values() if r["frequency"] == "on refusal")
+    assert not tool.finding_problems(_finding(system, "Q4"), records)
+    for low in ("LOW", "MED"):
+        problems = tool.finding_problems(_finding(system, "Q4", severity=low), records)
+        assert any("is not 'HIGH'" in p for p in problems), problems
+    assert tool.finding_problems(_finding(refusal, "Q4", severity="HIGH"), records)
+    assert not tool.finding_problems(_finding(refusal, "Q4"), records)

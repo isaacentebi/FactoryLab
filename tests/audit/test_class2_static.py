@@ -395,3 +395,17 @@ def test_the_composition_refusal_the_first_branch_hid_is_in_the_corpus(seat):
     texts = {t.text for t in seat.texts
              if t.source == "factorylab/runtime/composition.py::CompositionMixin._draw_executor"}
     assert "no live contract other than the requester emits or accepts {kind}" in texts
+
+
+
+def test_every_literal_a_seat_receives_in_a_payload_is_in_the_corpus(seat):
+    """Codex P2: not only error and reason values: every literal placed into a request's
+    text or inputs, or a seat's inbox, whatever its key, through spreads, mutations and
+    the functions that build it. ``_action_policy``'s note reaches a seat under
+    ``your_action_policy``, spread into the request by ``_action_policy_input``."""
+    payloads = {(t.text, t.source) for t in seat.texts if t.kind == "payload"}
+    assert any(text.startswith("drawn by the kernel from your ")
+               and src == "factorylab/runtime/compute.py::ComputeMixin._action_policy"
+               for text, src in payloads)
+    # A value added after the dict was bound (payload["account"] = {...}) is read too.
+    assert ("unavailable", "factorylab/runtime/loop.py::Runtime._producer_step") in payloads

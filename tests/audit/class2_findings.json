@@ -1603,6 +1603,16 @@
    "status": "untriaged"
   },
   {
+   "id": "aaeb7fe01cb4",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "EVAL",
+   "path": "kernel/seat_text/payload/factorylab:runtime:shared::work_disclosure/27417b22",
+   "quote": "settles on how much worse the judges' verdicts on the return scored against its measured outcome than those judges score on other returns.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
    "id": "1048904b36ec",
    "world": "kernel",
    "surface": "static",
@@ -1739,6 +1749,246 @@
    "rule": "IMP",
    "path": "kernel/seat_text/exception/factorylab:world:exchange::HyperliquidExchange.account/10401d83",
    "quote": "account() needs an address or a private key",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "5d3b08fbd13f",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/payload/factorylab:cortex:schematics::SchematicsMixin._institutional_block/abf6ed2d",
+   "quote": "omit pay for free sources.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "fa538fa16cf9",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/payload/factorylab:cortex:schematics::SchematicsMixin._institutional_block/da5cd330",
+   "quote": "call the venue.instruments public read for the whole listing, and register a market proposal to trade one of them.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "9d472a2df1fe",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/payload/factorylab:cortex:schematics::SchematicsMixin._proposal_index/7eac696a",
+   "quote": "read input shapes and readiness with world.read {\"section\":\"work\"}",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "2177c2a929f7",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/payload/factorylab:cortex:schematics::SchematicsMixin._proposal_index/bad2ad7e",
+   "quote": "give one assembly a learner over an action set it declares",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "f46ed19a7981",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/payload/factorylab:runtime:compute::ComputeMixin._invoke/a1e7566e",
+   "quote": "return the final answer;",
+   "design_ref": "B1-5",
+   "status": "untriaged"
+  },
+  {
+   "id": "7793776e5f2d",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/payload/factorylab:runtime:continuity::OutcomeInbox.unread/3e3f5523",
+   "quote": "use outcome.get on an outcome_id to deliver one before acknowledging it",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "c5180df12475",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/payload/factorylab:runtime:governance::GovernanceMixin._hold_vote/10a3ab06",
+   "quote": "vote on an amendment to the charter's metric cards proposed by a metric challenge:",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "8c51e3c5aff4",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/payload/factorylab:runtime:governance::GovernanceMixin._hold_vote/30516586",
+   "quote": "vote on a connector registration.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "2947d8ba0f43",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/payload/factorylab:runtime:governance::GovernanceMixin._hold_vote/5d5d90db",
+   "quote": "vote on retiring the named assembly version.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "00a04872e659",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/payload/factorylab:runtime:governance::GovernanceMixin._hold_vote/70e333f2",
+   "quote": "vote on appending a holdout to a charter card:",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "8ad64a802b18",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/payload/factorylab:runtime:governance::GovernanceMixin._motion_description/4f59d886",
+   "quote": "vote on an amendment to the charter's metric cards.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "0af310cd8d7d",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/payload/factorylab:runtime:governance::GovernanceMixin._motion_description/62ec04c6",
+   "quote": "vote on a motion setting lambda on current charter cards.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "e8c341038742",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/payload/factorylab:runtime:governance::GovernanceMixin._motion_description/95fbf3e8",
+   "quote": "vote on a motion changing the world's tick interval.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "efc3df464f48",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/payload/factorylab:runtime:governance::GovernanceMixin._testify/83ec947f",
+   "quote": "testify on a norm edition.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "62d2a85d0821",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/payload/factorylab:runtime:loop::Runtime._counter_step/527c96c5",
+   "quote": "give your own verdict 0-1 on the return this verdict judged, against the charter.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "a2f46800a21d",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/payload/factorylab:runtime:loop::Runtime._evaluator_step/818d8b52",
+   "quote": "give verdict 0-1 on the public return addressed by about_handle (subject_handle by default) against the charter.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "2d7fdd856dc6",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/payload/factorylab:runtime:loop::Runtime._evaluator_step/d758578e",
+   "quote": "give verdict 0-1 on the return against the charter.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "61afa63908c5",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/payload/factorylab:runtime:loop::Runtime._meta_step/5d40ab7f",
+   "quote": "assess the public return addressed by about_handle for conformity with the charter.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "449c05f31b47",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/payload/factorylab:runtime:loop::Runtime._meta_step/abe481ba",
+   "quote": "assess the released representative verdict for conformity with the charter, using its window as context.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "d19d1056761a",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/payload/factorylab:runtime:loop::Runtime._producer_step/e559ba58",
+   "quote": "respond to event {ev.kind} on {ev.source}.",
+   "design_ref": "B1-4",
+   "status": "untriaged"
+  },
+  {
+   "id": "3de76063149f",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/payload/factorylab:runtime:shared::work_disclosure/346c9c5b",
+   "quote": "return verdict (0 to 1) on the return a verdict judged.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "5414d16e025d",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/payload/factorylab:runtime:shared::work_disclosure/6529e160",
+   "quote": "return forecasts:",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "7d890ebc0a1c",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/payload/factorylab:runtime:shared::work_disclosure/76f17907",
+   "quote": "return facts['fills'] > 0",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "e740153c8483",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/payload/factorylab:runtime:shared::work_disclosure/79b84750",
+   "quote": "return conformity (0 to 1) on the judged work.",
    "design_ref": null,
    "status": "untriaged"
   },

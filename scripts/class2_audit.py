@@ -705,11 +705,27 @@ SEVERITIES = ("HIGH", "MED", "LOW")
 CLASS_OF = {"Q3": "ANNOUNCED-PHYSICS", "Q4": "C1", "Q5": "C2", "Q6": "C1",
             "Q7": "FALSE-PHYSICS", "Q8": "C1", "Q9": "DISCLOSURE", "Q10": "C2",
             "Q11": "C2", "Q12": "NORM-OBJECTIVE"}
-#: The severities the rubric's severity rule admits for each question: HIGH only for
-#: Q3-Q5; Q6, Q8 and Q10 are MED; the rest MED or LOW.
-SEVERITY_OF = {**{q: SEVERITIES for q in ("Q3", "Q4", "Q5")},
-               **{q: ("MED",) for q in ("Q6", "Q8", "Q10")},
-               **{q: ("MED", "LOW") for q in ("Q7", "Q9", "Q11", "Q12")}}
+def reach(frequency: str) -> str:
+    """How far a leaf reaches, from its ``frequency`` tag (``describe``): ``every`` when
+    it is in every wake or call of its audience ("every …"), ``some`` when it reaches
+    some requests only ("on …": on demand, on refusal, on error), else ``none``."""
+    if frequency.startswith("every"):
+        return "every"
+    if frequency.startswith("on "):
+        return "some"
+    return "none"
+
+
+def required_severity(question: str, frequency: str) -> str:
+    """The rubric's severity, derived from the question and the leaf's reach together:
+    HIGH for Q3-Q5 on a leaf that reaches every wake; MED for Q6, Q8 and Q10, and for any
+    question on a leaf that reaches requests; LOW otherwise."""
+    where = reach(frequency)
+    if question in ("Q3", "Q4", "Q5") and where == "every":
+        return "HIGH"
+    if question in ("Q6", "Q8", "Q10") or where in ("every", "some"):
+        return "MED"
+    return "LOW"
 #: The questions a context leaf (a charter card or norm) may be flagged under.
 CONTEXT_QUESTIONS = frozenset({"Q10", "Q11", "Q12"})
 #: The provenance pass's one question, its class and its severity (AGENTS rule 2 at the
@@ -761,9 +777,10 @@ def finding_problems(f: dict, records: dict[str, dict]) -> list[str]:
     else:
         if f["class"] != CLASS_OF[question]:
             problems.append(f"class {f['class']!r} is not {question}'s {CLASS_OF[question]}")
-        if f["severity"] not in SEVERITY_OF[question]:
-            problems.append(f"severity {f['severity']!r} is not one {question} admits "
-                            f"{SEVERITY_OF[question]}")
+        wanted = required_severity(question, str(leaf.get("frequency", "")))
+        if f["severity"] != wanted:
+            problems.append(f"severity {f['severity']!r} is not {wanted!r}, what {question} "
+                            f"on a leaf read {leaf.get('frequency')!r} is")
         if leaf["provenance"] != "kernel" and question not in CONTEXT_QUESTIONS:
             problems.append(f"a context leaf flagged under {question}")
         if question == "Q12" and "norm" not in leaf["provenance"]:

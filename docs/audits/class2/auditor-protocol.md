@@ -74,7 +74,13 @@ therefore cannot recommend text that steers (AGENTS rule 2).
 | Q12 | For a norm (context only): does it name a predetermined end with a target, an instrumental objective posing as a value? | NORM-OBJECTIVE: reported to the norm house, not fixed in code |
 
 **Severity.** HIGH if the leaf reaches every wake of a role and is Q3, Q4 or Q5. MED if it
-reaches some requests, or is Q6, Q8 or Q10. LOW otherwise.
+reaches some requests, or is Q6, Q8 or Q10. LOW otherwise. A leaf's reach is its
+`frequency` tag: one that begins "every" (every call, every wake, every request of a form)
+reaches every wake; one that begins "on" (on demand, on refusal, on error) reaches some
+requests; any other reaches none. So the severity is fixed by the question and the leaf
+together, and a finding carrying any other severity is invalid: Q3-Q5 on an every-wake
+leaf is HIGH, Q3-Q5 on an on-demand leaf is MED, Q7 on an every-wake leaf is MED, and
+Q11 on a charter card (reach none) is LOW.
 
 ## Output format
 
