@@ -413,7 +413,8 @@ def test_runner_report_records_effective_manifest_and_uses_denied_market(monkeyp
         cap_micro=10_000,
         max_calls=2,
         provider=provider,
-        source_root="/Users/isaacentebi/Desktop/FactoryLab",
+        # The tree this test imports, wherever it is checked out: a worktree imports its own.
+        source_root=Path(rehearsal.__file__).resolve().parents[1],
         now_ns=lambda: 1_000_000_000,
         minimum_ticks=60,
     )

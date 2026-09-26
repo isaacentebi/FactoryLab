@@ -34,8 +34,8 @@ from factorylab.settlement.vocabulary import DECLINED_DEFINITION
 from factorylab.world.models import ModelResponse
 from factorylab.world.scripted import (
     ScriptedProvider,
-    _description_from_prompt,
     _inputs_from_prompt,
+    request_form,
 )
 from tests.runtime.test_attributable_blame import _card, _commitments
 
@@ -373,8 +373,8 @@ class Decliner(ScriptedProvider):
 
     def complete(self, req):
         text = "\n".join(str(m.get("content", "")) for m in req.messages)
-        if _description_from_prompt(text).startswith(("Give verdict", "Assess",
-                                                      "Give your own verdict")):
+        if request_form(req, text, _inputs_from_prompt(text)) in ("judge", "meta",
+                                                                  "counter"):
             return ModelResponse(req.model_id, json.dumps({"status": "cannot",
                                                            "reason": "no view"}),
                                  self.input_tokens, self.output_tokens, "end_turn")
@@ -508,11 +508,11 @@ class Standoff(ScriptedProvider):
     def complete(self, req):
         text = "\n".join(str(m.get("content", "")) for m in req.messages)
         inputs = _inputs_from_prompt(text)
-        desc = _description_from_prompt(text)
-        if desc.startswith("Respond to event"):
+        form = request_form(req, text, inputs)
+        if form == "produce":
             reply = ({"status": "cannot", "reason": REASON} if inputs.get("you") == REFUSER
                      else {"action": "hold"})
-        elif desc.startswith("Give verdict"):
+        elif form == "judge":
             reply = ({"verdict": 0.5, "rationale": "r"}
                      if inputs.get("producer", {}).get("status") == "ok"
                      else {"status": "cannot", "reason": "no return to judge"})

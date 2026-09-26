@@ -26,6 +26,7 @@ from factorylab.world.scripted import (
     ScriptedProvider,
     _description_from_prompt,
     _inputs_from_prompt,
+    request_form,
 )
 from tests.helpers import place
 from tests.runtime.test_connectors import ledger_items
@@ -206,7 +207,8 @@ class TestGateTwoContinuityAndInformationBoundaries:
         """
         sink, _ = leaky_world
         commissions = [(desc, system, text) for desc, system, text in sink
-                       if desc.startswith(("Give verdict", "Assess"))]
+                       if request_form(None, text, _inputs_from_prompt(text))
+                       in ("judge", "meta")]
         assert len(commissions) > 20, "the run commissioned no evaluation to scan"
         scanned = 0
         for desc, system, text in commissions:
