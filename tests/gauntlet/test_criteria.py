@@ -21,14 +21,17 @@ M = {"prices": {"eta": 0.5, "decay": 0.1, "lambda_max": 1.0, "penalty_cap": 0.5,
 
 
 def _w(index, *, acts=False, sf=False, thrash=False, ld=False, lam=0.0, pen=0.0,
-       profile=None, frontier=(), violated=None, unsettled=None, lifespans=()):
+       profile=None, frontier=(), violated=None, unsettled=None, lifespans=(), tv=None):
     """An ``immune.window`` row. A stable-failure window names the card it holds (card
     ``c`` unless ``violated`` says otherwise), as ``versions.diagnose`` does."""
     if violated is None:
         violated = ["card:c"] if sf else []
     return {"kind": "immune.window", "window": index, "acts": acts,
             "flags": {"stable_failure": sf, "thrash": thrash, "learning_death": ld},
-            "thrash": {"lambda": lam, "penalty": pen}, "unsettled": unsettled,
+            # The thrash price's violation: positive while flagged unless given.
+            "thrash": {"lambda": lam, "penalty": pen,
+                       "violation": (1.0 if thrash else 0.0) if tv is None else tv},
+            "unsettled": unsettled,
             "violated_cards": list(violated), "lifespans": list(lifespans),
             # The organ's learning-death evidence names the routers it read quarantined.
             "frontier": {"quarantined_routers": sorted(
@@ -503,7 +506,7 @@ def test_th1a_and_th1b_detection_and_a_price_that_holds_duration():
     assert g.th1a_detection(closes, M, cycle_start=3).ok
     assert g.th1a_detection(closes, M, cycle_start=-10).status == g.FAIL
     assert g.th1b_duration(closes, M).ok
-    flat = [_w(i, thrash=True, lam=0.0) for i in range(1, 8)]
+    flat = [_w(i, thrash=True, lam=0.0, unsettled=1.0) for i in range(1, 8)]
     assert g.th1b_duration(flat, M).status == g.FAIL  # the price never holds duration
     falling = [_w(i, thrash=True, lam=0.3 - 0.02 * i, pen=0.1) for i in range(1, 8)]
     assert g.th1b_duration(falling, M).status == g.FAIL
@@ -522,8 +525,10 @@ def test_th1c_every_charge_is_price_times_movement_and_some_round_is_charged():
     wrong = rows + [{"kind": "thrash.charged", "handle": "d3", "router": "router:Tick",
                      "charge": 0.1, "reward": 0.4}]
     assert g.th1c_movement(wrong, M).status == g.FAIL
-    # The negative control's shape: a charge that never lands.
-    assert g.th1c_movement(rows, M).status == g.FAIL
+    # The negative control's shape: a charge that never lands on a learned round fails;
+    # on a round not learned yet it is pending (``_thrash_charged`` runs at learning).
+    assert g.th1c_movement(rows + [_settled("d2")], M).status == g.FAIL
+    assert g.th1c_movement(rows, M).status == g.UNSUPPORTED
 
 
 def test_th1c_one_of_two_expected_charges_missing_fails():
@@ -538,9 +543,12 @@ def test_th1c_one_of_two_expected_charges_missing_fails():
                     "charge": c, "reward": 0.4} for h, c in (("d2", 0.4 * 0.7),
                                                              ("d3", 0.4 * 0.5))]
     assert g.th1c_movement(both, M).ok
-    one = both[:-1]
+    one = [*both[:-1], _settled("d3")]
     result = g.th1c_movement(one, M)
     assert result.status == g.FAIL and result.evidence["missing"] == ["d3"]
+    # Codex P2 (gauntlet.py:1598): not learned yet, the same round is pending.
+    pending = g.th1c_movement(both[:-1], M)
+    assert pending.ok and pending.evidence["pending"] == 1
     wrong_amount = [*both[:-1], {**both[-1], "charge": 0.1}]
     assert g.th1c_movement(wrong_amount, M).status == g.FAIL
 
@@ -922,8 +930,13 @@ def test_s1_every_draw_replays_from_its_seed_and_every_act_traces_to_a_return():
     forced[0]["propensity"]["rng_seed"] = next(
         s for s in range(1000) if Random(s).choices(["a", "NOOP"], weights=[.5, .5])[0] == "a")
     assert g.s1_draw_sovereignty(forced).status == g.FAIL
-    kernel_order = [_open("decision-1", "a"), {"kind": "order.intent", "handle": "decision-1"}]
+    kernel_order = [_open("decision-1", "a"), {"kind": "order.intent", "handle": "decision-1"},
+                    {"kind": "invocation", "handle": "decision-1", "status": "ok"}]
     assert g.s1_draw_sovereignty(kernel_order).status == g.FAIL
+    # A diary that ends inside the call that made the act: pending, never a pass or a
+    # failure (the call's tool.call and the wake's invocation come after it).
+    ended = kernel_order[:2]
+    assert g.s1_draw_sovereignty(ended).status == g.UNSUPPORTED
     # A charter proposal names its decision as ``proposer_handle`` (CharterBook.propose).
     proposal = {"kind": "charter.propose", "id": "m", "proposer_handle": "decision-1"}
     traced = g.s1_draw_sovereignty(good + [proposal])
@@ -1952,6 +1965,64 @@ def test_s8_gamma_vectors_of_different_lengths_fail_with_a_clear_reason():
     names = {r.name: r for r in g.replay(_seq([_launch(), _w(1), uneven]), M)}
     assert names["S8"].status == g.FAIL and "error" not in names["S8"].evidence
     assert names["LD-1f"].status in (g.PASS, g.FAIL, g.UNSUPPORTED)
+
+
+# --- Codex pass on 5c977be: false fails at valid boundaries ---------------------------------
+
+
+@pytest.mark.parametrize("before, after", [(1.0, 0.95), (0.95, 1.0), (1.0, 1.0)])
+def test_s8_instrumented_a_gamma_step_at_one_is_symmetric(before, after):
+    """Codex P2 (gauntlet.py:2615): at γ = 1 (valid when gamma_max = 1) the prior is
+    uniform whatever the weights; the after-distribution is read from the preserved
+    weights with the kernel's mixing (exp3.py:42), so a valid step is not asymmetric."""
+    base = {"actions": ["a", "b", "NOOP"], "gamma": before,
+            "log_weights": {"a": 2.0, "b": 0.5, "NOOP": -1.0}}
+    assert g.gain_neutral({"bases": [base]}, {"bases": [dict(base, gamma=after)]}).ok
+    steered = dict(base, gamma=after, log_weights={"a": 2.0, "b": 1.5, "NOOP": -1.0})
+    assert g.gain_neutral({"bases": [base]}, {"bases": [steered]}).status == g.FAIL
+
+
+def test_th1b_a_price_with_no_room_to_rise_is_not_a_failure():
+    """The sweep: a flagged run whose price sits at lambda_max, or whose violation is 0
+    (a short-lived configuration inside ``tv_threshold``), holds its price validly: TH-1b
+    is unsupported there. With room and a positive violation, holding still fails."""
+    at_max = [_w(1, lam=1.0),
+              *[_w(i, thrash=True, lam=1.0, unsettled=1.0) for i in range(2, 6)]]
+    assert g.th1b_duration(at_max, M).status == g.UNSUPPORTED
+    inside = [_w(1, lam=0.2),
+              *[_w(i, thrash=True, lam=0.2, unsettled=0.1) for i in range(2, 6)]]
+    assert g.th1b_duration(inside, M).status == g.UNSUPPORTED
+    held = [_w(1, lam=0.2), *[_w(i, thrash=True, lam=0.2, unsettled=1.0) for i in range(2, 6)]]
+    assert g.th1b_duration(held, M).status == g.FAIL
+    rising = [_w(1, lam=0.2),
+              *[_w(i, thrash=True, lam=0.2 + 0.1 * i, unsettled=1.0) for i in range(2, 6)]]
+    assert g.th1b_duration(rising, M).ok
+
+
+def test_sf1e_a_router_seeded_at_gamma_max_writes_no_gain_row_and_is_not_failed():
+    """The sweep: seeded at gamma_max the router needs no step and the kernel writes no
+    gain row (immune.py ``_gain``: ``before == after``): unsupported, never a failure."""
+    closes = [_w(i, acts=i % 3 == 0, sf=i >= 3) for i in range(1, 40)]
+    result = g.sf1e_gain([_open("d1", "a"), *closes], M)
+    assert result.status == g.UNSUPPORTED, result.evidence
+
+
+def test_ld1e_and_sf1a_at_k_equal_one():
+    """The sweep: k = 1 is a valid tail; a one-window quarantine flagged in its window,
+    and a one-window violation flagged in it, are detections."""
+    k1 = {**M, "immune": {**M["immune"], "k": 1}}
+    row = {"router": "router:r1", "quarantined": True, "core": False}
+    closes = [_w(1, ld=True, frontier=[row]), *[_w(i) for i in range(2, 15)]]
+    assert g.ld1e_detection(closes, k1).ok
+    violated = [_price_window(1, 0.0), *[_price_window(i, 1.0) for i in range(2, 15)]]
+    flags = [_w(1, sf=True), *[_w(i) for i in range(2, 15)]]
+    assert g.sf1a_detection(violated + flags, k1, card="c").status != g.FAIL
+
+
+def test_sf2a_a_single_seat_arm_is_not_comparable_not_failed():
+    """The sweep: a window with holders and no reliever (or one seat) compares nothing."""
+    window = _sf2_window(_member("d2", "hold"))
+    assert g.sf2_gradient(window + [_penalty("d2", 1.0)], M, **KW).status == g.UNSUPPORTED
 
 
 def test_s4_an_unresolved_penalty_row_may_carry_no_raw_score():

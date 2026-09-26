@@ -1442,6 +1442,9 @@ def act_traces(events: list[Mapping], kinds: Mapping[str, str]) -> list[dict]:
             invoked.setdefault(handle, (i, row.get("status")))
         elif kind == "tool.call":
             tool_calls[handle].append((i, row.get("tool")))
+    last_step = max((i for i, row in enumerate(events)
+                     if row.get("kind") in ("decision.open", "invocation", "tool.call")),
+                    default=-1)
     out = []
     for i, row in enumerate(events):
         if row.get("kind") not in kinds:
@@ -1455,9 +1458,15 @@ def act_traces(events: list[Mapping], kinds: Mapping[str, str]) -> list[dict]:
             entry.update(traced=inv[1] == "ok", path="answer")
             if inv[1] != "ok":
                 entry["why"] = f"its decision's invocation returned {inv[1]!r}"
-        elif inv is not None and (call := next(
-                ((t, tool) for t, tool in tool_calls[handle] if t > i), None)) is not None \
-                and call[0] <= inv[0]:
+        elif inv is None and need(row, "kind") in ACT_TOOLS and i > last_step:
+            # The diary ends inside the call: the kernel writes the call's tool.call row
+            # and the wake's invocation row after the act (compute.py:2425, :2616), and
+            # nothing of another decision (an open, an invocation, a call) can come
+            # before them, so an act after the diary's last such row is pending.
+            entry.update(traced=None, path="tool call",
+                         why="the diary ends inside the call that made it")
+        elif (call := next(((t, tool) for t, tool in tool_calls[handle] if t > i), None)) \
+                is not None and (inv is None or call[0] <= inv[0]):
             # The call that caused it is the next one recorded for the handle: the
             # kernel ledgers the act inside that call, before its tool.call row.
             tools = ACT_TOOLS.get(need(row, "kind"), frozenset())
@@ -1518,11 +1527,24 @@ def th1b_duration(events: list[Mapping], manifest: Mapping) -> Result:
     series = thrash_series(events)
     runs = _runs([w for w, _lam, _pen, flag in series if flag])
     by_window = {w: (lam, pen) for w, lam, pen, _flag in series}
-    falls, rose = [], False
+    # The thrash PID integrates ``eta · v`` each window its violation ``v`` is positive,
+    # up to ``lambda_max``, where ``v`` is the organ's unsettledness above
+    # ``tv_threshold`` (immune.py ``thrash_controller``: region ``max`` at
+    # ``tv_threshold``, scale 1; ``thrash_penalty`` observes ``unsettled``). ``v`` is
+    # read from the organ's own ``unsettled``, never from the price rows under test. A
+    # rise is owed only at a flagged window with ``v > 0`` whose price had room below
+    # ``lambda_max``: a thrash flagged on a short-lived configuration whose
+    # unsettledness sits inside ``tv_threshold`` (``v = 0``), or one at ``lambda_max``,
+    # holds its price validly.
+    violation = {need(w, "window"): max(0.0, float(need(w, "unsettled")) - ph.tv_threshold)
+                 if need(w, "unsettled") is not None else 0.0 for w in windows(events)}
+    falls, rose, room = [], False, False
     for start, end in runs:
         # The window before the run is the price the thrash started from.
-        lams = [by_window[w] for w in range(start - 1, end + 1) if w in by_window]
-        for (a, pa), (b, _pb) in zip(lams, lams[1:], strict=False):
+        for window in range(start, end + 1):
+            if window - 1 not in by_window or window not in by_window:
+                continue
+            (a, pa), (b, _pb) = by_window[window - 1], by_window[window]
             # The kernel's own values, compared exactly: a price that holds is equal.
             if pa >= ph.cap:
                 break
@@ -1530,9 +1552,17 @@ def th1b_duration(events: list[Mapping], manifest: Mapping) -> Result:
                 falls.append({"run": [start, end], "from": a, "to": b})
             if b > a:
                 rose = True
+            if violation.get(window, 0.0) > 0 and a < ph.lambda_max:
+                room = True
     if not runs:
         return _unsupported("TH-1b", "thrash was never flagged")
-    return _result("TH-1b", rose and not falls, runs=runs[:8], falls=falls[:5], rose=rose)
+    evidence = {"runs": runs[:8], "falls": falls[:5], "rose": rose, "room": room}
+    if falls or (room and not rose):
+        return _result("TH-1b", False, **evidence)
+    if not rose:
+        return _unsupported("TH-1b", "no flagged window had a positive violation and room "
+                            "below lambda_max", **evidence)
+    return _result("TH-1b", True, **evidence)
 
 
 @criterion("TH-1b-antiwindup")
@@ -1595,15 +1625,31 @@ def th1c_movement(events: list[Mapping], manifest: Mapping) -> Result:
     counts = Counter(need(row, "handle") for row in charged)
     landed = set(counts)
     duplicated = sorted(h for h, n in counts.items() if n > 1)
-    missing, unexpected = sorted(positive - landed), sorted(landed - positive)
+    # A charge is ledgered only when its round is learned (feedback.py
+    # ``_learn_router_return`` -> ``_thrash_charged``: a seat round at its settlement, an
+    # abstention when its deferred credit is priced). A positive charge whose round has
+    # not been learned yet is pending, never missing.
+    learned = ({need(row, "return.handle") for row in rows_of(events, "decision.settle")}
+               - {row.get("handle") for row in rows_of(events, "propensity.unlearned")})
+    noops = {h for h, seat in decision_seats(events).items() if seat == "NOOP"}
+    credited = {need(row, "handle") for row in rows_of(events, "router.abstention_priced")}
+    learned = {h for h in learned if h not in noops} | credited
+    unlanded = positive - landed
+    missing = sorted(unlanded & learned)
+    pending = sorted(unlanded - learned)
+    unexpected = sorted(landed - positive)
     bad = [{"handle": need(row, "handle"), "charge": need(row, "charge"),
             "expected": expected.get(need(row, "handle"))}
            for row in charged
            if float(need(row, "charge")) != float(expected.get(need(row, "handle"), 0.0))]
-    return _result("TH-1c", not missing and not unexpected and not bad and not duplicated,
-                   charged=len(charged), expected_positive=len(positive),
-                   missing=missing[:5], unexpected=unexpected[:5], bad=bad[:5],
-                   duplicated=duplicated[:5])
+    evidence = {"charged": len(charged), "expected_positive": len(positive),
+                "missing": missing[:5], "pending": len(pending), "unexpected": unexpected[:5],
+                "bad": bad[:5], "duplicated": duplicated[:5]}
+    if missing or unexpected or bad or duplicated:
+        return _result("TH-1c", False, **evidence)
+    if not landed:
+        return _unsupported("TH-1c", "no positive charge's round was learned yet", **evidence)
+    return _result("TH-1c", True, **evidence)
 
 
 @criterion("TH-1d")
@@ -2240,14 +2286,19 @@ def s1_draw_sovereignty(events: list[Mapping], manifest: Mapping | None = None) 
             bad.append(need(row, "handle"))
     traces = act_traces(events, ACT_KINDS)
     acts = [(need(t, "kind"), need(t, "handle")) for t in traces]
-    unreturned = [{"kind": need(t, "kind"), "handle": need(t, "handle"), "why": need(t, "why")}
-                  for t in traces if not need(t, "traced")]
+    unreturned = [{"kind": need(t, "kind"), "handle": need(t, "handle"),
+                   "why": need(t, "why")} for t in traces if need(t, "traced") is False]
+    pending = [{"kind": need(t, "kind"), "handle": need(t, "handle")}
+               for t in traces if need(t, "traced") is None]
     evidence = {"draws": checked, "bad_draws": bad[:5], "acts": len(acts),
                 "unreturned": unreturned[:5], "malformed_propensities": malformed[:5]}
     if bad or unreturned:
         # An observed violation fails whatever else the diary lacks: an act no seat's
         # return traces to is the kernel acting for a seat.
         return _result("S1", False, **evidence)
+    if pending:
+        return _unsupported("S1", "the diary ends inside a call that made an act",
+                            pending=pending[:5], **evidence)
     if not checked and not acts:
         return _unsupported("S1", "no sampled decision and no act", **evidence)
     return _result("S1", True, **evidence)
@@ -2611,10 +2662,14 @@ def gain_neutral(before: Mapping[str, Any], after: Mapping[str, Any]) -> Result:
         steps.add(round(need(a, "gamma") - need(b, "gamma"), 12))
         pb, pa = _probs(b), _probs(a)
         if len(pb) >= 2:
-            k = len(pb)
-            scale = (1 - need(a, "gamma")) / (1 - need(b, "gamma")) if need(b, "gamma") < 1 else 1.0
-            shift = need(a, "gamma") / k - scale * need(b, "gamma") / k
-            off = max(abs(q - (scale * p + shift)) for p, q in zip(pb, pa, strict=True))
+            # The kernel's mixing, q = (1 − γ)·w/Σw + γ/K (learners/exp3.py:42), on the
+            # preserved weights: the change a γ step alone makes is (γ' − γ)(1/K − w/Σw)
+            # on every arm, read from the weights, so it is exact at γ = 1 too (where the
+            # prior is uniform whatever the weights, and no ratio of the two can be read).
+            k, dg = len(pb), float(need(a, "gamma")) - float(need(b, "gamma"))
+            share = _shares(wb, "log_weights" in b)
+            off = max(abs(q - (p + dg * (1 / k - w))) for p, q, w in zip(pb, pa, share,
+                                                                         strict=True))
             if off > 1e-12:
                 problems.append({"asymmetric": off})
     if len(steps) > 1:
@@ -2633,17 +2688,23 @@ def _weights(base: Mapping) -> list[float]:
     return [float(x) for x in raw]
 
 
-def _probs(base: Mapping) -> list[float]:
-    """An EXP3 base's distribution over its arms: ``(1 − γ)·w/Σw + γ/K``."""
-    raw = _weights(base)
-    if not raw:
-        return []
-    if "log_weights" in base:
+def _shares(raw: list[float], logged: bool) -> list[float]:
+    """Each arm's weight share ``w/Σw``, from raw weights or log weights."""
+    if logged and raw:
         top = max(raw)
         raw = [math.exp(x - top) for x in raw]
     total = math.fsum(raw)
+    return [w / total for w in raw]
+
+
+def _probs(base: Mapping) -> list[float]:
+    """An EXP3 base's distribution over its arms: ``(1 − γ)·w/Σw + γ/K``
+    (learners/exp3.py:42)."""
+    raw = _weights(base)
+    if not raw:
+        return []
     k, gamma = len(raw), float(need(base, "gamma"))
-    return [(1 - gamma) * w / total + gamma / k for w in raw]
+    return [(1 - gamma) * w + gamma / k for w in _shares(raw, "log_weights" in base)]
 
 
 # --- the registry, the replay and the sweep ---------------------------------------------------
