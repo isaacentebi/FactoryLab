@@ -618,6 +618,19 @@ def test_th2_a_short_lived_configuration_reads_as_thrash_and_is_never_refused():
     assert g.th2_short_lived(unread, M, loop="seat:m").status == g.FAIL
 
 
+def test_th2_passes_only_on_a_short_lifespan_it_read():
+    """Codex P2: a short lifespan as the diary's last row, with no window after it, is no
+    evidence; nor is a diary of long lifespans alone. A speed refusal still fails."""
+    last = _seq([_w(1, unsettled=0.0), {"kind": "config.lifespan", **_LIFESPAN}])
+    result = g.th2_short_lived(last, M, loop="seat:m")
+    assert result.status == g.UNSUPPORTED and result.evidence["short_checked"] == 0
+    long_only = _seq([{"kind": "config.lifespan", **_LIFESPAN, "ratio": 2.0},
+                      _w(1, unsettled=0.0)])
+    assert g.th2_short_lived(long_only, M, loop="seat:m").status == g.UNSUPPORTED
+    refused = long_only + [{"kind": "registration.rejected", "reason": "too fast"}]
+    assert g.th2_short_lived(refused, M, loop="seat:m").status == g.FAIL
+
+
 def test_th2_reads_the_lifespan_in_the_windows_whose_tail_holds_it():
     """The sweep (A): the windows that carry the short lifespan must read it; a high
     reading in a later, unrelated window does not excuse a low one where it was held."""

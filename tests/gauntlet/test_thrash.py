@@ -117,9 +117,12 @@ def test_th2_every_refactor_is_admitted_and_read_against_its_loop(th2):
     that passes admission is admitted (no speed limit is committed, so none is
     enforced), and each change of the judges' router menu is read as a lifespan against
     the loop that corrects it. The kernel defers its own epochs to ``min_ratio`` × that
-    loop (``_epoch_due``), so its configuration never outruns its correction."""
+    loop (``_epoch_due``), so its configuration never outruns its correction: no
+    lifespan is short, so TH-2's reading is not exercised (unsupported), and nothing
+    was refused for its speed."""
     result = g.th2_short_lived(th2.events, th2.manifest, loop="router:ProducerReturn")
-    assert result.ok, result.evidence
+    assert result.status == g.UNSUPPORTED, result.evidence
+    assert result.evidence["lifespans"] > 0 and result.evidence["speed_refusals"] == 0
     registered = [r for r in th2.rows("registry.register")
                   if r["contract"]["id"].startswith("molt-judge")]
     refused = [r for r in th2.rows("registration.rejected")]

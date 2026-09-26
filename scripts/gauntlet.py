@@ -1200,6 +1200,9 @@ def th2_short_lived(events: list[Mapping], manifest: Mapping, *, loop: str) -> R
     is where ``versions.diagnose`` reads ``short_lived``. Each supported one of them
     flags thrash with ``unsettled >= 1 − ratio``, compared exactly (the kernel's own
     ``1.0 − ratio``). A lifespan no later window carries was never read (``fail``).
+    ``pass`` needs one short lifespan read by a supported window; with none (no short
+    lifespan, or one the diary ended before reading) the result is ``unsupported``,
+    unless a refusal for speed already fails it.
     """
     ph = physics(manifest)
     rows = [row for row in rows_of(events, "config.lifespan") if row.get("loop") == loop]
@@ -1228,9 +1231,15 @@ def th2_short_lived(events: list[Mapping], manifest: Mapping, *, loop: str) -> R
              if any(word in str(row.get("reason", "")).lower()
                     for word in ("too soon", "too fast", "lifespan", "speed", "rate limit"))]
     worst = min(rows, key=lambda row: row["ratio"])
-    return _result("TH-2", not unread and not misread and not speed, lifespans=len(rows),
-                   worst_ratio=worst["ratio"], short_checked=checked, unread=unread[:5],
-                   misread=misread[:5], speed_refusals=len(speed))
+    evidence = {"lifespans": len(rows), "worst_ratio": worst["ratio"],
+                "short_checked": checked, "unread": unread[:5], "misread": misread[:5],
+                "speed_refusals": len(speed)}
+    if not unread and not misread and not speed and checked == 0:
+        # (B): no short lifespan was read by a supported window (none was short, or the
+        # diary ended before a window carried it), so the reading was never exercised.
+        return _unsupported("TH-2", "no short lifespan was read by a supported window",
+                            **evidence)
+    return _result("TH-2", not unread and not misread and not speed, **evidence)
 
 
 def th3_governance_gap(events: list[Mapping], manifest: Mapping) -> Result:
