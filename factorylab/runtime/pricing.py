@@ -1087,9 +1087,9 @@ class PricingMixin:
         if not excess.get(own):
             return 0.0, own
         # Decisions taken in the unhistoried niche are not counted (wave 16, R-E).
-        peers = {h for h, d in window.decisions.items()
+        peers = {h for h, d in self._split_decisions(window).items()
                  if h != handle and (d["invocations"] or d["ok"] or not d["cost"])
-                 and not self._is_niche(h, window) and self._scope_of(window, h, per) == own}
+                 and self._scope_of(window, h, per) == own}
         peers.add(handle)
         part = excess[own] / total
         return part * max(self.m.prices.min_blame_share, 1 / len(peers)), own
@@ -1145,7 +1145,8 @@ class PricingMixin:
             if card.window.kind == "returns":
                 # The same horizon the card measured.
                 group = _horizon(card.observation, group, card.window.n, partial=True)
-            successful = [r for r in group if r["ok"]]
+            # A niche decision's return owns no cost share and dilutes none (R-E).
+            successful = [r for r in group if r["ok"] and self._in_split(r["handle"])]
             # The scope's mean cost, measured the way the card measured it: a
             # scope with no response has no measured cost to own.
             responses = len(successful)
@@ -1157,6 +1158,21 @@ class PricingMixin:
                     row["cost"], responses)
         total = sum(shares.values())
         return {h: float(amount / total) for h, amount in shares.items()} if total else {}
+
+    def _in_split(self, handle: str, window=None) -> bool:
+        """Whether a decision is counted when a card's penalty is split across decisions.
+
+        Wave 16, R-E as amended: a decision taken in the unhistoried niche bears
+        nothing and changes nobody's split. Every share, its numerator and its
+        denominator (relief rates, cost, well-formedness, tool calls, turnover, the
+        frozen cost shares, a scope's peers), reads its decisions through this one
+        predicate, so no path counts a niche decision another path does not.
+        """
+        return not self._is_niche(handle, window)
+
+    def _split_decisions(self, window) -> dict[str, dict]:
+        """The window's decisions a card's penalty is split across (``_in_split``)."""
+        return {h: d for h, d in window.decisions.items() if self._in_split(h, window)}
 
     def _decision_share(self, window, handle, observation, role, region, value, *,
                         as_role: str | None = None) -> float:
@@ -1174,7 +1190,9 @@ class PricingMixin:
         ``as_role`` counts ``handle`` among that role's decisions, whatever role its
         window recorded.
         """
-        samples = window.decisions
+        if not self._in_split(handle, window):
+            return 0.0
+        samples = self._split_decisions(window)
         own = samples.get(handle, {})
         numerator = denominator = 0
         if observation in ("cost_per_return", "cost_per_attempt"):
@@ -1190,18 +1208,20 @@ class PricingMixin:
                              for h, d in samples.items()}
             numerator, denominator = contributions.get(handle, 0), sum(contributions.values())
         elif observation in ("tool_calls", "turnover"):
+            # Divided by what the decisions in the split contributed, never by the
+            # window's total, which a niche decision's calls or notional would dilute.
             key = "tool_calls" if observation == "tool_calls" else "notional_micro"
-            numerator, denominator = own.get(key, 0), getattr(window, key)
+            numerator = own.get(key, 0)
+            denominator = sum(d.get(key, 0) for d in samples.values())
         else:
             # A decision whose only entry in this window is money spent made no
             # response this observation reads, so it does not take a share of the
             # violation and does not dilute the shares that do.
             scope = [h for h, d in samples.items()
                      if (d["invocations"] or d["ok"] or not d["cost"])
-                     and not self._is_niche(h, window)
                      and (role == "all" or (as_role if h == handle and as_role is not None
                                             else d["role"]) == role)]
-            if handle not in scope and not self._is_niche(handle, window):
+            if handle not in scope:
                 scope.append(handle)
             if observation in RELIEF_RATES:
                 relievers = self._relievers(window, observation, region, value)
@@ -1235,7 +1255,7 @@ class PricingMixin:
         the world"). It is a penalty rule, never a reward floor: the decision keeps
         whatever its judges gave it.
         """
-        if self._is_niche(handle):
+        if not self._in_split(handle):
             return 0.0
         terms = self._penalty_terms(cards, handle, as_role=as_role)
         total = sum(t["weight"] for t in terms)
@@ -1260,7 +1280,7 @@ class PricingMixin:
         window = self.price_windows.get(origins.get("origin"))
         if window is None or window.closed_values is not None:
             return False
-        if self._is_niche(handle, window):  # the origin window's record (Sol F3)
+        if not self._in_split(handle, window):  # the origin window's record (Sol F3)
             return False
         return any(card.answers_for in (cards, "all") and card.id in self.regions
                    and observation.id not in _EXACT_SHARES and w is window
