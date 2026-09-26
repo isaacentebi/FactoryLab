@@ -484,7 +484,7 @@ consequence mix and ledgers `sampling.blind` (published in
   less the venue's taker fee rate on its notional (wave 16, D7), so the acting road
   pays the same round trip as the road not taken. The mark is never money: what the
   lot realises when it really closes is booked once, late, with the fee the venue
-  charged (`consequence.late`). Funding the venue paid on the lot for funding times at or before `H` is in its charges, however late the mark arrives (ruling R10-m).
+  charged (`consequence.late`). Funding the venue paid on the lot for funding times at or before `H` is in its charges, however late the mark arrives (ruling R10-m). A held instrument with no venue mid at or after `H` within the consequence patience (`H` plus `verdict_timeout_ticks` after the return, as for a named trade) fixes the outcome uninformative (`consequence.uninformative`, reason `no_mark`, naming the instruments); the lots stay open, and the decision is released once they close.
   A venue write counts once the venue accepted it or may have (`uncertain`); a
   return whose every write the venue rejected executed nothing. A return that acted
   is measured this way and any counterfactual it named is ignored: one predicate,

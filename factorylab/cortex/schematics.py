@@ -32,6 +32,7 @@ from factorylab.runtime.propensity import (
 )
 from factorylab.runtime.shared import work_disclosure
 from factorylab.runtime.summary import _duration_str, _price_str
+from factorylab.settlement.lots import FEE_UNKNOWN, NO_MARK
 from factorylab.settlement.scoring import (
     UNINFORMATIVE_HIGH,
     UNINFORMATIVE_LOW,
@@ -1924,6 +1925,12 @@ class SchematicsMixin:
             "thrash_price": {"lambda": thrash.get("lambda", 0.0),
                              "penalty": thrash.get("penalty", 0.0),
                              "roles": list(thrash.get("roles") or [])},
+            # Closed windows until a window's decisions have their measured
+            # consequences (world.mechanics.committee.shadow_prices), from the very
+            # function the margin and shadow-price readers use: it moves with the
+            # price loop's period.
+            "margin_horizon_windows": (self._margin_horizon()
+                                       if hasattr(self, "_margin_horizon") else None),
             "committed": "world.mechanics carries the committed value of each of these; a "
             "difference is this runtime's own adaptation, not an amendment",
         }
@@ -2032,6 +2039,27 @@ class SchematicsMixin:
         scoring = self._scoring_block()
         return {key: scoring[key] for key in self.SETTLEMENT_KEYS[kind]}
 
+    def _enforced_values(self) -> dict[str, Any]:
+        """The numbers the published formulas name, each read from the function the
+        runtime enforces it with, never restated by hand.
+
+        Guarantees ``consequence_horizon_ns`` is ``_horizon_ns()`` (H),
+        ``consequence_patience_ns`` is ``_patience_ns()`` (H plus the verdict window,
+        counted once; ruling R10-k), ``penalty_cap`` the prices' cap, and
+        ``learned_map_bound`` each learner's ``B`` (``_charge_bound``; ruling R10-l),
+        so a formula and its value cannot drift apart.
+        """
+        values: dict[str, Any] = {"penalty_cap": self.m.prices.penalty_cap,
+                                  "uninformative_reasons": [FEE_UNKNOWN, NO_MARK]}
+        for key, name in (("consequence_horizon_ns", "_horizon_ns"),
+                          ("consequence_patience_ns", "_patience_ns")):
+            reader = getattr(self, name, None)
+            values[key] = reader() if callable(reader) else None
+        bound = getattr(self, "_charge_bound", None)
+        if callable(bound):
+            values["learned_map_bound"] = {"router": bound(True), "seat": bound(False)}
+        return values
+
     def _scoring_block(self) -> dict[str, Any]:
         """How decisions settle, stated as facts about the world (schematics are
         public; no goals). Every formula here is the one the runtime applies: the
@@ -2044,6 +2072,10 @@ class SchematicsMixin:
         """
         ev = self.ev
         return {
+            # Every number the formulas below name, generated from the function the
+            # runtime enforces it with (Chapter II §II.b: published = enforced), fixed
+            # for one charter edition.
+            "enforced_values": self._enforced_values(),
             "producer_or_custom_return": (
                 "ProducerReturn and custom return kinds settle on the verdict channel: the "
                 "score is the mean of the verdicts (0 to 1) the judges that read it gave, "
@@ -2060,9 +2092,12 @@ class SchematicsMixin:
                 "one left uncertain counts), y = return_paid_off, 1 when its realised P&L, "
                 "with lots still open at H marked at the mid less the venue's taker fee "
                 "rate on their notional (the rate most recently read at or before H; with "
-                "none read by H the outcome is uninformative, fee_unknown) and funding "
+                f"none read by H the outcome is uninformative, {FEE_UNKNOWN}) and funding "
                 "counted for funding times at or before H only, exceeds its own "
-                "compute and tool cost, fixed at H or when its lots close; any "
+                "compute and tool cost, fixed at H or when its lots close; a held "
+                "instrument with no mid at or after H within the consequence patience, "
+                "H + verdict_timeout_ticks after the return, makes it uninformative, "
+                f"{NO_MARK}; any "
                 "counterfactual such a return named is ignored. "
                 "For a return that executed nothing and named a counterfactual {coin, side}, "
                 "net = s * (m1 - m0) / m0 * 10^4 - (f0 + f1) * 10^4 - s * sum(rho) * 10^4 "
@@ -2074,7 +2109,7 @@ class SchematicsMixin:
                 "fee rate for the coin's market (spot for a pair, perp otherwise) most "
                 "recently read at or before the return (f0) and at or before H (f1) "
                 "(venue.fee_schedule; with none read by either instant the outcome is "
-                "uninformative, fee_unknown), rho the venue's funding rate in force "
+                f"uninformative, {FEE_UNKNOWN}), rho the venue's funding rate in force "
                 "at each of its funding times after m0 and at or before H (perps only; longs pay a "
                 "positive rate), and y = 1 when net <= 0, else 0 (declined-trade-net-v1); "
                 "for a return whose answer order {coin, side} was refused (collateral "

@@ -5,7 +5,14 @@ from dataclasses import asdict
 from fractions import Fraction
 
 from factorylab.kernel.ledger import Ledger
-from factorylab.settlement.lots import FEE_UNKNOWN, RELEASED_ORDER, LotTable, Payoff, exact
+from factorylab.settlement.lots import (
+    FEE_UNKNOWN,
+    NO_MARK,
+    RELEASED_ORDER,
+    LotTable,
+    Payoff,
+    exact,
+)
 from factorylab.settlement.receipts import ExecutionReceipt, ReceiptBook
 from factorylab.settlement.vocabulary import _require_event_index
 
@@ -121,6 +128,12 @@ class ReturnConsequences:
 
     def _now_ns(self) -> int | None:
         """The venue clock the horizon counts, or None. A runtime overrides it."""
+        return None
+
+    def _patience_ns(self) -> int | None:
+        """How long after its opening a return waits for its horizon marks, or None
+        (it waits for them however long). A runtime overrides it with the named
+        trades' patience, ``H`` plus the verdict window (Codex on #152)."""
         return None
 
     def _exit_rates(self) -> dict[str, str | None] | None:
@@ -427,7 +440,8 @@ class ReturnConsequences:
                                    now_ns=self._now_ns(), horizon_ns=self.horizon_ns,
                                    exit_rates=self._exit_rates(),
                                    horizon_marks=self.horizon_marks,
-                                   after_horizon=self.after_horizon)
+                                   after_horizon=self.after_horizon,
+                                   patience_ns=self._patience_ns())
         for before, after in zip(self.table.returns, table.returns, strict=True):
             if before.payoff is None and after.payoff is not None:
                 self.ledger.append({"kind": "consequence.outcome", **asdict(after.payoff)})
@@ -437,6 +451,16 @@ class ReturnConsequences:
                     self.ledger.append({"kind": "consequence.uninformative",
                                         "handle": after.payoff.handle,
                                         "reason": FEE_UNKNOWN})
+                elif after.payoff.censored == NO_MARK:
+                    # Fixed a patience past its opening, uninformative: the venue never
+                    # priced these instruments at or after its horizon by then.
+                    marked = self.horizon_marks.get(after.payoff.handle, {})
+                    held = sorted({lot.coin for lot in self.table.lots
+                                   if lot.handle == after.payoff.handle
+                                   and lot.coin not in marked})
+                    self.ledger.append({"kind": "consequence.uninformative",
+                                        "handle": after.payoff.handle,
+                                        "reason": NO_MARK, "instruments": held})
                 fixed.append(after.payoff)
         self.table = table
         # A horizon mark is pinned by its return's open outcome: fixed or voided, no

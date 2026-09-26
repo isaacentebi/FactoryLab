@@ -160,6 +160,47 @@ def test_a_fill_after_a_return_s_mark_is_marked_by_the_next_mid():
     assert rt.consequences.payoff(handle).net_micro == 500_000  # marked at the later mid
 
 
+def test_an_instrument_never_priced_after_h_fixes_the_outcome_as_none_after_patience():
+    """The instrument stops publishing once the lot opens (Codex on #152). The return
+    waits for its mark no longer than a named trade would, a patience past its opening:
+    then its outcome is fixed, uninformative (``no_mark``, naming the instrument), the
+    world outcome is none, and once its position closes and its orders are confirmed
+    terminal, the decision is releasable."""
+    from factorylab.kernel.queue import PropensityRecord
+    from factorylab.settlement.lots import NO_MARK
+    from tests.conftest import make_runtime
+    from tests.runtime.test_reward_chain import _rows
+
+    rt = make_runtime()
+    rt.fee_schedule = {"rates": {}, "read_ns": 0, "history": {"BTC": [[0, "0"]]}}
+    handle = _open_long(rt, "BTC", "60000")
+    opened = rt.clock.now_ns
+    rt.consequences.observe("MarketMid", {"coin": "BTC", "mid": "60000", "ts_ns": opened},
+                            rt.n)  # the instrument's last mid, before H
+    rt.clock.now_ns = opened + rt._patience_ns()
+    assert all(p.handle != handle for p in rt.consequences.resolve(rt.n))  # still waiting
+    assert rt.consequences.payoff(handle) is None
+    rt.clock.now_ns += 1
+    (payoff,) = [p for p in rt.consequences.resolve(rt.n) if p.handle == handle]
+    assert payoff.censored == NO_MARK and payoff.y == 0
+    (row,) = _rows(rt, "consequence.uninformative", handle=handle)
+    assert row["reason"] == NO_MARK and row["instruments"] == ["BTC"]
+    assert rt._final_outcome(handle)[0] == "none"
+    assert not rt.consequences.releasable(handle)  # its position is still open: money
+    prop = PropensityRecord(("seed-decider",), (1.0,), "seed-decider", 0, "router:Tick", "t")
+    closer = rt.queue.open(actor="router:Tick", event_id="close", propensity=prop,
+                           channel="verdict", deadline_ns=rt.clock.now_ns + 10**18,
+                           parent_handle=None, cost_ceiling=0)
+    rt.consequences.start(closer, rt.n)
+    rt.consequences.order_result(closer, {"status": "filled", "order_id": "o-close",
+                                          "filled_size": "0.001"}, {"size": "0.001"}, rt.n)
+    rt.consequences.observe("Fill", {"order_id": "o-close", "coin": "BTC", "is_buy": False,
+                                     "size": "0.001", "px": "60000", "fee_usd": "0"}, rt.n)
+    for order_id in ("o-BTC", "o-close"):
+        rt.consequences.confirm_terminal(order_id, "filled", "0.001", rt.n)
+    assert rt.consequences.releasable(handle)
+
+
 def test_a_tick_at_h_before_the_mid_at_h_marks_at_the_mid_at_h():
     """D2: the mark is the first venue mid timestamped at or after the horizon. The
     batch's Tick at H comes first, with an earlier instant's mid cached: nothing is

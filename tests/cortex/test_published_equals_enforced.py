@@ -536,3 +536,107 @@ def test_every_wave_16_formula_is_published_in_world_scoring():
         assert fact in text, fact
     for advice in ("you should", "try to", "aim to", "it is best"):
         assert advice not in text.lower()
+
+
+# --- published numbers are derived from the code that enforces them (Codex on #152) ----
+
+
+def _formula(text: str, start: str, end: str) -> str:
+    """The expression published between ``start`` and ``end``, as Python."""
+    expression = text.split(start, 1)[1].split(end, 1)[0]
+    return expression.replace("^", "**")
+
+
+@pytest.mark.parametrize("verdict_timeout", [2, 7, 40])
+def test_the_published_margin_horizon_is_the_one_the_code_reads(verdict_timeout):
+    """R10-k: settlement of a shadow price waits for the consequence patience, H plus
+    the verdict window counted ONCE. The published number is the one ``_margin_horizon``
+    returns, and it equals that derivation for every verdict window; the published text
+    no longer adds a second verdict window."""
+    from dataclasses import replace
+
+    from factorylab.runtime.clockwork import tick_ns
+    from tests.conftest import make_runtime
+
+    rt = make_runtime()
+    rt.m = replace(rt.m, evaluation=replace(rt.m.evaluation,
+                                            verdict_timeout_events=verdict_timeout))
+    rt.ev = rt.m.evaluation
+    published = rt._adaptive_scoring_block()["margin_horizon_windows"]
+    assert published == rt._margin_horizon()
+    tick = tick_ns(rt.tick_clock)
+    patience_ticks = -(-(rt._horizon_ns() + verdict_timeout * tick) // tick)
+    window = rt.clockwork.period("price", default=rt.m.timing.min_ratio)
+    assert published == max(rt.m.timing.min_ratio, -(-patience_ticks // window))
+    text = rt._mechanics_block()["committee"]["shadow_prices"]
+    assert "plus verdict_timeout_ticks later" not in text
+    assert "world.adaptive_scoring.margin_horizon_windows" in text
+
+
+def test_every_published_value_is_the_one_the_runtime_enforces():
+    """Each number the scoring formulas name is generated from its enforcing function:
+    H, the consequence patience (R10-k), the cap, each learner's map bound (R10-l) and
+    the uninformative reasons."""
+    from factorylab.runtime.clockwork import tick_ns
+    from factorylab.settlement.lots import FEE_UNKNOWN, NO_MARK
+    from tests.conftest import make_runtime
+
+    rt = make_runtime()
+    values = rt._scoring_block()["enforced_values"]
+    assert values["consequence_horizon_ns"] == rt._horizon_ns()
+    assert values["consequence_horizon_ns"] == (rt.m.timing.world_repricing_ns
+                                                // rt.m.timing.min_ratio)
+    assert values["consequence_patience_ns"] == rt._patience_ns() == (
+        rt._horizon_ns() + rt.ev.verdict_timeout_ticks * tick_ns(rt.tick_clock))
+    assert values["penalty_cap"] == rt.controller.snapshot()["parameters"]["penalty_cap"]
+    assert values["learned_map_bound"] == {"router": rt._charge_bound(True),
+                                           "seat": rt._charge_bound(False)}
+    assert values["uninformative_reasons"] == [FEE_UNKNOWN, NO_MARK]
+    text = rt._scoring_block()["verdict_is_a_prediction"]
+    assert FEE_UNKNOWN in text and NO_MARK in text
+
+
+@pytest.mark.parametrize("raw,card,thrash", [(0.1, 0.0, 0.0), (0.3, 0.2, 0.0),
+                                             (0.3, 0.0, 0.2), (0.0, 0.5, 0.5)])
+def test_the_published_learned_map_evaluates_to_what_every_learner_learns(raw, card, thrash):
+    """R10-l: the router's published map, evaluated with the published bound, is what
+    ``_learning_value`` gives a router; with no thrash term and the seat's bound, what
+    it gives a seat's own learner."""
+    from tests.conftest import make_runtime
+
+    rt = make_runtime()
+    bound = rt._scoring_block()["enforced_values"]["learned_map_bound"]
+    formula = _formula(rt._mechanics_block()["thrash_price"], "the router learns ", ", r raw")
+    router = rt._all_router_states()[0]
+    rt.thrash_charges["h"] = thrash
+    learned = rt._learning_value("h", raw, card, router=router)
+    assert learned == pytest.approx(eval(formula, {}, {"r": raw, "B": bound["router"],
+                                                        "p": card, "c": thrash}))
+    assert rt._learning_value("s", raw, card) == pytest.approx(
+        eval(formula, {}, {"r": raw, "B": bound["seat"], "p": card, "c": 0.0}))
+
+
+@pytest.mark.parametrize("entry,exit_,rates", [("0.00045", "0.00035", ()),
+                                               ("0.00045", "0.00045", ("0.0001",)),
+                                               ("0", "0.0007", ("-0.0002", "0.0001"))])
+def test_the_published_net_evaluates_to_what_the_road_not_taken_is_priced_at(entry, exit_,
+                                                                            rates):
+    """D1, D7 fee legs and R10-m: the net published in world.scoring, evaluated with its
+    own named terms, is ``opportunity_cost``'s net for the same mids, legs and funding."""
+    from decimal import Decimal
+
+    from factorylab.runtime.grounded import opportunity_cost
+    from tests.conftest import make_runtime
+
+    rt = make_runtime()
+    text = rt._scoring_block()["verdict_is_a_prediction"]
+    formula = _formula(text, "net = ", " bp")
+    assert "f0 + f1" in formula
+    for side, s in (("buy", 1), ("sell", -1)):
+        priced = opportunity_cost([("BTC", "100")], [("BTC", "100.3")], entry, exit_,
+                                  {"coin": "BTC", "side": side}, rates)
+        expected = eval(formula, {"sum": sum}, {
+            "s": s, "m0": 100.0, "m1": 100.3, "f0": float(entry), "f1": float(exit_),
+            "rho": [float(r) for r in rates]})
+        assert float(Decimal(priced["net_bps"])) == pytest.approx(expected, abs=1e-4)
+    assert "at or before H" in text  # R10-m: funding stops at H, on both roads

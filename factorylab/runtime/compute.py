@@ -460,6 +460,11 @@ class ContractConsequences(ReturnConsequences):
         consequence horizon is counted on (wave 16, D2), never the factory's ticks."""
         return self.runtime.clock.now_ns
 
+    def _patience_ns(self) -> int:
+        """A named trade's patience, ``H`` plus the verdict window (``_patience_ns``):
+        an acting return waits no longer for its horizon marks (Codex on #152)."""
+        return self.runtime._patience_ns()
+
     def _exit_rates(self):
         """The venue's taker rate per instrument at a horizon (wave 16, D7; ruling
         R10-i): the most recent successfully read rate at or before it, None when none

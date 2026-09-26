@@ -142,6 +142,10 @@ RELEASED_ORDER = "the order's return was settled and released"
 #: Why a return's outcome is censored at its horizon when the venue never stated the
 #: taker rate its open lots exit at (wave 16, ruling R10-i): uninformative, not pending.
 FEE_UNKNOWN = "fee_unknown"
+#: Why a return's outcome is censored when an instrument it holds was never priced by
+#: a venue mid at or after its horizon within its patience (Codex on #152): the same
+#: rule a named trade the venue never priced follows; uninformative, never pending.
+NO_MARK = "no_mark"
 
 
 #: The markets whose exit a venue's taker schedule prices (an event token's is not).
@@ -565,7 +569,8 @@ class LotTable:
                 horizon_ns: int | None = None,
                 exit_rates: Mapping[str, str | None] | None = None,
                 horizon_marks: Mapping[str, Mapping[str, str]] | None = None,
-                after_horizon: Mapping[str, Fraction] | None = None
+                after_horizon: Mapping[str, Fraction] | None = None,
+                patience_ns: int | None = None
                 ) -> "LotTable":
         """Fix ready outcomes once; marks require a valid mid for every remaining coin.
 
@@ -591,6 +596,10 @@ class LotTable:
         return's open lots are marked at the first venue mid of each instrument
         timestamped at or after its horizon (wave 16, D2), and it waits until every
         instrument it holds has one; the latest cached ``mids`` never stand in for it.
+        With ``patience_ns``, it waits no longer than its opening plus that patience
+        on the venue's clock (a named trade's own rule): past it, an instrument still
+        without its mark fixes the outcome censored, ``NO_MARK``, uninformative, with
+        the lots that were marked still valued.
 
         ``after_horizon`` (handle -> micro-USD): funding the venue charged a return's
         lots for funding times after its horizon. It is added back, so an outcome
@@ -625,17 +634,23 @@ class LotTable:
             net = account.realized_micro + (after_horizon or {}).get(account.handle, 0)
             exit_fee = Fraction(0)
             unknown = False
+            unmarked = False
             if lots:
                 marked = mids
                 if (horizon_marks is not None and horizon_ns is not None
                         and account.opened_at_ns is not None):
                     marked = horizon_marks.get(account.handle, {})
-                if any(lot.coin not in marked for lot in lots):
+                missing = any(lot.coin not in marked for lot in lots)
+                if missing and not (patience_ns is not None and now_ns is not None
+                                    and account.opened_at_ns is not None
+                                    and now_ns > account.opened_at_ns + patience_ns):
                     continue
-                rates = _exit_rates_for(exit_rates, lots, account, now_ns, horizon_ns)
+                unmarked = missing
+                valued = [lot for lot in lots if lot.coin in marked]
+                rates = _exit_rates_for(exit_rates, valued, account, now_ns, horizon_ns)
                 if any(rate is None for rate in rates.values()):
                     unknown = True
-                for lot in lots:
+                for lot in valued:
                     mid = exact(marked[lot.coin])
                     if mid <= 0:
                         raise ValueError("mark must be positive")
@@ -649,7 +664,8 @@ class LotTable:
             # Everything the return cost: its own compute and tools.
             cost = account.cost_micro
             acted = account.opened_lots > 0 or account.closes > 0 or account.earnings > 0
-            reason = (censored or {}).get(account.handle) or (FEE_UNKNOWN if unknown else None)
+            reason = ((censored or {}).get(account.handle)
+                      or (NO_MARK if unmarked else FEE_UNKNOWN if unknown else None))
             outcome = Payoff(
                 account.handle,
                 0 if reason else int(acted and micro + account.earned_micro > cost),

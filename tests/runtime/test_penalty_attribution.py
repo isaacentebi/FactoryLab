@@ -293,3 +293,32 @@ def test_an_adopted_price_of_1e308_at_violation_2_closes_the_window_saturated(mo
     rt.controller.ratchet(HOLDS.id, window=1, step=0.05)
     (saturated,) = _rows(rt, "immune.price_ratchet_saturated", card_id=HOLDS.id)
     assert saturated["pressure"] == cap
+
+
+#: A floor on each assembly's revision rate: a registration relieves it.
+REVISIONS = MetricCard("revision-floor", "the capacity to revise inadequate practices",
+                       "Share of revising returns.",
+                       "fraction", MetricWindow("windows", 1, "assembly"),
+                       {"rule": "at least", "lo": 0.5}, "revision_rate", "producer")
+
+
+@pytest.mark.parametrize("per", ["assembly", "role"])
+def test_a_reliever_bears_nothing_in_any_scope(monkeypatch, per):
+    """Relief takes precedence in every scope (Codex on #152): a registration-producing
+    return in an assembly whose revision rate stays below its floor bears 0, never its
+    scope's peer share; the returns that did not revise bear the scope's part."""
+    monkeypatch.setattr(pricing, "close_window", lambda *_a: None)
+    seed = load_manifest("scripted")
+    card = replace(REVISIONS, window=MetricWindow("windows", 1, per))
+    rt = Runtime(replace(seed, charter=replace(seed.charter, cards=(card,))), events=0,
+                 seed=1, initial_balance_micro=None, ledger_path=None, router_gamma=0.1)
+    rt._derive_regions()
+    rt.controller.set_price(card.id, 0.8, amendment_id="test")
+    others = [_producer(rt, "seed-decider", "buy") for _ in range(2)]
+    revised = _producer(rt, "seed-decider", "buy")
+    rt.card_samples.revised(revised)  # its registration was accepted
+    rt._close_price_window()
+    scopes = rt.price_windows[max(rt.price_windows)].closed_scopes.get(card.id)
+    assert scopes and all(value < 0.5 for value in scopes.values())  # below its floor
+    assert _share(rt, revised) == 0.0 and rt._penalty_for("producer", revised) == 0.0
+    assert all(_share(rt, h) > 0 for h in others)

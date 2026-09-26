@@ -1053,7 +1053,13 @@ class PricingMixin:
             )
             if handle is not None and observation.id == "cost_per_return":
                 share = self._cost_share(card, window, handle, share)
-            elif handle is not None and amount > 0 and observation.id not in _EXACT_SHARES:
+            elif (handle is not None and amount > 0 and observation.id not in _EXACT_SHARES
+                  and not (observation.id in RELIEF_RATES
+                           and handle in self._relievers(window, observation.id, region,
+                                                         values[card.id]))):
+                # Relief takes precedence in every scope (wave 16, D5; Codex on #152):
+                # a decision that moved the rate toward its region bears nothing,
+                # whatever its scope's aggregate, so it never takes a scope's share.
                 scopes = (self.card_samples.scopes if window.closed_values is None
                           else window.closed_scopes).get(card.id) or {}
                 attributed = self._attributed_share(window, handle, card, region, scopes,
