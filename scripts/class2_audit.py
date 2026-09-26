@@ -19,7 +19,10 @@ does everything around that call, offline:
             ``provenance_prompt.md``, the second prompt (input 6): every commit in
             --range base..head that touches a seat-visible surface, with its message and
             diff. Commit messages may carry behaviour data, so they never enter the
-            corpus prompt.
+            corpus prompt. The range's head must be the commit checked out, with no
+            uncommitted seat-visible change; the key records it (``release_commit``).
+            The corpus includes, once under the world ``kernel``, every string the
+            kernel's code can return to a seat (``tests/audit/class2_seat_text.py``).
   validate  Score the audit: two corpus samples and two provenance samples (JSON Lines)
             against the key. Refused unless the key is bound to the corpus and the two
             prompts beside it.
@@ -39,7 +42,8 @@ does everything around that call, offline:
             nothing, for a world the audit did not render, an invalid audit, a family
             that authored kernel text or sits in the world, and the family the last
             triage of the world used (rotation).
-  gate      The release gate, recomputed from bound sources: given the key and the
+  gate      The release gate, recomputed from bound sources: given the key (which must
+            have audited the release gated, ``--release`` or HEAD) and the
             sample files, it checks the triage file names the world, the key's corpus
             and range and exactly those samples by sha256; recomputes the audit (valid)
             and the world's findings from the samples; and requires each finding to
@@ -142,6 +146,10 @@ def describe(path: str) -> dict[str, Any]:
     if kind == "refusal":
         return {"surface_kind": "refusal", "audience": ["the refused seat"],
                 "frequency": "on refusal"}
+    if kind == "seat_text":
+        return {"surface_kind": f"seat_text.{parts[2] if len(parts) > 2 else ''}",
+                "audience": ["the seat whose call, proposal or order is answered"],
+                "frequency": "on that refusal or error"}
     if kind == "system":
         return {"surface_kind": "system", "audience": ["every role"], "frequency": "every call"}
     return {"surface_kind": kind, "audience": [], "frequency": "unknown"}
@@ -181,6 +189,14 @@ def corpus_records(worlds: list[str], *, rendered: bool) -> list[dict]:
             records.append({"leaf_id": leaf_id(path, text), "world": world, "path": path,
                             "text": text, "provenance": "context, not under audit (card)",
                             **describe(path)})
+    # The seat text in the kernel's code (tool results, refusal reasons, error messages
+    # a seat reads back), found statically and read once: it is the same in every world.
+    for path, text in corpus.render_seat_text():
+        key = leaf_id(path, text)
+        if key not in seen:
+            seen.add(key)
+            records.append({"leaf_id": key, "world": corpus.KERNEL, "path": path,
+                            "text": text, "provenance": "kernel", **describe(path)})
     return records
 
 
@@ -493,6 +509,24 @@ def resolve_range(repo: Path, release_range: str) -> list[str]:
     return shas
 
 
+def release_commit(repo: Path, release_range: str) -> str:
+    """The commit being audited: ``repo``'s HEAD, refused unless it is the release range's
+    head and no seat-visible path (``SURFACE_PATHS``) has an uncommitted change, so the
+    corpus rendered from the worktree is the text of that commit and the provenance pass
+    reads the commits that made it."""
+    head = _git(repo, "rev-parse", "--verify", "HEAD^{commit}").strip()
+    range_head = resolve_range(repo, release_range)[1]
+    if range_head != head:
+        raise AuditInputInvalid(f"the range head {range_head[:12]} is not HEAD {head[:12]}: "
+                                "the audited release is the commit checked out")
+    dirty = _git(repo, "status", "--porcelain", "--untracked-files=all", "--",
+                 *SURFACE_PATHS).strip()
+    if dirty:
+        raise AuditInputInvalid("uncommitted seat-visible changes: the corpus would not be "
+                                f"the release commit's text ({dirty.splitlines()[0]})")
+    return head
+
+
 def load_canaries() -> dict:
     """``canaries.json``, refused unless it is the protocol's calibration set: one canary
     per question Q3-Q10 with that question's class, Q6/Q9/Q10 and only they mandatory,
@@ -619,6 +653,7 @@ def render(worlds: list[str], out: Path, *, seed: int, rendered: bool, release_r
     if missing:
         raise AuditInputInvalid(f"no world file for {missing}")
     range_shas = resolve_range(repo, release_range)
+    released = release_commit(repo, release_range)
     commits = provenance_commits(repo, release_range)
     provenance = provenance_section(release_range, commits)
     provenance_id = hashlib.sha256(provenance.encode()).hexdigest()
@@ -647,7 +682,8 @@ def render(worlds: list[str], out: Path, *, seed: int, rendered: bool, release_r
     write_provenance_prompt(out, provenance, provenance_id=provenance_id)
     key.update({
         "schema": KEY_SCHEMA, "worlds": list(worlds), "rendered": rendered,
-        "range": release_range, "range_shas": range_shas, "corpus_sha": corpus_sha,
+        "range": release_range, "range_shas": range_shas, "release_commit": released,
+        "corpus_sha": corpus_sha,
         "prompt_sha": sha256_file(out / "prompt.md"),
         "provenance_prompt_sha": sha256_file(out / "provenance_prompt.md"),
         "provenance_id": provenance_id,
@@ -756,7 +792,8 @@ def load_key(path: Path) -> tuple[dict, list[dict]]:
     path = Path(path)
     key = json.loads(path.read_text())
     required = {"schema": int, "worlds": list, "range": str, "range_shas": list,
-                "corpus_sha": str, "prompt_sha": str, "provenance_prompt_sha": str,
+                "release_commit": str, "corpus_sha": str, "prompt_sha": str,
+                "provenance_prompt_sha": str,
                 "provenance_id": str, "provenance_commits": list,
                 "canaries": list, "controls": list, "expected_leaves": list,
                 "expected_count": int}
@@ -1031,10 +1068,12 @@ def family_refusal(family: str, world: str, previous_triage: Path | None) -> str
 
 def world_findings(findings: list[dict], provenance: list[dict], key: dict,
                    world: str) -> list[dict]:
-    """The findings one world's triage owns: that world's non-canary findings, and every
-    provenance finding (a commit's text reaches every world it touches)."""
+    """The findings one world's triage owns: that world's non-canary findings, the
+    kernel's seat text (the same code runs in every world) and every provenance finding
+    (a commit's text reaches every world it touches)."""
     planted = {c["leaf_id"] for c in key["canaries"]}
-    own = [f for f in findings if f.get("world") == world and f.get("leaf_id") not in planted]
+    own = [f for f in findings if f.get("world") in (world, corpus.KERNEL)
+           and f.get("leaf_id") not in planted]
     return own + provenance
 
 
@@ -1156,11 +1195,14 @@ def _hashes(value: str | None) -> list[str]:
 
 
 def gate(world: str, triage: Path, key_path: Path, samples: list[Path],
-         provenance: list[Path]) -> list[str]:
+         provenance: list[Path], *, release: str | None = None,
+         repo: Path | None = None) -> list[str]:
     """The release gate for ``world``: recomputed from bound sources, never read from a
     stored result.
 
-    Guarantees: the key is bound to its corpus and prompts (``load_key``); the triage
+    Guarantees: the key is bound to its corpus and prompts (``load_key``) and audited
+    the release being gated (``release``, or ``repo``'s HEAD: the key's
+    ``release_commit``); the triage
     file names ``world`` (rendered by the key), the key's corpus and range, and exactly
     the corpus and provenance sample files given, by sha256; the audit those samples
     make is recomputed and must be valid (``audit_verdict``); the recorded family may
@@ -1175,6 +1217,15 @@ def gate(world: str, triage: Path, key_path: Path, samples: list[Path],
     text = triage.read_text()
     header = triage_header(text)
     problems = []
+    repo = repo or ROOT
+    gated = release or _git(repo, "rev-parse", "--verify", "HEAD^{commit}").strip()
+    try:
+        gated = _git(repo, "rev-parse", "--verify", f"{gated}^{{commit}}").strip()
+    except subprocess.CalledProcessError:
+        pass
+    if key["release_commit"] != gated:
+        problems.append(f"the key audited {key['release_commit'][:12]}, not the release "
+                        f"gated {gated[:12]}")
     if header.get("World") != world or world not in key["worlds"]:
         problems.append(f"the triage file is of {header.get('World')!r}, not {world!r} of "
                         f"the rendered worlds {key['worlds']}")
@@ -1218,7 +1269,6 @@ def main(argv: list[str] | None = None) -> int:
                    help="the rejected findings with their reasons")
     r.add_argument("--range", required=True,
                    help="the release range, base..head, read by the provenance pass")
-    r.add_argument("--repo", type=Path, default=ROOT, help="the repository the range is in")
     for name in ("validate", "triage"):
         v = sub.add_parser(name)
         v.add_argument("output", type=Path, nargs="+", help="one JSON Lines file per sample")
@@ -1236,6 +1286,8 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--provenance-samples", type=Path, nargs="+", required=True,
                    help="the provenance sample files the triage file records")
     g.add_argument("--triage", type=Path, default=None)
+    g.add_argument("--release", default=None,
+                   help="the release commit being gated (default: HEAD)")
     b = sub.add_parser("baseline")
     b.add_argument("--static-only", action="store_true")
     args = parser.parse_args(argv)
@@ -1250,7 +1302,7 @@ def _run(args: argparse.Namespace) -> int:
     if args.command == "render":
         try:
             key = render(args.world, args.out, seed=args.seed, rendered=args.rendered,
-                         release_range=args.range, repo=args.repo, essay=args.essay,
+                         release_range=args.range, repo=ROOT, essay=args.essay,
                          previous=args.previous, previous_corpus=args.previous_corpus,
                          rejected=args.rejected)
         except RenderFailed as exc:
@@ -1273,7 +1325,8 @@ def _run(args: argparse.Namespace) -> int:
         return 0
     if args.command == "gate":
         path = args.triage or TRIAGE_DIR / f"{args.world}.md"
-        problems = gate(args.world, path, args.key, args.samples, args.provenance_samples)
+        problems = gate(args.world, path, args.key, args.samples, args.provenance_samples,
+                        release=args.release)
         for problem in problems:
             print(problem, file=sys.stderr)
         return 1 if problems else 0

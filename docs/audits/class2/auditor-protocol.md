@@ -34,7 +34,10 @@ therefore cannot recommend text that steers (AGENTS rule 2).
 
 1. **The corpus** for each launchable world (`scripts/class2_audit.py render`): the same
    leaves as B1, each with `surface_kind`, `audience`, `frequency` and `provenance`. The
-   charter's cards and norms are included and tagged "context, not under audit".
+   charter's cards and norms are included and tagged "context, not under audit". The
+   kernel's seat text (every tool result, refusal reason and error message the code can
+   return to a seat, found statically by `tests/audit/class2_seat_text.py`, whether a
+   short run reaches it or not) is included once, under the world `kernel`.
 2. **The authority text, verbatim**: Chapter I §I (the three classes and the definition
    of an objective); Chapter II §I, §I.a (the Carroll paragraph), §I.b (the two channels;
    minimal sufficient disclosure; the obedience constraint), §II.b (hard casts) and §IV.a
@@ -180,14 +183,17 @@ uv run python scripts/class2_audit.py validate work/class2/<release>/sample1.jso
     --key work/class2/<release>/canary_key.json
 uv run python scripts/class2_audit.py triage <the same four samples> \
     --key work/class2/<release>/canary_key.json --world <world> --family <family>
-uv run python scripts/class2_audit.py gate --world <world> \
+uv run python scripts/class2_audit.py gate --world <world> --release <release sha> \
     --key work/class2/<release>/canary_key.json \
     --samples work/class2/<release>/sample1.jsonl work/class2/<release>/sample2.jsonl \
     --provenance-samples work/class2/<release>/provenance1.jsonl \
     work/class2/<release>/provenance2.jsonl
 ```
 
-`render` fills the authority text from `--essay` (default `docs/essay.md`, which is
+`render` audits the repository it runs in: the range's head must be the commit checked
+out (HEAD), with no uncommitted change under a seat-visible path, and the key records
+that commit (`release_commit`); `gate` refuses a key of any other release (`--release`,
+default HEAD). `render` fills the authority text from `--essay` (default `docs/essay.md`, which is
 copied into the worktree and never committed) and refuses to render without it, or when
 it lacks a heading that bounds the text. No prompt is ever edited after rendering: both
 prompts are bound to the key by hash.
@@ -200,7 +206,8 @@ key names the canaries, and the unplanted corpus would reveal them by difference
 
 The tool defends against inconsistency, stale artifacts and operator error:
 
-- **Bound.** Every artifact is bound by hash to its origin: the key to the corpus and
+- **Bound.** Every artifact is bound by hash to its origin: the key to the release
+  commit it audited and to the corpus and
   both prompts beside it, a sample to the id its prompt names, a triage file to its key's
   corpus and range and to its sample files, a previous corpus to its own leaf hashes.
 - **Recomputed.** Derived values are recomputed from bound sources, never stored and

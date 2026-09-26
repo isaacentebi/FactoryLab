@@ -4,6 +4,7 @@
   "compute-continuity-roster",
   "edition6-capital-loop",
   "edition6-testnet-rehearsal",
+  "kernel",
   "scripted",
   "scripted-crash",
   "testnet",
@@ -1568,6 +1569,196 @@
    "rule": "IMP",
    "path": "edition6-testnet-rehearsal/tools/world.read/description",
    "quote": "read one current public institutional section by its directory handle.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "0796d64044d9",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "DEON",
+   "path": "kernel/seat_text/exception/factorylab:charter:committee::Committee.__post_init__/6512b7ac",
+   "quote": "seat assemblies must be unique",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "4f3e24053650",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "DEON",
+   "path": "kernel/seat_text/exception/factorylab:charter:committee::Committee.__post_init__/9c5b33f4",
+   "quote": "seats must be a sequence of seat records",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "2911063de734",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "DEON",
+   "path": "kernel/seat_text/exception/factorylab:charter:committee::StandingCommittee.__post_init__/6512b7ac",
+   "quote": "seat assemblies must be unique",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "1048904b36ec",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/exception/factorylab:charter:book::CharterBook.vote/7050c110",
+   "quote": "use abstain for malformed votes",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "97280668f404",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/exception/factorylab:charter:book::CharterBook.vote/7050c110",
+   "quote": "vote must be a boolean;",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "116050efeab1",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/exception/factorylab:cortex:assembly::validate_return_sections/86157315",
+   "quote": "return sections did not settle",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "6e2ef5789cdf",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/exception/factorylab:kernel:money::_decimal/d5804882",
+   "quote": "use decimal or str, never float",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "e1752f88d9ec",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/exception/factorylab:kernel:queue::LearningReturn.__post_init__/d50682dc",
+   "quote": "return handle, channel and definition version are required",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "69e018700297",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/exception/factorylab:runtime:compute::ComputeMixin._validate_output_contract/51213b48",
+   "quote": "return kind cannot change after tools or children run",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "35b4abdec9c1",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/exception/factorylab:runtime:routing::ContractQueue.bind/02c58885",
+   "quote": "return emits an undeclared kind",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "e4bfbefdfd62",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/exception/factorylab:runtime:routing::ContractQueue.bind/51213b48",
+   "quote": "return kind cannot change after tools or children run",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "ef80a55181c7",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/exception/factorylab:runtime:routing::PopulationEvent.__post_init__/0ccf259a",
+   "quote": "use the kernel event type for a built-in kind",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "9ff83a48c90b",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/exception/factorylab:settlement:consequence::ReturnConsequences.release/dd4d0460",
+   "quote": "account {…} is not closed and cannot be released",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "cad8524db292",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/exception/factorylab:settlement:lots::LotTable.finish/e17cee35",
+   "quote": "return cost already final",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "caefa30c631c",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/exception/factorylab:settlement:lots::LotTable.release/94445e4f",
+   "quote": "account {…} is open or unknown and cannot be released",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "e989e4c219b2",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/exception/factorylab:settlement:lots::LotTable.start/4219f920",
+   "quote": "return already admitted",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "b91fbbb6a347",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/exception/factorylab:world:exchange::HyperliquidExchange.account/10401d83",
+   "quote": "account() needs an address or a private key",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "d3b8af784f9e",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/result/factorylab:world:exchange::HyperliquidExchange._vault_submit/26f1b5d8",
+   "quote": "submit exception:",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "29587bd821f0",
+   "world": "kernel",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "kernel/seat_text/sink/factorylab:runtime:venue::VenueMixin._execute_outputs/c8357538",
+   "quote": "use action=\"order\" with explicit coin, side and size",
    "design_ref": null,
    "status": "untriaged"
   },

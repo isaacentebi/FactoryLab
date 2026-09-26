@@ -152,10 +152,13 @@ def test_the_static_corpus_has_no_untriaged_finding_and_no_stale_one(world, stat
     assert drift == {"new": [], "stale": []}, drift
 
 
-def test_every_static_surface_is_registered_and_every_registered_one_is_rendered(static):
+def test_every_static_surface_is_registered_and_every_registered_one_is_rendered(static,
+                                                                                  seat):
     """The coverage registry: a new surface forces its classification; a registered surface
-    nothing renders means the corpus stopped reaching it."""
-    rendered = set().union(*(audit.surfaces_of(leaves) for leaves in static.values()))
+    nothing renders means the corpus stopped reaching it. The kernel's seat text is a
+    static surface too."""
+    rendered = set().union(*(audit.surfaces_of(leaves) for leaves in static.values()),
+                           audit.surfaces_of(corpus.render_seat_text(seat)))
     registered = set(audit.load_surfaces()["static"])
     assert rendered - registered == set(), "unregistered surfaces"
     assert registered - rendered == set(), "registered but not rendered"
@@ -273,3 +276,66 @@ def test_a_hand_edited_surface_registry_is_refused(tmp_path, monkeypatch):
     monkeypatch.setattr(audit, "SURFACES", edited)
     with pytest.raises(ValueError, match="sorted list of distinct strings"):
         audit.load_surfaces()
+
+
+# --- seat text in the kernel's code: every string a seat can read back ----------------------
+
+
+@pytest.fixture(scope="module")
+def seat():
+    """The seat-text scan (``class2_seat_text``), taken once for the module."""
+    from tests.audit import class2_seat_text
+
+    return class2_seat_text.scan()
+
+
+def test_every_seat_text_source_is_registered_and_rendered(seat):
+    """The class, not the instance (Codex P2, ``_refuse_request``): every function whose
+    text can reach a seat is registered, every registered one is still in the code, and
+    every one of its texts is a leaf of the corpus, whether a short run reaches it or
+    not. A new refusal, error message or result reason fails here until the baseline is
+    rewritten and its findings triaged."""
+    registered = set(audit.load_surfaces()["seat_text"])
+    assert seat.sources - registered == set(), "an unregistered seat-text source"
+    assert registered - seat.sources == set(), "a registered seat-text source is gone"
+    leaves = corpus.render_seat_text(seat)
+    assert len(leaves) == len(seat.texts)
+    assert all(corpus.excluded(path) is None for path, _text in leaves), \
+        "a seat-text leaf is excluded from the lint"
+    assert {text for _path, text in leaves} == {t.text for t in seat.texts}
+
+
+def test_the_seat_text_scan_reaches_what_short_runs_do_not(seat):
+    """The scan finds each class of seat text on its own path: a child request's
+    refusal (the reported instance), a tool dispatch's refusal, a recorded venue's
+    refusal, a refused registration's parser reason, and an exception message a tool
+    path raises, which the tool funnel returns to the seat."""
+    by_source: dict[str, set[str]] = {}
+    for t in seat.texts:
+        by_source.setdefault(t.source, set()).add(t.text)
+    composition = "factorylab/runtime/composition.py::CompositionMixin._invoke_child"
+    assert any(t.kind == "sink" and t.source == composition for t in seat.texts)
+    assert "unknown or disallowed tool" in by_source[
+        "factorylab/runtime/compute.py::ComputeMixin._run_tool"]
+    assert any("recorded market has ended" in text for texts in by_source.values()
+               for text in texts)
+    assert any(src.startswith("factorylab/cortex/registration.py::")
+               for src in by_source)
+    assert {"_refuse_request", "_reject_registration", "_refusal_to_owner"} <= set(seat.sinks)
+    assert "factorylab/runtime/compute.py::ComputeMixin._run_tool" in seat.funnels(
+        seat.reachable)
+
+
+def test_the_kernel_seat_text_has_no_untriaged_finding_and_no_stale_one(seat, allowlist):
+    result = audit.triage(corpus.render_seat_text(seat), allowlist)
+    assert not result.review, [f.key for f in result.review]
+    drift = lexicon.compare(result.findings, audit.baseline_rows(corpus.KERNEL, "static"))
+    assert drift == {"new": [], "stale": []}, drift
+
+
+def test_a_seat_text_source_the_registry_lacks_fails_the_check(seat, monkeypatch):
+    registry = audit.load_surfaces()
+    dropped = {**registry, "seat_text": registry["seat_text"][1:]}
+    monkeypatch.setattr(audit, "load_surfaces", lambda: dropped)
+    with pytest.raises(AssertionError, match="unregistered seat-text source"):
+        test_every_seat_text_source_is_registered_and_rendered(seat)

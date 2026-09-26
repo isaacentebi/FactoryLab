@@ -179,6 +179,21 @@ def render_static(name: str, rt=None) -> list[Leaf]:
     return [(p, t) for p, t in leaves if isinstance(t, str) and excluded(p) is None]
 
 
+#: The pseudo-world of the seat text written in the kernel's code (``class2_seat_text``):
+#: the same in every world, so it is read once, not once per world.
+KERNEL = "kernel"
+
+
+def render_seat_text(scan: Any | None = None) -> list[Leaf]:
+    """Every string the kernel's code can put before a seat as a tool result, a refusal
+    reason or an error message, whether or not a short run reaches it
+    (``class2_seat_text``), under ``kernel/seat_text/<kind>/<source>/<digest>``."""
+    from tests.audit import class2_seat_text
+
+    scan = scan or class2_seat_text.scan()
+    return [(f"{KERNEL}/{t.leaf}", t.text) for t in scan.texts]
+
+
 def _plain(value: Any) -> Any:
     return json.loads(json.dumps(value, default=str))
 

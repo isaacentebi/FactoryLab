@@ -50,6 +50,14 @@ def _commit(repo, path, text, message):
 BEHAVIOUR_MIX = "Soften the hold wording: seats held too much in the last run"
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _seat_text_scan():
+    """The seat-text scan every render reads (``class2_seat_text``), taken once in setup."""
+    from tests.audit import class2_seat_text
+
+    return class2_seat_text.scan()
+
+
 @pytest.fixture(scope="module")
 def history(tmp_path_factory):
     """A repository with a base, a surface commit justified by a behaviour mix, and a
@@ -149,9 +157,10 @@ def test_a_render_whose_world_raises_midway_writes_no_corpus_and_exits_nonzero(
         return original(self, ev)
 
     monkeypatch.setattr(Runtime, "_process_event", fails_midway)
+    monkeypatch.setattr(tool, "ROOT", repo)  # the CLI audits its own repository
     out = tmp_path / "audit"
     code = tool.main(["render", "--world", WORLD, "--out", str(out), "--seed", "7",
-                      "--rendered", "--range", f"{surface}..{head}", "--repo", str(repo),
+                      "--rendered", "--range", f"{surface}..{head}",
                       "--essay", str(ESSAY)])
     assert code != 0 and calls["n"] >= 8
     assert not out.exists()
@@ -596,18 +605,20 @@ def triaged(with_commit, tmp_path, monkeypatch):
     return out, key, tmp_path / f"{WORLD}.md", sha, samples, prov
 
 
-def _gate(triaged, world=WORLD, samples=None, prov=None):
-    out, _key, path, _sha, s, p = triaged
-    return tool.gate(world, path, out / "canary_key.json", samples or s, prov or p)
+def _gate(triaged, world=WORLD, samples=None, prov=None, release=None):
+    out, key, path, _sha, s, p = triaged
+    return tool.gate(world, path, out / "canary_key.json", samples or s, prov or p,
+                     release=release or key["release_commit"])
 
 
 def test_the_provenance_finding_reaches_the_triage_and_the_gate(triaged):
     """Codex P2: a flagged behaviour-mix commit is a HIGH finding the gate holds."""
-    out, _key, path, sha, samples, prov = triaged
+    out, key, path, sha, samples, prov = triaged
     text = path.read_text()
     assert f"`commit:{sha}` | P1 | BEHAVIOUR-MIX | HIGH |" in text
     gate = ["gate", "--world", WORLD, "--key", str(out / "canary_key.json"),
-            "--samples", *map(str, samples), "--provenance-samples", *map(str, prov)]
+            "--samples", *map(str, samples), "--provenance-samples", *map(str, prov),
+            "--release", key["release_commit"]]
     assert any("untriaged HIGH" in p for p in _gate(triaged))
     assert tool.main(gate) == 1
     path.write_text(_dispose(text))
@@ -836,3 +847,36 @@ def test_render_fills_the_authority_text_or_refuses(rendered, history, tmp_path)
             tool.render([WORLD], tmp_path / "out", seed=7, rendered=False, essay=essay,
                         release_range=f"{surface}..{head}", repo=repo)
         assert not (tmp_path / "out").exists()
+
+
+
+# --- the provenance range is the release being audited --------------------------------------
+
+
+def test_render_binds_the_release_commit_and_refuses_another(rendered, history, tmp_path):
+    """Codex P1: the range head is the commit checked out, with no uncommitted
+    seat-visible change; the key records it, and the gate re-verifies it."""
+    out, key = rendered
+    repo, base, surface, head = history
+    assert key["release_commit"] == head == key["range_shas"][1]
+    with pytest.raises(tool.AuditInputInvalid, match="is not HEAD"):
+        tool.render([WORLD], tmp_path / "old", seed=7, rendered=False, essay=ESSAY,
+                    release_range=f"{base}..{surface}", repo=repo)
+    schematics = repo / "factorylab/cortex/schematics.py"
+    original = schematics.read_text()
+    schematics.write_text(original + "HOLD_MORE = 'hold more'\n")
+    try:
+        with pytest.raises(tool.AuditInputInvalid, match="uncommitted seat-visible"):
+            tool.render([WORLD], tmp_path / "dirty", seed=7, rendered=False, essay=ESSAY,
+                        release_range=f"{surface}..{head}", repo=repo)
+    finally:
+        schematics.write_text(original)
+    assert not (tmp_path / "old").exists() and not (tmp_path / "dirty").exists()
+
+
+def test_the_gate_refuses_a_key_of_another_release(triaged):
+    out, key, path, _sha, _samples, _prov = triaged
+    path.write_text(_dispose(path.read_text()))
+    assert _gate(triaged) == []
+    other = "0" * 40
+    assert any("not the release gated" in p for p in _gate(triaged, release=other))

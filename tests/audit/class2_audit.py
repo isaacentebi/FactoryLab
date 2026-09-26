@@ -57,7 +57,8 @@ def baseline_rows(world: str, surface: str) -> list[dict]:
 SURFACES = lexicon.HERE / "class2_surfaces.toml"
 
 def load_surfaces() -> dict[str, list[str]]:
-    """The registry: the static and rendered surfaces, and the request builders rendered.
+    """The registry: the static and rendered surfaces, the request builders rendered, and
+    the seat-text sources the code holds (``class2_seat_text``).
 
     Refused (``ValueError``) unless each list is a sorted list of distinct strings, as
     ``write_baseline`` writes it: a hand edit that duplicates or misorders an entry is
@@ -65,7 +66,8 @@ def load_surfaces() -> dict[str, list[str]]:
     raw = tomllib.loads(SURFACES.read_text())
     out = {"static": raw.get("static", {}).get("surfaces"),
            "rendered": raw.get("rendered", {}).get("surfaces"),
-           "builders": raw.get("builders", {}).get("rendered")}
+           "builders": raw.get("builders", {}).get("rendered"),
+           "seat_text": raw.get("seat_text", {}).get("sources")}
     for name, items in out.items():
         if not isinstance(items, list) or not all(isinstance(i, str) for i in items) \
                 or items != sorted(set(items)):
@@ -106,6 +108,14 @@ def write_baseline(worlds: Iterable[str], *, rendered: bool = True) -> dict:
         # A static-only refresh keeps the rendered half as it was triaged.
         out += [row for row in lexicon.load_baseline() if row["surface"] == "rendered"]
         seen["rendered"] = set(load_surfaces()["rendered"])
+    # The seat text in the kernel's code, read once (the same in every world).
+    from tests.audit import class2_seat_text
+
+    seat = class2_seat_text.scan()
+    seat_leaves = corpus.render_seat_text(seat)
+    seen["static"] |= surfaces_of(seat_leaves)
+    result = triage(seat_leaves, allowlist)
+    out += rows(corpus.KERNEL, "static", result.findings, result.review)
     for world in worlds:
         static = corpus.render_static(world)
         seen["static"] |= surfaces_of(static)
@@ -131,6 +141,12 @@ def write_baseline(worlds: Iterable[str], *, rendered: bool = True) -> dict:
     lines.append("# The request builders (class2_corpus.REQUEST_BUILDERS) the corpus renders.")
     lines.append("rendered = [")
     lines += [f'  "{b}",' for b in sorted(builders)]
+    lines += ["]", ""]
+    lines.append("[seat_text]")
+    lines.append("# Every function whose text can reach a seat (class2_seat_text): a new one")
+    lines.append("# fails the check tier until the baseline is rewritten and triaged.")
+    lines.append("sources = [")
+    lines += [f'  "{s}",' for s in sorted(seat.sources)]
     lines += ["]"]
     SURFACES.write_text("\n".join(lines) + "\n")
     document = {
@@ -138,7 +154,7 @@ def write_baseline(worlds: Iterable[str], *, rendered: bool = True) -> dict:
                    "the edition-7 text wave; no seat-visible text is rewritten on the branch "
                    "that found them (phase-2 brief)."),
         # Bound: the worlds read and the allowlist that triaged them (load_baseline).
-        "worlds": sorted(worlds),
+        "worlds": sorted([*worlds, corpus.KERNEL]),
         "allowlist_sha256": lexicon.allowlist_sha(),
         "findings": sorted(out, key=lambda r: (r["world"], r["surface"], r["rule"],
                                                r["path"], r["quote"])),
