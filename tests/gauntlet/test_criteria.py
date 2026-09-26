@@ -6,6 +6,7 @@ passes on its violating rows does not discriminate and must be rewritten (design
 
 import json
 import math
+import re
 from decimal import Decimal
 from random import Random
 
@@ -1310,6 +1311,32 @@ def test_a_malformed_diary_is_refused(tmp_path):
         {"kind": "event", "seq": 1, "event": {"kind": "Tick"}}) + "\n")
     with pytest.raises(g.DiaryInvalid, match="another kind"):
         g.load_events(opened)
+
+
+@pytest.mark.parametrize("broken", ['{"kind": "event", "seq": 2', "not json", '{"a": }'],
+                         ids=["truncated", "text", "invalid"])
+@pytest.mark.parametrize("form", ["json", "jsonl", "directory"])
+def test_a_truncated_or_invalid_json_line_is_diary_invalid(tmp_path, form, broken):
+    """Codex on 3b5bb6a: in every input form ``load_events`` reads, a line that is not
+    JSON is refused as ``DiaryInvalid`` naming the file and the line, never raised as
+    ``JSONDecodeError``."""
+    good = json.dumps({"kind": "event", "seq": 1, "event": {"kind": "Launch"}})
+    if form == "json":
+        path = tmp_path / "rows.json"
+        path.write_text("[\n" + good + ",\n" + broken + "\n")
+        line = r"[34]"  # where the decoder stops: the line, or the end a truncation hits
+    elif form == "jsonl":
+        path = tmp_path / "rows.jsonl"
+        path.write_text(good + "\n" + broken + "\n")
+        line = 2
+    else:
+        path = tmp_path / "open"
+        path.mkdir()
+        (path / "event_Launch.jsonl").write_text(good + "\n" + broken + "\n")
+        line = 2
+    name = "event_Launch.jsonl" if form == "directory" else path.name
+    with pytest.raises(g.DiaryInvalid, match=rf"{re.escape(name)} line {line}\b"):
+        g.load_events(path)
 
 
 #: Every nested field the diary loader dereferences, as a path from the row.

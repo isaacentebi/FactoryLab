@@ -379,6 +379,21 @@ def _file_kind(stem: str) -> str:
     return "event" if stem.startswith("event_") else stem
 
 
+def _json_lines(path: Path) -> list[Any]:
+    """The JSON value on each non-blank line of ``path``; a truncated or invalid line
+    raises ``DiaryInvalid`` naming the file and the line, never ``JSONDecodeError``."""
+    rows = []
+    with path.open() as handle:
+        for number, line in enumerate(handle, 1):
+            if not line.strip():
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError as exc:
+                raise DiaryInvalid(f"{path.name} line {number}: not JSON ({exc.msg})") from exc
+    return rows
+
+
 def load_events(path: str | Path, *, kinds: Iterable[str] | None = None,
                 skip: frozenset[str] = HEAVY_KINDS) -> list[dict]:
     """Ledger rows from a diary, in ledger order (``seq``).
@@ -399,8 +414,7 @@ def load_events(path: str | Path, *, kinds: Iterable[str] | None = None,
             if file.stem in skip or kind in skip or (wanted is not None
                                                      and kind not in wanted):
                 continue
-            with file.open() as handle:
-                read = [json.loads(line) for line in handle if line.strip()]
+            read = _json_lines(file)
             for row in read:
                 event_kind = _event_of(row).get("kind") if kind == "event" else None
                 if not isinstance(row, dict) or row.get("kind") != kind or (
@@ -408,10 +422,14 @@ def load_events(path: str | Path, *, kinds: Iterable[str] | None = None,
                     raise DiaryInvalid(f"{file.name} holds a row of another kind")
             rows.extend(read)
     elif path.suffix == ".jsonl":
-        with path.open() as handle:
-            rows = [json.loads(line) for line in handle if line.strip()]
+        rows = _json_lines(path)
     else:
-        rows = json.loads(path.read_text())
+        try:
+            rows = json.loads(path.read_text())
+        except json.JSONDecodeError as exc:
+            raise DiaryInvalid(f"{path.name} line {exc.lineno}: not JSON ({exc.msg})") from exc
+        if not isinstance(rows, list):
+            raise DiaryInvalid(f"{path.name} is not a list of rows")
     if wanted is not None:
         rows = [row for row in rows if isinstance(row, dict) and row.get("kind") in wanted]
     bad = [i for i, row in enumerate(rows) if not isinstance(row, dict)
