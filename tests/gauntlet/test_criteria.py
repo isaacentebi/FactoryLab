@@ -1161,6 +1161,23 @@ def _sf1e_base():
     return closes, steps
 
 
+def test_sf1e_a_first_gain_row_after_the_episode_does_not_set_its_start():
+    """Codex P2 (gauntlet.py:1133): γ₀ is read only from gain rows before or during the
+    episode. A router drawing from window 1 whose first gain row is an unwind from
+    gamma_max after the episode had no observed γ during it: unsupported, not a pass
+    at zero steps."""
+    top = g.physics(M).gamma_max
+    drawn = [_open("tick-1", "a")]
+    closes = [_w(i, acts=i % 3 == 0, sf=3 <= i <= 20) for i in range(1, 36)]
+    after = [_gain(30, top, 0.1, pathology="none")]
+    result = g.sf1e_gain(drawn + closes + after, M)
+    assert result.status == g.UNSUPPORTED, result.evidence
+    assert result.evidence["stateless"][0]["router"] == "router:Tick"
+    # The same row inside the episode does set it: at the top, zero steps, a pass.
+    inside = [_gain(12, top, top)]
+    assert g.sf1e_gain(drawn + closes + inside + after, M).ok
+
+
 def test_ca_sf1e_a_router_registered_mid_episode_is_bound_from_its_registration():
     """Codex C-a: a router first seen at window 30 of an episode that began at 3 is held
     to a bound from 30, not from 3."""

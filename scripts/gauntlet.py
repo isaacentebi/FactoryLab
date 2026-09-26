@@ -1056,7 +1056,8 @@ def sf1e_gain(events: list[Mapping], manifest: Mapping) -> Result:
     (``immune.close_window`` raises gain exactly there: thrash takes priority), read
     from its own start, never across episodes (A). Per router and episode, γ₀ is the
     router's latest state before its bound starts (the last earlier gain row's
-    ``gamma_after``, else the first row's ``gamma_before``), read as the kernel reads γ
+    ``gamma_after``, else the ``gamma_before`` of its first row inside the episode; a
+    row after the episode never sets it), read as the kernel reads γ
     (``gamma_of``, the first base); ``steps`` is ``gain_steps(γ₀)``, the kernel's own
     float loop (C); ``A`` is the cadence the kernel allows that router's gain
     (``immune._gain``, time audit T2): the organ's own (``acting_period``, never below
@@ -1075,10 +1076,10 @@ def sf1e_gain(events: list[Mapping], manifest: Mapping) -> Result:
     ``fail`` when an episode stayed flagged through a router's bound without that router
     reaching the top, or γ unwound while flagged; ``unsupported`` when an episode still
     open at the diary's end has a bound beyond it, or when a router present while a step
-    was due has no gain row at all (the kernel writes none for a router already at
-    ``gamma_max``, immune.py ``_gain``, so γ is unobserved); ``pass`` needs one (router, episode)
-    that reached the top within its bound (B). An episode that resolved before a
-    router's bound is no evidence for that router.
+    was due has no gain row before or during the episode (the kernel writes none for a
+    router already at ``gamma_max``, immune.py ``_gain``, so γ is unobserved); ``pass``
+    needs one (router, episode) that reached the top within its bound (B). An episode
+    that resolved before a router's bound is no evidence for that router.
     """
     ph = physics(manifest)
     closes = windows(events)
@@ -1114,21 +1115,23 @@ def sf1e_gain(events: list[Mapping], manifest: Mapping) -> Result:
             if born > end or (gone is not None and gone <= start):
                 continue  # the router did not exist during this episode
             begin = max(start, born)
-            if not rows:
-                # A present router with no gain row has no observable γ. The kernel
-                # writes none for a router already at gamma_max (immune.py ``_gain``:
-                # ``if before == after: continue``) or not yet due (``clockwork.due``),
-                # so its absence is neither a pass nor a failure once a step was due.
+            prior = [row for row in rows if need(row, "window") < begin]
+            inside = [row for row in rows if begin <= need(row, "window") <= end]
+            if not prior and not inside:
+                # A present router with no gain row before or during the episode has no
+                # observable γ for it: a later row (an unwind from gamma_max, say) is the
+                # state after the episode, not its start. The kernel writes none for a
+                # router already at gamma_max (immune.py ``_gain``: ``if before ==
+                # after: continue``) or not yet due (``clockwork.due``), so its absence
+                # is neither a pass nor a failure once a step was due.
                 if min(end, gone - 1 if gone is not None else end) >= begin + own:
                     stateless.append({"router": router, "episode": [start, end],
                                       "begin": begin, "period": own})
                 else:
                     resolved += 1
                 continue
-            prior = [row for row in rows if need(row, "window") < begin]
-            inside = [row for row in rows if begin <= need(row, "window") <= end]
             gamma0 = (gamma_of(need(prior[-1], "gamma_after")) if prior
-                      else gamma_of(need(rows[0], "gamma_before")))
+                      else gamma_of(need(inside[0], "gamma_before")))
             steps = gain_steps(ph, gamma0)
             top = begin if steps == 0 else next(
                 (need(row, "window") for row in inside
