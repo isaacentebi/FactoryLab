@@ -534,7 +534,9 @@ class PricingMixin:
         (``PriceController.redefine``), its consecutive unmeasured windows (R10-f)
         restart; the organ's own step drops it from the failing set it holds (M-6;
         ``versions.organ_step``, which replay runs too), so no stable-failure duration
-        spans the redefinition.
+        spans the redefinition. Its price restarts (``redefine``), so both cadence
+        markers, the ratio clock (``card_clock``) and the controller's window
+        separation, restart from the redefinition (essay II.IV.c).
         A card whose identity is unchanged keeps all of it; old windows are read
         under the meaning they recorded (``immune.thrash_roles``,
         ``live.current_metrics``), and a closed price window prices on the cards it froze.
@@ -552,7 +554,11 @@ class PricingMixin:
                 was = [was, *meaning[1:]]
             if card.id in known and was != meaning:
                 if card.id in self.controller.card_ids():
-                    self.controller.redefine(card.id, edition=self.charter.edition)
+                    self.controller.redefine(card.id, edition=self.charter.edition,
+                                             window_end_event=self.n)
+                    # The price restarted here: its next move waits the full
+                    # controller-to-sample ratio from now (essay II.IV.c; T2).
+                    self.card_clock[card.id] = self.ticks_consumed
                 self.card_unmeasured.pop(card.id, None)
             known[card.id] = meaning
 

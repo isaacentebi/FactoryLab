@@ -426,7 +426,8 @@ class PriceController:
         return violation > 0 and (price >= ratio(self.__cap, violation)
                                   or pressure >= self.__cap)
 
-    def redefine(self, card_id: str, *, edition: int | str | None = None) -> None:
+    def redefine(self, card_id: str, *, edition: int | str | None = None,
+                 window_end_event: int | None = None) -> None:
         """A card redefined under the same id (a new ``metric_identity``) is a new
         metric (Codex on #152): its failing-attractor duration, its failure episode
         (``episode_bound``, R10-n), its runs of violating and saturated windows and its
@@ -436,7 +437,10 @@ class PriceController:
         manifest's seed lambda or an amendment's), with no pressure the old metric
         accumulated carried over; an amendment that also writes a lambda adopts it
         right after. A checkpoint that kept no declared price restarts from the price
-        in force. Cumulative counts stay. Ledgered first."""
+        in force. Cumulative counts stay. The restart is a move of the price, so the
+        card's window cadence counts from ``window_end_event`` when given (essay
+        II.IV.c): its next update waits ``min_window_events`` from the redefinition,
+        never from the old metric's last update. Ledgered first."""
         state = self.__cards[card_id]
         start = state.price if state.declared is None else state.declared
         self.__ledger.append({"kind": "price.redefined", "card_id": card_id,
@@ -444,6 +448,8 @@ class PriceController:
                               "episode_bound": state.episode_bound,
                               "lambda_before": state.price, "integral": state.integral,
                               "declared": start})
+        if window_end_event is not None:
+            state = replace(state, last_window_end_event=window_end_event)
         self.__cards[card_id] = replace(state, price=start, integral=start,
                                         failing_windows=0, episode_bound=0.0,
                                         violation_windows=0, saturated_windows=0,

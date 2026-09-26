@@ -216,3 +216,33 @@ def test_a_meaning_checkpointed_as_an_observation_alone_is_compared_as_one():
         rt._derive_regions()
         assert ("c" not in rt.card_unmeasured) is resets
         assert rt.card_meanings["c"] == ["well_formed_rate", "evaluator", "windows", None]
+
+
+def test_a_redefined_card_s_next_repricing_waits_the_full_ratio_from_the_redefinition(
+        monkeypatch):
+    """Codex on #152 (essay II.IV.c): the redefinition restarts the price, so both
+    cadence markers restart there. The old metric last moved long ago, which alone
+    would let the new metric reprice at once; it waits ``min_ratio`` times its sample
+    loop from the redefinition, and the controller's window separation from the
+    redefinition's event."""
+    from factorylab.charter import measurement
+
+    monkeypatch.setattr(measurement, "fresh_sample", lambda *_a: True)
+    rt = make_runtime()
+    old = _card("moving", "well_formed_rate", "evaluator")
+    rt.charter = replace(rt.charter, cards=(old,))
+    rt._derive_regions()
+    rt.card_clock["moving"] = 0
+    rt.ticks_consumed = 10_000
+    assert rt._price_held(old, rt.window) is None  # the old metric may move now
+    new = _card("moving", "noop_share", "evaluator")
+    rt.charter = replace(rt.charter, cards=(new,))
+    rt._derive_regions()
+    wait = rt.m.timing.min_ratio * rt._card_inner(new)
+    assert rt._price_held(new, rt.window) == {"reason": "ratio", "last_tick": 10_000,
+                                              "inner_ticks": rt._card_inner(new)}
+    rt.ticks_consumed = 10_000 + wait - 1
+    assert rt._price_held(new, rt.window)["reason"] == "ratio"
+    rt.ticks_consumed = 10_000 + wait
+    assert rt._price_held(new, rt.window) is None
+    assert rt.controller.snapshot()["cards"]["moving"]["last_window_end_event"] == rt.n
