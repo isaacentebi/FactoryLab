@@ -1625,8 +1625,8 @@ class FeedbackMixin:
 
     def _acted_trade(self, about: str) -> dict[str, str]:
         """The trade an acting return took, ``{coin, side}``: its first venue write the
-        venue did not refuse. A return that earned without a venue write (a service
-        receipt) names none."""
+        venue did not refuse, keyed by that write's own instrument (``_instrument``).
+        A return that earned without a venue write (a service receipt) names none."""
         try:
             operations = self.executed_operations(about)
         except (AttributeError, KeyError):
@@ -1638,8 +1638,43 @@ class FeedbackMixin:
             side = args.get("side")
             if side is None and isinstance(args.get("is_buy"), bool):
                 side = "buy" if args["is_buy"] else "sell"
-            return {"coin": str(args.get("coin", "-")), "side": str(side or row["operation"])}
+            return {"coin": self._instrument(row), "side": str(side or row["operation"])}
         return {"coin": "-", "side": "-"}
+
+    def _instrument(self, row: dict) -> str:
+        """The instrument one executed venue write acted on, by its own identity.
+
+        Wave 16, D3: the base rate a verdict is scored against is keyed per
+        instrument, so a write never keys by a placeholder that would pool distinct
+        instruments into one prevalence. Guarantees: a perp coin or spot pair its own
+        name (orders, closes, cancels, leverage); a Polymarket outcome token
+        ``PM:<token_id>``, a cancel's by the order it cancelled; a vault
+        ``VAULT:<address>`` (a creation's by the address the venue returned, else its
+        name); a treasury transfer ``TREASURY:<direction>``. A write of a kind this
+        does not know raises: it must be taught its identity, never pooled.
+        """
+        from factorylab.runtime.polymarket import coin_of
+
+        operation = row["operation"]
+        args = row.get("args") or {}
+        if "coin" in args:
+            return str(args["coin"])
+        if "token_id" in args:
+            return coin_of(str(args["token_id"]))
+        if operation == "polymarket.cancel":
+            surface = getattr(self, "polymarket", None)
+            order_id = str(args.get("order_id"))
+            client_id = surface.order_ids.get(order_id) if surface is not None else None
+            intent = surface.intents.get(client_id) if client_id is not None else None
+            token = (intent or {}).get("args", {}).get("token_id")
+            return coin_of(str(token)) if token is not None else f"PM-ORDER:{order_id}"
+        if "vault" in args:
+            return f"VAULT:{args['vault']}"
+        if operation == "venue.vault_create":
+            return f"VAULT:{row.get('vault') or 'new:' + str(args.get('name'))}"
+        if operation == "treasury.transfer":
+            return f"TREASURY:{args.get('direction')}"
+        raise ValueError(f"no instrument identity for executed operation {operation!r}")
 
     def _verdict_key(self, about: str, kind: str) -> str:
         """The base rate a verdict on ``about`` is scored against (wave 16, D3).

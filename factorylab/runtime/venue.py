@@ -663,7 +663,8 @@ class VenueMixin:
             rows.append({
                 "operation": intent["operation"], "client_id": intent["client_id"],
                 "args": dict(intent["args"]), "status": result.get("status"),
-                **{key: result[key] for key in ("order_id", "filled_size", "avg_px", "error")
+                **{key: result[key]
+                   for key in ("order_id", "filled_size", "avg_px", "error", "vault")
                    if result.get(key) is not None},
             })
         return rows
