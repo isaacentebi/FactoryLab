@@ -57,6 +57,9 @@ from factorylab.settlement.vocabulary import (
     UNOBSERVABLE,
 )
 
+#: What ``_verdict_key`` joins a multi-leg exposure's legs by; no leg identity has it.
+LEG_DELIMITER = "|"
+
 #: A judgement the kernel could not use: malformed, refused by the model, or
 #: addressed to nothing this judgement may be about. The call is charged, and the
 #: decision settles censored: a form check is never a grade (evaluations S2, P9).
@@ -1720,6 +1723,10 @@ class FeedbackMixin:
             if side is None and isinstance(args.get("is_buy"), bool):
                 side = "buy" if args["is_buy"] else "sell"
             leg = (self._instrument(row), str(side or row["operation"]))
+            if any(LEG_DELIMITER in part for part in leg):
+                # ``_verdict_key`` joins legs by it: an identity carrying it would
+                # collide with a multi-leg key. No identity ``_instrument`` forms does.
+                raise ValueError(f"leg identity {leg!r} contains {LEG_DELIMITER!r}")
             if leg not in legs:
                 legs.append(leg)
         if not legs:
@@ -1738,9 +1745,10 @@ class FeedbackMixin:
         instruments into one prevalence. Guarantees: a perp coin or spot pair its own
         name (orders, closes, cancels, leverage); a Polymarket outcome token
         ``PM:<token_id>``, a cancel's by the order it cancelled; a vault
-        ``VAULT:<address>`` (a creation's by the address the venue returned, else its
-        name); a treasury transfer ``TREASURY:<direction>``. A write of a kind this
-        does not know raises: it must be taught its identity, never pooled.
+        ``VAULT:<address>`` (a creation's by the address the venue returned, else
+        ``VAULT:new:<name>``, its name with ``%`` and ``|`` escaped); a treasury
+        transfer ``TREASURY:<direction>``. A write of a kind this does not know
+        raises: it must be taught its identity, never pooled.
         """
         from factorylab.runtime.polymarket import coin_of
 
@@ -1760,7 +1768,12 @@ class FeedbackMixin:
         if "vault" in args:
             return f"VAULT:{args['vault']}"
         if operation == "venue.vault_create":
-            return f"VAULT:{row.get('vault') or 'new:' + str(args.get('name'))}"
+            if row.get("vault"):
+                return f"VAULT:{row['vault']}"
+            # The one identity a seat spells itself: ``%`` and the leg delimiter ``|``
+            # are escaped, so no name can forge a multi-leg key (``_verdict_key``).
+            name = str(args.get("name")).replace("%", "%25").replace("|", "%7C")
+            return f"VAULT:new:{name}"
         if operation == "treasury.transfer":
             return f"TREASURY:{args.get('direction')}"
         raise ValueError(f"no instrument identity for executed operation {operation!r}")
@@ -1778,7 +1791,7 @@ class FeedbackMixin:
         (section 1: a pooled key paid predictable prevalence).
         """
         subject = (self.world_outcomes.get(about) or {}).get("subject") or {}
-        exposure = ("|".join(subject["legs"]) if subject.get("legs")
+        exposure = (LEG_DELIMITER.join(subject["legs"]) if subject.get("legs")
                     else f"{subject.get('coin', '-')}:{subject.get('side', '-')}")
         return f"{VERDICT_BASE}{kind}:{exposure}:{self._horizon_ns()}"
 

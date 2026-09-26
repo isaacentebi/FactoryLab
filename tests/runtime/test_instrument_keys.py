@@ -81,3 +81,21 @@ def test_a_multi_leg_return_keys_by_its_complete_exposure():
     assert key["btc"] == key["btc-twice"] == old
     assert rt._acted_trade("btc") == {"coin": "BTC", "side": "buy"}  # unchanged
     assert "rejected" in rt.REFUSED_WRITES and key["btc-refused"] == old
+
+
+def test_no_leg_identity_can_carry_the_leg_delimiter():
+    """The multi-leg key joins legs by ``|``: an identity carrying it raises when the
+    exposure is formed, and the one identity a seat spells (a new vault's name) is
+    escaped, so no name can forge another return's multi-leg key."""
+    from factorylab.runtime.feedback import LEG_DELIMITER
+
+    rt = make_runtime()
+    forged = {"operation": "venue.vault_create", "status": "ok",
+              "args": {"name": "BTC:buy|ETH", "description": "d", "usd": "100"}}
+    assert LEG_DELIMITER not in rt._instrument(forged)
+    assert rt._instrument(forged) == "VAULT:new:BTC:buy%7CETH"
+    rt.executed_operations = lambda handle: [
+        {"operation": "venue.place_market", "status": "ok",
+         "args": {"coin": "BTC", "side": "buy|sell", "size": "0.001"}}]
+    with pytest.raises(ValueError, match="contains"):
+        rt._acted_trade("h")
