@@ -14,7 +14,7 @@ batches, many resolve schedules and shuffles of every same-instant group, with t
 processing clock at each batch's end (the worst case a venue batch gives), and asserts
 every variant produces byte-identical outcomes, consequence rows and late money. The
 named-trade side runs the runtime's own freeze, observation, lapse and pricing methods
-on a stand-in carrying only their state, so 200 variants fit in the check tier.
+on a stand-in carrying only their state, so 400 variants fit in the check tier.
 
 Assumed of the venue, as every venue in this repository delivers: facts arrive in
 fact-time order across batches (a batch holds the facts through its instant), and two
@@ -33,7 +33,6 @@ import json
 import random
 from types import SimpleNamespace
 
-from factorylab.kernel.ledger import Ledger
 from factorylab.runtime.feedback import FeedbackMixin
 from factorylab.runtime.venue import VenueMixin
 from factorylab.settlement.consequence import ReturnConsequences
@@ -42,7 +41,7 @@ S = 10**9
 T0 = 3 * 3600 * S - 60 * S  # an hour boundary falls 60 s in
 H = 90 * S
 PATIENCE = H + 40 * S
-VARIANTS = 200
+VARIANTS = 400
 
 
 def _t(seconds: float) -> int:
@@ -70,20 +69,45 @@ class _Named(FeedbackMixin, VenueMixin):
         return PATIENCE
 
 
+class _Rows:
+    """The ledger the book writes to, as plain rows: the ledger itself is not under test
+    here, and its encryption would cost the check tier's time budget."""
+
+    def __init__(self) -> None:
+        self.rows: list[dict] = []
+
+    def append(self, row: dict) -> None:
+        self.rows.append(dict(row))
+
+    def _recovery_items(self) -> list[dict]:
+        return list(self.rows)
+
+
 class _Book(ReturnConsequences):
     """The consequence book on the venue's clock, as the runtime's is."""
 
     def __init__(self, history: dict) -> None:
-        super().__init__(Ledger(), 1, horizon_ns=H)
+        super().__init__(_Rows(), 1, horizon_ns=H)
         self.clock_ns = T0
         self.history = history
         # A polled venue's delivered-through instant of its fills and funding (ruling
         # R10-o), and an advancing venue's: the time it was last advanced to.
         self.stream_ns: int | None = None
         self.advance_ns: int | None = None
+        # Polymarket: each token's book, read at its instant (a failed read reads
+        # nothing), and its events feed (fills and resolutions).
+        self.books: dict[str, int] = {}
 
     def _now_ns(self) -> int:
         return self.clock_ns
+
+    def _stream_watermark(self, stream: str) -> int | float | None:
+        if stream.startswith("pm:book:"):
+            read = self.books.get(stream.removeprefix("pm:book:"))
+            return float("-inf") if read is None else read - 1
+        if stream == "pm:events":
+            return self._stream_through_ns()
+        return None
 
     def _stream_through_ns(self) -> int | None:
         if self.stream_ns is not None:
@@ -140,6 +164,27 @@ def _facts() -> list[tuple]:
     facts.append((_t(250), "fill", "o-A5", "BTC", False, "0.001", "102.0"))
     facts.append((_t(60), "funding", "BTC", "0.00003"))  # before every H
     facts.append((_t(115), "funding", "BTC", "0.00005"))  # after A1's and A2's H
+    # Polymarket. PM:A's book fails to read from 100 s to 170 s, across P1's H (110 s)
+    # and its patience (150 s): P1 waits, never no_mark, and is marked by the first
+    # read after, at 180 s. PM:B resolves at 114 s, after P2's H (112 s) and before any
+    # other mutation after it: P2 is graded on what it held at H, marked by the
+    # resolution (the first price after H), and the redemption is late money. P3's fill
+    # at 35 s is held while another order's ownership is pending (30 s to 60 s).
+    for step in range(0, 28):
+        at = _t(10 * step)
+        failed = 10 <= step <= 17
+        facts.append((at, "pmbook", "PM:A", None if failed else str(0.40 + step * 0.005)))
+        if step < 20:
+            facts.append((at, "pmbook", "PM:B", str(0.60 + step * 0.004)))
+    facts.append((_t(20), "open", "P1", "o-P1", "filled"))
+    facts.append((_t(20), "fill", "o-P1", "PM:A", True, "10", "0.40", "event"))
+    facts.append((_t(22), "open", "P2", "o-P2", "filled"))
+    facts.append((_t(22), "fill", "o-P2", "PM:B", True, "10", "0.60", "event"))
+    facts.append((_t(25), "open", "P3", "o-P3", "resting"))
+    facts.append((_t(30), "intent", "c-held", "P3", "PM:B"))
+    facts.append((_t(35), "fill", "o-P3", "PM:B", True, "10", "0.61", "event"))
+    facts.append((_t(60), "ack", "c-held"))
+    facts.append((_t(114), "pmresolve", "PM:B", "1"))
     facts.sort(key=lambda fact: (fact[0], fact[1] != "decide" and fact[1] != "open"))
     return facts
 
@@ -150,9 +195,18 @@ def _pay(book, fact: tuple, event: int) -> None:
 
 
 def _fill(book, fact: tuple, event: int) -> None:
+    market = fact[7] if len(fact) > 7 else "perp"
     book.observe("Fill", {"order_id": fact[2], "coin": fact[3], "is_buy": fact[4],
-                          "size": fact[5], "px": fact[6], "fee_usd": "0", "ts_ns": fact[0]},
-                 event)
+                          "size": fact[5], "px": fact[6], "fee_usd": "0", "ts_ns": fact[0],
+                          "market": market, "inventory_size": fact[5]}, event)
+
+
+def _resolve(book, fact: tuple, event: int) -> None:
+    book.redeem(fact[2], fact[3], event, {"token_id": fact[2]}, at_ns=fact[0])
+
+
+def _deliver(book, fact: tuple, event: int) -> None:
+    {"fill": _fill, "funding": _pay, "pmresolve": _resolve}[fact[1]](book, fact, event)
 
 
 def _groups(facts: list[tuple], rng: random.Random) -> list[tuple]:
@@ -187,6 +241,8 @@ def _run(rng: random.Random) -> dict:
     # tape ends with the last fact: its final advance is followed at once by the
     # terminal settlement, complete through the tape's close, and nothing after it.
     mode = rng.choice(("advance", "lag", "tape_end"))
+    # Resolve schedules: frequent, or sparse (outcomes fixed long after their facts).
+    per_fact, per_batch = rng.choice(((0.3, 0.5), (0.0, 0.1)))
     lag = mode == "lag"
     facts = _facts()
     if lag:
@@ -247,17 +303,24 @@ def _run(rng: random.Random) -> dict:
                 named._observe_mid(fact[2], at, fact[3])
                 book.observe("MarketMid", {"coin": fact[2], "mid": fact[3], "ts_ns": at},
                              event)
-            elif kind in ("funding", "fill") and lag:
+            elif kind in ("funding", "fill", "pmresolve") and lag:
                 polled.append(fact)  # executed now, reported at the next poll
-            elif kind == "funding":
-                _pay(book, fact, event)
-            elif kind == "fill":
-                _fill(book, fact, event)
+            elif kind in ("funding", "fill", "pmresolve"):
+                _deliver(book, fact, event)
             elif kind == "poll":
                 for reported in sorted(polled, key=lambda f: f[0]):
-                    (_fill if reported[1] == "fill" else _pay)(book, reported, event)
+                    _deliver(book, reported, event)
                 polled.clear()
                 book.stream_ns = at
+            elif kind == "pmbook":
+                if fact[3] is not None:  # a failed read delivers nothing and reads nothing
+                    book.observe("MarketMid", {"coin": fact[2], "mid": fact[3], "ts_ns": at},
+                                 event)
+                    book.books[fact[2]] = at
+            elif kind == "intent":
+                book.order_intent(fact[2], fact[3], fact[4])
+            elif kind == "ack":
+                book.order_acknowledged(fact[2])
             elif kind == "decide":
                 # A decision is the runtime's own act at its instant.
                 named.clock.now_ns = at
@@ -270,16 +333,17 @@ def _run(rng: random.Random) -> dict:
             elif kind == "open":
                 book.clock_ns = at
                 book.start(fact[2], event)
-                size = "0.01" if fact[2] == "A4" else "0.001"
+                size = ("0.01" if fact[2] == "A4" else "10" if fact[2].startswith("P")
+                        else "0.001")
                 book.order_result(fact[2], {"status": fact[4], "order_id": fact[3],
                                             "filled_size": size if fact[4] == "filled"
                                             else "0"}, {"size": size}, event)
                 book.finish(fact[2], 0)
-            if rng.random() < 0.3 and not final_advance:
+            if rng.random() < per_fact and not final_advance:
                 settle()
         if not lag:
             book.advance_ns = named.advance_through_ns = batch_end
-        if rng.random() < 0.5 and not final_advance:
+        if rng.random() < per_batch and not final_advance:
             settle()
     if mode == "tape_end":
         # The tape closed with its last fact: complete through it, and settled at once.
@@ -288,7 +352,9 @@ def _run(rng: random.Random) -> dict:
         # The world goes on: a tick long after every patience, and every outcome is fixed.
         book.tick_through_ns = named.tick_through_ns = _t(10_000)
     for reported in sorted(polled, key=lambda f: f[0]):
-        (_fill if reported[1] == "fill" else _pay)(book, reported, event)
+        _deliver(book, reported, event)
+    for coin in ("PM:A", "PM:B"):
+        book.books[coin] = _t(10_000)  # the books are read long after, one last time
     if lag:
         book.stream_ns = _t(10_000)
     settle()
@@ -329,3 +395,12 @@ def test_every_batching_of_the_same_world_facts_gives_the_same_outcomes():
     assert fixed["A3"]["marked"] is False and fixed["A3"]["net_micro"] == 0  # late money
     assert fixed["A4"]["censored"] == "no_mark"
     assert outcome["late"].get("A1")  # its lot closed after its outcome was fixed
+    # Polymarket: P1 was held through the failed reads, never no_mark, and marked by the
+    # first read after them; P2 graded on its lot at H, marked by the resolution, its
+    # redemption late money; P3 graded with the fill held while an owner was pending.
+    assert fixed["P1"]["censored"] is None and fixed["P1"]["marked"] is True
+    assert fixed["P1"]["net_micro"] == round((0.40 + 18 * 0.005 - 0.40) * 10 * 10**6)
+    assert fixed["P2"]["marked"] is True and fixed["P2"]["net_micro"] == 4_000_000
+    assert outcome["late"]["P2"] == 4_000_000  # (1 - 0.60) * 10, paid at the resolution
+    # P3's held fill counts: its lot was redeemed at 114 s, before its own H (115 s).
+    assert fixed["P3"]["marked"] is False and fixed["P3"]["net_micro"] == 3_900_000

@@ -924,7 +924,7 @@ _COMPONENT_FIELDS = (
                           "unresolved_orders", "censored_payoffs",
                           # Wave 16, D2: open returns' horizon marks; R10-m: the
                           # funding after their horizons, set aside.
-                          "horizon_marks", "after_horizon",
+                          "horizon_marks", "horizon_mark_ns", "after_horizon",
                           # Codex on #152: the facts seen through, and returns' economics
                           # frozen at their horizon.
                           "facts_ns", "tick_through_ns", "horizon_state")),

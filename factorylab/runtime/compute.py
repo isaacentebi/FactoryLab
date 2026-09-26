@@ -465,10 +465,9 @@ class ContractConsequences(ReturnConsequences):
         an acting return waits no longer for its horizon marks (Codex on #152)."""
         return self.runtime._patience_ns()
 
-    def _stream_through_ns(self) -> int | float | None:
-        """The venue's delivered-through instant of the mids, fills and funding an
-        acting return's outcome reads (ruling R10-o)."""
-        return self.runtime._stream_through(("mids", "fills", "funding"))
+    def _stream_watermark(self, stream: str) -> int | float | None:
+        """The runtime's watermark of one fact stream (Codex on #152, R10-o)."""
+        return self.runtime._stream_watermark(stream)
 
     def _exit_rates(self):
         """The venue's taker rate per instrument at a horizon (wave 16, D7; ruling

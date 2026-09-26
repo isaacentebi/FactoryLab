@@ -425,8 +425,15 @@ def test_a_polymarket_profit_is_a_claim_on_the_pot_that_financing_never_converts
     buy(rt, handle)
     rt.consequences.finish(handle, 0)
     rt.clock.now_ns = 10**12
-    advance(rt, 1)
+    advance(rt, 2)
+    # The resolution came long after the decision's horizon: its outcome is graded at
+    # the first price at or after H, which is the resolution itself (no book was read
+    # between), once every stream is delivered through it, and the redemption is late
+    # money, booked at the next pass (Codex on #152: a mutation after H never enters
+    # the grade).
     assert rt.consequences.payoff(handle).net_micro == 5_900_000
+    assert rt.consequences.payoff(handle).marked
+    advance(rt, 1)
     assert rt.polymarket.claims == {"seed-decider": 5_900_000}
     assert rt.budget.venue_claims().get("seed-decider", 0) == 0
     assert rt.budget.venue_booked() == 0 and rt.polymarket.booked == 5_900_000
@@ -938,3 +945,52 @@ def test_settlement_never_looks_a_token_up():
     rt = world(venue="live")
     with pytest.raises(KeyError):
         polymarket.event_facts(rt, "event_pays", token(rt), due_tick=5)
+
+
+# --- fact streams: Polymarket's own watermarks (Codex on #152) ----------------------------
+
+
+def test_a_held_polymarket_fill_keeps_its_own_fact_time():
+    """A fill that arrives while an order's ownership is pending is held and replayed
+    later: it enters consequence accounting at the venue time it executed, never the
+    processing time of its replay."""
+    rt = world()
+    handle = collateral_decision(rt)
+    rt.consequences.order_intent("pending-elsewhere", handle, "BTC")
+    executed = rt.clock.now_ns - 7 * 10**9
+    polymarket._settle_fill(rt, {"order_id": "pm-held", "token_id": token(rt),
+                                 "market_id": "fake-1", "is_buy": True, "size": "1",
+                                 "px": "0.41", "fee_usd": "0", "realized_usd": "0",
+                                 "ts_ns": executed})
+    ((kind, payload, _event),) = rt.consequences.deferred_events
+    assert kind == "Fill" and payload["ts_ns"] == executed
+
+
+def test_a_failed_polymarket_book_read_holds_the_event_lot_never_no_mark():
+    """The token's book stream is read through only by a successful book read: while
+    every read fails, the lot's outcome waits past its whole patience, never fixed
+    no_mark; the first successful read after marks it."""
+    rt = world()
+    handle = collateral_decision(rt)
+    assert buy(rt, handle)["status"] == "filled"
+    rt.consequences.finish(handle, 1_000)
+    venue = rt.polymarket.venue.target
+    reads = venue.order_book
+
+    def unreadable(*_args, **_kwargs):
+        raise RuntimeError("the book did not answer")
+
+    venue.order_book = unreadable
+    for _ in range(rt._patience_ticks() + 5):
+        advance(rt, 1)
+        # A tick: every other fact through now was delivered, so the world's clock
+        # passes the lot's whole patience; only its own book stream lags.
+        rt.tick_through_ns = rt.consequences.tick_through_ns = rt.clock.now_ns
+    assert rt.consequences._through_ns() > rt.clock.now_ns - 10**9  # the world moved on
+    assert rt.consequences.payoff(handle) is None
+    assert not [i for i in rt.ledger._recovery_items()
+                if i.get("kind") == "consequence.uninformative"]
+    venue.order_book = reads
+    advance(rt, 2)
+    payoff = rt.consequences.payoff(handle)
+    assert payoff is not None and payoff.marked and payoff.censored is None

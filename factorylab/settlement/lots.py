@@ -152,6 +152,24 @@ NO_MARK = "no_mark"
 #: The markets whose exit a venue's taker schedule prices (an event token's is not).
 VENUE_FEE_MARKETS = ("perp", "spot")
 
+#: Every stream of world facts a consequence can read (Codex on #152, ruling R10-o), by
+#: venue: each has its own fact-time and its own delivered-through watermark, stated by
+#: the runtime (``ReturnConsequences._stream_watermark``). Hyperliquid's mids, fills and
+#: funding payments (its funding-rate prints are ``hl:rates``, which only named trades
+#: read); Polymarket's events (its fills, cancels and resolutions, one feed) and each
+#: token's book (``pm:book:<instrument>``, its marks). Vault writes open no lot, so no
+#: consequence reads a vault stream.
+FACT_STREAMS = ("hl:mids", "hl:rates", "hl:fills", "hl:funding", "pm:events", "pm:book")
+
+
+def instrument_streams(coin: str, market: str) -> tuple[str, ...]:
+    """The fact streams a position in ``coin`` on ``market`` is graded from."""
+    if market == "event":
+        return (f"pm:book:{coin}", "pm:events")
+    if market == "spot":
+        return ("hl:mids", "hl:fills")
+    return ("hl:mids", "hl:fills", "hl:funding")
+
 
 def _exit_rates_for(exit_rates, lots, account, now_ns, horizon_ns) -> dict[str, str | None]:
     """The exit rate of each instrument ``lots`` hold, at the return's horizon.
@@ -570,10 +588,12 @@ class LotTable:
                 horizon_ns: int | None = None,
                 exit_rates: Mapping[str, str | None] | None = None,
                 horizon_marks: Mapping[str, Mapping[str, str]] | None = None,
+                horizon_mark_ns: Mapping[str, Mapping[str, int]] | None = None,
                 after_horizon: Mapping[str, Fraction] | None = None,
                 patience_ns: int | None = None,
                 through_ns: int | None = None,
-                horizon_state: Mapping[str, Mapping[str, Any]] | None = None
+                horizon_state: Mapping[str, Mapping[str, Any]] | None = None,
+                through_by_handle: Mapping[str, int | float | None] | None = None
                 ) -> "LotTable":
         """Fix ready outcomes once; marks require a valid mid for every remaining coin.
 
@@ -620,6 +640,12 @@ class LotTable:
         graded, so the outcome values the frozen lots and realised money instead of the
         table's.
 
+        ``through_by_handle`` overrides ``through_ns`` per return: the watermark of
+        exactly the fact streams of what that return holds (``instrument_streams``).
+        ``horizon_mark_ns`` is each mark's own fact time: a mark is final only once the
+        return's streams are delivered through it, since an earlier price at or after
+        H could still arrive on a stream that lags.
+
         ``censored`` names returns that also sent an order nobody could observe
         (handle -> documented reason). Such a return resolves on its own schedule
         like any other, and its outcome carries the money its observed orders
@@ -629,11 +655,14 @@ class LotTable:
         _require_event_index(event, "event")
         _require_event_index(backstop, "backstop", positive=True)
         updates = {}
+        default_through = through_ns
         for account in self.returns:
             if account.voided or account.cost_micro is None or account.payoff is not None:
                 continue
             lots = [lot for lot in self.lots if lot.handle == account.handle]
             waiting = any(o.handle == account.handle and o.remaining for o in self.orders)
+            through_ns = (through_by_handle.get(account.handle, default_through)
+                          if through_by_handle is not None else default_through)
             if (through_ns is not None and horizon_ns is not None
                     and account.opened_at_ns is not None):
                 young = through_ns < account.opened_at_ns + horizon_ns
@@ -653,8 +682,10 @@ class LotTable:
                 # moved since is late money.
                 lots = list(state["lots"])
                 net = state["realized"] + state["set_aside"]
+                earned = state.get("earned", account.earned_micro)
             else:
                 net = account.realized_micro + (after_horizon or {}).get(account.handle, 0)
+                earned = account.earned_micro
             exit_fee = Fraction(0)
             unknown = False
             unmarked = False
@@ -663,6 +694,10 @@ class LotTable:
                 if (horizon_marks is not None and horizon_ns is not None
                         and account.opened_at_ns is not None):
                     marked = horizon_marks.get(account.handle, {})
+                stamped = (horizon_mark_ns or {}).get(account.handle, {})
+                if through_ns is not None and any(
+                        stamped.get(lot.coin, float("-inf")) > through_ns for lot in lots):
+                    continue  # an earlier price at or after H may still be in flight
                 missing = any(lot.coin not in marked for lot in lots)
                 lapse_clock = through_ns if through_ns is not None else now_ns
                 if missing and not (patience_ns is not None and lapse_clock is not None
@@ -676,7 +711,8 @@ class LotTable:
                     unknown = True
                 for lot in valued:
                     mid = exact(marked[lot.coin])
-                    if mid <= 0:
+                    # An event token resolved worthless is marked at its payout, 0.
+                    if mid < 0 or (mid == 0 and lot.market != "event"):
                         raise ValueError("mark must be positive")
                     net += (mid - lot.px) * lot.size * (
                         1 if lot.is_buy else -1
@@ -692,13 +728,13 @@ class LotTable:
                       or (NO_MARK if unmarked else FEE_UNKNOWN if unknown else None))
             outcome = Payoff(
                 account.handle,
-                0 if reason else int(acted and micro + account.earned_micro > cost),
+                0 if reason else int(acted and micro + earned > cost),
                 micro,
                 cost,
                 event,
                 bool(lots),
                 account.liquidated,
-                account.earned_micro,
+                earned,
                 exit_fee_micro=-((-exit_fee.numerator) // exit_fee.denominator),
                 censored=reason,
             )

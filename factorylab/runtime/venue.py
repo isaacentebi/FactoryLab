@@ -347,6 +347,28 @@ class VenueMixin:
                                       ts_ns)
         return events
 
+    def _stream_watermark(self, stream: str) -> int | float | None:
+        """The instant one fact stream (``lots.FACT_STREAMS``) is delivered through, or
+        None when this runtime keeps no watermark for it (Codex on #152, R10-o).
+
+        Guarantees, for Hyperliquid, what ``_stream_through`` states (a live read's
+        request instant, or the time a fake or recorded venue was advanced to); for
+        Polymarket, the instant its events feed and each token's book were last read
+        successfully (``PolymarketSurface.through``: a simulated venue's advance time,
+        or a live read's instant before it), and minus infinity for one never read. A
+        failed read advances nothing, so it holds what depends on it.
+        """
+        if stream.startswith("hl:"):
+            return self._stream_through((stream.removeprefix("hl:"),))
+        surface = getattr(self, "polymarket", None)
+        if surface is None:
+            return None
+        key = "events" if stream == "pm:events" else stream.removeprefix("pm:book:")
+        read = (getattr(surface, "through", None) or {}).get(key)
+        if read is None:
+            return float("-inf")
+        return read if surface.venue.deterministic else read - 1
+
     def _stream_through(self, streams: tuple[str, ...]) -> int | float | None:
         """The earliest instant through which the venue has delivered every fact of
         ``streams``, or None when this runtime keeps no venue watermark (ruling R10-o).
