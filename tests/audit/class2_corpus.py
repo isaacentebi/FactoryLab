@@ -32,7 +32,21 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
+#: The corpus's sources: the package, which the seat-text scan indexes
+#: (``class2_seat_text.PACKAGE`` is this) and the rendered worlds run, and the world
+#: files the static corpus reads. ``corpus_sources`` names them for every reader that
+#: must watch what the corpus reads.
+PACKAGE = ROOT / "factorylab"
 WORLDS = ROOT / "worlds"
+
+
+def corpus_sources() -> tuple[str, ...]:
+    """Every repository path the corpus is rendered from, relative to the root.
+
+    Guarantees it is exactly the scanners' own roots (``PACKAGE``, ``WORLDS``): the
+    release tool's dirty check and provenance pass read these, so they cannot watch
+    less than the corpus reads."""
+    return tuple(p.relative_to(ROOT).as_posix() for p in (PACKAGE, WORLDS))
 
 Leaf = tuple[str, str]
 

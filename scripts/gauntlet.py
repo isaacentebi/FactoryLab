@@ -37,7 +37,7 @@ import math
 import sys
 import tomllib
 from collections import Counter, defaultdict
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
 from fractions import Fraction
@@ -421,6 +421,118 @@ def _runs(indexes: list[int]) -> list[tuple[int, int]]:
     return result
 
 
+# --- entity sets: every row kind that names an entity ------------------------------------
+
+#: The ledger kinds that name a card, and the fields that name it. A criterion that
+#: iterates cards reads ``diary_cards``: the union over every one of these, so a card
+#: the diary names anywhere (registered, priced, measured, violated, ratcheted,
+#: saturated, posted, refused) is judged. Enumerated from the emitting code (every
+#: ``ledger.append`` whose row carries ``card_id``) and pinned against it by
+#: tests/gauntlet/test_criteria_schema.py. ``values.*``/``regions.*`` are id-keyed
+#: mappings; ``card:`` prefixes (the organ's profile keys) are stripped.
+CARD_SOURCES: dict[str, tuple[str, ...]] = {
+    "price.register": ("card_id",),
+    "price.proposed": ("card_id",),
+    "price.removed": ("card_id",),
+    "price.region": ("card_id",),
+    "price.region_cleared": ("card_id",),
+    "price.update": ("card_id",),
+    "price.skipped": ("card_id",),
+    "price.unparsed": ("card_id",),
+    "price.unattributed": ("card_id",),
+    "price.margin": ("card_id",),
+    "price.window": ("values.*", "regions.*"),
+    "immune.window": ("violated_cards[]", "regions.*"),
+    "immune.price_ratchet": ("card_id",),
+    "immune.price_ratchet_ended": ("card_id",),
+    "immune.price_ratchet_saturated": ("card_id",),
+    "lambda_post.adopted": ("card_id",),
+    "lambda_post.aggregate": ("card_id",),
+    "lambda_post.settled": ("card_id",),
+    "charter.refused": ("card_id",),
+}
+#: The ledger kinds that name a router, and the fields that name it (only a value in the
+#: kernel's router namespace, ``router:``, is a router: routing.py ``_build_router``,
+#: governance.py's proposed routers). ``router_presence`` reads every one.
+ROUTER_SOURCES: dict[str, tuple[str, ...]] = {
+    "decision.open": ("actor",),
+    "immune.gain": ("router",),
+    "immune.window": ("frontier_invocation[].router", "frontier.quarantined_routers[]",
+                      "frontier.uninvoked_routers[]"),
+    "router.created": ("learner_id", "replaces[]"),
+    "router.retained": ("learner_id",),
+    "router.drained": ("learner_id",),
+    "router.step_rescaled": ("learner_id",),
+    "router.abstention_priced": ("router",),
+    "router.decline_priced": ("router",),
+    "propensity.unlearned": ("learner_id",),
+    "thrash.charged": ("router",),
+    "compute.route": ("router",),
+    "route.excluded": ("router",),
+    "request.child": ("router",),
+    "actor.retire": ("actor",),
+    "actor.successor": ("actor", "successor"),
+}
+#: The configuration loops a refactor names (TH-2 runs over each): its lifespan rows
+#: and the organ's windows that carry them.
+LOOP_SOURCES: dict[str, tuple[str, ...]] = {
+    "config.lifespan": ("loop",),
+    "immune.window": ("lifespans[].loop",),
+}
+#: Every entity set a criterion iterates, what builds it and from what. Sets read from
+#: one kind name why no other kind can name that entity.
+ENTITY_SETS: dict[str, str] = {
+    "cards (replay's per-card criteria, SF-1b)": "diary_cards: CARD_SOURCES",
+    "routers (SF-1e)": "router_presence: ROUTER_SOURCES",
+    "loops (replay's TH-2)": "diary_loops: LOOP_SOURCES",
+    "quarantined routers (LD-1e)": "immune.window frontier_invocation: the organ's "
+                                   "quarantine evidence is written nowhere else "
+                                   "(immune.frontier_evidence)",
+    "routers with a γ (LD-1f, S7, S8)": "immune.gain: a router's γ is ledgered only "
+                                        "when the organ moves it (immune._gain)",
+    "core draws (TH-1c)": "decision.open: a charge is on a draw's movement, and draws "
+                          "are ledgered only there (queue.open)",
+    "seats (decision_seats)": "decision.open propensity.chosen: the drawn arm of a "
+                              "decision is ledgered only there",
+}
+
+
+def _named(value: Any, path: str) -> list[Any]:
+    """The values at ``path`` in ``value``: ``a.b`` descends, ``[]`` spreads a list, and
+    ``*`` takes a mapping's keys."""
+    head, _, rest = path.partition(".")
+    if head == "*":
+        return list(value) if isinstance(value, Mapping) else []
+    spread = head.endswith("[]")
+    item = value.get(head.removesuffix("[]")) if isinstance(value, Mapping) else None
+    items = list(item) if spread and isinstance(item, list | tuple) else [item]
+    if not rest:
+        return [x for x in items if x is not None]
+    return [x for i in items for x in _named(i, rest)]
+
+
+def _entities(events: Iterable[Mapping], sources: Mapping[str, tuple[str, ...]]
+              ) -> Iterator[tuple[Mapping, str]]:
+    """Each (row, name) where a row of a source kind names an entity."""
+    for row in events:
+        for path in sources.get(row.get("kind"), ()):
+            for name in _named(row, path):
+                if isinstance(name, str) and name:
+                    yield row, name
+
+
+def diary_cards(events: Iterable[Mapping]) -> list[str]:
+    """Every card the diary names, from every kind that names one (``CARD_SOURCES``),
+    pathology cards (``pathology:thrash``, the thrash price's own) included."""
+    return sorted({name.removeprefix("card:") for _row, name in _entities(events,
+                                                                          CARD_SOURCES)})
+
+
+def diary_loops(events: Iterable[Mapping]) -> list[str]:
+    """Every configuration loop a refactor names (``LOOP_SOURCES``)."""
+    return sorted({name for _row, name in _entities(events, LOOP_SOURCES)})
+
+
 def acting_period(events: Iterable[Mapping], ph: Physics) -> int:
     """The organ's measured period in windows: the widest gap between two acting closes.
 
@@ -544,7 +656,10 @@ def sf1b_ratchet_cadence(events: list[Mapping], manifest: Mapping) -> Result:
     * **missed reset** — an acting window was not flagged (a transient resolution)
       and the card's next ratchet did not start again at 1.
 
-    Every ratchet sits in an acting window flagged on its own card. The episode is the
+    Every ratchet sits in an acting window flagged on its own card, and every card the
+    controller knew (``price.register``, not ``price.removed``) that such a window names
+    among its ``violated_cards`` is ratcheted there (**missed ratchet** otherwise). The
+    cards read are every card the diary names (``diary_cards``). The episode is the
     card's own (A, ``attractor_windows``): it begins where the kernel names the card
     among a flagged window's ``violated_cards`` and lasts while the flag holds (without
     thrash) and no measurement shows the card compliant. A window that did not measure
@@ -561,13 +676,27 @@ def sf1b_ratchet_cadence(events: list[Mapping], manifest: Mapping) -> Result:
                for w in closes if (w.get("flags") or {}).get("stable_failure")
                and w["window"] not in thrash}
     ratchets = rows_of(events, "immune.price_ratchet")
-    if not ratchets:
-        return _unsupported("SF-1b", "no ratchet was issued", flagged=len(holding))
     at: dict[tuple[str, int], int] = {(row["card_id"], row["window"]): row["duration"]
                                       for row in ratchets}
     problems = [{"unflagged_ratchet": row["window"], "card": row["card_id"]}
                 for row in ratchets if row["card_id"] not in holding.get(row["window"], ())]
-    for cid in sorted({row["card_id"] for row in ratchets}):
+    # The cards the controller knew at each close: registered (``price.register``) and
+    # not removed (``price.removed``). The organ ratchets every violated card of a
+    # flagged acting window that it knows (immune.close_window: ``for cid in
+    # diagnosed["violated_cards"]: if card_id in known: ratchet``).
+    known: set[str] = set()
+    known_at: dict[int, frozenset[str]] = {}
+    for row in events:
+        kind = row.get("kind")
+        if kind == "price.register":
+            known.add(row["card_id"])
+        elif kind == "price.removed":
+            known.discard(row["card_id"])
+        elif kind == "immune.window":
+            known_at[row["window"]] = frozenset(known)
+    # Every card the diary names (``diary_cards``), not only the ratcheted ones: a card
+    # the organ should have ratcheted and never did is read too.
+    for cid in diary_cards(events):
         attractor = attractor_windows(closes, holding, card_violations(events, cid), cid)
         previous = 0
         for window in acting:
@@ -579,7 +708,12 @@ def sf1b_ratchet_cadence(events: list[Mapping], manifest: Mapping) -> Result:
             if held and duration is None and previous:
                 problems.append({"card": cid, "window": window,
                                  "duration_reset": [previous, None]})
+            elif (duration is None and cid in holding.get(window, ())
+                  and cid in known_at.get(window, ())):
+                problems.append({"card": cid, "window": window, "missed_ratchet": True})
             previous = duration if (held and duration is not None) else 0
+    if not ratchets and not problems:
+        return _unsupported("SF-1b", "no ratchet was issued", flagged=len(holding))
     rose = any(row["duration"] >= 2 for row in ratchets)
     if not problems and not rose:
         return _unsupported("SF-1b", "no ratchet followed another: the duration never had "
@@ -737,16 +871,20 @@ def raises(row: Mapping) -> bool:
 
 
 def router_presence(events: list[Mapping]) -> dict[str, int]:
-    """Each router's first window in the diary: its first draw (``decision.open`` by that
-    actor, in the price window it opened in) or its first gain row, whichever is first."""
-    opened = _decision_windows(events)
-    first: dict[str, int] = {}
-    for row in rows_of(events, "decision.open"):
-        actor, window = row.get("actor"), opened.get(row.get("handle"))
-        if isinstance(actor, str) and window is not None:
-            first[actor] = min(first.get(actor, window), window)
-    for row in rows_of(events, "immune.gain"):
-        first[row["router"]] = min(first.get(row["router"], row["window"]), row["window"])
+    """Each router's first window in the diary, over every kind that names a router
+    (``ROUTER_SOURCES``): a row the organ writes (``immune.*``) at its own ``window``,
+    any other in the price window it was written in (the window closed after it + 1).
+    Only names in the kernel's router namespace (``router:``) are routers."""
+    window, first = 1, {}
+    for row in events:
+        kind = row.get("kind")
+        if kind == "price.window":
+            window = row["window"] + 1
+        at = row["window"] if (str(kind).startswith("immune.")
+                               and isinstance(row.get("window"), int)) else window
+        for _row, name in _entities([row], ROUTER_SOURCES):
+            if name.startswith("router:"):
+                first[name] = min(first.get(name, at), at)
     return first
 
 
@@ -835,11 +973,12 @@ def sf1e_gain(events: list[Mapping], manifest: Mapping) -> Result:
         by_router[row["router"]].append(row)
     flag_set = set(flags)
     presence = router_presence(events)
-    # Every router with decisions in the diary, not only those with gain rows: the
+    # Every router the diary names (``router_presence``: created, drawing, charged,
+    # carried, in the organ's frontier evidence), not only those with gain rows: the
     # kernel's routers are named ``router:<kind>`` (routing.py ``_build_router``) or
     # ``router:<kind>:<learner>:<n>`` (governance.py, a proposed router); an
     # ``assembly:`` actor (a committee seat, a market post) is no router and has no gain.
-    routers = sorted(set(by_router) | {r for r in presence if r.startswith("router:")})
+    routers = sorted(set(by_router) | set(presence))
     if not routers:
         return _unsupported("SF-1e", "no router drew a decision or had its gain moved")
     retired = router_retirements(events)
@@ -2088,11 +2227,13 @@ GENERIC: dict[str, Callable[[list[Mapping], Mapping], Result]] = {
     "LD-1e": ld1e_detection,
     "LD-1f": ld1f_hold,
     "TH-1b": th1b_duration,
+    "TH-1b-antiwindup": th1b2_frozen,
     "TH-1c": th1c_movement,
     "TH-1d": th1d_frontier,
     "TH-1f": th1f_priority,
     "TH-3": th3_governance_gap,
     "OF-1a": of1a_outside_the_loop,
+    "OF-2d": of2d_authorship,
     "OF-3a": of3a_sampling_behind_return,
     "I-3c": i3c_niche_no_worse_than_noop,
     "I-4a": i4a_no_blind_step_back,
@@ -2104,12 +2245,36 @@ GENERIC: dict[str, Callable[[list[Mapping], Mapping], Result]] = {
     "S8": s8_gain_rows_uniform,
 }
 
-#: Per-card criteria: ``replay`` runs each over every card the diary priced.
+#: Per-card criteria: ``replay`` runs each over every card the diary names
+#: (``diary_cards``), the thrash price's own ``pathology:thrash`` included.
 PER_CARD: dict[str, Callable[..., Result]] = {
     "SF-1a": sf1a_detection,
     "SF-1c": sf1c_anti_windup,
     "SF-1d": sf1d_escalation,
     "SF-2b": sf2b_order_blind,
+}
+#: Per-loop criteria: ``replay`` runs each over every loop a refactor names
+#: (``diary_loops``).
+PER_LOOP: dict[str, Callable[..., Result]] = {
+    "TH-2": th2_short_lived,
+}
+#: Criteria ``replay`` cannot run, each with why: it needs an input the diary does not
+#: hold (a scripted stimulus's timing, a synthetic null, the population's seat roles,
+#: or the learners' instrumented states). Their gate tests supply it
+#: (tests/gauntlet/populations.py). Every other criterion is registered above, and
+#: tests/gauntlet/test_criteria_schema.py fails on one that is neither.
+POPULATION_ONLY: dict[str, str] = {
+    "th1a_detection": "cycle_start: the window the population's scripted cycle began",
+    "th1e_release": "steady_from: the window the population's scripted stimulus stopped",
+    "th4_null": "synthetic: the detector's own null rate, from a separate synthetic run",
+    "sf2_gradient": "relievers and holders: the seat roles the population scripted",
+    "of2c_holdout_bites": "seats and after_window: the population's holdout script",
+    "gain_neutral": "the learners' states before and after a gain act, instrumented "
+                    "in the run; the diary holds only the gain rows (S8 reads those)",
+}
+#: Criteria ``replay`` runs by their own rule rather than a registry above.
+REPLAY_DIRECT: dict[str, str] = {
+    "sf0_relation": "SF-0, from the manifest and every region the diary measured",
 }
 
 
@@ -2124,12 +2289,14 @@ def replay(events: list[Mapping], manifest: Mapping | None = None, *,
     manifest, binding = bind_diary(events, world=world, seed=seed, manifest=manifest)
     results = [Result("BIND", PASS, binding), Result("SF-0", *_sf0_parts(manifest, events))]
     results += [fn(events, manifest) for fn in GENERIC.values()]
-    cards = sorted({row["card_id"] for row in rows_of(events, "price.update")
-                    if not str(row["card_id"]).startswith("pathology:")})
     for name, fn in PER_CARD.items():
-        for card in cards:
+        for card in diary_cards(events):
             result = fn(events, manifest, card=card)
             results.append(Result(f"{name}[{card}]", result.status, result.evidence))
+    for name, fn in PER_LOOP.items():
+        for loop in diary_loops(events):
+            result = fn(events, manifest, loop=loop)
+            results.append(Result(f"{name}[{loop}]", result.status, result.evidence))
     return results
 
 

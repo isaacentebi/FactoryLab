@@ -18,6 +18,7 @@ import pytest
 from scripts import class2_audit as tool
 
 WORLD = "scripted"
+ROOT = Path(__file__).resolve().parents[2]
 
 #: A stand-in essay with the headings that bound the authority text (the real one is
 #: never committed): ``render`` fills the prompt from it.
@@ -1352,6 +1353,84 @@ def test_a_previous_triage_row_without_its_full_identity_is_refused(tmp_path):
         (tmp_path / "t.md").write_text(head + bad)
         with pytest.raises(tool.AuditInputInvalid, match=why):
             tool.read_previous_triage(tmp_path / "t.md", [WORLD])
+
+
+# --- Codex pass on 144323c ----------------------------------------------------------------
+
+
+def test_the_release_scope_is_the_corpus_scanners_own_sources():
+    """Codex P1 (class2_audit.py:351): the dirty check and the provenance pass read the
+    paths the corpus is rendered from, by one function, so they cannot diverge: every
+    module the seat-text scan indexed, and every world file, lies under one."""
+    from tests.audit import class2_corpus, class2_seat_text
+
+    assert tool.SURFACE_PATHS == class2_corpus.corpus_sources()
+    under = lambda rel: any(rel == s or rel.startswith(s + "/") for s in tool.SURFACE_PATHS)  # noqa: E731
+    modules = class2_seat_text.scan().modules
+    assert modules and all(under(rel) for rel in modules)
+    assert all(under(p.relative_to(class2_corpus.ROOT).as_posix())
+               for p in class2_corpus.WORLDS.glob("*.toml"))
+
+
+@pytest.mark.parametrize("path", ["factorylab/kernel/queue.py",
+                                  "factorylab/learners/exp3.py",
+                                  "factorylab/versioning/live.py"])
+def test_a_kernel_change_is_in_the_provenance_pass_and_a_dirty_one_is_refused(tmp_path, path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    root = _commit(repo, "README.md", "x\n", "root")
+    touched = _commit(repo, path, "REASON = 'hold'\n", BEHAVIOUR_MIX)
+    head = _commit(repo, "docs/notes.md", "notes\n", "notes only")
+    commits = tool.provenance_commits(repo, f"{root}..{head}")
+    assert [c["sha"] for c in commits] == [touched]
+    assert tool.release_commit(repo, f"{root}..{head}") == head
+    (repo / path).write_text("REASON = 'hold harder'\n")
+    with pytest.raises(tool.AuditInputInvalid, match="uncommitted seat-visible"):
+        tool.release_commit(repo, f"{root}..{head}")
+
+
+def _documented_commands(text):
+    """Every ``uv run python scripts/class2_audit.py`` command in ``text``: continuation
+    lines joined, an optional ``[...]`` kept (it must parse too) and each ``<placeholder>``
+    one argument."""
+    import re
+    import shlex
+
+    commands, lines = [], text.splitlines()
+    for i, line in enumerate(lines):
+        if "uv run python scripts/class2_audit.py" not in line:
+            continue
+        command = line.strip()
+        j = i
+        while command.endswith("\\"):
+            j += 1
+            # A docstring's continuation is its source's escaped ``\\``.
+            command = command.rstrip("\\").rstrip() + " " + lines[j].strip()
+        command = command.split("scripts/class2_audit.py", 1)[1]
+        # ``<n>`` names a number (``--seed <n>``); every other placeholder a string.
+        command = re.sub(r"<[^<>]*>", "X", command.replace("<n>", "7"))
+        command = command.replace("[", " ").replace("]", " ")
+        commands.append(shlex.split(command.replace("…", "X")))
+    return commands
+
+
+@pytest.mark.parametrize("source", ["docs/audits/class2/auditor-protocol.md",
+                                    "scripts/class2_audit.py"])
+def test_every_documented_command_parses_with_the_real_command_line(source):
+    """Codex P2 (auditor-protocol.md:204): every command example the protocol and the
+    tool document is parsed by the tool's own parser (``build_parser``), so a required
+    argument the documentation leaves out (the gate's ``--triage-sha256``) fails here."""
+    commands = _documented_commands((ROOT / source).read_text())
+    assert {c[0] for c in commands} >= {"render", "validate", "triage", "gate"}, commands
+    for argv in commands:
+        try:
+            tool.build_parser().parse_args(argv)
+        except SystemExit:
+            pytest.fail(f"{source}: {' '.join(argv)} does not parse")
+    gate = next(c for c in commands if c[0] == "gate")
+    with pytest.raises(SystemExit):
+        tool.build_parser().parse_args(gate[:gate.index("--triage-sha256")])
 
 
 def test_an_allowlist_entry_names_its_question_with_its_class():

@@ -43,8 +43,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
-PACKAGE = ROOT / "factorylab"
+from tests.audit.class2_corpus import PACKAGE, ROOT  # the corpus's own sources
 
 #: Functions that deliver their reason argument to a seat, by name, and the index of
 #: that argument among the call's positional arguments (``self`` not counted).

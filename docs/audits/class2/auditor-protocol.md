@@ -195,13 +195,18 @@ uv run python scripts/class2_audit.py validate work/class2/<release>/sample1.jso
     work/class2/<release>/sample2.jsonl --provenance-samples \
     work/class2/<release>/provenance1.jsonl work/class2/<release>/provenance2.jsonl \
     --key work/class2/<release>/canary_key.json
-uv run python scripts/class2_audit.py triage <the same four samples> \
+uv run python scripts/class2_audit.py triage work/class2/<release>/sample1.jsonl \
+    work/class2/<release>/sample2.jsonl --provenance-samples \
+    work/class2/<release>/provenance1.jsonl work/class2/<release>/provenance2.jsonl \
     --key work/class2/<release>/canary_key.json --world <world> --family <family>
+# review docs/audits/class2/<world>.md, dispose of every row, then gate the file as
+# reviewed: its sha256 is a gate input, so an edit after review is refused.
 uv run python scripts/class2_audit.py gate --world <world> --release <release sha> \
     --key work/class2/<release>/canary_key.json \
     --samples work/class2/<release>/sample1.jsonl work/class2/<release>/sample2.jsonl \
     --provenance-samples work/class2/<release>/provenance1.jsonl \
-    work/class2/<release>/provenance2.jsonl
+    work/class2/<release>/provenance2.jsonl \
+    --triage-sha256 <the reviewed triage file's sha256>
 ```
 
 `render` audits the repository it runs in: the range's head must be the commit checked

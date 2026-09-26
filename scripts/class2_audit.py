@@ -78,11 +78,15 @@ Examples::
         work/class2/2026-10/sample2.jsonl --provenance-samples \\
         work/class2/2026-10/provenance1.jsonl work/class2/2026-10/provenance2.jsonl \\
         --key work/class2/2026-10/canary_key.json
-    uv run python scripts/class2_audit.py triage <the same samples> \\
+    uv run python scripts/class2_audit.py triage work/class2/2026-10/sample1.jsonl \\
+        work/class2/2026-10/sample2.jsonl --provenance-samples \\
+        work/class2/2026-10/provenance1.jsonl work/class2/2026-10/provenance2.jsonl \\
         --key work/class2/2026-10/canary_key.json --world edition6-capital-loop --family X
     uv run python scripts/class2_audit.py gate --world edition6-capital-loop \\
-        --key work/class2/2026-10/canary_key.json --samples <the two samples> \\
-        --provenance-samples <the two provenance samples>
+        --key work/class2/2026-10/canary_key.json --samples \\
+        work/class2/2026-10/sample1.jsonl work/class2/2026-10/sample2.jsonl \\
+        --provenance-samples work/class2/2026-10/provenance1.jsonl \\
+        work/class2/2026-10/provenance2.jsonl --triage-sha256 <the reviewed file's sha256>
 """
 
 from __future__ import annotations
@@ -343,12 +347,12 @@ def authority_text(essay: Path | None) -> str:
     return "\n".join(lines[head:stop] + ["", "---", ""] + lines[start2:end2])
 
 
-#: Where seat-visible text is written: every module that renders a request, a tool, a
-#: schematic, a refusal or a charter, and the world files (lenses, seat ids, prompts).
-#: Deliberately wide: a commit touching one of these is read by the provenance pass
-#: whether or not its diff turns out to change a seat-visible string.
-SURFACE_PATHS = ("factorylab/cortex", "factorylab/runtime", "factorylab/settlement",
-                 "factorylab/world", "factorylab/charter", "worlds")
+#: Where seat-visible text is written: exactly the paths the corpus is rendered from
+#: (``class2_corpus.corpus_sources``: the whole package the seat-text scan indexes, and
+#: the world files), so the dirty check and the provenance pass can never watch less
+#: than the corpus reads. Deliberately wide: a commit touching one of these is read by
+#: the provenance pass whether or not its diff turns out to change a seat-visible string.
+SURFACE_PATHS = corpus.corpus_sources()
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -1535,7 +1539,9 @@ def gate(world: str, triage: Path, key_path: Path, samples: list[Path],
                                    rejected=read_rejected(rejected or REJECTED)))
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """The command line ``main`` parses, and every documented example is parsed by
+    (tests/scripts/test_class2_audit.py), so the documentation cannot drift from it."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
     r = sub.add_parser("render")
@@ -1576,7 +1582,11 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--rejected", type=Path, default=REJECTED)
     b = sub.add_parser("baseline")
     b.add_argument("--static-only", action="store_true")
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
     try:
         return _run(args)
     except AuditInputInvalid as exc:

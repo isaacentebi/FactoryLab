@@ -1456,6 +1456,57 @@ def test_s1_a_decision_missing_a_required_propensity_field_fails(drop):
     assert result.evidence["bad_draws"] == ["decision-1"]
 
 
+# --- Codex pass on 144323c ----------------------------------------------------------------
+
+
+def test_replay_runs_the_thrash_antiwindup_and_every_card_and_loop_the_diary_names():
+    """Codex P2 (gauntlet.py:2090, :2128): TH-1b's anti-windup and OF-2d are replayed;
+    the per-card criteria run over every card any row names (the thrash price's own, a
+    card only ratcheted, a card only measured), and TH-2 over every refactored loop."""
+    region = {"kind": "min", "lo": 0.2, "hi": None, "scale": 0.2}
+    rows = _seq([_launch(), _w(1, acts=True, sf=True),
+                 *_updates("pathology:thrash", [(0.5, 1.0, 0.5), (0.5, 1.0, 0.5)]),
+                 {"kind": "immune.price_ratchet", "card_id": "r", "window": 1,
+                  "duration": 1, "lambda_after": 1.0},
+                 {"kind": "price.window", "window": 1, "values": {"v": 0.0},
+                  "regions": {"v": region}},
+                 {"kind": "config.lifespan", "loop": "price", "ratio": 0.5, "tick": 3}])
+    names = {r.name for r in g.replay(rows, M)}
+    assert {"TH-1b-antiwindup", "OF-2d", "TH-2[price]"} <= names
+    assert {"SF-1c[pathology:thrash]", "SF-1a[r]", "SF-1a[v]", "SF-1a[c]"} <= names
+
+
+def test_sf1b_reads_every_card_and_a_known_violated_card_never_ratcheted_fails():
+    """The sweep: SF-1b's cards are every card the diary names. The organ ratchets every
+    violated card it knows at a flagged acting window (immune.close_window), so a
+    registered card named violated there with no ratchet is a missed ratchet, even when
+    no ratchet was issued at all; a card the controller never knew is not."""
+    closes = [_w(i, acts=i % 3 == 0, sf=True) for i in range(1, 13)]
+    known = [{"kind": "price.register", "card_id": "c"}]
+    assert g.sf1b_ratchet_cadence(closes, M).status == g.UNSUPPORTED
+    missed = g.sf1b_ratchet_cadence(known + closes, M)
+    assert missed.status == g.FAIL
+    assert missed.evidence["problems"][0] == {"card": "c", "window": 3,
+                                              "missed_ratchet": True}
+    both = [_w(i, acts=i % 3 == 0, sf=True, violated=["card:c", "card:d"])
+            for i in range(1, 13)]
+    ratchets = _ratchets((3, 1), (6, 2), (9, 3), (12, 4))
+    assert g.sf1b_ratchet_cadence(known + both + ratchets, M).ok
+    d_known = [*known, {"kind": "price.register", "card_id": "d"}]
+    result = g.sf1b_ratchet_cadence(d_known + both + ratchets, M)
+    assert result.status == g.FAIL
+    assert {p["card"] for p in result.evidence["problems"]} == {"d"}
+
+
+def test_sf1e_a_router_the_diary_names_only_at_its_creation_is_judged():
+    closes, steps = _sf1e_base()
+    created = {"kind": "router.created", "learner_id": "router:Quiet", "event_kind": "Quiet",
+               "replaces": []}
+    result = g.sf1e_gain([created, *closes, *steps], M)
+    assert result.status == g.UNSUPPORTED, result.evidence
+    assert result.evidence["stateless"][0]["router"] == "router:Quiet"
+
+
 def test_s4_an_unresolved_penalty_row_may_carry_no_raw_score():
     row = {"kind": "price.penalty", "handle": "d", "penalty": 0.1, "raw": None,
            "effective": None}

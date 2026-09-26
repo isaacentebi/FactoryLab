@@ -26,6 +26,8 @@ NOT_EMITTED = {
                                       "on this branch emits it (SF-1d is a strict xfail)",
     "challenge.proposed": "emitted by governance._register_challenge with the challenge "
                           "record (its handle included); no gauntlet world files a challenge",
+    "price.register": "emitted by PriceController.register_pending with kind and card_id "
+                      "(the fields the fixture uses); the captured set holds none",
     "router.created": "emitted by routing._build_router with learner_id, event_kind and "
                       "replaces (the fields the fixture uses); the captured set holds none",
     "uptake.anticipated": "emitted by runtime/uptake.py; no captured run reached it",
@@ -299,3 +301,112 @@ def test_s4_a_missing_required_field_fails_on_every_real_row():
     settle = json.loads(json.dumps(REAL["rows"]["decision.settle"]))
     del settle["return"]["score"]
     assert g.s4_boundedness([settle], manifest).status == g.FAIL
+
+
+# --- the sweep (Codex pass on 144323c): every criterion replayed, every entity set whole --
+
+
+def _criteria():
+    """Every public criterion ``gauntlet.py`` defines: a top-level function returning a
+    ``Result``."""
+    tree = ast.parse(Path(g.__file__).read_text())
+    return {node.name for node in tree.body
+            if isinstance(node, ast.FunctionDef) and not node.name.startswith("_")
+            and isinstance(node.returns, ast.Constant | ast.Name)
+            and getattr(node.returns, "value", getattr(node.returns, "id", None)) == "Result"}
+
+
+def test_every_criterion_is_replayed_or_population_only_with_a_reason():
+    """Codex P2 (gauntlet.py:2090): a criterion defined and never replayed is a check no
+    diary gets. Each is in a replay registry, or population-only with a reason and an
+    input the diary cannot supply (a required keyword the replay never passes, or not a
+    diary at all)."""
+    import inspect
+
+    registered = {fn.__name__ for table in (g.GENERIC, g.PER_CARD, g.PER_LOOP)
+                  for fn in table.values()}
+    accounted = registered | set(g.POPULATION_ONLY) | set(g.REPLAY_DIRECT)
+    criteria = _criteria()
+    assert "th1b2_frozen" in criteria and "of2d_authorship" in criteria
+    assert sorted(criteria - accounted) == [], "a criterion replay never runs"
+    assert sorted(accounted - criteria) == [], "a registry names no criterion"
+    assert not registered & set(g.POPULATION_ONLY)
+    for name, reason in g.POPULATION_ONLY.items():
+        params = inspect.signature(getattr(g, name)).parameters
+        needs = [p for p in params.values() if p.kind is p.KEYWORD_ONLY
+                 and p.default is p.empty]
+        assert reason.strip() and (needs or list(params)[:2] != ["events", "manifest"]), name
+    for table, supplied in ((g.GENERIC, set()), (g.PER_CARD, {"card"}),
+                            (g.PER_LOOP, {"loop"})):
+        for name, fn in table.items():
+            required = {p.name for p in inspect.signature(fn).parameters.values()
+                        if p.kind is p.KEYWORD_ONLY and p.default is p.empty}
+            assert required <= supplied, (name, required)
+
+
+def _emitted_with(keys):
+    """Every constant ``kind`` of a dict literal in factorylab/ carrying one of ``keys``."""
+    found = set()
+    for path in sorted((ROOT / "factorylab").rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text())):
+            if not isinstance(node, ast.Dict):
+                continue
+            fields = {k.value: v for k, v in zip(node.keys, node.values, strict=True)
+                      if isinstance(k, ast.Constant)}
+            kind = fields.get("kind")
+            if isinstance(kind, ast.Constant) and set(keys) & set(fields):
+                found.add(kind.value)
+    return found
+
+
+#: Dict literals with a constant ``kind`` that are not ledger rows, each with its reason.
+NOT_ROWS = {
+    "challenge": "cortex/schematics.py: the example payload of a challenge a seat files "
+                 "(ledgered as challenge.proposed with the record, no card_id key)",
+    "learner": "cortex/schematics.py and world/scripted.py: a learner registration "
+               "payload a seat returns, not a row",
+    "retire": "cortex/schematics.py and world/scripted.py: a retirement payload a seat "
+              "returns, not a row",
+}
+
+
+def test_every_kind_that_names_a_card_is_a_card_source():
+    """Codex P2 (gauntlet.py:2128): the card set is built from every row kind that names
+    a card, never from one."""
+    missing = sorted(_emitted_with({"card_id"}) - set(g.CARD_SOURCES) - set(NOT_ROWS))
+    assert missing == [], "a kind names a card that diary_cards does not read"
+    assert "price.window" in g.CARD_SOURCES and "immune.window" in g.CARD_SOURCES
+
+
+def test_every_kind_that_names_a_router_is_a_router_source():
+    emitted = _emitted_with({"router", "learner_id", "actor"}) | {"decision.open"}
+    missing = sorted(emitted - set(g.ROUTER_SOURCES) - set(NOT_ROWS))
+    assert missing == [], "a kind names a router that router_presence does not read"
+
+
+def test_the_entity_builders_read_every_source():
+    """Each source kind alone makes its entity known to the builder."""
+    for kind, paths_ in g.CARD_SOURCES.items():
+        for path in paths_:
+            row = {"kind": kind, "window": 3}
+            target, *parts = path.replace("[]", "").split(".")
+            if path.endswith("[]"):
+                row[target] = ["card:c9"] if not parts else None
+            elif parts == ["*"]:
+                row[target] = {"card:c9" if kind == "immune.window" else "c9": 1.0}
+            else:
+                row[target] = "c9"
+            assert g.diary_cards([row]) == ["c9"], (kind, path)
+    for kind, paths_ in g.ROUTER_SOURCES.items():
+        for path in paths_:
+            parts = path.split(".")
+            leaf: object = "router:R"
+            for part in reversed(parts):
+                name = part.removesuffix("[]")
+                leaf = {name: [leaf] if part.endswith("[]") else leaf}
+            row = {"kind": kind, "window": 3, **leaf}
+            assert "router:R" in g.router_presence([row]), (kind, path)
+    lifespan = {"kind": "immune.window", "window": 1, "lifespans": [{"loop": "price"}]}
+    assert g.diary_loops([lifespan, {"kind": "config.lifespan", "loop": "gain"}]) == [
+        "gain", "price"]
+    assert set(g.ENTITY_SETS) and all(v.strip() for v in g.ENTITY_SETS.values())
