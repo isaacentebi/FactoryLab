@@ -670,9 +670,10 @@ def sf1d_escalation(events: list[Mapping], manifest: Mapping, *, card: str) -> R
     sustained saturation). Durations are read per saturation episode (A): an episode
     starts at duration 1 and each next row is the previous plus one, at the next window;
     a new episode may start at 1 after the cap released, never mid-count. Episodes are aligned, not
-    counted: every sustained run needs an episode whose windows overlap the run's
-    windows (``update_windows``) and that reached ``min_ratio``; a saturation row names
-    its ``window``.
+    counted: every sustained run needs an episode whose rows *inside the run's windows*
+    (``update_windows``) reach a duration of ``min_ratio``: overlapping the run, or
+    reaching ``min_ratio`` outside it, is not escalation of that run. A saturation row
+    names its ``window``.
     """
     ph = physics(manifest)
     at = update_windows(events)
@@ -710,12 +711,43 @@ def sf1d_escalation(events: list[Mapping], manifest: Mapping, *, card: str) -> R
             unmatched.append({"run": None, "why": "the run's windows are not ledgered"})
             continue
         lo, hi = min(windows_of), max(windows_of)
-        if not any(a <= hi and lo <= b and top >= ph.r for a, b, top in spans):
+        if not any(max((x["duration"] for x in e if lo <= x["window"] <= hi), default=0)
+                   >= ph.r for e in episodes):
             unmatched.append({"run": [lo, hi]})
     return _result("SF-1d", bool(rows) and not malformed and not unmatched,
                    card=card, saturated_rows=len(rows), episodes=spans[:6],
                    sustained_runs=len(sustained), unmatched=unmatched[:5],
                    malformed=malformed[:5], longest_run=longest)
+
+
+def gamma_of(values: list[float]) -> float:
+    """A router's γ as the kernel reads it: its first base's (``immune.gamma``,
+    ``_bases(learner.state())[0]["gamma"]``)."""
+    return values[0]
+
+
+def lowers(row: Mapping) -> bool:
+    """Whether a gain row lowered γ on any base (every base is a γ the router draws with)."""
+    return any(b < a for a, b in zip(row["gamma_before"], row["gamma_after"], strict=True))
+
+
+def raises(row: Mapping) -> bool:
+    """Whether a gain row raised γ on any base."""
+    return any(b > a for a, b in zip(row["gamma_before"], row["gamma_after"], strict=True))
+
+
+def router_presence(events: list[Mapping]) -> dict[str, int]:
+    """Each router's first window in the diary: its first draw (``decision.open`` by that
+    actor, in the price window it opened in) or its first gain row, whichever is first."""
+    opened = _decision_windows(events)
+    first: dict[str, int] = {}
+    for row in rows_of(events, "decision.open"):
+        actor, window = row.get("actor"), opened.get(row.get("handle"))
+        if isinstance(actor, str) and window is not None:
+            first[actor] = min(first.get(actor, window), window)
+    for row in rows_of(events, "immune.gain"):
+        first[row["router"]] = min(first.get(row["router"], row["window"]), row["window"])
+    return first
 
 
 def sf1e_gain(events: list[Mapping], manifest: Mapping) -> Result:
@@ -726,10 +758,14 @@ def sf1e_gain(events: list[Mapping], manifest: Mapping) -> Result:
     An episode is a run of consecutive windows flagged stable failure and not thrash
     (``immune.close_window`` raises gain exactly there: thrash takes priority), read
     from its own start, never across episodes (A). Per router and episode, γ₀ is the
-    router's latest state before the episode (the last earlier gain row's
-    ``gamma_after``, else the first row's ``gamma_before``); ``steps`` is
-    ``gain_steps(γ₀)``, the kernel's own float loop (C); ``A`` is the organ's period, or
-    the router's own gap between raises inside the episode when longer.
+    router's latest state before its bound starts (the last earlier gain row's
+    ``gamma_after``, else the first row's ``gamma_before``), read as the kernel reads γ
+    (``gamma_of``, the first base); ``steps`` is ``gain_steps(γ₀)``, the kernel's own
+    float loop (C); ``A`` is the organ's period, or the router's own gap between raises
+    inside the episode when longer. A router's bound starts at the episode's start, or
+    at the router's first window (``router_presence``) when it was registered during
+    the episode; a router that first appears after the episode is not judged by it. An
+    unwind is a lowering of any base (``lowers``).
 
     ``fail`` when an episode stayed flagged through a router's bound without that router
     reaching the top, or γ unwound while flagged; ``unsupported`` when an episode still
@@ -758,22 +794,27 @@ def sf1e_gain(events: list[Mapping], manifest: Mapping) -> Result:
         return _unsupported("SF-1e", "the organ never acted while flagged")
     last = max(w["window"] for w in closes)
     problems, reached, pending, resolved = [], {}, [], 0
+    presence = router_presence(events)
     for router, rows in by_router.items():
+        born = presence.get(router, rows[0]["window"])
         for start, end in episodes:
-            prior = [row for row in rows if row["window"] < start]
-            inside = [row for row in rows if start <= row["window"] <= end]
-            gamma0 = min(prior[-1]["gamma_after"]) if prior else min(rows[0]["gamma_before"])
+            if born > end:
+                continue  # the router did not exist during this episode
+            begin = max(start, born)
+            prior = [row for row in rows if row["window"] < begin]
+            inside = [row for row in rows if begin <= row["window"] <= end]
+            gamma0 = (gamma_of(prior[-1]["gamma_after"]) if prior
+                      else gamma_of(rows[0]["gamma_before"]))
             steps = gain_steps(ph, gamma0)
-            raised = [row["window"] for row in inside
-                      if max(row["gamma_after"]) > max(row["gamma_before"])]
+            raised = [row["window"] for row in inside if raises(row)]
             own = max([period, *(b - a for a, b in zip(raised, raised[1:], strict=False))])
-            top = start if steps == 0 else next(
-                (row["window"] for row in inside if min(row["gamma_after"]) >= ph.gamma_max),
-                None)
+            top = begin if steps == 0 else next(
+                (row["window"] for row in inside
+                 if gamma_of(row["gamma_after"]) >= ph.gamma_max), None)
             # The first act after the flag may come up to one period late.
-            bound = start + (steps + 1) * own
-            entry = {"router": router, "episode": [start, end], "reached_at": top,
-                     "steps": steps, "period": own, "bound": bound}
+            bound = begin + (steps + 1) * own
+            entry = {"router": router, "episode": [start, end], "begin": begin,
+                     "reached_at": top, "steps": steps, "period": own, "bound": bound}
             if top is not None and top <= bound:
                 reached.setdefault(router, {"window": top, "period": own,
                                             "episode": [start, end]})
@@ -784,8 +825,7 @@ def sf1e_gain(events: list[Mapping], manifest: Mapping) -> Result:
             else:
                 resolved += 1
         for row in rows:
-            if (row["window"] in flag_set and row["window"] not in thrash
-                    and max(row["gamma_after"]) < max(row["gamma_before"])):
+            if row["window"] in flag_set and row["window"] not in thrash and lowers(row):
                 problems.append({"router": router, "unwound_while_flagged": row["window"]})
     evidence = {"problems": problems[:10], "reached": reached, "pending": pending[:10],
                 "resolved": resolved, "episodes": episodes[:10], "organ_period": period}
@@ -832,17 +872,29 @@ def ld1a_accrual(events: list[Mapping], manifest: Mapping) -> Result:
 
 
 def sf1f_route_open(events: list[Mapping], manifest: Mapping) -> Result:
-    """SF-1f: the registration route stays open in every window and the reserve accrues."""
+    """SF-1f: the registration route stays open in every window that measured it, and the
+    reserve accrues.
+
+    ``access:registration_route`` is ``1.0`` present, ``0.0`` lost, and absent or null
+    when unknown (``immune.close_window``: ``None if present is None``): an unmeasured
+    window is missing evidence, never a shut route. With no window that measured the
+    route, the result is ``unsupported``.
+    """
     closes = windows(events)
     if not closes:
         return _unsupported("SF-1f", "no window closed")
-    shut = [w["window"] for w in closes
-            if (w.get("profile") or {}).get("access:registration_route") != 1.0]
+    readings = {w["window"]: (w.get("profile") or {}).get("access:registration_route")
+                for w in closes}
+    measured = {w: v for w, v in readings.items() if v is not None}
+    shut = [w for w, v in measured.items() if v != 1.0]
     accrual = ld1a_accrual(events, manifest)
+    if not shut and not measured:
+        return _unsupported("SF-1f", "no window measured the registration route",
+                            unmeasured=len(readings))
     if not shut and accrual.status == UNSUPPORTED:
         return _unsupported("SF-1f", "no reserve window opened", closed=[])
     return _result("SF-1f", not shut and accrual.ok, closed=shut[:10],
-                   accrual=accrual.status)
+                   measured=len(measured), accrual=accrual.status)
 
 
 def penalty_by_handle(events: list[Mapping]) -> dict[str, Mapping]:
@@ -869,7 +921,7 @@ def sf2_gradient(events: list[Mapping], manifest: Mapping, *, card: str,
     opened_in = _decision_windows(events)
     shares: dict[int, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
     nonrelieving: dict[int, set[str]] = defaultdict(set)
-    routers: set[str] = set()
+    routers: dict[int, set[str]] = defaultdict(set)
     for handle, row in penalty_by_handle(events).items():
         seat = seats.get(handle)
         for term in row.get("terms") or ():
@@ -881,12 +933,14 @@ def sf2_gradient(events: list[Mapping], manifest: Mapping, *, card: str,
                     "holder" if seat in holders else None)
             if side is not None:
                 shares[term["window"]][side].append(float(term["share"]))
-                routers.add(actors.get(handle))
+                routers[term["window"]].add(actors.get(handle))
     if not shares:
         return _unsupported("SF-2a", "no violated window priced either arm", card=card)
     for row in rows_of(events, "router.abstention_priced"):
         window = opened_in.get(row["handle"])
-        if window in shares and row.get("router") in routers:
+        # A NOOP is non-relieving in its window only for a router that drew either arm
+        # in that same window (R9, D5): the draws it abstained among.
+        if window in shares and row.get("router") in routers.get(window, ()):
             nonrelieving[window].add(row["handle"])
     problems = []
     for window, sides in sorted(shares.items()):
@@ -1145,8 +1199,7 @@ def th1f_priority(events: list[Mapping], manifest: Mapping) -> Result:
     if not both:
         return _unsupported("TH-1f", "no window was flagged with both")
     acts = [row for row in rows_of(events, "immune.gain") if row["window"] in both]
-    bad = [row for row in acts if row.get("pathology") != "thrash"
-           or max(row["gamma_after"]) > max(row["gamma_before"])]
+    bad = [row for row in acts if row.get("pathology") != "thrash" or raises(row)]
     if not acts:
         # (B): with no gain act in such a window the priority was never exercised.
         return _unsupported("TH-1f", "no gain act in a window flagged with both",
@@ -1295,7 +1348,11 @@ def th3_governance_gap(events: list[Mapping], manifest: Mapping) -> Result:
             bad.append({"boundary_ns": row["boundary_ns"], "gap": gap,
                         "required": ph.r * row["slowest_period_ns"]})
     at_boundary = {row["boundary_ns"] for row in boundaries}
-    slowest = {row["activation_ns"]: row["slowest_period_ns"] for row in cadence}
+    # Rows sharing an activation instant bind it by the slowest period any of them read.
+    slowest: dict[int, int] = {}
+    for row in cadence:
+        instant = row["activation_ns"]
+        slowest[instant] = max(slowest.get(instant, 0), row["slowest_period_ns"])
     for row in cadence:
         if row["activation_ns"] not in at_boundary:
             bad.append({"activation_ns": row["activation_ns"], "not_at_a_boundary": True})
@@ -1381,8 +1438,7 @@ def ld1f_hold(events: list[Mapping], manifest: Mapping) -> Result:
     if not dead:
         return _unsupported("LD-1f", "learning death was never flagged")
     gains = rows_of(events, "immune.gain")
-    bad = [row for row in gains
-           if row["window"] in dead and max(row["gamma_after"]) < max(row["gamma_before"])]
+    bad = [row for row in gains if row["window"] in dead and lowers(row)]
     by_router: dict[str, list[Mapping]] = defaultdict(list)
     for row in gains:
         by_router[row["router"]].append(row)
@@ -1393,7 +1449,7 @@ def ld1f_hold(events: list[Mapping], manifest: Mapping) -> Result:
         for router, rows in by_router.items():
             floor = min(min(row["gamma_before"] + row["gamma_after"]) for row in rows)
             prior = [row for row in rows if row["window"] < w["window"]]
-            if prior and max(prior[-1]["gamma_after"]) > floor:
+            if prior and gamma_of(prior[-1]["gamma_after"]) > floor:
                 exercised.append({"window": w["window"], "router": router})
     if not bad and not exercised:
         return _unsupported("LD-1f", "no acting learning-dead window found γ above its floor",
@@ -1486,12 +1542,14 @@ def of1a_outside_the_loop(events: list[Mapping], manifest: Mapping) -> Result:
     factory's input"). A ``y`` that moved with a verdict would be the verdict grading
     itself.
 
-    Repetition is the count of consequence rows on one (return, phase): two rows or
-    more are checked, and any difference in ``y`` fails, whether or not their ``q``
-    differ."""
+    Repetition is the count of consequence rows on one (return, phase) that carry a
+    ``y``: two rows or more are checked, and any difference in ``y`` fails, whether or
+    not their ``q`` differ. A row with ``y`` null (not yet known) is not a reading."""
     by_return: dict[tuple, list] = defaultdict(list)
     for row in rows_of(events, "verdict.consequence"):
-        by_return[(row["about_handle"], row.get("phase"))].append(row.get("y"))
+        # A row whose y is not yet known (null) reads no fact to compare.
+        if row.get("y") is not None:
+            by_return[(row["about_handle"], row.get("phase"))].append(row.get("y"))
     shared = {key: ys for key, ys in by_return.items() if len(ys) > 1}
     if not shared:
         return _unsupported("OF-1a", "no return carries two consequence rows in one phase")
@@ -1507,7 +1565,8 @@ def of3a_sampling_behind_return(events: list[Mapping], manifest: Mapping) -> Res
     A draw on a ``ProducerReturn`` event comes after both the event that published the
     return (its own ledger row, carried with its ``about_handle``) and the producer's
     invocation that made it."""
-    returned = {row["handle"]: row["seq"] for row in rows_of(events, "invocation")}
+    returned = {row["handle"]: row["seq"] for row in rows_of(events, "invocation")
+                if isinstance(row.get("handle"), str) and row["handle"]}
     published = {row["event"]["id"]: ((row["event"].get("payload") or {}).get("about_handle"),
                                       row["seq"])
                  for row in rows_of(events, "event")
@@ -1539,12 +1598,14 @@ def of2c_holdout_bites(events: list[Mapping], manifest: Mapping, *, card: str,
         for term in row.get("terms") or ():
             if term["card_id"] != card or term["window"] <= after_window:
                 continue
-            checked += 1
             # A decision settled while its window was still open is priced on the last
             # closed measurement (``_penalty_terms`` reads the live card samples).
             window = term["window"]
             reference = window if closed_at.get(window, math.inf) < row["seq"] else window - 1
-            extra = term["violation"] - region_violation.get(reference, 0.0)
+            if reference not in region_violation:
+                continue  # no measured region violation to subtract: missing evidence
+            checked += 1
+            extra = term["violation"] - region_violation[reference]
             if extra > 1e-12 and term["share"] > 0:
                 bitten.append({"handle": handle, "window": term["window"], "holdout": extra})
     if not checked:
@@ -1656,10 +1717,17 @@ def _field(row: Mapping, path: str) -> Any:
     return value
 
 
+def _bounded(value: Any, lo: float, hi: float) -> bool:
+    """A real number (never a bool, a string or None), finite, within [lo, hi]."""
+    return (isinstance(value, int | float) and not isinstance(value, bool)
+            and math.isfinite(value) and lo <= value <= hi)
+
+
 def s4_boundedness(events: list[Mapping], manifest: Mapping) -> Result:
-    """S4: every settled penalty ≤ ``penalty_cap``; every learned, settled or graded score
-    of every kind that carries one (``UNIT_FIELDS``) in [0, 1]; every ratchet ends at or
-    below ``lambda_max``. ``unsupported`` when the rows carry no such value at all."""
+    """S4: every settled penalty is a finite number in [0, ``penalty_cap``], present in
+    every row of its kind (``CAPPED_FIELDS``); every learned, settled or graded score of
+    every kind that carries one (``UNIT_FIELDS``) in [0, 1]; every ratchet ends in
+    [0, ``lambda_max``]. ``unsupported`` when the rows carry no such value at all."""
     ph = physics(manifest)
     bad, checked = [], 0
     for kind, fields in UNIT_FIELDS.items():
@@ -1677,15 +1745,19 @@ def s4_boundedness(events: list[Mapping], manifest: Mapping) -> Result:
     for kind, fields in CAPPED_FIELDS.items():
         for row in rows_of(events, kind):
             for name in fields:
+                # Every capped field of its kind is written by the kernel: a missing,
+                # non-numeric, non-finite, negative or over-cap value fails, and each
+                # one read is evidence (a penalty-only diary is checked, not unsupported).
                 value = _field(row, name)
                 slack = 1e-12 if kind in WEIGHTED_PENALTY_KINDS else 0.0
-                if isinstance(value, int | float) and value > ph.cap + slack:
+                checked += 1
+                if not _bounded(value, 0.0, ph.cap + slack):
                     bad.append({"kind": kind, "field": name, "value": value,
                                 "cap": ph.cap, "handle": row.get("handle")})
     for row in rows_of(events, "immune.price_ratchet"):
         checked += 1
-        if row["lambda_after"] > ph.lambda_max:  # min(lambda_max, …): exact
-            bad.append({"kind": row["kind"], "card": row["card_id"]})
+        if not _bounded(row.get("lambda_after"), 0.0, ph.lambda_max):  # min(lambda_max, …)
+            bad.append({"kind": row["kind"], "card": row.get("card_id")})
     if not checked:
         return _unsupported("S4", "no row carries a score, a reward or a ratchet")
     return _result("S4", not bad, checked=checked, bad=bad[:5])
@@ -1718,15 +1790,21 @@ def s5b_observed_neutral(events: list[Mapping], manifest: Mapping) -> Result:
     seats = decision_seats(events)
     actors = {row["handle"]: row.get("actor") for row in rows_of(events, "decision.open")}
     raws: dict[str, list[float]] = defaultdict(list)
-    bad, checked = [], 0
+    bad, checked, untraced = [], 0, 0
     for row in events:
         kind = row.get("kind")
         if kind == "price.penalty":
             handle = row.get("handle")
             if row.get("raw") is not None and seats.get(handle) not in (None, "NOOP"):
-                raws[actors.get(handle)].append(float(row["raw"]))
+                actor = actors.get(handle)
+                if not isinstance(actor, str):
+                    # A round no router drew (S1's rule: untraceable) is no router's mean.
+                    untraced += 1
+                    continue
+                raws[actor].append(float(row["raw"]))
         elif kind in ("router.abstention_priced", "router.decline_priced"):
-            observed = raws.get(row.get("router"))
+            router = row.get("router")
+            observed = raws.get(router) if isinstance(router, str) else None
             if observed:
                 checked += 1
                 mean = math.fsum(observed) / len(observed)
@@ -1734,8 +1812,10 @@ def s5b_observed_neutral(events: list[Mapping], manifest: Mapping) -> Result:
                     bad.append({"handle": row["handle"], "neutral": row["neutral"],
                                 "observed_mean": mean, "rounds": len(observed)})
     if not checked:
-        return _unsupported("S5b", "no abstention was priced after a settled round")
-    return _result("S5b", not bad, checked=checked, mismatched=len(bad), example=bad[:3])
+        return _unsupported("S5b", "no abstention was priced after a settled round",
+                            untraced=untraced)
+    return _result("S5b", not bad, checked=checked, mismatched=len(bad), example=bad[:3],
+                   untraced=untraced)
 
 
 def s7_gain_targets(events: list[Mapping], manifest: Mapping | None = None) -> Result:
@@ -1756,19 +1836,41 @@ def s8_gain_rows_uniform(events: list[Mapping], manifest: Mapping) -> Result:
     gains = rows_of(events, "immune.gain")
     if not gains:
         return _unsupported("S8", "no gain row")
-    bad = []
+    # A router's seed γ, where the diary shows it: its first gain row raised γ from the
+    # seed (a lowering needs an earlier raise, and γ never goes below the seed).
+    seeds: dict[str, list[float]] = {}
+    for row in gains:
+        if row["router"] not in seeds:
+            seeds[row["router"]] = list(row["gamma_before"]) if raises(row) else []
+    bad, unverified = [], []
     for row in gains:
         pairs = list(zip(row["gamma_before"], row["gamma_after"], strict=True))
         steps = {b - a for a, b in pairs}
-        # ``immune._gain``'s own step, exactly: up is min(gamma_max, old + gain_step);
-        # down is old − gain_step, or less of a step where the seed floor binds.
+        seed = seeds[row["router"]]
+        # ``immune._gain``'s own step, exactly (immune.py:145-148): up is
+        # max(old, min(gamma_max, old + gain_step)); down is
+        # min(old, max(seed_gamma, old − gain_step)), a partial step only onto the seed.
         if row.get("pathology") == "stable_failure":
             wrong = [b for a, b in pairs if b != max(a, min(ph.gamma_max, a + ph.gain_step))]
         else:
-            wrong = [b for a, b in pairs if not (a - ph.gain_step <= b <= a)]
+            wrong = []
+            for i, (a, b) in enumerate(pairs):
+                if seed:
+                    if b != min(a, max(seed[i], a - ph.gain_step)):
+                        wrong.append(b)
+                elif b != a - ph.gain_step:
+                    if a - ph.gain_step < b < a:
+                        unverified.append({"router": row["router"], "window": row["window"]})
+                    else:
+                        wrong.append(b)
         if len(steps) != 1 or wrong or max(row["gamma_after"]) > ph.gamma_max:
             bad.append({"router": row["router"], "window": row["window"],
                         "steps": sorted(steps), "wrong": wrong[:3]})
+    if not bad and unverified:
+        # A partial step lands on the seed only; with the seed not in the diary it cannot
+        # be told from a short step.
+        return _unsupported("S8", "a partial down step with the router's seed unknown",
+                            unverified=unverified[:5])
     return _result("S8", not bad, gains=len(gains), bad=bad[:5])
 
 

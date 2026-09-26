@@ -1087,3 +1087,210 @@ def test_the_replay_command_refuses_an_unbound_diary(tmp_path, capsys):
     assert g.main(["replay", str(tmp_path / "rows.json"), "--world", "v"]) == 2
     assert "refused" in capsys.readouterr().err
     assert g.main(["replay", str(tmp_path / "rows.json"), "--world", "w", "--seed", "1"]) == 0
+
+
+
+# --- the consolidated round on 9fea1f2: Codex pass 11 and Sol's cross-family pass -----------
+
+
+def _gain2(window, before, after, pathology="stable_failure", router="router:Tick"):
+    """A gain row over several bases."""
+    return {"kind": "immune.gain", "router": router, "window": window,
+            "pathology": pathology, "gamma_before": list(before), "gamma_after": list(after)}
+
+
+def _sf1e_base():
+    """The passing SF-1e diary: flagged from window 3, acts every third window, the Tick
+    router climbing from 0.1 to the top by window 24."""
+    closes = [_w(i, acts=i % 3 == 0, sf=i >= 3) for i in range(1, 40)]
+    steps = [_gain(w, round(0.1 + 0.05 * n, 2), round(0.15 + 0.05 * n, 2))
+             for n, w in enumerate(range(3, 27, 3))]
+    return closes, steps
+
+
+def test_ca_sf1e_a_router_registered_mid_episode_is_bound_from_its_registration():
+    """Codex C-a: a router first seen at window 30 of an episode that began at 3 is held
+    to a bound from 30, not from 3."""
+    closes, steps = _sf1e_base()
+    late = [_gain(30, 0.45, 0.5, router="router:Late")]
+    result = g.sf1e_gain(closes + steps + late, M)
+    assert result.ok, result.evidence
+    assert result.evidence["reached"]["router:Late"]["window"] == 30
+    # A router registered at 21 (its first draw) that has not climbed by its own bound
+    # (two steps from 0.4: 21 + 3 × 3 = 30) while the episode ran on to 39 fails.
+    drawn = [{"kind": "price.window", "window": w} for w in range(1, 21)] + [
+        _open("late-1", "a", actor="router:Late")]
+    stuck = [_gain(33, 0.4, 0.45, router="router:Late")]
+    result = g.sf1e_gain(drawn + closes + steps + stuck, M)
+    assert result.status == g.FAIL
+    assert any(p.get("router") == "router:Late" and p.get("begin") == 21
+               for p in result.evidence["problems"])
+
+
+def test_cb_sf1d_the_duration_must_reach_min_ratio_inside_the_run():
+    """Codex C-b: a saturation episode that overlaps the capped run at 1-3 but reaches
+    min_ratio only after it (windows 3-5) is not the run's escalation."""
+    run = _windowed("c", [(0.5, 1.0, 0.5)] * 3, first=1) + _windowed(
+        "c", [(0.2, 1.0, 0.2)] * 3, first=4)
+    overlapping = _saturated((3, 1), (4, 2), (5, 3))
+    result = g.sf1d_escalation(run + overlapping, M, card="c")
+    assert result.status == g.FAIL and result.evidence["unmatched"] == [{"run": [1, 3]}]
+    inside = _saturated((1, 1), (2, 2), (3, 3))
+    assert g.sf1d_escalation(run + inside, M, card="c").ok
+
+
+@pytest.mark.parametrize("value", [-0.1, "0.3", float("nan"), float("inf"), True, None])
+def test_cc_s4_every_capped_value_is_a_finite_number_within_the_cap(value):
+    """Codex C-c: a negative, non-numeric, non-finite or missing capped value fails."""
+    row = _penalty("d", 1.0) | {"penalty": value}
+    if value is None:
+        row.pop("penalty")
+    result = g.s4_boundedness([row], M)
+    assert result.status == g.FAIL, result.evidence
+
+
+def test_k1_s4_a_penalty_only_diary_is_checked_not_unsupported():
+    """Sol K1: capped fields are evidence: a penalty over the cap in a diary with no unit
+    field fails, and one within the cap passes."""
+    over = {"kind": "price.penalty", "handle": "h1", "penalty": 0.9, "raw": None,
+            "effective": None}
+    assert g.s4_boundedness([over], M).status == g.FAIL
+    assert g.s4_boundedness([over | {"penalty": 0.3}], M).ok
+
+
+def test_a1_sf1a_measurements_k_apart_are_one_episode_as_the_kernel_reads_them():
+    """Sol A1 (disagreed, with the kernel's own predicate): the tail is the last k
+    windows (versions.py:82) and a card fails while every window of it that measured the
+    card violated, and one did (live.py:334-347). Measurements k apart keep a violating
+    measurement in every tail between them, so the kernel's failing set never drops the
+    card: one episode. k + 1 apart, one tail holds none: two episodes."""
+    from factorylab.versioning.live import persistent_violations
+
+    k = g.physics(M).k
+
+    def window(index, measured):
+        return {"window": index, "profile": {"foo": 0.5} if measured else {},
+                "regions": {"foo": {"kind": "min", "lo": 1.0, "hi": None, "scale": 1.0}}}
+
+    for gap, episodes in ((k, 1), (k + 1, 2)):
+        last = 2 + gap
+        diary = {i: window(i, i in (2, last)) for i in range(1, last + 1)}
+        # The kernel's reading at every window from the first full tail to the second
+        # measurement: diary[W - k + 1 .. W].
+        failing = {w: persistent_violations([diary[i] for i in range(w - k + 1, w + 1)])
+                   == ["foo"] for w in range(max(k, 2), last + 1)}
+        assert all(failing.values()) is (episodes == 1), failing
+        assert len(g.violation_episodes({2: 1.0, last: 1.0}, k)) == episodes
+
+
+def test_b1_s8_a_down_step_is_the_kernels_exactly():
+    """Sol B1: immune.py:145-148 lowers γ to min(old, max(seed, old − gain_step)) (the
+    floor is the router's seed γ, not 0.0): a partial step that is not onto the seed
+    fails; one onto the seed passes; one with the seed out of the diary is unverified."""
+    seeded = [_gain(1, 0.1, 0.1 + 0.05)]
+    short = seeded + [_gain(5, 0.4, 0.38, "thrash")]
+    assert g.s8_gain_rows_uniform(short, M).status == g.FAIL
+    exact = seeded + [_gain(5, 0.4, 0.4 - 0.05, "thrash")]
+    assert g.s8_gain_rows_uniform(exact, M).ok
+    onto_seed = seeded + [_gain(6, 0.12, 0.1, "cleared")]
+    assert g.s8_gain_rows_uniform(onto_seed, M).ok
+    unseeded = [_gain(5, 0.4, 0.38, "thrash")]
+    assert g.s8_gain_rows_uniform(unseeded, M).status == g.UNSUPPORTED
+
+
+def test_c1_of2c_an_unmeasured_reference_window_is_missing_evidence():
+    """Sol C1: a decision priced while window 4 was open is compared with window 3; with
+    window 3 unmeasured there is no region violation to subtract, not a zero one."""
+    rows = _seq([_price_window(2, 0.1), _open("d1", "registrar"),
+                 _penalty("d1", 0.5, window=4, violation=0.3)])
+    result = g.of2c_holdout_bites(rows, M, card="c", seats={"registrar"}, after_window=1)
+    assert result.status == g.UNSUPPORTED, result.evidence
+
+
+def test_d1_sf2a_a_noop_counts_only_for_a_router_that_drew_an_arm_that_window():
+    """Sol D1: r1 drew both arms in window 1 and only a NOOP in window 2, where r2 drew
+    the holder: window 2's non-relieving set is the holder alone (n = 1)."""
+    kw = {"card": "c", "relievers": {"rel"}, "holders": {"hold"}}
+    rows = _seq([
+        _open("d1", "rel", actor="router:r1"), _open("d2", "hold", actor="router:r1"),
+        {"kind": "price.window", "window": 1},
+        _open("d3", "hold", actor="router:r2"), _open("d4", "NOOP", actor="router:r1"),
+        _penalty("d1", 0.0, window=1), _penalty("d2", 1.0, window=1),
+        _penalty("d3", 1.0, window=2),
+        {"kind": "router.abstention_priced", "handle": "d4", "router": "router:r1",
+         "neutral": 0.5, "penalty": 0.0, "reward": 0.5}])
+    result = g.sf2_gradient(rows, M, **kw)
+    assert {"window": 2, "missing": ["reliever"]} in result.evidence["problems"]
+    assert not [p for p in result.evidence["problems"] if "holder_shares" in p], \
+        result.evidence
+
+
+def test_e1_of3a_an_invocation_without_a_handle_returns_nothing():
+    """Sol E1: a handle-less invocation is no return, and a ProducerReturn naming no
+    handle names none of it."""
+    ok = [{"kind": "invocation", "handle": "p1", "seq": 1}, _returned_event("e", "p1", 2),
+          {"kind": "decision.open", "handle": "j1", "event_id": "producerreturn-2", "seq": 3}]
+    stray = [{"kind": "event", "seq": 12, "event": {"id": "ev1", "kind": "ProducerReturn",
+                                                    "payload": {}}},
+             {"kind": "decision.open", "handle": "j2", "event_id": "ev1", "seq": 13},
+             {"kind": "invocation", "seq": 15}]
+    result = g.of3a_sampling_behind_return(ok + stray, M)
+    assert result.ok and result.evidence["draws"] == 1, result.evidence
+
+
+def test_g1_sf1e_reads_gamma_as_the_kernel_does_and_any_base_unwinding_fails():
+    """Sol G1: γ is the first base's (immune.py:117-119), for γ₀ as for the top; a
+    lowering of any base while flagged is an unwind."""
+    closes = [_w(i, acts=i % 3 == 0, sf=i >= 10) for i in range(1, 31)]
+    prior = [_gain2(9, [0.4, 0.35], [0.45, 0.40])]
+    late_top = [_gain2(18, [0.45, 0.45], [0.5, 0.5])]
+    result = g.sf1e_gain(closes + prior + late_top, M)
+    assert result.status == g.FAIL  # one step from 0.45: bound 10 + 2*3 = 16 < 18
+    base, steps = _sf1e_base()
+    lowered = [_gain2(27, [0.5, 0.5], [0.5, 0.45], "cleared")]
+    unwound = g.sf1e_gain(base + steps + lowered, M)
+    assert unwound.status == g.FAIL
+    assert {"router": "router:Tick", "unwound_while_flagged": 27} in \
+        unwound.evidence["problems"]
+
+
+def test_h1_sf1f_an_unmeasured_route_is_missing_evidence():
+    """Sol H1: immune.close_window writes access:registration_route as None when unknown;
+    a window without it is not a shut route."""
+    unmeasured = [_w(1, profile={"registrations": 0.0}), _novelty()]
+    assert g.sf1f_route_open(unmeasured, M).status == g.UNSUPPORTED
+    shut = [_w(1, profile={"access:registration_route": 0.0}), _novelty()]
+    assert g.sf1f_route_open(shut, M).status == g.FAIL
+    open_ = [_w(1, profile={"access:registration_route": 1.0}), _w(2, profile={}),
+             _novelty()]
+    assert g.sf1f_route_open(open_, M).ok
+
+
+def test_i1_th3_one_activation_instant_is_bound_by_its_slowest_period():
+    """Sol I1: two cadence rows at one instant with different slowest periods bind it by
+    the larger: 400 ns after the last instant is under 3 × 200."""
+    rows = [_boundary(1000, 700, slow=100), _cadence(1000, slow=100),
+            _boundary(1400, 1000, slow=100), _cadence(1400, slow=200),
+            _cadence(1400, slow=100)]
+    result = g.th3_governance_gap(rows, M)
+    assert result.status == g.FAIL and result.evidence["bad"][0]["required"] == 600
+
+
+def test_j1_of1a_a_pending_y_is_not_a_reading():
+    """Sol J1: a consequence row whose y is not yet known does not split a return."""
+    pending = [_consequence("h5", 0.6, None), _consequence("h5", 0.8, 0.7)]
+    assert g.of1a_outside_the_loop(pending, M).status == g.UNSUPPORTED
+    settled = pending + [_consequence("h5", 0.2, 0.7)]
+    assert g.of1a_outside_the_loop(settled, M).ok
+
+
+def test_l1_s5b_an_untraceable_round_is_no_routers_mean():
+    """Sol L1: a settled round whose decision names no router (S1: untraceable) joins no
+    router's mean, and an abstention naming no router reads none."""
+    rows = [{"kind": "decision.open", "handle": "h_old2",
+             "propensity": {"chosen": "seat_x"}},
+            _penalty("h_old2", 0.0) | {"raw": 0.2},
+            {"kind": "router.abstention_priced", "handle": "h_abs", "router": None,
+             "neutral": 0.5, "penalty": 0.0, "reward": 0.5}]
+    result = g.s5b_observed_neutral(rows, M)
+    assert result.status == g.UNSUPPORTED and result.evidence["untraced"] == 1
