@@ -546,3 +546,22 @@ def test_every_criterion_turns_a_malformed_row_into_a_failure():
     with pytest.raises(g.Malformed):
         g.need({"kind": "immune.window"}, "thrash.lambda")
     assert g.need({"kind": "x", "a": {"b": None}}, "a.b") is None
+
+
+# --- Astra G-2: S2 reads the one list of pathology labels ----------------------------------
+
+
+def test_s2_scans_for_every_pathology_word():
+    """S2's request scan is derived from ``PATHOLOGY_WORDS``: a thrash or overfit label as
+    a JSON key or value is a diagnosis in a request, like the others."""
+    from tests.gauntlet import populations as P
+
+    assert P._LABEL_TOKENS == tuple(f'"{w}' for w in g.PATHOLOGY_WORDS)
+    for word in g.PATHOLOGY_WORDS:
+        assert P._diagnosis_labels(json.dumps({word: True})) == [word]
+    assert "thrash" in P._diagnosis_labels(json.dumps({"flag": "thrash"}))
+    assert "overfit" in P._diagnosis_labels(json.dumps({"overfitting_divergence": 1}))
+    assert P._diagnosis_labels("the thrash price is lambda times movement") == []
+    # The published price's key is the schematic, not a diagnosis.
+    assert P._diagnosis_labels(json.dumps({"thrash_price": {"lambda": 0.1}})) == []
+    assert P._diagnosis_labels(json.dumps({"thrash_price": 1, "thrash": 1})) == ["thrash"]

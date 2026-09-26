@@ -23,6 +23,7 @@ import copy
 import dataclasses
 import hashlib
 import json
+import re
 import tomllib
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Mapping
@@ -489,13 +490,19 @@ def assert_prices_not_steers(result: Run, *, s5: bool = True) -> dict[str, gaunt
 
 #: Where a diagnosis could leak into a request: a flag or a pathology label as a JSON key
 #: or value. Published formula prose that names the thrash price is the schematic
-#: (§I.b(1)), not a diagnosis, so words are matched only as quoted JSON tokens.
-_LABEL_TOKENS = tuple(f'"{word}' for word in ("stable_failure", "learning_death",
-                                              "pathology", "overfitting_divergence"))
+#: (§I.b(1)), not a diagnosis, so words are matched only as quoted JSON tokens. The words
+#: are ``gauntlet.PATHOLOGY_WORDS``, the one list of labels no seat-visible leaf carries
+#: (Astra G-2): ``"overfit`` also covers ``"overfitting_divergence``. A published price's
+#: name (``"thrash_price"``, world.mechanics) is the schematic's key for the price, not a
+#: diagnosis, so a token followed by ``_price"`` is not a label.
+_LABEL_TOKENS = tuple(f'"{word}' for word in gauntlet.PATHOLOGY_WORDS)
+_LABEL_PATTERNS = tuple(re.compile(re.escape(token) + r'(?!_price")') for token in _LABEL_TOKENS)
 
 
 def _diagnosis_labels(text: str) -> list[str]:
-    return [token.strip('"') for token in _LABEL_TOKENS if token in text]
+    return [token.strip('"') for token, pattern in zip(_LABEL_TOKENS, _LABEL_PATTERNS,
+                                                       strict=True)
+            if pattern.search(text)]
 
 
 # --- the populations (design §3) -----------------------------------------------------------
