@@ -80,3 +80,19 @@ def test_the_seat_s_learner_reads_the_penalty_after_the_router_has(monkeypatch):
     rt, penalty, learned, _ = _assembly_round(monkeypatch, price=0.0, router_first=True)
     cap = rt.m.prices.penalty_cap
     assert penalty > 0.1 and learned == pytest.approx((0.1 + cap - penalty) / (1 + cap))
+
+
+def test_a_learned_round_s_evidence_is_dropped_once_nobody_is_owed_it(monkeypatch):
+    """The raw score and penalty are kept for the round's learners and no longer: a
+    decision the kernel owes nothing and no seat's learner waits on keeps neither, so
+    the checkpoint does not grow with them (the plateau)."""
+    rt, _penalty, _learned, handle = _assembly_round(monkeypatch, price=0.0)
+    rt._deliver_returns()
+    rt._prune_price_evidence()
+    # Its seat has not read the return it was delivered: the kernel still owes it.
+    assert rt.queue.owed(handle) is not None
+    assert handle in rt.raw_scores and handle in rt.round_penalties
+    owed = rt.queue.owed
+    monkeypatch.setattr(rt.queue, "owed", lambda h: None if h == handle else owed(h))
+    rt._prune_price_evidence()  # read: nothing is owed any more
+    assert handle not in rt.raw_scores and handle not in rt.round_penalties

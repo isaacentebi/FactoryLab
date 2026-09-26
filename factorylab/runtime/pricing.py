@@ -421,14 +421,15 @@ class PricingMixin:
     def _prune_price_evidence(self) -> None:
         """Completed decisions release old attribution windows after their totals are frozen."""
         for handle in tuple({**self.raw_scores, **self.round_penalties}):
-            # A raw score and its penalty wait for the router that drew the decision, and
-            # the seat's own learner, to read them; a decision no router drew, or one
-            # both have read, keeps nothing.
+            # A raw score and its penalty wait for whoever learns the decision: its
+            # consumer's read of every return delivered for it (the kernel owes it
+            # nothing, ``DecisionQueue.owed``; a router's learning is such a read) and
+            # the seat's own learner (``assembly_rounds``). A decision whose actor is no
+            # learner is owed nothing once final, so it keeps nothing either.
             decision = self.queue.get(handle)
             if (decision.status not in (SettleStatus.PENDING, SettleStatus.TIMED_OUT)
                     and handle not in self.assembly_rounds
-                    and self.queue.delivered_count(decision.actor)
-                    <= self.delivered_seen.get(decision.actor, 0)):
+                    and self.queue.owed(handle) is None):
                 self.raw_scores.pop(handle, None)
                 self.round_penalties.pop(handle, None)
         for handle in tuple(self.thrash_charges):
