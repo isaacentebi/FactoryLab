@@ -9,6 +9,7 @@ from math import ceil
 
 from factorylab.charter.charter import MetricCard
 from factorylab.charter.controller import CardRegion, relative_region, violation
+from factorylab.charter.controller import pressure as card_pressure
 from factorylab.charter.measurement import _groups, _horizon, measure_cards
 from factorylab.cortex.registration import measured_role
 from factorylab.kernel.events import Event, EventKind
@@ -724,8 +725,11 @@ class PricingMixin:
             region = self.regions.get(cid)
             if region is None:
                 continue
-            weight[cid] = self.controller.price(cid) * (
-                violation(region, card_values[cid]) + holdouts.get(cid, 0.0))
+            # Saturated at the cap: an unbounded adopted price never overflows (R-E).
+            weight[cid] = card_pressure(
+                self.controller.price(cid),
+                violation(region, card_values[cid]) + holdouts.get(cid, 0.0),
+                self.m.prices.penalty_cap)
         roles = sorted({c.answers_for for c in cards.values() if c.answers_for != "all"})
 
         def role_sum(role: str | None) -> float:
@@ -1025,7 +1029,7 @@ class PricingMixin:
             holdouts = (self.card_samples.holdouts if window.closed_values is None
                         else window.closed_holdouts)
             amount = violation(region, values[card.id]) + holdouts.get(card.id, 0.0)
-            weight = price * amount
+            weight = card_pressure(price, amount, self.m.prices.penalty_cap)
             owner = None
             share = 1.0 if handle is None else self._decision_share(
                 window, handle, observation.id, card.answers_for, region, values[card.id],

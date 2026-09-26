@@ -191,9 +191,11 @@ def test_penalty_sums_known_cards_without_clipping_or_mutating(ledger):
     prices.observe("cost", 14, 0)
     prices.observe("rate", 3, 0)
     before = prices.snapshot()
-    # Each priced at its bound, 0.9 / v; the sum over cards is not clipped.
+    # Each card's pressure saturates at the cap (0.45 * 3 and 0.9 * 2 both exceed 0.9):
+    # finite for any adopted price; the sum over cards is not clipped.
     assert prices.penalty({"cost": 16, "rate": 2, "unknown": float("nan")}) == pytest.approx(
-        0.45 * 3 + 0.9 * 2)
+        0.9 + 0.9)
+    assert prices.penalty({"cost": 11}) == pytest.approx(0.45 * 0.5)  # below: the product
     assert prices.penalty({"cost": 10, "rate": 5}) == 0.0
     assert prices.penalty({}) == prices.penalty({"unknown": 1000}) == 0.0
     assert prices.snapshot() == before

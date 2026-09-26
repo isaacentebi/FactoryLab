@@ -39,7 +39,7 @@ import hashlib
 import json
 from dataclasses import asdict
 
-from factorylab.charter.controller import CardRegion, PriceController
+from factorylab.charter.controller import CardRegion, PriceController, pressure
 from factorylab.versioning import live
 from factorylab.versioning.series import CHANNELS
 from factorylab.versioning.versions import diagnose
@@ -145,7 +145,7 @@ def thrash_penalty(rt) -> dict:
         controller.observe(THRASH_CARD, unsettled, window_end_event=rt.n)
     price = controller.price(THRASH_CARD)
     violation = controller.violation(THRASH_CARD, unsettled) if unsettled is not None else 0.0
-    penalty = min(price * violation, rt.m.prices.penalty_cap)
+    penalty = pressure(price, violation, rt.m.prices.penalty_cap)
     return {"unsettled": unsettled, "violation": violation, "lambda": price,
             "penalty": penalty}
 

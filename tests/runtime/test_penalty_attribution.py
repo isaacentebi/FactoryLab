@@ -268,3 +268,28 @@ def test_a_card_with_no_readings_for_n_windows_publishes_unmeasured_windows_n(mo
     _producer(rt, "seed-decider", "hold")
     rt._close_price_window()
     assert rt._card_observed(HOLDS.id) == {"unmeasured_windows": 0}
+
+
+# --- an unbounded adopted price never overflows (R-E) -----------------------------------
+
+
+def test_an_adopted_price_of_1e308_at_violation_2_closes_the_window_saturated(monkeypatch):
+    """Codex on #152: with lambda_max deleted, 1e308 * 2 overflowed to inf in the roles'
+    pressure and the close raised. Pressure saturates at the cap instead: the window
+    closes, the pressure it hands the controller is penalty_cap, and the saturation is
+    ledgered."""
+    rt = _runtime(monkeypatch)
+    rt.controller.set_price(HOLDS.id, 1e308, amendment_id="huge")
+    for _ in range(3):  # three holds of three: noop_share 1.0, violation (1 - 0.25) / 0.25
+        _producer(rt, "seed-decider", "hold")
+    rt._close_price_window()
+    (update,) = _rows(rt, "price.update", card_id=HOLDS.id)
+    cap = rt.m.prices.penalty_cap
+    assert update["violation"] >= 2
+    assert update["pressure"] == cap and update["at_cap"] and update["integrator_frozen"]
+    assert rt.controller.saturation(HOLDS.id)["windows_at_bound"] == 1
+    handle = next(iter(rt.window.decisions))
+    assert rt._penalty_for("producer", handle) <= cap
+    rt.controller.ratchet(HOLDS.id, window=1, step=0.05)
+    (saturated,) = _rows(rt, "immune.price_ratchet_saturated", card_id=HOLDS.id)
+    assert saturated["pressure"] == cap

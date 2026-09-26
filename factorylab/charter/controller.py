@@ -129,10 +129,31 @@ class _CardState:
     last_pressure: float = 0.0
 
 
-def _repriced(state: _CardState, price: float) -> float:
+def pressure(price: float, violation: float, cap: float) -> float:
+    """One card's pressure on the reward, ``lambda * v``, saturated at ``cap``.
+
+    A price has no bound of its own (wave 16, ruling R-E), so an adopted price as
+    large as a float allows times a violation above one would overflow to infinity.
+    Guarantees ``cap`` when the price is at or above the card's bound ``cap / v``
+    (the penalty it presses cannot exceed the cap any reward bears), the product
+    otherwise, and 0 while the card does not violate: always finite.
+    """
+    if violation <= 0:
+        return 0.0
+    if price >= cap / violation:
+        return cap
+    return price * violation
+
+
+_pressure = pressure
+
+
+def _repriced(state: _CardState, price: float, cap: float) -> float:
     """The roles' pressure after this card alone moves to ``price``: the last reading
-    moved by the change times the card's violation, never below zero."""
-    return max(0.0, state.last_pressure + (price - state.price) * state.previous_violation)
+    moved by the change in the card's own saturated pressure, never below zero."""
+    v = state.previous_violation
+    return max(0.0, state.last_pressure - _pressure(state.price, v, cap)
+               + _pressure(price, v, cap))
 
 
 class PriceController:
@@ -277,7 +298,7 @@ class PriceController:
             "lambda_before": state.price, "lambda_after": price,
         })
         self.__cards[card_id] = replace(state, price=price, integral=price,
-                                        last_pressure=_repriced(state, price))
+                                        last_pressure=_repriced(state, price, self.__cap))
 
     def ratchet(self, card_id: str, *, window: int, step: float) -> None:
         """Raise a card's price with the duration of the failing attractor it sits in.
@@ -324,7 +345,7 @@ class PriceController:
         })
         self.__cards[card_id] = replace(state, price=price, integral=integral,
                                         failing_windows=duration,
-                                        last_pressure=_repriced(state, price))
+                                        last_pressure=_repriced(state, price, self.__cap))
 
     def _bound(self, violation: float) -> float | None:
         """The price at which a card's own penalty takes the whole cap, or None unviolated."""
@@ -450,6 +471,10 @@ class PriceController:
         price = max(0.0, requested) if bound is None else min(bound, max(0.0, requested))
         saturated = requested < 0 or (bound is not None and requested > bound)
         at_bound = self._presses(price, violation, pressure or 0.0)
+        # The card's own pressure before and after, saturated at the cap: finite for
+        # any adopted price (``pressure``).
+        own_before = _pressure(state.price, violation, self.__cap)
+        own_after = _pressure(price, violation, self.__cap)
         updated = replace(
             state,
             price=price,
@@ -465,8 +490,8 @@ class PriceController:
             violation_windows=state.violation_windows + 1 if violation > 0 else 0,
             # The pressure at the prices now in force: the reading (at the prices
             # before this update) moved by this card's own change.
-            last_pressure=max(0.0, (state.price * violation if pressure is None else pressure)
-                              + (price - state.price) * violation),
+            last_pressure=max(0.0, (own_before if pressure is None else pressure)
+                              - own_before + own_after),
         )
         entry = {
             "kind": "price.update",
@@ -564,10 +589,11 @@ class PriceController:
         return state.price
 
     def penalty(self, values: dict[str, float]) -> float:
-        """Return the unclipped sum for known cards only; callers own score clipping."""
+        """Return the sum over known cards of each one's pressure, saturated per card at
+        the cap (``pressure``) and not clipped in total; callers own score clipping."""
         return sum(
             (
-                self.price(card_id) * self.violation(card_id, value)
+                _pressure(self.price(card_id), self.violation(card_id, value), self.__cap)
                 for card_id, value in values.items()
                 if card_id in self.__cards
             ),
