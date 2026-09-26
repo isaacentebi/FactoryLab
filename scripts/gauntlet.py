@@ -1723,16 +1723,59 @@ def th1c_movement(events: list[Mapping], manifest: Mapping) -> Result:
     return _result("TH-1c", True, **evidence)
 
 
+def thrash_attributed(events: list[Mapping], manifest: Mapping) -> dict[str, bool]:
+    """Whether each router draw's round may carry a thrash charge, by the diary's own
+    attribution (wave 16, second addendum, I-10, ruling R-E; routing.py
+    ``_thrash_attributed``): when the last closed window before the draw names the roles
+    whose behaviour moved (``immune.window`` ``thrash.roles``), a router is attributed
+    when a seat on its menus so far fills one of them (``registration.measured_role`` of
+    the seat's emitted kind, from the Launch manifest or its ``registry.register``);
+    when it names none, or the diary predates I-10 and writes no ``roles``, the router
+    is attributed when its kind is in ``evaluation.no_swap_regret_kinds``."""
+    from factorylab.cortex.registration import measured_role
+
+    ph = physics(manifest)
+    emits = {str(a.get("id")): a.get("emits") for a in manifest.get("assemblies") or ()
+             if isinstance(a, Mapping)}
+    roles: list[str] = []
+    menus: dict[str, set[str]] = defaultdict(set)
+    out: dict[str, bool] = {}
+    for row in events:
+        kind = row.get("kind")
+        if kind == "immune.window":
+            thrash = row.get("thrash")
+            roles = list((thrash.get("roles") if isinstance(thrash, Mapping) else None) or ())
+        elif kind == "registry.register":
+            contract = need(row, "contract")
+            schema = contract.get("output_schema") if isinstance(contract, Mapping) else None
+            if isinstance(schema, Mapping):
+                emits[str(contract.get("id"))] = schema.get("emits")
+        elif kind == "decision.open":
+            router = need(row, "actor")
+            if not isinstance(router, str) or not router.startswith("router:"):
+                continue
+            menus[router].update(need(row, "propensity.action_ids"))
+            if roles:
+                filled = {measured_role(emits[a]) for a in menus[router] if a in emits}
+                out[need(row, "handle")] = bool(filled & set(roles))
+            else:
+                core = router.split(":", 1)[1].split("#")[0].split("@")[0]
+                out[need(row, "handle")] = core in ph.no_swap_regret_kinds
+    return out
+
+
 @criterion("TH-1d")
 def th1d_frontier(events: list[Mapping], manifest: Mapping) -> Result:
-    """TH-1d: no charge reaches a mean-based router, a niche decision or a frontier NOOP."""
-    ph = physics(manifest)
+    """TH-1d: every charge lands on a router the diary attributes the thrash price to
+    (``thrash_attributed``: the moving roles' routers under I-10, else the core), and
+    none on a niche decision. A charge on a round no attributed draw opened fails."""
+    attributed = thrash_attributed(events, manifest)
     niche = {need(row, "handle") for row in rows_of(events, "niche.action")}
     bad = []
     for row in rows_of(events, "thrash.charged"):
-        kind = str(need(row, "router")).split(":", 1)[-1].split("#")[0].split("@")[0]
-        if kind not in ph.no_swap_regret_kinds or need(row, "handle") in niche:
-            bad.append({"handle": need(row, "handle"), "router": row.get("router")})
+        handle = need(row, "handle")
+        if not attributed.get(handle, False) or handle in niche:
+            bad.append({"handle": handle, "router": row.get("router")})
     charged = len(rows_of(events, "thrash.charged"))
     if not charged:
         return _unsupported("TH-1d", "no round was charged")

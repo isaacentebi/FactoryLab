@@ -613,15 +613,48 @@ def test_th1c_checks_every_charge_even_with_no_core_kind_configured():
         assert g.th1c_movement(rows + bad, mean).status == g.FAIL, bad
 
 
+def _charge(handle, router="router:Tick"):
+    return {"kind": "thrash.charged", "handle": handle, "router": router, "charge": 0.1}
+
+
 def test_th1d_no_charge_reaches_the_frontier_or_the_niche():
-    ok = [{"kind": "thrash.charged", "handle": "d1", "router": "router:Tick", "charge": 0.1}]
+    """A pre-I-10 diary (no ``thrash.roles``): the core list attributes the price."""
+    opened = [_w(1, lam=0.4), _open("d1", "a"), _open("d2", "a", actor="router:WorldUpdate")]
+    ok = opened + [_charge("d1")]
     assert g.th1d_frontier(ok, M).ok
-    frontier = [{"kind": "thrash.charged", "handle": "d1", "router": "router:WorldUpdate",
-                 "charge": 0.1}]
+    frontier = opened + [_charge("d2", "router:WorldUpdate")]
     assert g.th1d_frontier(frontier, M).status == g.FAIL
     niche = ok + [{"kind": "niche.action", "handle": "d1"}]
     assert g.th1d_frontier(niche, M).status == g.FAIL
     assert g.th1d_frontier([], M).status == g.UNSUPPORTED  # no charge is no evidence
+    # A charge on a round no draw opened is attributed by nothing.
+    assert g.th1d_frontier([_charge("ghost")], M).status == g.FAIL
+
+
+def test_th1d_follows_the_i10_roles_the_window_names():
+    """Wave 16 I-10 (the architect's ruling on TH-1d): when the window names the roles
+    whose behaviour moved, the routers whose seats fill them are charged, core or not;
+    a router filling none of them is not, even the core's."""
+    world = {**M, "assemblies": [{"id": "judge-a", "emits": ["Verdict"]},
+                                 {"id": "hold-a", "emits": ["ProducerReturn"]}]}
+    moved = _w(1, lam=0.4)
+    moved["thrash"] = {**moved["thrash"], "roles": ["evaluator"]}
+    rows = [moved, _open("v1", "judge-a", actor="router:ProducerReturn"),
+            _open("t1", "hold-a")]
+    judged = rows + [_charge("v1", "router:ProducerReturn")]
+    assert g.th1d_frontier(judged, world).ok
+    core = rows + [_charge("t1")]
+    result = g.th1d_frontier(core, world)
+    assert result.status == g.FAIL and result.evidence["bad"][0]["handle"] == "t1"
+    # A registered seat's role comes from its contract's emitted kind.
+    registered = [moved, {"kind": "registry.register", "handle": "r", "contract": {
+        "id": "new-judge", "output_schema": {"emits": ["Verdict"]}}},
+        _open("v2", "new-judge", actor="router:Custom"), _charge("v2", "router:Custom")]
+    assert g.th1d_frontier(registered, world).ok
+    # An empty roles list is the kernel's "names none": the core list again.
+    quiet = _w(1, lam=0.4)
+    quiet["thrash"] = {**quiet["thrash"], "roles": []}
+    assert g.th1d_frontier([quiet, _open("t1", "hold-a"), _charge("t1")], world).ok
 
 
 def test_th1e_release_after_the_cycle_stops():
