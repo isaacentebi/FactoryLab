@@ -79,10 +79,10 @@ def history(tmp_path_factory):
 
 @pytest.fixture(scope="module")
 def rendered(tmp_path_factory, history):
-    repo, _base, surface, head = history
+    repo, base, _surface, head = history
     out = tmp_path_factory.mktemp("class2")
     key = tool.render([WORLD], out, seed=7, rendered=False, essay=ESSAY,
-                      release_range=f"{surface}..{head}", repo=repo)
+                      release_range=f"{base}..{head}", repo=repo)
     return out, key
 
 
@@ -133,9 +133,16 @@ def test_a_merge_whose_conflict_resolution_adds_surface_text_is_in_the_provenanc
     assert BEHAVIOUR_MIX in section and "you should hold when unsure" in section
 
 
-def test_a_range_with_no_surface_commit_renders_an_explicit_empty_section(rendered):
-    out, _key = rendered
-    section = (out / "provenance_prompt.md").read_text().split("## Provenance pass", 1)[1]
+def test_a_range_with_no_surface_commit_renders_an_explicit_empty_section(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    root = _commit(repo, "README.md", "x\n", "root")
+    head = _commit(repo, "docs/notes.md", "notes\n", "notes only")
+    tool.render([WORLD], tmp_path / "out", seed=7, rendered=False, essay=ESSAY,
+                release_range=f"{root}..{head}", repo=repo)
+    section = ((tmp_path / "out" / "provenance_prompt.md").read_text()
+               .split("## Provenance pass", 1)[1])
     assert "(no commit in this range touched a seat-visible surface)" in section
     assert BEHAVIOUR_MIX not in section
 
@@ -153,7 +160,7 @@ def test_a_render_whose_world_raises_midway_writes_no_corpus_and_exits_nonzero(
     its partial requests never become the key's trusted expected leaves."""
     from factorylab.runtime.loop import Runtime
 
-    repo, _base, surface, head = history
+    repo, base, _surface, head = history
     original, calls = Runtime._process_event, {"n": 0}
 
     def fails_midway(self, ev):
@@ -166,7 +173,7 @@ def test_a_render_whose_world_raises_midway_writes_no_corpus_and_exits_nonzero(
     monkeypatch.setattr(tool, "ROOT", repo)  # the CLI audits its own repository
     out = tmp_path / "audit"
     code = tool.main(["render", "--world", WORLD, "--out", str(out), "--seed", "7",
-                      "--rendered", "--range", f"{surface}..{head}",
+                      "--rendered", "--range", f"{base}..{head}",
                       "--essay", str(ESSAY)])
     assert code != 0 and calls["n"] >= 8
     assert not out.exists()
@@ -174,7 +181,7 @@ def test_a_render_whose_world_raises_midway_writes_no_corpus_and_exits_nonzero(
     assert "world raised midway" in err and WORLD in err
     with pytest.raises(tool.RenderFailed):
         tool.render([WORLD], out, seed=7, rendered=True, essay=ESSAY,
-                    release_range=f"{surface}..{head}", repo=repo)
+                    release_range=f"{base}..{head}", repo=repo)
     assert not out.exists()
 
 
@@ -225,9 +232,9 @@ def test_a_malformed_canary_set_is_refused(monkeypatch, tmp_path):
 
 def test_render_is_deterministic(rendered, history, tmp_path):
     out, key = rendered
-    repo, _base, surface, head = history
+    repo, base, _surface, head = history
     again = tool.render([WORLD], tmp_path, seed=7, rendered=False, essay=ESSAY,
-                        release_range=f"{surface}..{head}", repo=repo)
+                        release_range=f"{base}..{head}", repo=repo)
     assert again == key
     for name in ("auditor_input.jsonl", "prompt.md", "provenance_prompt.md"):
         assert (tmp_path / name).read_bytes() == (out / name).read_bytes()
@@ -596,7 +603,7 @@ def _dispose(text, disposition="REJECT", reason="the auditor misread", rejected=
             line = line[:-len("|  |  |")] + f"| {disposition} | {reason} |"
             cells = tool._cells(line)
             records.append({"finding_id": cells[0], "path": cells[1].strip("`"),
-                            "reason": reason})
+                            "question": cells[2], "class": cells[3], "reason": reason})
         lines.append(line)
     if rejected is not None and disposition == "REJECT":
         with rejected.open("a") as handle:
@@ -644,7 +651,13 @@ def test_the_provenance_finding_reaches_the_triage_and_the_gate(triaged, monkeyp
     assert tool.main(gate()) == 1
     path.write_text(_dispose(text, rejected=path.parent / "rejected.jsonl"))
     assert _gate(triaged) == []
-    assert tool.main(gate()) == 0
+    last = REPO[0] / tool.LAST_RELEASE
+    try:
+        assert tool.main(gate()) == 0
+        # The gate records the release it passed, for the next range to start at.
+        assert last.read_text() == key["release_commit"] + "\n"
+    finally:
+        last.unlink(missing_ok=True)
 
 
 def test_the_gate_recomputes_the_findings_from_the_bound_samples(triaged, tmp_path):
@@ -736,7 +749,7 @@ def _diffed(rendered, history, tmp_path):
     """A release rendered against a previous corpus in which one real leaf had other
     text and another did not exist yet."""
     out, _key = rendered
-    repo, _base, surface, head = history
+    repo, base, _surface, head = history
     previous = [json.loads(line)
                 for line in (out / "release_corpus.jsonl").read_text().splitlines()]
     kernel = [r for r in previous if r["provenance"] == "kernel"]
@@ -746,10 +759,11 @@ def _diffed(rendered, history, tmp_path):
              for r in previous if r is not added]
     (tmp_path / "prior.jsonl").write_text("\n".join(json.dumps(r) for r in prior) + "\n")
     (tmp_path / "rejected.jsonl").write_text(json.dumps(
-        {"finding_id": "f1", "path": changed["path"], "reason": "a formula"}) + "\n")
+        {"finding_id": "f1", "path": changed["path"], "question": "Q4", "class": "C1",
+         "reason": "a formula"}) + "\n")
     release = tmp_path / "release"
     tool.render([WORLD], release, seed=7, rendered=False, essay=ESSAY,
-                release_range=f"{surface}..{head}", repo=repo,
+                release_range=f"{base}..{head}", repo=repo,
                 previous_corpus=tmp_path / "prior.jsonl", rejected=tmp_path / "rejected.jsonl")
     return release, changed, added
 
@@ -767,6 +781,8 @@ def test_the_corpus_diff_is_rendered_before_the_triage_and_changed_leaves_lead(
     section = prompt[diff:prompt.index("## Last release's triage")]
     assert f"`{changed['leaf_id']}` changed" in section and "The old wording." in section
     assert f"`{added['leaf_id']}` added" in section
+    # The diff names the rejected finding on the changed leaf by its full identity.
+    assert "rejected last release: f1 Q4 C1" in section
     assert '"reason": "a formula"' in prompt  # input 4: the rejected findings
     records = _records(release)
     leading = [r for r in records if r["change"] in ("added", "changed")]
@@ -810,14 +826,14 @@ def test_render_refuses_an_unbound_or_malformed_input(rendered, history, tmp_pat
                                                       content, why):
     """(iii) validated: every input render reads passes its schema before anything is
     written."""
-    repo, _base, surface, head = history
+    repo, base, _surface, head = history
     (tmp_path / name).write_text(content)
     kw = {"prior.jsonl": {"previous_corpus": tmp_path / name},
           "rejected.jsonl": {"rejected": tmp_path / name},
           "previous.md": {"previous": tmp_path / name}}[name]
     with pytest.raises(tool.AuditInputInvalid, match=why):
         tool.render([WORLD], tmp_path / "out", seed=7, rendered=False, essay=ESSAY,
-                    release_range=f"{surface}..{head}", repo=repo, **kw)
+                    release_range=f"{base}..{head}", repo=repo, **kw)
     assert not (tmp_path / "out").exists()
 
 
@@ -859,14 +875,14 @@ def test_render_fills_the_authority_text_or_refuses(rendered, history, tmp_path)
     assert "Class 1, Class 2 and Class 3 (stand-in)." in prompt
     assert "THE DARK STACK (stand-in)" in prompt and "Not quoted" not in prompt
     assert "[The operator pastes" not in prompt
-    repo, _base, surface, head = history
+    repo, base, _surface, head = history
     headless = tmp_path / "essay.md"
     headless.write_text(ESSAY_TEXT.replace("CHAPTER III", "Afterword"))
     for essay, why in ((None, "no essay"), (tmp_path / "absent.md", "no essay"),
                        (headless, "no heading 'CHAPTER III'")):
         with pytest.raises(tool.AuditInputInvalid, match=why):
             tool.render([WORLD], tmp_path / "out", seed=7, rendered=False, essay=essay,
-                        release_range=f"{surface}..{head}", repo=repo)
+                        release_range=f"{base}..{head}", repo=repo)
         assert not (tmp_path / "out").exists()
 
 
@@ -889,7 +905,7 @@ def test_render_binds_the_release_commit_and_refuses_another(rendered, history, 
     try:
         with pytest.raises(tool.AuditInputInvalid, match="uncommitted seat-visible"):
             tool.render([WORLD], tmp_path / "dirty", seed=7, rendered=False, essay=ESSAY,
-                        release_range=f"{surface}..{head}", repo=repo)
+                        release_range=f"{base}..{head}", repo=repo)
     finally:
         schematics.write_text(original)
     assert not (tmp_path / "old").exists() and not (tmp_path / "dirty").exists()
@@ -1070,12 +1086,12 @@ def test_bnd3_the_previous_corpus_is_required_and_verified(rendered, history, tm
     """Sol BND-3: the key names the previous corpus it diffed against; a key without the
     field, or a previous corpus changed since, is refused."""
     out, _key = rendered
-    repo, _base, surface, head = history
+    repo, base, _surface, head = history
     prior = tmp_path / "prior.jsonl"
     prior.write_bytes((out / "release_corpus.jsonl").read_bytes())
     release = tmp_path / "release"
     tool.render([WORLD], release, seed=7, rendered=False, essay=ESSAY,
-                release_range=f"{surface}..{head}", repo=repo, previous_corpus=prior)
+                release_range=f"{base}..{head}", repo=repo, previous_corpus=prior)
     key, _records = tool.load_key(release / "canary_key.json")
     assert key["previous_corpus"] == str(prior.resolve())
     prior.write_text(prior.read_text() + "\n")
@@ -1176,3 +1192,174 @@ def test_bnd1_a_disposition_must_be_one_the_rubric_allows_and_the_protocol_backs
     with pytest.raises(tool.AuditInputInvalid, match="reviewed triage"):
         tool.gate(WORLD, path, out / "canary_key.json", samples, prov,
                   release=key["release_commit"], repo=REPO[0])
+
+
+# --- Codex pass on 11ea116: the range starts at the last release; identity everywhere -----
+
+
+@pytest.fixture(scope="module")
+def released(tmp_path_factory):
+    """A repository whose last audited release is ``rel`` (``LAST_RELEASE`` committed at
+    the head), with one surface commit before it and one after."""
+    repo = tmp_path_factory.mktemp("released")
+    _git(repo, "init", "-q")
+    root = _commit(repo, "README.md", "x\n", "root")
+    early = _commit(repo, "factorylab/cortex/schematics.py", "HOLD = 'hold'\n", "early")
+    rel = _commit(repo, "docs/notes.md", "release\n", "the release audited last")
+    later = _commit(repo, "factorylab/cortex/schematics.py", "HOLD = 'keep'\n", "later")
+    head = _commit(repo, tool.LAST_RELEASE, rel + "\n", "record the last release")
+    return repo, root, early, rel, later, head
+
+
+def test_the_range_base_is_the_last_audited_release(released, tmp_path):
+    """Codex P1 (class2_audit.py:670): a base after the last release (``HEAD^``) would
+    hide the commits between them from the provenance pass; the base is the release
+    ``LAST_RELEASE`` names as committed at the head, and nothing else."""
+    repo, root, early, rel, later, head = released
+    for base in (later, root, early):
+        with pytest.raises(tool.AuditInputInvalid, match="not the last audited release"):
+            tool.render([WORLD], tmp_path / "out", seed=7, rendered=False, essay=ESSAY,
+                        release_range=f"{base}..{head}", repo=repo)
+        assert not (tmp_path / "out").exists()
+    key = tool.render([WORLD], tmp_path / "out", seed=7, rendered=False, essay=ESSAY,
+                      release_range=f"{rel}..{head}", repo=repo)
+    assert [c["sha"] for c in key["provenance_commits"]] == [later]
+    assert tool.range_problems(repo, key) == []
+
+
+def test_the_first_release_starts_at_the_repository_root(history, tmp_path):
+    """Before any release is recorded, the range starts at the root, and the root's own
+    commit is in the provenance pass."""
+    repo, base, surface, head = history
+    with pytest.raises(tool.AuditInputInvalid, match="not the repository root"):
+        tool.render([WORLD], tmp_path / "out", seed=7, rendered=False, essay=ESSAY,
+                    release_range=f"{surface}..{head}", repo=repo)
+    root = tmp_path / "root"
+    root.mkdir()
+    _git(root, "init", "-q")
+    first = _commit(root, "factorylab/cortex/schematics.py", "HOLD = 'hold'\n", "first")
+    tip = _commit(root, "docs/notes.md", "notes\n", "notes")
+    assert tool.release_base(root, first, tip) is True
+    assert [c["sha"] for c in tool.provenance_commits(root, f"{first}..{tip}",
+                                                      from_root=True)] == [first]
+
+
+def test_a_malformed_or_foreign_last_release_is_refused(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    root = _commit(repo, "README.md", "x\n", "root")
+    head = _commit(repo, tool.LAST_RELEASE, "HEAD~1\n", "not a sha")
+    with pytest.raises(tool.AuditInputInvalid, match="not one commit SHA"):
+        tool.release_base(repo, root, head)
+    main = _git(repo, "rev-parse", "--abbrev-ref", "HEAD")
+    _git(repo, "checkout", "-q", "-b", "side", root)
+    stray = _commit(repo, "README.md", "y\n", "a commit on another line")
+    _git(repo, "checkout", "-q", main)
+    head = _commit(repo, tool.LAST_RELEASE, stray + "\n", "a release not in this history")
+    with pytest.raises(tool.AuditInputInvalid, match="not a commit before"):
+        tool.release_base(repo, stray, head)
+
+
+def test_the_gate_re_verifies_the_range_against_the_last_release(released, tmp_path):
+    """The gate recomputes the range's base from the release commit and the provenance
+    prompt from the range: a key naming another base, or a prompt of another range, is
+    refused at gate time."""
+    repo, _root, _early, rel, later, head = released
+    key = tool.render([WORLD], tmp_path / "out", seed=7, rendered=False, essay=ESSAY,
+                      release_range=f"{rel}..{head}", repo=repo)
+    assert tool.range_problems(repo, key) == []
+    moved = key | {"range_shas": [later, head], "range": f"{later}..{head}"}
+    assert any("not the last audited release" in p for p in tool.range_problems(repo, moved))
+    other = key | {"provenance_id": "0" * 64}
+    assert any("provenance prompt" in p for p in tool.range_problems(repo, other))
+
+
+def test_a_previous_triage_must_be_the_last_releases(released, tmp_path):
+    """``--previous`` is the last release's triage: one recording another release is
+    refused, and so is any on the first release."""
+    repo, root, early, rel, _later, head = released
+    header = ("# Class 2 audit triage: scripted\n\n- Auditor family: fam-x\n"
+              "- World: scripted\n- Corpus: abc\n- Release range: r ({}..{})\n\n"
+              "| id | path | question | class | severity | confidence | quote | "
+              "disposition | reason |\n|---|---|---|---|---|---|---|---|---|\n")
+    stale = tmp_path / "stale.md"
+    stale.write_text(header.format(root, early))
+    with pytest.raises(tool.AuditInputInvalid, match="not the last audited release"):
+        tool.render([WORLD], tmp_path / "out", seed=7, rendered=False, essay=ESSAY,
+                    release_range=f"{rel}..{head}", repo=repo, previous=stale)
+    assert tool.triage_release(header.format(root, rel)) == rel
+
+
+def test_a_rejected_record_backs_only_the_finding_of_its_question_and_class(triaged):
+    """Codex P2 (class2_audit.py:1299): rejected.jsonl names a finding by its full
+    identity. A REJECT recorded for the same quote under another question does not back
+    this one's."""
+    _out, _key, path, _sha, _samples, _prov = triaged
+    rejected = path.parent / "rejected.jsonl"
+    reviewed = _dispose(path.read_text(), rejected=rejected)
+    path.write_text(reviewed)
+    assert _gate(triaged, reviewed=tool.sha256_file(path)) == []
+    rows = [json.loads(line) for line in rejected.read_text().splitlines()]
+    moved = [r | {"question": "Q6"} if r["question"] == "Q4" else r for r in rows]
+    rejected.write_text("".join(json.dumps(r) + "\n" for r in moved))
+    problems = _gate(triaged, reviewed=tool.sha256_file(path))
+    assert any("Q4" in p and "not recorded in rejected.jsonl" in p for p in problems)
+
+
+def test_an_allowlist_entry_backs_only_the_finding_of_its_question_and_class(triaged,
+                                                                             monkeypatch):
+    from tests.audit import class2_lexicon
+
+    _out, _key, path, _sha, samples, _prov = triaged
+    reviewed = _dispose(path.read_text(), rejected=path.parent / "rejected.jsonl")
+    findings = [json.loads(line) for line in samples[0].read_text().splitlines()]
+    row = next(line for line in reviewed.splitlines() if "| Q4 | C1 | HIGH |" in line)
+    finding = next(f for f in findings if f.get("finding_id") == tool._cells(row)[0]
+                   and f.get("question") == "Q4")
+    path.write_text(reviewed.replace(row, row.replace("| REJECT |", "| ALLOW |")))
+    for question, ok in (("Q6", False), ("Q4", True)):
+        entry = {"path": finding["path"], "quote": finding["quote"], "question": question,
+                 "class": "C1"}
+        monkeypatch.setattr(class2_lexicon, "load_allowlist",
+                            lambda e=entry: {"collocation": [], "allow": [e]})
+        problems = _gate(triaged, reviewed=tool.sha256_file(path))
+        assert any("no allowlist entry" in p for p in problems) is not ok, problems
+
+
+@pytest.mark.parametrize("row, why", [
+    ({"finding_id": "f1", "path": "p", "reason": "r", "class": "C1"}, "lacks"),
+    ({"finding_id": "f1", "path": "p", "reason": "r", "question": "Q4"}, "lacks"),
+    ({"finding_id": "f1", "path": "p", "reason": "r", "question": "Q4", "class": "C2"},
+     "not a finding's identity"),
+])
+def test_a_rejected_record_without_its_full_identity_is_refused(tmp_path, row, why):
+    (tmp_path / "rejected.jsonl").write_text(json.dumps(row) + "\n")
+    with pytest.raises(tool.AuditInputInvalid, match=why):
+        tool.read_rejected(tmp_path / "rejected.jsonl")
+
+
+def test_a_previous_triage_row_without_its_full_identity_is_refused(tmp_path):
+    head = ("# Class 2 audit triage: scripted\n\n- Auditor family: fam-x\n- World: scripted\n"
+            "- Corpus: abc\n\n| id | path | question | class | severity | confidence | "
+            "quote | disposition | reason |\n|---|---|---|---|---|---|---|---|---|\n")
+    good = "| f1 | `p` | Q4 | C1 | HIGH | both samples | q | REJECT | r |\n"
+    (tmp_path / "t.md").write_text(head + good)
+    assert tool.read_previous_triage(tmp_path / "t.md", [WORLD])
+    for bad, why in ((good.replace("| C1 |", "|  |"), "no full finding identity"),
+                     (good.replace("| C1 |", "| C2 |"), "not a finding's identity"),
+                     (good + good, "two rows")):
+        (tmp_path / "t.md").write_text(head + bad)
+        with pytest.raises(tool.AuditInputInvalid, match=why):
+            tool.read_previous_triage(tmp_path / "t.md", [WORLD])
+
+
+def test_an_allowlist_entry_names_its_question_with_its_class():
+    from tests.audit import class2_lexicon
+
+    entry = {"path": "*/p", "quote": "q", "rule": next(iter(class2_lexicon.RULES)),
+             "context_words": ["w"], "reason": "r",
+             "passage": next(iter(class2_lexicon.PASSAGES))}
+    assert class2_lexicon.allowlist_problems({"collocation": [], "allow": [entry]}) == []
+    half = entry | {"question": "Q4"}
+    assert class2_lexicon.allowlist_problems({"collocation": [], "allow": [half]})

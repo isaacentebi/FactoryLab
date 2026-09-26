@@ -21,6 +21,8 @@ does everything around that call, offline:
             diff. Commit messages may carry behaviour data, so they never enter the
             corpus prompt. The range's head must be the commit checked out, with no
             uncommitted seat-visible change; the key records it (``release_commit``).
+            The range's base must be the last audited release (``LAST_RELEASE`` as
+            committed at the head; the repository root before the first release).
             The corpus includes, once under the world ``kernel``, every string the
             kernel's code can return to a seat (``tests/audit/class2_seat_text.py``).
   validate  Score the audit: two corpus samples and two provenance samples (JSON Lines)
@@ -49,7 +51,9 @@ does everything around that call, offline:
             and the world's findings from the samples; and requires each finding to
             have exactly one row with its severity, question and class, every HIGH or
             MED finding a disposition, a non-FIX disposition a reason, and no charter
-            card marked FIX. Nothing the gate trusts is stored beside the triage file.
+            card marked FIX. It re-verifies the range's base against the last release
+            and, when it passes, writes the release to ``LAST_RELEASE``. Nothing the
+            gate trusts is stored beside the triage file.
   baseline  Recompute the static audit's findings and surface registry after the
             architect's triage (tests/audit/class2_findings.json, class2_surfaces.toml).
 
@@ -105,6 +109,10 @@ CANARIES = ROOT / "docs/audits/class2/canaries.json"
 REJECTED = ROOT / "docs/audits/class2/rejected.jsonl"
 PROTOCOL = ROOT / "docs/audits/class2/auditor-protocol.md"
 TRIAGE_DIR = ROOT / "docs/audits/class2"
+#: The last audited release's commit, one SHA on one line, tracked in the repository and
+#: written by the gate when a release passes it. A release's range starts there; before
+#: the first release it is absent and the range starts at the repository root.
+LAST_RELEASE = "docs/audits/class2/last_release"
 #: The overall calibration bar (Astra H-2): at least this many of the canaries found.
 MIN_CANARIES = 7
 #: At most this many of the clean controls may be flagged.
@@ -348,10 +356,12 @@ def _git(repo: Path, *args: str) -> str:
                           text=True).stdout
 
 
-def provenance_commits(repo: Path, release_range: str) -> list[dict]:
+def provenance_commits(repo: Path, release_range: str, *, from_root: bool = False
+                       ) -> list[dict]:
     """Every commit in ``release_range`` (``base..head``) that touches a seat-visible
     surface, merges included, oldest first, with its full message and its diff to those
-    paths.
+    paths. ``from_root`` (the first release, whose base is the repository root) reads
+    every ancestor of the head, the root included.
 
     A merge's diff is its combined diff (``git show --cc``): the hunks it holds that no
     parent holds, which is where a conflict resolution writes text of its own. A merge
@@ -363,7 +373,8 @@ def provenance_commits(repo: Path, release_range: str) -> list[dict]:
     if ".." not in release_range:
         raise ValueError("the release range is base..head")
     # Full history: no commit on either side of a merge is simplified away.
-    shas = _git(repo, "rev-list", "--reverse", "--full-history", release_range, "--",
+    revs = release_range.split("..", 1)[1] if from_root else release_range
+    shas = _git(repo, "rev-list", "--reverse", "--full-history", revs, "--",
                 *SURFACE_PATHS).split()
     commits = []
     for sha in shas:
@@ -395,9 +406,11 @@ def provenance_section(release_range: str, commits: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def diff_section(planted: list[dict], diff: dict[str, Any]) -> str:
+def diff_section(planted: list[dict], diff: dict[str, Any],
+                 rejected: list[dict] = ()) -> str:
     """Protocol input 5: every leaf added or changed since the last audited release (the
-    replaced text shown), then every path removed; or an explicit first release."""
+    replaced text shown, and each rejected finding on its path by its full identity:
+    id, question, class), then every path removed; or an explicit first release."""
     lines = ["## The corpus diff since the last audited release", ""]
     if not diff["previous"]:
         lines.append("(no previous audited corpus: this is the first release audited, and "
@@ -412,6 +425,10 @@ def diff_section(planted: list[dict], diff: dict[str, Any]) -> str:
         lines.append(f"- `{r['leaf_id']}` {r['change']}: `{r['path']}`")
         for text in diff["was"].get(r["leaf_id"], ()):
             lines.append(f"  - was: {json.dumps(text, ensure_ascii=False)}")
+        for row in rejected:
+            if row["path"] == r["path"]:
+                lines.append(f"  - rejected last release: {row['finding_id']} "
+                             f"{row['question']} {row['class']}")
     for r in diff["removed"]:
         lines.append(f"- removed: `{r['path']}` was {json.dumps(r['text'], ensure_ascii=False)}")
     return "\n".join(lines)
@@ -541,6 +558,46 @@ def release_commit(repo: Path, release_range: str) -> str:
     return head
 
 
+def prior_release(repo: Path, commit: str) -> str | None:
+    """The release audited before ``commit``: the SHA ``LAST_RELEASE`` holds as committed
+    in ``commit`` (never a worktree copy, so the value is the one reviewed with that
+    commit), or None when ``commit`` has no such file (the first release). Refused
+    unless it is one full commit SHA and an ancestor of ``commit``."""
+    exists = subprocess.run(["git", "-C", str(repo), "cat-file", "-e",
+                             f"{commit}:{LAST_RELEASE}"], capture_output=True)
+    if exists.returncode != 0:
+        return None
+    sha = _git(repo, "show", f"{commit}:{LAST_RELEASE}").strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise AuditInputInvalid(f"{LAST_RELEASE} holds {sha[:60]!r}, not one commit SHA")
+    ancestor = subprocess.run(["git", "-C", str(repo), "merge-base", "--is-ancestor", sha,
+                               commit], capture_output=True)
+    if ancestor.returncode != 0:
+        raise AuditInputInvalid(f"{LAST_RELEASE} names {sha[:12]}, which is not a commit "
+                                f"before {commit[:12]}")
+    return sha
+
+
+def release_base(repo: Path, base: str, head: str) -> bool:
+    """Whether the range ``base..head`` is the first release's; refused unless ``base``
+    is the prior audited release (``prior_release`` of ``head``), or, before the first
+    release, a root of ``head``'s history. A base chosen later (``HEAD^``) would hide the
+    commits between the last release and it from the provenance pass."""
+    prior = prior_release(repo, head)
+    if prior is None:
+        roots = _git(repo, "rev-list", "--max-parents=0", head).split()
+        if base not in roots:
+            raise AuditInputInvalid(
+                f"the range base {base[:12]} is not the repository root "
+                f"({', '.join(r[:12] for r in roots)}): no release has been audited "
+                f"({LAST_RELEASE} is absent), so the first one starts at the root")
+        return True
+    if base != prior:
+        raise AuditInputInvalid(f"the range base {base[:12]} is not the last audited "
+                                f"release {prior[:12]} ({LAST_RELEASE})")
+    return False
+
+
 def load_canaries() -> dict:
     """``canaries.json``, refused unless it is the protocol's calibration set: one canary
     per question Q3-Q10 with that question's class, Q6/Q7/Q9/Q10 and only they mandatory,
@@ -600,17 +657,39 @@ def read_corpus(path: Path) -> list[dict]:
     return records
 
 
+def identity_problem(question: Any, cls: Any) -> str | None:
+    """Why ``(question, class)`` is not a finding's: a rubric question with its class
+    (``CLASS_OF``), or the provenance pass's (``PROVENANCE``)."""
+    if (question, cls) == (PROVENANCE["question"], PROVENANCE["class"]):
+        return None
+    if CLASS_OF.get(question) != cls:
+        return f"question {question!r} with class {cls!r} is not a finding's identity"
+    return None
+
+
+#: A rejected finding names its full identity (``finding_identity``: id, question,
+#: class), its path and the reason.
+REJECTED_FIELDS = ("finding_id", "path", "question", "class", "reason")
+
+
 def read_rejected(path: Path | None) -> list[dict]:
-    """Last release's rejected findings, refused unless each names its finding, its path
-    and a reason."""
+    """Last release's rejected findings, refused unless each names its finding by its
+    full identity (``finding_identity``), its path and a reason, once."""
     if path is None or not Path(path).exists():
         return []
     rows = _jsonl(path, "rejected.jsonl")
+    seen = set()
     for i, row in enumerate(rows, 1):
-        bad = [f for f in ("finding_id", "path", "reason")
+        bad = [f for f in REJECTED_FIELDS
                if not isinstance(row.get(f), str) or not row[f].strip()]
         if bad:
             raise AuditInputInvalid(f"rejected.jsonl line {i} lacks {bad}")
+        why = identity_problem(row["question"], row["class"])
+        if why is not None:
+            raise AuditInputInvalid(f"rejected.jsonl line {i}: {why}")
+        if finding_identity(row) in seen:
+            raise AuditInputInvalid(f"rejected.jsonl line {i} repeats a finding")
+        seen.add(finding_identity(row))
     return rows
 
 
@@ -628,7 +707,8 @@ def triage_header(text: str) -> dict[str, str]:
 
 def read_previous_triage(path: Path | None, worlds: list[str]) -> str | None:
     """Last release's triage file, refused unless it is a triage file of one of the
-    worlds rendered, recording its family and corpus."""
+    worlds rendered, recording its family and corpus, and every row names its finding by
+    its full identity (``finding_identity``: id, question, class) with its path, once."""
     if path is None or not Path(path).exists():
         return None
     text = Path(path).read_text()
@@ -639,7 +719,26 @@ def read_previous_triage(path: Path | None, worlds: list[str]) -> str | None:
         raise AuditInputInvalid(f"{path} is not a triage file of {worlds}")
     if not header.get("Auditor family") or not header.get("Corpus"):
         raise AuditInputInvalid(f"{path} records no auditor family or corpus")
+    seen = set()
+    for row in table_rows(text):
+        ident = (row.get("id", ""), row.get("question", ""), row.get("class", ""))
+        if not all(ident) or not row.get("path", "").strip("`"):
+            raise AuditInputInvalid(f"{path}: a row names no full finding identity {ident}")
+        why = identity_problem(ident[1], ident[2])
+        if why is not None:
+            raise AuditInputInvalid(f"{path}: {why}")
+        if ident in seen:
+            raise AuditInputInvalid(f"{path}: two rows name the finding {ident}")
+        seen.add(ident)
     return text
+
+
+def triage_release(text: str) -> str | None:
+    """The release commit a triage file records: the head of its ``Release range``
+    (``range (base..head)``), or None when it records none."""
+    match = re.search(r"\(([0-9a-f]{40})\.\.([0-9a-f]{40})\)\s*$",
+                      triage_header(text).get("Release range", ""))
+    return match.group(2) if match else None
 
 
 def render(worlds: list[str], out: Path, *, seed: int, rendered: bool, release_range: str,
@@ -658,7 +757,9 @@ def render(worlds: list[str], out: Path, *, seed: int, rendered: bool, release_r
     Binding: every input is validated before anything is written, and the key records
     the origin of everything the audit reads (worlds, seed, the range and its two
     commits, the corpus, both prompts, the release corpus and the previous one, the
-    essay) and the provenance commits the second prompt asks about. Each prompt names
+    essay) and the provenance commits the second prompt asks about. The range's base is
+    the last audited release (``release_base``), and a previous triage file is that
+    release's. Each prompt names
     the id its answers must echo (``corpus_sha``, ``provenance_id``).
     """
     if not worlds or len(set(worlds)) != len(worlds):
@@ -668,12 +769,19 @@ def render(worlds: list[str], out: Path, *, seed: int, rendered: bool, release_r
         raise AuditInputInvalid(f"no world file for {missing}")
     range_shas = resolve_range(repo, release_range)
     released = release_commit(repo, release_range)
-    commits = provenance_commits(repo, release_range)
+    first = release_base(repo, *range_shas)
+    commits = provenance_commits(repo, release_range, from_root=first)
     provenance = provenance_section(release_range, commits)
     provenance_id = hashlib.sha256(provenance.encode()).hexdigest()
     prior = read_corpus(previous_corpus) if previous_corpus is not None else None
     rejected_rows = read_rejected(rejected)
     previous_text = read_previous_triage(previous, worlds)
+    if previous_text is not None:
+        recorded = triage_release(previous_text)
+        if first or recorded != range_shas[0]:
+            raise AuditInputInvalid(f"{previous} triaged release {str(recorded)[:12]}, not "
+                                    f"the last audited release this range starts at "
+                                    f"({range_shas[0][:12]})")
     spec = load_canaries()
     authority = authority_text(essay)
     # Rendered before anything is written: a failed render leaves no corpus behind.
@@ -692,7 +800,7 @@ def render(worlds: list[str], out: Path, *, seed: int, rendered: bool, release_r
             handle.write(json.dumps(record, sort_keys=True, ensure_ascii=False) + "\n")
     corpus_sha = sha256_file(out / "auditor_input.jsonl")
     write_prompt(out, authority=authority, previous_text=previous_text,
-                 diff=diff_section(planted, diff), rejected=rejected_rows,
+                 diff=diff_section(planted, diff, rejected_rows), rejected=rejected_rows,
                  corpus_sha=corpus_sha)
     write_provenance_prompt(out, provenance, provenance_id=provenance_id)
     key.update({
@@ -1290,13 +1398,15 @@ def disposition_problems(text: str, expected: list[dict], *, allowlist: dict,
                          rejected: list[dict]) -> list[str]:
     """Why a row's disposition is not one the rubric allows its finding, or is not
     backed where the protocol says it lands: an ALLOW by an allowlist entry covering
-    the finding's path and quote; a REJECT by a ``rejected.jsonl`` row naming the
-    finding with its reason."""
+    the finding's path and quote and naming its question and class; a REJECT by a
+    ``rejected.jsonl`` row naming the finding by its full identity (``finding_identity``)
+    with its reason. A disposition of one question never backs the same quote read under
+    another."""
     import fnmatch
 
     want = {finding_identity(f): f for f in expected}
     problems = []
-    rejected_ids = {(r.get("finding_id"), r.get("path")) for r in rejected}
+    rejected_ids = {finding_identity(r) for r in rejected}
     for row in table_rows(text):
         ident = (row.get("id", ""), row.get("question", ""), row.get("class", ""))
         f = want.get(ident)
@@ -1309,16 +1419,47 @@ def disposition_problems(text: str, expected: list[dict], *, allowlist: dict,
         if disposition == "ALLOW" and not any(
                 fnmatch.fnmatchcase(str(f.get("path")), entry.get("path", ""))
                 and entry.get("quote", "\0") in str(f.get("quote", ""))
+                and (entry.get("question"), entry.get("class")) == ident[1:]
                 for entry in allowlist.get("allow", ())):
-            problems.append(f"{ident}: ALLOW with no allowlist entry covering its path and "
-                            "quote")
-        if disposition == "REJECT" and (f.get("finding_id"), f.get("path")) not in rejected_ids:
-            problems.append(f"{ident}: REJECT not recorded in rejected.jsonl")
+            problems.append(f"{ident}: ALLOW with no allowlist entry covering its path, "
+                            "quote, question and class")
+        if disposition == "REJECT" and finding_identity(f) not in rejected_ids:
+            problems.append(f"{ident}: REJECT not recorded in rejected.jsonl under its "
+                            "identity")
     return problems
 
 
 def _hashes(value: str | None) -> list[str]:
     return sorted(h.strip() for h in (value or "").split(",") if h.strip())
+
+
+def range_problems(repo: Path, key: dict) -> list[str]:
+    """Why the key's range is not the release's, re-verified in ``repo`` at gate time:
+    its head is the release it audited, its base the last audited release as committed
+    there (``release_base``), and the provenance prompt the auditor answered is the one
+    that range yields now (its ``provenance_id``)."""
+    base, head = key["range_shas"]
+    if head != key["release_commit"]:
+        return [f"the key's range ends at {head[:12]}, not its release "
+                f"{key['release_commit'][:12]}"]
+    try:
+        first = release_base(repo, base, head)
+    except AuditInputInvalid as exc:
+        return [f"the key's range is not the release's: {exc}"]
+    section = provenance_section(key["range"], provenance_commits(
+        repo, f"{base}..{head}", from_root=first))
+    if hashlib.sha256(section.encode()).hexdigest() != key["provenance_id"]:
+        return ["the provenance prompt the key binds is not the one its range yields"]
+    return []
+
+
+def write_last_release(repo: Path, key: dict) -> Path:
+    """Record the release just gated as the last audited one (``LAST_RELEASE``), for the
+    next release's range to start at; the operator commits it with the triage files."""
+    path = Path(repo) / LAST_RELEASE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(key["release_commit"] + "\n")
+    return path
 
 
 def gate(world: str, triage: Path, key_path: Path, samples: list[Path],
@@ -1330,7 +1471,8 @@ def gate(world: str, triage: Path, key_path: Path, samples: list[Path],
 
     Guarantees: the key is bound to its corpus and prompts (``load_key``) and audited
     the release being gated (``release``, or ``repo``'s HEAD: the key's
-    ``release_commit``); the triage
+    ``release_commit``) over the range from the last audited release, re-verified in
+    ``repo`` (``range_problems``); the triage
     file names ``world`` (rendered by the key), the key's corpus and range, and exactly
     the corpus and provenance sample files given, by sha256; the audit those samples
     make is recomputed and must be valid (``audit_verdict``); the recorded family may
@@ -1362,6 +1504,7 @@ def gate(world: str, triage: Path, key_path: Path, samples: list[Path],
     if key["release_commit"] != gated:
         problems.append(f"the key audited {key['release_commit'][:12]}, not the release "
                         f"gated {gated[:12]}")
+    problems += range_problems(repo, key)
     if header.get("World") != world or world not in key["worlds"]:
         problems.append(f"the triage file is of {header.get('World')!r}, not {world!r} of "
                         f"the rendered worlds {key['worlds']}")
@@ -1469,11 +1612,15 @@ def _run(args: argparse.Namespace) -> int:
     if args.command == "gate":
         path = args.triage or TRIAGE_DIR / f"{args.world}.md"
         problems = gate(args.world, path, args.key, args.samples, args.provenance_samples,
-                        release=args.release, triage_sha256=args.triage_sha256,
+                        release=args.release, repo=ROOT, triage_sha256=args.triage_sha256,
                         rejected=args.rejected)
         for problem in problems:
             print(problem, file=sys.stderr)
-        return 1 if problems else 0
+        if problems:
+            return 1
+        written = write_last_release(ROOT, load_key(args.key)[0])
+        print(f"gate passed; {written} names the release: commit it with the triage files")
+        return 0
     key, records = load_key(args.key)
     samples = [read_output(path) for path in args.output]
     provenance = [read_output(path) for path in args.provenance_samples]

@@ -26,6 +26,8 @@ NOT_EMITTED = {
                                       "on this branch emits it (SF-1d is a strict xfail)",
     "challenge.proposed": "emitted by governance._register_challenge with the challenge "
                           "record (its handle included); no gauntlet world files a challenge",
+    "router.created": "emitted by routing._build_router with learner_id, event_kind and "
+                      "replaces (the fields the fixture uses); the captured set holds none",
     "uptake.anticipated": "emitted by runtime/uptake.py; no captured run reached it",
     "uptake.forecast": "emitted by runtime/uptake.py; no captured run reached it",
 }
@@ -233,3 +235,67 @@ def test_s4_refuses_an_out_of_range_score_on_every_reward_bearing_kind():
             assert result.status == g.FAIL, (kind, name)
             assert result.evidence["bad"][0]["field"] == name
     assert tried >= len(g.UNIT_FIELDS) - len(UNCAPTURED)
+
+
+# --- S4: required and nullable fields, from the emitting code (Codex pass on 11ea116) ----
+
+#: Nullable fields whose None comes from a value, not a literal, in the emitter: the AST
+#: cannot see it, so each names the expression that is None.
+NULLABLE_BY_VALUE = {
+    ("price.penalty", "effective"): "pricing.py: effective = None when unresolved",
+    ("policy.outcome", "y"): "governance.py: outcome = ... if SETTLED else None",
+    ("evaluator.settled", "grade"): "PendingJudgement.grade: None with no grade",
+    ("evaluator.settled", "consequence"): "PendingJudgement.consequence: None, censored",
+    ("evaluator.settled", "reward"): "evaluation_reward: None when neither signal is",
+    ("composed.settled", "verdict"): "composition.py: verdict None with no verdicts",
+    ("composed.settled", "reward"): "composed_reward: None when no signal is",
+}
+
+
+def _literally_nullable():
+    """Every (kind, field) of ``UNIT_FIELDS`` some emitter leaves out, writes as the
+    constant None, or writes as a conditional with a None branch."""
+    found = set()
+    for path in sorted((ROOT / "factorylab").rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text())):
+            if not isinstance(node, ast.Dict):
+                continue
+            fields = {k.value: v for k, v in zip(node.keys, node.values, strict=True)
+                      if isinstance(k, ast.Constant)}
+            kind = fields.get("kind")
+            if not (isinstance(kind, ast.Constant) and kind.value in g.UNIT_FIELDS):
+                continue
+            for name in g.UNIT_FIELDS[kind.value]:
+                value = fields.get(name.split(".")[0])
+                if (value is None and "." not in name) or any(
+                        isinstance(n, ast.Constant) and n.value is None
+                        for n in ast.walk(value or ast.Constant(0))):
+                    found.add((kind.value, name))
+    return found
+
+
+def test_s4_nullable_fields_are_exactly_what_the_emitters_write_as_none():
+    assert set(g.NULLABLE) == _literally_nullable() | set(NULLABLE_BY_VALUE)
+
+
+def test_s4_a_missing_required_field_fails_on_every_real_row():
+    """Codex P2: every field the kernel always writes is required: dropping it from the
+    real row of its kind fails S4."""
+    manifest = {"prices": {"penalty_cap": 0.5, "lambda_max": 1.0}}
+    tried = 0
+    for kind, fields in g.UNIT_FIELDS.items():
+        if kind not in REAL["rows"]:
+            continue
+        for name in fields:
+            if (kind, name) in g.NULLABLE or "." in name:
+                continue
+            row = json.loads(json.dumps(REAL["rows"][kind]))
+            row.pop(name, None)
+            tried += 1
+            result = g.s4_boundedness([row], manifest)
+            assert result.status == g.FAIL, (kind, name)
+            assert result.evidence["bad"][0]["missing"], (kind, name)
+    assert tried >= 20
+    settle = json.loads(json.dumps(REAL["rows"]["decision.settle"]))
+    del settle["return"]["score"]
+    assert g.s4_boundedness([settle], manifest).status == g.FAIL

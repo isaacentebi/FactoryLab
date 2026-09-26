@@ -750,6 +750,20 @@ def router_presence(events: list[Mapping]) -> dict[str, int]:
     return first
 
 
+def router_retirements(events: list[Mapping]) -> dict[str, int]:
+    """The window each router was replaced in: a ``router.created`` row naming it in
+    ``replaces`` (routing.py ``_build_router``: the replaced router is retained, not
+    stepped, since ``_all_router_states`` holds only live routers)."""
+    window, out = 1, {}
+    for row in events:
+        if row.get("kind") == "price.window":
+            window = row["window"] + 1
+        elif row.get("kind") == "router.created":
+            for old in row.get("replaces") or ():
+                out.setdefault(old, window)
+    return out
+
+
 def router_round_periods(events: list[Mapping]) -> dict[str, int]:
     """Each router's round period in windows: the p90 of its rounds' closures, from the
     window a decision it drew opened in to the window the decision settled in
@@ -796,9 +810,15 @@ def sf1e_gain(events: list[Mapping], manifest: Mapping) -> Result:
     the episode; a router that first appears after the episode is not judged by it. An
     unwind is a lowering of any base (``lowers``).
 
+    The routers judged are every router with decisions in the diary
+    (``router_presence``), not only those with gain rows; one replaced before its bound
+    (``router_retirements``) is no evidence.
+
     ``fail`` when an episode stayed flagged through a router's bound without that router
     reaching the top, or γ unwound while flagged; ``unsupported`` when an episode still
-    open at the diary's end has a bound beyond it; ``pass`` needs one (router, episode)
+    open at the diary's end has a bound beyond it, or when a router present while a step
+    was due has no gain row at all (the kernel writes none for a router already at
+    ``gamma_max``, immune.py ``_gain``, so γ is unobserved); ``pass`` needs one (router, episode)
     that reached the top within its bound (B). An episode that resolved before a
     router's bound is no evidence for that router.
     """
@@ -814,29 +834,43 @@ def sf1e_gain(events: list[Mapping], manifest: Mapping) -> Result:
     for row in rows_of(events, "immune.gain"):
         by_router[row["router"]].append(row)
     flag_set = set(flags)
-    if not by_router:
-        acted = [w["window"] for w in closes if w.get("acts") and w["window"] in flag_set
-                 and w["window"] not in thrash]
-        if acted:
-            return _result("SF-1e", False, why="the organ acted while flagged and no gain "
-                           "row exists", acted=acted[:5])
-        return _unsupported("SF-1e", "the organ never acted while flagged")
-    last = max(w["window"] for w in closes)
-    problems, reached, pending, resolved = [], {}, [], 0
     presence = router_presence(events)
+    # Every router with decisions in the diary, not only those with gain rows: the
+    # kernel's routers are named ``router:<kind>`` (routing.py ``_build_router``) or
+    # ``router:<kind>:<learner>:<n>`` (governance.py, a proposed router); an
+    # ``assembly:`` actor (a committee seat, a market post) is no router and has no gain.
+    routers = sorted(set(by_router) | {r for r in presence if r.startswith("router:")})
+    if not routers:
+        return _unsupported("SF-1e", "no router drew a decision or had its gain moved")
+    retired = router_retirements(events)
+    last = max(w["window"] for w in closes)
+    problems, reached, pending, resolved, stateless = [], {}, [], 0, []
     rounds = router_round_periods(events)
-    for router, rows in by_router.items():
-        born = presence.get(router, rows[0]["window"])
+    for router in routers:
+        rows = by_router.get(router, [])
+        born = presence.get(router, rows[0]["window"] if rows else 1)
+        gone = retired.get(router)
+        own = max(period, ph.r * rounds.get(router, 1))
         for start, end in episodes:
-            if born > end:
+            if born > end or (gone is not None and gone <= start):
                 continue  # the router did not exist during this episode
             begin = max(start, born)
+            if not rows:
+                # A present router with no gain row has no observable γ. The kernel
+                # writes none for a router already at gamma_max (immune.py ``_gain``:
+                # ``if before == after: continue``) or not yet due (``clockwork.due``),
+                # so its absence is neither a pass nor a failure once a step was due.
+                if min(end, gone - 1 if gone is not None else end) >= begin + own:
+                    stateless.append({"router": router, "episode": [start, end],
+                                      "begin": begin, "period": own})
+                else:
+                    resolved += 1
+                continue
             prior = [row for row in rows if row["window"] < begin]
             inside = [row for row in rows if begin <= row["window"] <= end]
             gamma0 = (gamma_of(prior[-1]["gamma_after"]) if prior
                       else gamma_of(rows[0]["gamma_before"]))
             steps = gain_steps(ph, gamma0)
-            own = max(period, ph.r * rounds.get(router, 1))
             top = begin if steps == 0 else next(
                 (row["window"] for row in inside
                  if gamma_of(row["gamma_after"]) >= ph.gamma_max), None)
@@ -847,6 +881,8 @@ def sf1e_gain(events: list[Mapping], manifest: Mapping) -> Result:
             if top is not None and top <= bound:
                 reached.setdefault(router, {"window": top, "period": own,
                                             "episode": [start, end]})
+            elif gone is not None and gone <= bound:
+                resolved += 1  # replaced before its bound: the kernel stops stepping it
             elif end >= bound:
                 problems.append(entry)
             elif end == last:
@@ -857,12 +893,16 @@ def sf1e_gain(events: list[Mapping], manifest: Mapping) -> Result:
             if row["window"] in flag_set and row["window"] not in thrash and lowers(row):
                 problems.append({"router": router, "unwound_while_flagged": row["window"]})
     evidence = {"problems": problems[:10], "reached": reached, "pending": pending[:10],
-                "resolved": resolved, "episodes": episodes[:10], "organ_period": period}
+                "resolved": resolved, "stateless": stateless[:10],
+                "episodes": episodes[:10], "organ_period": period}
     if problems:
         return _result("SF-1e", False, **evidence)
     if pending:
         return _unsupported("SF-1e", "an open episode's bound lies beyond the diary",
                             **evidence)
+    if stateless:
+        return _unsupported("SF-1e", "a router present while a step was due has no gain "
+                            "row, so its γ is unobserved", **evidence)
     if not reached:
         return _unsupported("SF-1e", "every episode resolved before a router's bound",
                             **evidence)
@@ -1425,7 +1465,9 @@ def ld1e_detection(events: list[Mapping], manifest: Mapping) -> Result:
     by router identity as the organ's evidence is (same router across the tail): two
     routers quarantined in alternate windows make no tail. Only a flag that names this
     router (``frontier.quarantined_routers`` or ``uninvoked_routers``, the kernel's
-    ``frontier_evidence``) detects its tail: another router's flag does not (A).
+    ``frontier_evidence``) detects its tail: another router's flag does not (A). The
+    flag must fall inside the quarantined run and within ``H`` of its start; a run that
+    cleared unflagged failed, whatever was flagged after it.
     """
     ph = physics(manifest)
     closes = windows(events)
@@ -1447,8 +1489,14 @@ def ld1e_detection(events: list[Mapping], manifest: Mapping) -> Result:
                            *(frontier.get("uninvoked_routers") or ())]:
                 naming[str(router)].add(w["window"])
     last = max(w["window"] for w in closes)
-    unmet = [r for r in runs if not any(r[0] <= w <= r[0] + ph.H for w in naming[r[2]])]
-    late = [r for r in unmet if last >= r[0] + ph.H]
+    # A flag detects a run only inside it and by its deadline: after the run cleared,
+    # the organ's tail (``persistent_violations`` over ``windows[-k:]``) holds an
+    # unquarantined window, so a later flag reads something else (A).
+    unmet = [r for r in runs
+             if not any(r[0] <= w <= min(r[1], r[0] + ph.H) for w in naming[r[2]])]
+    # A run still open at the diary's end is pending until its H deadline; one that
+    # cleared before the diary ended is decided.
+    late = [r for r in unmet if r[1] < last or last >= r[0] + ph.H]
     if unmet and not late:
         return _unsupported("LD-1e", "the diary ends before H windows after a quarantine "
                             "began", runs=unmet[:5], last=last)
@@ -1678,9 +1726,19 @@ def s1_draw_sovereignty(events: list[Mapping], manifest: Mapping | None = None) 
     """
     bad, checked = [], 0
     for row in rows_of(events, "decision.open"):
-        prop = row.get("propensity") or {}
-        if prop.get("source") != "sampled" or prop.get("rng_seed") is None:
+        # ``Decision.propensity`` is a required ``PropensityRecord`` and every field of
+        # it is required (queue.py ``PropensityRecord.validate``: an int seed, the
+        # support, the probabilities, the chosen arm; source sampled or declared). A
+        # decision row missing any of them is malformed, never skipped.
+        prop = row.get("propensity")
+        if (not isinstance(prop, Mapping)
+                or prop.get("source", "sampled") not in ("sampled", "declared")
+                or any(prop.get(f) is None for f in ("action_ids", "probs", "chosen",
+                                                      "rng_seed"))):
+            bad.append(row.get("handle"))
             continue
+        if prop.get("source", "sampled") != "sampled":
+            continue  # a declared field was drawn by the seat, not the kernel
         ids, probs = list(prop["action_ids"]), [float(p) for p in prop["probs"]]
         checked += 1
         drawn = Random(int(prop["rng_seed"])).choices(ids, weights=probs, k=1)[0]
@@ -1735,6 +1793,43 @@ WEIGHTED_PENALTY_KINDS = frozenset({"router.abstention_priced", "router.decline_
 #: field (a reward, a grade, a probability, a score, a realized y) is a number, and a
 #: boolean there fails S4.
 BOOLEAN_OUTCOMES = frozenset({("policy.outcome", "y")})
+#: The unit fields the kernel writes as None or leaves out, each with the condition on
+#: its own row under which the emitting code does so. Every other ``UNIT_FIELDS`` field
+#: is written by every emitter of its kind, and a row missing it (or carrying None)
+#: fails S4. Read from the emitters, and pinned against them by
+#: tests/gauntlet/test_criteria_schema.py:
+#: - ``price.penalty`` ``raw``/``effective``: None when the settlement is unresolved,
+#:   and then the row names ``unresolved`` (pricing.py ``_settle_priced``).
+#: - ``exposure.settled`` ``score``: None when no judge was scored on the antagonist's
+#:   return (feedback.py, the two ``"score": None`` emitters).
+#: - ``counter.settled`` ``q``/``judge_q``/``y`` absent and ``score`` None together, when
+#:   the judged return's outcome was not measured (feedback.py, the censored emitter);
+#:   the measured emitter writes all four.
+#: - ``policy.outcome`` ``y``: None unless the motion's outcome settled
+#:   (governance.py: ``outcome = promise_kept(...) if status is SETTLED else None``).
+#: - ``evaluator.settled`` ``grade``/``consequence``: each None when that signal did not
+#:   arrive (``PendingJudgement.grade``/``consequence``); ``reward`` None only when both
+#:   are (``evaluation_reward``).
+#: - ``composed.settled`` ``verdict``: None when no judge's verdict was held;
+#:   ``reward`` None only when the verdict, the credit and the tool-use credit all are
+#:   (``composed_reward``).
+NULLABLE: dict[tuple[str, str], Any] = {
+    ("price.penalty", "raw"): lambda row: "unresolved" in row,
+    ("price.penalty", "effective"): lambda row: "unresolved" in row,
+    ("exposure.settled", "score"): lambda row: True,
+    **{("counter.settled", name): (lambda row: row.get("score") is None)
+       for name in ("q", "judge_q", "y")},
+    ("counter.settled", "score"): lambda row: not {"q", "judge_q", "y"} & set(row),
+    ("policy.outcome", "y"): lambda row: row.get("status") != "settled",
+    ("evaluator.settled", "grade"): lambda row: True,
+    ("evaluator.settled", "consequence"): lambda row: True,
+    ("evaluator.settled", "reward"): (
+        lambda row: row.get("grade") is None and row.get("consequence") is None),
+    ("composed.settled", "verdict"): lambda row: True,
+    ("composed.settled", "reward"): (
+        lambda row: all(row.get(k) is None for k in ("verdict", "credit",
+                                                     "tool_use_credit"))),
+}
 #: The penalty a settlement or an abstention bears is bounded by ``penalty_cap``.
 CAPPED_FIELDS: dict[str, tuple[str, ...]] = {
     "price.penalty": ("penalty",),
@@ -1760,7 +1855,9 @@ def _bounded(value: Any, lo: float, hi: float) -> bool:
 def s4_boundedness(events: list[Mapping], manifest: Mapping) -> Result:
     """S4: every settled penalty is a finite number in [0, ``penalty_cap``], present in
     every row of its kind (``CAPPED_FIELDS``); every learned, settled or graded score of
-    every kind that carries one (``UNIT_FIELDS``) in [0, 1]; every ratchet ends in
+    every kind that carries one (``UNIT_FIELDS``) in [0, 1] and present, unless the
+    kernel writes that field as None under that row's condition (``NULLABLE``); every
+    ratchet ends in
     [0, ``lambda_max``]. ``unsupported`` when the rows carry no such value at all."""
     ph = physics(manifest)
     bad, checked = [], 0
@@ -1768,9 +1865,15 @@ def s4_boundedness(events: list[Mapping], manifest: Mapping) -> Result:
         for row in rows_of(events, kind):
             for name in fields:
                 value = _field(row, name)
-                if value is None:
-                    continue
                 checked += 1
+                if value is None:
+                    # Only a field the kernel writes as None, under the condition it
+                    # does so, may be absent; every other one missing fails.
+                    allowed = NULLABLE.get((kind, name))
+                    if allowed is None or not allowed(row):
+                        bad.append({"kind": kind, "field": name, "value": None,
+                                    "missing": True, "handle": row.get("handle")})
+                    continue
                 if isinstance(value, bool) and (kind, name) in BOOLEAN_OUTCOMES:
                     continue  # a boolean outcome is 0 or 1 by the kernel's schema
                 if not _bounded(value, 0.0, 1.0):

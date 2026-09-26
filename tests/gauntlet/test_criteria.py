@@ -408,7 +408,7 @@ def _penalty(handle, share, window=1, violation=1.0, obs="revision_rate", owner=
     if owner:
         term["owner"] = owner
     return {"kind": "price.penalty", "handle": handle, "penalty": 0.5 * share,
-            "effective": 0.5, "terms": [term]}
+            "raw": min(1.0, 0.5 + 0.5 * share), "effective": 0.5, "terms": [term]}
 
 
 def test_sf2a_relievers_bear_nothing_and_holders_share_equally():
@@ -1155,7 +1155,7 @@ def test_k1_s4_a_penalty_only_diary_is_checked_not_unsupported():
     """Sol K1: capped fields are evidence: a penalty over the cap in a diary with no unit
     field fails, and one within the cap passes."""
     over = {"kind": "price.penalty", "handle": "h1", "penalty": 0.9, "raw": None,
-            "effective": None}
+            "effective": None} | {"unresolved": ["c"]}
     assert g.s4_boundedness([over], M).status == g.FAIL
     assert g.s4_boundedness([over | {"penalty": 0.3}], M).ok
 
@@ -1355,3 +1355,108 @@ def test_sf1e_a_routers_own_loop_is_read_from_its_rounds_not_its_gain_rows():
                    router="router:Slow") for n, w in enumerate(range(3, 84, 9))]
     assert g.sf1e_gain(rounds + closes + climb, M).ok
     assert g.sf1e_gain(closes + climb, M).status == g.FAIL  # no rounds: the organ's cadence
+
+
+# --- Codex pass on 11ea116 ----------------------------------------------------------------
+
+
+@pytest.mark.parametrize("row, ok", [
+    # Required: always written by every emitter of the kind.
+    ({"kind": "propensity.learned", "handle": "d"}, False),
+    ({"kind": "verdict.mean", "handle": "d", "score": None}, False),
+    ({"kind": "counter.opened", "handle": "d", "q": 0.5}, False),
+    ({"kind": "price.penalty", "handle": "d", "penalty": 0.1, "effective": 0.4}, False),
+    # Nullable, only under the condition the kernel writes None.
+    ({"kind": "price.penalty", "handle": "d", "penalty": 0.1, "raw": None,
+      "effective": None}, False),
+    ({"kind": "exposure.settled", "handle": "d", "score": None}, True),
+    ({"kind": "counter.settled", "handle": "d", "score": None}, True),
+    ({"kind": "counter.settled", "handle": "d", "q": 0.5, "judge_q": 0.5, "y": 0.5},
+     False),
+    ({"kind": "counter.settled", "handle": "d", "q": 0.5, "judge_q": 0.5, "score": 0.5},
+     False),
+    ({"kind": "policy.outcome", "handle": "d", "q": 0.5, "y": None, "score": 0.0,
+      "status": "censored"}, True),
+    ({"kind": "policy.outcome", "handle": "d", "q": 0.5, "y": None, "score": 0.0,
+      "status": "settled"}, False),
+    ({"kind": "evaluator.settled", "handle": "d", "grade": None, "consequence": None,
+      "reward": None}, True),
+    ({"kind": "evaluator.settled", "handle": "d", "grade": 0.5, "consequence": None,
+      "reward": None}, False),
+])
+def test_s4_a_missing_field_fails_unless_the_kernel_writes_it_as_none(row, ok):
+    """Codex P2 (gauntlet.py:1772): a required field that is absent or None fails S4;
+    only a field the kernel writes as None, under the condition it does, may be."""
+    assert g.s4_boundedness([row], M).status == (g.PASS if ok else g.FAIL)
+
+
+def test_sf1e_every_present_router_is_judged_not_only_those_with_gain_rows():
+    """Codex P2 (gauntlet.py:830): the routers are read from ``router_presence``. A
+    router that drew decisions through a flagged episode long enough for a step, and has
+    no gain row, is unsupported: the kernel writes no row for a router already at
+    gamma_max (immune.py ``_gain``: ``if before == after: continue``), so its γ is
+    unobserved, never a pass. An ``assembly:`` actor is no router."""
+    closes, steps = _sf1e_base()
+    assert g.sf1e_gain(closes + steps, M).ok
+    other = g.sf1e_gain([_open("d-o", "a", actor="router:Other"), *closes, *steps], M)
+    assert other.status == g.UNSUPPORTED, other.evidence
+    assert other.evidence["stateless"][0]["router"] == "router:Other"
+    seat = [_open("d-s", "a", actor="assembly:committee"), *closes, *steps]
+    assert g.sf1e_gain(seat, M).ok
+    # No gain row at all, the organ acting while flagged: unobserved, not proven failed.
+    alone = g.sf1e_gain([_open("d-t", "a"), *closes], M)
+    assert alone.status == g.UNSUPPORTED
+    assert g.sf1e_gain(closes, M).status == g.UNSUPPORTED
+
+
+def test_sf1e_a_router_replaced_before_its_bound_is_no_evidence():
+    """A replaced router leaves ``_all_router_states`` (routing.py ``_build_router``), so
+    the kernel stops stepping it: it is not failed for the bound it could not reach."""
+    closes = [_w(i, acts=i % 3 == 0, sf=i >= 3) for i in range(1, 40)]
+    stuck = [_gain(3, 0.1, 0.15)]
+    assert g.sf1e_gain(closes + stuck, M).status == g.FAIL
+    replaced = [{"kind": "price.window", "window": 5},
+                {"kind": "router.created", "learner_id": "router:Tick#1",
+                 "event_kind": "Tick", "replaces": ["router:Tick"]}]
+    result = g.sf1e_gain(replaced + closes + stuck, M)
+    assert result.status == g.UNSUPPORTED, result.evidence
+    assert result.evidence["resolved"] >= 1
+
+
+def test_ld1e_a_flag_after_the_quarantine_cleared_is_not_detection():
+    """Codex P2 (gauntlet.py:1451): router r1 quarantined in windows 1-4 (a k-tail), then
+    invoked again; a flag naming it at window 6, inside H of the run's start but after
+    the run cleared, does not detect the run: the run failed. A flag inside the run
+    does."""
+    r1 = {"router": "router:r1", "quarantined": True, "core": False}
+    closes = [_w(i, ld=i == 6, frontier=[r1] if i <= 4 else []) for i in range(1, 15)]
+    closes[5]["frontier"] = {"quarantined_routers": ["router:r1"]}
+    assert g.physics(M).H > 6
+    result = g.ld1e_detection(closes, M)
+    assert result.status == g.FAIL, result.evidence
+    assert result.evidence["late"][0][:2] == (1, 4)
+    inside = [_w(i, ld=i == 4, frontier=[r1] if i <= 4 else []) for i in range(1, 15)]
+    assert g.ld1e_detection(inside, M).ok
+
+
+@pytest.mark.parametrize("drop", ["propensity", "rng_seed", "probs", "action_ids", "chosen"])
+def test_s1_a_decision_missing_a_required_propensity_field_fails(drop):
+    """The same pattern as S4 (Codex pass on 11ea116): ``Decision.propensity`` and every
+    field of it are required by the kernel, so a decision row without one is malformed
+    and fails S1, never skipped as unsampled."""
+    good = _open("decision-1", "a")
+    bad = json.loads(json.dumps(good))
+    if drop == "propensity":
+        del bad["propensity"]
+    else:
+        del bad["propensity"][drop]
+    assert g.s1_draw_sovereignty([good]).ok
+    result = g.s1_draw_sovereignty([good, bad])
+    assert result.status == g.FAIL
+    assert result.evidence["bad_draws"] == ["decision-1"]
+
+
+def test_s4_an_unresolved_penalty_row_may_carry_no_raw_score():
+    row = {"kind": "price.penalty", "handle": "d", "penalty": 0.1, "raw": None,
+           "effective": None}
+    assert g.s4_boundedness([row | {"unresolved": ["c"]}], M).ok

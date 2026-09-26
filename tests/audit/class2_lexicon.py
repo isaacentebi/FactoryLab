@@ -193,6 +193,12 @@ def allowlist_problems(allowlist: dict) -> list[str]:
             problems.append(f"context_words missing: {path!r}")
         if not str(entry.get("quote", "")).strip():
             problems.append(f"no quote: {path!r}")
+        # An entry excusing an auditor's finding names that finding's question and class
+        # with its path and quote (scripts/class2_audit.py ``finding_identity``): both or
+        # neither.
+        if ("question" in entry) != ("class" in entry):
+            problems.append(f"a question without its class, or a class without its "
+                            f"question: {path!r}")
     return problems
 
 

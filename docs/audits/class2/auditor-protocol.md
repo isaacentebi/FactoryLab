@@ -151,10 +151,13 @@ the skeleton):
   kernel-text fix ships at the next world boundary and is never hot-patched into a live
   world (rule 9). After the fix lands, `scripts/class2_audit.py baseline` rewrites
   `tests/audit/class2_findings.json`.
-- **ALLOW.** An allowlist entry with a reason, a passage from the closed set and
+- **ALLOW.** An allowlist entry with a reason, a passage from the closed set, the
+  finding's `question` and `class` beside its path and quote (an entry backs only the
+  finding of its question and class), and
   `context_words` (words that must stand within two sentences of the quote; when they
   drift, the entry stops excusing the finding and it returns as REVIEW).
-- **REJECT.** The auditor is wrong. The finding goes to `rejected.jsonl` with the reason
+- **REJECT.** The auditor is wrong. The finding goes to `rejected.jsonl` by its full
+  identity (`finding_id`, `question`, `class`), its `path` and the `reason`
   and is input 4 at the next release.
 - **CHARTER.** A charter card or norm (see the release gate): sent to the charter's next
   revision as an observation, never fixed in code.
@@ -181,7 +184,7 @@ the skeleton):
 
 ```
 uv run python scripts/class2_audit.py render --world <world> [--world …] \
-    --out work/class2/<release> --seed <n> --range <last release>..<release> \
+    --out work/class2/<release> --seed <n> --range <last release>..HEAD \
     [--rendered] [--previous <last triage file>] \
     [--previous-corpus work/class2/<last release>/release_corpus.jsonl]
 # send work/class2/<release>/prompt.md with auditor_input.jsonl to the chosen family,
@@ -204,7 +207,13 @@ uv run python scripts/class2_audit.py gate --world <world> --release <release sh
 `render` audits the repository it runs in: the range's head must be the commit checked
 out (HEAD), with no uncommitted change under a seat-visible path, and the key records
 that commit (`release_commit`); `gate` refuses a key of any other release (`--release`,
-default HEAD). `render` fills the authority text from `--essay` (default `docs/essay.md`, which is
+default HEAD). The range's base is the last audited release: the SHA
+`docs/audits/class2/last_release` holds as committed at the release (before the first
+release there is no such file, and the base is the repository root, whose own commit the
+provenance pass also reads). `render` refuses any other base, and a `--previous` triage
+file of any other release; `gate` re-verifies the base and recomputes the provenance
+prompt from the range. When a gate passes it writes the release's SHA to
+`last_release`; commit it with the triage files. `render` fills the authority text from `--essay` (default `docs/essay.md`, which is
 copied into the worktree and never committed) and refuses to render without it, or when
 it lacks a heading that bounds the text. No prompt is ever edited after rendering: both
 prompts are bound to the key by hash.
@@ -219,7 +228,8 @@ The tool defends against inconsistency, stale artifacts and operator error:
 
 - **Bound.** Every artifact is bound by hash to its origin: the key to the release
   commit it audited and to the corpus and
-  both prompts beside it, a sample to the id its prompt names, a triage file to its key's
+  both prompts beside it, the range's base to the last audited release
+  (`last_release`), a sample to the id its prompt names, a triage file to its key's
   corpus and range and to its sample files, a previous corpus to its own leaf hashes.
 - **Recomputed.** Derived values are recomputed from bound sources, never stored and
   trusted: the gate recomputes the verdict and every finding from the samples; nothing
