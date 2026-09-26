@@ -994,7 +994,8 @@ class PricingMixin:
 
         A scoped card routes each violating scope's part of its violation onto that
         scope's decisions priced on this window (``_attributed_share``). A scope that
-        violates but has no such decision leaves its part uncharged, because nobody
+        violates but has no such decision (none, or only niche decisions, which bear
+        nothing: ``_in_split``) leaves its part uncharged, because nobody
         will settle against it. That part is recorded at the close as
         ``price.unattributed`` (card, scope, window, the frozen lambda, the scope's
         own violation and its part of the card's), once per card and scope. It is
@@ -1017,10 +1018,14 @@ class PricingMixin:
             if total <= 0:
                 continue
             # The decisions that will settle against this window's frozen price for
-            # this card: the same origin rule ``_priced_cards`` applies.
+            # this card: the same origin rule ``_priced_cards`` applies, and the same
+            # split (``_in_split``): a niche decision bears nothing (wave 16, R-E as
+            # amended), so a scope of niche decisions only carries none of its part.
             carried = set()
             for handle, origins in self.price_origins.items():
                 if origins.get(observation.id, origins.get("origin")) != window.index:
+                    continue
+                if not self._in_split(handle, window):
                     continue
                 if card.answers_for != "all" and (
                         self._scope_of(window, handle, "role") != card.answers_for):

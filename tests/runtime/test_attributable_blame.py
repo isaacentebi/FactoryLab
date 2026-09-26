@@ -213,6 +213,25 @@ def test_a_violating_seat_with_no_decision_in_the_window_is_ledgered_unattribute
     assert rt._penalty_terms("all", carried[0])[0]["share"] == pytest.approx(2 / 9 / 2)
 
 
+def test_a_violating_seat_with_only_niche_decisions_is_ledgered_unattributed(monkeypatch):
+    """Codex on #152: a niche decision bears nothing (R-E as amended), so a violating
+    scope whose only decisions are niche carries none of its part: it is ledgered
+    ``price.unattributed``, never counted as charged."""
+    monkeypatch.setattr(pricing, "close_window", lambda *_a: None)
+    rt = _runtime(_card())
+    niche = _decision(rt, GUILTY)
+    rt.window.decisions[niche]["niche"] = True  # as ``_invoke`` marks a protected trial
+    _decision(rt, PARTLY)
+    _commitments(rt, GUILTY, censored=4)
+    _commitments(rt, PARTLY, censored=2)
+    _commitments(rt, INNOCENT, censored=0)
+    rt._close_price_window()
+    assert rt._penalty_for("all", niche) == 0.0
+    rows = [i for i in rt.ledger._recovery_items() if i["kind"] == "price.unattributed"]
+    assert [(r["card_id"], r["scope"], r["window"]) for r in rows] == [
+        ("censorship-bound", GUILTY, rt.window.index)]
+
+
 def test_a_timed_out_forecast_return_still_carries_its_unresolved_price(monkeypatch):
     """A wall-clock cutoff before the horizon (an outage) does not make the price free.
 
