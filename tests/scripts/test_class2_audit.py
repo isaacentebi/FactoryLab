@@ -9,12 +9,23 @@ is the operator's; nothing here makes one.
 import json
 import os
 import subprocess
+import tempfile
+from pathlib import Path
 
 import pytest
 
 from scripts import class2_audit as tool
 
 WORLD = "scripted"
+
+#: A stand-in essay with the headings that bound the authority text (the real one is
+#: never committed): ``render`` fills the prompt from it.
+ESSAY_TEXT = "\n".join([
+    "Preface", "I. On Factories and Darkness", "Class 1, Class 2 and Class 3 (stand-in).",
+    "II. The Human and the Loop", "Not quoted.", "CHAPTER II", "THE DARK STACK (stand-in)",
+    "CHAPTER III", "Not quoted either."])
+ESSAY = Path(tempfile.mkdtemp(prefix="class2-essay-")) / "essay.md"
+ESSAY.write_text(ESSAY_TEXT + "\n")
 
 
 def _git(repo, *args):
@@ -56,7 +67,7 @@ def history(tmp_path_factory):
 def rendered(tmp_path_factory, history):
     repo, _base, surface, head = history
     out = tmp_path_factory.mktemp("class2")
-    key = tool.render([WORLD], out, seed=7, rendered=False, essay=None,
+    key = tool.render([WORLD], out, seed=7, rendered=False, essay=ESSAY,
                       release_range=f"{surface}..{head}", repo=repo)
     return out, key
 
@@ -65,7 +76,7 @@ def test_the_provenance_pass_shows_a_commit_justified_by_a_behaviour_mix(history
     """Codex review: every surface-touching commit in the release range is in the prompt
     with its message and diff; a commit touching no surface is not."""
     repo, base, surface, head = history
-    tool.render([WORLD], tmp_path, seed=7, rendered=False, essay=None,
+    tool.render([WORLD], tmp_path, seed=7, rendered=False, essay=ESSAY,
                 release_range=f"{base}..{head}", repo=repo)
     section = (tmp_path / "provenance_prompt.md").read_text().split("## Provenance pass", 1)[1]
     assert surface in section and BEHAVIOUR_MIX in section
@@ -118,7 +129,7 @@ def test_a_range_with_no_surface_commit_renders_an_explicit_empty_section(render
 def test_the_release_range_is_base_dot_dot_head(history, tmp_path):
     repo, _base, _surface, head = history
     with pytest.raises(ValueError, match="base..head"):
-        tool.render([WORLD], tmp_path, seed=7, rendered=False, essay=None,
+        tool.render([WORLD], tmp_path, seed=7, rendered=False, essay=ESSAY,
                     release_range=head, repo=repo)
 
 
@@ -141,13 +152,13 @@ def test_a_render_whose_world_raises_midway_writes_no_corpus_and_exits_nonzero(
     out = tmp_path / "audit"
     code = tool.main(["render", "--world", WORLD, "--out", str(out), "--seed", "7",
                       "--rendered", "--range", f"{surface}..{head}", "--repo", str(repo),
-                      "--essay", str(tmp_path / "absent.md")])
+                      "--essay", str(ESSAY)])
     assert code != 0 and calls["n"] >= 8
     assert not out.exists()
     err = capsys.readouterr().err
     assert "world raised midway" in err and WORLD in err
     with pytest.raises(tool.RenderFailed):
-        tool.render([WORLD], out, seed=7, rendered=True, essay=None,
+        tool.render([WORLD], out, seed=7, rendered=True, essay=ESSAY,
                     release_range=f"{surface}..{head}", repo=repo)
     assert not out.exists()
 
@@ -200,7 +211,7 @@ def test_a_malformed_canary_set_is_refused(monkeypatch, tmp_path):
 def test_render_is_deterministic(rendered, history, tmp_path):
     out, key = rendered
     repo, _base, surface, head = history
-    again = tool.render([WORLD], tmp_path, seed=7, rendered=False, essay=None,
+    again = tool.render([WORLD], tmp_path, seed=7, rendered=False, essay=ESSAY,
                         release_range=f"{surface}..{head}", repo=repo)
     assert again == key
     for name in ("auditor_input.jsonl", "prompt.md", "provenance_prompt.md"):
@@ -461,7 +472,7 @@ def with_commit(tmp_path_factory, history):
     """A render whose range holds the surface commit justified by a behaviour mix."""
     repo, base, _surface, head = history
     out = tmp_path_factory.mktemp("class2-prov")
-    key = tool.render([WORLD], out, seed=7, rendered=False, essay=None,
+    key = tool.render([WORLD], out, seed=7, rendered=False, essay=ESSAY,
                       release_range=f"{base}..{head}", repo=repo)
     return out, key
 
@@ -491,12 +502,17 @@ def _sample(path, rows, summary):
     return path
 
 
-def _files(tmp_path, out, key, *, flag=(), **kw):
+def _paths(tmp_path, out, key, *, flag=(), **kw):
     """Two corpus samples and two provenance samples on disk."""
     samples = [_sample(tmp_path / f"s{i}.jsonl", *_output(out, key, sample=i, **kw))
                for i in (1, 2)]
     prov = [_sample(tmp_path / f"p{i}.jsonl", *_provenance(key, sample=i, flag=flag))
             for i in (1, 2)]
+    return samples, prov
+
+
+def _files(tmp_path, out, key, *, flag=(), **kw):
+    samples, prov = _paths(tmp_path, out, key, flag=flag, **kw)
     return [*map(str, samples), "--provenance-samples", *map(str, prov),
             "--key", str(out / "canary_key.json")]
 
@@ -514,8 +530,7 @@ def test_triage_of_an_invalid_audit_writes_nothing_and_exits_nonzero(rendered, t
     assert list((tmp_path / "triage").iterdir()) == []
     argv = ["triage", *_files(tmp_path, out, key), "--world", WORLD, "--family", "fam-x"]
     assert tool.main(argv) == 0
-    assert (tmp_path / "triage" / f"{WORLD}.md").exists()
-    assert (tmp_path / "triage" / f"{WORLD}.findings.jsonl").exists()
+    assert [p.name for p in (tmp_path / "triage").iterdir()] == [f"{WORLD}.md"]
 
 
 def test_triage_refuses_a_world_the_audit_did_not_render(rendered, tmp_path, monkeypatch,
@@ -574,46 +589,78 @@ def triaged(with_commit, tmp_path, monkeypatch):
     (sha,) = [c["sha"] for c in key["provenance_commits"]]
     real = next(r for r in _records(out) if r["provenance"] == "kernel"
                 and r["leaf_id"] not in {c["leaf_id"] for c in key["canaries"] + key["controls"]})
-    argv = ["triage", *_files(tmp_path, out, key, flag={sha}, extra=[_finding(real, "Q4")]),
-            "--world", WORLD, "--family", "fam-x"]
+    samples, prov = _paths(tmp_path, out, key, flag={sha}, extra=[_finding(real, "Q4")])
+    argv = ["triage", *map(str, samples), "--provenance-samples", *map(str, prov),
+            "--key", str(out / "canary_key.json"), "--world", WORLD, "--family", "fam-x"]
     assert tool.main(argv) == 0
-    return out, key, tmp_path / f"{WORLD}.md", sha
+    return out, key, tmp_path / f"{WORLD}.md", sha, samples, prov
+
+
+def _gate(triaged, world=WORLD, samples=None, prov=None):
+    out, _key, path, _sha, s, p = triaged
+    return tool.gate(world, path, out / "canary_key.json", samples or s, prov or p)
 
 
 def test_the_provenance_finding_reaches_the_triage_and_the_gate(triaged):
     """Codex P2: a flagged behaviour-mix commit is a HIGH finding the gate holds."""
-    out, _key, path, sha = triaged
+    out, _key, path, sha, samples, prov = triaged
     text = path.read_text()
     assert f"`commit:{sha}` | P1 | BEHAVIOUR-MIX | HIGH |" in text
-    gate = ["gate", "--world", WORLD, "--key", str(out / "canary_key.json")]
-    problems = tool.gate(WORLD, path, out / "canary_key.json")
-    assert any("untriaged HIGH" in p for p in problems)
+    gate = ["gate", "--world", WORLD, "--key", str(out / "canary_key.json"),
+            "--samples", *map(str, samples), "--provenance-samples", *map(str, prov)]
+    assert any("untriaged HIGH" in p for p in _gate(triaged))
     assert tool.main(gate) == 1
     path.write_text(_dispose(text))
-    assert tool.gate(WORLD, path, out / "canary_key.json") == []
+    assert _gate(triaged) == []
     assert tool.main(gate) == 0
 
 
-def test_the_gate_is_bound_to_its_world_key_and_findings(triaged, tmp_path):
-    """Codex P1: a triage file approves only the world, corpus and findings it names."""
-    out, key, path, _sha = triaged
+def test_the_gate_recomputes_the_findings_from_the_bound_samples(triaged, tmp_path):
+    """Codex P1: the gate trusts no stored findings. It recomputes them from the samples
+    the triage file records by hash, so rewriting the table (and its header) cannot drop
+    a finding, and a sample file that changed is not the one the triage read."""
+    out, key, path, sha, samples, prov = triaged
     path.write_text(_dispose(path.read_text()))
-    key_path = out / "canary_key.json"
-    assert tool.gate(WORLD, path, key_path) == []
-    assert any("not 'edition6-capital-loop'" in p or "'edition6-capital-loop'" in p
-               for p in tool.gate("edition6-capital-loop", path, key_path))
-    # A row whose severity was edited, a row deleted, or a findings file edited.
+    assert _gate(triaged) == []
+    assert any("'edition6-capital-loop'" in p for p in _gate(triaged, "edition6-capital-loop"))
     text = path.read_text()
-    first = next(line for line in text.splitlines() if "| Q4 | C1 | HIGH |" in line)
-    path.write_text(text.replace(first, first.replace("| HIGH |", "| LOW |")))
-    assert any("severity 'LOW' is not the finding's 'HIGH'" in p
-               for p in tool.gate(WORLD, path, key_path))
-    path.write_text(text.replace(first + "\n", ""))
-    assert any("has no row" in p for p in tool.gate(WORLD, path, key_path))
+    q4 = next(line for line in text.splitlines() if "| Q4 | C1 | HIGH |" in line)
+    path.write_text(text.replace(q4, q4.replace("| HIGH |", "| LOW |")))
+    assert any("severity 'LOW' is not the finding's 'HIGH'" in p for p in _gate(triaged))
+    path.write_text(text.replace(q4 + "\n", ""))
+    assert any("(HIGH) has no row" in p for p in _gate(triaged))
+    commit_row = next(line for line in text.splitlines() if f"commit:{sha}" in line)
+    path.write_text(text.replace(commit_row + "\n", ""))
+    assert any("(HIGH) has no row" in p for p in _gate(triaged))
+    path.write_text(text + "| ffffffffffff | `scripted/x` | Q4 | C1 | MED | low | x | FIX |  |\n")
+    assert any("names no finding of this audit" in p for p in _gate(triaged))
     path.write_text(text)
-    owned = path.with_suffix(".findings.jsonl")
-    owned.write_text(owned.read_text() + owned.read_text().splitlines()[0] + "\n")
-    assert any("not bound to its findings file" in p for p in tool.gate(WORLD, path, key_path))
+    # A sample edited after triage (a finding removed) is not the sample the file records.
+    rows, summary = _output(out, key, sample=2)
+    edited = _sample(tmp_path / "edited.jsonl", rows, summary)
+    assert any("not the ones the triage file records" in p
+               for p in _gate(triaged, samples=[samples[0], edited]))
+    # A recorded family that may not audit the world, however the header was edited.
+    path.write_text(text.replace("- Auditor family: fam-x", "- Auditor family: fake-haiku"))
+    assert any("may not audit" in p for p in _gate(triaged))
+    path.write_text(text)
+    assert _gate(triaged) == []
+    assert not list(tmp_path.glob("*.findings.jsonl"))  # no stored findings at all
+
+
+def test_the_gate_recomputes_the_verdict(triaged, tmp_path):
+    """A triage file that says valid, over samples whose audit is not, fails the gate."""
+    out, key, path, _sha, samples, prov = triaged
+    path.write_text(_dispose(path.read_text()))
+    missing = {c["id"] for c in key["canaries"]} - {"canary-q6"}
+    bad = [_sample(tmp_path / f"b{i}.jsonl", *_output(out, key, sample=i, canaries=missing))
+           for i in (1, 2)]
+    header_hashes = ", ".join(tool.sha256_file(f) for f in bad)
+    text = path.read_text()
+    old = next(line for line in text.splitlines() if line.startswith("- Samples sha256:"))
+    path.write_text(text.replace(old, f"- Samples sha256: {header_hashes}"))
+    problems = _gate(triaged, samples=bad)
+    assert any(p.startswith("the audit is invalid") and "mandatory" in p for p in problems)
 
 
 def _triage_file(tmp_path, rows):
@@ -669,7 +716,7 @@ def _diffed(rendered, history, tmp_path):
     (tmp_path / "rejected.jsonl").write_text(json.dumps(
         {"finding_id": "f1", "path": changed["path"], "reason": "a formula"}) + "\n")
     release = tmp_path / "release"
-    tool.render([WORLD], release, seed=7, rendered=False, essay=None,
+    tool.render([WORLD], release, seed=7, rendered=False, essay=ESSAY,
                 release_range=f"{surface}..{head}", repo=repo,
                 previous_corpus=tmp_path / "prior.jsonl", rejected=tmp_path / "rejected.jsonl")
     return release, changed, added
@@ -737,7 +784,7 @@ def test_render_refuses_an_unbound_or_malformed_input(rendered, history, tmp_pat
           "rejected.jsonl": {"rejected": tmp_path / name},
           "previous.md": {"previous": tmp_path / name}}[name]
     with pytest.raises(tool.AuditInputInvalid, match=why):
-        tool.render([WORLD], tmp_path / "out", seed=7, rendered=False, essay=None,
+        tool.render([WORLD], tmp_path / "out", seed=7, rendered=False, essay=ESSAY,
                     release_range=f"{surface}..{head}", repo=repo, **kw)
     assert not (tmp_path / "out").exists()
 
@@ -745,5 +792,47 @@ def test_render_refuses_an_unbound_or_malformed_input(rendered, history, tmp_pat
 def test_render_refuses_a_range_end_that_is_not_a_commit(history, tmp_path):
     repo, _base, surface, _head = history
     with pytest.raises(ValueError, match="not a commit"):
-        tool.render([WORLD], tmp_path / "out", seed=7, rendered=False, essay=None,
+        tool.render([WORLD], tmp_path / "out", seed=7, rendered=False, essay=ESSAY,
                     release_range=f"{surface}..no-such-ref", repo=repo)
+
+
+# --- the prompts are bound to the key, and complete when rendered --------------------------
+
+
+def test_the_key_is_refused_when_a_prompt_changed(rendered, tmp_path):
+    """Codex P2: the key binds both prompts; an edited prompt is not the one rendered."""
+    out, _key = rendered
+    for name in ("auditor_input.jsonl", "canary_key.json", "prompt.md",
+                 "provenance_prompt.md"):
+        (tmp_path / name).write_bytes((out / name).read_bytes())
+    assert tool.load_key(tmp_path / "canary_key.json")
+    for name in ("prompt.md", "provenance_prompt.md"):
+        original = (tmp_path / name).read_text()
+        (tmp_path / name).write_text(original + "An operator's edit.\n")
+        with pytest.raises(tool.AuditInputInvalid, match=f"the {name} beside it"):
+            tool.load_key(tmp_path / "canary_key.json")
+        (tmp_path / name).write_text(original)
+    key = json.loads((tmp_path / "canary_key.json").read_text())
+    key.pop("prompt_sha")
+    (tmp_path / "canary_key.json").write_text(json.dumps(key))
+    with pytest.raises(tool.AuditInputInvalid, match="schema"):
+        tool.load_key(tmp_path / "canary_key.json")
+
+
+def test_render_fills_the_authority_text_or_refuses(rendered, history, tmp_path):
+    """Codex P2: no prompt is edited after rendering. The essay's text is in the prompt,
+    and without an essay (or with one missing a heading) nothing is rendered."""
+    out, _key = rendered
+    prompt = (out / "prompt.md").read_text()
+    assert "Class 1, Class 2 and Class 3 (stand-in)." in prompt
+    assert "THE DARK STACK (stand-in)" in prompt and "Not quoted" not in prompt
+    assert "[The operator pastes" not in prompt
+    repo, _base, surface, head = history
+    headless = tmp_path / "essay.md"
+    headless.write_text(ESSAY_TEXT.replace("CHAPTER III", "Afterword"))
+    for essay, why in ((None, "no essay"), (tmp_path / "absent.md", "no essay"),
+                       (headless, "no heading 'CHAPTER III'")):
+        with pytest.raises(tool.AuditInputInvalid, match=why):
+            tool.render([WORLD], tmp_path / "out", seed=7, rendered=False, essay=essay,
+                        release_range=f"{surface}..{head}", repo=repo)
+        assert not (tmp_path / "out").exists()

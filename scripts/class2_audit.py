@@ -14,13 +14,15 @@ does everything around that call, offline:
             leaves, next release's --previous-corpus) are written to files the auditor
             is never given. Also writes ``prompt.md`` (protocol inputs 1-5: the rubric,
             the authority text, the allowlist, the corpus diff against
-            --previous-corpus, then last release's triage and rejected findings) and
+            --previous-corpus, then last release's triage and rejected findings; the
+            authority text filled from --essay, or no render) and
             ``provenance_prompt.md``, the second prompt (input 6): every commit in
             --range base..head that touches a seat-visible surface, with its message and
             diff. Commit messages may carry behaviour data, so they never enter the
             corpus prompt.
   validate  Score the audit: two corpus samples and two provenance samples (JSON Lines)
-            against the key. Refused unless the key is bound to the corpus beside it.
+            against the key. Refused unless the key is bound to the corpus and the two
+            prompts beside it.
             Valid only when every sample echoes its prompt's id (``corpus_sha``,
             ``provenance_id``) and its sample number (1 and 2, once each); every corpus
             finding passes its schema (fields, enums, its leaf in the corpus, its class
@@ -29,26 +31,30 @@ does everything around that call, offline:
             provenance sample answers every commit once; at least 7 of the 8 canaries
             are found in the union and every mandatory one (Q6, Q9, Q10) is; and at most
             1 of 10 controls is flagged. An invalid audit is rerun with the next family.
-  triage    From a valid audit, write ``docs/audits/class2/<world>.md`` and its findings
-            file ``<world>.findings.jsonl``: that world's findings of the union (a
-            finding one sample alone made is low confidence) and every commit the
-            provenance pass flagged, as HIGH findings. The file records its bindings:
-            the family, the world, the corpus, the range, every sample's sha256 and the
-            findings file's. Refused, writing nothing, for a world the audit did not
-            render, an invalid audit, a family that authored kernel text or sits in the
-            world, and the family the last triage of the world used (rotation).
-  gate      The release gate, bound to the key: the triage file names the world and the
-            key's corpus and range; its rows are exactly its findings file's, each once,
-            with the severity, question and class the finding carries; every HIGH or
-            MED finding has a disposition, a non-FIX disposition a reason, and no
-            charter card is marked FIX.
+  triage    From a valid audit, write ``docs/audits/class2/<world>.md``: one row per
+            finding the world owns, that world's findings of the union (a finding one
+            sample alone made is low confidence) and every commit the provenance pass
+            flagged, as HIGH findings. The file records its bindings: the family, the
+            world, the corpus, the range and every sample's sha256. Refused, writing
+            nothing, for a world the audit did not render, an invalid audit, a family
+            that authored kernel text or sits in the world, and the family the last
+            triage of the world used (rotation).
+  gate      The release gate, recomputed from bound sources: given the key and the
+            sample files, it checks the triage file names the world, the key's corpus
+            and range and exactly those samples by sha256; recomputes the audit (valid)
+            and the world's findings from the samples; and requires each finding to
+            have exactly one row with its severity, question and class, every HIGH or
+            MED finding a disposition, a non-FIX disposition a reason, and no charter
+            card marked FIX. Nothing the gate trusts is stored beside the triage file.
   baseline  Recompute the static audit's findings and surface registry after the
             architect's triage (tests/audit/class2_findings.json, class2_surfaces.toml).
 
 Every artifact this tool reads is refused (exit 2) unless it passes its schema and is
-bound to its origin: the key to its corpus, a sample to its prompt, a triage file to its
-key and findings file, a previous corpus to its own hashes, rejected findings and a
-previous triage file to their fields.
+bound to its origin: the key to its corpus and prompts, a sample to its prompt, a triage
+file to its key and samples, a previous corpus to its own hashes, rejected findings and a
+previous triage file to their fields. Derived values (the verdict, the findings) are
+recomputed from those sources, never stored and trusted (the threat model is in
+``docs/audits/class2/auditor-protocol.md``).
 
 The model call itself is the operator's: send ``prompt.md`` with ``auditor_input.jsonl``
 to one model family that neither authored kernel text nor sits in the world, at
@@ -67,7 +73,8 @@ Examples::
     uv run python scripts/class2_audit.py triage <the same samples> \\
         --key work/class2/2026-10/canary_key.json --world edition6-capital-loop --family X
     uv run python scripts/class2_audit.py gate --world edition6-capital-loop \\
-        --key work/class2/2026-10/canary_key.json
+        --key work/class2/2026-10/canary_key.json --samples <the two samples> \\
+        --provenance-samples <the two provenance samples>
 """
 
 from __future__ import annotations
@@ -269,17 +276,32 @@ def plant(records: list[dict], *, seed: int, world: str, changed: int | None = N
     return out, key
 
 
+#: The headings that bound the authority text in the essay: Chapter I §I, and Chapter II.
+ESSAY_MARKS = ("I. On Factories and Darkness", "II. The Human and the Loop", "CHAPTER II",
+               "CHAPTER III")
+
+
 def authority_text(essay: Path | None) -> str:
-    """Chapter I §I and Chapter II, verbatim from the essay (it is not in the repository)."""
-    if essay is None or not essay.exists():
-        return ("[The operator pastes Chapter I §I (lines 73-81, the three classes) and "
-                "Chapter II §I, §I.a, §I.b, §II.b and §IV.a of The Superdark Factory here, "
-                "verbatim: docs/essay.md is not checked in.]")
-    lines = essay.read_text().splitlines()
-    head = next(i for i, line in enumerate(lines) if "I. On Factories and Darkness" in line)
-    stop = next(i for i, line in enumerate(lines) if "II. The Human and the Loop" in line)
-    start2 = next(i for i, line in enumerate(lines) if "CHAPTER II" in line)
-    end2 = next(i for i, line in enumerate(lines) if "CHAPTER III" in line)
+    """Chapter I §I and Chapter II, verbatim from the essay (it is not in the repository).
+
+    Guarantees the prompt is complete when rendered: ``render`` fills the authority
+    text itself, so no prompt is edited afterwards (its hash is in the key). An essay
+    that is missing, or lacks a heading that bounds the text, refuses the render
+    (``AuditInputInvalid``); there is never a placeholder to paste into.
+    """
+    if essay is None or not Path(essay).exists():
+        raise AuditInputInvalid(f"no essay at {essay}: render fills the authority text "
+                                "from docs/essay.md (copied into the worktree, never "
+                                "committed), and refuses without it")
+    lines = Path(essay).read_text().splitlines()
+    at = {}
+    for mark in ESSAY_MARKS:
+        at[mark] = next((i for i, line in enumerate(lines) if mark in line), None)
+        if at[mark] is None:
+            raise AuditInputInvalid(f"the essay has no heading {mark!r}")
+    head, stop, start2, end2 = (at[mark] for mark in ESSAY_MARKS)
+    if not (head < stop and start2 < end2):
+        raise AuditInputInvalid("the essay's headings are out of order")
     return "\n".join(lines[head:stop] + ["", "---", ""] + lines[start2:end2])
 
 
@@ -393,7 +415,7 @@ def write_provenance_prompt(out: Path, provenance: str, *, provenance_id: str) -
     return path
 
 
-def write_prompt(out: Path, *, essay: Path | None, previous_text: str | None,
+def write_prompt(out: Path, *, authority: str, previous_text: str | None,
                  diff: str, rejected: list[dict], corpus_sha: str) -> Path:
     """The corpus prompt: protocol inputs 1-5, the corpus diff before last release's
     triage so a rejected finding's leaf can be read against its change, and the corpus
@@ -412,7 +434,7 @@ def write_prompt(out: Path, *, essay: Path | None, previous_text: str | None,
         "",
         "## Authority text (verbatim)",
         "",
-        authority_text(essay),
+        authority,
         "",
         "## AGENTS.md rules 1-5",
         "",
@@ -604,6 +626,7 @@ def render(worlds: list[str], out: Path, *, seed: int, rendered: bool, release_r
     rejected_rows = read_rejected(rejected)
     previous_text = read_previous_triage(previous, worlds)
     spec = load_canaries()
+    authority = authority_text(essay)
     # Rendered before anything is written: a failed render leaves no corpus behind.
     records = corpus_records(worlds, rendered=rendered)
     diff = corpus_diff(prior, records)
@@ -618,7 +641,7 @@ def render(worlds: list[str], out: Path, *, seed: int, rendered: bool, release_r
         for record in records:
             handle.write(json.dumps(record, sort_keys=True, ensure_ascii=False) + "\n")
     corpus_sha = sha256_file(out / "auditor_input.jsonl")
-    write_prompt(out, essay=essay, previous_text=previous_text,
+    write_prompt(out, authority=authority, previous_text=previous_text,
                  diff=diff_section(planted, diff), rejected=rejected_rows,
                  corpus_sha=corpus_sha)
     write_provenance_prompt(out, provenance, provenance_id=provenance_id)
@@ -723,23 +746,29 @@ def finding_problems(f: dict, records: dict[str, dict]) -> list[str]:
 def load_key(path: Path) -> tuple[dict, list[dict]]:
     """The key and the corpus it was rendered with, refused unless bound together.
 
-    Guarantees: the key has its schema's fields; the ``auditor_input.jsonl`` beside it
-    hashes to its ``corpus_sha``; every record has its fields and its id is the hash of
+    Guarantees: the key has its schema's fields; the ``auditor_input.jsonl``,
+    ``prompt.md`` and ``provenance_prompt.md`` beside it hash to its ``corpus_sha``,
+    ``prompt_sha`` and ``provenance_prompt_sha`` (the auditor read exactly the prompts
+    rendered); every record has its fields and its id is the hash of
     its path and text; the expected leaves are exactly the corpus's kernel leaves; and
     every canary and control names a leaf of it.
     """
     path = Path(path)
     key = json.loads(path.read_text())
     required = {"schema": int, "worlds": list, "range": str, "range_shas": list,
-                "corpus_sha": str, "provenance_id": str, "provenance_commits": list,
+                "corpus_sha": str, "prompt_sha": str, "provenance_prompt_sha": str,
+                "provenance_id": str, "provenance_commits": list,
                 "canaries": list, "controls": list, "expected_leaves": list,
                 "expected_count": int}
     bad = [n for n, t in required.items() if not isinstance(key.get(n), t)]
     if bad or key.get("schema") != KEY_SCHEMA:
         raise AuditInputInvalid(f"the key is not a schema-{KEY_SCHEMA} key: {bad}")
+    for name, field in (("auditor_input.jsonl", "corpus_sha"), ("prompt.md", "prompt_sha"),
+                        ("provenance_prompt.md", "provenance_prompt_sha")):
+        beside = path.parent / name
+        if not beside.exists() or sha256_file(beside) != key[field]:
+            raise AuditInputInvalid(f"the key is not bound to the {name} beside it")
     corpus_path = path.parent / "auditor_input.jsonl"
-    if not corpus_path.exists() or sha256_file(corpus_path) != key["corpus_sha"]:
-        raise AuditInputInvalid("the key is not bound to the auditor_input.jsonl beside it")
     records = _jsonl(corpus_path, "auditor_input.jsonl")
     for r in records:
         if any(not isinstance(r.get(f), str) for f in RECORD_FIELDS) \
@@ -1071,36 +1100,26 @@ def table_rows(text: str) -> list[dict[str, str]]:
     return out
 
 
-def release_gate(text: str, *, world: str | None = None, key: dict | None = None,
-                 owned: list[dict] | None = None, owned_sha: str | None = None) -> list[str]:
-    """Why a triage file does not pass the release gate (none when it does).
+def release_gate(text: str, *, expected: list[dict] | None = None) -> list[str]:
+    """Why a triage file's rows do not pass the release gate (none when they do).
 
-    The protocol's gate: the file records the family and a valid canary score; zero
-    untriaged HIGH or MED findings; each disposition is one of ``DISPOSITIONS`` and a
-    non-FIX one carries its reason; a charter card or norm is never FIX. Bound (when
-    ``key`` is given): the file names ``world``, which the key rendered, the key's corpus
-    and range, and the findings file whose rows (``owned``, hashing to ``owned_sha``) it
-    must list exactly once each, with the severity, question and class they carry.
+    The protocol's gate: zero untriaged HIGH or MED findings; each disposition is one of
+    ``DISPOSITIONS`` and a non-FIX one carries its reason; a charter card or norm is
+    never FIX; every severity is from the enum. With ``expected`` (the findings ``gate``
+    recomputed from the bound samples), the rows are exactly those findings, one row
+    each, with the severity, question and class each carries; without it (a bare
+    reading of a file), the file must also record its family and a valid canary score.
     """
     problems = []
     header = triage_header(text)
-    if not header.get("Auditor family"):
-        problems.append("the triage file records no auditor family")
-    if "valid: True" not in text:
-        problems.append("the triage file records no valid canary score")
-    if key is not None:
-        if header.get("World") != world or world not in key["worlds"]:
-            problems.append(f"the triage file is of {header.get('World')!r}, not {world!r} "
-                            f"of the rendered worlds {key['worlds']}")
-        if header.get("Corpus") != key["corpus_sha"]:
-            problems.append("the triage file is not bound to the key's corpus")
-        if not str(header.get("Release range", "")).startswith(key["range"] + " "):
-            problems.append("the triage file is not bound to the key's release range")
-        if header.get("Findings") != owned_sha:
-            problems.append("the triage file is not bound to its findings file")
+    if expected is None:
+        if not header.get("Auditor family"):
+            problems.append("the triage file records no auditor family")
+        if "valid: True" not in text:
+            problems.append("the triage file records no valid canary score")
     rows = table_rows(text)
-    if owned is not None:
-        want = {f["finding_id"]: f for f in owned}
+    if expected is not None:
+        want = {f["finding_id"]: f for f in expected}
         seen: dict[str, int] = {}
         for row in rows:
             seen[row.get("id", "")] = seen.get(row.get("id", ""), 0) + 1
@@ -1112,7 +1131,8 @@ def release_gate(text: str, *, world: str | None = None, key: dict | None = None
                 if row.get(column) != f.get(column):
                     problems.append(f"{row.get('id')}: {column} {row.get(column)!r} is not "
                                     f"the finding's {f.get(column)!r}")
-        problems += [f"finding {i} has no row" for i in want if i not in seen]
+        problems += [f"finding {i} ({want[i]['severity']}) has no row" for i in want
+                     if i not in seen]
         problems += [f"finding {i} has {n} rows" for i, n in seen.items() if n > 1]
     for row in rows:
         disposition = row.get("disposition", "").upper()
@@ -1131,31 +1151,54 @@ def release_gate(text: str, *, world: str | None = None, key: dict | None = None
     return problems
 
 
-def gate(world: str, triage: Path, key_path: Path) -> list[str]:
-    """The release gate for ``world``, bound to the audit ``key_path`` names."""
+def _hashes(value: str | None) -> list[str]:
+    return sorted(h.strip() for h in (value or "").split(",") if h.strip())
+
+
+def gate(world: str, triage: Path, key_path: Path, samples: list[Path],
+         provenance: list[Path]) -> list[str]:
+    """The release gate for ``world``: recomputed from bound sources, never read from a
+    stored result.
+
+    Guarantees: the key is bound to its corpus and prompts (``load_key``); the triage
+    file names ``world`` (rendered by the key), the key's corpus and range, and exactly
+    the corpus and provenance sample files given, by sha256; the audit those samples
+    make is recomputed and must be valid (``audit_verdict``); the recorded family may
+    audit the world (``family_refusal``, less the rotation, which the triage checked
+    against the file it replaced); and the findings the world owns are recomputed from
+    the samples (``world_findings``), each needing exactly one row with its severity,
+    question and class, and each HIGH or MED one a disposition (``release_gate``).
+    """
     if not triage.exists():
         return [f"no triage file at {triage}"]
     key, records = load_key(key_path)
     text = triage.read_text()
-    owned_path = triage.with_suffix(".findings.jsonl")
-    if not owned_path.exists():
-        return [f"no findings file at {owned_path}"]
-    owned = _jsonl(owned_path, str(owned_path))
-    by_id = {r["leaf_id"]: r for r in records}
+    header = triage_header(text)
     problems = []
-    for f in owned:
-        if f.get("provenance_pass"):
-            if {k: f.get(k) for k in PROVENANCE} != PROVENANCE or str(
-                    f.get("path", "")).removeprefix("commit:") not in {
-                    c["sha"] for c in key["provenance_commits"]}:
-                problems.append(f"provenance finding {f.get('finding_id')} is malformed")
-        else:
-            problems += [f"finding {f.get('finding_id')}: {p}"
-                         for p in finding_problems(f, by_id)]
-            if f.get("world") != world:
-                problems.append(f"finding {f.get('finding_id')} is of another world")
-    return problems + release_gate(text, world=world, key=key, owned=owned,
-                                   owned_sha=sha256_file(owned_path))
+    if header.get("World") != world or world not in key["worlds"]:
+        problems.append(f"the triage file is of {header.get('World')!r}, not {world!r} of "
+                        f"the rendered worlds {key['worlds']}")
+    if header.get("Corpus") != key["corpus_sha"]:
+        problems.append("the triage file is not bound to the key's corpus")
+    if not str(header.get("Release range", "")).startswith(key["range"] + " "):
+        problems.append("the triage file is not bound to the key's release range")
+    for label, files in (("Samples sha256", samples),
+                         ("Provenance samples sha256", provenance)):
+        if _hashes(header.get(label)) != sorted(sha256_file(f) for f in files):
+            problems.append(f"the sample files given are not the ones the triage file "
+                            f"records ({label})")
+    family = header.get("Auditor family")
+    refusal = family_refusal(family, world, None) if family else "no auditor family"
+    if refusal is not None:
+        problems.append(f"the recorded family may not audit {world}: {refusal}")
+    parsed = [read_output(f) for f in samples]
+    parsed_provenance = [read_output(f) for f in provenance]
+    verdict = audit_verdict(parsed, parsed_provenance, key, records)
+    if not verdict["valid"]:
+        problems += [f"the audit is invalid: {p}" for p in verdict["problems"]]
+    expected = world_findings(union(parsed), provenance_findings(parsed_provenance), key,
+                              world)
+    return problems + release_gate(text, expected=expected)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1188,6 +1231,10 @@ def main(argv: list[str] | None = None) -> int:
     g = sub.add_parser("gate")
     g.add_argument("--world", required=True)
     g.add_argument("--key", type=Path, required=True)
+    g.add_argument("--samples", type=Path, nargs="+", required=True,
+                   help="the corpus sample files the triage file records")
+    g.add_argument("--provenance-samples", type=Path, nargs="+", required=True,
+                   help="the provenance sample files the triage file records")
     g.add_argument("--triage", type=Path, default=None)
     b = sub.add_parser("baseline")
     b.add_argument("--static-only", action="store_true")
@@ -1226,7 +1273,7 @@ def _run(args: argparse.Namespace) -> int:
         return 0
     if args.command == "gate":
         path = args.triage or TRIAGE_DIR / f"{args.world}.md"
-        problems = gate(args.world, path, args.key)
+        problems = gate(args.world, path, args.key, args.samples, args.provenance_samples)
         for problem in problems:
             print(problem, file=sys.stderr)
         return 1 if problems else 0
@@ -1253,16 +1300,14 @@ def _run(args: argparse.Namespace) -> int:
         print(f"no triage: {refusal}", file=sys.stderr)
         return 1
     owned = world_findings(union(samples), provenance_findings(provenance), key, args.world)
-    owned_path = path.with_suffix(".findings.jsonl")
-    owned_path.write_text("".join(json.dumps(f, sort_keys=True, ensure_ascii=False) + "\n"
-                                  for f in owned))
+    # The samples are the source: the gate recomputes the findings from them, so the
+    # triage file records them by hash and stores no findings of its own.
     bindings = {"Samples sha256": ", ".join(sha256_file(p) for p in args.output),
                 "Provenance samples sha256": ", ".join(sha256_file(p)
-                                                       for p in args.provenance_samples),
-                "Findings": sha256_file(owned_path)}
+                                                       for p in args.provenance_samples)}
     path.write_text(triage_skeleton(owned, verdict, world=args.world, family=args.family,
                                     key=key, bindings=bindings))
-    print(f"wrote {path} and {owned_path}")
+    print(f"wrote {path}")
     return 0
 
 if __name__ == "__main__":

@@ -150,13 +150,15 @@ the skeleton):
 ## The release gate
 
 - Zero untriaged HIGH or MED findings, and a reason on every non-FIX disposition
-  (`scripts/class2_audit.py gate --key`). The gate is bound: the triage file names the
-  world, the key's corpus and range, and its findings file (`<world>.findings.jsonl`),
-  whose findings it lists exactly once each with the severity, question and class they
-  carry. A commit the provenance pass flagged is a HIGH finding (P1, BEHAVIOUR-MIX) of
-  every world's triage.
+  (`scripts/class2_audit.py gate`). The gate recomputes rather than reads: given the key
+  and the four sample files, it checks that the triage file names the world, the key's
+  corpus and range and exactly those samples (by sha256), recomputes the audit's
+  validity and the world's findings from the samples, and requires each finding to have
+  exactly one row with the severity, question and class it carries. A commit the
+  provenance pass flagged is a HIGH finding (P1, BEHAVIOUR-MIX) of every world's triage.
 - The triage file is committed, recording the family used, the canary score and each
-  finding with its disposition.
+  finding with its disposition. The four sample files are kept with the release
+  artifacts: the gate reads them.
 - A charter card flagged by Q10, Q11 or Q12 is **not** the kernel's to fix. It is sent to
   the charter's next revision as an observation (§IV: "Governance never intervenes in the
   internal affairs"; the metrics layer is the factory's).
@@ -179,16 +181,36 @@ uv run python scripts/class2_audit.py validate work/class2/<release>/sample1.jso
 uv run python scripts/class2_audit.py triage <the same four samples> \
     --key work/class2/<release>/canary_key.json --world <world> --family <family>
 uv run python scripts/class2_audit.py gate --world <world> \
-    --key work/class2/<release>/canary_key.json
+    --key work/class2/<release>/canary_key.json \
+    --samples work/class2/<release>/sample1.jsonl work/class2/<release>/sample2.jsonl \
+    --provenance-samples work/class2/<release>/provenance1.jsonl \
+    work/class2/<release>/provenance2.jsonl
 ```
 
-Every file the tool reads is refused (exit 2) unless it passes its schema and is bound
-to its origin: the key to the `auditor_input.jsonl` beside it, a sample to its prompt's
-id, a triage file to its key and findings file, a previous corpus to its own hashes.
+`render` fills the authority text from `--essay` (default `docs/essay.md`, which is
+copied into the worktree and never committed) and refuses to render without it, or when
+it lacks a heading that bounds the text. No prompt is ever edited after rendering: both
+prompts are bound to the key by hash.
 
 `canary_key.json` and `release_corpus.jsonl` are never part of the auditor's input: the
 key names the canaries, and the unplanted corpus would reveal them by difference. Keep
 `release_corpus.jsonl` as the release artifact the next release diffs against.
 
-`docs/essay.md` is not checked in. `render` reads it from `--essay` when present and
-otherwise leaves a marked place for the operator to paste the authority text verbatim.
+## Threat model
+
+The tool defends against inconsistency, stale artifacts and operator error:
+
+- **Bound.** Every artifact is bound by hash to its origin: the key to the corpus and
+  both prompts beside it, a sample to the id its prompt names, a triage file to its key's
+  corpus and range and to its sample files, a previous corpus to its own leaf hashes.
+- **Recomputed.** Derived values are recomputed from bound sources, never stored and
+  trusted: the gate recomputes the verdict and every finding from the samples; nothing
+  beside a triage file is authoritative.
+- **Validated.** Every input is schema-validated before use; one invalid field refuses
+  the artifact (exit 2) or invalidates the sample.
+
+It does **not** defend against an adversary with write access to every artifact and to
+the repository: such a writer can re-render, re-sample and re-triage consistently. Git
+history, pull-request review and the rotated auditor family cover that. So a gap is
+closed by recomputing from a bound source, not by storing another digest: a digest
+written beside the thing it vouches for is rewritten with it.
