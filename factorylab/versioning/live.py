@@ -356,23 +356,35 @@ def organ_record(row: dict) -> dict:
     return record
 
 
+def same_metric(was: dict, now: dict) -> bool:
+    """Whether two recorded meanings of a card measure the same rows.
+
+    Guarantees the comparison of their full ``identity`` (``measurement.metric_identity``:
+    observation, role answered for, sample kind, scope) when both carry one, and of the
+    observation alone when either was recorded before identities were kept.
+    """
+    if was.get("identity") is not None and now.get("identity") is not None:
+        return list(was["identity"]) == list(now["identity"])
+    return was.get("observation") == now.get("observation")
+
+
 def redefined(windows: list[dict], name: str) -> bool:
-    """Whether card ``name`` measured a different observation in the newest window than in
-    the one before it: a new metric under the same id (Codex on #152)."""
+    """Whether card ``name`` measured a different metric (``same_metric``) in the newest
+    window than in the one before it: a new metric under the same id (Codex on #152)."""
     if len(windows) < 2:
         return False
     before, after = windows[-2].get("semantics"), windows[-1].get("semantics")
     if before is None or after is None:
         return False
-    return ((before.get(name) or {}).get("observation")
-            != (after.get(name) or {}).get("observation"))
+    return not same_metric(before.get(name) or {}, after.get(name) or {})
 
 
 def current_metrics(windows: list[dict]) -> list[dict]:
     """``windows`` with each card kept only where it measured what it measures now.
 
-    Guarantees a window keeps a card's reading and region only when the observation it
-    recorded for that card (``semantics``) is the one the newest window recorded: a
+    Guarantees a window keeps a card's reading and region only when the metric it
+    recorded for that card (``semantics``) is the one the newest window recorded
+    (``same_metric``: its identity, or its observation for an older record): a
     card redefined under the same id is a new metric, so its old readings are neither
     violation nor movement of the new one (Codex on #152), and a card the newest window
     no longer carries is gone. Windows recorded before semantics were kept, and a
@@ -388,7 +400,7 @@ def current_metrics(windows: list[dict]) -> list[dict]:
             result.append(window)
             continue
         stale = {name for name, meaning in recorded.items()
-                 if (newest.get(name) or {}).get("observation") != meaning.get("observation")}
+                 if not same_metric(meaning, newest.get(name) or {})}
         if not stale:
             result.append(window)
             continue

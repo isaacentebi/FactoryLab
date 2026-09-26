@@ -104,3 +104,26 @@ def test_a_card_the_charter_dropped_is_not_held():
     diagnosis = diagnose(windows, {"card_gap": None}, k=K, tv_threshold=0.2,
                          gap_threshold=0.8, held=["card:gone"], **BINS)
     assert diagnosis["violated_cards"] == [] and not diagnosis["flags"]["stable_failure"]
+
+
+def test_a_card_is_one_metric_while_its_identity_is_and_older_records_by_observation():
+    """``live.redefined`` and ``live.current_metrics`` compare the recorded identity
+    (observation, role, sample kind, scope); a window recorded before identities were
+    kept is compared by its observation alone."""
+    from factorylab.versioning import live
+
+    def window(i, meaning):
+        return {"index": i, "profile": {"card:c": 0.1}, "regions": {"card:c": {}},
+                "semantics": {"card:c": meaning}}
+
+    evaluators = {"observation": "well_formed_rate", "role": "evaluator",
+                  "identity": ["well_formed_rate", "evaluator", "windows", None]}
+    producers = {"observation": "well_formed_rate", "role": "producer",
+                 "identity": ["well_formed_rate", "producer", "windows", None]}
+    older = {"observation": "well_formed_rate", "role": "evaluator"}
+    spliced = [window(0, evaluators), window(1, producers)]
+    assert live.redefined(spliced, "card:c")
+    assert ["card:c" in w["profile"] for w in live.current_metrics(spliced)] == [False, True]
+    upgraded = [window(0, older), window(1, producers)]
+    assert not live.redefined(upgraded, "card:c")
+    assert all("card:c" in w["profile"] for w in live.current_metrics(upgraded))

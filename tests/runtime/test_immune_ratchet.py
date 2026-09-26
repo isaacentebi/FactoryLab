@@ -174,31 +174,47 @@ def test_a_seed_gamma_outside_the_organ_s_bound_is_refused_at_load(seed):
             router_gamma=0.5)  # at the bound: accepted
 
 
-def test_a_replay_of_the_diary_diagnoses_every_window_as_the_live_organ_did():
+def _answering_for(rt, **change):
+    """The charter with card ``well_formed_rate`` changed by ``change``, derived."""
+    card = replace(next(c for c in rt.charter.cards if c.id == "well_formed_rate"), **change)
+    rt.charter = replace(rt.charter, cards=tuple(
+        card if c.id == "well_formed_rate" else c for c in rt.charter.cards))
+    rt._derive_regions()
+
+
+@pytest.mark.parametrize("change", [{"observation": "noop_share"},
+                                    {"answers_for": "producer"}],
+                         ids=["new-observation", "same-observation-new-role"])
+def test_a_replay_of_the_diary_diagnoses_every_window_as_the_live_organ_did(change):
     """Codex on #152 (735d50a): live and replay run one step (``versions.organ_step``).
-    A world fails a card for five windows, the charter then redefines that card under
-    the same id to a new observation, and seven more windows close. Replaying the
-    organ's own ledgered windows gives, window by window, exactly the flags, violated
-    cards, held cards and gaps the live organ ledgered."""
-    from factorylab.versioning.live import organ_record
+    A world fails a card answering for the evaluators for five windows, the charter
+    then redefines that card under the same id (a new observation, or the same one
+    answering for the producers: a new ``metric_identity``), and seven more windows
+    close. Versioning does not splice the two populations: the newest window reads the
+    card only from windows that measured what it measures now. Replaying the organ's
+    own ledgered windows gives, window by window, exactly the flags, violated cards,
+    held cards and gaps the live organ ledgered."""
+    from factorylab.versioning.live import current_metrics, organ_record, redefined
     from factorylab.versioning.versions import replay
 
     rt = _runtime()
+    _answering_for(rt, answers_for="evaluator")
     for _ in range(5):
         _close(rt, 0.2)
-    redefined = replace(next(c for c in rt.charter.cards if c.id == "well_formed_rate"),
-                        observation="noop_share")
-    rt.charter = replace(rt.charter, cards=tuple(
-        redefined if c.id == "well_formed_rate" else c for c in rt.charter.cards))
-    rt._derive_regions()
+    _answering_for(rt, **change)
     for i in range(7):
         _close(rt, 0.2 if i % 3 else 1.0)
     rows = _items(rt, "immune.window")
     assert len(rows) == 12
-    assert rows[4]["semantics"]["card:well_formed_rate"]["observation"] == "well_formed_rate"
-    assert rows[5]["semantics"]["card:well_formed_rate"]["observation"] == "noop_share"
+    name = "card:well_formed_rate"
+    was, now = rows[4]["semantics"][name], rows[5]["semantics"][name]
+    assert was["identity"][:2] == ["well_formed_rate", "evaluator"]
+    assert now["identity"] != was["identity"]
+    records = [organ_record(row) for row in rows]
+    assert redefined(records[:6], name) and not redefined(records[:5], name)
+    assert [name in w["profile"] for w in current_metrics(records[:6])] == [False] * 5 + [True]
     spec = rt.m.immune
-    readings = replay([organ_record(row) for row in rows], k=spec.k,
+    readings = replay(records, k=spec.k,
                       horizon=rt.m.timing.min_ratio * spec.k,
                       tv_threshold=spec.tv_threshold, gap_threshold=spec.gap_threshold,
                       registration_bins=tuple(spec.registration_bins),

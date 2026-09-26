@@ -40,6 +40,7 @@ import json
 from dataclasses import asdict
 
 from factorylab.charter.controller import CardRegion, PriceController, pressure
+from factorylab.charter.measurement import metric_identity
 from factorylab.versioning import live
 from factorylab.versioning.series import CHANNELS
 from factorylab.versioning.versions import organ_step
@@ -88,13 +89,16 @@ MEASURED_TIER = {"verdict_mean": "evaluator", "verdict_std": "evaluator",
                  "meta_verdict_mean": "meta", "exposure_win_rate": "antagonist"}
 
 
-def card_semantics(card) -> dict[str, str]:
-    """What a card measures, as a window records it at its close: the observation and
-    the role whose behaviour that observation is (``MEASURED_TIER``, else the role the
-    card answers for)."""
+def card_semantics(card) -> dict:
+    """What a card measures, as a window records it at its close: the observation, the
+    role whose behaviour that observation is (``MEASURED_TIER``, else the role the card
+    answers for), and its full ``identity`` (``measurement.metric_identity``, as a list
+    so it compares equal after JSON), which says whether two windows measured one
+    metric (``live.redefined``, ``live.current_metrics``)."""
     observation = card.observation.strip().lower()
     return {"observation": observation,
-            "role": MEASURED_TIER.get(observation, card.answers_for)}
+            "role": MEASURED_TIER.get(observation, card.answers_for),
+            "identity": list(metric_identity(card))}
 
 
 def thrash_roles(rt, windows: list[dict]) -> list[str]:
@@ -132,7 +136,8 @@ def thrash_roles(rt, windows: list[dict]) -> list[str]:
             if cell_before[i] == cell_after[i]:
                 continue
             was, now = meaning(before, name), meaning(after, name)
-            if was is None or now is None or was != now:
+            if (was is None or now is None or was.get("role") != now.get("role")
+                    or not live.same_metric(was, now)):
                 continue  # a redefinition (a new observation or role), not movement
             if now["role"] != "all":
                 roles.add(now["role"])
