@@ -1223,22 +1223,30 @@ def ld1a_accrual(events: list[Mapping], manifest: Mapping) -> Result:
     ``Decimal(str(share))`` (never the float's binary expansion: at share 0.3 on 10 µUSD
     the kernel's cap is 3, a float ratio's 2), its exact integer ratio, integer floor
     division, and ``accrued`` as the exact ``Fraction`` the row records.
+
+    A window whose cap floors to 0 µUSD has no niche: no compute is reserved for
+    unhistoried actions, so the learning-death guard (a share of compute usable only by
+    them, §I.a) is absent that window, and LD-1a fails naming it (Astra G-4).
     """
     ph = physics(manifest)
     rows = rows_of(events, "novelty.window")
     if not rows:
         return _unsupported("LD-1a", "no reserve window opened")
     num, den = novelty_share_ratio(ph)
-    bad = []
+    bad, no_niche = [], []
     for row in rows:
         accrued = Fraction(str(need(row, "accrued")))
         cap = int(need(row, "budget")) * num // den
+        if cap == 0:
+            no_niche.append({"seq": row.get("seq"), "window": row.get("window"),
+                             "budget": need(row, "budget")})
         expected = min(cap, int(need(row, "carried"))
                        + cap * accrued.numerator // accrued.denominator)
         if cap != int(need(row, "cap")) or expected != int(need(row, "amount")):
             bad.append({"seq": row.get("seq"), "cap": need(row, "cap"), "expected_cap": cap,
                         "amount": need(row, "amount"), "expected": expected})
-    return _result("LD-1a", not bad, windows=len(rows), bad=bad[:5])
+    return _result("LD-1a", not bad and not no_niche, windows=len(rows), bad=bad[:5],
+                   no_niche=no_niche[:5])
 
 
 @criterion("SF-1f")

@@ -371,6 +371,17 @@ def test_ld1a_and_sf1f_accrual_is_exact_and_the_route_stays_open():
     assert g.sf1f_route_open(rows + shut, M).status == g.FAIL
 
 
+def test_ld1a_fails_a_window_whose_niche_floors_to_zero():
+    """Astra G-4: ``floor(budget × share) == 0`` reserves nothing for unhistoried actions;
+    the arithmetic is right, but the guard is absent, and LD-1a fails naming the window."""
+    empty = _novelty(budget=9) | {"window": 4}
+    assert empty["cap"] == 0 and empty["amount"] == 0
+    result = g.ld1a_accrual([_novelty(), empty], M)
+    assert result.status == g.FAIL and result.evidence["bad"] == []
+    assert result.evidence["no_niche"] == [{"seq": None, "window": 4, "budget": 9}]
+    assert g.ld1a_accrual([_novelty(budget=10)], M).ok
+
+
 def test_ld1a_uses_the_reserves_decimal_arithmetic_at_share_0_3():
     """Codex review: at share 0.3 on 10 µUSD the kernel's cap is 3 (Decimal "0.3"); a
     float ratio would say 2. The predicate agrees with the real NoveltyReserve."""
