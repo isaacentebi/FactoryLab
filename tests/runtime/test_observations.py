@@ -76,8 +76,9 @@ def test_catalogue_is_exact_and_public_metadata_cannot_mutate_it():
     # + evaluator_compute_share (the #132 review, item 2), + provider_concentration and
     # family_concentration (time audit T15), + prompt_bytes, you_bytes, inputs_bytes and
     # downstream_read_bytes (wave 7, context size published as a fact), +
-    # non_acting_informative_share and non_acting_paid_off_rate (wave 16, R-H)
-    assert len(public) == len({o.id for o in CATALOGUE}) == 36
+    # non_acting_informative_share and non_acting_paid_off_rate (wave 16, R-H), +
+    # resolved_verdict_mean and resolved_verdict_std (Codex on #152: one name, one formula)
+    assert len(public) == len({o.id for o in CATALOGUE}) == 38
     # A11: the public row now also names where the observation came from and which
     # version of it this is, because the population can register its own.
     assert all(set(item) == {"id", "description", "units", "unit_range", "scale",

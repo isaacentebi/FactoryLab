@@ -220,13 +220,14 @@ def test_a_card_over_one_closed_window_computes_the_window_published_value():
         CardSamples,
         measure_cards,
         window_forecast_skills,
+        window_resolved_verdicts,
     )
     from factorylab.runtime.observations import SEED_IDS, SEEDS, seed_book
 
     samples = CardSamples()
-    for skill in (0.1, None, -0.2):
+    for skill, verdict in ((0.1, 0.9), (None, None), (-0.2, 0.4)):
         samples.forecasts.append({"handle": "f", "assembly": "e", "role": "evaluator",
-                                  "window": 1, "skill": skill, "verdict": None,
+                                  "window": 1, "skill": skill, "verdict": verdict,
                                   "predicate": "return_paid_off", "y": 1,
                                   "status": "settled" if skill is not None else "censored",
                                   "excluded": None})
@@ -237,7 +238,8 @@ def test_a_card_over_one_closed_window_computes_the_window_published_value():
     # The window the runtime closes over those rows: its forecast skills are the window's
     # own rows, and its three invocations spent what their responses cost.
     window = replace(_full_window(), compute_spend_micro=5,
-                     forecast_skills=window_forecast_skills(samples, 1))
+                     forecast_skills=window_forecast_skills(samples, 1),
+                     resolved_verdicts=window_resolved_verdicts(samples, 1))
     book = seed_book()
     published = {seed: book.value(SEEDS[seed], window) for seed in SEED_IDS}
     cards = [MetricCard(id=f"card-{seed}", norm="n", description="d",
@@ -247,6 +249,8 @@ def test_a_card_over_one_closed_window_computes_the_window_published_value():
     carded = measure_cards(cards, samples, window, observations=book)
     assert published["forecast_skill"] == carded["card-forecast_skill"] == pytest.approx(-0.05)
     assert published["cost_per_attempt"] == carded["card-cost_per_attempt"] == 5 / 3
+    assert (published["resolved_verdict_mean"] == carded["card-resolved_verdict_mean"]
+            == pytest.approx(0.65))
     for seed in SEED_IDS:
         if seed in CLOSED_WINDOW_DIFFERS:
             continue
@@ -317,3 +321,27 @@ def test_a_card_over_returns_or_forecasts_computes_what_a_window_of_the_same_res
         assert carded is not None and carded == SEEDS[observation].measure(window), observation
         compared += 1
     assert compared == len(ROW_INPUTS) - len(ROWS_DIFFER)
+
+
+@pytest.mark.parametrize("window", [MetricWindow("forecasts", 5, "assembly"),
+                                    MetricWindow("returns", 5, "role"),
+                                    MetricWindow("windows", 5, "role")])
+@pytest.mark.parametrize("name", ["verdict_mean", "verdict_std"])
+def test_a_card_naming_delivered_verdicts_over_a_scope_is_refused_and_pointed_to_its_name(
+        name, window):
+    """Codex on #152: ``verdict_mean`` and ``verdict_std`` are the verdicts delivered in
+    whole closed windows. A card over forecasts, returns or a scope asks for the verdict
+    attached to each resolved forecast, which is ``resolved_verdict_mean`` or
+    ``resolved_verdict_std``: it is refused at load, and the refusal names the new name.
+    The same card under the new name loads, and the whole-window card still does."""
+    from dataclasses import replace
+
+    from factorylab.charter.measurement import preflight_card
+
+    card = MetricCard(id="c", norm="n", description="d", units="score", window=window,
+                      acceptable_region="at least 0.5", observation=name, answers_for="all")
+    with pytest.raises(ValueError, match=f"is resolved_{name}"):
+        preflight_card(card)
+    if window.kind != "returns":
+        preflight_card(replace(card, observation=f"resolved_{name}"))
+    preflight_card(replace(card, window=MetricWindow("windows", 5, None)))

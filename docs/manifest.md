@@ -947,7 +947,8 @@ rendered prompt in a scope exactly as it is globally. Its violations are attribu
 `forecasts` selects the latest `n` resolved forecast records in each scope.
 `forecast_skill` uses paired Brier skill against the baseline as it stood before
 each outcome, not lifetime standing. The other supported forecast observations
-are `verdict_mean`, `verdict_std`, `consequence_paid_off_rate` and `censored_share`.
+are `resolved_verdict_mean`, `resolved_verdict_std`, `consequence_paid_off_rate` and
+`censored_share`.
 Censored records count toward the selector but not a scored outcome mean.
 `consequence_paid_off_rate` counts acting returns only (wave 16, R-H), on every
 selector: a return that executed nothing has `return_paid_off` 0 by the predicate's
@@ -959,8 +960,11 @@ fixed in the window and measured under an informative base-rate key, over all su
 returns whose outcome was fixed (measured, or known absent); and
 `non_acting_paid_off_rate`, the share with `y = 1` among those informative outcomes.
 The charter's cards are the charter's to revise.
-`verdict_mean` and `verdict_std` select by the judged subject's assembly or
-role. `forecast_skill` selects by the forecaster. Preflight uses the same
+`resolved_verdict_mean` and `resolved_verdict_std` (the verdict attached to each
+resolved forecast) select by the judged subject's assembly or role. `verdict_mean` and
+`verdict_std` are the verdicts delivered in whole closed windows: a card naming them
+over forecasts, over returns or per scope is refused at load and pointed to the
+`resolved_` name. `forecast_skill` selects by the forecaster. Preflight uses the same
 subject-aware forecast row construction as runtime measurement.
 
 `windows` selects exactly the latest `n` closed reserve windows. Global rates
@@ -1366,8 +1370,8 @@ law and gains (`prices.eta`, `kp`, `kd`, `decay`, `penalty_cap`), so its integra
 accumulates how long the thrash lasts. The price lands on the tier whose behaviour
 moved (wave 16, second addendum, I-10; ruling R-E): the organ reads which cards'
 region-relative cells took more than one value over the retained horizon and names
-the roles they measure (`verdict_mean`, `verdict_std`, `evaluator_disagreement` and
-`forecast_skill` measure evaluators, `meta_verdict_mean` metas, `exposure_win_rate`
+the roles they measure (`verdict_mean`, `verdict_std`, `resolved_verdict_mean`,
+`resolved_verdict_std`, `evaluator_disagreement` and `forecast_skill` measure evaluators, `meta_verdict_mean` metas, `exposure_win_rate`
 antagonists, any other card the role it answers for;
 `world.adaptive_scoring.thrash_price.roles`). A router whose seats fill one of those
 roles is charged; with no role named (a card answering for `all`, or activity alone)

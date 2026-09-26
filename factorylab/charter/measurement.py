@@ -35,7 +35,8 @@ ATTRIBUTION_FIELDS = ("decisions", "closed_values", "closed_regions", "closed_ca
                       # The price loop's own schedule is the clock's, not an observation.
                       "opened_tick", "due_tick")
 FORECAST_OBSERVATIONS = frozenset({
-    "forecast_skill", "verdict_mean", "verdict_std", "consequence_paid_off_rate", "censored_share",
+    "forecast_skill", "resolved_verdict_mean", "resolved_verdict_std",
+    "consequence_paid_off_rate", "censored_share",
     "avoidably_unresolved_share",
 })
 #: Observations a whole-window card still measures from settled forecast rows.
@@ -45,6 +46,8 @@ FORECAST_ROWS = frozenset({"forecast_skill", "avoidably_unresolved_share"})
 _WINDOW_SUPPORT = {
     "verdict_mean": lambda w: bool(w.verdicts),
     "verdict_std": lambda w: bool(w.verdicts),
+    "resolved_verdict_mean": lambda w: bool(getattr(w, "resolved_verdicts", None)),
+    "resolved_verdict_std": lambda w: bool(getattr(w, "resolved_verdicts", None)),
     "consequence_paid_off_rate": lambda w: w.consequences_settled > 0,
     "censored_share": lambda w: w.outcomes > 0,
     "non_acting_informative_share": lambda w: (w.non_acting_outcomes or 0) > 0,
@@ -141,8 +144,8 @@ ROW_INPUTS: Mapping[str, tuple[str, ...]] = MappingProxyType({
     "inputs_bytes": ("inputs_bytes",),
     "downstream_read_bytes": ("reading", "read_bytes"),
     "forecast_skill": ("skill",),
-    "verdict_mean": ("verdict",),
-    "verdict_std": ("verdict",),
+    "resolved_verdict_mean": ("verdict",),
+    "resolved_verdict_std": ("verdict",),
     "consequence_paid_off_rate": ("predicate", "status", "subject_acted", "y"),
     "censored_share": ("status",),
     "avoidably_unresolved_share": ("excluded", "status"),
@@ -185,16 +188,27 @@ CLOSED_WINDOW_DIFFERS: Mapping[str, str] = MappingProxyType({})
 #: window calculator on the same responses (``scope_facts`` of the same rows), each
 #: with its reason. A test holds every other row-measured seed to one number.
 ROWS_DIFFER: Mapping[str, str] = MappingProxyType({
-    "verdict_mean": "a card over forecasts reads the verdict attached to each resolved "
-    "forecast, grouped by the judged return's scope; a window reads the verdicts "
-    "delivered in it, which are other rows.",
-    "verdict_std": "a card over forecasts reads the verdict attached to each resolved "
-    "forecast, grouped by the judged return's scope; a window reads the verdicts "
-    "delivered in it, which are other rows.",
     "avoidably_unresolved_share": "only a card over forecasts measures it, over a "
     "scope's due commitments; a window's raw counts cannot stand in for them, so a "
     "window leaves it unmeasured.",
 })
+
+
+def window_resolved_verdicts(samples, index: int) -> list[float]:
+    """The verdict attached to each forecast resolved in window ``index``, in order.
+
+    Guarantees the one sample list both ``resolved_verdict_*`` readings read: a closed
+    window's own value (the runtime sets it as the window's ``resolved_verdicts``) and
+    a card over closed windows or over forecasts (the same rows).
+    """
+    return [row["verdict"] for row in samples.forecasts
+            if row["window"] == index and row.get("verdict") is not None]
+
+
+#: Delivered-verdict observations (the window meaning) and the name of the forecast-scope
+#: quantity a card over forecasts or per scope asks for instead (Codex on #152).
+_RESOLVED_NAME = MappingProxyType({"verdict_mean": "resolved_verdict_mean",
+                                   "verdict_std": "resolved_verdict_std"})
 
 
 def window_forecast_skills(samples, index: int) -> list[float]:
@@ -225,10 +239,11 @@ _FORMULAS: Mapping[str, str] = MappingProxyType({
     "noop_share": "Share of responses declaring action noop or hold.",
     "revision_rate": "Share of responses whose registration was accepted, amendments "
     "activated included.",
-    "verdict_mean": "Mean evaluator verdict; forecast selectors group the verdicts by the "
-    "judged return's assembly or role.",
-    "verdict_std": "Population standard deviation of evaluator verdicts; forecast "
-    "selectors group them by the judged return's assembly or role.",
+    "resolved_verdict_mean": "Mean of the verdict attached to each resolved forecast; a "
+    "scoped card groups them by the judged return's assembly or role.",
+    "resolved_verdict_std": "Population standard deviation of the verdict attached to "
+    "each resolved forecast; a scoped card groups them by the judged return's assembly "
+    "or role.",
     "consequence_paid_off_rate": "Positive return_paid_off outcomes over the settled "
     "consequences of acting returns.",
     "censored_share": "censored / outcomes over a closed window: the settlements it "
@@ -320,7 +335,7 @@ UNSCOPED_COUNTERS = ("notional_micro", "fills", "realized_pnl_micro",
                      "non_acting_outcomes", "non_acting_informative",
                      "non_acting_paid_off")
 #: Observations whose value is not a mean of its samples: no interval states their error.
-NOT_A_MEAN = frozenset({"verdict_std", "evaluator_disagreement",
+NOT_A_MEAN = frozenset({"verdict_std", "resolved_verdict_std", "evaluator_disagreement",
                         # Reading bytes over responses: no reading is one of the responses.
                         READ_OBSERVATION})
 
@@ -386,6 +401,8 @@ def scope_facts(windows: list[dict], returns: list[dict], forecasts: list[dict],
         "verdicts": {row["handle"]: {"judge": [row["verdict"]]} for row in responses
                      if row.get("verdict") is not None},
         "forecast_skills": [row["skill"] for row in forecasts if row.get("skill") is not None],
+        "resolved_verdicts": [row["verdict"] for row in forecasts
+                              if row.get("verdict") is not None],
         "outcomes": len(forecasts),
         "censored": sum(row.get("status") == "censored" for row in forecasts),
         "consequences_settled": len(settled),
@@ -627,6 +644,14 @@ def preflight_card(card: MetricCard, observations=None) -> None:
         raise ValueError(f"card {card.id} acceptable_region: no finite usable bounds")
     region_for(card, rolling={f"{card.id}_prev_median": 1.0}, observations=book)
     kind = card.window.kind
+    if observation.id in _RESOLVED_NAME and (kind != "windows" or card.window.per is not None):
+        # Codex on #152: verdict_mean and verdict_std are the verdicts delivered in whole
+        # closed windows; the verdict attached to each resolved forecast, which a card
+        # over forecasts or per scope reads, is its own observation.
+        raise ValueError(
+            f"card {card.id} window: {observation.id} is the verdicts delivered in whole "
+            f"closed windows; the verdict attached to each resolved forecast, per scope or "
+            f"over forecasts, is {_RESOLVED_NAME[observation.id]}")
     supported = RETURN_OBSERVATIONS if kind == "returns" else FORECAST_OBSERVATIONS
     if kind != "windows" and observation.id not in supported:
         raise ValueError(f"card {card.id} window: {observation.id} cannot be measured over {kind}")
@@ -761,7 +786,8 @@ def _horizon(observation: str, group: list[dict], n: int, *,
 
 def _groups(card: MetricCard, rows: list[dict]) -> dict[str, list[dict]]:
     groups = defaultdict(list)
-    subject = card.observation.strip().lower() in ("verdict_mean", "verdict_std")
+    subject = card.observation.strip().lower() in ("resolved_verdict_mean",
+                                                   "resolved_verdict_std")
     for row in rows:
         if subject and row.get("verdict") is None:
             continue
@@ -837,7 +863,7 @@ def _measure_rows(observation: str, rows: list[dict]) -> float | None:
         values = [row["verdict"] for row in rows if row.get("verdict") is not None]
     if not values:
         return None
-    return pstdev(values) if observation == "verdict_std" else fmean(values)
+    return pstdev(values) if observation == "resolved_verdict_std" else fmean(values)
 
 
 def _merge_counts(into: dict, other: dict) -> None:

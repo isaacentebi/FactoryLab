@@ -168,6 +168,12 @@ def _verdict_std(w: MeasureWindow) -> float | None:
     return pstdev(values) if values else None
 
 
+def _resolved_verdicts(w: MeasureWindow) -> list[float]:
+    """The verdicts attached to the forecasts the window resolved; a record closed before
+    they were kept has none."""
+    return list(getattr(w, "resolved_verdicts", None) or [])
+
+
 CATALOGUE: tuple[Observation, ...] = (
     Observation(
         "cost_per_return",
@@ -269,6 +275,22 @@ CATALOGUE: tuple[Observation, ...] = (
         "Population standard deviation of delivered raw evaluator verdicts.",
         "score standard deviation",
         _verdict_std,
+        (0.0, 0.5),
+    ),
+    # Codex on #152: the verdict attached to each resolved forecast is its own quantity,
+    # never ``verdict_mean`` under a second formula (rule 3: one name, one formula).
+    Observation(
+        "resolved_verdict_mean",
+        "Mean of the verdict attached to each forecast resolved.",
+        "score",
+        lambda w: fmean(values) if (values := _resolved_verdicts(w)) else None,
+        (0.0, 1.0),
+    ),
+    Observation(
+        "resolved_verdict_std",
+        "Population standard deviation of the verdict attached to each forecast resolved.",
+        "score standard deviation",
+        lambda w: pstdev(values) if (values := _resolved_verdicts(w)) else None,
         (0.0, 0.5),
     ),
     Observation(
@@ -509,6 +531,8 @@ WINDOW_INPUTS: Mapping[str, tuple[str, ...]] = MappingProxyType({
     "amendments_activated": ("amendments_activated",),
     "verdict_mean": ("verdicts",),
     "verdict_std": ("verdicts",),
+    "resolved_verdict_mean": ("resolved_verdicts",),
+    "resolved_verdict_std": ("resolved_verdicts",),
     "evaluator_disagreement": ("verdicts",),
     "consequence_paid_off_rate": ("consequences_paid_off", "consequences_settled"),
     "non_acting_informative_share": ("non_acting_informative", "non_acting_outcomes"),
@@ -555,6 +579,8 @@ WINDOW_FIELD_MEANINGS: Mapping[str, str] = MappingProxyType({
     "amendments_proposed": "the amendments admitted to the proposal book",
     "amendments_activated": "the amendments activated",
     "verdicts": "the raw evaluator verdicts delivered, by judged return and judge",
+    "resolved_verdicts": "the verdict attached to each forecast the window resolved, in "
+                         "resolution order",
     "consequences_paid_off": "the settled return_paid_off consequences with y = 1",
     "consequences_settled": "the settled return_paid_off consequences of acting returns",
     "non_acting_informative": "the non-acting outcomes fixed with an informative "

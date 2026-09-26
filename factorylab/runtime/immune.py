@@ -83,6 +83,7 @@ def thrash_controller(ledger, manifest) -> PriceController:
 #: conformity the metas', an antagonist's exposure the antagonists' (wave 16, second
 #: addendum, I-10: a penalty lands on the decisions whose behaviour it measures).
 MEASURED_TIER = {"verdict_mean": "evaluator", "verdict_std": "evaluator",
+                 "resolved_verdict_mean": "evaluator", "resolved_verdict_std": "evaluator",
                  "evaluator_disagreement": "evaluator", "forecast_skill": "evaluator",
                  "meta_verdict_mean": "meta", "exposure_win_rate": "antagonist"}
 

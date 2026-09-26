@@ -42,6 +42,10 @@ class MeasureWindow:
     ok: int = 0
     notional_micro: int = 0  # filled size × price, summed
     forecast_skills: list[float] = field(default_factory=list)
+    # The verdict attached to each forecast the window resolved, in resolution order:
+    # ``resolved_verdict_mean`` and ``resolved_verdict_std`` read these, set at the close
+    # from the window's own forecast rows (Codex on #152: one name, one formula).
+    resolved_verdicts: list[float] = field(default_factory=list)
     # How many consequence scores the world issued in the window (a verdict's, a meta's,
     # a settled forecast's): zero means the window had no consequence reading at all
     # (wave 16, ruling R-B; the sampling actuator reads it).
@@ -613,10 +617,15 @@ class PricingMixin:
         the skill of each forecast this window settled (``window_forecast_skills``),
         the same rows a card over closed windows averages.
         """
-        from factorylab.charter.measurement import window_forecast_skills
+        from factorylab.charter.measurement import (
+            window_forecast_skills,
+            window_resolved_verdicts,
+        )
 
         w = replace(self.window,
-                    forecast_skills=window_forecast_skills(self.card_samples, self.window.index))
+                    forecast_skills=window_forecast_skills(self.card_samples, self.window.index),
+                    resolved_verdicts=window_resolved_verdicts(self.card_samples,
+                                                               self.window.index))
         history, series = self._early_warning_open(w)
         book = self.observations
         # An observation is in use while a card names it: the charter's, a card a
