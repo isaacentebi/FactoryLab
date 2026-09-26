@@ -275,25 +275,40 @@ def test_at_saturation_the_ratchet_stops_and_the_fact_is_ledgered():
 
 
 @pytest.mark.parametrize("first", [1.1, 2.0], ids=["mild", "spike"])
-def test_a_redefined_card_is_priced_from_its_price_with_no_old_integral(first):
-    """A redefined card is a new metric: the old integral never measured it. Its first
-    window is priced exactly as a card adopted at the same price and never observed:
-    the integral restarts from the price, the episode and last reading reset."""
+def test_a_redefined_card_restarts_from_the_charter_s_declared_price(first):
+    """A redefined card is a new metric: the live price and the integral the old metric
+    drove never measured it. Seed lambda 0.2; the old metric drives the live price past
+    0.6; an identity-only redefinition restarts both at 0.2, and its first window is
+    priced exactly as a card freshly adopted at 0.2."""
     ledger = Ledger()
     old = _pid(ledger)
+    old.set_price("c", 0.2, amendment_id="manifest:edition1")
     for event in range(3):
-        old.observe("c", 1.4, event)  # violation 0.4: I = 0.6, P = 0.2
-    carried = old.price("c")
-    assert carried == pytest.approx(0.8)
+        old.observe("c", 1.4, event)  # violation 0.4
+    assert old.price("c") > 0.6
     old.redefine("c", edition=2)
     (row,) = [i for i in ledger._recovery_items() if i["kind"] == "price.redefined"]
-    assert row["integral"] == pytest.approx(0.6)
+    assert row["declared"] == 0.2 and row["lambda_before"] > 0.6
+    card = old.snapshot()["cards"]["c"]
+    assert (card["lambda"], card["integral"], card["declared"]) == (0.2, 0.2, 0.2)
     fresh_ledger = Ledger()
     fresh = _pid(fresh_ledger)
-    fresh.set_price("c", carried, amendment_id="t")
+    fresh.set_price("c", 0.2, amendment_id="t")
     old.observe("c", first, 3)
     fresh.observe("c", first, 0)
     assert old.price("c") == pytest.approx(fresh.price("c"))
     terms = [{k: u[k] for k in ("p", "i", "d")} for u in (_updates(ledger)[-1],
                                                            _updates(fresh_ledger)[-1])]
     assert terms[0] == pytest.approx(terms[1])
+
+
+def test_a_card_with_no_declared_price_restarts_from_its_price_in_force():
+    """A checkpoint written before declared prices were kept: the price in force."""
+    old = _pid()
+    for event in range(3):
+        old.observe("c", 1.4, event)
+    assert old.snapshot()["cards"]["c"]["declared"] is None
+    live = old.price("c")
+    old.redefine("c")
+    card = old.snapshot()["cards"]["c"]
+    assert (card["lambda"], card["integral"]) == (live, live)
