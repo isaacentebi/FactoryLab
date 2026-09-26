@@ -162,13 +162,29 @@ VENUE_FEE_MARKETS = ("perp", "spot")
 FACT_STREAMS = ("hl:mids", "hl:rates", "hl:fills", "hl:funding", "pm:events", "pm:book")
 
 
-def instrument_streams(coin: str, market: str) -> tuple[str, ...]:
-    """The fact streams a position in ``coin`` on ``market`` is graded from."""
+def instrument_market(coin: str) -> str:
+    """The market a Hyperliquid instrument trades on: a pair (``BASE/QUOTE``) is spot,
+    anything else a perp; a Polymarket token (``PM:<id>``) is an event."""
+    if coin.startswith("PM:"):
+        return "event"
+    return "spot" if "/" in coin else "perp"
+
+
+def instrument_streams(coin: str, market: str, *, acting: bool = True) -> tuple[str, ...]:
+    """The fact streams a consequence on ``coin`` on ``market`` is graded from: the ONE
+    selector both roads use (Codex on #152).
+
+    Guarantees, for a position the return holds (``acting``): its market's marks, its
+    fills and, on a perp, the funding payments charged to it. For a trade the return
+    named and did not take (a declined or attempted trade): its market's marks and, on
+    a perp, the funding-rate prints it is priced with; never fills, and never a
+    funding stream on a spot pair or an event token, which pay no funding.
+    """
     if market == "event":
-        return (f"pm:book:{coin}", "pm:events")
+        return (f"pm:book:{coin}", "pm:events") if acting else (f"pm:book:{coin}",)
     if market == "spot":
-        return ("hl:mids", "hl:fills")
-    return ("hl:mids", "hl:fills", "hl:funding")
+        return ("hl:mids", "hl:fills") if acting else ("hl:mids",)
+    return ("hl:mids", "hl:fills", "hl:funding") if acting else ("hl:mids", "hl:rates")
 
 
 def _exit_rates_for(exit_rates, lots, account, now_ns, horizon_ns) -> dict[str, str | None]:

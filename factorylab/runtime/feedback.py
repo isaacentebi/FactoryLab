@@ -47,7 +47,7 @@ from factorylab.settlement import (
     WindowFacts,
     open_forecast_decision,
 )
-from factorylab.settlement.lots import FEE_UNKNOWN
+from factorylab.settlement.lots import FEE_UNKNOWN, instrument_market, instrument_streams
 from factorylab.settlement.settle import PredicateForecast
 from factorylab.settlement.vocabulary import (
     DECLINED_DEFINITION,
@@ -1448,21 +1448,26 @@ class FeedbackMixin:
         seen = getattr(self, "facts_seen_ns", None)
         self.facts_seen_ns = at_ns if seen is None else max(seen, at_ns)
 
-    def _facts_through(self) -> int:
-        """The venue time every fact a named trade reads has been delivered through,
-        inclusive: the instant before the latest venue mid or funding print seen
-        (facts at that very instant may still be in flight), or the previous tick,
-        whichever is later; the world's clock only when neither is known. Guarantees
-        a named trade's lapse and horizon pass on world facts, never on when this
-        runs (Codex on #152)."""
+    def _facts_through(self, frozen: dict) -> int | float:
+        """The venue time every fact the named trade ``frozen`` reads has been delivered
+        through, inclusive: the instant before the latest venue mid or funding print
+        seen (facts at that very instant may still be in flight), or the previous
+        tick, whichever is later; the world's clock only when neither is known; and
+        never after the delivered-through instant of the streams its instrument is
+        priced from (ruling R10-o). Those streams are chosen by the one selector the
+        acting road uses (``lots.instrument_streams``, Codex on #152): a perp's mids and
+        funding-rate prints, a spot pair's mids alone, so a failing funding read never
+        holds a spot trade. Guarantees a named trade's lapse and horizon pass on world
+        facts, never on when this runs."""
         seen = getattr(self, "facts_seen_ns", None)
         known = [v for v in (None if seen is None else seen - 1,
                              getattr(self, "tick_through_ns", None)) if v is not None]
         through = max(known) if known else self.clock.now_ns
-        # Ruling R10-o: never after the venue's own delivered-through instant of the
-        # streams a named trade reads (mids, funding-rate prints).
-        venue = self._stream_through(("mids", "rates"))
-        return through if venue is None else min(through, venue)
+        coin = str(frozen["coin"])
+        marks = [self._stream_watermark(stream) for stream in instrument_streams(
+            coin, instrument_market(coin), acting=False)]
+        marks = [mark for mark in marks if mark is not None]
+        return min(through, *marks) if marks else through
 
     def _open_named_trade(self, frozen: dict, ts_ns: int, mid: str) -> None:
         """Open a frozen named trade at a venue mid of its own coin: ``t_open`` is that
@@ -1542,7 +1547,7 @@ class FeedbackMixin:
         funding rates otherwise.
         """
         due, res = frozen.get("due_ns"), frozen.get("res")
-        through = self._facts_through()
+        through = self._facts_through(frozen)
         lapsed = through > self._frozen_lapse_ns(frozen)
         if res is None or due is None:
             return ("none" if lapsed else "open"), None
@@ -1790,7 +1795,7 @@ class FeedbackMixin:
             # Priced from the very mid it opens at (the coin's own venue mark), never a
             # cached copy from another record of the world (Codex on #152).
             mids = tuple((c, str(mark[1]) if c == coin else m) for c, m in mids)
-        interval = (None if "/" in coin else
+        interval = (None if instrument_market(coin) != "perp" else
                     getattr(self.exchange, "funding_interval_ns", None)
                     or self.m.timing.world_repricing_ns)
         latest = self.funding_prints.get(coin)
@@ -1978,7 +1983,7 @@ class FeedbackMixin:
         # past that opening (Codex on #152). One a return that acted left unread lapses
         # on the same clock.
         for handle in [h for h, frozen in self.reference_mids.items()
-                       if self._facts_through() > self._frozen_lapse_ns(frozen)]:
+                       if self._facts_through(frozen) > self._frozen_lapse_ns(frozen)]:
             del self.reference_mids[handle]
 
     def _kept_ns(self, value: Any) -> int:

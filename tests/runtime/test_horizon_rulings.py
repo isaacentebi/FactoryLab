@@ -396,6 +396,51 @@ def test_a_mark_the_final_tape_advance_delivers_is_graded_before_terminated():
     assert priced["seq"] < killed and graded["seq"] < killed
 
 
+def test_a_failing_funding_read_holds_a_named_perp_trade_never_a_spot_one():
+    """Codex on #152 (e7702fc): a named trade waits on the streams its instrument is
+    priced from, chosen by the acting road's own selector. The venue answers every mids
+    read and no funding read: the declined spot trade resolves at its horizon mid; the
+    declined perp trade, priced with funding-rate prints, waits for them."""
+    from decimal import Decimal
+
+    from factorylab.runtime.live import LiveVenue
+
+    class MidsOnly:
+        name = "mids-only"
+
+        def mids(self):
+            return {"BTC": Decimal("100"), "PURR/USDC": Decimal("0.2")}
+
+        def funding(self):
+            raise RuntimeError("funding is unavailable")
+
+        def funding_payments(self, _since):
+            return []
+
+    rt = _world(10)
+    start = 4 * NS_PER_HOUR
+    rt.clock.now_ns = start
+    rt.venue = LiveVenue(MidsOnly(), last_fill_ns=start, last_funding_ns=start)
+
+    def tick(now):
+        rt.clock.now_ns = now
+        rt.tick_through_ns = now
+        rt._settle_exchange_effects(rt.venue.on_tick(now, include_fills=False),
+                                    observe_positions=False)
+
+    tick(start)
+    mids = tuple((coin, mark[1]) for coin, mark in rt.venue_marks.items())
+    for handle, coin in (("n-spot", "PURR/USDC"), ("n-perp", "BTC")):
+        named = {"coin": coin, "side": "buy"}
+        rt._freeze_named(handle, named, mids, declined=named, attempted=None)
+    for step in range(1, rt._horizon_ns() // (10 * S) + 3):
+        tick(start + step * 10 * S)
+    spot, perp = rt.reference_mids["n-spot"], rt.reference_mids["n-perp"]
+    assert spot["funding"] is None and perp["funding"] is not None
+    assert rt._reference_outcome(spot) == ("measured", [])
+    assert rt._reference_outcome(perp) == ("open", None)  # no rate print read through H
+
+
 def test_a_tick_at_h_before_the_mid_at_h_marks_at_the_mid_at_h():
     """D2: the mark is the first venue mid timestamped at or after the horizon. The
     batch's Tick at H comes first, with an earlier instant's mid cached: nothing is

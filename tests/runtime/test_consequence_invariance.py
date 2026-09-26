@@ -61,6 +61,14 @@ class _Named(FeedbackMixin, VenueMixin):
         self.exchange = SimpleNamespace(funding_interval_ns=3600 * S)
         self.m = SimpleNamespace(timing=SimpleNamespace(world_repricing_ns=270 * S))
         self.ticks_consumed = 0
+        # The funding-rate stream's delivered-through instant: its latest successful
+        # read (a failed read reads nothing).
+        self.rates_ns: int | None = None
+
+    def _stream_watermark(self, stream: str):
+        if stream == "hl:rates":
+            return float("-inf") if self.rates_ns is None else self.rates_ns - 1
+        return super()._stream_watermark(stream)
 
     def _horizon_ns(self) -> int:
         return H
@@ -130,8 +138,13 @@ def _facts() -> list[tuple]:
     """One fixed sequence of world facts and decisions, in fact-time order."""
     facts: list[tuple] = []
     for coin, rate in (("BTC", "0.00045"), ("ETH", "0.0004"), ("SOL", "0.0005"),
-                       ("DOGE", "0.0005")):
+                       ("DOGE", "0.0005"), ("PURR/USDC", "0.0007")):
         facts.append((_t(0), "fee", coin, rate))
+    # The funding-rate reads fail from 200 s on, for good: a perp trade priced with them
+    # whose horizon falls after would wait forever; the spot trades, which pay no
+    # funding, never wait on them (N-PURR2's horizon is 240 s).
+    for step in range(0, 28):
+        facts.append((_t(10 * step), "rateread", step < 20))
     facts.append((_t(50), "fee", "BTC", "0.00035"))  # BTC's rate falls before H
     for coin in ("BTC", "SOL"):
         facts.append((_t(-10), "rate", coin, "0.0001"))
@@ -144,6 +157,7 @@ def _facts() -> list[tuple]:
             facts.append((at, "mid", "ETH", str(2000 + step)))  # ETH stops publishing
         if step >= 2:
             facts.append((at, "mid", "SOL", str(20 + step * 0.1)))  # SOL starts at 20 s
+        facts.append((at, "mid", "PURR/USDC", str(0.2 + step * 0.002)))
         if step >= 15:
             # DOGE's first quote at 150 s, just after its decision's lapse (13 + 130 s).
             facts.append((at, "mid", "DOGE", str(0.1 + step * 0.001)))
@@ -153,6 +167,8 @@ def _facts() -> list[tuple]:
     facts.append((_t(12), "decide", "N-BTC", "BTC", "buy"))
     facts.append((_t(13), "decide", "N-DOGE", "DOGE", "sell"))
     facts.append((_t(14), "decide", "N-SOL", "SOL", "buy"))
+    facts.append((_t(16), "decide", "N-PURR", "PURR/USDC", "sell"))
+    facts.append((_t(152), "decide", "N-PURR2", "PURR/USDC", "buy"))
     # Acting returns.
     facts.append((_t(12.5), "open", "A1", "o-A1", "filled"))
     facts.append((_t(12.5), "fill", "o-A1", "BTC", True, "0.001", "100.0"))
@@ -315,6 +331,9 @@ def _run(rng: random.Random) -> dict:
                 named.fee_schedule["rates"][fact[2]] = fact[3]
             elif kind == "rate":
                 named._observe_funding(fact[2], at, fact[3])
+            elif kind == "rateread":
+                if fact[2]:  # a failed read reads nothing
+                    named.rates_ns = at
             elif kind == "mid":
                 named._observe_mid(fact[2], at, fact[3])
                 book.observe("MarketMid", {"coin": fact[2], "mid": fact[3], "ts_ns": at},
@@ -408,7 +427,11 @@ def test_every_batching_of_the_same_world_facts_gives_the_same_outcomes():
     outcome = json.loads(reference)
     named = outcome["named"]
     assert named["N-DOGE"] == ["none"]  # its first quote came after its lapse
-    assert named["N-BTC"][0] == named["N-SOL"][0] == "measured"
+    assert named["N-BTC"][0] == named["N-SOL"][0] == named["N-PURR"][0] == "measured"
+    assert named["N-PURR"][2]["funding_payments"] == 0  # a spot pair pays no funding
+    # Its horizon (240 s) is after the funding-rate reads failed for good: a spot trade
+    # still resolves, since it never waits on them.
+    assert named["N-PURR2"][0] == "measured"
     btc = named["N-BTC"][2]
     assert (btc["entry_fee_bps"], btc["exit_fee_bps"]) == ("4.5", "3.5")
     assert btc["funding_payments"] == 1  # the hour boundary at 60 s, inside its window
