@@ -168,8 +168,9 @@ the skeleton):
 - **REVERTED.** A commit the provenance pass flagged (and only such a finding) that was a
   behaviour mix, and whose change has been undone: the commit stays in the range, but
   every seat-visible line it added (whitespace-normalised; a line with no letter or
-  digit carries no text) is absent from its file at the release commit, or the file is
-  gone. The gate recomputes this from the repository and never trusts the triage row.
+  digit carries no text) is absent, as a whole line, from every seat-visible file at the
+  release commit (the corpus's own scope, not only the file it was added to: moving the
+  text is not reverting it). The gate recomputes this from the repository and never trusts the triage row.
   REJECT stays for a flagged commit that is not a behaviour mix, with its reason.
 
 ## The release gate

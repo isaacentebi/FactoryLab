@@ -1415,6 +1415,23 @@ def test_a_flagged_commit_whose_text_is_still_present_fails_reverted(tmp_path):
         text, [finding], allowlist={"allow": []}, rejected=[], repo=repo, release=still))
 
 
+def test_a_flagged_line_moved_to_another_seat_visible_module_fails_reverted(tmp_path):
+    """Moving the flagged text is not reverting it: each added line is looked for in
+    every seat-visible file at the release (the corpus's scope), not only its own."""
+    repo, flagged, _still, reverted = _flagged_repo(tmp_path)
+    moved = _commit(repo, "worlds/advice.toml",
+                    "  ADVICE   =  'you should hold when unsure'\n", "Move the advice")
+    problems = tool.reverted_problems(repo, flagged, moved)
+    assert problems and "worlds/advice.toml" in problems[0]
+    assert tool.reverted_problems(repo, flagged, reverted) == []
+    # Outside the seat-visible scope the line is no seat's text.
+    _git(repo, "rm", "-q", "worlds/advice.toml")
+    _git(repo, "commit", "-q", "-m", "Drop the moved advice")
+    elsewhere = _commit(repo, "docs/advice.md", "ADVICE = 'you should hold when unsure'\n",
+                        "Keep the advice in the docs")
+    assert tool.reverted_problems(repo, flagged, elsewhere) == []
+
+
 def test_reverted_on_a_corpus_finding_is_refused(tmp_path):
     finding = {"finding_id": "f1", "path": "scripted/tools/a", "question": "Q4",
                "class": "C1", "severity": "HIGH"}

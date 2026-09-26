@@ -1619,22 +1619,37 @@ def _added_lines(repo: Path, commit: str) -> dict[str, list[str]]:
     return added
 
 
+def _seat_visible_lines(repo: Path, release: str) -> dict[str, str]:
+    """Every whitespace-normalised line of every seat-visible file at ``release`` (the
+    corpus's own scope, ``SURFACE_PATHS`` = ``corpus_sources()``), each with the first
+    file it stands in. One ``git grep`` over the tree, text files only."""
+    run = subprocess.run(["git", "-C", str(repo), "grep", "-I", "--no-color", "-e", "",
+                          release, "--", *SURFACE_PATHS], capture_output=True, text=True)
+    if run.returncode not in (0, 1):  # 1: no text file at all
+        raise AuditInputInvalid(f"cannot read the release's seat-visible files: "
+                                f"{run.stderr.strip()[:200]}")
+    lines: dict[str, str] = {}
+    prefix = f"{release}:"
+    for raw in run.stdout.splitlines():
+        path, _, text = raw.removeprefix(prefix).partition(":")
+        lines.setdefault(" ".join(text.split()), path)
+    return lines
+
+
 def reverted_problems(repo: Path, commit: str, release: str) -> list[str]:
     """Why ``commit``'s seat-visible text is not reverted at ``release`` (none when it
     is): every line it added to a seat-visible path (``_added_lines``) must be absent,
-    whitespace-normalised, from that file at ``release``, or the file gone. Recomputed
-    from the repository, never read from a triage row."""
+    as a whole whitespace-normalised line, from EVERY seat-visible file at ``release``
+    (``_seat_visible_lines``), not only the one it was added to: moving the text to
+    another module is not reverting it. Recomputed from the repository, never read
+    from a triage row."""
+    present = _seat_visible_lines(repo, release)
     problems = []
     for path, lines in _added_lines(repo, commit).items():
-        try:
-            now = _git(repo, "show", f"{release}:{path}")
-        except subprocess.CalledProcessError:
-            continue  # the file is gone at the release
-        present = {" ".join(line.split()) for line in now.splitlines()}
         kept = [line for line in lines if line in present]
         if kept:
-            problems.append(f"{commit[:12]}'s text is still in {path} at the release: "
-                            f"{kept[0][:80]!r}")
+            problems.append(f"{commit[:12]}'s text from {path} is still in "
+                            f"{present[kept[0]]} at the release: {kept[0][:80]!r}")
     return problems
 
 
