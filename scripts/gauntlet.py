@@ -450,23 +450,34 @@ def card_violations(events: Iterable[Mapping], card: str) -> dict[int, float]:
 # --- stable failure (§3.1) ----------------------------------------------------------------
 
 
-def violation_episodes(violated: Mapping[int, float]) -> list[tuple[int, int]]:
-    """The card's violation episodes as the kernel reads persistence
-    (``live.persistent_violations``): a run of measured violating windows, ended only by a
-    measured compliant window. A window that did not measure the card is missing
-    evidence, not compliance, so it neither ends an episode nor extends it. Each episode
-    is (first, last) measured violating window."""
-    episodes: list[tuple[int, int]] = []
-    start = end = None
+def violation_episodes(violated: Mapping[int, float], k: int) -> list[tuple[list[int], int]]:
+    """The card's violation episodes as the kernel reads persistence: each episode's
+    measured violating windows, and the last window its evidence can still be read.
+
+    ``versions.diagnose`` reads ``live.persistent_violations`` over the tail of the last
+    ``k`` closed windows: a card fails while every window of the tail that measured it
+    violated, and one did. So an episode is a run of measured violations with no measured
+    compliance between them; a window that did not measure the card neither ends nor
+    extends it; and it expires when its evidence leaves the tail, when ``k`` windows pass
+    with no measurement (consecutive measured violations more than ``k`` windows apart
+    are two episodes). Its end is the window before a measured compliance, or the last
+    window whose tail still holds its last measurement.
+    """
+    episodes: list[tuple[list[int], int]] = []
+    current: list[int] | None = None
     for window, value in sorted(violated.items()):
         if value > 0:
-            start = window if start is None else start
-            end = window
-        elif start is not None:
-            episodes.append((start, end))
-            start = None
-    if start is not None:
-        episodes.append((start, end))
+            if current is not None and window - current[-1] <= k:
+                current.append(window)
+                continue
+            if current is not None:
+                episodes.append((current, current[-1] + k - 1))
+            current = [window]
+        elif current is not None:
+            episodes.append((current, min(window - 1, current[-1] + k - 1)))
+            current = None
+    if current is not None:
+        episodes.append((current, current[-1] + k - 1))
     return episodes
 
 
@@ -480,32 +491,39 @@ def card_flagged(events: Iterable[Mapping], card: str) -> list[int]:
 
 
 def sf1a_detection(events: list[Mapping], manifest: Mapping, *, card: str) -> Result:
-    """SF-1a: in every violation episode of the card, stable failure is first flagged on
-    it at most ``H`` windows after the episode's onset.
+    """SF-1a: in every violation episode of the card, stable failure is flagged on it by
+    the time ``H`` measured violations past the episode's onset have been observed.
 
-    Episodes are the kernel's (``violation_episodes``): consecutive measured violations,
-    reset by measured compliance, never summed across episodes. Only a flag on this card
-    inside the episode counts. Per episode: a flag within ``H`` detects it; no flag, or a
-    late one, fails once the episode lasted more than ``H`` windows; a shorter unflagged
-    episode is no evidence. ``pass`` needs one detected episode and no failed one.
+    Episodes are the kernel's (``violation_episodes``, K-SF: ``live.py:334`` read by
+    ``versions.py:86``): measured violations, reset by measured compliance, expired when
+    their evidence leaves the ``k``-window tail, never summed across episodes. Duration
+    counts measured violating observations, never unmeasured gap windows: the deadline is
+    the window of the episode's ``H + 1``-th measured violation (with a measurement every
+    window, ``onset + H``). Only a flag naming this card, inside the episode, counts. Per
+    episode: a flag by the deadline detects it; a later flag, or none once the episode
+    holds more than ``H`` observations, fails it; a shorter unflagged episode is no
+    evidence. ``pass`` needs one detected episode and no failed one.
     """
     ph = physics(manifest)
-    episodes = violation_episodes(card_violations(events, card))
+    episodes = violation_episodes(card_violations(events, card), ph.k)
     if not episodes:
         return _unsupported("SF-1a", "the card was never violated", card=card)
     flags = card_flagged(events, card)
     detected, failed, short = [], [], []
-    for start, end in episodes:
-        first = min((w for w in flags if start <= w <= end), default=None)
-        entry = {"onset": start, "last": end, "first_flag": first, "H": ph.H}
-        if first is not None and first <= start + ph.H:
+    for observed, end in episodes:
+        onset = observed[0]
+        first = min((w for w in flags if onset <= w <= end), default=None)
+        deadline = observed[ph.H] if len(observed) > ph.H else None
+        entry = {"onset": onset, "observations": len(observed), "end": end,
+                 "first_flag": first, "deadline": deadline, "H": ph.H}
+        if first is not None and (deadline is None or first <= deadline):
             detected.append(entry)
-        elif first is not None or end - start + 1 > ph.H:
+        elif first is not None or deadline is not None:
             failed.append(entry)
         else:
             short.append(entry)
     if not detected and not failed:
-        return _unsupported("SF-1a", "no episode was violated for more than H windows",
+        return _unsupported("SF-1a", "no episode held more than H measured violations",
                             card=card, episodes=short[:5])
     return _result("SF-1a", not failed, card=card, detected=detected[:5], failed=failed[:5],
                    short=len(short))

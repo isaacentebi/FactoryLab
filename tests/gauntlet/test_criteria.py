@@ -135,6 +135,31 @@ def test_sf1a_episodes_reset_on_compliance_and_are_never_summed():
     assert result.ok and result.evidence["detected"][0]["onset"] == 8
 
 
+def test_sf1a_counts_measured_observations_and_expires_with_the_tail():
+    """Codex P2: unmeasured gap windows never count toward H. Violations measured every
+    other window (k = 3) are one episode, but six observations over eleven windows are
+    not H = 9 of them; an episode whose measurements fall more than k windows apart has
+    left the kernel's tail and is several."""
+    sparse = [_price_window(w, 0.0) for w in range(1, 12, 2)]
+    closes = [_w(i) for i in range(1, 25)]
+    result = g.sf1a_detection(sparse + closes, M, card="c")
+    assert result.status == g.UNSUPPORTED
+    assert result.evidence["episodes"][0]["observations"] == 6
+    # Measured every other window long enough: the deadline is the tenth observation's
+    # window (19), not onset + 9 windows (10).
+    long = [_price_window(w, 0.0) for w in range(1, 41, 2)]
+    closes = [_w(i, sf=i >= 15) for i in range(1, 45)]
+    result = g.sf1a_detection(long + closes, M, card="c")
+    assert result.ok and result.evidence["detected"][0]["deadline"] == 19
+    late = [_w(i, sf=i >= 25) for i in range(1, 45)]
+    assert g.sf1a_detection(long + late, M, card="c").status == g.FAIL
+    # Measurements four windows apart: the tail (k = 3) loses each before the next.
+    apart = [_price_window(w, 0.0) for w in range(1, 60, 4)]
+    result = g.sf1a_detection(apart + [_w(i) for i in range(1, 62)], M, card="c")
+    assert result.status == g.UNSUPPORTED
+    assert {e["observations"] for e in result.evidence["episodes"]} == {1}
+
+
 def _ratchets(*pairs):
     return [{"kind": "immune.price_ratchet", "card_id": "c", "window": w, "duration": d,
              "lambda_after": 1.0} for w, d in pairs]
