@@ -19,6 +19,7 @@ from factorylab.runtime.worlds import load_manifest
 from factorylab.world.exchange import FakeExchange
 from factorylab.world.models import ModelResponse
 from factorylab.world.scripted import ScriptedProvider
+from tests.runtime.test_loop import lists_nothing
 
 SEAT = "seed-decider"
 
@@ -123,7 +124,7 @@ def test_a_model_request_refused_over_its_ceiling_is_read_by_nobody(monkeypatch)
 
 
 def test_a_delivered_request_is_a_downstream_reading(monkeypatch):
-    rt = runtime()
+    rt = lists_nothing(runtime())
     req = _reader(rt, 2_000_000)
     drive(rt, monkeypatch, [{"action": "hold", "rationale": "done"}])
     ret = rt._invoke(SEAT, req, "evaluator")

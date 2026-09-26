@@ -680,6 +680,9 @@ _RUNTIME_FIELDS = (
     # the cursor of the venue's vault ledger rows already read.
     "vault_intents", "vault_book", "vault_ledger_cursor_ns", "vault_ledger_seen",
     "consequence_mix", "sampling_history",
+    # Wave 16 (R-B): the last closed window's consequence count and the actuator's
+    # blindness. An older checkpoint has neither: no reading, not blind yet.
+    "last_window_consequences", "sampling_blind",
     # Time audit T14: each loop's last configuration change and the lifespans not yet
     # read by the immune organ. An older checkpoint has neither: no lifespan yet.
     "config_ticks", "lifespan_log",
@@ -697,7 +700,19 @@ _RUNTIME_FIELDS = (
     # outcomes and the mids declined trades are priced from. Each defaults empty
     # when an older checkpoint lacks it.
     "exposure_scores", "arrived_verdicts", "consequence_scores", "world_outcomes",
-    "reference_mids", "marked_outcomes", "late_verdicts",
+    "reference_mids",
+    # Wave 16 (D1, D2): the venue's taker rates as last read, and the venue's clock:
+    # each coin's latest mid and funding-rate print. Absent from an older checkpoint:
+    # the next broadcast reads them.
+    "fee_schedule", "venue_marks", "funding_prints",
+    # Codex on #152: the venue time facts were delivered through, and the last tick.
+    "facts_seen_ns", "tick_through_ns", "last_tick_ns", "advance_through_ns",
+    # Wave 16 (D4): settled raw scores awaiting their router. An older checkpoint has
+    # none: its routers learn effective scores until the next settlement.
+    "raw_scores", "round_penalties",
+    # Wave 16 (D5): settlements waiting for their origin window's close. An older
+    # checkpoint has none: nothing waits.
+    "deferred_settlements",
     # Wave 5a (evaluations M1, P5): each judge's ordinary consequence tally, the
     # adversarial judges' open counter-verdicts, and the chaos faults of the tick in
     # progress. Each defaults empty when an older checkpoint lacks it.
@@ -785,6 +800,12 @@ _RUNTIME_FIELDS = (
     # tier is taken as viable until measured, no epoch waits, and the anchor is
     # rebuilt from the treasury's own window.
     "card_clock", "governance_viable", "pending_epochs", "cap_anchor_ns",
+    # Each card's consecutive unmeasured windows (wave 16, R10-f). An older checkpoint
+    # has none: the run counts from the next close.
+    "card_unmeasured",
+    # Codex on #152: each card's observation as last derived, so a redefinition under
+    # the same id is recognised across a resume.
+    "card_meanings",
     # Wave 17b: each seat's ballot cursor over its own deliveries, the committee
     # eligibility tally and the evidence it counted, and released decisions' order
     # intents as counts. An older checkpoint has none: its seats have read nothing, its
@@ -885,7 +906,7 @@ _COMPONENT_FIELDS = (
                        # censored one and the capital loop. An older checkpoint has none.
                        "settling", "unsettled", "censored", "capital")),
     ("standing", "_ConsequenceStanding__", ("min_coverage", "evaluators")),
-    ("settler", "_Settler__", ("snapshots", "recorded")),
+    ("settler", "_Settler__", ("snapshots", "recorded", "retired")),
     ("charter_book", "_CharterBook__", (
         "editions", "proposals", "committees", "ballots", "activated", "activations",
         "bindings",
@@ -894,17 +915,23 @@ _COMPONENT_FIELDS = (
         "sittings", "deferrals", "voters", "norm_editions",
     )),
     ("controller", "_PriceController__", (
-        "eta", "decay", "lambda_max", "min_window_events", "cards", "kp", "kd",
+        "eta", "decay", "cap", "min_window_events", "cards", "kp", "kd",
     )),
     # The thrash price (versioning C2). An older checkpoint has none: it starts at zero.
     ("thrash_controller", "_PriceController__", (
-        "eta", "decay", "lambda_max", "min_window_events", "cards", "kp", "kd",
+        "eta", "decay", "cap", "min_window_events", "cards", "kp", "kd",
     )),
     ("consequences", "", ("backstop", "table", "mids", "pending_orders", "deferred_events",
                           # R4-C: a released hold's exposure, and the censored
                           # outcomes not yet handed to the runtime.
-                          "unresolved_orders", "censored_payoffs")),
-    ("consequence_fills", "", ("since_ns", "seen")),
+                          "unresolved_orders", "censored_payoffs",
+                          # Wave 16, D2: open returns' horizon marks; R10-m: the
+                          # funding after their horizons, set aside.
+                          "horizon_marks", "horizon_mark_ns",
+                          # Codex on #152: the facts seen through, and returns' economics
+                          # frozen at their horizon.
+                          "facts_ns", "tick_through_ns", "history")),
+    ("consequence_fills", "", ("since_ns", "seen", "through_ns")),
     ("reconciler", "", ("every", "_ticks")),
     # The artifact archive's index (C9): hash -> owner, kind, size, time, published.
     # The bytes stay beside the ledger and are found again by hash.
@@ -1006,7 +1033,8 @@ def runtime_state(rt) -> Checkpoint:
         "venue": encode({"last_fill_ns": rt.venue.last_fill_ns,
                          "seen_fills": rt.venue.seen_fills,
                          "last_funding_ns": rt.venue.last_funding_ns,
-                         "seen_funding": rt.venue.seen_funding}) if rt.venue else None,
+                         "seen_funding": rt.venue.seen_funding,
+                         "through": rt.venue.through}) if rt.venue else None,
         "venue_tool_log": encode(rt.venue_tools.log) if rt.venue_tools else None,
         "fake_exchange": encode(vars(rt.exchange.target)) if rt.exchange.deterministic else None,
         "fake_provider": encode(vars(rt.provider.target)) if rt.provider.deterministic else None,
@@ -1218,6 +1246,10 @@ def restore_runtime(rt, state: dict) -> None:
                     and field not in components[name]):
                 # Older checkpoints predate the standing committee and the norm
                 # edition: none was seated, deferred or applied.
+                continue
+            if name == "settler" and field == "retired" and field not in components[name]:
+                # Older checkpoints predate the easy-question rule on verdicts (wave 16,
+                # D3): no question was answered by its base rate.
                 continue
             if name == "artifacts" and name not in components:
                 # Older checkpoints predate the artifact archive; it starts empty.

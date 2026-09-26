@@ -34,13 +34,11 @@ class BanditFeedback:
 type Feedback = FullInfoFeedback | BanditFeedback
 
 
-#: The reward of zero consequence on the midpoint scales: what a round that changed
-#: nothing is worth where 0.5 is the score of no consequence (opportunity-cost-v2
-#: scores a declined trade that did not move at 0.5), so a seat earns waking
-#: only by beating it on average. It is the fallback, not the rule: a score whose
-#: scale puts "nothing delivered" elsewhere (a coin-flip forecast earns 0.75 under
-#: Brier) is given its own value by the runtime's per-definition table
-#: (``factorylab.runtime.routing.ZERO_CONSEQUENCE``).
+#: The published prior for what a round that delivered nothing is worth, before a
+#: router has observed any settled round: 0.5, the score of no consequence on the
+#: midpoint scales. From the first settled round on, nothing delivered is credited the
+#: router's observed mean raw score instead (``RouterState.neutral``; wave 16, D4,
+#: ruling R-F; published in ``world.scoring.abstention``).
 NEUTRAL_REWARD = 0.5
 
 

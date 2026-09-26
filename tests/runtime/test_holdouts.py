@@ -131,13 +131,13 @@ def test_each_failed_holdout_adds_one_bounded_step_and_passing_ones_dilute_nothi
     assert holdout_violation([False, False, None], step) == pytest.approx(0.10)
     assert holdout_violation([None, None], step) == 0.0  # absent evidence is never a failure
     ledger = Ledger(None)
-    controller = PriceController(ledger, eta=0.5, decay=0.1, lambda_max=1.0,
+    controller = PriceController(ledger, eta=0.5, decay=0.1, penalty_cap=0.9,
                                  min_window_events=1, kp=0.5)
     controller.register(CardRegion("c", "min", 0.9, None, 1.0))
     controller.observe("c", 0.95, 1)
     assert controller.price("c") == 0.0
     controller.observe("c", 0.95, 2, holdout=step)
-    # One failing holdout inside the region: priced, and nowhere near lambda_max.
+    # One failing holdout inside the region: priced, and nowhere near its bound.
     assert controller.price("c") == pytest.approx(0.5 * step + 0.5 * step)
     update = [i for i in ledger._recovery_items() if i["kind"] == "price.update"][-1]
     assert update["holdout"] == step and update["violation"] == step
@@ -176,7 +176,7 @@ def test_a_live_card_with_a_failing_holdout_is_priced_one_step_at_the_close(monk
     assert window["holdouts"][card.id]["violation"] == pytest.approx(step)
     update = [i for i in _items(rt, "price.update") if i["card_id"] == card.id][-1]
     assert update["violation"] == pytest.approx(step)
-    assert 0.4 < update["lambda_after"] < rt.m.prices.lambda_max
+    assert 0.4 < update["lambda_after"] < update["bound"]
     term, = rt._penalty_terms("all", handle)
     assert term["violation"] == pytest.approx(step)
 

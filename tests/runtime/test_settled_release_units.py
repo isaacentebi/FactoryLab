@@ -17,6 +17,8 @@ world-level proofs are in ``test_settled_release.py``):
 
 from fractions import Fraction
 
+import pytest
+
 from factorylab.kernel.queue import SettleStatus
 from factorylab.runtime import settled
 
@@ -80,6 +82,14 @@ def test_terminal_venue_writes_pin_nothing_and_leave_with_their_decision():
     assert "h5" not in rt.polymarket.realized and "h5" not in rt.polymarket.claimed
 
 
+def _close_the_window(rt):
+    from factorylab.runtime.pricing import MeasureWindow
+
+    rt._close_price_window()
+    rt.window = MeasureWindow(rt.window.index + 1, rt.wallet.balance)
+    rt._prune_price_evidence()
+
+
 def test_a_polymarket_decision_is_released_once_resolved_confirmed_and_claimed():
     from tests.helpers import collateral_decision
     from tests.runtime.test_polymarket_surface import advance, buy, still_fake, world
@@ -89,9 +99,12 @@ def test_a_polymarket_decision_is_released_once_resolved_confirmed_and_claimed()
     assert buy(rt, handle)["status"] == "filled"
     rt.consequences.finish(handle, 0)
     rt.clock.now_ns = 10**12
-    advance(rt, rt.ev.consequence_horizon_ticks + 1)
+    advance(rt, rt._horizon_ns() // 10**9 + 1)  # the horizon on the venue clock (D2)
     rt.queue.settle(handle, channel="verdict", score=0.5, status=SettleStatus.SETTLED,
                     definition_version="probe", sampling_ref=None)
+    # Its payoff moved the paid-off rate in the open price window, which attributes
+    # relief by decision at its close (wave 16, D5): the window pins it until then.
+    _close_the_window(rt)
     rt._release_read_deliveries()
     assert any(i["kind"] == "consequence.terminal" for i in rt.ledger._recovery_items())
     assert rt.polymarket.realized[handle] and rt._live_venue_books()[-1] == []
@@ -263,9 +276,12 @@ def test_a_released_polymarket_order_s_late_proceeds_are_claimed_on_the_pot():
     rt._run_tool("seed-decider", handle, {"tool": "polymarket.cancel",
                                           "args": {"order_id": oid}}, slot="tool:1")
     rt.consequences.finish(handle, 0)
-    advance(rt, rt.ev.consequence_horizon_ticks + 1)
+    advance(rt, rt._horizon_ns() // 10**9 + 1)  # the horizon on the venue clock (D2)
     rt.queue.settle(handle, channel="verdict", score=0.5, status=SettleStatus.SETTLED,
                     definition_version="probe", sampling_ref=None)
+    # Its payoff moved the paid-off rate in the open price window, which attributes
+    # relief by decision at its close (wave 16, D5): the window pins it until then.
+    _close_the_window(rt)
     rt._release_read_deliveries()
     assert handle in rt._release_settled()
     tok = token(rt)
@@ -329,3 +345,22 @@ def test_late_money_no_live_seat_can_take_is_ledgered_with_its_amount():
              if i["kind"] == "consequence.late_undeliverable"]
     assert (row["handle"], row["micro"]) == ("decision-9", 5_000_000)
     assert dict(rt.budget.venue_claims()) == claims
+
+
+@pytest.mark.parametrize("book", ["reference_mids", "deferred_settlements", "raw_scores"])
+def test_what_wave_16_still_owes_a_decision_pins_it(book):
+    """A named trade awaiting its horizon (D2, R10-j), a settlement awaiting its
+    window's close (D5) and a raw score awaiting its router (D4) are owed readings:
+    while a wave 16 book names a decision, release refuses it."""
+    from factorylab.kernel.queue import PropensityRecord
+    from tests.conftest import make_runtime
+
+    assert book in settled.LIVE_BOOKS
+    rt = make_runtime()
+    handle = rt.queue.open(
+        actor="test-router", event_id="probe", channel="verdict", deadline_ns=10**18,
+        parent_handle=None, cost_ceiling=0,
+        propensity=PropensityRecord(("seed-decider",), (1.0,), "seed-decider", 0,
+                                    "test-router", "state"))
+    getattr(rt, book)[handle] = {"held": True} if book != "raw_scores" else 0.4
+    assert handle in rt._live_references()["named"]

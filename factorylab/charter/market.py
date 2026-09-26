@@ -20,23 +20,24 @@ MOTION_FORECAST_DEFINITION = "motion-forecast-brier-v1"
 BRANCHES = ("enact", "reject")
 
 
-def post_score(posted: float, realized: float, lambda_max: float) -> float:
+def post_score(posted: float, realized: float, scale: float) -> float:
     """The quadratic score of a posted price against the realized one, in [0, 1].
 
-    ``1 - ((posted - realized) / lambda_max) ** 2``. For a realized price ``Y`` in
-    ``[0, lambda_max]`` the expected score ``1 - E[(p - Y)^2] / lambda_max^2`` is
-    ``1 - (Var Y + (p - E[Y])^2) / lambda_max^2``, which is maximized only at
-    ``p = E[Y]``: the rule is strictly proper for the mean, so a seat's best post
-    is its honest expectation of the price the law will realize.
+    ``1 - ((posted - realized) / scale) ** 2``, ``scale`` the posts' range, the price
+    at which a unit violation's penalty takes the whole ``penalty_cap`` (wave 16,
+    R-E). For a realized price ``Y`` in ``[0, scale]`` the expected score ``1 - E[(p -
+    Y)^2] / scale^2`` is ``1 - (Var Y + (p - E[Y])^2) / scale^2``, which is maximized
+    only at ``p = E[Y]``: the rule is strictly proper for the mean, so a seat's best
+    post is its honest expectation of the price the law will realize.
     """
-    for name, value in (("posted", posted), ("realized", realized), ("lambda_max", lambda_max)):
+    for name, value in (("posted", posted), ("realized", realized), ("scale", scale)):
         if type(value) not in (int, float) or not isfinite(value):
             raise ValueError(f"{name} must be a finite number")
-    if lambda_max <= 0:
-        raise ValueError("lambda_max must be positive")
-    if not (0 <= posted <= lambda_max and 0 <= realized <= lambda_max):
-        raise ValueError("posted and realized prices lie in [0, lambda_max]")
-    return 1.0 - ((posted - realized) / lambda_max) ** 2
+    if scale <= 0:
+        raise ValueError("scale must be positive")
+    if not (0 <= posted <= scale and 0 <= realized <= scale):
+        raise ValueError("posted and realized prices lie in [0, scale]")
+    return 1.0 - ((posted - realized) / scale) ** 2
 
 
 def brier(q: float, y: int | bool) -> float:
@@ -108,7 +109,9 @@ def branch_violation(violation: float, q: float, sign: int, step: float) -> floa
         raise ValueError("sign is +1 or -1")
     if type(q) not in (int, float) or not isfinite(q) or not 0 <= q <= 1:
         raise ValueError("q must be a probability")
-    return max(0.0, violation + sign * q * step)
+    from factorylab.charter.controller import held
+
+    return max(0.0, held(violation + sign * q * step))
 
 
 def enactment_rate(passed: int, failed: int) -> float:
@@ -148,24 +151,28 @@ def margin(points: list[dict]) -> dict:
     vs = [float(p["v"]) for p in rows]
     mean_v = sum(vs) / len(vs)
     var = sum((v - mean_v) ** 2 for v in vs)
-    if var <= 0:
+    # A spread of violations too wide for a float (Codex on #152: a subnormal scale
+    # makes a violation as large as a float allows) identifies no slope either.
+    if var <= 0 or not isfinite(var) or not isfinite(mean_v):
         return out
 
-    def slope(key: str) -> float:
+    def slope(key: str) -> float | None:
         ys = [float(p[key]) for p in rows]
         mean_y = sum(ys) / len(ys)
-        return sum((v - mean_v) * (y - mean_y) for v, y in zip(vs, ys, strict=True)) / var
+        value = sum((v - mean_v) * (y - mean_y) for v, y in zip(vs, ys, strict=True)) / var
+        return value if isfinite(value) else None
 
     out["slope"] = slope("consequence")
     out["micro_usd_per_violation"] = slope("micro_usd")
     return out
 
 
-def shadow_price(points: list[dict], lambda_max: float) -> float | None:
+def shadow_price(points: list[dict], scale: float) -> float | None:
     """The realized shadow price a λ post is scored against, or None when unidentified.
 
-    ``clip(margin(points).slope, 0, lambda_max)``: the reward one more unit of
-    violation bought in the world, which the committee's own λ does not enter.
+    ``clip(margin(points).slope, 0, scale)``: the reward one more unit of violation
+    bought in the world, which the committee's own λ does not enter, on the posts'
+    scale (``post_score``).
     """
     slope = margin(points)["slope"]
-    return None if slope is None else min(lambda_max, max(0.0, slope))
+    return None if slope is None else min(scale, max(0.0, slope))

@@ -217,6 +217,10 @@ class BootstrapMixin:
         self.ticks_consumed = 0
         # card id -> the tick its price last moved (time audit T2).
         self.card_clock: dict[str, int] = {}
+        # card id -> its consecutive closed windows with no reading (wave 16, R10-f):
+        # a dark card is published to governance, never coerced.
+        self.card_unmeasured: dict[str, int] = {}
+        self.card_meanings: dict[str, str] = {}
         # Whether a governance tier fits between the slowest loop and the world (T7).
         self.governance_viable = True
         # event kind -> the tick a grown menu started waiting for its epoch (T6).
@@ -561,6 +565,13 @@ class BootstrapMixin:
             self.budget.genesis([a.id for a in manifest.assemblies])
 
         # nervous system
+        # A seed exploration above the gain organ's own bound is invalid physics: no
+        # step could ever reach it, and the organ would clamp it on its first (Codex on
+        # #152, the R10-e sweep). Refused at load, as SF-0 is.
+        if (type(router_gamma) not in (int, float) or not 0 < router_gamma
+                or router_gamma > manifest.immune.gamma_max):
+            raise ValueError(f"router_gamma {router_gamma!r} must be in (0, immune.gamma_max "
+                             f"= {manifest.immune.gamma_max}]")
         self.router_gamma = router_gamma
         self.routers: dict[str, list[RouterState]] = {}
         self.retired_routers: dict[str, RouterState] = {}
@@ -598,10 +609,25 @@ class BootstrapMixin:
         self.world_outcomes: dict[str, dict[str, Any]] = {}
         # Anticipatory settlement: each judged return's mark once taken, and the judge
         # decisions rewarded on it whose final measurement is still owed to standing.
-        self.marked_outcomes: dict[str, dict[str, Any]] = {}
-        self.late_verdicts: dict[str, dict[str, Any]] = {}
+        # The venue's clock (wave 16, D2): the latest mid and funding-rate print of each
+        # coin, [ts_ns, value], that a named trade opens from and is measured by.
+        self.venue_marks: dict[str, list] = {}
+        self.funding_prints: dict[str, list] = {}
         self.reference_mids: dict[str, dict[str, Any]] = {}
+        # Codex on #152 (eaf23e0): the venue time through which every world fact a named
+        # trade reads has been delivered: the latest venue mid or funding print seen,
+        # or the previous tick (every fact through it was delivered before this tick's).
+        # A named trade's lapse and horizon pass on it, never on the processing clock.
+        self.facts_seen_ns: int | None = None
+        # Ruling R10-o: the time a fake or recorded venue was last advanced to.
+        self.advance_through_ns: int | None = None
+        self.tick_through_ns: int | None = None
+        self.last_tick_ns: int | None = None
         self.consequence_mix: float = self.ev.consequence_share  # live sampling actuator
+        # The consequence scores the last closed window issued, and whether the actuator
+        # is blind for want of them (wave 16, ruling R-B).
+        self.last_window_consequences: int = 0
+        self.sampling_blind: dict[str, int] | None = None
         self.sampling_history: list[dict[str, Any]] = []
         # The niche for unhistoried actions (ruling R5): per open invocation, the
         # unhistoried tool action whose result its next model round reads. Emptied
@@ -651,9 +677,21 @@ class BootstrapMixin:
         self.snapshot_keys: dict[str, str] = {}  # decision handle -> snapshot key
         # NOOP handle -> the abstention credit its router is owed, and when it is due.
         self.noop_credits: dict[str, dict] = {}
+        # Decision handle -> its settled score before the card penalty, until the router
+        # that drew it learns it (wave 16, D4: the router's observed mean raw score).
+        self.raw_scores: dict[str, float] = {}
+        # Decision handle -> the card penalty its priced settlement bore, read with its
+        # raw score by every learner (wave 16, R10-g).
+        self.round_penalties: dict[str, float] = {}
+        # Decision handle -> the settlement its penalty waits for its origin window's
+        # close to price (wave 16, D5; ruling R-I, Q9).
+        self.deferred_settlements: dict[str, dict] = {}
 
         # world memory (public facts) and assembly memory (private to each assembly)
         self.recent_mids: dict[str, deque[dict[str, Any]]] = {}
+        # The venue's taker rate per market and when it was read (wave 16, D1): what a
+        # named road not taken pays for its round trip. None until the first broadcast.
+        self.fee_schedule: dict[str, Any] | None = None
         self.realized_to_date = 0
         self.fees_to_date = 0
         self.funding_to_date = 0
@@ -721,9 +759,6 @@ class BootstrapMixin:
         # W4: registering decision -> {"until": tick, "tools": [...], "scores": [...]},
         # held for its tool-use window (``CompositionMixin._hold_for_tool_use``).
         self.tool_holds: dict[str, dict[str, Any]] = {}
-        # A priced settlement's raw score while the kernel settles it (never between
-        # events): what the settlement hook credits composition with.
-        self.raw_scores: dict[str, float] = {}
         # C10 routing evidence: each seat's last rendered ceiling and the world size then.
         self.seat_ceilings: dict[str, dict[str, int]] = {}
         self.entitlement_bridges: dict[str, int] = {}  # handle -> pool-backed cover, one call
@@ -966,7 +1001,7 @@ class BootstrapMixin:
             self.ledger,
             eta=pr.eta,
             decay=pr.decay,
-            lambda_max=pr.lambda_max,
+            penalty_cap=pr.penalty_cap,
             min_window_events=pr.min_window_events,
             kp=pr.kp,
             kd=pr.kd,

@@ -91,7 +91,7 @@ from factorylab.runtime.venue import VenueMixin
 from factorylab.runtime.worlds import WorldManifest
 from factorylab.settlement.vocabulary import commission_block
 from factorylab.world.clock import ClockSource, merge_sources
-from factorylab.world.events import WorldEvent, WorldEventKind
+from factorylab.world.events import WorldEvent, WorldEventKind, funding_instant
 from factorylab.world.market import X402Provider
 
 #: What a return carries that is not the work under judgement: its propensity, which
@@ -236,19 +236,20 @@ class Runtime(
         A decision that settles here carries its raw (pre-penalty) score to what it
         composed: the settlement hook every path shares (``ContractQueue.settle``,
         ``CompositionMixin._settled``) reads it from ``raw_scores``, so each decision
-        answers for its own cards and credit is never charged the requester's.
+        answers for its own cards and credit is never charged the requester's. The raw
+        score stays until the router and the seat's own learner have read it (wave 16,
+        D4 and R10-g; ``PricingMixin._prune_price_evidence``).
         """
         emitted = self.return_kinds.get(handle)
         if emitted and emitted not in BUILTIN_RETURNS:
             cards = measured_role(emitted)
         self.raw_scores[handle] = kwargs["score"]
-        try:
-            return super()._settle_priced(handle, cards=cards, **kwargs)
-        finally:
-            self.raw_scores.pop(handle, None)
+        return super()._settle_priced(handle, cards=cards, **kwargs)
 
-    def _settle_exchange_effects(self, events, *, observe_positions=True) -> None:
-        super()._settle_exchange_effects(events, observe_positions=observe_positions)
+    def _settle_exchange_effects(self, events, *, observe_positions=True,
+                                 broadcast_mids=True) -> None:
+        super()._settle_exchange_effects(events, observe_positions=observe_positions,
+                                         broadcast_mids=broadcast_mids)
         self._record_pricing_fills(events)
 
     def _universe_for(self, kind: str, ev: Event | None = None) -> list[str]:
@@ -382,6 +383,17 @@ class Runtime(
             coin = str(ev.payload.get("coin"))
             dq = self.recent_mids.setdefault(coin, deque(maxlen=20))
             dq.append({"t_s": ev.ts_ns // 1_000_000_000, "mid": str(ev.payload.get("mid"))})
+            if self._fee_schedule_due():
+                self._read_fee_schedule()
+            # The venue's clock: a named trade is measured at the first mid at or after
+            # its horizon (wave 16, D2).
+            self._observe_mid(coin, ev.ts_ns, str(ev.payload.get("mid")))
+        elif ev.kind is EventKind.FUNDING and ev.payload.get("rate") is not None:
+            # At the funding time the rate is for, never the instant the venue reported
+            # it (a tape reports a crossed boundary at its advance time).
+            self._observe_funding(str(ev.payload.get("coin")),
+                                  funding_instant(ev.payload, ev.ts_ns),
+                                  str(ev.payload.get("rate")), ev.payload.get("mark"))
 
         # Due tranches are mandatory even while dormant; each released tranche is then
         # classified (C10): base_share across live seats, the remainder unallocated.
@@ -400,6 +412,10 @@ class Runtime(
             self._sampling_actuator()
         self._observe_delivered_event(ev)
         if ev.kind is EventKind.TICK:
+            # Every world fact through the previous tick was delivered before this one
+            # (the internal queue drains first): the floor of what is known complete.
+            self.tick_through_ns, self.last_tick_ns = self.last_tick_ns, ev.ts_ns
+            self.consequences.tick_through_ns = self.tick_through_ns
             self._open_pending_epochs()
             self._assign_waiting_readers()
             self._prune_read_use()
@@ -423,7 +439,8 @@ class Runtime(
                     WorldEvent(
                         WorldEventKind.FILL, max(self.clock.now_ns, ts), self.exchange.name, payload
                     )
-                    for ts, payload in self.consequence_fills.poll(self.exchange)
+                    for ts, payload in self.consequence_fills.poll(
+                        self.exchange, now_ns=self.clock.now_ns)
                 )
                 self._settle_exchange_effects(observed)
                 if self.reconciler.due():
@@ -437,7 +454,7 @@ class Runtime(
                     self.stats.reconciliations += 1
                     self._emit(EventKind.RECONCILED, snap, source="kernel")
             else:
-                self._settle_exchange_effects(self.exchange.advance(self.clock.now_ns))
+                self._settle_exchange_effects(self._advance_venue(self.clock.now_ns))
             # C2: the kernel settles every registered watcher from world state, then
             # offers one coalesced update to the seats that asked
             # for one. Both are queued behind this tick's own routing.
@@ -566,14 +583,16 @@ class Runtime(
         self.clock.now_ns = max(self.clock.now_ns, now)
         if self.live:
             fills = [WorldEvent(WorldEventKind.FILL, max(now, ts), self.exchange.name, payload)
-                     for ts, payload in self.consequence_fills.poll(self.exchange)]
+                     for ts, payload in self.consequence_fills.poll(self.exchange,
+                                                                     now_ns=now)]
         else:
             # The recorded market moved while a model thought: whatever it filled,
-            # refused or charged by now settles here. Its mids are read afresh by the
-            # next read; as on the live path, the pass delivers no mid of its own.
-            fills = [we for we in self.exchange.advance(now)
-                     if we.kind is not WorldEventKind.MARKET_MID]
-        self._settle_exchange_effects(fills)
+            # refused or charged by now settles here, and its mids are accounted; the
+            # seats read mids afresh at the next tick, as on the live path.
+            fills = self._advance_venue(now)
+        # Every fact of the advance is accounted (the watermark covers it), and the
+        # pass broadcasts no mid of its own to the seats (Codex on #152).
+        self._settle_exchange_effects(fills, broadcast_mids=False)
         self._reconcile_orders()
         self._evaluate_watchers(sweep=f"safety-{now}")
         terminal = self.termination.check(self.wallet, self.clock.now_ns,
@@ -825,16 +844,15 @@ class Runtime(
           kind and published tier alone;
         * the hindsight refusal is permanent: for a judged tier, R's consequence
           score is in (``consequence_scores`` never forgets one); for a return,
-          its account is voided or its consequence horizon, counted in ticks from
-          the tick it opened, has passed (the horizon is the manifest's, fixed for
-          the world's life, and ticks only advance).
+          its account is voided or its consequence horizon, counted on the world's
+          clock from the nanosecond it opened, has passed (the horizon is the
+          manifest's, fixed for the world's life, and the clock only advances).
 
         The key itself stays: a judgement may still name R, and is refused as before.
         """
         from dataclasses import replace
 
         queued = {self._event_subject(ev) for ev in self.internal}
-        horizon = self.ev.consequence_horizon_ticks
         for about, event in self.return_events.items():
             key = {"Verdict": "evaluator_handle", "MetaVerdict": "by"}.get(
                 str(event.kind), "about_handle")
@@ -852,9 +870,7 @@ class Runtime(
                     account = self.consequences.table.account(about)
                 except KeyError:
                     continue
-                if not account.voided and (
-                        account.opened_at_tick is None
-                        or self.ticks_consumed < account.opened_at_tick + horizon):
+                if not account.voided and not self._past_horizon(account):
                     continue
             self.return_events[about] = replace(event, payload=slim)
 
@@ -896,7 +912,7 @@ class Runtime(
         if self.live:
             observed = [
                 WorldEvent(WorldEventKind.FILL, max(now_ns, ts), self.exchange.name, payload)
-                for ts, payload in self.consequence_fills.poll(self.exchange)
+                for ts, payload in self.consequence_fills.poll(self.exchange, now_ns=now_ns)
             ]
             observed.extend(self.venue.funding_payments(now_ns))
             self._settle_exchange_effects(observed)
@@ -1188,11 +1204,11 @@ class Runtime(
 
         A prediction precedes its outcome. The router's subject is not chosen, but a
         return that names an older target instead may not name one whose outcome the
-        world has already given: a consequence already fixed, or one past the horizon
-        at which its mark settles its judges (``consequence_horizon_ticks``). The
+        world has already given: a consequence already fixed, or one past the
+        consequence horizon on the venue's clock (``_horizon_ns``; wave 16, D2). The
         judgement's own deadline is not compared: it lives until its target's
-        backstop by construction, and a verdict is scored when the world answers,
-        not when its decision expires. A judgement of an evaluator decision predicts
+        consequence patience by construction, and a verdict is scored when the world
+        answers, not when its decision expires. A judgement of an evaluator decision predicts
         that decision's consequence score (ruling R1), so it may not name one whose
         score is already known; its economic account says nothing about it.
         """
@@ -1209,16 +1225,27 @@ class Runtime(
             return "judgement needs a chosen return a seat authored, not an abstention"
         # A return that acted is answered when its payoff is fixed; one that did not
         # has an account fixed at once that says nothing about it (its measurement, if
-        # any, is its declined trade's price), so only its mark or final price answers.
+        # any, is its declined trade's price), so only its price answers.
         if ((account.payoff is not None and self._acted(about))
-                or about in self.marked_outcomes or about in self.world_outcomes):
+                or about in self.world_outcomes):
             return "judgement needs a chosen return whose consequence is still open"
-        # The horizons count world ticks consumed since the return opened (defect 1).
-        opened = (account.opened_at_tick if account.opened_at_tick is not None
-                  else self.ticks_consumed)
-        if self.ticks_consumed >= opened + self.ev.consequence_horizon_ticks:
+        if self._past_horizon(account):
             return "judgement needs a chosen return before its consequence horizon"
         return None
+
+    def _past_horizon(self, account) -> bool:
+        """Whether a return's consequence horizon has passed on the world's clock.
+
+        Counted from the nanosecond the return opened (wave 16, D2); an account opened
+        without a clock reading is aged in ticks at the delivered interval.
+        """
+        from factorylab.runtime.clockwork import tick_ns
+
+        if account.opened_at_ns is not None:
+            return self.clock.now_ns >= account.opened_at_ns + self._horizon_ns()
+        opened = (account.opened_at_tick if account.opened_at_tick is not None
+                  else self.ticks_consumed)
+        return (self.ticks_consumed - opened) * tick_ns(self.tick_clock) >= self._horizon_ns()
 
     CHILD_SUBJECT_REFUSAL = ("a requested judgement may only address the requesting decision "
                              "or its ancestors; judging anyone else's return is the router's")
@@ -1675,7 +1702,8 @@ class Runtime(
             # same world the verdict was made in, never a later one.
             self.verdict_views[handle] = {
                 "world": {k: v for k, v in inputs["actor_context"].items() if k != "seats"},
-                "early_warning": inputs["early_warning"], "tick": self.ticks_consumed}
+                "early_warning": inputs["early_warning"], "tick": self.ticks_consumed,
+                "ns": self.clock.now_ns}
         self._emit(
             EventKind.VERDICT,
             {
@@ -1904,6 +1932,7 @@ class Runtime(
         self.pending_counters[handle] = {
             "about": about, "q": q, "judge_handle": payload.get("evaluator_handle"),
             "judge_q": judged, "evaluator_id": sample.chosen, "tick": self.ticks_consumed,
+            "ns": self.clock.now_ns,
         }
         self.ledger.append({"kind": "counter.opened", "handle": handle, "about_handle": about,
                             "judge_handle": payload.get("evaluator_handle"), "q": q,

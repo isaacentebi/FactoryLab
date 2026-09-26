@@ -827,7 +827,12 @@ class FakeExchange:
                     WorldEventKind.FUNDING,
                     self._now_ns,
                     self.name,
-                    {"coin": coin, "rate": str(self.funding_rate), "paid_usd": str(paid)},
+                    # The hour boundary this payment is for, which the advance that
+                    # applies it may have passed.
+                    {"coin": coin, "rate": str(self.funding_rate), "paid_usd": str(paid),
+                     "funding_ns": self._last_funding_ns,
+                     # The price the payment is on: size times this times the rate.
+                     "mark": str(self._mids[coin])},
                 )
             )
         return events
@@ -1117,6 +1122,11 @@ class HyperliquidExchange:
     than raising on venue-side rejection.
     """
 
+    #: The venue's funding times: Hyperliquid settles perp funding every hour, on the
+    #: hour. A fact about the venue, read by the price of a named road not taken
+    #: (wave 16, D1), never a setting.
+    funding_interval_ns = NS_PER_HOUR
+
     def __init__(
         self,
         *,
@@ -1197,6 +1207,16 @@ class HyperliquidExchange:
             except (KeyError, TypeError, ArithmeticError, ValueError):
                 rates[market] = {"fee_rates": "unavailable", "reason": reason}
         return rates
+
+    def refresh_fee_rates(self) -> None:
+        """Read this account's fee rates again, keeping a market's last stated rates when
+        the venue does not state them now (wave 16, D1: the schedule a named road not
+        taken is priced at is re-read once per world repricing). Nothing is written."""
+        fresh = self._read_fee_rates()
+        previous = getattr(self, "_fee_rates", None) or {}
+        self._fee_rates = {market: (row if "taker_fee_rate" in row
+                                    else previous.get(market, row))
+                           for market, row in fresh.items()}
 
     def _configure_spot(self, meta: dict) -> None:
         """Record the venue's whole spot universe, and the wire names of traded pairs."""

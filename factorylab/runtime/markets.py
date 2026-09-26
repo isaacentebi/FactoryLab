@@ -39,7 +39,7 @@ from factorylab.kernel.queue import PropensityRecord, SettleStatus
 MARKET_RETURN_FIELDS = {
     "shadow_prices": (
         "optional on any return: {card_id: lambda} for cards priced now (world.card_prices), "
-        "each a number in [0, lambda_max]; one post per seat, card and reserve window. Each "
+        "each a number in [0, penalty_cap]; one post per seat, card and reserve window. Each "
         "post opens its own policy decision; its score is in "
         "world.mechanics.committee.shadow_prices"
     ),
@@ -123,7 +123,7 @@ class MarketsMixin:
                 self._market_refused(handle, "lambda_post", f"card {card_id} is not priced now")
                 continue
             try:
-                price = proposed_price(value, self.m.prices.lambda_max)
+                price = proposed_price(value, self.m.prices.penalty_cap)
             except ValueError as exc:
                 self._market_refused(handle, "lambda_post", str(exc))
                 continue
@@ -243,12 +243,12 @@ class MarketsMixin:
     def _margin_horizon(self) -> int:
         """Closed windows until a window's decisions have their world-measured consequences.
 
-        A decision's consequence is fixed by its backstop plus the verdict window at
-        the latest (``evaluation.consequence_backstop_ticks + verdict_timeout_ticks``),
-        converted to closed windows at the price loop's current period in ticks, and
-        never sooner than ``timing.min_ratio`` windows.
+        A decision's consequence is fixed within its consequence patience at the
+        latest (``_patience_ticks``: the horizon plus the verdict window, counted once;
+        wave 16, D2 and ruling R10-k), converted to closed windows at the price loop's
+        current period in ticks, and never sooner than ``timing.min_ratio`` windows.
         """
-        ticks = self.ev.consequence_backstop_ticks + self.ev.verdict_timeout_ticks
+        ticks = self._patience_ticks()
         window = self.clockwork.period("price", default=self.m.timing.min_ratio)
         return max(int(self.m.timing.min_ratio), -(-ticks // window))
 
@@ -276,19 +276,17 @@ class MarketsMixin:
             "cards": cards}
 
     def _capture_consequences(self) -> None:
-        """Keep each tracked decision's world-measured consequence once the world fixes it.
+        """Keep each tracked return's world-measured outcome once the world fixes it.
 
-        A judgement's consequence score, or a return's measured outcome
-        (``return_paid_off``, a declined trade's priced move): the reward chain's own
-        world signal, in [0, 1]. The chain forgets them after its horizon; the window
-        that owns the decision keeps them until its margin is read.
+        A return's measured outcome (``return_paid_off``, a named trade's net-of-fee
+        fact), in [0, 1]. The consequence score that grades an evaluator's judgement
+        is never read here: realized consequence is not priced or traded through λ
+        (wave 16, section 9; essay II.IV.a). The chain forgets outcomes after its
+        horizon; the window that owns the decision keeps them until its margin is
+        read.
         """
         tracked = {h for row in self.margin_windows.values() for h in row["decisions"]}
         for handle in tracked - set(self.measured_consequences):
-            kept = self.consequence_scores.get(handle)
-            if kept is not None and kept[0] is not None:
-                self.measured_consequences[handle] = float(kept[0])
-                continue
             outcome = self.world_outcomes.get(handle)
             if outcome is not None and outcome.get("state") == "measured":
                 self.measured_consequences[handle] = float(outcome["y"])
@@ -315,19 +313,20 @@ class MarketsMixin:
         Essay II.IV.a (architect's ruling on the cold review): a posted λ is scored
         against the window's realized shadow price, ``charter.market.shadow_price``,
         the least-squares slope of the scopes' world-measured consequence on their
-        violation, clipped to ``[0, lambda_max]``. The committee's λ is not the
+        violation, clipped to ``[0, penalty_cap]`` (the price at which a unit
+        violation's penalty takes the whole cap: wave 16, R-E). The committee's λ is not the
         target, so posting it, or adopting a post by motion, cannot make a post
         come true. The score is ``charter.market.post_score``, strictly proper for
         the mean. With the slope unidentifiable the post is censored. The same
         margins are the window's λ-to-dollar statistic (``price.margin``).
         """
         record = self.margin_windows.pop(window)
-        lambda_max = self.m.prices.lambda_max
+        scale = self.m.prices.penalty_cap
         margins = {}
         for card_id, card in sorted(record["cards"].items()):
             points = self._margin_points(record, card)
             row = margin(points)
-            target = shadow_price(points, lambda_max)
+            target = shadow_price(points, scale)
             margins[card_id] = {"lambda": card["lambda"],
                                 "marginal_consequence": row["slope"],
                                 "micro_usd_per_violation": row["micro_usd_per_violation"],
@@ -346,7 +345,7 @@ class MarketsMixin:
             if target is None:
                 score, status = 0.0, SettleStatus.CENSORED
             else:
-                score, status = post_score(post["lambda"], target, lambda_max), \
+                score, status = post_score(post["lambda"], target, scale), \
                     SettleStatus.SETTLED
                 n, total = self.lambda_standing.get(post["assembly"], (0, 0.0))
                 self.lambda_standing[post["assembly"]] = (n + 1, total + score)
@@ -430,7 +429,7 @@ class MarketsMixin:
         """The markets' formulas, published beside the committee's and the controller's."""
         block = super()._mechanics_block()
         committee = block["committee"]
-        lambda_max = self.m.prices.lambda_max
+        scale = self.m.prices.penalty_cap
         committee["liability"] = (
             "a ballot and a conditional forecast are both bets on a motion's predicted_effect. "
             "The branch is decided at the boundary: enact when the motion takes effect, "
@@ -446,14 +445,19 @@ class MarketsMixin:
             "no predicted effect in a retire proposal, their ballots are unscored and "
             "censored.")
         committee["shadow_prices"] = (
-            f"a seat may post a card's lambda p in [0, {lambda_max}] for the reserve window it "
+            f"a seat may post a card's lambda p in [0, {scale}] for the reserve window it "
             "posts in. When that window's decisions have their world-measured consequences "
-            "(consequence_backstop_ticks + verdict_timeout_ticks later, at least "
-            "timing.min_ratio windows) the window's shadow price y is read: the least-squares "
-            "slope, across the card's scopes (per role or assembly, at least 3, with "
-            "variance in v), of the scope's mean consequence (a judgement's consequence "
-            "score, a return's return_paid_off or priced declined trade, in [0, 1]) on its "
-            "violation v, clipped to [0, lambda_max]. score = 1 - ((p - y) / lambda_max)^2 "
+            "(the consequence patience, H = timing.world_repricing / timing.min_ratio plus "
+            "verdict_timeout_ticks, converted to closed windows at the price loop's period "
+            "in ticks, and at least timing.min_ratio windows; in force: "
+            "world.adaptive_scoring.margin_horizon_windows) the window's shadow price y is "
+            "read: the "
+            "least-squares slope, across the card's scopes (per role or assembly, at least "
+            "3, with variance in v), of the scope's mean measured outcome (a return's "
+            "return_paid_off or priced named trade, in [0, 1]; never a judgement's "
+            "consequence score) on its "
+            "violation v, clipped to [0, prices.penalty_cap]. score = 1 - ((p - y) / "
+            "prices.penalty_cap)^2 "
             "on the post's own policy decision; with y unidentified the post is censored. "
             "The posted price of a card is the median of each seat's latest unsettled post "
             "weighted by the seat's (1/2 + sum of its settled post scores) / (1 + their "

@@ -211,8 +211,12 @@ def test_judges_see_the_rule_they_are_graded_by_in_every_prompt_mode(monkeypatch
     section = dict(req.sections())["scoring"]
     assert section.startswith("SCORING\n")
     shown = json.loads(section.split("\n", 2)[2])
-    assert shown == {k: scoring[k] for k in ("evaluator_return", "verdict_is_a_prediction")}
+    assert shown == {k: scoring[k] for k in ("evaluator_return", "verdict_is_a_prediction",
+                                             "abstention")}
     assert "0.5 + 0.5 * (brier - base)" in section
+    # Wave 16, section 9 item 5: D4 is carried verbatim in the SCORING section.
+    assert ("a decline, a NOOP and an abstention are priced at the router's observed "
+            "average raw score less the same penalty") in section
     for advice in ("should", "try to", "aim", "best", "better"):
         assert advice not in section.lower()
 
@@ -231,7 +235,8 @@ def test_metas_see_the_rule_they_are_graded_by(monkeypatch):
                      "propensity": None}, "kernel")
     rt._meta_step(verdict, meta, SimpleNamespace(chosen="meta-a"), rt.queue.get(meta).deadline_ns)
     (req,) = captured
-    assert "meta_return" in json.loads(dict(req.sections())["scoring"].split("\n", 2)[2])
+    shown = json.loads(dict(req.sections())["scoring"].split("\n", 2)[2])
+    assert "meta_return" in shown and shown["abstention"] == rt._scoring_block()["abstention"]
     answer = req.outcome_schema["anyOf"][0]
     assert answer["properties"]["conformity"] == {"type": "number", "minimum": 0,
                                                   "maximum": 1}
@@ -508,3 +513,419 @@ def test_a_polymorphic_contract_with_a_judging_kind_carries_its_decline_form():
     rt.assemblies["eval-a"].spec = replace(spec, emits=("Verdict", "ProducerReturn"))
     contract = rt._contract_schema("eval-a")
     assert contract["anyOf"][-1] == DECLINE_FORM
+
+
+def test_every_wave_16_formula_is_published_in_world_scoring():
+    """Wave 16: each changed reward formula is a factual, retrievable world.scoring
+    entry (Chapter II §I.b), never advice."""
+    from tests.conftest import make_runtime
+
+    rt = make_runtime()
+    scoring = rt._scoring_block()
+    text = json.dumps(scoring)
+    for fact in (
+        "declined-trade-net-v1", "attempted-trade-net-v1",  # D1
+        "H = timing.world_repricing / timing.min_ratio",  # D2
+        "verdict:<definition>:<coin>:<side>:<H in ns>", "uninformative",  # D3
+        "the equal mean of those that exist",  # D6
+        "No consequence score enters a card, a lambda or a posted lambda",  # section 9
+        "priced at the router's observed average raw score less the same penalty",  # D4
+        "unhistoried niche", "non-relieving",  # D5
+        "another card's pressure never stops it",  # R-E, R10-e
+    ):
+        assert fact in text, fact
+    for advice in ("you should", "try to", "aim to", "it is best"):
+        assert advice not in text.lower()
+
+
+# --- published numbers are derived from the code that enforces them (Codex on #152) ----
+
+
+def _formula(text: str, start: str, end: str) -> str:
+    """The expression published between ``start`` and ``end``, as Python."""
+    expression = text.split(start, 1)[1].split(end, 1)[0]
+    return expression.replace("^", "**")
+
+
+@pytest.mark.parametrize("verdict_timeout", [2, 7, 40])
+def test_the_published_margin_horizon_is_the_one_the_code_reads(verdict_timeout):
+    """R10-k: settlement of a shadow price waits for the consequence patience, H plus
+    the verdict window counted ONCE. The published number is the one ``_margin_horizon``
+    returns, and it equals that derivation for every verdict window; the published text
+    no longer adds a second verdict window."""
+    from dataclasses import replace
+
+    from factorylab.runtime.clockwork import tick_ns
+    from tests.conftest import make_runtime
+
+    rt = make_runtime()
+    rt.m = replace(rt.m, evaluation=replace(rt.m.evaluation,
+                                            verdict_timeout_events=verdict_timeout))
+    rt.ev = rt.m.evaluation
+    published = rt._adaptive_scoring_block()["margin_horizon_windows"]
+    assert published == rt._margin_horizon()
+    tick = tick_ns(rt.tick_clock)
+    patience_ticks = -(-(rt._horizon_ns() + verdict_timeout * tick) // tick)
+    window = rt.clockwork.period("price", default=rt.m.timing.min_ratio)
+    assert published == max(rt.m.timing.min_ratio, -(-patience_ticks // window))
+    text = rt._mechanics_block()["committee"]["shadow_prices"]
+    assert "plus verdict_timeout_ticks later" not in text
+    assert "world.adaptive_scoring.margin_horizon_windows" in text
+
+
+def test_every_published_value_is_the_one_the_runtime_enforces():
+    """Each number the scoring formulas name is generated from its enforcing function:
+    H, the consequence patience (R10-k), the cap, each learner's map bound (R10-l) and
+    the uninformative reasons."""
+    from factorylab.runtime.clockwork import tick_ns
+    from factorylab.settlement.lots import FEE_UNKNOWN, NO_MARK
+    from tests.conftest import make_runtime
+
+    rt = make_runtime()
+    values = rt._scoring_block()["enforced_values"]
+    assert values["consequence_horizon_ns"] == rt._horizon_ns()
+    assert values["consequence_horizon_ns"] == (rt.m.timing.world_repricing_ns
+                                                // rt.m.timing.min_ratio)
+    assert values["consequence_patience_ns"] == rt._patience_ns() == (
+        rt._horizon_ns() + rt.ev.verdict_timeout_ticks * tick_ns(rt.tick_clock))
+    assert values["penalty_cap"] == rt.controller.snapshot()["parameters"]["penalty_cap"]
+    assert values["learned_map_bound"] == {"router": rt._charge_bound(True),
+                                           "seat": rt._charge_bound(False)}
+    assert values["uninformative_reasons"] == [FEE_UNKNOWN, NO_MARK]
+    text = rt._scoring_block()["verdict_is_a_prediction"]
+    assert FEE_UNKNOWN in text and NO_MARK in text
+
+
+@pytest.mark.parametrize("raw,card,thrash", [(0.1, 0.0, 0.0), (0.3, 0.2, 0.0),
+                                             (0.3, 0.0, 0.2), (0.0, 0.5, 0.5)])
+def test_the_published_learned_map_evaluates_to_what_every_learner_learns(raw, card, thrash):
+    """R10-l: the router's published map, evaluated with the published bound, is what
+    ``_learning_value`` gives a router; with no thrash term and the seat's bound, what
+    it gives a seat's own learner."""
+    from tests.conftest import make_runtime
+
+    rt = make_runtime()
+    bound = rt._scoring_block()["enforced_values"]["learned_map_bound"]
+    formula = _formula(rt._mechanics_block()["thrash_price"], "the router learns ", ", r raw")
+    router = rt._all_router_states()[0]
+    rt.thrash_charges["h"] = thrash
+    learned = rt._learning_value("h", raw, card, router=router)
+    assert learned == pytest.approx(eval(formula, {}, {"r": raw, "B": bound["router"],
+                                                        "p": card, "c": thrash}))
+    assert rt._learning_value("s", raw, card) == pytest.approx(
+        eval(formula, {}, {"r": raw, "B": bound["seat"], "p": card, "c": 0.0}))
+
+
+@pytest.mark.parametrize("entry,exit_,rates", [
+    ("0.00045", "0.00035", ()),
+    ("0.00045", "0.00045", (("0.0001", "100.2"),)),
+    ("0", "0.0007", (("-0.0002", "99.1"), ("0.0001", "101.7")))])
+def test_the_published_net_evaluates_to_what_the_road_not_taken_is_priced_at(entry, exit_,
+                                                                            rates):
+    """D1, D7 fee legs and funding, R10-m: the net published in world.scoring, evaluated
+    with its own named terms, is ``opportunity_cost``'s net for the same mids, legs and
+    funding (each payment's rate and the price it is on)."""
+    from decimal import Decimal
+
+    from factorylab.runtime.grounded import opportunity_cost
+    from tests.conftest import make_runtime
+
+    rt = make_runtime()
+    text = rt._scoring_block()["verdict_is_a_prediction"]
+    formula = _formula(text, "net = ", " bp")
+    assert "f0 + f1 * m1 / m0" in formula  # D7: the exit leg on the exit notional
+    assert "sum(rho_i * m_i) / m0" in formula  # D7: each payment on its own notional
+    paid = sum(float(rate) * float(mark) for rate, mark in rates)
+    formula = formula.replace("sum(rho_i * m_i)", "paid")
+    for side, s in (("buy", 1), ("sell", -1)):
+        priced = opportunity_cost([("BTC", "100")], [("BTC", "100.3")], entry, exit_,
+                                  {"coin": "BTC", "side": side}, rates)
+        expected = eval(formula, {}, {
+            "s": s, "m0": 100.0, "m1": 100.3, "f0": float(entry), "f1": float(exit_),
+            "paid": paid})
+        assert float(Decimal(priced["net_bps"])) == pytest.approx(expected, abs=1e-4)
+    assert "at or before H" in text  # R10-m: funding stops at H, on both roads
+
+
+#: The decisions of one closed window: a niche decision with tool calls, notional and a
+#: well-formed return; a decision whose only entry is money spent; and the others.
+SPLIT_WINDOW = {
+    "p1": {"role": "producer", "cost": 10, "ok": 1, "invocations": 1, "tool_calls": 2,
+           "notional_micro": 300},
+    "p2": {"role": "producer", "cost": 20, "ok": 0, "invocations": 2, "tool_calls": 1,
+           "notional_micro": 100},
+    "p3": {"role": "producer", "cost": 0, "ok": 0, "invocations": 0, "tool_calls": 0,
+           "notional_micro": 0},  # a NOOP: no invocation, no spend
+    "e1": {"role": "evaluator", "cost": 5, "ok": 1, "invocations": 1, "tool_calls": 0,
+           "notional_micro": 0},
+    "spend": {"role": "producer", "cost": 7, "ok": 0, "invocations": 0, "tool_calls": 0,
+              "notional_micro": 0},
+    "niche": {"role": "producer", "cost": 50, "ok": 1, "invocations": 1, "tool_calls": 9,
+              "notional_micro": 900, "niche": True},
+}
+
+
+def _published_share(text, handle, observation, role, region, value, relievers, floor):
+    """share_j as world.scoring publishes it, evaluated with its own published terms."""
+    attributable = _formula(text, "turnover, share_j = ", ", 0 when total_j is 0")
+    relief = _formula(text, "else share_j = ", ", n the counted decisions that did not")
+    generic = _formula(text, "For any other observation share_j = ", ", n the counted")
+    split = {h: d for h, d in SPLIT_WINDOW.items() if not d.get("niche")}
+    if handle not in split:
+        return 0.0  # the niche: share_j 0
+    of_role = {h: d for h, d in split.items() if role == "all" or d["role"] == role}
+    terms = {
+        "cost_per_return": {h: d["cost"] for h, d in of_role.items() if d["ok"]},
+        "cost_per_attempt": {h: d["cost"] for h, d in of_role.items() if d["cost"]},
+        "well_formed_rate": {h: (d["invocations"] - d["ok"]) if floor else d["ok"]
+                             for h, d in split.items()},
+        "tool_calls": {h: d["tool_calls"] for h, d in split.items()},
+        "turnover": {h: d["notional_micro"] for h, d in split.items()},
+    }
+    if observation in terms:
+        own, total = terms[observation].get(handle, 0), sum(terms[observation].values())
+        return 0.0 if total == 0 else eval(attributable, {"min": min},
+                                           {"own_j": own, "total_j": total})
+    counted = {h for h, d in of_role.items()
+               if d["invocations"] or d["ok"] or not d["cost"]} | {handle}
+    if observation in ("revision_rate", "noop_share", "consequence_paid_off_rate"):
+        if handle in relievers:
+            return 0.0
+        return eval(relief, {"max": max}, {"n": len(counted - relievers)})
+    return eval(generic.replace("prices.min_blame_share", "min_blame_share"), {"max": max},
+                {"min_blame_share": region["min_blame_share"], "n": len(counted)})
+
+
+@pytest.mark.parametrize("observation", [
+    "cost_per_return", "cost_per_attempt", "well_formed_rate", "tool_calls", "turnover",
+    "revision_rate", "noop_share", "consequence_paid_off_rate", "verdict_mean",
+    "burn_per_window"])
+@pytest.mark.parametrize("kind", ["min", "max"])
+def test_the_published_card_share_evaluates_to_the_share_the_kernel_charges(observation,
+                                                                           kind):
+    """Codex on #152: world.scoring's card_penalty share_j, evaluated with its published
+    terms on a window holding a niche decision with tool calls and notional, is
+    ``_decision_share`` for every card kind, every decision and both scopes. A niche
+    decision is in no total and no count, so it dilutes nobody's share."""
+    from factorylab.charter.controller import CardRegion
+    from factorylab.runtime.pricing import MeasureWindow
+    from tests.conftest import make_runtime
+
+    rt = make_runtime()
+    text = rt._scoring_block()["card_penalty"]
+    window = MeasureWindow(7, 1_000, decisions={h: dict(d) for h, d in SPLIT_WINDOW.items()})
+    hits, members = ["p1"], ["p1", "p2", "p3", "niche"]
+    window.closed_relief = {rate: {"members": members, "hits": hits}
+                            for rate in ("revision_rate", "noop_share",
+                                         "consequence_paid_off_rate")}
+    region = (CardRegion("c", "min", 0.5, None, 1.0) if kind == "min"
+              else CardRegion("c", "max", None, 0.5, 1.0))
+    value = 0.2 if kind == "min" else 0.8  # outside the region either way
+    relievers = set(hits) if kind == "min" else set(members) - set(hits)
+    for role in ("producer", "all"):
+        for handle in SPLIT_WINDOW:
+            enforced = rt._decision_share(window, handle, observation, role, region, value)
+            published = _published_share(
+                text, handle, observation, role,
+                {"min_blame_share": rt.m.prices.min_blame_share}, value, relievers,
+                floor=kind == "min")
+            assert enforced == pytest.approx(published), (handle, role)
+
+
+# --- every other evaluable formula in world.scoring, evaluated (Codex on #152) --------
+#
+# Not evaluated here, and why: antagonist_routing renormalises the router's whole
+# distribution (a transformation, not a score; the router tests hold it);
+# producer_or_custom_return's mean of verdicts is composed_return's with no credit and
+# its clip is card_penalty's (both below); propensity, observations, revision,
+# venue_and_treasury_writes, novelty_reserve, malformed_judgement and declined_return
+# state rules and routing, no arithmetic; world.adaptive_scoring publishes values in
+# force (consequence_mix, sampling_blind, thrash_price), not formulas, except
+# margin_horizon_windows, evaluated above.
+
+
+def _scoring():
+    from tests.conftest import make_runtime
+
+    rt = make_runtime()
+    return rt, rt._scoring_block()
+
+
+@pytest.mark.parametrize("q,y", [(0.8, 1), (0.3, 1), (0.6, 0), (0.5, 0)])
+def test_the_published_verdict_score_evaluates_to_the_consequence_score(q, y):
+    from factorylab.runtime.feedback import consequence_score
+
+    rt, scoring = _scoring()
+    text = scoring["verdict_is_a_prediction"]
+    brier = eval(_formula(text, "brier = ", "; base"), {}, {"q": q, "y": y})
+    base = eval(_formula(text, "base = ", ", b the base rate"), {}, {"b": 0.5, "y": y})
+    published = eval(_formula(text, "consequence score = ", ", a proper score"), {},
+                     {"brier": brier, "base": base})
+    assert "0.5 before any" in text
+    result = rt.settler.settle_verdict(evaluator_id="e", about_handle="h", q=q, outcome=y,
+                                       key="verdict:declined-trade-net-v1:BTC:buy:1")
+    assert published == pytest.approx(consequence_score(result.brier, result.baseline_brier))
+
+
+@pytest.mark.parametrize("k,s", [(0.9, 0.7), (0.2, 0.7), (0.5, 0.5), (1.0, 0.0)])
+def test_the_published_meta_score_evaluates_to_what_a_meta_is_scored(k, s):
+    from factorylab.runtime.feedback import consequence_score
+
+    rt, scoring = _scoring()
+    formula = _formula(scoring["meta_return"], "c = ", ", b the base rate")
+    result = rt.settler.settle_verdict(evaluator_id="m", about_handle="h", q=k, outcome=s,
+                                       key="evaluation_consequence:2")
+    assert eval(formula, {}, {"k": k, "s": s, "b": 0.5}) == pytest.approx(
+        consequence_score(result.brier, result.baseline_brier))
+
+
+@pytest.mark.parametrize("qc,q,y", [(0.9, 0.2, 1), (0.2, 0.9, 1), (0.4, 0.4, 0)])
+def test_the_published_counter_score_evaluates_to_counter_score(qc, q, y):
+    from factorylab.runtime.feedback import counter_score
+
+    _rt, scoring = _scoring()
+    formula = _formula(scoring["counter_return"], "score = ", ", less the card").replace(
+        "q'", "qc")
+    assert eval(formula, {}, {"qc": qc, "q": q, "y": y}) == pytest.approx(
+        counter_score(qc, q, y))
+
+
+@pytest.mark.parametrize("consequences,ordinary", [([0.2, 0.4], [0.5, 0.7]),
+                                                   ([0.9], [0.5]), ([0.5, 0.5], [0.5, 0.1])])
+def test_the_published_exposure_score_evaluates_to_exposure_score(consequences, ordinary):
+    """Codex on #152: the published text said the mean of (1 - consequence score); the
+    kernel pays how much worse its judges did than on ordinary returns."""
+    from statistics import fmean
+
+    from factorylab.runtime.feedback import exposure_score
+
+    _rt, scoring = _scoring()
+    formula = _formula(scoring["antagonist_exposure"], "score = ", ", c the mean")
+    assert eval(formula, {}, {"c": fmean(consequences), "o": fmean(ordinary)}) == (
+        pytest.approx(exposure_score(consequences, ordinary)))
+
+
+@pytest.mark.parametrize("first,second", [(0.8, 0.4), (0.8, None), (None, 0.3), (None, None)])
+def test_the_published_equal_means_evaluate_to_the_evaluator_composed_and_tool_rewards(
+        first, second):
+    """evaluator_return: the equal mean of g and c that exist; composed_return: the mean
+    of the child's verdict and its requester's score, each alone when only one exists;
+    tool_use_credit: the mean of the builder's verdict and its callers' mean score."""
+    from statistics import fmean
+
+    from factorylab.runtime.feedback import composed_reward, evaluation_reward
+
+    _rt, scoring = _scoring()
+    assert "score = the equal mean of those that exist" in scoring["evaluator_return"]
+    assert "(each alone when only one exists)" in scoring["composed_return"]
+    assert "settles once on the mean of its judges' verdict and the mean score" in (
+        scoring["tool_use_credit"])
+    present = [v for v in (first, second) if v is not None]
+    published = fmean(present) if present else None
+    assert evaluation_reward(first, second) == published
+    assert composed_reward(first, second) == published
+    assert composed_reward(first, None, second) == published
+
+
+@pytest.mark.parametrize("q,y", [(0.7, 1), (0.7, 0), (1.0, 0)])
+def test_the_published_policy_score_evaluates_to_the_ballot_score(q, y):
+    from factorylab.charter.market import brier
+
+    _rt, scoring = _scoring()
+    formula = _formula(scoring["policy"], "Score = ", ", outcome the promise")
+    assert eval(formula, {}, {"q": q, "outcome": y}) == pytest.approx(brier(q, y))
+
+
+@pytest.mark.parametrize("requested", [3, 30])
+def test_the_published_standing_evaluates_to_the_standing_weight(requested):
+    """consequence_standing: 0.5 + skill, clipped to [0, 1], capped at 0.5 below minimum
+    coverage; skill over settled forecasts and scored verdicts alike."""
+    from statistics import fmean
+
+    from factorylab.settlement.standing import ConsequenceStanding
+
+    _rt, scoring = _scoring()
+    text = scoring["consequence_standing"]
+    assert "0.5 + skill, clipped to [0, 1] and capped at 0.5 below minimum coverage" in text
+    assert "settled forecasts and scored verdicts" in text
+    standing = ConsequenceStanding(min_coverage=0.5)
+    forecasts, verdicts = [(1.0, 0.75), (0.96, 0.75)], [(0.91, 0.5)]
+    for brier, base in forecasts:
+        standing.record("e", brier, base)
+    for brier, base in verdicts:
+        standing.record_verdict("e", brier, base)
+    standing.set_requested("e", requested)
+    scored = forecasts + verdicts
+    skill = fmean(b for b, _ in scored) - fmean(base for _, base in scored)
+    published = min(1.0, max(0.0, 0.5 + skill))
+    if standing.coverage("e") < 0.5:
+        published = min(0.5, published)
+    assert standing.weight("e") == pytest.approx(published)
+
+
+@pytest.mark.parametrize("cards", [((0.4, 0.5, 0.3), (0.2, 1.0, 0.7)),
+                                   ((3.0, 1.0, 0.5), (0.1, 0.0, 1.0)),  # one card saturated
+                                   ((0.0, 2.0, 1.0),)])
+def test_the_published_card_penalty_evaluates_to_the_penalty_charged(cards, monkeypatch):
+    """card_penalty: p_j = min(lambda_j * v_j, penalty_cap), S = sum(p_j), penalty =
+    min(S, cap) * share, share = sum(p_j * share_j) / S, and score = clip(raw - penalty,
+    0, 1), each evaluated with its published terms against what the kernel charges and
+    settles. Each term's (lambda_j, v_j, share_j) is given; its p_j is the kernel's own
+    ``pressure``."""
+    from factorylab.charter.controller import pressure
+
+    rt, scoring = _scoring()
+    text = scoring["card_penalty"]
+    cap = rt.m.prices.penalty_cap
+    p_formula = _formula(text, "p_j = ", ", 0 while v_j is 0").replace("penalty_cap", "cap")
+    penalty_formula = _formula(text, "penalty = ", "; share")
+    share_formula = _formula(text, "share = ", " (zero when S = 0)")
+    terms, published_p = [], []
+    for lam, v, share in cards:
+        p = 0.0 if v == 0 else eval(p_formula, {"min": min},
+                                    {"lambda_j": lam, "v_j": v, "cap": cap})
+        assert p == pytest.approx(pressure(lam, v, cap))
+        published_p.append(p)
+        terms.append({"weight": pressure(lam, v, cap), "share": share, "lambda": lam,
+                      "violation": v})
+    total = sum(published_p)
+    share = 0.0 if total == 0 else eval(
+        share_formula.replace("sum(p_j * share_j)", "weighted"), {},
+        {"weighted": sum(p * s for p, (_, _, s) in zip(published_p, cards, strict=True)),
+         "S": total})
+    published = eval(penalty_formula, {"min": min}, {"S": total, "share": share})
+    monkeypatch.setattr(rt, "_penalty_terms", lambda *_a, **_k: terms)
+    monkeypatch.setattr(rt, "_in_split", lambda *_a, **_k: True)
+    assert rt._penalty_for("producer", "h") == pytest.approx(published)
+    # score = clip(raw_score - penalty, 0, 1), as the settlement applies it.
+    assert "score = clip(raw_score - penalty, 0, 1)" in text
+    monkeypatch.setattr(rt, "_penalty_for", lambda *_a, **_k: published)
+    monkeypatch.setattr(rt, "_awaits_close", lambda *_a, **_k: False)
+    for raw in (0.1, 0.9):
+        handle = _consequence_decision(rt, "seed-decider", "verdict")
+        rt._settle_priced(handle, channel="verdict", score=raw, definition_version="t",
+                          sampling_ref=None, cards="producer")
+        assert rt.queue.history(handle)[-1].score == pytest.approx(
+            min(1.0, max(0.0, raw - published)))
+
+
+@pytest.mark.parametrize("raw,p,thrash", [(0.1, 0.0, 0.0), (0.4, 0.3, 0.2)])
+def test_the_published_abstention_map_evaluates_to_what_every_learner_learns(raw, p, thrash):
+    """abstention and card_penalty publish the one learned map with its bounds: B =
+    2 * prices.penalty_cap for a router and prices.penalty_cap for a seat's own learner,
+    P the penalty plus a router's thrash charge."""
+    rt, scoring = _scoring()
+    text = scoring["abstention"]
+    formula = _formula(text, "learned as ", ", P = ")
+    router_bound = _formula(text, "B = ", " for a router").replace(
+        "prices.penalty_cap", "cap")
+    seat_bound = _formula(text, "for a router and ", " for a seat's").replace(
+        "prices.penalty_cap", "cap")
+    cap = rt.m.prices.penalty_cap
+    assert "(raw_score + B - P) / (1 + B)" in scoring["card_penalty"]
+    router = rt._all_router_states()[0]
+    rt.thrash_charges["h"] = thrash
+    assert rt._learning_value("h", raw, p, router=router) == pytest.approx(eval(
+        formula, {}, {"r": raw, "B": eval(router_bound, {}, {"cap": cap}), "P": p + thrash}))
+    assert rt._learning_value("s", raw, p) == pytest.approx(eval(
+        formula, {}, {"r": raw, "B": eval(seat_bound, {}, {"cap": cap}), "P": p}))

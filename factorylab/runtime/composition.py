@@ -375,14 +375,14 @@ class CompositionMixin:
         twice: a child's credit closes once, and a decision's tool uses are consumed
         by its one settlement.
         """
-        from factorylab.runtime.routing import ZERO_CONSEQUENCE
+        from factorylab.runtime.routing import MIDPOINT_DEFINITIONS
 
         child_score = score if definition in (DEF_VERDICT, DEF_COMPOSED) else None
         for pend in self.pending.values():
             if pend.requester == handle and not pend.credit_closed:
                 pend.credit, pend.credit_closed = child_score, True
         uses = self.tool_uses.pop(handle, None)
-        if not uses or score is None or ZERO_CONSEQUENCE.get(definition or "") != 0.5:
+        if not uses or score is None or definition not in MIDPOINT_DEFINITIONS:
             return
         for tool_id, calls in sorted(uses.items()):
             tool = self.population_tools.get(tool_id)

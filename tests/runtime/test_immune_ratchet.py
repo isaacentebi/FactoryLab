@@ -18,9 +18,11 @@ from factorylab.runtime.pricing import MeasureWindow
 from factorylab.runtime.worlds import load_manifest
 
 
-def _runtime(lambda_max=1.0):
+def _runtime(**prices):
+    """The scripted world, its price gains overridden by ``prices``: a test of the
+    duration price needs gains that leave it room below the cap (``gain_headroom``)."""
     seed = load_manifest("scripted")
-    seed = replace(seed, prices=replace(seed.prices, lambda_max=lambda_max))
+    seed = replace(seed, prices=replace(seed.prices, **prices))
     charter = replace(seed.charter, cards=tuple(replace(c, window=MetricWindow("windows", 1, None))
                                                for c in seed.charter.cards))
     rt = Runtime(replace(seed, charter=charter), events=1, seed=1, initial_balance_micro=None,
@@ -49,7 +51,7 @@ def _items(rt, kind):
 
 
 def test_stable_failure_raises_violated_price_with_duration_and_never_halves_it():
-    rt = _runtime(lambda_max=10.0)
+    rt = _runtime(eta=0.01)  # the PID alone takes many windows to reach the cap
     prices = [0.0]
     for _ in range(6):
         _close(rt, 0.2)  # the same failing cell, window after window
@@ -65,7 +67,9 @@ def test_stable_failure_raises_violated_price_with_duration_and_never_halves_it(
     assert [r["step"] for r in ratchets] == [
         rt.m.immune.price_step * r["duration"] for r in ratchets]
     assert all(r["lambda_after"] >= r["lambda_before"] for r in ratchets)
-    assert prices == sorted(prices) and prices[-1] <= rt.m.prices.lambda_max
+    # Bounded by the one bound (wave 16, R-E): the card's penalty never passes the cap.
+    bound = rt.controller.saturation("well_formed_rate")["bound"]
+    assert prices == sorted(prices) and prices[-1] <= bound
 
 
 def test_leaving_the_attractor_ends_the_ratchet_and_unwinds_exploration():
@@ -88,7 +92,7 @@ def test_leaving_the_attractor_ends_the_ratchet_and_unwinds_exploration():
 def test_the_organ_diagnoses_every_window_and_acts_on_its_own_slower_loop():
     """Versioning P5, time audit T2: the organ acts once every min_ratio price periods or
     more, jittered, and diagnoses every window in between."""
-    rt = _runtime(lambda_max=10.0)
+    rt = _runtime()
     rt.clockwork.fire("price", rt.ticks_consumed, 1)
     rt.clockwork.fire("immune", rt.ticks_consumed, rt.clockwork.period("price"))
     for _ in range(12):
@@ -109,14 +113,100 @@ def test_price_step_alone_sets_the_ratchet_and_is_part_of_the_identity():
     stepped = replace(seed, immune=replace(seed.immune, price_step=0.2))
     stepped.validate()
     assert stepped.canonical_json() != seed.canonical_json()
-    for bad in (None, 0.0, -0.1, float("nan"), seed.prices.lambda_max * 2, True):
+    for bad in (None, 0.0, -0.1, float("nan"), float("inf"), True):
         with pytest.raises(ValueError):
             replace(seed, immune=replace(seed.immune, price_step=bad)).validate()
 
-    rt = _runtime(lambda_max=10.0)
-    rt.m = replace(rt.m, immune=replace(rt.m.immune, price_step=0.2))
+    rt = _runtime(eta=0.01)
+    rt.m = replace(rt.m, immune=replace(rt.m.immune, price_step=0.02))
     for _ in range(6):
         _close(rt, 0.2)
     ratchets = _items(rt, "immune.price_ratchet")
     assert ratchets and [r["step"] for r in ratchets] == pytest.approx(
-        [0.2 * r["duration"] for r in ratchets])
+        [0.02 * r["duration"] for r in ratchets])
+
+
+def test_an_unmeasured_failing_card_holds_its_duration():
+    """Wave 16, second addendum (M-6): windows that measure nothing of a failing card
+    are missing evidence, not relief: its duration is not reset."""
+    rt = _runtime(eta=0.01)
+    for _ in range(4):
+        _close(rt, 0.2)
+    before = rt.controller.snapshot()["cards"]["well_formed_rate"]["failing_windows"]
+    assert before > 0
+    for _ in range(4):  # no invocation: well_formed_rate is unmeasured
+        rt.n += 10
+        rt.ticks_consumed += rt.m.timing.min_ratio
+        rt.clockwork.force("immune", rt.ticks_consumed)
+        rt.window = MeasureWindow(rt.n, rt.wallet.balance, invocations=0, ok=0,
+                                  registrations=1)
+        rt._close_price_window()
+    after = rt.controller.snapshot()["cards"]["well_formed_rate"]["failing_windows"]
+    assert after >= before
+    assert not _items(rt, "immune.price_ratchet_ended")
+
+
+@pytest.mark.parametrize("kind", ["stable_failure", "cleared", "thrash"])
+def test_the_organ_never_leaves_or_holds_a_gamma_above_gamma_max(kind):
+    """A router seeded (or restored) above ``gamma_max`` is clamped to it on the organ's
+    next step, whichever way it steps: a value above its bound would sit where no
+    step reaches it (Codex on #152, the R10-e sweep)."""
+    from factorylab.runtime.immune import _gain
+    from tests.conftest import make_runtime
+
+    rt = make_runtime()
+    router = rt._build_router("Tick", "exp3", 0.9)
+    assert gamma(router.learner) == 0.9 > rt.m.immune.gamma_max
+    _gain(rt, kind, 1)
+    assert gamma(router.learner) == rt.m.immune.gamma_max
+
+
+@pytest.mark.parametrize("seed", [0.9, 0.5000001, 0.0, -0.1])
+def test_a_seed_gamma_outside_the_organ_s_bound_is_refused_at_load(seed):
+    """A seed exploration above ``immune.gamma_max`` is invalid physics (no step could
+    reach it): refused at load, as SF-0 is, never clamped silently later."""
+    manifest = load_manifest("scripted")
+    assert manifest.immune.gamma_max == 0.5
+    with pytest.raises(ValueError, match="router_gamma"):
+        Runtime(manifest, events=1, seed=1, initial_balance_micro=None, ledger_path=None,
+                router_gamma=seed)
+    Runtime(manifest, events=1, seed=1, initial_balance_micro=None, ledger_path=None,
+            router_gamma=0.5)  # at the bound: accepted
+
+
+def test_a_replay_of_the_diary_diagnoses_every_window_as_the_live_organ_did():
+    """Codex on #152 (735d50a): live and replay run one step (``versions.organ_step``).
+    A world fails a card for five windows, the charter then redefines that card under
+    the same id to a new observation, and seven more windows close. Replaying the
+    organ's own ledgered windows gives, window by window, exactly the flags, violated
+    cards, held cards and gaps the live organ ledgered."""
+    from factorylab.versioning.live import organ_record
+    from factorylab.versioning.versions import replay
+
+    rt = _runtime()
+    for _ in range(5):
+        _close(rt, 0.2)
+    redefined = replace(next(c for c in rt.charter.cards if c.id == "well_formed_rate"),
+                        observation="noop_share")
+    rt.charter = replace(rt.charter, cards=tuple(
+        redefined if c.id == "well_formed_rate" else c for c in rt.charter.cards))
+    rt._derive_regions()
+    for i in range(7):
+        _close(rt, 0.2 if i % 3 else 1.0)
+    rows = _items(rt, "immune.window")
+    assert len(rows) == 12
+    assert rows[4]["semantics"]["card:well_formed_rate"]["observation"] == "well_formed_rate"
+    assert rows[5]["semantics"]["card:well_formed_rate"]["observation"] == "noop_share"
+    spec = rt.m.immune
+    readings = replay([organ_record(row) for row in rows], k=spec.k,
+                      horizon=rt.m.timing.min_ratio * spec.k,
+                      tv_threshold=spec.tv_threshold, gap_threshold=spec.gap_threshold,
+                      registration_bins=tuple(spec.registration_bins),
+                      revision_bins=tuple(spec.revision_bins))
+    for row, reading in zip(rows, readings, strict=True):
+        diagnosis = reading["diagnosis"]
+        for name in ("violated_cards", "unmeasured_held", "gap", "card_gap", "rolling_gap",
+                     "volatility", "version"):
+            assert diagnosis[name] == row[name], (row["window"], name)
+        assert diagnosis["flags"] == row["flags"], row["window"]
+    assert any(row["violated_cards"] for row in rows[:5])  # the old metric failed

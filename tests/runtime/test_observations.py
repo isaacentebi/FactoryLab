@@ -17,6 +17,7 @@ def window():
         realized_pnl_micro=-1_250_000, max_position_notional_micro=5_000_000,
         exposures_settled=4, exposures_won=1, meta_verdicts=[0.2, 0.8],
         outcomes=8, censored=2, tool_calls=7, market_purchases=2,
+        non_acting_outcomes=5, non_acting_informative=4, non_acting_paid_off=1,
     )
 
 
@@ -28,7 +29,8 @@ def window():
     ("evaluator_disagreement", 0.5), ("consequence_paid_off_rate", 0.75), ("fills", 6.0),
     ("realized_pnl_usd", -1.25), ("position_concentration", 0.5), ("exposure_win_rate", 0.25),
     ("meta_verdict_mean", 0.5), ("censored_share", 0.25), ("tool_calls", 7 / 4),
-    ("market_purchases", 2.0),
+    ("market_purchases", 2.0), ("non_acting_informative_share", 0.8),
+    ("non_acting_paid_off_rate", 0.25),
 ])
 def test_each_observation_is_pure_and_has_declared_units(name, expected):
     w = window()
@@ -73,8 +75,10 @@ def test_catalogue_is_exact_and_public_metadata_cannot_mutate_it():
     # (charter audit M6), + ews_variance and ews_autocorrelation (ruling R3, evaluations M2),
     # + evaluator_compute_share (the #132 review, item 2), + provider_concentration and
     # family_concentration (time audit T15), + prompt_bytes, you_bytes, inputs_bytes and
-    # downstream_read_bytes (wave 7, context size published as a fact)
-    assert len(public) == len({o.id for o in CATALOGUE}) == 34
+    # downstream_read_bytes (wave 7, context size published as a fact), +
+    # non_acting_informative_share and non_acting_paid_off_rate (wave 16, R-H), +
+    # resolved_verdict_mean and resolved_verdict_std (Codex on #152: one name, one formula)
+    assert len(public) == len({o.id for o in CATALOGUE}) == 38
     # A11: the public row now also names where the observation came from and which
     # version of it this is, because the population can register its own.
     assert all(set(item) == {"id", "description", "units", "unit_range", "scale",

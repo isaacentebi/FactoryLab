@@ -30,6 +30,7 @@ from tests.runtime.test_loop import (
     _consequence_diary,
     _consequence_produce,
     _consequence_runtime,
+    lists_nothing,
 )
 
 
@@ -108,7 +109,7 @@ def test_final_answer_order_without_a_tool_write_still_places_one_market_order()
 def test_order_answer_missing_fields_without_a_write_is_refused_not_malformed():
     """No trade was made and none can be read: the seat is told, the return stands."""
     provider = Scripted({"action": "order", "rationale": "want to buy"})
-    runtime = _consequence_runtime(provider=provider, exchange=_exchange())
+    runtime = lists_nothing(_consequence_runtime(provider=provider, exchange=_exchange()))
     handle, event = _consequence_produce(runtime)
     assert event.payload["status"] == "ok"
     assert _writes(runtime, handle) == []
@@ -197,7 +198,7 @@ def test_a_bad_read_drops_itself_and_answers_in_the_next_round():
                         {"tool": "venue.funding_history", "args": {"coin": "ETH"}}]},
         {"action": "hold", "rationale": "positions read; will retry the history"},
     )
-    runtime = _consequence_runtime(provider=provider, exchange=_exchange())
+    runtime = lists_nothing(_consequence_runtime(provider=provider, exchange=_exchange()))
     _, event = _consequence_produce(runtime)
     assert event.payload["status"] == "ok"
     continuation = "\n".join(str(m.get("content", ""))
@@ -215,7 +216,7 @@ def test_a_turn_whose_every_read_was_wrong_is_still_a_continuation():
         {"tool_calls": [{"tool": "venue.funding_history", "args": {"coin": "BTC", "n": 5}}]},
         {"action": "hold", "rationale": "funding flat"},
     )
-    runtime = _consequence_runtime(provider=provider, exchange=_exchange())
+    runtime = lists_nothing(_consequence_runtime(provider=provider, exchange=_exchange()))
     _, event = _consequence_produce(runtime)
     assert event.payload["status"] == "ok" and len(provider.requests) == 3
     second = "\n".join(str(m.get("content", "")) for m in provider.requests[1].messages)
@@ -227,7 +228,7 @@ def test_a_bad_item_in_a_batch_that_writes_still_voids_the_whole_batch():
                  "args": {"coin": "BTC", "side": "sell", "price": "150"}}  # no size
     provider = Scripted({"action": "hold", "tool_calls": [
         {"tool": "venue.positions", "args": {}}, bad_limit]})
-    runtime = _consequence_runtime(provider=provider, exchange=_exchange())
+    runtime = lists_nothing(_consequence_runtime(provider=provider, exchange=_exchange()))
     handle, event = _consequence_produce(runtime)
     assert _writes(runtime, handle) == [] and len(provider.requests) == 1
     assert event.payload["status"] == "ok"  # the answer stands; the batch never ran
@@ -237,7 +238,7 @@ def test_reads_over_the_turn_limit_are_answered_in_their_slots():
     """Live harness: five outcome.get calls against a four-call limit voided the turn."""
     reads = [{"tool": "venue.positions", "args": {}}] * 5
     provider = Scripted({"tool_calls": reads}, {"action": "hold", "rationale": "read"})
-    runtime = _consequence_runtime(provider=provider, exchange=_exchange())
+    runtime = lists_nothing(_consequence_runtime(provider=provider, exchange=_exchange()))
     limit = runtime.m.tools.max_tool_calls
     provider.replies[0] = {"tool_calls": [{"tool": "venue.positions", "args": {}}] * (limit + 1)}
     _, event = _consequence_produce(runtime)
@@ -258,14 +259,14 @@ def test_a_draft_status_beside_tool_calls_does_not_void_the_turn():
     provider = Scripted(
         {"status": "pending", "tool_calls": [{"tool": "venue.positions", "args": {}}]},
         {"action": "hold", "rationale": "done"})
-    runtime = _consequence_runtime(provider=provider, exchange=_exchange())
+    runtime = lists_nothing(_consequence_runtime(provider=provider, exchange=_exchange()))
     _, event = _consequence_produce(runtime)
     assert event.payload["status"] == "ok" and len(provider.requests) == 2
 
 
 def test_an_order_described_only_in_prose_is_refused_with_how_to_place_it():
     provider = Scripted({"action": "order", "rationale": "I submit one tiny limit buy"})
-    runtime = _consequence_runtime(provider=provider, exchange=_exchange())
+    runtime = lists_nothing(_consequence_runtime(provider=provider, exchange=_exchange()))
     handle, _ = _consequence_produce(runtime)
     refusal = next(i for i in _consequence_diary(runtime)
                    if i["kind"] == "order.refused" and i["handle"] == handle)
@@ -397,7 +398,7 @@ def test_a_population_kinds_order_word_is_its_own_and_never_trades():
     """F7: a kind that does not own the answer order gives ``action: order`` its own
     meaning. The return stands, is published as its own kind, and places nothing."""
     order = {"action": "order", "coin": "BTC", "side": "buy", "size": "0.01"}
-    runtime = _custom_kind_runtime(Scripted(order))
+    runtime = lists_nothing(_custom_kind_runtime(Scripted(order)))
     handle = _produce_as(runtime, "seed-decider")
     assert _writes(runtime, handle) == []
     kinds = _kinds(runtime, handle)

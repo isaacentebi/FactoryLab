@@ -14,7 +14,7 @@ from factorylab.runtime.shared import CH_VERDICT
 from factorylab.world.exchange import OrderResult
 from factorylab.world.models import ModelResponse
 from tests.conftest import make_runtime
-from tests.runtime.test_loop import _consequence_produce
+from tests.runtime.test_loop import _consequence_produce, lists_nothing
 
 
 def _items(rt, kind):
@@ -63,7 +63,7 @@ def test_a_mixed_contract_author_is_not_drawn_to_judge_its_own_return(monkeypatc
     """A ``(ProducerReturn, Verdict)`` contract used to stay in the router for its own
     return, be woken and paid, then refused at ``_judged_event``. It is excluded before
     the draw; a pure producer accepting its own kind still continues its own work."""
-    rt = make_runtime()
+    rt = lists_nothing(make_runtime())
     rt._manage_reserve_window()
     _register(rt, "dual", accepts=("Tick", "ProducerReturn"), emits=("ProducerReturn", "Verdict"))
     _register(rt, "pure", accepts=("Tick", "ProducerReturn"), emits=("ProducerReturn",))

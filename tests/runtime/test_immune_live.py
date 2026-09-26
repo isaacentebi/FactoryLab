@@ -118,6 +118,12 @@ def _draw(state, probs):
     return Sample((*seats, NOOP), tuple(probs), NOOP, 1, state.learner.id, "h", ())
 
 
+def _charged(rt, state, handle, raw):
+    """What ``state`` (a router) learns for a round of raw score ``raw`` and no card
+    share: its thrash charge on the one map (ruling R10-l)."""
+    return rt._learning_value(handle, raw, 0.0, router=state)
+
+
 def test_a_core_router_that_stops_moving_pays_less_and_the_frontier_nothing():
     """The #134 review: a charge every round bore alike is a constant shift no-regret
     learners ignore. Each round is charged the price times the router's own movement,
@@ -126,23 +132,25 @@ def test_a_core_router_that_stops_moving_pays_less_and_the_frontier_nothing():
     rt.m = replace(rt.m, evaluation=replace(rt.m.evaluation, no_swap_regret_kinds=("Tick",)))
     rt.stats.thrash = {"lambda": 0.4}
     core, frontier = rt.routers["Tick"][0], rt.routers["MarketMid"][0]
-    cap = rt.m.prices.penalty_cap
+    cap = 2 * rt.m.prices.penalty_cap  # a router's B (ruling R10-l)
     rt._record_movement(core, _draw(core, (0.8, 0.1, 0.1)), "h1")  # the first draw
     rt._record_movement(core, _draw(core, (0.1, 0.8, 0.1)), "h2")  # moved: TV 0.7
     rt._record_movement(core, _draw(core, (0.1, 0.8, 0.1)), "h3")  # held still
     assert "h1" not in rt.thrash_charges and "h3" not in rt.thrash_charges
     assert rt.thrash_charges["h2"] == pytest.approx(0.4 * 0.7)
-    moved, still = rt._thrash_charged(core, "h2", 0.7), rt._thrash_charged(core, "h3", 0.7)
+    moved, still = _charged(rt, core, "h2", 0.7), _charged(rt, core, "h3", 0.7)
     assert still == pytest.approx((0.7 + cap) / (1 + cap)) and moved < still
     assert still - moved == pytest.approx(0.28 / (1 + cap))
     # One affine map: a low reward loses the same charge as a high one, never clipped.
     rt.thrash_charges.update(lo=0.28, hi=0.28)
-    assert (rt._thrash_charged(core, "x", 0.05) - rt._thrash_charged(core, "lo", 0.05)
-            == pytest.approx(rt._thrash_charged(core, "y", 0.95)
-                             - rt._thrash_charged(core, "hi", 0.95)))
+    assert (_charged(rt, core, "x", 0.05) - _charged(rt, core, "lo", 0.05)
+            == pytest.approx(_charged(rt, core, "y", 0.95)
+                             - _charged(rt, core, "hi", 0.95)))
     rt._record_movement(frontier, _draw(frontier, (0.8, 0.2)), "f1")
     rt._record_movement(frontier, _draw(frontier, (0.2, 0.8)), "f2")
-    assert "f2" not in rt.thrash_charges and rt._thrash_charged(frontier, "f2", 0.7) == 0.7
+    # Unattributed, uncharged: still learned on the one map (ruling R10-c).
+    assert "f2" not in rt.thrash_charges
+    assert _charged(rt, frontier, "f2", 0.7) == pytest.approx((0.7 + cap) / (1 + cap))
     # Waking nobody pays it too (ruling R9).
     handle = rt.queue.open(
         actor=core.learner.id, event_id="noop", channel="verdict", deadline_ns=10**18,
@@ -223,18 +231,18 @@ def test_a_stable_failures_duration_price_reaches_abstention(monkeypatch):
     rt._close_price_window()
     rt.window = MeasureWindow(rt.window.index + 1, rt.wallet.balance)
     noop = _abstention(rt)
-    before = rt._priced_abstention(noop, 0.9)[1]
+    before = rt._priced_abstention(noop)
     rt.controller.set_price("censorship-bound", 0.2, amendment_id="lower")
-    lowered = rt._priced_abstention(noop, 0.9)[1]
+    lowered = rt._priced_abstention(noop)
     for window in range(3):
         rt.controller.ratchet("censorship-bound", window=window, step=0.1)
-    ratcheted = rt._priced_abstention(noop, 0.9)[1]
+    ratcheted = rt._priced_abstention(noop)
     assert lowered < before and ratcheted > lowered
     assert ratcheted <= rt.m.prices.penalty_cap
 
 
 def test_one_registration_does_not_reset_the_ratchet():
-    rt = _organ(lambda_max=10.0)
+    rt = _organ()
     durations = []
     for i in range(8):
         _close(rt, 0.2, registrations=3 if i == 4 else 0)
@@ -275,7 +283,9 @@ def test_an_unhistoried_action_of_a_historied_seat_may_spend_the_niche():
     rt._manage_reserve_window()
     seat, tool = "seed-decider", "venue.positions"
     _settle(rt, _open(rt, seat))
-    assert not rt._unhistoried(seat)  # past its first record: no seat trial
+    assert rt._unhistoried(seat)  # a seed's trial lasts its patience (ruling R10-b)
+    rt.ticks_consumed = rt._patience()  # past it: no seat trial
+    assert not rt._unhistoried(seat)
     handle = _open(rt, seat)
     reason, model = f"tool:{tool}", f"model:{rt.assemblies[seat].spec.model_id}"
     assert rt._novelty_compute(handle, reason)
@@ -346,6 +356,7 @@ def test_niche_cover_reaches_only_the_call_and_the_one_round_that_reads_it(monke
     known = _open(rt, seat)  # venue.mids has history for this seat; venue.positions not
     rt.queue.record_actions(known, {rt._tool_action("venue.mids")})
     _settle(rt, known)
+    rt.ticks_consumed = rt._patience()  # the seat's trial is over (ruling R10-b)
     handle = _open(rt, seat)
     seen = []
     replies = iter([
@@ -499,5 +510,6 @@ def test_the_niche_is_published_as_a_schematic_and_nothing_more():
     mechanics = rt._mechanics_block()
     assert "eligible" in mechanics["novelty"] and "thrash_price" in mechanics
     assert "uptake" in mechanics
-    assert set(rt._adaptive_scoring_block()["thrash_price"]) == {"lambda", "penalty"}
+    # Wave 16, second addendum (I-10): the roles the price lands on travel with it.
+    assert set(rt._adaptive_scoring_block()["thrash_price"]) == {"lambda", "penalty", "roles"}
     assert load_manifest("scripted").immune.gap_threshold > 0

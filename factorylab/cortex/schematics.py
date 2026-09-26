@@ -20,6 +20,7 @@ from factorylab.cortex.assembly import (
 )
 from factorylab.kernel.artifacts import RELEASED_MEMORY
 from factorylab.kernel.money import money_to_usd
+from factorylab.learners.base import NEUTRAL_REWARD
 from factorylab.runtime.cadence import tick_intervals
 from factorylab.runtime.continuity import HARD_STATE_BYTES
 from factorylab.runtime.custody import UNAVAILABLE
@@ -31,6 +32,12 @@ from factorylab.runtime.propensity import (
 )
 from factorylab.runtime.shared import work_disclosure
 from factorylab.runtime.summary import _duration_str, _price_str
+from factorylab.settlement.lots import FEE_UNKNOWN, NO_MARK
+from factorylab.settlement.scoring import (
+    UNINFORMATIVE_HIGH,
+    UNINFORMATIVE_LOW,
+    UNINFORMATIVE_SUPPORT,
+)
 from factorylab.settlement.vocabulary import COMMISSIONED_JUDGE_REFUSAL
 from factorylab.world.treasury import admitted_directions, venice_conversion_text
 
@@ -348,13 +355,17 @@ class SchematicsMixin:
         "counterfactual": (
             'ProducerReturn, Exposure and a declared kind whose reward shape is judged or '
             'exposure: {"coin", "side": "buy" | "sell"}, a trade the return declined; coin '
-            "is a key of public_observations.recent_mids when the return is made. It is "
+            "is an instrument the venue lists when the return is made: a perp coin or spot "
+            "pair its last instrument listing named (venue.instruments; the listing is "
+            "read at the first broadcast mid and once per timing.world_repricing), and "
+            "before one the manifest's exchange.coins and exchange.spot_pairs; a listed "
+            "coin with no mid yet opens at its first mid. It is "
             "required on a final answer of those kinds from a decision that executed no "
             "venue operation (no venue write the venue accepted or left uncertain, a "
             "rejected write executing nothing, and no answer order with coin, side and "
             "size that the decision may place), and "
-            "optional otherwise. Without it, or with a coin recent_mids does not list, the "
-            "return is malformed. It is not required while recent_mids is empty. Each "
+            "optional otherwise. Without it, or with a coin the venue does not list, the "
+            "return is malformed. It is not required while nothing is listed. Each "
             "request's outcome schema states this for that request as a union: an answer "
             "with counterfactual required, its coin one of the listed coins, or, where an "
             "answer order may be placed, an answer order with coin, side and size"
@@ -410,7 +421,7 @@ class SchematicsMixin:
         "{kind: returns|forecasts|windows, n: positive integer, per: role|assembly|null}. "
         "Insufficient samples are unmeasured. An amendment carries one change class: cards "
         "(add, replace, remove, as in proposal_shapes.amendment), lambda ({\"lambda\": "
-        "{card_id: value}} over current cards, bounded by prices.lambda_max) or clock "
+        "{card_id: value}} over current cards, each a finite number >= 0) or clock "
         "(tick_interval, a duration within world.clock bounds). A prediction names a "
         "card_id, direction (increase or decrease), and a positive window count after activation; "
         "a clock amendment's prediction names an observation instead of a card_id: "
@@ -634,9 +645,12 @@ class SchematicsMixin:
                         if (r := self.regions.get(cid)) is not None
                         else None
                     ),
-                    # Charter audit M7: closed windows priced at lambda_max, and the
-                    # current run of consecutive windows in violation.
+                    # Charter audit M7 and wave 16 R-E: the card's bound
+                    # (penalty_cap / v), its closed windows at it and its current
+                    # saturated run, and the current run of windows in violation;
+                    # and its consecutive unmeasured windows (R10-f).
                     **self.controller.saturation(cid),
+                    **self._card_observed(cid),
                 }
                 for cid in sorted(self.priced)
             ],
@@ -789,8 +803,7 @@ class SchematicsMixin:
                 max_children=self.m.tools.max_children,
                 max_tool_calls=self.m.tools.max_tool_calls),
             "scoring": self._scoring_block(),
-            "prices": {"lambda_max": self.m.prices.lambda_max,
-                       "penalty_cap": self.m.prices.penalty_cap},
+            "prices": {"penalty_cap": self.m.prices.penalty_cap},
             "event_kinds": sorted(self._event_kinds()),
             "meta_input": (
                 "A meta judges the released representative verdict. Its window describes "
@@ -1818,23 +1831,46 @@ class SchematicsMixin:
                 "and the current one has not settled; 1 - lifespan / latency for a "
                 "configuration outlived by the loop that corrects it. v = max(0, u - "
                 "immune.tv_threshold); lambda follows the controller's recurrence with v "
-                "(world.adaptive_scoring.thrash_price). A round a router of "
-                "evaluation.no_swap_regret_kinds draws, abstentions included, carries c = "
+                "(world.adaptive_scoring.thrash_price). The price lands on the routers "
+                "whose seats fill a role the moving cards measure (a card whose "
+                "region-relative cell took more than one value over the retained "
+                "timing.min_ratio * immune.k windows; verdict_mean, verdict_std, "
+                "resolved_verdict_mean, resolved_verdict_std, evaluator_disagreement and "
+                "forecast_skill measure evaluators, "
+                "meta_verdict_mean metas, exposure_win_rate antagonists, any other card "
+                "the role it answers for; world.adaptive_scoring.thrash_price.roles), "
+                "and on the routers of evaluation.no_swap_regret_kinds when no role is "
+                "named. A round such a router draws, abstentions included, carries c = "
                 "min(prices.penalty_cap, lambda * m), m the total-variation distance "
-                "between that draw's distribution and the router's previous draw's; its "
-                "reward r is learned as (r + prices.penalty_cap - c) / (1 + "
-                "prices.penalty_cap)"),
+                "between that draw's distribution and the router's previous draw's; c "
+                "joins the round's card penalty p in one total charge, and the router "
+                "learns (r + B - p - c) / (1 + B), r raw, B = 2 * prices.penalty_cap; "
+                "every round of every router is learned on that one map, with c = 0 when "
+                "uncharged"),
             "controller": {
                 "law": "pid",
                 "eta": pr.eta, "kp": pr.kp, "kd": pr.kd, "decay": pr.decay,
-                "lambda_max": pr.lambda_max, "min_window_events": pr.min_window_events,
-                "penalty_cap": getattr(pr, "penalty_cap", None),
+                "min_window_events": pr.min_window_events, "penalty_cap": pr.penalty_cap,
                 "recurrence": "v = distance outside the inclusive region / scale; "
-                "if v > 0: I' = clip(I + eta*v, 0, lambda_max), except I' = I while "
-                "kp*v + I >= lambda_max and v > v_previous; otherwise I' = max(0, I-decay). "
-                "D = kd*max(0, the measurement's move deeper outside the region since the "
-                "previous window)/scale while v > 0, else 0. "
-                "lambda' = clip(kp*v + I' + D, 0, lambda_max)",
+                "B = penalty_cap / v, the price at which the card's own penalty lambda * v "
+                "takes the whole cap; S = sum(lambda_j * v_j) over the cards of the roles "
+                "the card answers for (the least over roles for a card that answers for "
+                "all), at the prices in force. E = the largest B of the card's current "
+                "failure episode (its violating windows since it last complied, this one "
+                "included), 0 outside one. If v > 0, with I_E = min(E, I): I' = I_E while "
+                "lambda >= B (the integrator is held at the card's own bound, never cut by "
+                "a spike; S never holds it) or while kp*v + I_E >= B and v > v_previous, "
+                "else I' = min(B, I_E + eta*v); otherwise I' = max(0, min(I, E_ended) - "
+                "decay), E_ended the episode compliance ends: a price adopted above every "
+                "bound unwinds on the decay schedule. D = kd*max(0, the "
+                "measurement's move deeper outside the region since the previous "
+                "window)/scale while v > 0, else 0. "
+                "lambda' = clip(kp*v + I' + D, 0, B) while v > 0, else max(0, I'). A window "
+                "closing with "
+                "max(lambda * v, S) >= penalty_cap is a window at the bound, counted and "
+                "published with the card (world.card_prices: bound, windows_at_bound, "
+                "saturated_windows)",
+                "gain_headroom": self.m.gain_headroom(),
             },
             "cascade": {"min_ratio": self.m.timing.min_ratio,
                         "jitter_fraction": self.m.timing.jitter_fraction},
@@ -1887,9 +1923,19 @@ class SchematicsMixin:
         thrash = getattr(self, "stats", None) and self.stats.thrash or {}
         return {
             "consequence_mix": getattr(self, "consequence_mix", self.ev.consequence_share),
+            # Whether the sampling actuator holds the mix for want of consequence
+            # readings (wave 16, R-B): {supported, needed, window}, or None.
+            "sampling_blind": getattr(self, "sampling_blind", None),
             # The thrash price in force (world.mechanics.thrash_price): it moves each window.
             "thrash_price": {"lambda": thrash.get("lambda", 0.0),
-                             "penalty": thrash.get("penalty", 0.0)},
+                             "penalty": thrash.get("penalty", 0.0),
+                             "roles": list(thrash.get("roles") or [])},
+            # Closed windows until a window's decisions have their measured
+            # consequences (world.mechanics.committee.shadow_prices), from the very
+            # function the margin and shadow-price readers use: it moves with the
+            # price loop's period.
+            "margin_horizon_windows": (self._margin_horizon()
+                                       if hasattr(self, "_margin_horizon") else None),
             "committed": "world.mechanics carries the committed value of each of these; a "
             "difference is this runtime's own adaptation, not an amendment",
         }
@@ -1932,13 +1978,16 @@ class SchematicsMixin:
 
 
     #: The ``world.scoring`` entries that state how each judging kind's answer settles:
-    #: its own formula and the consequence score it predicts. The decline's settlement
-    #: is ``world.scoring.malformed_judgement``; the decline itself is stated once, as a
+    #: its own formula, the consequence score it predicts, and what a decline, a NOOP
+    #: and an abstention are priced at (``abstention``; wave 16, section 9 item 5: D4
+    #: travels with the request, verbatim). The decline's settlement is
+    #: ``world.scoring.malformed_judgement``; the decline itself is stated once, as a
     #: form of the outcome schema.
     SETTLEMENT_KEYS: dict[str, tuple[str, ...]] = {
-        "Verdict": ("evaluator_return", "verdict_is_a_prediction"),
-        "MetaVerdict": ("meta_return", "evaluator_return", "verdict_is_a_prediction"),
-        "CounterVerdict": ("counter_return", "verdict_is_a_prediction"),
+        "Verdict": ("evaluator_return", "verdict_is_a_prediction", "abstention"),
+        "MetaVerdict": ("meta_return", "evaluator_return", "verdict_is_a_prediction",
+                        "abstention"),
+        "CounterVerdict": ("counter_return", "verdict_is_a_prediction", "abstention"),
     }
 
     #: The ``world.scoring`` entry each reward shape settles by.
@@ -1995,6 +2044,27 @@ class SchematicsMixin:
         scoring = self._scoring_block()
         return {key: scoring[key] for key in self.SETTLEMENT_KEYS[kind]}
 
+    def _enforced_values(self) -> dict[str, Any]:
+        """The numbers the published formulas name, each read from the function the
+        runtime enforces it with, never restated by hand.
+
+        Guarantees ``consequence_horizon_ns`` is ``_horizon_ns()`` (H),
+        ``consequence_patience_ns`` is ``_patience_ns()`` (H plus the verdict window,
+        counted once; ruling R10-k), ``penalty_cap`` the prices' cap, and
+        ``learned_map_bound`` each learner's ``B`` (``_charge_bound``; ruling R10-l),
+        so a formula and its value cannot drift apart.
+        """
+        values: dict[str, Any] = {"penalty_cap": self.m.prices.penalty_cap,
+                                  "uninformative_reasons": [FEE_UNKNOWN, NO_MARK]}
+        for key, name in (("consequence_horizon_ns", "_horizon_ns"),
+                          ("consequence_patience_ns", "_patience_ns")):
+            reader = getattr(self, name, None)
+            values[key] = reader() if callable(reader) else None
+        bound = getattr(self, "_charge_bound", None)
+        if callable(bound):
+            values["learned_map_bound"] = {"router": bound(True), "seat": bound(False)}
+        return values
+
     def _scoring_block(self) -> dict[str, Any]:
         """How decisions settle, stated as facts about the world (schematics are
         public; no goals). Every formula here is the one the runtime applies: the
@@ -2006,45 +2076,77 @@ class SchematicsMixin:
         force is in ``world.adaptive_scoring``.
         """
         ev = self.ev
-        backstop = ev.consequence_backstop_ticks
         return {
+            # Every number the formulas below name, generated from the function the
+            # runtime enforces it with (Chapter II §II.b: published = enforced), fixed
+            # for one charter edition.
+            "enforced_values": self._enforced_values(),
             "producer_or_custom_return": (
                 "ProducerReturn and custom return kinds settle on the verdict channel: the "
                 "score is the mean of the verdicts (0 to 1) the judges that read it gave, "
                 f"less the card penalty; a return no judge read within {ev.verdict_timeout_ticks} "
                 "ticks is censored: no score, and its router and the seat's own learner are "
-                "credited the zero-consequence reward, unpriced; except a return that answered "
-                "status: cannot, which then settles as declined: the router that drew the "
-                "seat and the seat's own learner are credited as for an abstention, less the "
-                "card penalty its role bears"
+                "credited as for an abstention (world.scoring.abstention); a return that "
+                "answered status: cannot settles as declined and is credited the same way"
             ),
             "verdict_is_a_prediction": (
-                "a verdict q is scored against the judged return's measured outcome y: "
-                "for a return that executed venue operations (or earned service income; a "
-                "write the venue rejected executed nothing, one left uncertain counts), "
-                "y = return_paid_off, 1 when its realised or marked P&L exceeds its own "
-                "compute and tool cost; for a return that executed nothing and named a "
-                "counterfactual {coin, side}, y = 0.5 - 0.5 * tanh(g / "
-                f"{ev.opportunity_scale_bps}), g the declined trade's gross move in bp "
-                "(signed by its side, no fees) (opportunity-cost-v2); for a return whose "
-                "answer order {coin, side} was refused (collateral check, venue rejection "
-                "or terminal error) and that executed nothing else, y = 0.5 + 0.5 * "
-                f"tanh(g / {ev.opportunity_scale_bps}), g that order's gross move in bp "
-                "(signed by the ordered side, no fees), from the same mids and horizons "
-                "(attempted-trade-v1); any other return has no y. The reward is "
-                "scored when the outcome is fixed, or at the latest "
-                f"{ev.consequence_horizon_ticks} ticks after the return, on its mark then "
-                "(lots and the declined trade marked to the mids then); the fixed outcome at "
-                f"the backstop ({backstop} ticks) then updates standing only. brier = "
-                "1 - (q - y)^2; base = 1 - (b - y)^2, b the base rate of that kind of y "
-                "before this return's entered it; consequence score = 0.5 + 0.5 * "
-                "(brier - base), a proper score in [0, 1]"
+                "a verdict q is scored against the judged return's measured outcome y, "
+                "fixed once, at H = timing.world_repricing / timing.min_ratio after the "
+                "return on the venue's clock: for a return that executed venue operations "
+                "(or earned service income; a write the venue rejected executed nothing, "
+                "one left uncertain counts), y = return_paid_off, 1 when its realised P&L, "
+                "with lots still open at H marked at the mid less the venue's taker fee "
+                "rate on their notional (the rate most recently read at or before H; with "
+                f"none read by H the outcome is uninformative, {FEE_UNKNOWN}) and funding "
+                "counted for funding times at or before H only, exceeds its own "
+                "compute and tool cost, fixed at H or when its lots close; a held "
+                "instrument with no mid at or after H within the consequence patience, "
+                "H + verdict_timeout_ticks after the return, makes it uninformative, "
+                f"{NO_MARK}; a fill after H is late money, booked and never graded; any "
+                "counterfactual such a return named is ignored. "
+                "For a return that executed nothing and named a counterfactual {coin, side}, "
+                "net = s * (m1 - m0) / m0 * 10^4 - (f0 + f1 * m1 / m0) * 10^4 - "
+                "s * sum(rho_i * m_i) / m0 * 10^4 bp (each leg and each funding payment on "
+                "its own notional, as an acting lot opened and marked at the same instants "
+                "pays: the exit leg on the exit notional, m1 / m0 of the entry's, and "
+                "payment i on the notional at its funding time, m_i / m0 of it), "
+                "s = +1 for buy and -1 for sell, m0 the coin's latest venue mid when the "
+                "return was made (its first venue mid at or after the return when none was "
+                "read yet; H then counts from that mid), "
+                "m1 its first mid timestamped at or after H, f0 and f1 the venue's taker "
+                "fee rate for the coin's market (spot for a pair, perp otherwise) most "
+                "recently read at or before the return (f0) and at or before H (f1) "
+                "(venue.fee_schedule; with none read by either instant the outcome is "
+                f"uninformative, {FEE_UNKNOWN}), rho_i the venue's funding rate in force "
+                "at its i-th funding time after m0 and at or before H and m_i the price that "
+                "payment is on: the one the venue states its payment used, else the coin's "
+                "first venue mid at or after that funding time (perps only; longs pay a "
+                "positive rate), and y = 1 when net <= 0, else 0 (declined-trade-net-v1); "
+                "for a return whose answer order {coin, side} was refused (collateral "
+                "check, venue rejection or terminal error) and that executed nothing else, "
+                "the same net on the ordered side, and y = 1 when net > 0, else 0 "
+                "(attempted-trade-net-v1). A trade whose fee or funding rate the venue did "
+                "not state, or that the venue did not price within its consequence "
+                "patience, H + verdict_timeout_ticks of world time, has no y; any other "
+                "return has no y. brier = "
+                "1 - (q - y)^2; base = 1 - (b - y)^2, b the base rate of y for the same "
+                "definition, coin, side and horizon (verdict:<definition>:<coin>:<side>:"
+                "<H in ns>; an acting return's first venue write names its coin and side) "
+                "before this return's entered it, 0.5 before any; consequence score = 0.5 "
+                "+ 0.5 * (brier - base), a proper score in [0, 1]. When that base rate "
+                f"rests on at least {UNINFORMATIVE_SUPPORT} outcomes and is at least "
+                f"{UNINFORMATIVE_HIGH} or at most {UNINFORMATIVE_LOW}, the outcome is "
+                "uninformative: no consequence score is issued at all "
+                "(consequence.uninformative, with the base rate), the verdict trains no "
+                "standing, and y still enters the base rate"
             ),
             "evaluator_return": (
                 "a judge's decision settles on the conformity channel on two signals: g, the "
                 "mean grade the tier above gave it while its grade window was open, and c, "
-                "its consequence score; score = mean of those that exist, less the card "
-                "penalty; censored when neither exists. Each tier's judgements wait in a "
+                "its consequence score (absent when the outcome was uninformative); score = "
+                "the equal mean of those that exist, less the card penalty; censored when "
+                "neither exists. No consequence score enters a card, a lambda or a posted "
+                "lambda. Each tier's judgements wait in a "
                 "cascade window lasting timing.min_ratio times the measured period in which "
                 "the decisions that tier judges reach a score, lengthened by up to "
                 "timing.jitter_fraction of itself. The window releases at the first "
@@ -2054,12 +2156,12 @@ class SchematicsMixin:
                 "then the latest) and, beside it, the next completed judgements by the same "
                 "order up to evaluation.meta_read_share of them; the other completed ones "
                 "are passed over. A judgement whose decision has not settled at the release "
-                "is carried into the tier's next window, which opens then, until "
-                f"{backstop + ev.verdict_timeout_ticks} ticks after the judgement was made; "
-                "past that it is not carried. A judgement's grade window closes on the tick "
-                "after a release that handed it up, passed it over or stopped carrying it; "
-                f"one held longer than {backstop + ev.verdict_timeout_ticks} ticks plus the "
-                f"duration of the window it is in, or taken by no window within "
+                "is carried into the tier's next window, which opens then, for one "
+                "consequence patience (H + verdict_timeout_ticks of world time) per tier at "
+                "or beneath its own after the judgement was made; past that it is not "
+                "carried. A judgement's grade window closes on the tick after a release that "
+                "handed it up, passed it over or stopped carrying it; one held longer than "
+                "that plus the duration of the window it is in, or taken by no window within "
                 f"{ev.verdict_timeout_ticks} ticks, closes then. A grade that reaches a "
                 "closed grade window, and a grade "
                 "window that closes with no grade, are ledgered as evaluator.grade_censored "
@@ -2068,7 +2170,9 @@ class SchematicsMixin:
             "meta_return": (
                 "a meta's conformity k is also a prediction of the consequence score s of the "
                 "decision it graded: c = 0.5 + 0.5 * ((1 - (k - s)^2) - (1 - (b - s)^2)), "
-                "b the base rate of those scores; no s, no c. A meta settles like a judge on "
+                "b the base rate of those scores at the meta's own tier "
+                "(evaluation_consequence:<tier>), under the same uninformative rule as a "
+                "verdict's; no s, no c. A meta settles like a judge on "
                 "the grade from a tier above, when one exists, and on c; a top-tier meta on "
                 "c alone"
             ),
@@ -2077,22 +2181,24 @@ class SchematicsMixin:
                 "whose target is refused settles censored; its call is charged. status: "
                 "cannot declines the commission: the call is charged, it settles as "
                 "declined, and the router that drew the seat and the seat's own learner are "
-                "credited as for an abstention"
+                "credited as for an abstention (world.scoring.abstention)"
             ),
             "counter_return": (
                 "a counter-verdict q' on the return a first-tier verdict q judged, made in "
                 "the tick of that verdict, settles on the adversarial channel when the world "
                 "measures that return's outcome y (the y of verdict_is_a_prediction): "
                 "score = 0.5 + 0.5 * ((1 - (q' - y)^2) - (1 - (q - y)^2)), less the card "
-                "penalty; censored when the return is unmeasured "
-                f"{backstop + ev.verdict_timeout_ticks} ticks after the counter, or when the "
-                "counter read anything but a first-tier verdict in its tick"
+                "penalty; censored when the return is unmeasured H + verdict_timeout_ticks "
+                "of world time after the counter, or when the counter read anything but a "
+                "first-tier verdict in its tick"
             ),
             "antagonist_exposure": (
-                "an Exposure return settles on the exposure channel: the mean over the judges "
-                "scored on it of (1 - their consequence score), less the antagonist's card "
-                "penalty; censored when no judge's verdict on it was scored, or declined "
-                "when it answered status: cannot"
+                "an Exposure return settles on the exposure channel: score = 0.5 + 0.5 * "
+                "(o - c), c the mean consequence score of the judges scored on it and o the "
+                "mean, over those same judges, of each one's mean consequence score on "
+                "ordinary returns (0.5 for a judge not yet scored on one), less the "
+                "antagonist's card penalty; censored when no judge's verdict on it was "
+                "scored, or declined when it answered status: cannot"
             ),
             "composed_return": (
                 "a requested child drawn by a kind's request router, whose return reached "
@@ -2123,12 +2229,23 @@ class SchematicsMixin:
             "declined_return": (
                 "any return that answered status: cannot and earned no score on its "
                 "channel settles declined: its call is charged, and the router that drew "
-                "the seat and the seat's own learner are credited as for an abstention"
+                "the seat and the seat's own learner are credited as for an abstention "
+                "(world.scoring.abstention)"
             ),
             "abstention": (
-                "a router's NOOP draw is credited the zero-consequence reward of the rounds "
-                "that router learns from, less the card penalty a decision of the role it "
-                "would have filled bears in the window it was drawn in"
+                "a decline, a NOOP and an abstention are priced at the router's observed "
+                "average raw score less the same penalty: a router's NOOP draw, a declined "
+                "commission, and a decision censored or timed out without a score are each "
+                "credited r less p, learned as (r + B - P) / (1 + B), P = p plus a router's "
+                "thrash charge, B = 2 * prices.penalty_cap for a router and "
+                "prices.penalty_cap for a seat's own learner, r the mean score before card "
+                "penalty of every seat round "
+                "the router has learned from a settlement (cumulative over the router's "
+                "life and its successors'), p the card penalty a decision of the role it "
+                "filled, or would have filled, bears in the window it was drawn in (a NOOP "
+                "weighs each role by the odds its draw gave that role's seats); before the "
+                "router's first settled round r is the published prior "
+                f"{NEUTRAL_REWARD}. A seat's own learner is credited the same"
             ),
             "consequence_standing": (
                 "0.5 + skill, clipped to [0, 1] and capped at 0.5 below minimum coverage; "
@@ -2141,24 +2258,54 @@ class SchematicsMixin:
                 "learned selection; when the verdict mean "
                 f"rises while consequence skill falls over {self.m.immune.k} windows the mix "
                 f"rises by {ev.sampling_step} for the next window, capped at "
-                f"{ev.sampling_cap}, and steps back otherwise"
+                f"{ev.sampling_cap}, and steps back otherwise; a window that scored no "
+                "consequence has no skill reading, and while fewer than "
+                f"{self.m.immune.k} of the last {self.m.immune.k} windows have one the mix "
+                "holds (world.adaptive_scoring.sampling_blind)"
             ),
             "card_penalty": (
-                "v_j = distance outside card j's inclusive region / observation.scale; "
-                "S = sum(lambda_j * v_j) over cards for the settlement's role or all; "
-                "each role's cards use their declared typed windows. "
-                f"penalty = min(S, {self.m.prices.penalty_cap}) * share; "
-                "share = sum(lambda_j * v_j * share_j) / S (zero when S = 0). "
-                "share_j is the decision's own cost, malformed-return deficit (well-formed "
-                "count for an upper-bound violation), tool attempts or filled notional "
-                "divided by that observation's window total; otherwise "
-                "1/n decisions for that role. A zero total contributes zero. "
+                "v_j = distance outside card j's inclusive region / observation.scale, plus "
+                "the violation its failed holdouts add; p_j = min(lambda_j * v_j, "
+                "penalty_cap), 0 while v_j is 0; S = sum(p_j) over cards for the "
+                "settlement's role or all; each role's cards use their declared typed "
+                f"windows. penalty = min(S, {self.m.prices.penalty_cap}) * share; "
+                "share = sum(p_j * share_j) / S (zero when S = 0). "
+                "The split is the window's decisions not taken in the unhistoried niche (a "
+                "seat in its protected trial, or a niche.action); a decision in the niche has "
+                "share_j 0 and penalty 0, is in no own_j, total_j or n, and its score is its "
+                "judges', unchanged. For cost_per_return, cost_per_attempt, "
+                "well_formed_rate, tool_calls and turnover, share_j = min(1, own_j / "
+                "total_j), 0 when total_j is 0, where own_j is the decision's own and total_j "
+                "the sum over the split of: cost_per_return, the cost of a decision of the "
+                "settlement's role with a well-formed return; cost_per_attempt, the cost of "
+                "a decision of the settlement's role that spent; well_formed_rate, "
+                "invocations - ok when the rate reads below a floor or a band's low bound, "
+                "else ok; tool_calls, tool attempts; turnover, filled notional. For "
+                "revision_rate, noop_share and consequence_paid_off_rate, share_j = 0 for a "
+                "decision that moved the rate toward its region (a floor: in its numerator; "
+                "a ceiling: in its denominator and not its numerator), else share_j = 1 / "
+                "max(1, n), n the counted decisions that did not (the non-relieving ones), "
+                "NOOPs and declines included. For any other observation share_j = "
+                "max(prices.min_blame_share, 1 / max(1, n)), n the counted decisions. The "
+                "counted decisions are the split decisions of the settlement's role, the "
+                "decision itself included, less any whose only entry in the window is "
+                "money spent. Every count is the window's when it closed: a "
+                "decision settling while its window is open settles at the close "
+                "(price.deferred). "
                 "Closed decision windows retain their observations; open windows use the last "
                 "closed observations with current contribution totals. "
-                "score = clip(raw_score - penalty, 0, 1). Prices and region scales are in "
-                "card_prices. "
+                "score = clip(raw_score - penalty, 0, 1), as published; every learner, the "
+                "router that drew the decision and the seat's own, learns one map, applied "
+                "once: (raw_score + B - P) / (1 + B), with no clip, P the total charge the "
+                "round bears (penalty, plus the thrash charge of the router that drew it) "
+                "and B the largest P can be for that learner (penalty_cap for a seat's own "
+                "learner, 2 * penalty_cap for a router). Prices and region "
+                "scales are in card_prices. "
                 "Stable failure raises each violated card's lambda by n * immune.price_step in "
-                "its n-th consecutive failing window, bounded by lambda_max. Duplicate "
+                "its n-th consecutive failing window, bounded by B = penalty_cap / v; a card "
+                "whose own price sits at B (its own penalty at penalty_cap; another card's "
+                "pressure never stops it) is not raised, and the ratchet ledgers "
+                "immune.price_ratchet_saturated instead. Duplicate "
                 "observations on overlapping roles are refused in amendments."
             ),
             "propensity": (

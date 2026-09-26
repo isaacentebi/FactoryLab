@@ -196,9 +196,13 @@ class PolymarketSurface:
         # token due at one tick; None while open, else the wall ns (``wall_now``) until
         # which it still counts: one window, 10 s, after the kernel's last request for it.
         self.open_reads: dict[str, int | None] = {}
+        # Codex on #152: the instant this venue's events feed ("events": its fills,
+        # cancels and resolutions) and each held token's book were last read
+        # successfully; what depends on a stream waits for its read.
+        self.through: dict[str, int] = {}
 
     FIELDS = ("intents", "order_ids", "realized", "claimed", "claims", "booked", "settled",
-              "opening", "token_markets", "open_reads")
+              "opening", "token_markets", "open_reads", "through")
 
     def state(self) -> dict[str, Any]:
         """Intents, order ownership, the claim book, the window count and the venue's state."""
@@ -1184,7 +1188,8 @@ def _record(rt: Any, surface: PolymarketSurface, client_id: str,
         if result["status"] == "cancelled" and Decimal(str(result["filled_size"])) > 0:
             attributed = {**result, "status": "filled"}
         rt.consequences.order_result(intent["handle"], attributed,
-                                     {"size": str(intent["args"]["size"])}, rt.n)
+                                     {"size": str(intent["args"]["size"])}, rt.n,
+                                     coin=coin_of(intent["args"]["token_id"]))
     before = rt.consequences.table
     rt._replay_deferred(rt.consequences.order_acknowledged(client_id), before)
     return dict(result)
@@ -1208,6 +1213,7 @@ def tick(rt: Any) -> None:
             # so what an event forecast settles on changes with the world's clock. With
             # no writes it holds nothing, so its events are empty.
             settle(rt, surface.venue.advance(rt.clock.now_ns))
+            surface.through["events"] = rt.clock.now_ns
         return
     for client_id, intent in list(surface.intents.items()):
         if intent["result"]["status"] != "uncertain" or intent.get("unresolved"):
@@ -1221,6 +1227,8 @@ def tick(rt: Any) -> None:
             continue
         _recover(rt, surface, client_id)
     settle(rt, surface.venue.advance(rt.clock.now_ns))
+    # Every event the venue held through now was handed over and accounted.
+    surface.through["events"] = rt.clock.now_ns
     confirm_terminal(rt)
     mark(rt)
     reconcile(rt)
@@ -1264,14 +1272,26 @@ def mark(rt: Any) -> None:
     Polymarket nothing, so it needs no share of the request budget.
     """
     surface = rt.polymarket
-    for coin in sorted({lot.coin for lot in rt.consequences.table.lots
-                        if lot.market == "event"}):
+    # Every token a lot holds, and every token an open outcome held at any recorded
+    # fact (its lot may since have been redeemed): each needs its mark.
+    for coin in sorted({coin for coin, market in rt.consequences.graded_instruments()
+                        if market == "event"}):
         try:
-            mid = _decimal(surface.venue.order_book(coin.removeprefix("PM:"), 1)["midpoint"])
-        except Exception:  # noqa: BLE001 - an unread price is an absent price
+            book = surface.venue.order_book(coin.removeprefix("PM:"), 1)
+        except Exception:  # noqa: BLE001 - an unread book advances nothing
+            book = None
+        if book is not None:
+            # A successful read is the token's book stream read through now, whatever
+            # it states (Codex on #152): an empty or one-sided book is read, and states
+            # no price; only an unanswered read holds the lots on the token.
+            surface.through[coin] = rt.clock.now_ns
+        try:
+            mid = _decimal(book["midpoint"]) if book is not None else None
+        except Exception:  # noqa: BLE001 - an unreadable price is an absent price
             mid = None
         if mid is not None and 0 < mid < 1:
-            rt.consequences.observe("MarketMid", {"coin": coin, "mid": str(mid)}, rt.n)
+            rt.consequences.observe("MarketMid", {"coin": coin, "mid": str(mid),
+                                                  "ts_ns": rt.clock.now_ns}, rt.n)
         elif rt.consequences.mids.pop(coin, None) is not None:
             rt.ledger.append({"kind": "polymarket.mark_unavailable", "coin": coin,
                               "ts": rt.clock.now_ns})
@@ -1306,6 +1326,10 @@ def reconcile(rt: Any) -> dict[str, Any] | None:
     return result
 
 
+#: A resolved token's book stream watermark: no book fact can follow a resolution.
+RESOLVED_BOOK = 2**62
+
+
 def settle(rt: Any, events: list[dict[str, Any]]) -> None:
     """Book what the venue did: fills into lots and the pot, resolutions into consequences.
 
@@ -1334,7 +1358,9 @@ def _settle_fill(rt: Any, event: dict) -> None:
     payload = {"order_id": order_id, "coin": coin_of(event["token_id"]),
                "is_buy": event["is_buy"], "size": event["size"], "px": event["px"],
                "fee_usd": event["fee_usd"], "realized_usd": event["realized_usd"],
-               "liquidation": False, "market": "event", "inventory_size": event["size"]}
+               "liquidation": False, "market": "event", "inventory_size": event["size"],
+               # The fill's own venue time, kept while it is held or drained late.
+               **({"ts_ns": int(event["ts_ns"])} if event.get("ts_ns") is not None else {})}
     rt.ledger.append({"kind": "polymarket.fill", **payload, "market_id": event["market_id"],
                       "ts": rt.clock.now_ns})
     rt.polymarket.settled += Decimal(event["realized_usd"]) - Decimal(event["fee_usd"])
@@ -1364,7 +1390,10 @@ def _settle_resolution(rt: Any, event: dict) -> None:
     # A lot a released decision's order opened realises into the pot too (wave 17b):
     # ``realized_by_handle`` counts retained and released handles alike.
     before = rt.consequences.table.realized_by_handle()
-    realized = rt.consequences.redeem(coin_of(token), event["payout"], rt.n, facts)
+    realized = rt.consequences.redeem(coin_of(token), event["payout"], rt.n, facts,
+                                      at_ns=event.get("ts_ns"))
+    # A resolved token's book states nothing more, ever: its stream is complete.
+    rt.polymarket.through[coin_of(token)] = RESOLVED_BOOK
     after = rt.consequences.table.realized_by_handle()
     credit_realized(rt, {handle: total - before.get(handle, 0)
                          for handle, total in after.items()

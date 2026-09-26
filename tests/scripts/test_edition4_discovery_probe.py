@@ -26,6 +26,15 @@ def no_network(monkeypatch):
     monkeypatch.setattr("socket.getaddrinfo", deny)
 
 
+def lists_nothing(monkeypatch):
+    """The probe worlds as worlds whose venue lists no instrument: their canned answers
+    name no declined trade, which a world listing one requires (Codex on #152: the
+    counterfactual contract reads the venue's listing, not whether a mid was broadcast)."""
+    from factorylab.runtime.loop import Runtime
+
+    monkeypatch.setattr(Runtime, "_listed_instruments", lambda self: ())
+
+
 class CannedProvider:
     """Answer each completion from a fixture, recording what was asked."""
 
@@ -123,7 +132,8 @@ def test_default_run_freezes_the_preflight_and_buys_nothing(tmp_path, monkeypatc
     assert [row["executed"] for row in records(where["out"])] == [False]
 
 
-def test_the_full_chain_is_read_from_receipts_not_from_prose(tmp_path):
+def test_the_full_chain_is_read_from_receipts_not_from_prose(tmp_path, monkeypatch):
+    lists_nothing(monkeypatch)
     where = paths(tmp_path)
     provider = CannedProvider(discovery_chain())
     record = probe.run_probe(out=where["out"], freeze=where["freeze"], provider=provider)
@@ -327,7 +337,8 @@ def test_investigation_paid_mode_requires_an_existing_freeze(tmp_path, monkeypat
     assert report["executed"] is False
 
 
-def test_investigation_initial_requests_publish_numeric_tool_call_bound():
+def test_investigation_initial_requests_publish_numeric_tool_call_bound(monkeypatch):
+    lists_nothing(monkeypatch)
     manifest = investigation.effective_manifest(
         investigation.load_manifest(str(probe.DEFAULT_WORLD)))
     seat = "mechanism"

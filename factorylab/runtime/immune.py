@@ -13,19 +13,22 @@ report also replays (``versioning.versions.diagnose``). The answers:
   the ratcheted price reaches abstention too, through the same card penalty a
   router's NOOP bears (ruling R9, ``FeedbackMixin._priced_abstention``). The raise is
   bounded by ``prices.penalty_cap`` like every card penalty; see ``thrash_penalty``
-  for why that bound is kept.
+  for why that bound is kept. At the cap the ratchet stops, and the saturation is
+  ledgered (``immune.price_ratchet_saturated``) and published with the card's
+  statistics, the card's price at its bound (wave 16, R-E).
 * **thrash**: "penalize the duration of spectral-gap volatility, incentivizing the
   surplus-retaining core of no-swap-regret learners to stabilize": the diagnosis's
   unsettledness (the version gap's volatility, oscillation, abandoned versions,
   short-lived configurations) is priced by the charter's one price law, a PID whose
   integral accumulates how long it lasts (``THRASH_CARD``), and each round of a
   no-swap-regret router, abstentions included, is charged that price times the
-  router's own policy movement (``FeedbackMixin._thrash_charged``): holding still
+  router's own policy movement (``FeedbackMixin._thrash_charge``): holding still
   is what lowers the charge.
 * **learning death**: "delivered as a fact about the world", never as a response:
   the novelty reserve is usable by unhistoried actions of every seat (ruling R5,
-  ``RoutingMixin._niche_action``). The organ only holds the exploration gain it
-  raised while the frontier is gone.
+  ``RoutingMixin._niche_action``), and a decision taken in the niche bears no card
+  penalty (wave 16, R-E). The organ only holds the exploration gain it raised while
+  the frontier is gone.
 
 The organ diagnoses every window and acts (gain, ratchet) on its own loop, at least
 ``min_ratio`` price periods apart (versioning P5). The thrash price is a price and
@@ -36,10 +39,10 @@ import hashlib
 import json
 from dataclasses import asdict
 
-from factorylab.charter.controller import CardRegion, PriceController
+from factorylab.charter.controller import CardRegion, PriceController, pressure
 from factorylab.versioning import live
 from factorylab.versioning.series import CHANNELS
-from factorylab.versioning.versions import diagnose
+from factorylab.versioning.versions import organ_step
 
 #: The version causes whose settling times governance: a revision of the input, by
 #: the charter or by the world's terms. Essay II.IV.c: "inject a small, deliberate
@@ -58,19 +61,82 @@ def thrash_controller(ledger, manifest) -> PriceController:
     """The thrash price: the charter's PID law and gains over the version gap's volatility.
 
     One price law (Chapter II rulings §2: "One price law: PID"): the same ``eta``,
-    ``kp``, ``kd``, ``decay`` and ``lambda_max`` the charter committed for its cards,
+    ``kp``, ``kd``, ``decay`` and one bound, ``penalty_cap``, the charter committed for
+    its cards,
     over the volatility of the version gap series, in the region ``[0,
     immune.tv_threshold]``. Its integral accumulates ``eta * v`` for every window
     the volatility stays above that bound, so the price rises with the duration of
     the thrash, and leaks ``decay`` a window once it settles.
     """
     pr, bound = manifest.prices, manifest.immune.tv_threshold
-    controller = PriceController(ledger, eta=pr.eta, decay=pr.decay, lambda_max=pr.lambda_max,
+    controller = PriceController(ledger, eta=pr.eta, decay=pr.decay,
+                                 penalty_cap=pr.penalty_cap,
                                  min_window_events=pr.min_window_events, kp=pr.kp, kd=pr.kd)
     # The violation is in the gap's own units (it lives in [0, 1]), as a card at a zero
     # bound keeps its observation's declared units.
     controller.register(CardRegion(THRASH_CARD, "max", None, bound, 1.0))
     return controller
+
+
+#: The tier whose behaviour an observation measures, where that is not the role its card
+#: answers for: a judge's verdicts and forecasts are the judges' behaviour, a meta's
+#: conformity the metas', an antagonist's exposure the antagonists' (wave 16, second
+#: addendum, I-10: a penalty lands on the decisions whose behaviour it measures).
+MEASURED_TIER = {"verdict_mean": "evaluator", "verdict_std": "evaluator",
+                 "resolved_verdict_mean": "evaluator", "resolved_verdict_std": "evaluator",
+                 "evaluator_disagreement": "evaluator", "forecast_skill": "evaluator",
+                 "meta_verdict_mean": "meta", "exposure_win_rate": "antagonist"}
+
+
+def card_semantics(card) -> dict[str, str]:
+    """What a card measures, as a window records it at its close: the observation and
+    the role whose behaviour that observation is (``MEASURED_TIER``, else the role the
+    card answers for)."""
+    observation = card.observation.strip().lower()
+    return {"observation": observation,
+            "role": MEASURED_TIER.get(observation, card.answers_for)}
+
+
+def thrash_roles(rt, windows: list[dict]) -> list[str]:
+    """The roles whose behaviour the thrash signals read as moving.
+
+    Guarantees the roles measured by the cards whose region-relative cell changed
+    between two consecutive windows of the retained horizon the diagnosis read
+    (``live.cells`` over ``timing.min_ratio × immune.k`` windows), each read under the
+    semantics the window RECORDED at its close (``semantics``), never the charter in
+    force now (Codex on #152): an amendment that redefines a card under the same id
+    cannot move old movement onto its new role. A change between two windows that
+    recorded different meanings for the card (observation or role) compares two
+    tiers' behaviour or two metrics: its redefinition, not movement.
+    A card answering for ``all``, and movement in activity alone, name no role: then
+    the price lands where essay II.II.b puts it, on the no-swap-regret core. A window
+    recorded before semantics were kept is read under the current card.
+    """
+    horizon = rt.m.timing.min_ratio * rt.m.immune.k
+    span = windows[-horizon:]
+    if len(span) < 2:
+        return []
+    bins = {"registration_bins": rt.m.immune.registration_bins,
+            "revision_bins": rt.m.immune.revision_bins}
+    dims, series = live.cells(span, activity=False, **bins)
+    current = {f"card:{card.id}": card_semantics(card) for card in rt.charter.cards}
+
+    def meaning(window: dict, name: str) -> dict | None:
+        recorded = window.get("semantics")
+        return (recorded or {}).get(name) if recorded is not None else current.get(name)
+
+    roles = set()
+    for i, name in enumerate(dims):
+        for before, after, cell_before, cell_after in zip(span, span[1:], series,
+                                                          series[1:], strict=False):
+            if cell_before[i] == cell_after[i]:
+                continue
+            was, now = meaning(before, name), meaning(after, name)
+            if was is None or now is None or was != now:
+                continue  # a redefinition (a new observation or role), not movement
+            if now["role"] != "all":
+                roles.add(now["role"])
+    return sorted(roles)
 
 
 def thrash_penalty(rt) -> dict:
@@ -82,7 +148,7 @@ def thrash_penalty(rt) -> dict:
     penalty is ``min(lambda * v, prices.penalty_cap)``, where ``v`` is ``u``'s
     distance above ``immune.tv_threshold``, zero while it is unsupported or inside
     that bound. The penalty is the published reading; what a round is charged is
-    the price times the router's own movement (``FeedbackMixin._thrash_charged``).
+    the price times the router's own movement (``FeedbackMixin._thrash_charge``).
 
     ``prices.penalty_cap`` binds this and the stable-failure ratchet alike (versioning
     audit P4 asked whether it should). It is kept: a reward is a unit-interval score,
@@ -91,9 +157,9 @@ def thrash_penalty(rt) -> dict:
     and the essay's own warning is that "gain ramped high enough to kick a system out
     of an overdamped attractor will, if unchecked, overshoot into an oscillation
     condition (thrash)". What keeps staying costly beyond the cap is that abstention
-    bears the same price (ruling R9), so the cap no longer makes waiting the escape,
-    and the ratchet keeps winding the card's integral, which keeps the price after
-    the attractor is left.
+    bears the same price (ruling R9), so the cap no longer makes waiting the escape.
+    At the cap the integral is frozen and the ratchet stops (wave 16, R-E): a wound-up
+    integral would keep the price high long after the attractor is left.
     """
     unsettled = rt.stats.versions.get("unsettled")
     controller = rt.thrash_controller
@@ -101,7 +167,7 @@ def thrash_penalty(rt) -> dict:
         controller.observe(THRASH_CARD, unsettled, window_end_event=rt.n)
     price = controller.price(THRASH_CARD)
     violation = controller.violation(THRASH_CARD, unsettled) if unsettled is not None else 0.0
-    penalty = min(price * violation, rt.m.prices.penalty_cap)
+    penalty = pressure(price, violation, rt.m.prices.penalty_cap)
     return {"unsettled": unsettled, "violation": violation, "lambda": price,
             "penalty": penalty}
 
@@ -125,7 +191,10 @@ def _gain(rt, kind: str, window: int) -> None:
     Up is bounded by ``gamma_max``; down (thrash, or ``cleared`` once no pathology
     that the gain answers is diagnosed) never goes below the router's own seed
     gamma, so a ratchet the organ raised unwinds after the attractor is left and a
-    router that was never raised is not touched. Each change is ledgered first.
+    router that was never raised is not touched. Guarantees no step leaves or holds
+    a gamma above ``gamma_max`` (a router restored or seeded above it is clamped to it
+    on the organ's next step, in either direction): a value above its bound would sit
+    where no step could reach it. Each change is ledgered first.
 
     A router's gain is an outer loop over that router's own rounds (time audit T2):
     a kind's routers step at most once per ``min_ratio`` times their measured round
@@ -143,8 +212,8 @@ def _gain(rt, kind: str, window: int) -> None:
         bases = _bases(saved["router"]["learner"])
         before = [base["gamma"] for base in bases]
         after = [
-            max(old, min(spec.gamma_max, old + spec.gain_step))
-            if kind == "stable_failure" else min(old, max(router.seed_gamma, old - spec.gain_step))
+            min(spec.gamma_max, old + spec.gain_step) if kind == "stable_failure"
+            else min(spec.gamma_max, old, max(router.seed_gamma, old - spec.gain_step))
             for old in before
         ]
         if before == after:
@@ -294,6 +363,9 @@ def close_window(rt, values: dict[str, float]) -> None:
     current = {
         "index": rt.window.index, "tick": now, "charter_edition": rt.charter.edition,
         "terms": terms_digest(rt), "profile": profile,
+        # What each card measured when this window closed (Codex on #152): its old
+        # evidence is read under this meaning, whatever the charter later says.
+        "semantics": {f"card:{c.id}": card_semantics(c) for c in rt.charter.cards},
         # The frontier signal (ruling R9; versioning P1, U1): each router's draws this
         # window, its NOOP floor and its draw mass on unhistoried seats.
         "frontier_invocation": rt.frontier_invocation(),
@@ -304,8 +376,14 @@ def close_window(rt, values: dict[str, float]) -> None:
     }
     rt.lifespan_log = []
     windows = [*rt.stats.immune_windows, current][-live.retention(horizon, k):]
-    state, events = live.advance(rt.stats.versions or live.fresh(), windows, k=k,
-                                 horizon=horizon, tv_threshold=spec.tv_threshold, **bins)
+    # The previous diagnosis's failing set: a card in it that this tail leaves
+    # unmeasured holds its state (wave 16, second addendum, M-6).
+    held = list((rt.stats.versions or {}).get("failing", []))
+    # The one step a forensic replay runs too (``versions.organ_step``): a redefined
+    # card is a new metric, read only from windows that measured what it measures now.
+    state, events, diagnosed = organ_step(
+        rt.stats.versions or live.fresh(), windows, held, k=k, horizon=horizon,
+        tv_threshold=spec.tv_threshold, gap_threshold=spec.gap_threshold, **bins)
     for event in events:
         kind = event["kind"]
         rt.ledger.append({"kind": f"version.{kind}", **{n: v for n, v in event.items()
@@ -316,8 +394,6 @@ def close_window(rt, values: dict[str, float]) -> None:
     rt.cadence.track_version(version=state["version"], opened=state["start_tick"],
                              settled=(state["settled_tick"] is not None
                                       or state["cause"] not in REVISIONS))
-    diagnosed = diagnose(windows, state, k=k, tv_threshold=spec.tv_threshold,
-                         gap_threshold=spec.gap_threshold, **bins)
     flags = diagnosed.pop("flags")
     evidence = {"window": current["index"], **diagnosed}
     rt.stats.immune_windows = windows
@@ -327,7 +403,9 @@ def close_window(rt, values: dict[str, float]) -> None:
     for kind, detected in flags.items():
         if detected:
             rt.ledger.append({"kind": f"pathology.{kind}", **evidence})
-    rt.stats.thrash = thrash_penalty(rt)
+    # Wave 16, second addendum (I-10): the thrash price is charged on the routers of
+    # the tiers whose behaviour moved, never shifted to another tier's.
+    rt.stats.thrash = {**thrash_penalty(rt), "roles": thrash_roles(rt, windows)}
     # Versioning P5, time audit T2: the organ diagnoses every closed window but acts
     # (gain, ratchet) only on its own loop, at least ``min_ratio`` price-loop
     # periods apart with its own jitter, so it never revises the controller at the
@@ -338,6 +416,7 @@ def close_window(rt, values: dict[str, float]) -> None:
                       "regions": current["regions"], "charter_edition": rt.charter.edition,
                       "tick": now, "terms": current["terms"],
                       "frontier_invocation": current["frontier_invocation"],
+                      "semantics": current["semantics"],
                       "lifespans": current["lifespans"], "thrash": rt.stats.thrash,
                       "acts": acts})
     if not acts:
@@ -364,8 +443,11 @@ def close_window(rt, values: dict[str, float]) -> None:
         # The attractor is left: the exploration the organ added unwinds toward seed.
         # A learning-dead window holds it, since less exploration is the wrong answer.
         _gain(rt, "cleared", current["index"])
+    # An unmeasured failing card holds its duration whatever the flags say (M-6):
+    # missing evidence ends no failure.
+    unmeasured = {cid.removeprefix("card:") for cid in diagnosed.get("unmeasured_held", ())}
     for card_id in rt.controller.card_ids():
-        if card_id not in ratcheted:
+        if card_id not in ratcheted and card_id not in unmeasured:
             rt.controller.end_failure(card_id, window=current["index"])
 
 

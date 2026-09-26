@@ -525,7 +525,7 @@ def _world(**tables):
             "models": [{"id": "m", "input_usd_per_mtok": "1", "output_usd_per_mtok": "5"}],
             "assemblies": [{"id": "a", "model_id": "m"}],
             "novelty": {"share": 0.1}, "immune": {"price_step": 0.05},
-            **tables}
+            "timing": {"world_repricing": "1h"}, **tables}
 
 
 @pytest.mark.parametrize("table,key", sorted(REMOVED_PRICE_KEYS))

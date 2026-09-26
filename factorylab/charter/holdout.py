@@ -19,7 +19,7 @@ BEHAVIOURAL_FACTS = frozenset({
     "exposures_won", "fills", "forecast_skills", "invocations", "market_purchases",
     "max_position_notional_micro", "meta_verdicts", "noop_returns", "notional_micro", "ok",
     "outcomes", "producer_returns", "realized_pnl_micro", "registration_rejections",
-    "registrations", "revised_decisions", "revision_returns",
+    "registrations", "resolved_verdicts", "revised_decisions", "revision_returns",
     "tool_calls", "verdicts",
 })
 #: Modules a holdout may import: arithmetic only, no clock, no randomness, no host.

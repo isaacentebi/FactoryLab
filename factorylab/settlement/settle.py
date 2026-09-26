@@ -75,7 +75,13 @@ class Settled:
 
 @dataclass(frozen=True)
 class SettledVerdict:
-    """One verdict scored against the measured outcome of the decision it judged."""
+    """One verdict scored against the measured outcome of the decision it judged.
+
+    ``uninformative`` is True when the outcome's base rate already answered the
+    question (``PrevalenceBaseline.uninformative`` as it stood before this outcome
+    entered it): the verdict is then worth no standing and no consequence score
+    (wave 16, D3 and ruling R-B), and ``base_rate`` and ``support`` say why.
+    """
 
     evaluator_id: str
     about_handle: str
@@ -83,6 +89,9 @@ class SettledVerdict:
     outcome: float
     brier: float
     baseline_brier: float
+    uninformative: bool = False
+    base_rate: float | None = None
+    support: int = 0
 
 
 def baseline_key(forecast: Forecast) -> str:
@@ -147,6 +156,9 @@ class Settler:
         self.__excluded: dict[str, str] = {}
         # about_handle -> baseline q before that return's outcome entered the base rate
         self.__snapshots: dict[str, float] = {}
+        # question -> [whether its key was uninformative, the key's support], as they
+        # stood before its outcome entered the base rate (wave 16, D3)
+        self.__retired: dict[str, list] = {}
         # about_handle -> the outcome already counted in the base rate, once per return
         # (a binary payoff, or a verdict key's fractional unblamed target)
         self.__recorded: dict[str, float] = {}
@@ -277,6 +289,12 @@ class Settler:
         """
         return self.__excluded.pop(handle, None)
 
+    def uninformative(self, key: str) -> bool:
+        """Whether the base rate under ``key`` already answers its question now
+        (``PrevalenceBaseline.uninformative``): what a verdict about an outcome entering
+        it now would be told."""
+        return self.__baseline.uninformative(key)
+
     def forget(self, about_handles) -> int:
         """Drop the base-rate snapshot and record of every question about a released
         decision; return how many entries went.
@@ -290,29 +308,31 @@ class Settler:
         if not gone:
             return 0
         count = 0
-        for store in (self.__snapshots, self.__recorded):
+        for store in (self.__snapshots, self.__recorded, self.__retired):
             for question in [q for q in store if q.rpartition(":")[2] in gone]:
                 del store[question]
                 count += 1
         return count
 
-    def score_verdict(self, *, about_handle: str, q: float, outcome: float,
-                      key: str) -> tuple[float, float]:
-        """Score one verdict against a provisional outcome, recording nothing.
+    def record_outcome(self, *, key: str, about_handle: str, outcome: float) -> None:
+        """Enter one decision's measured outcome in ``key``'s base rate, once.
 
-        Anticipatory settlement (essay II.IV.b): a verdict's reward is scored on its
-        return's mark before the world fixes the outcome. Guarantees the same
-        pre-outcome base rate ``settle_verdict`` will use for this decision (the
-        snapshot is taken here if it was not), and that neither standing nor the base
-        rate moves: the final measurement records both, once. Returns
-        (brier, baseline_brier), higher is better.
+        Wave 16, ruling R10-j: the keyed prevalence learns every fixed outcome, judged
+        or not. Guarantees the question's pre-outcome snapshot (base rate and whether
+        it was uninformative) is taken first, so a verdict about the decision scored
+        later is scored against the rate before this outcome entered it, exactly as if
+        it had been scored first; and that the outcome enters the rate once.
         """
         _require_probability(outcome, "outcome")
         question = f"{key}:{about_handle}"
-        baseline_q = self.__snapshots.get(question)
-        if baseline_q is None:
-            baseline_q = self.__snapshots[question] = self.__baseline.baseline_q(key)
-        return normative_brier(q, outcome), normative_brier(baseline_q, outcome)
+        if question not in self.__snapshots:
+            self.__snapshots[question] = self.__baseline.baseline_q(key)
+        if question not in self.__retired:
+            self.__retired[question] = [self.__baseline.uninformative(key),
+                                        self.__baseline.support(key)]
+        if question not in self.__recorded:
+            self.__recorded[question] = outcome
+            self.__baseline.record_fraction(key, outcome)
 
     def settle_verdict(
         self, *, evaluator_id: str, about_handle: str, q: float, outcome: float, key: str
@@ -320,23 +340,38 @@ class Settler:
         """Score one verdict against the measured outcome of the decision it judged.
 
         Ruling R1: a verdict in [0, 1] is also a prediction. ``outcome`` is what the
-        world measured (``return_paid_off`` as 0 or 1, a declined trade's
-        opportunity price, or the consequence score of an evaluator decision a meta
-        graded), and ``key`` names that kind of outcome's base rate. Every verdict
-        about one decision is scored against the base rate as it stood before that
-        decision's outcome entered it, and the outcome enters it once: a judge that
-        only repeats the base rate has no excess skill. The score trains the judge's
-        verdict skill; coverage is untouched.
+        world measured (``return_paid_off`` or a named trade's net-of-fee fact as 0
+        or 1, or the consequence score of an evaluator decision a meta graded), and
+        ``key`` names that kind of outcome's base rate. Every verdict about one
+        decision is scored against the base rate as it stood before that decision's
+        outcome entered it, and the outcome enters it once: a judge that only repeats
+        the base rate has no excess skill.
+
+        The easy-question rule ``settle_due`` applies to forecasts applies to verdicts
+        too (wave 16, D3; ruling R-B): when the key's base rate, as it stood before
+        this outcome entered it, already answers the question
+        (``PrevalenceBaseline.uninformative``), the verdict is ``uninformative``: it
+        trains no standing and the caller issues it no consequence score. The outcome
+        still enters the base rate, so a key the world changes can come back. Every
+        verdict about one decision faces the same answer.
         """
         _require_probability(outcome, "outcome")
         question = f"{key}:{about_handle}"
         baseline_q = self.__snapshots.get(question)
         if baseline_q is None:
             baseline_q = self.__snapshots[question] = self.__baseline.baseline_q(key)
+        retired = self.__retired.get(question)
+        if retired is None:
+            retired = self.__retired[question] = [self.__baseline.uninformative(key),
+                                                  self.__baseline.support(key)]
+        easy, support = bool(retired[0]), int(retired[1])
         score = normative_brier(q, outcome)
         baseline_score = normative_brier(baseline_q, outcome)
-        self.__standing.record_verdict(evaluator_id, score, baseline_score)
+        if not easy:
+            self.__standing.record_verdict(evaluator_id, score, baseline_score)
         if question not in self.__recorded:
             self.__recorded[question] = outcome
             self.__baseline.record_fraction(key, outcome)
-        return SettledVerdict(evaluator_id, about_handle, q, outcome, score, baseline_score)
+        return SettledVerdict(evaluator_id, about_handle, q, outcome, score, baseline_score,
+                              uninformative=easy, base_rate=baseline_q, support=support)
+

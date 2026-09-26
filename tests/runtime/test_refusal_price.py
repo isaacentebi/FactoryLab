@@ -39,6 +39,14 @@ from factorylab.world.scripted import (
 )
 from tests.runtime.test_attributable_blame import _card, _commitments
 
+
+def _learned(rt, r, p, *, router=True):
+    """Ruling R10-l: every learner learns (r + B - P) / (1 + B), no clip, B = 2 * cap for
+    a router (card share plus thrash) and cap for a seat's own learner."""
+    bound = rt.m.prices.penalty_cap * (2 if router else 1)
+    return (r + bound - p) / (1 + bound)
+
+
 REASON = "no concrete task was given"
 
 
@@ -65,7 +73,14 @@ def _priced_runtime(monkeypatch):
     rt._manage_reserve_window()
     rt._derive_regions()
     rt.controller.set_price(card.id, 0.8, amendment_id="test")
+    _outside_the_niche(rt)
     return rt
+
+
+def _outside_the_niche(rt):
+    """A decision taken in the unhistoried niche bears no card penalty (wave 16, R-E as
+    amended); these tests price the decisions outside it, so none is read as niche."""
+    rt._is_niche = lambda *_a, **_k: False
 
 
 def _drawn(rt, chosen, channel="verdict"):
@@ -126,12 +141,12 @@ def test_a_refusal_no_judge_graded_is_priced_as_an_abstention_never_credited_fre
     rt._deliver_returns()
     (priced,) = _rows(rt, "router.decline_priced", handle=refused)
     assert priced["penalty"] > 0
-    assert priced["reward"] == pytest.approx(state.neutral() - priced["penalty"])
+    assert priced["reward"] == pytest.approx(_learned(rt, state.neutral(), priced["penalty"]))
     # Priced: never credited above a NOOP drawn in the same window, and below the
     # unpriced neutral a censored refusal used to be credited.
-    noop_reward, _noop_penalty = rt._priced_abstention(noop, state.neutral())
+    noop_reward = _learned(rt, state.neutral(), rt._priced_abstention(noop))
     assert priced["reward"] <= noop_reward
-    assert priced["reward"] < state.neutral()
+    assert priced["reward"] < _learned(rt, state.neutral(), 0.0)
 
 
 def test_a_refusal_a_judge_graded_settles_on_its_verdict_like_any_return(monkeypatch):
@@ -148,6 +163,10 @@ def test_a_refusal_a_judge_graded_settles_on_its_verdict_like_any_return(monkeyp
                        returned=Return(judge, {"verdict": 0.2, "rationale": "r"}, 0, "ok"))
     rt._settle_arrived_verdicts()
     _past_the_verdict_timeout(rt)
+    # Its card's share is a count of the window's decisions: it settles at the close
+    # (wave 16, D5, ruling R-I).
+    assert not rt.queue.history(refused) and refused in rt.deferred_settlements
+    rt._close_price_window()
     (settled,) = rt.queue.history(refused)
     assert settled.status is SettleStatus.SETTLED and settled.definition_version == "verdict-v1"
     (row,) = _rows(rt, "price.penalty", handle=refused)
@@ -167,7 +186,8 @@ def test_the_refusing_seats_own_learner_is_priced_as_its_router_is(monkeypatch):
     _past_the_verdict_timeout(rt)
     rt._close_assembly_rounds()
     ((handle, fb),) = updates
-    expected, penalty = rt._priced_abstention(refused, NEUTRAL_REWARD)
+    penalty = rt._priced_abstention(refused)
+    expected = _learned(rt, NEUTRAL_REWARD, penalty, router=False)
     assert handle == refused and fb.action == "declined"
     assert penalty > 0 and fb.reward == pytest.approx(expected)
     assert fb.reward < NEUTRAL_REWARD
@@ -209,11 +229,12 @@ def test_a_requested_childs_refusal_is_priced_as_an_abstention_on_its_request_ro
     rt._deliver_returns()
     (priced,) = _rows(rt, "router.decline_priced", handle=handle)
     assert priced["router"] == state.learner.id and priced["penalty"] > 0
-    assert priced["reward"] == pytest.approx(state.neutral() - priced["penalty"])
-    noop_reward, _noop_penalty = rt._priced_abstention(noop, state.neutral())
+    assert priced["reward"] == pytest.approx(_learned(rt, state.neutral(), priced["penalty"]))
+    noop_reward = _learned(rt, state.neutral(), rt._priced_abstention(noop))
     assert priced["reward"] <= noop_reward
     ((learned, fb),) = updates
-    expected, penalty = rt._priced_abstention(handle, NEUTRAL_REWARD)
+    penalty = rt._priced_abstention(handle)
+    expected = _learned(rt, NEUTRAL_REWARD, penalty, router=False)
     assert learned == handle and penalty > 0 and fb.reward == pytest.approx(expected)
 
 
@@ -263,10 +284,10 @@ def test_an_ungraded_refusal_on_any_producing_channel_settles_declined_at_the_pr
     rt._deliver_returns()
     (priced,) = _rows(rt, "router.decline_priced", handle=handle)
     assert priced["penalty"] > 0
-    assert priced["reward"] == pytest.approx(state.neutral() - priced["penalty"])
+    assert priced["reward"] == pytest.approx(_learned(rt, state.neutral(), priced["penalty"]))
     _noop_state, noop = _drawn(rt, NOOP, channel)
     rt._contribution(noop, rt.window.decisions[handle]["role"])
-    noop_reward, _noop_penalty = rt._priced_abstention(noop, state.neutral())
+    noop_reward = _learned(rt, state.neutral(), rt._priced_abstention(noop))
     assert priced["reward"] <= noop_reward
 
 
@@ -300,7 +321,7 @@ def test_a_refusal_cut_off_before_its_settlement_check_still_settles_declined(
     rt._deliver_returns()
     (priced,) = _rows(rt, "router.decline_priced", handle=handle)
     assert priced["penalty"] > 0
-    assert priced["reward"] == pytest.approx(state.neutral() - priced["penalty"])
+    assert priced["reward"] == pytest.approx(_learned(rt, state.neutral(), priced["penalty"]))
     # The settlement checks that come later find it closed and change nothing.
     rt.ticks_consumed += rt.ev.verdict_timeout_ticks + 1
     rt._settle_exposures()
@@ -362,7 +383,7 @@ def test_a_polymorphic_decline_settles_on_the_kind_it_selected_at_its_cutoff(mon
     rt._deliver_returns()
     (priced,) = _rows(rt, "router.decline_priced", handle=handle)
     assert priced["penalty"] > 0
-    assert priced["reward"] == pytest.approx(state.neutral() - priced["penalty"])
+    assert priced["reward"] == pytest.approx(_learned(rt, state.neutral(), priced["penalty"]))
 
 
 # --- a judge, a meta and a counter-judge decline their commissions ---------------------
@@ -397,6 +418,7 @@ def _declining_runtime(monkeypatch):
     rt._manage_reserve_window()
     rt._derive_regions()
     rt.controller.set_price(card.id, 0.8, amendment_id="test")
+    _outside_the_niche(rt)
     return rt
 
 
@@ -474,12 +496,12 @@ def test_a_judging_seat_that_declines_is_priced_as_an_abstention_never_censored_
     rt._deliver_returns()
     (priced,) = _rows(rt, "router.decline_priced", handle=handle)
     assert priced["penalty"] > 0
-    assert priced["reward"] == pytest.approx(state.neutral() - priced["penalty"])
-    assert priced["reward"] < state.neutral()
+    assert priced["reward"] == pytest.approx(_learned(rt, state.neutral(), priced["penalty"]))
+    assert priced["reward"] < _learned(rt, state.neutral(), 0.0)
     # Never above a NOOP the same router drew in the same window.
     _noop_state, noop = _draw(rt, NOOP, channel)
     rt._contribution(noop, rt.window.decisions[handle]["role"])
-    noop_reward, _noop_penalty = rt._priced_abstention(noop, state.neutral())
+    noop_reward = _learned(rt, state.neutral(), rt._priced_abstention(noop))
     assert priced["reward"] <= noop_reward
 
 
@@ -557,9 +579,20 @@ def test_in_a_world_every_unjudged_refusal_and_decline_settles_at_the_abstention
                    for seat, status, _d in outcomes)
     assert outcomes[(REFUSER, SettleStatus.INAPPLICABLE, DECLINED_DEFINITION)] > 0
     priced = _rows(rt, "router.decline_priced")
-    assert priced and any(row["penalty"] > 0 for row in priced)
+    assert priced
     for row in priced:
-        assert row["reward"] == pytest.approx(max(0.0, row["neutral"] - row["penalty"]))
+        assert row["reward"] == pytest.approx(_learned(rt, row["neutral"], row["penalty"]))
+    # A seat that only refuses, once past its trial, bears its penalty share (ruling
+    # R10-b: its priced declines are a reward trail, and a seed's trial ends at its
+    # patience); inside the niche nothing is charged.
+    niche = {row["handle"] for row in _rows(rt, "price.contribution") if row.get("niche")}
+    refused = [row for row in priced if drawn.get(row["handle"]) == REFUSER]
+    assert any(row["penalty"] > 0 for row in refused if row["handle"] not in niche)
+    assert all(row["penalty"] == 0 for row in priced if row["handle"] in niche)
+    late = [h for h in drawn if drawn[h] == REFUSER
+            and rt.queue.opened_tick(h) is not None
+            and rt.queue.opened_tick(h) >= rt._patience()]
+    assert late and not set(late) & niche  # past the trial, never in the niche
     # The judges who declined to grade a refusal ("no return to judge") declined too,
     # in the form ``_invoke`` hands on: none is censored at a free neutral, each is
     # priced on its router as an abstention, and some of those prices bite.
@@ -569,6 +602,44 @@ def test_in_a_world_every_unjudged_refusal_and_decline_settles_at_the_abstention
     declined = {row["handle"] for row in _rows(rt, "evaluation.declined",
                                                 channel=CH_CONFORMITY)}
     judged = [row for row in priced if row["router"] in judge_routers]
-    assert declined and {row["handle"] for row in judged} == declined
-    assert any(row["penalty"] > 0 for row in judged)
-    assert all(row["reward"] <= row["neutral"] for row in judged)
+    # Every decline is priced, except one still owed at the run's end: a decline
+    # outside the niche is priced on its window's close (D5), which the run may end
+    # before.
+    owed = {h for h in declined if h in rt.noop_credits}
+    assert declined and {row["handle"] for row in judged} == declined - owed
+    assert all(not rt._is_niche(h) for h in owed)
+    assert all(row["reward"] <= _learned(rt, row["neutral"], 0.0) for row in judged)
+    assert all(row["penalty"] == 0 for row in judged if row["handle"] in niche)
+
+
+def test_a_seat_that_declines_every_round_leaves_the_niche_when_its_trial_ends(monkeypatch):
+    """Ruling R10-b, the violation attempt: declining is a reward trail, and a seed's
+    trial ends at its patience from the world's first tick, so a seat that declines
+    every round is protected inside the trial and charged after it."""
+    monkeypatch.setattr(pricing, "close_window", lambda *_a: None)
+    card = _card(per=None)
+    seed = load_manifest("scripted")
+    rt = Runtime(replace(seed, charter=replace(seed.charter, cards=(card,))), events=0,
+                 seed=1, initial_balance_micro=None, ledger_path=None, router_gamma=0.1,
+                 provider=Refuser())
+    rt._manage_reserve_window()
+    rt._derive_regions()
+    rt.controller.set_price(card.id, 0.8, amendment_id="test")
+    _commitments(rt, "eval-a", censored=4)
+    rt._close_price_window()  # a violation measured, and priced
+
+    def decline_penalty():
+        _state, handle = _refuse(rt)
+        _commitments(rt, "eval-a", censored=4)
+        rt._close_price_window()
+        _past_the_verdict_timeout(rt)
+        rt._deliver_returns()
+        return handle, rt._is_niche(handle), rt._priced_abstention(handle)
+
+    inside = decline_penalty()
+    assert inside[1] and inside[2] == 0.0  # the trial: protected, charged nothing
+    assert rt.queue.has_history("seed-decider")  # its priced decline is a reward trail
+    rt.ticks_consumed = max(rt.ticks_consumed, rt._patience())
+    assert not rt._unhistoried("seed-decider")
+    after = decline_penalty()
+    assert not after[1] and after[2] > 0  # out of the niche: it bears its share

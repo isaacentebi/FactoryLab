@@ -22,6 +22,7 @@ from tests.runtime.test_loop import (
     _consequence_judge,
     _consequence_produce,
     _consequence_runtime,
+    lists_nothing,
 )
 
 # ---- the four settlement objects -------------------------------------------------------
@@ -69,7 +70,7 @@ def test_a_restored_runtime_settles_an_evaluator_decision_once():
     manifest = load_manifest("scripted")
     manifest = replace(manifest, evaluation=replace(manifest.evaluation,
                                                     consequence_backstop_events=30))
-    runtime = _consequence_runtime(provider=_Endorser(), manifest=manifest)
+    runtime = lists_nothing(_consequence_runtime(provider=_Endorser(), manifest=manifest))
     runtime._manage_reserve_window()
     _, event = _consequence_produce(runtime, "seed-decider")
     judge = _consequence_judge(runtime, event, "eval-a")
@@ -81,7 +82,7 @@ def test_a_restored_runtime_settles_an_evaluator_decision_once():
                if row["handle"] == judge]
     assert len(settled) == 1 and judge not in runtime.pending
     state = runtime_state(runtime)
-    restored = _consequence_runtime(provider=_Endorser(), manifest=manifest)
+    restored = lists_nothing(_consequence_runtime(provider=_Endorser(), manifest=manifest))
     restore_runtime(restored, state)
     before = len(_verdict_rows(restored, "evaluator.settled"))
     for _ in range(40):

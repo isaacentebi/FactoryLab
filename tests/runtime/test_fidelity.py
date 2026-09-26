@@ -42,6 +42,13 @@ def decision(rt, assembly, *, settled=False):
     return handle
 
 
+def past_trial(rt, seat):
+    """A seat whose protected trial is over: ``novelty.trials`` consequences delivered.
+    A seed's trial ends on a population assembly's terms (wave 16, ruling R10-b), so
+    one settled decision no longer makes a seed an incumbent."""
+    rt.stats.consequences_by_assembly[seat] = rt.m.novelty.trials
+
+
 def close(rt, value, *, registrations=1):
     """One closed window a price-loop period after the last, the organ's loop due at it."""
     rt.n += 10
@@ -57,6 +64,7 @@ def test_incumbent_cannot_spend_the_frontiers_compute():
     rt = runtime()
     rt._manage_reserve_window()
     incumbent = decision(rt, "seed-decider", settled=True)
+    past_trial(rt, "seed-decider")
     protected = rt.reserve.remaining()
     ordinary = rt.wallet.reserve(rt.wallet.balance - protected, incumbent, "model:fake-opus")
     rt.wallet.commit(ordinary, ordinary.amount)
@@ -80,6 +88,7 @@ def test_new_assembly_keeps_protected_compute_until_its_consequences_settle():
         system_prompt="Observe.", max_tokens=128, effort="medium",
     ))
     decision(rt, "seed-decider", settled=True)
+    past_trial(rt, "seed-decider")
     incumbent = decision(rt, "seed-decider")
     hold = rt.wallet.reserve(rt.wallet.available, incumbent, "model:fake-opus")
     rt.wallet.commit(hold, hold.amount)
@@ -178,6 +187,7 @@ def test_an_empty_thinking_pot_does_not_stop_an_order_the_venue_can_carry(mode):
     rt = runtime()
     rt._manage_reserve_window()
     incumbent = decision(rt, "seed-decider", settled=True)
+    past_trial(rt, "seed-decider")
     rt.consequences.start(incumbent, 0)
     hold = rt.wallet.reserve(rt.wallet.available, incumbent, "model:fake-opus")
     rt.wallet.commit(hold, hold.amount)

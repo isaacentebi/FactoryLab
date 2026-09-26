@@ -74,13 +74,15 @@ def _trail(items):
     """The artifact trail: every put, release, collection and size, in order.
 
     An inbox body names its evidence by ledger sequence, and a resume adds its own
-    items to the diary, so a body put after a resume differs by that pointer alone:
-    a put is compared by kind, owner and size. An inbox body is released once
-    acknowledged or past its retention horizon (wave 17b); its hash differs after a
-    resume, so the archive may hold it at another position and collect it in
-    another order among the working states: its releases and collections are
-    compared as counts. Every working state, and every release and collection of
-    one, is compared by its hash, in order.
+    items to the diary, so a body put after a resume differs by that pointer alone,
+    and its size by the pointer's digits when the shift carries it across a power of
+    ten (9995 against 10001): such a put is compared by kind and owner, and a retained
+    total, which sums such bodies, by its record count (wave 16, R10-d). An inbox body
+    is released once acknowledged or past its retention horizon (wave 17b); its hash
+    differs after a resume, so the archive may hold it at another position and collect
+    it in another order among the working states: its releases and collections are
+    compared as counts. Every working state, and every release and collection of one,
+    is compared by its hash and size, in order.
     """
     bodies = {i["sha"] for i in items
               if i["kind"] == "artifact.put" and i.get("artifact_kind") != "working.state"}
@@ -91,9 +93,12 @@ def _trail(items):
         return (i["kind"] in ("artifact.released", "artifact.collected")
                 and i.get("sha") in bodies and i.get("sha") not in states)
 
-    trail = [(i["kind"], i.get("artifact_kind"),
-              None if i["kind"] == "artifact.put" and i.get("artifact_kind") != "working.state"
-              else i.get("sha"), i.get("bytes"), i.get("owner"), i.get("records"))
+    def pointed(i):
+        return ((i["kind"] == "artifact.put" and i.get("artifact_kind") != "working.state")
+                or i["kind"] == "artifact.retained")
+
+    trail = [(i["kind"], i.get("artifact_kind"), None if pointed(i) else i.get("sha"),
+              None if pointed(i) else i.get("bytes"), i.get("owner"), i.get("records"))
              for i in items if i["kind"] in TRAIL and not body(i)]
     released = sum(1 for i in items if body(i) and i["kind"] == "artifact.released")
     collected = sum(1 for i in items if body(i) and i["kind"] == "artifact.collected")

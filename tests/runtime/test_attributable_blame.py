@@ -14,9 +14,8 @@ import pytest
 
 from factorylab.charter.charter import MetricCard
 from factorylab.charter.windows import MetricWindow
-from factorylab.kernel.queue import LearningReturn, PropensityRecord, SettleStatus
+from factorylab.kernel.queue import PropensityRecord, SettleStatus
 from factorylab.runtime import pricing
-from factorylab.runtime.feedback import _priced
 from factorylab.runtime.loop import Runtime
 from factorylab.runtime.pricing import UNRESOLVED_PRICED
 from factorylab.runtime.worlds import load_manifest
@@ -130,12 +129,50 @@ def test_an_avoidably_unresolved_commitment_is_priced_for_its_owner(monkeypatch)
     assert rt.queue.history(bystander)[-1].score == 0.0
     entry = [i for i in rt.ledger._recovery_items() if i["kind"] == "price.penalty"][0]
     assert entry["raw"] is None and entry["unresolved"] == ["f-1"]
-    # Its learners are credited the neutral estimate less that price, never a zero score.
-    assert _priced(0.6, charged) == pytest.approx(0.6 - charged.score)
-    assert _priced(None, charged) is None
-    plain = LearningReturn("h", "consequence", 0.0, "forecast-mean-v1",
-                           SettleStatus.CENSORED, None)
-    assert _priced(0.6, plain) == 0.6
+    # Its learners are credited as for an abstention: the router's observed mean less the
+    # same price, never a zero score (wave 16, D4), on the one affine map every learner
+    # learns (R10-l). The bystander bears nothing.
+    assert rt._priced_abstention(owner) == pytest.approx(charged.score)
+    assert rt._priced_abstention(bystander) == 0.0
+
+
+def test_an_unresolved_priced_settlement_is_censored_in_censored_share(monkeypatch):
+    """Codex on #152: an UNRESOLVED_PRICED settlement has no measured world outcome, so it
+    is censored in ``censored_share`` (censored / outcomes), numerator and denominator
+    both; a settlement with a score counts in the denominator alone."""
+    from factorylab.runtime.observations import SEEDS
+
+    rt, handles = _closed(_card(), monkeypatch)
+    before = (rt.window.censored, rt.window.outcomes)
+    rt._settle_priced(handles[GUILTY][0], channel="consequence", score=0.0,
+                      definition_version="t", sampling_ref=None, cards="evaluator",
+                      unresolved=("f-1",))
+    rt._settle_priced(handles[INNOCENT][0], channel="consequence", score=0.9,
+                      definition_version="t", sampling_ref=None, cards="evaluator")
+    assert rt.queue.history(handles[GUILTY][0])[-1].definition_version == UNRESOLVED_PRICED
+    assert (rt.window.censored - before[0], rt.window.outcomes - before[1]) == (1, 2)
+    assert SEEDS["censored_share"].measure(rt.window) == pytest.approx(
+        (before[0] + 1) / (before[1] + 2))
+
+
+def test_the_published_forecast_skill_is_the_mean_of_the_window_settled_forecast_rows(
+        monkeypatch):
+    """Codex on #152: ``price.window`` publishes ``forecast_skill`` as a card over the
+    closed window computes it, the mean skill of the forecasts the window settled (a
+    censored one has no skill), never a mean of per-evaluator cumulative skills."""
+    monkeypatch.setattr(pricing, "close_window", lambda *_a: None)
+    rt = _runtime(_card())
+    for i, skill in enumerate((0.3, None, -0.1)):
+        rt.card_samples.forecasts.append({
+            "handle": f"f-{i}", "assembly": GUILTY, "role": "evaluator",
+            "subject_handle": "s", "subject_assembly": "seed-decider",
+            "subject_role": "producer", "window": rt.window.index, "skill": skill,
+            "predicate": "return_paid_off", "y": 1,
+            "status": "settled" if skill is not None else "censored", "verdict": None,
+            "excluded": None})
+    rt._close_price_window()
+    (row,) = [i for i in rt.ledger._recovery_items() if i["kind"] == "price.window"]
+    assert row["observations"]["forecast_skill"] == pytest.approx(0.1)
 
 
 def test_forecast_return_with_an_unresolved_commitment_is_settled_priced(monkeypatch):

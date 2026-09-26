@@ -245,9 +245,12 @@ def launch_world(manifest) -> dict:
     return rt._world_block()
 
 
-def card_from(raw: dict, norms: tuple, lambda_max: float) -> tuple[MetricCard | None,
-                                                                    float | None, str | None]:
-    """The executable card a proposal states, its starting price, or the preflight refusal."""
+def card_from(raw: dict, norms: tuple) -> tuple[MetricCard | None, float | None, str | None]:
+    """The executable card a proposal states, its starting price, or the preflight refusal.
+
+    A price has no bound of its own (wave 16, ruling R-E): the one bound is
+    ``prices.penalty_cap``, on the penalty, which the controller enforces.
+    """
     missing = [f for f in CARD_FIELDS if raw.get(f) in (None, "")]
     if missing:
         return None, None, f"missing {', '.join(missing)}"
@@ -259,7 +262,7 @@ def card_from(raw: dict, norms: tuple, lambda_max: float) -> tuple[MetricCard | 
             raise ValueError("region has no rule")
         preflight_measurement(card)
         price = (None if raw.get("lambda") is None
-                 else proposed_price(raw["lambda"], lambda_max))
+                 else proposed_price(raw["lambda"]))
     except (ValueError, TypeError) as exc:
         return None, None, str(exc)[:300]
     return card, price, None
@@ -269,12 +272,11 @@ def draft(manifest, provider, world: dict, rng: random.Random,
           calls: list[Call]) -> tuple[list[Proposal], list[Seat]]:
     """(a) Every seat proposes; a sortition votes on each proposal; a strict majority passes."""
     norms = manifest.charter.norms
-    lambda_max = manifest.prices.lambda_max
     card_schema = {"type": "object", "properties": {
         **{f: {"type": "string"} for f in CARD_FIELDS if f not in ("window", "region")},
         "window": window_schema(), "region": region_schema(),
         "norm": {"enum": [str(n) for n in norms]}, "reason": {"type": "string"},
-        "lambda": {"type": "number", "minimum": 0, "maximum": lambda_max}},
+        "lambda": {"type": "number", "minimum": 0}},
         "required": [*CARD_FIELDS, "reason"]}
     text = _prompt(
         "Propose metric cards for the charter. The norms are fixed; the cards are the "
@@ -289,7 +291,7 @@ def draft(manifest, provider, world: dict, rng: random.Random,
         for raw in (parsed or {}).get("cards") or []:
             if not isinstance(raw, dict):
                 continue
-            card, price, problem = card_from(raw, norms, lambda_max)
+            card, price, problem = card_from(raw, norms)
             proposals.append(Proposal(f"p{len(proposals) + 1:02d}", spec.id, raw, card, price,
                                       problem))
     voted = [p for p in proposals if p.problem is None]

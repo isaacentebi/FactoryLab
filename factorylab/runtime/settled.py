@@ -47,7 +47,6 @@ LIVE_BOOKS = (
     "pending_counters",       # counter-verdicts awaiting the world's measurement
     "forecast_returns",       # forecast returns awaiting their forecasts
     "noop_credits",           # abstention credits owed to a router (II.II.b niche)
-    "late_verdicts",          # verdicts scored on a mark, owed the final measurement
     "assembly_rounds",        # an assembly's own learner round awaiting its decision
     "tool_uses", "tool_holds",  # tool builders held for their callers' scores (W4)
     "uptake",                 # registrations whose uptake is still being realized
@@ -57,6 +56,13 @@ LIVE_BOOKS = (
     "registered_observations", "registered_predicates",  # registrations' provenance
     "price_windows", "price_origins", "window",  # the price loop's open measurement
     "margin_windows", "measured_consequences",   # the charter's margin windows (M5)
+    # Wave 16: a named trade's frozen mids until its outcome is fixed at its horizon
+    # (D2, R10-j: judged or not); a settlement whose penalty waits for its origin
+    # window's close (D5, R-I); a raw score until the router that drew it learns it
+    # (D4); the venue's own marks and funding prints a horizon is priced from.
+    "reference_mids", "deferred_settlements", "raw_scores", "round_penalties",
+    "venue_marks",
+    "funding_prints",
 )
 # The venue books are live only where they are not terminal (``_live_venue_books``).
 # Not live books, though they name handles: ``card_samples`` rows carry their own
@@ -75,7 +81,7 @@ DROPPED_WITH_DECISION = (
     "handle_to_assembly",     # its author: the tombstone keeps the author
     "decision_subjects",      # what it judged: its own ancestry, read while retained
     "consequence_scores",     # what a meta grading it predicts: none can grade it now
-    "world_outcomes", "marked_outcomes", "reference_mids",  # its measured outcome
+    "world_outcomes",         # its measured outcome
     "verdict_views",          # the world a counter re-judging its verdict reads
     "venue_deltas",           # custody effects reported at its payoff, already fixed
     "decision_ticks",         # its tick cutoff: it is final and learned
@@ -228,9 +234,9 @@ class SettledMixin:
           open lot, every order it placed was confirmed terminal by the venue's own
           order status (``confirm_terminal``), with nothing filled beyond what was
           accounted, and no intent it sent is unanswered;
-        * its realized-consequence horizon has passed (``consequence_horizon_ticks``
-          since its account opened), so a judgement naming it could no longer be a
-          prediction (``_hindsight_reason``);
+        * its realized-consequence horizon has passed on the venue's clock
+          (``_past_horizon``; wave 16, D2), so a judgement naming it could no longer be
+          a prediction (``_hindsight_reason``);
         * no retained forecast window reads the author of an order it placed.
         """
         debt = self.queue.owed(handle)
@@ -246,9 +252,9 @@ class SettledMixin:
             account = self.consequences.table.account(handle)
         except KeyError:
             account = None
-        if (account is not None and not account.voided and account.opened_at_tick is not None
-                and self.ticks_consumed
-                < account.opened_at_tick + self.ev.consequence_horizon_ticks):
+        if (account is not None and not account.voided
+                and (account.opened_at_ns is not None or account.opened_at_tick is not None)
+                and not self._past_horizon(account)):
             return "its realized-consequence horizon has not passed"
         if handle in live["order_owners"]:
             return "a retained forecast window reads an order it placed"

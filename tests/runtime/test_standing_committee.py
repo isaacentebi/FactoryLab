@@ -172,7 +172,8 @@ def test_an_internal_motion_below_quorum_is_refused_not_seated(monkeypatch):
 
 
 def test_saturation_statistics_reach_the_world_the_wake_and_the_agenda(monkeypatch):
-    """M7: windows at lambda_max and the violation's duration, per card, in public."""
+    """M7; wave 16, R-E: each card's bound, its windows at it and the violation's
+    duration, per card, in public."""
     from factorylab.runtime.wake import public_window_item
 
     rt, _ = _runtime(monkeypatch)
@@ -181,7 +182,8 @@ def test_saturation_statistics_reach_the_world_the_wake_and_the_agenda(monkeypat
     for event in range(1, 30):
         rt.controller.observe(card, 0.0, window_end_event=event * 10)
     stats = rt.controller.saturation(card)
-    assert stats["violation_windows"] == 29 and stats["windows_at_lambda_max"] > 0
+    assert stats["violation_windows"] == 29 and stats["windows_at_bound"] > 0
+    assert stats["saturated_windows"] > 0 and stats["bound"] is not None
     world = {row["card_id"]: row for row in rt._world_block()["card_prices"]}
     assert {k: world[card][k] for k in stats} == stats
     public = {row["id"]: row for row in
@@ -198,6 +200,7 @@ def test_saturation_statistics_reach_the_world_the_wake_and_the_agenda(monkeypat
     assert ballots
     for inputs in ballots:
         agenda = inputs["agenda"]
-        assert agenda["motions"] == ["drop-cost"] and agenda["lambda_max"] == 1.0
+        assert agenda["motions"] == ["drop-cost"]
+        assert agenda["penalty_cap"] == rt.m.prices.penalty_cap
         row = next(r for r in agenda["cards"] if r["card_id"] == card)
         assert {k: row[k] for k in stats} == stats

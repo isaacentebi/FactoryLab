@@ -140,7 +140,8 @@ def test_partial_forecast_support_does_not_fabricate_a_slope(diary):
     ],
 )
 def test_violation_matches_controller(kind, lo, hi, values):
-    controller = PriceController(Ledger(), eta=0.1, decay=0.1, lambda_max=1, min_window_events=1)
+    controller = PriceController(Ledger(), eta=0.1, decay=0.1, penalty_cap=0.9,
+                                 min_window_events=1)
     controller.register(CardRegion("x", kind, lo, hi, 2))
     region = {"kind": kind, "lo": lo, "hi": hi, "scale": 2}
     for value in values:

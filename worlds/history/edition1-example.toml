@@ -178,7 +178,6 @@ max_leverage = 3
 kappa = 0.5
 eta = 0.5
 decay = 0.1
-lambda_max = 1.0
 min_window_events = 1
 
 [termination]
@@ -232,7 +231,7 @@ description = "The mean verdict score assigned by evaluators to the producer's r
 units = "score (0-1)"
 window = { kind = "forecasts", n = 50, per = "assembly" }
 acceptable_region = "at least 0.8"
-observation = "verdict_mean"
+observation = "resolved_verdict_mean"
 answers_for = "producer"
 
 [[charter.cards]]

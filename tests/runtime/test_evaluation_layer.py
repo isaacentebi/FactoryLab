@@ -27,10 +27,10 @@ from factorylab.runtime.feedback import counter_score, exposure_score
 from factorylab.runtime.shared import CH_COUNTER, NOOP
 from factorylab.runtime.worlds import AssemblySeed, load_manifest, manifest_from_dict
 from factorylab.settlement import Observer, WindowFacts
-from tests.runtime.test_loop import _consequence_decision, _consequence_runtime
+from tests.runtime.test_loop import _consequence_decision, _consequence_runtime, lists_nothing
 from tests.runtime.test_reward_chain import (
     Population,
-    _advance,
+    _horizon,
     _judge,
     _mids,
     _rows,
@@ -324,9 +324,7 @@ def test_an_adversarial_judge_is_paid_by_how_far_it_beat_the_verdict_it_read():
     counter = _counter(rt, judge, 0.1)
     (opened,) = _rows(rt, "counter.opened", handle=counter)
     assert opened["judge_q"] == 0.9 and opened["q"] == 0.1
-    _advance(rt, rt.ev.consequence_horizon_ticks - 1)
-    _mids(rt, BTC="101")  # the declined buy would have paid: the verdict of 0.9 was wrong
-    _advance(rt, 2)
+    _horizon(rt, BTC="101")  # the declined buy would have paid: the verdict of 0.9 was wrong
     (judged,) = _rows(rt, "verdict.consequence", handle=judge)
     (settled,) = _rows(rt, "counter.settled", handle=counter)
     assert settled["y"] == judged["y"]
@@ -339,7 +337,7 @@ def test_an_adversarial_judge_is_paid_by_how_far_it_beat_the_verdict_it_read():
 
 
 def test_a_counter_on_a_return_the_world_never_measures_is_censored():
-    rt = _adversarial_runtime(verdicts=(0.9,))
+    rt = lists_nothing(_adversarial_runtime(verdicts=(0.9,)))
     _producer, event = _produce_hold(rt)  # a bare hold: no world outcome
     judge = _judge(rt, event, "eval-c")
     rt._settle_arrived_verdicts()
@@ -840,8 +838,6 @@ def test_counter_verdicts_are_measured_and_priced_in_the_adversary_scope(monkeyp
     judge = _judge(rt, event, "eval-c")
     rt._settle_arrived_verdicts()
     counter = _counter(rt, judge, 0.1)
-    _advance(rt, rt.ev.consequence_horizon_ticks - 1)
-    _mids(rt, BTC="101")
-    _advance(rt, 2)
+    _horizon(rt, BTC="101")
     assert ("adversary", counter) in priced
 

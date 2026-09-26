@@ -353,7 +353,7 @@ carry case of `scripts/calibrate_seats.py` exactly.
 |---|---|---|---|---|
 | `consequence_share` | float in [0, 1) | 0.3 | hard | Base weight of payoff standing in evaluator selection; the live actuator starts here. |
 | `adversarial_share` | float in [0, 1] | 0.15 | hard | Cap on the router's probability mass over antagonist assemblies (A5). The essay's "minority" is a constraint, not a prize. |
-| `sampling_step` | float in [0, 1] | 0.1 | hard | Step by which the consequence mix rises per divergent window and steps back otherwise (A14, the live sampling-rate actuator). |
+| `sampling_step` | float in [0, 1] | 0.1 | hard | Step by which the consequence mix rises per divergent window and steps back otherwise (A14, the live sampling-rate actuator); it holds while fewer than `immune.k` of its last `immune.k` windows scored any consequence (wave 16, R-B). |
 | `sampling_cap` | float in [consequence_share, 1) | 0.7 | hard | Ceiling of the raised consequence mix (A14). |
 | `multi_judge_share` | float in [0, 1] | 0.3 | hard | Share of judged returns drawn again until `multi_judge_count` judges read them (Wave 5a; evaluations P6, M2). Drawn once per judged return from the runtime's seeded stream; 0 draws nothing. |
 | `multi_judge_count` | int in [2, 5] | 2 | hard | Draws a multi-judged return receives. Each further draw is an ordinary routed decision from the kind's first router, over its menu less every seat drawn for the return and every seat on a drawn seat's family (`route.multi_judge`). |
@@ -419,7 +419,7 @@ public facts) keeps every print.
 
 | Key | Type | Default | Cast | Meaning |
 |---|---|---|---|---|
-| `trials` | int >= 1 | 3 | hard | Settled consequences delivered to a population assembly before its protected trial ends (A13). Replaces `trial_invocations`, which counted model calls; continuations and children do not count. |
+| `trials` | int >= 1 | 3 | hard | Settled consequences delivered to an assembly before its protected trial ends (A13), or its patience (`min_ratio` consequence periods) since it was born, whichever comes first: a population assembly at its registration, a seed assembly at the world's first tick (wave 16, R10-b). Replaces `trial_invocations`, which counted model calls; continuations and children do not count. |
 | `seat_share` | number in (0, 1] | 0.25 | hard | The most of one consequence period's share of the novelty reserve one seat's unhistoried actions (tool calls and the rounds that read them) may use, so no seat starves the registration trials (ruling R5; the #134 review). |
 | `max_lifetime_windows` | int >= 1 | 6 | hard | Reserve windows after registration after which the trial ends regardless of deliveries (A13). |
 
@@ -456,32 +456,74 @@ done, so every judge a draw woke on a return counts and none alone
 **A verdict is also a prediction.** When the world resolves the judged return,
 the kernel scores the verdict `q` against a measured outcome `y`:
 `brier = 1 - (q - y)^2`, `base = 1 - (b - y)^2` with `b` the base rate of that
-kind of outcome before this return's own entered it (once per return, however
-many judges read it), and `consequence score = 0.5 + 0.5 * (brier - base)`, which
-stays in [0, 1] and is a proper scoring rule (an affine map of Brier)
-(`verdict.consequence`). A judge the world proved wrong earns less than one it
-proved right, and one that only repeats the base rate earns 0.5. `y` is:
+kind of outcome, for the same named or taken coin, side and horizon, before this
+return's own entered it (once per return, however many judges read it; the key is
+`verdict:<definition>:<coin>:<side>:<horizon ns>`, wave 16 D3, so a judge that knows
+only which coins or sides the world usually proves right earns 0.5 and no more), and
+`consequence score = 0.5 + 0.5 * (brier - base)`, which stays in [0, 1] and is a
+proper scoring rule (an affine map of Brier) (`verdict.consequence`). A judge the
+world proved wrong earns less than one it proved right, and one that only repeats
+the base rate earns 0.5.
+
+**Realized consequence is sparse** (wave 16, D3 and ruling R-B). The easy-question
+rule forecasts obey applies to verdicts: when the key's base rate, as it stood before
+this return's outcome entered it, rests on at least 20 outcomes and is at least 0.95
+or at most 0.05 (`settlement.scoring.UNINFORMATIVE_*`), the outcome predicts nothing a
+verdict could be right about. No consequence score is issued at all, not 0.5: the
+verdict closes `consequence.uninformative` with the base rate and its support, the
+judge is told, no standing is trained, and the judge's reward is its tier grade alone.
+The outcome still enters the base rate, so a key the world changes comes back. The
+sampling actuator reads a window that scored no consequence as no reading: while
+fewer than `immune.k` of its last `immune.k` windows have one it holds the
+consequence mix and ledgers `sampling.blind` (published in
+`world.adaptive_scoring.sampling_blind`); absence is not evidence of calm. `y` is:
 
 - for a return that executed venue operations (or earned service income):
-  `return_paid_off`, 0 or 1, fixed when its lots close or marked at the
-  consequence backstop. A venue write counts once the venue accepted it or may
-  have (`uncertain`); a return whose every write the venue rejected executed
-  nothing;
+  `return_paid_off`, 0 or 1, fixed when its lots close or at the consequence
+  horizon `H`, where a lot still open is marked to its liquidation value: the mid
+  less the venue's taker fee rate on its notional (wave 16, D7), so the acting road
+  pays the same round trip as the road not taken. The mark is never money: what the
+  lot realises when it really closes is booked once, late, with the fee the venue
+  charged (`consequence.late`). Funding the venue paid on the lot for funding times at or before `H` is in its charges, however late the mark arrives (ruling R10-m). A held instrument with no venue mid at or after `H` within the consequence patience (`H` plus `verdict_timeout_ticks` after the return, as for a named trade) fixes the outcome uninformative (`consequence.uninformative`, reason `no_mark`, naming the instruments); the lots stay open, and the decision is released once they close. An outcome is a function only of the world facts with fact-time at or before `H` (fills, funding, fee reads), the first mark with fact-time at or after `H` and the original lapse deadline: a fill after `H` is late money (booked, never graded), a first quote after a named trade's lapse never opens it, and a horizon or a patience passes on the venue time every fact has been delivered through (the instant before the latest fact seen, or the previous tick), never on when the outcome is resolved or how the venue batched its events. Each venue states its own fact streams, each with a fact time and a delivered-through watermark (a live read's request instant, or the time a simulated or recorded venue was advanced to; a failed read advances nothing): Hyperliquid's mids, funding-rate prints, fills and funding payments, and Polymarket's events (fills, cancels, resolutions) and each token's book. An open outcome waits on exactly the streams of what it holds, so a Polymarket book that cannot be read holds its event lots and never lets them lapse into `no_mark`. A return's economics at `H` are derived when its outcome is fixed, from its own position-changing facts (fills it opened or closed, liquidations, funding on its lots, resolutions at their `resolved_at_ns`, service income), each kept with its fact time: every fact at or before `H` applied in fact-time order, and every later one late money, so no fact's arrival order, on any stream, can change a grade. A successful read of an empty or one-sided book is read through its instant and states no price; a resolution is the token's price at its instant: the mark is the earliest price at or after `H` any stream states, fixed once every stream it reads is delivered through it.
+  A venue write counts once the venue accepted it or may have (`uncertain`); a
+  return whose every write the venue rejected executed nothing. A return that acted
+  is measured this way and any counterfactual it named is ignored: one predicate,
+  `_acted`, decides which road measures a return;
 - for a return that executed nothing and named a declined trade
-  (`counterfactual {coin, side}`): `opportunity-cost-v2`,
-  `y = 0.5 - 0.5 * tanh(g / opportunity_scale_bps)` with `g` the trade's gross
-  move in bp, signed by its side and excluding fees, from the mids the world had
-  broadcast when the return was made (ruling R2). It is symmetric and monotone,
-  so a hold without directional skill earns 0.5 whatever trade it names;
+  (`counterfactual {coin, side}`): `declined-trade-net-v1` (wave 16, D1; ruling
+  R2: "net of fees, priced ex ante on the named trade"). `net = s * (m1 - m0) / m0
+  * 10^4 - (f0 + f1 * m1 / m0) * 10^4` bp (each fee leg on its own notional: the exit
+  leg on the exit notional, `m1 / m0` of the entry's), `s` = +1 for a buy and -1 for a sell, `m0` the coin's
+  mid the world had broadcast when the return was made, `m1` its mid at the
+  horizon, `f0` and `f1` the venue's taker fee rate for the coin's market (the spot
+  schedule for a pair, the perp schedule otherwise; ruling R-I), each leg at its own
+  instant: `f0` the instrument's latest rate at or before the decision (D1's ex-ante
+  element), `f1` its latest successful read at or before `H` (ruling R10-i). That is
+  the round trip an acting lot opened and marked at the same instants pays (D7). A
+  leg with no rate read by its instant fixes the outcome as uninformative
+  (`consequence.uninformative`, reason `fee_unknown`). Less `s * sum(rho_i * m_i) / m0
+  * 10^4` for the venue's funding rate `rho_i` in force at its `i`-th funding time
+  after `m0` and at or before `H` (ruling R10-m; perps only; longs pay a positive rate;
+  the rate at a funding time is the venue's latest print at or before it), each paid on
+  the notional at that funding time (D7): `m_i` is the price the venue states its
+  payment used (the fake venue and a recorded tape state it on the funding event as
+  `mark`), else the coin's first venue mid at or after the funding time. The recorded
+  prices are kept with the frozen trade, at most one per funding time of its own
+  window; `y = 1`
+  when `net <= 0` (declining was right in money), else `0`. The taker
+  rate is read from the venue's own listing (`instruments`, `taker_fee_rate`) at the
+  first broadcast and once per `timing.world_repricing`, and ledgered as
+  `venue.fee_schedule` when it changes. A trade whose rate the venue did not state
+  has no `y`. The retired `opportunity-cost-v2` (a gross tanh on
+  `opportunity_scale_bps`) remains a name in old diaries only;
 - for a return whose answer order (`{"action": "order", coin, side, size}`) was
   refused (by the collateral check, the venue, or a terminal error) and that
-  executed nothing else: `attempted-trade-v1`,
-  `y = 0.5 + 0.5 * tanh(g / opportunity_scale_bps)` with `g` the ordered coin's
-  gross move in bp, signed by the ordered side and excluding fees, from the same
-  frozen mids and horizons as the declined form, of which it is the mirror: 0.5 at
-  no move, toward 1 as the market moves for the ordered side. It is ledgered as
-  `consequence.attempted_mark` and `consequence.attempted`. An order left
-  `uncertain` is acting, and is measured by `return_paid_off`;
+  executed nothing else: `attempted-trade-net-v1`, the same `net` on the ordered
+  side, from the same frozen mids, rate and horizons, and `y = 1` when `net > 0`
+  (the attempted trade would have beaten the round trip), else `0`: the complement
+  of the declined form. It is ledgered as `consequence.attempted_mark` and
+  `consequence.attempted`. An order left `uncertain` is acting, and is measured by
+  `return_paid_off`;
 - for anything else (a return made while the world listed no coin, a declined
   commission, or a named coin with no mid at the horizon): nothing. Only the tier
   above grades it.
@@ -492,18 +534,21 @@ answer of ProducerReturn, Exposure or a declared kind whose reward shape is
 `judged` or `exposure`, from a decision that executed no venue operation (no venue
 write the venue accepted or left `uncertain`, and no answer order it may place),
 carries `counterfactual
-{coin, side}`: `side` is `buy` or `sell`, and `coin` is a key of `recent_mids` (the
-world's broadcast mids, the record the trade is priced from) when the return is
-made. Without it the return is `malformed`, as it is with a coin the world does
-not list or any other shape; the seat's inbox and `return.validation_failed` carry
-the reason, which names the fields that failed. Nothing is required while
-`recent_mids` is empty. A return that executed venue operations needs none.
+{coin, side}`: `side` is `buy` or `sell`, and `coin` is an instrument the venue lists
+when the return is made: a perp coin or spot pair its last instrument listing named
+(`venue.instruments`, read at the first broadcast mid and once per
+`timing.world_repricing`; `venue.fee_schedule` ledgers it as `listed`), and before
+one the manifest's `exchange.coins` and `exchange.spot_pairs`. A listed coin with no
+mid yet is nameable: the trade opens at its first mid (ruling R10-h). Without it the
+return is `malformed`, as it is with a coin the venue does not list or any other
+shape; the seat's inbox and `return.validation_failed` carry the reason, which names
+the fields that failed. Nothing is required while nothing is listed. A return that executed venue operations needs none.
 
 The request states this contract as structure, and the published schema is the
 enforced one (§II.b). Every round's `outcome_schema` is rebuilt by one function
 (`producing_contract`) from the facts the kernel checks: before the decision
 acts, a producing answer is `anyOf` (a) the kind's answer with `counterfactual`
-required and its `coin` an `enum` of the coins `recent_mids` lists, or, when the
+required and its `coin` an `enum` of the instruments the venue lists, or, when the
 decision may place an answer order and the kind owns one, (b) `action: "order"`
 with `coin`, `side` and `size` required. After a venue write the venue accepted or
 left `uncertain`, the field is optional. With nothing listed it is absent. The kernel
@@ -518,36 +563,66 @@ are not returns a first-tier verdict judges and carry no such requirement; neith
 declined commission (`status: "cannot"`), which is not a contract return. The
 scoring above is unchanged.
 
-**Anticipatory settlement** (§IV.b: an explorer is compensated sooner than the
-lifetime of what it found). A verdict's reward is scored as soon as its return's
-outcome is fixed, or at the latest `consequence_horizon_ticks` after the return
-opened, on its mark then: the lots marked to the mids then
-(`consequence.marked`), the declined trade priced then
-(`consequence.opportunity_mark`). The final measurement (a fixed payoff, or the
-declined trade priced at the backstop, `consequence.opportunity`) then trains
-the judge's standing and the base rate once (`verdict.consequence_late`) and
-never re-settles the reward. The timing is never a charter price window
-(evaluations P7). A judgement may choose a target other than its delivered
-subject only while that target's outcome is unanswered: not fixed, marked or
-priced, and before its horizon.
+**One horizon, on the venue's clock** (wave 16, D2; ruling R-C; §IV.c: realized
+consequence is the slowest loop, "ultimately dependent on the timescale of
+consequentiality"). A judged return's outcome is fixed once, at
+`H = timing.world_repricing / timing.min_ratio` after the return opened, counted in
+venue nanoseconds and never in ticks, so the fact a verdict is graded on does not
+depend on the factory's own latency: a named trade is priced from its mid when the
+return was made to the first mid timestamped at or after `H`
+(`consequence.opportunity`, `consequence.attempted`, with `open_ns` and
+`resolved_ns`); an acting return is fixed at `H` or when its lots close. Every
+verdict about the return is scored once then, against the base rate as it stood
+before the return's `y` entered it, and that one score is the judge's consequence
+signal, its standing and the base rate's observation, in the same pass. There is no
+earlier mark and no later re-scoring. `H` is the longest horizon the §IV.c ratio
+admits: governance must fit `timing.min_ratio` of it inside the repricing period,
+and the decision loop must settle `timing.min_ratio` times faster than it, so a tick
+is admissible while it is at most `H / timing.min_ratio` (`max_tick`). Anticipatory
+settlement (§IV.b: an explorer is compensated sooner than the lifetime of what it
+found) is the producer's: it is paid its judges' verdicts at once, a forecast of
+the outcome; the judges are forecasters, paid when the horizon closes (ruling R-D).
+A consequence the venue has not given within its **consequence patience**,
+`H + verdict_timeout_ticks` of world time from the judgement (the backstop plus the
+verdict window it replaces), is none; a judgement waits for what it judged to settle
+for one patience per tier at or beneath it. The timing is never a charter price
+window (evaluations P7). A judgement may choose a target other than its delivered
+subject only while that target's outcome is unanswered: not fixed or priced, and
+before its horizon.
 
-`[evaluation] consequence_horizon_ticks` (integer in [1, backstop], default 10)
-and `opportunity_scale_bps` (positive number, default 50) are hashed.
+`[evaluation] consequence_horizon_ticks` and `opportunity_scale_bps` were removed in
+wave 16: a manifest that names either is refused. A world that lists a venue must
+state `timing.world_repricing`.
 
-A declined commission (`status: cannot`) is credited to the router that drew the
-seat as an abstention is, the zero-consequence reward less its role's card
-penalty (`router.decline_priced`), never the seat's own mean. The meta tier's
+**Nothing happened is priced at what happening earned** (wave 16, D4; ruling R-F).
+A decline, a NOOP and an abstention are priced at the router's observed average raw
+score less the same penalty: a router's NOOP draw (`router.abstention_priced`), a
+declined commission (`status: cannot`, `router.decline_priced`) and a decision
+censored or timed out without a score (`router.unscored_priced`) are each credited
+`r - p`, `r` the mean score before card penalty of every seat round the router has
+learned from a settlement (`RouterState.neutral`: cumulative over the router's life
+and carried to its successor, so a router that stops waking seats keeps its last
+mean), `p` the card penalty a decision of the role it filled, or would have filled,
+bears in the window it was drawn in. A seat's own learner is credited the same.
+Before a router's first settled round `r` is the published prior 0.5
+(`NEUTRAL_REWARD`, `world.scoring.abstention`); no other constant prices a round that
+delivered nothing, and never the seat's own mean (time audit T4). The meta tier's
 cascade window reads first a verdict on a return with no world outcome, since the
 tier above is that verdict's only grader.
 
-**The judge's reward is both signals.** A judge's decision settles
-(`evaluation-v1`, `evaluator.settled`) on the equal mean of its grade from the
-tier above (the mean of the grades metas gave it while its grade window was
-open, `evaluator.meta_grade`) and its consequence score, whichever exist, less its
+**The judge's reward is both signals** (wave 16, section 9: ruling R-A reversed; D6).
+A judge's decision settles (`evaluation-v1`, `evaluator.settled`) on the equal mean
+of its grade from the tier above (the mean of the grades metas gave it while its
+grade window was open, `evaluator.meta_grade`) and its consequence score, whichever
+exist, and so on its grade alone when the outcome was uninformative, less its
 card penalty; with neither it settles censored (`evaluation-unscored-v1`).
 Neither channel is weighted by the charter. The argument is in
 `runtime/feedback.py: evaluation_reward`. The router that drew the judge learns
-the same reward, so a judge decision's deadline covers the return's backstop.
+the same reward, so a judge decision's deadline covers its consequence patience.
+Realized consequence is nonfungible (essay II.IV.a): a judge's or a meta's
+consequence score enters its reward and its standing, and never a charter card, a
+price or a posted λ. The `forecast_skill` observation reads settled forecasts alone,
+and a λ post's shadow price reads returns' measured outcomes alone.
 
 **The grade window is the read above it.** At every tier, an evaluator decision's
 grade window closes on the tick after the cascade window holding its judgement
@@ -559,17 +634,17 @@ before the tier above could read the metas (essay II.IV.c: the queue withholds a
 verdict until it settles, at a 3:1 ratio or more; II.III.b: evaluators are graded
 tier upon tier). Before this, 0 to 4 of the 11 to 17 tier-three grades delivered in
 200 events counted on seeds 1 to 5 of the recursive scripted world; every one now
-counts. A judgement held in a window closes at the latest after
-`consequence_backstop_ticks + verdict_timeout_ticks` plus that window's drawn
-duration; one no window took (a judgement a judge chose rather than a routed one)
+counts. A judgement held in a window closes at the latest after its carry patience
+(one consequence patience per tier at or beneath it, on the world's clock) plus that
+window's drawn duration; one no window took (a judgement a judge chose rather than a routed one)
 waits `verdict_timeout_ticks`. A judgement whose decision has not settled when its
 window releases is withheld, not dropped (II.IV.c: "withheld ... until it
 settles"): it is carried into the tier's next window, which opens at the release
 with a duration drawn by the same law (`CascadeGate.carried`, `cascade.carry`),
 keeps its own open time and open grade window, and is read in the first release
 after its decision settles, ahead of that window's own arrivals of equal priority,
-within `meta_read_share`. It is carried until `consequence_backstop_ticks +
-verdict_timeout_ticks` after it was made; past that it is listed under `backstop`
+within `meta_read_share`. It is carried for its carry patience after it was made;
+past that it is listed under `backstop`
 in `cascade.carry` and its grade window closes. A delivered grade that cannot
 count, and a grade window that closes with no grade, are ledgered as
 `evaluator.grade_censored` with the reason (passed over, no grade returned, no
@@ -577,7 +652,9 @@ read, or backstop); nothing is dropped unseen.
 
 **Metas are graded by the world too.** A meta's conformity `k` is a prediction of
 the consequence score `s` of the decision it graded, scored the same way against
-the base rate of those scores (`meta.consequence`); a meta of a verdict the world
+the base rate of those scores at the meta's own tier (`evaluation_consequence:<tier>`;
+tiers score different random variables) under the same uninformative rule
+(`meta.consequence`); a meta of a verdict the world
 never resolved has none. A top-tier meta settles on that alone, a lower tier on it
 and the grade from the tier above. A meta reads what the cascade window released
 to it: the representative and, up to `meta_read_share` of the window's completed
@@ -601,13 +678,14 @@ learners").
 verdict `q` on that return. It is drawn when the verdict is given, in the same tick,
 before the cascade (every other reader of a Verdict is drawn at the cascade's
 release), and it is shown the world exactly as the judge it re-judges was shown it,
-frozen at that verdict; a counter made in a later tick is censored. When the world measures the return (the same mark or
-final measurement its judges are rewarded on), it settles on
+frozen at that verdict; a counter made in a later tick is censored. When the world
+measures the return (the one measurement at the horizon its judges are scored on), it
+settles on
 `0.5 + 0.5 * ((1 - (q - y)^2) - (1 - (v - y)^2))` (`counter-v1`, `counter.settled`),
 `v` the verdict it read: a proper rule in `q`, 0.5 for a counter that repeats the
 verdict. A return the world will not measure is never on an adversary's menu
-(`no world outcome`), and a counter the world leaves unmeasured past the backstop
-settles censored. A counter never touches the judge's or the producer's reward. It is
+(`no world outcome`), and a counter the world leaves unmeasured past its consequence
+patience settles censored. A counter never touches the judge's or the producer's reward. It is
 measured in its own `adversary` scope (a card may answer for `adversary`, and counter
 settlements bear that scope's prices), capped with the antagonists at
 `adversarial_share`, and cannot be commissioned.
@@ -875,10 +953,24 @@ rendered prompt in a scope exactly as it is globally. Its violations are attribu
 `forecasts` selects the latest `n` resolved forecast records in each scope.
 `forecast_skill` uses paired Brier skill against the baseline as it stood before
 each outcome, not lifetime standing. The other supported forecast observations
-are `verdict_mean`, `verdict_std`, `consequence_paid_off_rate` and `censored_share`.
+are `resolved_verdict_mean`, `resolved_verdict_std`, `consequence_paid_off_rate` and
+`censored_share`.
 Censored records count toward the selector but not a scored outcome mean.
-`verdict_mean` and `verdict_std` select by the judged subject's assembly or
-role. `forecast_skill` selects by the forecaster. Preflight uses the same
+`consequence_paid_off_rate` counts acting returns only (wave 16, R-H), on every
+selector: a return that executed nothing has `return_paid_off` 0 by the predicate's
+acting clause whatever the world said about it, so its forecast rows (marked
+`subject_acted: false`) and its outcome are not in the rate. What the world said about
+the returns that acted on nothing is published apart, over global closed windows only:
+`non_acting_informative_share`, the non-acting returns whose named trade's outcome was
+fixed in the window and measured under an informative base-rate key, over all such
+returns whose outcome was fixed (measured, or known absent); and
+`non_acting_paid_off_rate`, the share with `y = 1` among those informative outcomes.
+The charter's cards are the charter's to revise.
+`resolved_verdict_mean` and `resolved_verdict_std` (the verdict attached to each
+resolved forecast) select by the judged subject's assembly or role. `verdict_mean` and
+`verdict_std` are the verdicts delivered in whole closed windows: a card naming them
+over forecasts, over returns or per scope is refused at load and pointed to the
+`resolved_` name. `forecast_skill` selects by the forecaster. Preflight uses the same
 subject-aware forecast row construction as runtime measurement.
 
 `windows` selects exactly the latest `n` closed reserve windows. Global rates
@@ -941,11 +1033,18 @@ Charter audit C1, C2, P3, P4, M4, M6, M7 (essay II.IV.a, II.IV.c).
   next edition (`charter.norm_edition`): the new norms, every card whose norm
   survives, and a `charter.refused` for each card and each pending motion on a
   removed norm.
-- **Saturation.** Each priced card's `windows_at_lambda_max` (observed windows
-  closed at `prices.lambda_max`) and `violation_windows` (the current run of
+- **Saturation** (charter audit M7; wave 16, ruling R-E). Each priced card's
+  `bound` (`prices.penalty_cap / v`, the price at which its own penalty takes the
+  whole cap at its last violation), `windows_at_bound` (observed windows closed
+  with its penalty, or the total pressure of its roles, at the cap),
+  `saturated_windows` (the current run of them: its shadow price exceeds what the
+  reward channel can express) and `violation_windows` (the current run of
   consecutive observed windows in violation) are in `world.card_prices`, the
-  public window item and every ballot's `inputs.agenda`. They kill nothing: the
-  kernel's three deaths are unchanged.
+  public window item and every ballot's `inputs.agenda` (which also carries
+  `penalty_cap`), with `unmeasured_windows`, the card's consecutive closed windows
+  with no reading (wave 16, R10-f; the agenda also names each card's observation). A
+  dark card stays not failing (M-6); nothing is added or redefined to make it
+  measurable. They kill nothing: the kernel's three deaths are unchanged.
 
 ## Committee liability
 
@@ -1001,18 +1100,19 @@ No manifest key: the formulas are published in `world.mechanics.committee` and
 `world.mechanics.controller`.
 
 - **Posted λ.** Any return may carry `shadow_prices: {card_id: lambda}` for cards
-  priced now, each in `[0, prices.lambda_max]`, one per seat, card and reserve
+  priced now, each in `[0, prices.penalty_cap]`, one per seat, card and reserve
   window (`lambda_post.posted`; a refusal is `lambda_post.refused` and reaches the
   poster's inbox). Each post opens its own `policy` decision under
   `assembly:<id>`. A post is a claim about the window it is posted in: once that
-  window's decisions have their world-measured consequences
-  (`consequence_backstop_ticks + verdict_timeout_ticks`, in windows at the tick in
-  force, at least `timing.min_ratio`), the window's shadow price `y` is read: the
+  window's decisions have their world-measured consequences (the consequence
+  patience in ticks, which already holds `verdict_timeout_ticks` once (wave 16,
+  R10-k), in windows at the tick in force, at least `timing.min_ratio`), the window's shadow price `y` is read: the
   least-squares slope, across the card's scopes (per role or assembly; at least 3,
   with variance in `v`), of each scope's mean consequence (a judgement's
   consequence score, a return's `return_paid_off` or priced declined trade) on its
-  violation `v`, clipped to `[0, lambda_max]` (`price.margin`). The post settles as
-  `lambda-post-quadratic-v1` with `1 - ((p - y) / lambda_max)^2`
+  violation `v`, clipped to `[0, penalty_cap]` (`price.margin`; the price at which a
+  unit violation's penalty takes the whole cap). The post settles as
+  `lambda-post-quadratic-v1` with `1 - ((p - y) / penalty_cap)^2`
   (`lambda_post.settled`); with `y` unidentified it is censored. The committee's
   λ is never the target. The posted price is the median of each seat's latest
   unsettled post weighted by `(1/2 + sum of its settled post scores) / (1 + their
@@ -1211,12 +1311,13 @@ parameters; the observer never substitutes a second set of thresholds.
 | `timing.cadence_sample` | positive integer | `200` | Yes: retained consequence-latency sample length (latencies in world ticks). |
 | `timing.min_ratio` | integer, at least 3 | `3` | Yes: the one ratio every derived loop keeps to the measured loop it commands (price, immune organ, sampling actuator, cascade tiers, novelty patience, policy grading, governance), and the ratio slack on every decision cutoff. |
 | `timing.jitter_fraction` | finite nonnegative number | `0.2` | Yes: how far each derived loop's own continuous jitter may lengthen its period. |
-| `timing.world_repricing` | Absent, or a positive duration | Absent | Yes: the world's own repricing period, a fact about the venue (Hyperliquid funding settles hourly; edition 6 states `"1h"`). Governance is viable only while `timing.min_ratio` times the slowest loop fits inside it and inside the run's remaining ticks (`governance.nonviable`); `max_tick` is derived from it. |
-| `evaluation.consequence_backstop_events` (or `consequence_backstop_ticks`) | positive integer, in world ticks | `200`; scripted worlds `20`; testnet `60` | Yes: consequence horizon and conservative governance period floor. |
+| `timing.world_repricing` | A positive duration; required in a world with any trading venue (`exchange.coins`, `exchange.spot_pairs` or an enabled `polymarket`), refused at load otherwise | Absent | Yes: the world's own repricing period, a fact about the venue (Hyperliquid funding settles hourly; edition 6 states `"1h"`). The consequence horizon is `world_repricing / min_ratio` on the venue's clock, and `max_tick` is that over `min_ratio` (wave 16, D2). A named trade opens at its coin's latest venue mid, or, with none read yet, at the coin's first venue mid at or after the return (R10-h). Every named trade's outcome is fixed at its horizon, judged or not, and enters the non-acting observations and the keyed base rate (R10-j). An acting return's open lots exit at the venue's taker rate most recently read at or before its horizon; a read that states no rate keeps the last one; with none read by then the outcome is uninformative (`consequence.uninformative`, reason `fee_unknown`), never pending (R10-i). Governance is viable only while `timing.min_ratio` times the slowest loop fits inside it and inside the run's remaining ticks (`governance.nonviable`). |
+| `evaluation.consequence_backstop_events` (or `consequence_backstop_ticks`) | positive integer, in world ticks | `200`; scripted worlds `20`; testnet `60` | Yes: the conservative governance period floor and the tick-counted waits that are not a consequence (a requester's credit, a tool-use window). A judged return's outcome is fixed at the consequence horizon on the venue's clock, not here (wave 16, D2). |
 | `evaluation.verdict_timeout_events` (or `verdict_timeout_ticks`) | positive integer, in world ticks | `20` | Yes: how long a producer return waits for its judges' verdicts before it is censored, and how long an evaluator decision whose judgement no cascade window took waits for a grade. A routed evaluator decision's grade window is its cascade window's read, not this constant (see "The grade window is the read above it"). |
-| `prices.penalty_cap` | finite number strictly between 0 and 1 | `0.5` | Yes: maximum penalty before attribution. |
+| `prices.eta` | finite positive number | Derived: `(penalty_cap - kp) / (timing.min_ratio * immune.k)` (`0.5 / 9` at the defaults) | Yes: the PID's integral gain. Unstated, it is derived from the SF-0 relation (wave 16), so the price law alone presses a unit violation onto the cap in exactly `min_ratio` times the windows stable failure is diagnosed in; stated, the manifest is refused unless the relation holds (`gain_headroom`). A `kp` at or above `penalty_cap` saturates in one window whatever `eta` is and is refused. |
+| `prices.penalty_cap` | finite number strictly between 0 and 1 | `0.5` | Yes: maximum penalty before attribution, and the one bound on a card's price (wave 16, ruling R-E): a card is priced at most `penalty_cap / v`, the price at which its own penalty takes the whole cap. `prices.lambda_max` is refused by name. |
 | `prices.min_blame_share` | finite number in [0, 1] | `0.1` | Yes: floor on one decision's share of a generic (non-attributable) violation. |
-| `prices.kp` | finite nonnegative number | `0.0` | Yes: the PID's proportional gain. The PID is the only price law (charter audit U3): `lambda = kp*v + I + D`, where `I` accumulates `eta*v` while violating and leaks `decay` once compliant, held in `[0, lambda_max]` and not integrated only while `P + I` already reaches `lambda_max` and the violation is growing (anti-windup); `D = kd * max(0, d(measurement))/scale`, on the measurement rather than the error, signed toward violation, applied only while violating and only its positive part (Stooke et al. 2020), so a card still out of its region is never priced below `P + I`. With `kp = kd = 0` the law is the integral alone. `prices.controller` and `prices.kappa` are refused. |
+| `prices.kp` | finite nonnegative number | `0.0` | Yes: the PID's proportional gain. The PID is the only price law (charter audit U3): `lambda = kp*v + I + D`, where `I` accumulates `eta*v` while violating, never integrating past the bound `B = penalty_cap / v`, and leaks `decay` once compliant; it is held (not cut) while the card's own price sits at `B` (its own `lambda * v` at `penalty_cap`: anti-windup, rulings R-E, R10-e; the total `S` over the cards of its roles clips each decision's penalty and is published, but never holds another card). It is never used above the largest `B` of the card's current failure episode (its violating windows since it last complied; ruling R10-n, checkpointed as `episode_bound`), so a spike of any length never cuts it and an adopted price such as `1e308` unwinds on the decay schedule instead of locking the card at the cap or while `P + I` already reaches `B` and the violation is growing; `lambda = clip(P + I + D, 0, B)` while violating; `D = kd * max(0, d(measurement))/scale`, on the measurement rather than the error, signed toward violation, applied only while violating and only its positive part (Stooke et al. 2020), so a card still out of its region is never priced below `P + I`. With `kp = kd = 0` the law is the integral alone. `prices.controller` and `prices.kappa` are refused. |
 | `prices.kd` | finite nonnegative number | `0.0` | Yes: the PID's derivative-on-measurement gain. |
 | `immune.k` | integer, at least 2 | `3` | Yes: windows of evidence for every diagnosis; the live versioning retains `timing.min_ratio × k` windows. |
 | `immune.registration_bins` | increasing nonnegative numeric array | `[0, 2]` | Yes: zero, 1–2, 3+ registrations. Values equal to a cut enter the lower bin. |
@@ -1224,7 +1325,7 @@ parameters; the observer never substitutes a second set of thresholds.
 | `immune.tv_threshold` | finite number in (0, 1] | `0.2` | Yes: behavioural version boundaries and settling (the TV between adjacent k-window blocks), and the bound the gap series' volatility is priced above (the thrash price). |
 | `immune.gap_threshold` | finite number in (0, 1] | `0.8` | Yes: a wide gap: a version is `durable`, and a persistent violation is stable failure, at or above it. |
 | `immune.gain_step` | finite number in (0, 1] | `0.05` | Yes: exploration-gain adjustment. |
-| `immune.price_step` | finite number in (0, `prices.lambda_max`] | Required | Yes: the stable-failure price ratchet's lambda step per window of duration. A lambda step and an exploration-gain step are different units, so `gain_step` never stands in (versioning S3). The profile's three region-relative bins (inside, up to one scale unit outside, beyond) are fixed in the kernel; `immune.bins` is refused (versioning U5). |
+| `immune.price_step` | finite positive number | Required | Yes: the stable-failure price ratchet's lambda step per window of duration. A lambda step and an exploration-gain step are different units, so `gain_step` never stands in (versioning S3). The profile's three region-relative bins (inside, up to one scale unit outside, beyond) are fixed in the kernel; `immune.bins` is refused (versioning U5). |
 | `immune.gamma_max` | finite number in (0, 1] | `0.5` | Yes: exploration-gain ceiling. |
 
 `immune.decay_step` is refused (versioning audit C2): thrash is priced by its
@@ -1234,9 +1335,30 @@ These launch settings are immutable parameters of an experiment. Effective
 prices, gain, diagnoses and the currently negotiated tick interval remain runtime
 state. Stable failure is priced by its duration (essay II.II.b): the n-th
 consecutive diagnosed window adds `n * immune.price_step` to each violated card's
-price and accumulated pressure, bounded by `prices.lambda_max`
-(`immune.price_ratchet`), and the count restarts once the card leaves the
-attractor (`immune.price_ratchet_ended`). The exploration gain raised for stable
+price and accumulated pressure, bounded by the card's bound `penalty_cap / v`
+(`immune.price_ratchet`). At saturation the ratchet stops (wave 16, ruling R-E):
+a card whose own price already sits at its bound (its own `lambda * v` at
+`penalty_cap`; ruling R10-e: another card's saturation of the roles' pressure never
+stops it, which would be a safe harbour for its failure) keeps its price and integral,
+its duration keeps counting, and `immune.price_ratchet_saturated` is ledgered with
+the price at its bound; the card's saturation is published to governance (above).
+Whether the duration price has room to exist is published as
+`world.mechanics.controller.gain_headroom`: `saturation_windows`, the fewest
+windows in which the PID alone presses a unit violation onto the cap (the least `w
+>= 1` with `kp + w * eta >= penalty_cap`), against `diagnosis_windows`
+(`immune.k`, the fewest windows stable failure is diagnosed in); the relation
+`holds` when the first is at least `timing.min_ratio` times the second (§IV.c). A
+manifest that fails it is refused at load, with its numbers (wave 16, second
+addendum, Q-G1). Edition 6 as written (kp 0.5, eta 0.5, cap 0.5) saturated in 1
+window against the 9 required; `prices.eta` unstated is derived from the relation.
+The count restarts once the card leaves the
+attractor (`immune.price_ratchet_ended`). An unmeasured card holds its state (wave 16,
+second addendum, M-6): a card of the previous diagnosis's failing set that no window
+of the diagnosis tail measured stays in the failing set (`unmeasured_held` in the
+`pathology.*` and `immune.window` evidence), so its duration is neither reset nor read
+as relief, and with the card gap unreadable and the attractor held only by such cards
+the attractor holds; a card never measured never enters the set, and a card the
+charter dropped is gone, not held. The exploration gain raised for stable
 failure steps back toward each router's seed gamma once a window diagnoses no
 pathology (`immune.gain` with pathology `cleared`); a learning-dead window holds
 it. That state resumes with the controller. (Older worlds halved the violated
@@ -1250,15 +1372,26 @@ ramped unchecked overshoots into thrash.
 
 Thrash is priced (essay II.II.b, versioning audit C2): the diagnosis's
 unsettledness `u` (below) above `immune.tv_threshold` is priced by the charter's PID
-law and gains (`prices.eta`, `kp`, `kd`, `decay`, `lambda_max`), so its integral
-accumulates how long the thrash lasts. A round a router of
-`evaluation.no_swap_regret_kinds` draws, its abstentions included, carries
+law and gains (`prices.eta`, `kp`, `kd`, `decay`, `penalty_cap`), so its integral
+accumulates how long the thrash lasts. The price lands on the tier whose behaviour
+moved (wave 16, second addendum, I-10; ruling R-E): the organ reads which cards'
+region-relative cells took more than one value over the retained horizon and names
+the roles they measure (`verdict_mean`, `verdict_std`, `resolved_verdict_mean`,
+`resolved_verdict_std`, `evaluator_disagreement` and `forecast_skill` measure evaluators, `meta_verdict_mean` metas, `exposure_win_rate`
+antagonists, any other card the role it answers for;
+`world.adaptive_scoring.thrash_price.roles`). A router whose seats fill one of those
+roles is charged; with no role named (a card answering for `all`, or activity alone)
+the routers of `evaluation.no_swap_regret_kinds` are, as before. A round such a
+router draws, its abstentions included, carries
 `c = min(prices.penalty_cap, lambda * m)`, `m` the total-variation distance between
 that draw's distribution and the router's previous draw's: the router's own policy
 movement, so holding still is what lowers it (a charge every round bore alike would
-be a constant shift a no-regret learner ignores). The router learns
-`(r + penalty_cap - c) / (1 + penalty_cap)` for every round, charged or not, one
-affine map with no clip (`thrash.charged`). The price is published in
+be a constant shift a no-regret learner ignores). The charge joins the round's card
+penalty `p` in one total charge, and every router learns `(r + B - p - c) / (1 + B)`,
+`r` raw and `B = 2 * penalty_cap`, for every round, charged or not (`c = 0`
+uncharged): one affine map applied once, with no clip and one scale per router for the
+world's life, so a charge never raises a reward and a card penalty and a thrash charge
+of equal size lower it equally (wave 16, rulings R10-c, R10-l; `thrash.charged`). The price is published in
 `world.adaptive_scoring.thrash_price`; its controller resumes with the checkpoint
 (`thrash_controller`), and each open round's charge with `thrash_charges`.
 
@@ -1360,8 +1493,9 @@ spelled for their unit (a manifest that gives both spellings must give one
 number). The judgement deadlines the decision queue enforces were already
 computed from these numbers times the tick interval, so the two now agree.
 
-The shipped testnet manifest sets `tick_interval = "120s"` and
-`evaluation.consequence_backstop_events = 60`. With `timing.min_ratio = 3`,
+The shipped testnet manifest sets `tick_interval = "120s"` (it ran at 600 s before
+wave 16; a tick must now be at most the consequence horizon over `min_ratio`, 400 s
+at `world_repricing = "1h"`) and `evaluation.consequence_backstop_events = 60`. With `timing.min_ratio = 3`,
 the conservative activation floor is 180 ticks, or six hours at the declared
 tick interval. Both scripted manifests use a 20-tick backstop so the
 500-event demonstration can activate a card amendment and evaluator retirement
@@ -1414,10 +1548,11 @@ or by its width for a band. A zero one-sided bound falls back to the
 observation's declared unit width. The resulting scale is frozen with the
 card's region. Doubling a positive 500-micro-USD cap therefore has violation 1.
 
-For card j, `v_j = distance_outside_region / card_region.scale`, and
-`S = sum(lambda_j * v_j)`. A settlement receives
+For card j, `v_j = distance_outside_region / card_region.scale` plus the
+violation its failed holdouts add, `p_j = min(lambda_j * v_j, prices.penalty_cap)`
+(0 while `v_j` is 0), and `S = sum(p_j)`. A settlement receives
 `min(S, prices.penalty_cap) * share`. When cards measure different quantities,
-`share = sum(lambda_j * v_j * share_j) / S`, or zero when S is zero.
+`share = sum(p_j * share_j) / S`, or zero when S is zero.
 
 Cost shares use the card's selected scopes. For `cost_per_return` only
 successful returns own cost; for `cost_per_attempt` every invocation's cost is
@@ -1427,7 +1562,9 @@ a scope with no response of its own is measured nowhere and attributed nowhere. 
 normalised across supported scopes. Evaluator and meta cost cards therefore
 charge those roles. Global window cost retains the producer-cost sufficient
 statistics. Tool attempts and turnover use the decision's contribution divided
-by the window total. A lower-bound well-formedness violation is allocated by
+by the total of the window's decisions outside the unhistoried niche (the split),
+never the window's own total, which a niche decision's calls or notional would
+dilute; so do cost and well-formedness. A lower-bound well-formedness violation is allocated by
 malformed invocations, so a correct return does not pay for someone else's
 malformed one; an upper-bound violation uses well-formed invocations. A zero
 attributable total contributes zero. Other observations use `1/n` decisions
@@ -1439,15 +1576,40 @@ across many decisions cannot dilute what each one carries of a violation below
 the floor. The generic share is `max(min_blame_share, 1/n)`, so two decisions
 still carry a half each; the floor bites only once `n` exceeds its reciprocal.
 Attributable observations (cost, well-formedness, tool attempts, turnover) keep
-their exact shares. A card measured per assembly or per role is attributable to
+their exact shares. **A rate is attributed by relief** (wave 16, D5): for
+`revision_rate`, `noop_share` and `consequence_paid_off_rate`, a decision that moved
+the rate toward its region (for a floor, one in its numerator; for a ceiling, one
+in its denominator and not its numerator) bears nothing, and every other decision
+of the scope bears `1/n` of the violation, `n` the non-relieving decisions, NOOPs
+and declines included (ruling R9), with no `min_blame_share` floor. Every count
+share (a rate, or any other generic observation) is the window's count when it
+closed: a decision settling while its window is open is deferred
+(`price.deferred`) and settles at the close, so no share depends on the order
+decisions settled in. **The unhistoried niche bears no penalty** (essay II.II.b;
+wave 16, R-E as amended): a decision of a seat in its protected trial (no settled
+delivery yet, of any status: a decline, NOOP or abstention credited at its D4 price
+is a reward trail; or fewer than `novelty.trials` settled consequences inside its
+patience, counted from its registration or, for a seed, the world's first tick;
+ruling R10-b), or one
+that took an unhistoried action the novelty reserve paid for (`niche.action`), is
+priced at zero, is not in any split's denominator and waits for no close. It is a
+penalty rule, never a reward floor: the decision keeps whatever its judges gave it. A card measured per assembly or per role is attributable to
 its scopes: each scope whose own value lies outside the region owns
 `v_scope / sum(v_scope)` of the violation (a compliant scope owns none), and a
 decision carries its scope's part times `max(min_blame_share, 1/n_scope)` over
 that scope's decisions that responded in the window; the term records the
 `owner` scope. The generic split applies only when no scope violates. Closed
-windows freeze the per-scope values as `closed_scopes`. The final score is
+windows freeze the per-scope values as `closed_scopes`. The published score is
 `clip(raw_score - penalty, 0, 1)`: the penalty is subtracted (the essay's
 Lagrangian), and the clip at zero only keeps a settled reward in the unit interval.
+What every learner learns has no clip (wave 16, rulings R10-g, R10-l): the router that
+drew the decision and the seat's own learner each learn one affine map for the world's
+life, applied exactly once, `(raw_score + B - P) / (1 + B)`: `P` the total charge the
+round bears (`penalty`, plus the router's thrash charge for the router; 0 for a round
+that bore none) and `B` the largest `P` can be for that learner (`penalty_cap` for a
+seat's own learner, `2 * penalty_cap` for a router), so a low-reward decision never
+escapes part of its charge. A round that delivered nothing is learned on the same map
+with the router's observed mean raw score as its `raw_score`.
 A forecast-shaped decision whose accepted commitment came due avoidably unresolved
 (censored with no documented exclusion) still settles censored, never as a zero,
 but under `forecast-unresolved-priced-v1` carrying its penalty as the score; its

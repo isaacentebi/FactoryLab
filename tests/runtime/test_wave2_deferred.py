@@ -38,7 +38,7 @@ def test_an_abstention_is_priced_in_each_menu_role_under_that_roles_scope(monkey
     as_evaluator = rt._penalty_for("evaluator", noop, as_role="evaluator")
     filed = rt._penalty_for("evaluator", noop)
     assert as_evaluator > 0 and filed == 0.0
-    _reward, charged = rt._priced_abstention(noop, 0.5)
+    charged = rt._priced_abstention(noop)
     assert charged == pytest.approx(0.75 * rt._penalty_for("producer", noop, as_role="producer")
                                     + 0.25 * as_evaluator)
 
