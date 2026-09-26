@@ -151,7 +151,8 @@ def test_an_attempt_beyond_the_bound_is_saturation_and_the_bound_moves_with_v(le
     card = prices.snapshot()["cards"]["cost"]
     assert card == pytest.approx({
         "lambda": 0.02, "updates": 3, "saturations": 3, "max_step": 0.45,
-        "last_window_end_event": 2, "integral": 0.0, "failing_windows": 0,
+        "last_window_end_event": 2, "integral": 0.0, "episode_bound": 0.45,
+        "failing_windows": 0,
         "bound": 0.02, "windows_at_bound": 3, "saturated_windows": 3,
         "violation_windows": 3,
     })

@@ -109,10 +109,17 @@ class _CardState:
     last_window_end_event: int | None = None
     previous_violation: float = 0.0
     # The integral term: accumulated pressure. It integrates only up to the bound of
-    # the window it integrates in (penalty_cap / v), and is clamped to that bound, never
-    # held above it, while the penalty sits at the cap (ruling R10-e refined): a value
-    # above the bound prices nothing more and ``decay`` could never unwind it.
+    # the window it integrates in (penalty_cap / v) and is held, never cut, while the
+    # penalty sits at the cap, so a violation that spikes and subsides keeps its memory;
+    # it is never used above ``episode_bound`` (ruling R10-n).
     integral: float = 0.0
+    # Ruling R10-n: the largest own bound penalty_cap / v the card has seen in its
+    # current failure episode (the bound of its mildest violation since it began
+    # violating), 0 outside one. The episode begins at the first violating observation
+    # and ends at compliance (not ``end_failure``). An integral above it (an adopted price
+    # such as 1e308) prices nothing more and could never decay, so it is clamped to it;
+    # a spike, whose bound is smaller, never erases the memory below it.
+    episode_bound: float = 0.0
     # The last accepted observation, for the PID's derivative on measurement.
     previous_value: float | None = None
     # Consecutive windows the immune organ diagnosed this card violated inside a
@@ -219,9 +226,10 @@ class PriceController:
     is clipped to ``[0, penalty_cap / v]`` while it violates (``v > 0``): above it,
     ``lambda * v`` would take more than the capped penalty any reward can bear, and no
     decision's reward would change. There is no ``lambda_max``. While the card's own
-    price sits at its bound (``lambda >= penalty_cap / v``) the integrator is clamped to
-    that bound and held there (ruling R10-e refined: never frozen at a value above it,
-    which ``decay`` could not unwind): essay II.IV.b, "gain ramped high enough to kick a
+    price sits at its bound (``lambda >= penalty_cap / v``) the integrator is held, never
+    cut, and never above the largest own bound of the card's current failure episode
+    (ruling R10-n: a spike keeps its memory, and an adopted price above every bound
+    unwinds): essay II.IV.b, "gain ramped high enough to kick a
     system out of an overdamped attractor will, if unchecked, overshoot into an
     oscillation condition (thrash)", and a wound-up integral would keep the price high
     long after the attractor was left. The gate is the card's own bound only (wave 16,
@@ -381,6 +389,10 @@ class PriceController:
             return
         self.__ledger.append({"kind": "immune.price_ratchet_ended", "card_id": card_id,
                               "window": window, "duration": state.failing_windows})
+        # The failure episode (ruling R10-n) is not ended here: the organ calls this
+        # whenever it diagnoses no stable failure, and a spike can be what moves the
+        # diagnosis, so ending the episode here would let the spike erase the memory
+        # the episode keeps. It ends at compliance.
         self.__cards[card_id] = replace(state, failing_windows=0)
 
     def card_ids(self) -> tuple[str, ...]:
@@ -464,7 +476,11 @@ class PriceController:
         # At its own bound no gain on the card's price exists, and the integrator
         # holds; another card's pressure never holds it (ruling R10-e).
         frozen = self._own_bound(state.price, violation)
-        requested, integral, terms = self._pid(state, value, violation, frozen=frozen)
+        # The failure episode's largest own bound, this window's included (R10-n).
+        episode = (max(state.episode_bound, self.__cap / violation) if violation > 0
+                   else 0.0)
+        requested, integral, terms = self._pid(state, value, violation, frozen=frozen,
+                                               episode=episode)
         if anticipated is not None and violation > 0:
             feed_forward = self.__kp * max(anticipated, -violation)
             requested += feed_forward
@@ -486,6 +502,7 @@ class PriceController:
             last_window_end_event=window_end_event,
             previous_violation=violation,
             integral=integral,
+            episode_bound=episode,
             previous_value=value,
             windows_at_bound=state.windows_at_bound + int(at_bound),
             saturated_windows=state.saturated_windows + 1 if at_bound else 0,
@@ -516,7 +533,8 @@ class PriceController:
         self.__cards[card_id] = updated
 
     def _pid(self, state: _CardState, value: float, violation: float, *,
-             frozen: bool = False) -> tuple[float, float, dict[str, float]]:
+             frozen: bool = False, episode: float = 0.0
+             ) -> tuple[float, float, dict[str, float]]:
         """Guarantees a violating card is never priced below its accumulated integral,
         or its bound where the integral exceeds it.
 
@@ -526,15 +544,14 @@ class PriceController:
         violates, and only its positive part: a card moving back toward its region
         but still outside it keeps ``P + I``, so a shrinking violation can lower the
         price only through ``P``, never to zero while it lasts. The integral never
-        integrates past ``penalty_cap / v``, and an integral above that bound (an
-        adopted price such as 1e308, or one held through a spike of ``v``) is clamped
-        to it before it is used (ruling R10-e refined): it holds, at most at the bound,
-        while the penalty sits at the cap (``frozen``; ruling R-E), and while ``P``
-        plus the integral already reaches the bound and the violation is still
-        growing; it leaks ``decay`` once the card stops violating, from at most the
-        bound of the last violation it saw. A stored value above its effective bound
-        can therefore never sit out of reach of ``decay`` (a float no-op at 1e308),
-        and the price always unwinds.
+        integrates past ``penalty_cap / v``; it holds, unchanged, while the penalty
+        sits at the cap (``frozen``; ruling R-E), and while ``P`` plus the integral
+        already reaches the bound and the violation is still growing; it leaks
+        ``decay`` once the card stops violating. Ruling R10-n: the integral is used
+        clamped to ``episode``, the largest own bound of the card's current failure
+        episode, so a spike (a smaller bound) never cuts it, and a stored value above
+        every bound of the episode (an adopted 1e308, which ``decay`` could never
+        unwind) is clamped at the first violating observation and at compliance.
         """
         region = state.region
         derivative = 0.0
@@ -551,19 +568,22 @@ class PriceController:
                              / region.scale)
         proportional = self.__kp * violation
         if violation <= 0:
+            # The episode that ends here leaks from at most its largest bound.
             held = state.integral
-            if state.previous_violation > 0:
-                held = min(held, self.__cap / state.previous_violation)
+            if state.episode_bound > 0:
+                held = min(held, state.episode_bound)
             integral = max(0.0, held - self.__decay)
         else:
             bound = self.__cap / violation
-            # Clamped to the card's own bound before it is used (ruling R10-e refined):
-            # an integral above it would price nothing more and could never decay.
-            held = min(bound, state.integral)
+            # Used at most at the episode's largest own bound (ruling R10-n): above it
+            # an integral prices nothing and could never decay; a spike's smaller
+            # bound never cuts it.
+            held = min(episode, state.integral)
             if frozen or (proportional + held >= bound
                           and violation > state.previous_violation):
                 # At the cap, or saturated high without any new integration and still
-                # climbing: hold at the bound, never wind up.
+                # climbing: hold, never wind up, and never cut: a spike's lower bound
+                # clips the price, not the pressure the card has accumulated.
                 integral = held
             else:
                 integral = min(bound, held + self.__eta * violation)
@@ -647,6 +667,7 @@ class PriceController:
                     "max_step": state.max_step,
                     "last_window_end_event": state.last_window_end_event,
                     "integral": state.integral,
+                    "episode_bound": state.episode_bound,
                     "failing_windows": state.failing_windows,
                     "bound": self._bound(state.previous_violation),
                     "windows_at_bound": state.windows_at_bound,

@@ -159,3 +159,16 @@ def test_the_organ_never_leaves_or_holds_a_gamma_above_gamma_max(kind):
     assert gamma(router.learner) == 0.9 > rt.m.immune.gamma_max
     _gain(rt, kind, 1)
     assert gamma(router.learner) == rt.m.immune.gamma_max
+
+
+@pytest.mark.parametrize("seed", [0.9, 0.5000001, 0.0, -0.1])
+def test_a_seed_gamma_outside_the_organ_s_bound_is_refused_at_load(seed):
+    """A seed exploration above ``immune.gamma_max`` is invalid physics (no step could
+    reach it): refused at load, as SF-0 is, never clamped silently later."""
+    manifest = load_manifest("scripted")
+    assert manifest.immune.gamma_max == 0.5
+    with pytest.raises(ValueError, match="router_gamma"):
+        Runtime(manifest, events=1, seed=1, initial_balance_micro=None, ledger_path=None,
+                router_gamma=seed)
+    Runtime(manifest, events=1, seed=1, initial_balance_micro=None, ledger_path=None,
+            router_gamma=0.5)  # at the bound: accepted
