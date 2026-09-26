@@ -2369,26 +2369,35 @@ def of3a_sampling_behind_return(events: list[Mapping], manifest: Mapping) -> Res
     """OF-3a: every judge draw on a return is ledgered after that return: the sampling
     decision stays behind the return, so no seat can alias a sampler it cannot predict.
 
-    A draw on a ``ProducerReturn`` event comes after both the event that published the
-    return (its own ledger row, carried with its ``about_handle``) and the producer's
-    invocation that made it."""
-    returned = {need(row, "handle"): need(row, "seq") for row in rows_of(events, "invocation")
-                if isinstance(row.get("handle"), str) and need(row, "handle")}
+    A draw on a ``ProducerReturn`` event (its own ledger row, carried with its
+    ``about_handle``) comes after that event, and the event after an ``ok`` invocation
+    of the producer that made it. Every draw on a ProducerReturn is checked: one whose
+    return has no ``ok`` invocation, or only ones ledgered after the event, fails (a
+    return no producer made before it was published), never drops out of the count."""
+    made: dict[str, list[int]] = defaultdict(list)
+    for row in rows_of(events, "invocation"):
+        handle = row.get("handle")
+        if isinstance(handle, str) and handle and need(row, "status") == "ok":
+            made[handle].append(need(row, "seq"))
     # loop.py emits every ProducerReturn with its ``about_handle``.
     published = {need(row, "event.id"): (need(row, "event.payload.about_handle"), need(row, "seq"))
                  for row in rows_of(events, "event")
                  if need(row, "event.kind") == "ProducerReturn"}
-    checked, early = 0, []
+    checked, early, unmade = 0, [], []
     for row in rows_of(events, "decision.open"):
         # A draw on an event that is no ProducerReturn is not a draw on a return.
-        handle, event_seq = published.get(need(row, "event_id"), (None, None))
-        if handle in returned:
-            checked += 1
-            if need(row, "seq") <= event_seq or need(row, "seq") <= returned[handle]:
-                early.append(need(row, "handle"))
+        if need(row, "event_id") not in published:
+            continue
+        handle, event_seq = published[need(row, "event_id")]
+        checked += 1
+        if not any(seq < event_seq for seq in made.get(handle, ())):
+            unmade.append({"draw": need(row, "handle"), "return": handle})
+        elif need(row, "seq") <= event_seq:
+            early.append(need(row, "handle"))
     if not checked:
         return _unsupported("OF-3a", "no judge draw on a return")
-    return _result("OF-3a", not early, draws=checked, early=early[:5])
+    return _result("OF-3a", not early and not unmade, draws=checked, early=early[:5],
+                   unmade=unmade[:5])
 
 
 @criterion("OF-2c")

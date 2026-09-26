@@ -1003,14 +1003,15 @@ def _returned_event(handle, about, seq):
 
 
 def test_of3a_a_judge_is_drawn_only_after_the_return_it_reads():
-    ok = [{"kind": "invocation", "handle": "p1", "seq": 1}, _returned_event("e", "p1", 2),
+    ok = [{"kind": "invocation", "handle": "p1", "seq": 1, "status": "ok"},
+          _returned_event("e", "p1", 2),
           {"kind": "decision.open", "handle": "j1", "event_id": "producerreturn-2", "seq": 3}]
     assert g.of3a_sampling_behind_return(ok, M).ok
     early = [{"kind": "decision.open", "handle": "j1", "event_id": "producerreturn-2",
               "seq": 0}, *ok[:2]]
     assert g.of3a_sampling_behind_return(early, M).status == g.FAIL
     # Codex review: after the invocation but before the ProducerReturn it reads.
-    before_event = [{"kind": "invocation", "handle": "p1", "seq": 1},
+    before_event = [{"kind": "invocation", "handle": "p1", "seq": 1, "status": "ok"},
                     {"kind": "decision.open", "handle": "j1",
                      "event_id": "producerreturn-3", "seq": 2},
                     _returned_event("e", "p1", 3)]
@@ -1513,7 +1514,8 @@ def test_e1_of3a_an_invocation_without_a_handle_returns_nothing():
     """Sol E1: a handle-less invocation is no return. A ProducerReturn always names its
     handle (loop.py emits it with ``about_handle``), so one naming none is a malformed
     row and fails, never a draw on nothing (Codex pass on 7c714a2)."""
-    ok = [{"kind": "invocation", "handle": "p1", "seq": 1}, _returned_event("e", "p1", 2),
+    ok = [{"kind": "invocation", "handle": "p1", "seq": 1, "status": "ok"},
+          _returned_event("e", "p1", 2),
           {"kind": "decision.open", "handle": "j1", "event_id": "producerreturn-2", "seq": 3}]
     stray = [{"kind": "event", "seq": 12, "event": {"id": "ev1", "kind": "ProducerReturn",
                                                     "payload": {}}},
@@ -1524,8 +1526,26 @@ def test_e1_of3a_an_invocation_without_a_handle_returns_nothing():
     assert result.evidence["malformed"]["field"] == "event.payload.about_handle"
     named = [{**stray[0], "event": {**stray[0]["event"], "payload": {"about_handle": "zz"}}},
              *stray[1:]]
+    # Codex on 3b5bb6a: a return no producer made (no ok invocation) is a failure,
+    # never a draw that drops out of the count.
     result = g.of3a_sampling_behind_return(ok + named, M)
-    assert result.ok and result.evidence["draws"] == 1, result.evidence
+    assert result.status == g.FAIL and result.evidence["draws"] == 2, result.evidence
+    assert result.evidence["unmade"] == [{"draw": "j2", "return": "zz"}]
+
+
+def test_of3a_the_producers_ok_invocation_precedes_the_return():
+    """Codex on 3b5bb6a: an ok invocation ledgered after the ProducerReturn, or only a
+    failed one before it, backs no draw on that return: OF-3a fails."""
+    event, draw = _returned_event("e", "p1", 2), {
+        "kind": "decision.open", "handle": "j1", "event_id": "producerreturn-2", "seq": 3}
+    late = [event, draw, {"kind": "invocation", "handle": "p1", "seq": 4, "status": "ok"}]
+    result = g.of3a_sampling_behind_return(late, M)
+    assert result.status == g.FAIL and result.evidence["unmade"][0]["return"] == "p1"
+    failed = [{"kind": "invocation", "handle": "p1", "seq": 1, "status": "error"},
+              event, draw]
+    assert g.of3a_sampling_behind_return(failed, M).status == g.FAIL
+    made = [{"kind": "invocation", "handle": "p1", "seq": 1, "status": "ok"}, event, draw]
+    assert g.of3a_sampling_behind_return(made, M).ok
 
 
 def test_g1_sf1e_reads_gamma_as_the_kernel_does_and_any_base_unwinding_fails():
@@ -1950,7 +1970,7 @@ def _thin_violations():
         "OF-3a": (g.of3a_sampling_behind_return,
                   [_returned_event("e", "p1", 2), {"kind": "decision.open", "handle": "j1",
                                                    "event_id": "producerreturn-2", "seq": 3},
-                   {"kind": "invocation", "handle": "p1", "seq": 4}], {}),
+                   {"kind": "invocation", "handle": "p1", "seq": 4, "status": "ok"}], {}),
         "I-3c": (g.i3c_niche_no_worse_than_noop,
                  [_open("n1", "seat"), _open("z1", "NOOP"), *niche,
                   {"kind": "router.abstention_priced", "handle": "z1", "penalty": 0.1,
