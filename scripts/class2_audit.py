@@ -32,8 +32,8 @@ does everything around that call, offline:
             Valid only when every sample echoes its prompt's id (``corpus_sha``,
             ``provenance_id``) and its sample number (1 and 2, once each); every corpus
             finding passes its schema (fields, enums, its leaf in the corpus, its class
-            and severity the rubric's); every summary covers every leaf the key records
-            (none unread, none unaccounted for) and counts its findings by class; every
+            and severity the rubric's); every summary covers every leaf of the corpus,
+            context included (none unread, none unaccounted for) and counts its findings by class; every
             provenance sample answers every commit once; at least 7 of the 8 canaries
             are found in the union and every mandatory one (Q6, Q7, Q9, Q10) is; and at most
             1 of 10 controls is flagged. An invalid audit is rerun with the next family.
@@ -713,8 +713,9 @@ def prompt_text(*, authority: str, previous_text: str | None, diff: str,
         "",
         "One JSON object per line in auditor_input.jsonl: leaf_id, world, path, text, "
         "surface_kind, audience, frequency, provenance, change. Answer every leaf whose "
-        "provenance is `kernel`; read the others as context only. The added and changed "
-        "leaves come first.",
+        "provenance is `kernel`; read the others as context, asked only the questions "
+        "the rubric puts to a context leaf. Every leaf, context included, is in your "
+        "summary's `read` or `unread` list. The added and changed leaves come first.",
         "",
         f"The corpus id is `{corpus_sha}`: your summary carries it as `corpus_sha`, and "
         "`sample` is 1 on the first run and 2 on the second.",
@@ -1433,12 +1434,15 @@ def _sample_number(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= SAMPLES
 
 
-def _completeness(summary: dict, expected: set[str], all_ids: set[str]) -> list[str]:
-    """Why a sample's summary is not complete against the key (none when it is).
+def _completeness(summary: dict, all_ids: set[str]) -> list[str]:
+    """Why a sample's summary is not complete against the corpus (none when it is).
 
-    Judged against the key render wrote, never the numbers the auditor reports about
-    itself: every expected leaf is in the read set or listed unread, and an unread leaf
-    fails the audit.
+    Judged against the corpus render wrote, never the numbers the auditor reports about
+    itself: every leaf of the corpus, kernel and context alike, is in the read set or
+    listed unread, and an unread leaf fails the audit. Context leaves (charter cards and
+    norms) are where Q10-Q12 are asked, so an auditor that omits them has not read them;
+    their tag constrains which questions apply (``finding_problems``), not whether they
+    are read.
     """
     problems = []
     read, unread = summary.get("read"), summary.get("unread")
@@ -1454,15 +1458,15 @@ def _completeness(summary: dict, expected: set[str], all_ids: set[str]) -> list[
                         f"{len((read | unread) - all_ids)}")
     if unread:
         problems.append(f"unread leaves: {len(unread)}")
-    unaccounted = expected - read - unread
+    unaccounted = all_ids - read - unread
     if unaccounted:
-        problems.append(f"expected leaves neither read nor listed unread: "
-                        f"{len(unaccounted)}/{len(expected)}")
-    if summary.get("leaves_total") != len(expected):
+        problems.append(f"corpus leaves neither read nor listed unread: "
+                        f"{len(unaccounted)}/{len(all_ids)}")
+    if summary.get("leaves_total") != len(all_ids):
         problems.append(f"leaves_total {summary.get('leaves_total')!r} is not the "
-                        f"{len(expected)} leaves rendered")
-    if summary.get("leaves_read") != len(read & expected):
-        problems.append("leaves_read differs from the expected leaves in the read set")
+                        f"{len(all_ids)} leaves rendered")
+    if summary.get("leaves_read") != len(read & all_ids):
+        problems.append("leaves_read differs from the corpus leaves in the read set")
     return problems
 
 
@@ -1478,7 +1482,7 @@ def sample_problems(findings: list[dict], summary: dict | None, key: dict,
         problems.append("the summary is not bound to this corpus (corpus_sha)")
     if not _sample_number(summary.get("sample")):
         problems.append(f"sample id {summary.get('sample')!r} is not 1..{SAMPLES}")
-    problems += _completeness(summary, set(key["expected_leaves"]), set(records))
+    problems += _completeness(summary, set(records))
     counts: dict[str, int] = {}
     for i, f in enumerate(findings, 1):
         for p in finding_problems(f, records):

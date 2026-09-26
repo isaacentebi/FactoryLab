@@ -422,12 +422,12 @@ def _output(out, key, *, canaries=None, controls=0, summary=True, unread=(), sam
             if canaries is None or c["id"] in canaries]
     rows += [_finding(records[c["leaf_id"]], "Q4") for c in key["controls"][:controls]]
     rows += list(extra)
-    read = sorted(set(key["expected_leaves"]) - set(unread))
+    read = sorted(set(records) - set(unread))
     by_class = {}
     for row in rows:
         by_class[row.get("class")] = by_class.get(row.get("class"), 0) + 1
     summ = {"summary": True, "corpus_sha": key["corpus_sha"], "sample": sample,
-            "leaves_read": len(read), "leaves_total": key["expected_count"], "read": read,
+            "leaves_read": len(read), "leaves_total": len(records), "read": read,
             "unread": list(unread), "by_class": by_class}
     return rows, (summ if summary else None)
 
@@ -488,6 +488,21 @@ def test_a_missing_summary_or_an_unread_leaf_invalidates(rendered):
                 if i not in {c["leaf_id"] for c in key["canaries"]})
     verdict = _verdict(out, key, unread=[real])
     assert not verdict["valid"] and any("unread" in p for p in verdict["problems"])
+
+
+def test_a_summary_omitting_every_charter_leaf_is_refused(rendered):
+    """Codex on d1f0903: context leaves (cards and norms) are where Q10-Q12 are asked,
+    so omitting them from both read and unread leaves them unread."""
+    out, key = rendered
+    context = {r["leaf_id"] for r in _records(out) if r["provenance"] != "kernel"}
+    assert context
+    rows, summary = _output(out, key, sample=2)
+    read = [i for i in summary["read"] if i not in context]
+    for total in (summary["leaves_total"], key["expected_count"]):
+        forged = {**summary, "read": read, "leaves_read": len(read), "leaves_total": total}
+        verdict = _verdict(out, key, second=(rows, forged))
+        assert not verdict["valid"]
+        assert any("neither read nor listed" in p for p in verdict["problems"])
 
 
 def test_the_key_records_every_kernel_leaf_rendered(rendered):

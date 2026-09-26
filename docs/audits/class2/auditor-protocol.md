@@ -98,8 +98,8 @@ JSON Lines, one object per finding, then one summary object:
  "by_class": {"C1": 3, "C2": 1, "ANNOUNCED-PHYSICS": 2}}
 ```
 
-`read` lists the `leaf_id` of every leaf the auditor answered, and `unread` every one it
-did not. The counts are checked against those sets, and the sets against the corpus.
+`read` lists the `leaf_id` of every leaf the auditor answered, context leaves included,
+and `unread` every one it did not. The counts are checked against those sets, and the sets against the corpus.
 `corpus_sha` is the id the prompt names; `sample` is 1 on the first run and 2 on the
 second. Every field of every finding is checked: its leaf is in the corpus and its
 world, path and tags are that leaf's; its id is `sha256(path|quote)[:12]` and its quote
@@ -121,10 +121,11 @@ list. The key is written to `canary_key.json`, which is never part of the audito
 The audit is **valid** only if all of these hold (`scripts/class2_audit.py validate`):
 
 - the summary is present and complete against the corpus `render` wrote, not against the
-  auditor's own numbers: the key records every leaf under audit (`expected_leaves`), and
-  every one of them must appear in the summary's `read` set or its `unread` list; any
-  unread leaf fails the audit, and `leaves_total` and `leaves_read` must match those
-  sets;
+  auditor's own numbers: every leaf of the corpus, kernel and context alike (the charter
+  cards and norms are where Q10–Q12 are asked), must appear in the summary's `read` set
+  or its `unread` list; any unread leaf fails the audit, and `leaves_total` (the corpus's
+  leaves) and `leaves_read` must match those sets. The context tag constrains which
+  questions a leaf may be flagged under, not whether it is read;
 - at least **7 of the 8** canaries are found under their question and class;
 - each **mandatory** canary is found: **Q6** (salience), **Q7** (false physics), **Q9**
   (disclosure) and **Q10** (standing label). Q6, Q9 and Q10 are the classes the closed
