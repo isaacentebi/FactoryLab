@@ -159,10 +159,15 @@ the skeleton):
   finding's `question` and `class` beside its path and quote (an entry backs only the
   finding of its question and class), and
   `context_words` (words that must stand within two sentences of the quote; when they
-  drift, the entry stops excusing the finding and it returns as REVIEW).
+  drift, the entry stops excusing the finding and it returns as REVIEW). The entry
+  backs the finding only when it is committed in the release commit gated: the gate
+  reads the allowlist from that commit, never the worktree, so an entry added after
+  the render means commit, re-render, re-audit.
 - **REJECT.** The auditor is wrong. The finding goes to `rejected.jsonl` by its full
   identity (`finding_id`, `question`, `class`), its `path` and the `reason`
-  and is input 4 at the next release.
+  and is input 4 at the next release. Like an ALLOW entry, the record backs the REJECT
+  only when it is committed in the release commit gated (the gate reads
+  `rejected.jsonl` from that commit).
 - **CHARTER.** A charter card or norm (see the release gate): sent to the charter's next
   revision as an observation, never fixed in code.
 - **REVERTED.** A commit the provenance pass flagged (and only such a finding) that was a
@@ -255,6 +260,12 @@ The tool defends against inconsistency, stale artifacts and operator error:
   both prompts beside it, the range's base to the last audited release
   (`last_release`), a sample to the id its prompt names, a triage file to its key's
   corpus and range and to its sample files, a previous corpus to its own leaf hashes.
+  Every policy and evidence file the tool reads is read from the release commit
+  (`git show <release>:<path>`), never the worktree: `canaries.json`, `rejected.jsonl`,
+  this protocol's reviewer text, AGENTS.md's rules, the allowlist, the world files the
+  family check reads, and `last_release`. The corpus is rendered from the worktree,
+  which the render pins to the release (HEAD is the release, no seat-visible path is
+  dirty); the essay is never committed and is bound by its sha256 in the key.
 - **Recomputed.** Derived values are recomputed from bound sources, never stored and
   trusted: the gate recomputes the verdict and every finding from the samples; nothing
   beside a triage file is authoritative.

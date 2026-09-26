@@ -1593,10 +1593,15 @@ def clopper_pearson_upper(x: int, n: int, confidence: float = 0.95) -> float:
     """The exact one-sided Clopper–Pearson upper bound on a binomial rate.
 
     The p with ``P(Bin(n, p) <= x) = 1 − confidence``; 1 when ``x == n``. Found by
-    bisection on the exact binomial CDF (no external dependency).
+    bisection on the exact binomial CDF (no external dependency). Raises ``ValueError``
+    on a sample that bounds nothing (``n <= 0``, ``x`` outside ``[0, n]``, a count that
+    is not an integer, a confidence outside (0, 1)): a degenerate sample is no bound,
+    never the vacuous 1.0.
     """
-    if n <= 0:
-        return 1.0
+    if (type(x) is not int or type(n) is not int or n <= 0 or not 0 <= x <= n
+            or not 0 < confidence < 1):
+        raise ValueError(f"no binomial bound from x={x!r}, n={n!r}, "
+                         f"confidence={confidence!r}")
     if x >= n:
         return 1.0
     alpha = 1.0 - confidence
@@ -1620,9 +1625,20 @@ def th4_null(events: list[Mapping], manifest: Mapping, *, synthetic: tuple[int, 
     if n == 0:
         return _unsupported("TH-4", "no window after the first H")
     x_syn, n_syn = synthetic
-    bound = clopper_pearson_upper(x_syn, n_syn, confidence)
-    return _result("TH-4", flags / n <= bound, world=[flags, n], world_rate=flags / n,
-                   synthetic=[x_syn, n_syn], bound=bound)
+    try:
+        bound = clopper_pearson_upper(x_syn, n_syn, confidence)
+    except ValueError as exc:
+        # A null with no windows (or invalid counts) bounds nothing: never a pass.
+        return _unsupported("TH-4", f"the synthetic null is degenerate: {exc}",
+                            world=[flags, n], synthetic=[x_syn, n_syn])
+    evidence = {"world": [flags, n], "world_rate": flags / n,
+                "synthetic": [x_syn, n_syn], "bound": bound}
+    if bound >= 1.0 and flags <= n:
+        # A null that flags every window bounds the rate at 1.0, which no world rate
+        # can exceed: a vacuous bound is no evidence of a pass.
+        return _unsupported("TH-4", "the synthetic null flags every window: its bound "
+                            "is 1.0 and no rate can exceed it", **evidence)
+    return _result("TH-4", flags / n <= bound, **evidence)
 
 
 @criterion("TH-2")
@@ -2430,7 +2446,8 @@ def gain_neutral(before: Mapping[str, Any], after: Mapping[str, Any]) -> Result:
     """S8 (instrumented half): one gain act changed only γ, uniformly across arms.
 
     ``before`` and ``after`` are a router's saved EXP3 bases, ``{"gamma", "weights"
-    (or "log_weights"), "actions"}`` lists. Guarantees: the weights are identical,
+    (or "log_weights"), "actions"}`` lists. Guarantees: the actions (their identities
+    and their order) and the weights are identical,
     every base's γ moved by one common step, and each arm's probability moved by the
     arm-symmetric map ``p' = a·p + b`` with one ``(a, b)`` per base — the change is
     ``(γ' − γ)(1/K − w_i/Σw)``, never a term chosen per arm.
@@ -2444,6 +2461,11 @@ def gain_neutral(before: Mapping[str, Any], after: Mapping[str, Any]) -> Result:
         return _unsupported("S8-instrumented", "the router saved no base")
     steps = set()
     for b, a in zip(rows_b, rows_a, strict=True):
+        # The arms themselves, and their order, are part of what a gain act must not
+        # touch: equal weights over other arms are other weights.
+        if list(need(b, "actions")) != list(need(a, "actions")):
+            problems.append({"actions_changed": [list(b["actions"]), list(a["actions"])]})
+            continue
         wb, wa = _weights(b), _weights(a)
         if wb != wa:
             problems.append({"weights_changed": True})

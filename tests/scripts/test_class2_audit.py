@@ -38,6 +38,21 @@ def _git(repo, *args):
                           text=True, env=env).stdout.strip()
 
 
+#: The policy files the audit tool reads from the release commit (``committed_text``),
+#: seeded into every test repository that renders or gates from this checkout's copies.
+POLICY = (tool.CANARIES_REL, tool.PROTOCOL_REL, tool.AGENTS_REL, tool.ALLOWLIST_REL)
+
+
+def _seed_policy(repo):
+    """Write the policy files into ``repo``'s worktree and stage them (the next commit
+    carries them)."""
+    for rel in POLICY:
+        target = repo / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text((ROOT / rel).read_text())
+        _git(repo, "add", rel)
+
+
 def _commit(repo, path, text, message):
     target = repo / path
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -64,18 +79,51 @@ def _seat_text_scan():
 REPO: list = []
 
 
+def _rejected_records(surface):
+    """The rejected findings the history's release commits, so a REJECT the tests
+    write is backed by the release (the gate reads ``rejected.jsonl`` committed there):
+    the flagged commit, and Q3, Q4 and Q6 on the first kernel leaves (any a test picks,
+    whatever the controls)."""
+    rows = [{"finding_id": tool.leaf_id(f"commit:{surface}", ""),
+             "path": f"commit:{surface}", "question": "P1", "class": "BEHAVIOUR-MIX",
+             "reason": "the auditor misread"}]
+    kernel = [r for r in tool.corpus_records([WORLD], rendered=False)
+              if r["provenance"] == "kernel"][:15]
+    for record in kernel:
+        quote = record["text"].strip()[:60].strip()
+        for question in ("Q3", "Q4", "Q6"):
+            rows.append({"finding_id": tool.leaf_id(record["path"], quote),
+                         "path": record["path"], "question": question,
+                         "class": tool.CLASS_OF[question], "reason": "the auditor misread"})
+    return "".join(json.dumps(r) + "\n" for r in rows)
+
+
 @pytest.fixture(scope="module")
 def history(tmp_path_factory):
-    """A repository with a base, a surface commit justified by a behaviour mix, and a
-    commit that touches no seat-visible surface."""
+    """A repository with a base (carrying the policy files), a surface commit justified
+    by a behaviour mix (with the world file), and a commit that touches no seat-visible
+    surface and records the rejected findings the tests' REJECTs name."""
     repo = tmp_path_factory.mktemp("repo")
     REPO[:] = [repo]
     _git(repo, "init", "-q")
+    _seed_policy(repo)
     base = _commit(repo, "README.md", "x\n", "base")
+    world = repo / "worlds" / f"{WORLD}.toml"
+    world.parent.mkdir(parents=True, exist_ok=True)
+    world.write_text((ROOT / "worlds" / f"{WORLD}.toml").read_text())
+    _git(repo, "add", f"worlds/{WORLD}.toml")
     surface = _commit(repo, "factorylab/cortex/schematics.py", "HOLD = 'hold'\n",
                       BEHAVIOUR_MIX)
+    (repo / tool.REJECTED_REL).write_text(_rejected_records(surface))
+    _git(repo, "add", tool.REJECTED_REL)
     head = _commit(repo, "docs/notes.md", "notes\n", "notes only")
     return repo, base, surface, head
+
+
+@pytest.fixture(autouse=True)
+def _root_is_the_history(history, monkeypatch):
+    """The CLI audits the repository it runs in (``tool.ROOT``): here, the history's."""
+    monkeypatch.setattr(tool, "ROOT", history[0])
 
 
 def _triage_text(base, rel, world=WORLD):
@@ -100,7 +148,7 @@ def _gate_record(repo, rel, prior, triage_text, *, world=WORLD):
     return _git(repo, "rev-parse", "HEAD"), triage
 
 
-def _release_repo(where, prior, *, family="fam-x"):
+def _release_repo(where, prior, *, family="fam-x", rejected=None):
     """A repository whose last audited release is ``rel``: one surface commit before it,
     the gate-recording commit right after it (``LAST_RELEASE`` with ``prior``'s digest,
     and WORLD's triage file, recording ``family``), then one surface commit and the
@@ -108,12 +156,20 @@ def _release_repo(where, prior, *, family="fam-x"):
     repo = where / "repo"
     repo.mkdir()
     _git(repo, "init", "-q")
+    _seed_policy(repo)
     root = _commit(repo, "README.md", "x\n", "root")
+    world = repo / "worlds" / f"{WORLD}.toml"
+    world.parent.mkdir(parents=True, exist_ok=True)
+    world.write_text((ROOT / "worlds" / f"{WORLD}.toml").read_text())
+    _git(repo, "add", f"worlds/{WORLD}.toml")
     early = _commit(repo, "factorylab/cortex/schematics.py", "HOLD = 'hold'\n", "early")
     rel = _commit(repo, "docs/notes.md", "release\n", "the release audited last")
     _recorded, triage = _gate_record(repo, rel, prior,
                                      _triage_text(root, rel).replace("fam-x", family))
     later = _commit(repo, "factorylab/cortex/schematics.py", "HOLD = 'keep'\n", "later")
+    if rejected is not None:
+        (repo / tool.REJECTED_REL).write_text(rejected)
+        _git(repo, "add", tool.REJECTED_REL)
     head = _commit(repo, "docs/notes.md", "release 2\n", "the release audited now")
     return repo, (root, early, rel, later, head), triage
 
@@ -178,6 +234,7 @@ def test_a_range_with_no_surface_commit_renders_an_explicit_empty_section(tmp_pa
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init", "-q")
+    _seed_policy(repo)
     root = _commit(repo, "README.md", "x\n", "root")
     head = _commit(repo, "docs/notes.md", "notes\n", "notes only")
     tool.render([WORLD], tmp_path / "out", seed=7, rendered=False, essay=ESSAY,
@@ -253,7 +310,7 @@ def test_a_failed_render_refuses_the_whole_baseline_rewrite(tmp_path, monkeypatc
 
 
 def test_the_canary_corpus_has_one_canary_per_question_and_three_mandatory():
-    spec = tool.load_canaries()
+    spec = tool.load_canaries((ROOT / tool.CANARIES_REL).read_text())
     questions = [c["question"] for c in spec["canaries"]]
     assert questions == [f"Q{i}" for i in range(3, 11)]
     assert {c["question"] for c in spec["canaries"] if c.get("mandatory")} == {
@@ -261,14 +318,11 @@ def test_the_canary_corpus_has_one_canary_per_question_and_three_mandatory():
     assert len(spec["control_surfaces"]) == 10
 
 
-def test_a_malformed_canary_set_is_refused(monkeypatch, tmp_path):
-    spec = json.loads(tool.CANARIES.read_text())
+def test_a_malformed_canary_set_is_refused():
+    spec = json.loads((ROOT / tool.CANARIES_REL).read_text())
     spec["canaries"][2]["class"] = "C1"  # Q5 yields C2
-    bad = tmp_path / "canaries.json"
-    bad.write_text(json.dumps(spec))
-    monkeypatch.setattr(tool, "CANARIES", bad)
     with pytest.raises(tool.AuditInputInvalid, match="canary-q5"):
-        tool.load_canaries()
+        tool.load_canaries(json.dumps(spec))
 
 
 def test_render_is_deterministic(rendered, history, tmp_path):
@@ -623,10 +677,20 @@ def test_triage_refuses_an_authoring_or_seated_family(rendered, tmp_path, monkey
 
 
 def test_triage_rotates_the_family_across_releases(rendered, tmp_path, monkeypatch, capsys):
-    out, key = rendered
-    monkeypatch.setattr(tool, "TRIAGE_DIR", tmp_path)
+    """The family the prior release's gated triage of the world records (read from its
+    gate-recording commit, never a worktree triage file) may not audit the next."""
+    prior = tmp_path / "prior.jsonl"
+    prior.write_bytes((rendered[0] / "release_corpus.jsonl").read_bytes())
+    repo, (*_commits, rel, _later, head), triage = _release_repo(
+        tmp_path, prior, family="google/gemini-3")
+    out = tmp_path / "out"
+    key = tool.render([WORLD], out, seed=7, rendered=False, essay=ESSAY,
+                      release_range=f"{rel}..{head}", repo=repo, previous=triage,
+                      previous_corpus=prior)
+    monkeypatch.setattr(tool, "ROOT", repo)
+    monkeypatch.setattr(tool, "TRIAGE_DIR", tmp_path / "triage")
+    (tmp_path / "triage").mkdir()
     argv = ["triage", *_files(tmp_path, out, key), "--world", WORLD, "--family"]
-    assert tool.main([*argv, "google/gemini-3"]) == 0
     assert tool.main([*argv, "gemini-3-flash"]) == 1  # the same family, next release
     assert "rotates" in capsys.readouterr().err
     assert tool.main([*argv, "mistralai/mistral-large"]) == 0
@@ -672,8 +736,7 @@ def _gate(triaged, world=WORLD, samples=None, prov=None, release=None, reviewed=
     out, key, path, _sha, s, p = triaged
     return tool.gate(world, path, out / "canary_key.json", samples or s, prov or p,
                      release=release or key["release_commit"], repo=REPO[0],
-                     triage_sha256=reviewed or tool.sha256_file(path),
-                     rejected=path.parent / "rejected.jsonl")
+                     triage_sha256=reviewed or tool.sha256_file(path))
 
 
 def test_the_provenance_finding_reaches_the_triage_and_the_gate(triaged, monkeypatch):
@@ -685,8 +748,7 @@ def test_the_provenance_finding_reaches_the_triage_and_the_gate(triaged, monkeyp
     def gate():
         return ["gate", "--world", WORLD, "--key", str(out / "canary_key.json"),
                 "--samples", *map(str, samples), "--provenance-samples", *map(str, prov),
-                "--release", key["release_commit"], "--rejected",
-                str(path.parent / "rejected.jsonl"),
+                "--release", key["release_commit"],
                 "--triage-sha256", tool.sha256_file(path)]
     assert any("untriaged HIGH" in p for p in _gate(triaged))
     assert tool.main(gate()) == 1
@@ -808,15 +870,14 @@ def _diffed(rendered, history, tmp_path):
     prior = [r | {"text": old, "leaf_id": tool.leaf_id(r["path"], old)} if r is changed else r
              for r in previous if r is not added]
     (tmp_path / "prior.jsonl").write_text("\n".join(json.dumps(r) for r in prior) + "\n")
-    (tmp_path / "rejected.jsonl").write_text(json.dumps(
-        {"finding_id": "f1", "path": changed["path"], "question": "Q4", "class": "C1",
-         "reason": "a formula"}) + "\n")
+    rejected = json.dumps({"finding_id": "f1", "path": changed["path"], "question": "Q4",
+                           "class": "C1", "reason": "a formula"}) + "\n"
     repo, (_root, _early, rel, _later, head), triage = _release_repo(
-        tmp_path, tmp_path / "prior.jsonl")
+        tmp_path, tmp_path / "prior.jsonl", rejected=rejected)
     release = tmp_path / "release"
     tool.render([WORLD], release, seed=7, rendered=False, essay=ESSAY,
                 release_range=f"{rel}..{head}", repo=repo, previous=triage,
-                previous_corpus=tmp_path / "prior.jsonl", rejected=tmp_path / "rejected.jsonl")
+                previous_corpus=tmp_path / "prior.jsonl")
     return release, changed, added
 
 
@@ -880,16 +941,17 @@ def test_render_refuses_an_unbound_or_malformed_input(rendered, history, tmp_pat
     written."""
     repo, base, _surface, head = history
     (tmp_path / name).write_text(content)
-    read = {"prior.jsonl": tool.read_corpus, "rejected.jsonl": tool.read_rejected,
+    read = {"prior.jsonl": tool.read_corpus,
+            "rejected.jsonl": lambda path: tool.read_rejected(path.read_text()),
             "previous.md": lambda path: tool.read_previous_triage(path, [WORLD])}[name]
     with pytest.raises(tool.AuditInputInvalid, match=why):
         read(tmp_path / name)
+    if name == "rejected.jsonl":
+        return  # read from the release commit, never passed in (the committed test)
     kw = {"prior.jsonl": {"previous_corpus": tmp_path / name},
-          "rejected.jsonl": {"rejected": tmp_path / name},
           "previous.md": {"previous": tmp_path / name}}[name]
     # On a first release a previous file is refused before it is read at all.
-    refused = why if name == "rejected.jsonl" else "the first release has no previous"
-    with pytest.raises(tool.AuditInputInvalid, match=refused):
+    with pytest.raises(tool.AuditInputInvalid, match="the first release has no previous"):
         tool.render([WORLD], tmp_path / "out", seed=7, rendered=False, essay=ESSAY,
                     release_range=f"{base}..{head}", repo=repo, **kw)
     assert not (tmp_path / "out").exists()
@@ -1017,8 +1079,7 @@ def test_one_quote_under_two_questions_is_two_findings_through_triage_and_gate(
     def gate():
         return tool.gate(WORLD, path, out / "canary_key.json", samples, prov,
                          release=key["release_commit"], repo=REPO[0],
-                         triage_sha256=tool.sha256_file(path),
-                         rejected=path.parent / "rejected.jsonl")
+                         triage_sha256=tool.sha256_file(path))
 
     disposed = _dispose(path.read_text(), rejected=path.parent / "rejected.jsonl")
     path.write_text(disposed)
@@ -1189,9 +1250,10 @@ def test_can1_controls_rotate_with_the_release_and_repeat_within_it(rendered):
     out, key = rendered
     planted = {c["leaf_id"] for c in key["canaries"]}
     base = [r for r in _records(out) if r["leaf_id"] not in planted]
-    _, one = tool.plant(base, seed=7, world=WORLD, control_seed="a" * 40)
-    _, again = tool.plant(base, seed=7, world=WORLD, control_seed="a" * 40)
-    _, other = tool.plant(base, seed=7, world=WORLD, control_seed="b" * 40)
+    spec = tool.load_canaries((ROOT / tool.CANARIES_REL).read_text())
+    _, one = tool.plant(base, seed=7, world=WORLD, control_seed="a" * 40, spec=spec)
+    _, again = tool.plant(base, seed=7, world=WORLD, control_seed="a" * 40, spec=spec)
+    _, other = tool.plant(base, seed=7, world=WORLD, control_seed="b" * 40, spec=spec)
     assert one["controls"] == again["controls"]
     assert one["controls"] != other["controls"]
 
@@ -1241,8 +1303,11 @@ def test_bnd1_a_disposition_must_be_one_the_rubric_allows_and_the_protocol_backs
         assert any(why in p for p in _gate(triaged)), why
     # A REJECT with no rejected.jsonl record is not the protocol's REJECT.
     path.write_text(reviewed)
-    rejected.write_text("")
-    assert any("not recorded in rejected.jsonl" in p for p in _gate(triaged))
+    expected = tool.world_findings(
+        tool.union([tool.read_output(f) for f in samples]),
+        tool.provenance_findings([tool.read_output(f) for f in prov]), key, WORLD)
+    assert any("not recorded in rejected.jsonl" in p for p in tool.disposition_problems(
+        reviewed, expected, allowlist={"allow": []}, rejected=[]))
     # An edit after review is refused: the reviewed sha256 is a gate input.
     _dispose(text, rejected=rejected)
     as_reviewed = hashlib.sha256(reviewed.encode()).hexdigest()
@@ -1360,7 +1425,7 @@ def test_a_fix_disposition_fails_until_the_fixed_leaf_is_re_rendered_and_re_audi
     retriaged.write_text(_dispose(retriaged.read_text(), rejected=rejected2))
     problems = tool.gate(WORLD, retriaged, again / "canary_key.json", samples, prov,
                          release=key2["release_commit"], repo=REPO[0],
-                         triage_sha256=tool.sha256_file(retriaged), rejected=rejected2)
+                         triage_sha256=tool.sha256_file(retriaged))
     assert problems == []
 
 
@@ -1510,7 +1575,7 @@ def test_the_gate_rechecks_rotation_against_the_prior_releases_triage(rendered, 
     assert tool.rotation_problems(repo, key, "another-world", "gemini-3-flash") == []
     # The gate runs it: a rotation refusal is a gate problem.
     monkeypatch.setattr(tool, "rotation_problems", lambda *a: ["rotation checked"])
-    assert "rotation checked" in _gate(triaged)
+    assert any("rotation checked" in p for p in _gate(triaged))
 
 
 def test_the_gate_record_adds_each_world_of_one_release(tmp_path):
@@ -1605,36 +1670,98 @@ def test_a_rejected_record_backs_only_the_finding_of_its_question_and_class(tria
     """Codex P2 (class2_audit.py:1299): rejected.jsonl names a finding by its full
     identity. A REJECT recorded for the same quote under another question does not back
     this one's."""
-    _out, _key, path, _sha, _samples, _prov = triaged
-    rejected = path.parent / "rejected.jsonl"
-    reviewed = _dispose(path.read_text(), rejected=rejected)
+    _out, key, path, _sha, samples, prov = triaged
+    reviewed = _dispose(path.read_text())
     path.write_text(reviewed)
     assert _gate(triaged, reviewed=tool.sha256_file(path)) == []
-    rows = [json.loads(line) for line in rejected.read_text().splitlines()]
+    expected = tool.world_findings(
+        tool.union([tool.read_output(f) for f in samples]),
+        tool.provenance_findings([tool.read_output(f) for f in prov]), key, WORLD)
+    rows = [{"finding_id": f["finding_id"], "path": f["path"], "question": f["question"],
+             "class": f["class"], "reason": "r"} for f in expected]
     moved = [r | {"question": "Q6"} if r["question"] == "Q4" else r for r in rows]
-    rejected.write_text("".join(json.dumps(r) + "\n" for r in moved))
-    problems = _gate(triaged, reviewed=tool.sha256_file(path))
+    problems = tool.disposition_problems(reviewed, expected, allowlist={"allow": []},
+                                         rejected=moved)
     assert any("Q4" in p and "not recorded in rejected.jsonl" in p for p in problems)
 
 
-def test_an_allowlist_entry_backs_only_the_finding_of_its_question_and_class(triaged,
-                                                                             monkeypatch):
-    from tests.audit import class2_lexicon
-
+def _q4_allowed(triaged):
+    """The triage file with the kernel Q4 finding marked ALLOW, and that finding."""
     _out, _key, path, _sha, samples, _prov = triaged
-    reviewed = _dispose(path.read_text(), rejected=path.parent / "rejected.jsonl")
+    reviewed = _dispose(path.read_text())
     findings = [json.loads(line) for line in samples[0].read_text().splitlines()]
     row = next(line for line in reviewed.splitlines() if "| Q4 | C1 | HIGH |" in line)
     finding = next(f for f in findings if f.get("finding_id") == tool._cells(row)[0]
                    and f.get("question") == "Q4")
-    path.write_text(reviewed.replace(row, row.replace("| REJECT |", "| ALLOW |")))
+    return reviewed.replace(row, row.replace("| REJECT |", "| ALLOW |")), finding
+
+
+def test_an_allowlist_entry_backs_only_the_finding_of_its_question_and_class(triaged):
+    text, finding = _q4_allowed(triaged)
+    expected = [finding]
     for question, ok in (("Q6", False), ("Q4", True)):
         entry = {"path": finding["path"], "quote": finding["quote"], "question": question,
                  "class": "C1"}
-        monkeypatch.setattr(class2_lexicon, "load_allowlist",
-                            lambda e=entry: {"collocation": [], "allow": [e]})
-        problems = _gate(triaged, reviewed=tool.sha256_file(path))
+        problems = tool.disposition_problems(text, expected, rejected=[],
+                                             allowlist={"collocation": [], "allow": [entry]})
         assert any("no allowlist entry" in p for p in problems) is not ok, problems
+
+
+def test_no_policy_or_evidence_read_bypasses_the_release_commit():
+    """The class (Codex P1, class2_audit.py:1781): every policy or evidence file is read
+    through ``committed_text`` from the release commit. A worktree read survives only
+    where the file is not policy: the essay (never committed; its sha256 is in the key),
+    files bound by digest (samples, key, corpus, previous corpus and triage, the triage
+    file gated), the record the gate writes, and the corpus render (``release_commit``
+    pins the worktree to the release). A new worktree read anywhere else fails here."""
+    import ast
+    import inspect
+
+    source = inspect.getsource(tool)
+    reads = {}
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.FunctionDef):
+            body = ast.get_source_segment(source, node)
+            found = [p for p in ("read_text(", "read_bytes(", "raw_world(", "corpus.WORLDS",
+                                 "lexicon.ALLOWLIST", "load_allowlist(")
+                     if p in body]
+            if found:
+                reads[node.name] = found
+    assert reads == {
+        "authority_text": ["read_text("],       # the essay: never committed
+        "sha256_file": ["read_bytes("],         # digests, of any file
+        "_jsonl": ["read_text("],               # samples, corpus, previous corpus
+        "read_previous_triage": ["read_text("],  # bound by the recorded digest
+        "previous_problems": ["read_text("],     # the same file, digest-checked
+        "load_key": ["read_text("],              # bound to its corpus and prompts
+        "gate": ["read_text("],                  # the triage file, by its sha256
+        "write_last_release": ["read_text("],    # the record the gate writes
+        "corpus_records": ["raw_world("],        # the render, pinned by release_commit
+        "render": ["corpus.WORLDS"],             # the renderer's own world files
+    }, reads
+    for gone in ("CANARIES", "REJECTED", "PROTOCOL"):
+        assert not hasattr(tool, gone), gone
+
+
+def test_an_uncommitted_allowlist_entry_does_not_back_an_allow(triaged):
+    """Codex P1 (class2_audit.py:1781): the gate reads the allowlist committed in the
+    release, never the worktree's: an entry written but not committed backs nothing."""
+    _out, key, path, _sha, _samples, _prov = triaged
+    text, finding = _q4_allowed(triaged)
+    path.write_text(text)
+    allowlist = REPO[0] / tool.ALLOWLIST_REL
+    original = allowlist.read_text()
+    entry = (f'\n[[allow]]\npath = "{finding["path"]}"\nquote = {json.dumps(finding["quote"])}'
+             '\nquestion = "Q4"\nclass = "C1"\nrule = "imperative"\n'
+             'context_words = ["x"]\nreason = "uncommitted"\npassage = "§I.b(1)"\n')
+    try:
+        allowlist.write_text(original + entry)
+        problems = _gate(triaged, reviewed=tool.sha256_file(path))
+        assert any("no allowlist entry" in p for p in problems), problems
+        assert "uncommitted" not in tool.committed_text(REPO[0], key["release_commit"],
+                                                        tool.ALLOWLIST_REL)
+    finally:
+        allowlist.write_text(original)
 
 
 @pytest.mark.parametrize("row, why", [
@@ -1644,9 +1771,8 @@ def test_an_allowlist_entry_backs_only_the_finding_of_its_question_and_class(tri
      "not a finding's identity"),
 ])
 def test_a_rejected_record_without_its_full_identity_is_refused(tmp_path, row, why):
-    (tmp_path / "rejected.jsonl").write_text(json.dumps(row) + "\n")
     with pytest.raises(tool.AuditInputInvalid, match=why):
-        tool.read_rejected(tmp_path / "rejected.jsonl")
+        tool.read_rejected(json.dumps(row) + "\n")
 
 
 def test_a_previous_triage_row_without_its_full_identity_is_refused(tmp_path):

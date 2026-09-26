@@ -112,10 +112,38 @@ if str(ROOT) not in sys.path:
 from tests.audit import class2_corpus as corpus  # noqa: E402
 from tests.audit.class2_corpus import RenderFailed  # noqa: E402
 
-CANARIES = ROOT / "docs/audits/class2/canaries.json"
-#: Last release's REJECTED findings with their reasons (protocol input 4).
-REJECTED = ROOT / "docs/audits/class2/rejected.jsonl"
-PROTOCOL = ROOT / "docs/audits/class2/auditor-protocol.md"
+#: The policy and evidence the tool reads, as repository paths. Every one is read from
+#: the release commit being audited or gated (``committed_text``: ``git show
+#: <release>:<path>``), never from the worktree, so an uncommitted edit (an allowlist
+#: entry, a rejected record, a canary, a rule) backs nothing:
+#: the canaries and controls (``canaries.json``), last release's REJECTED findings
+#: (``rejected.jsonl``: prompt input 4, and the record that backs a REJECT), the
+#: protocol's reviewer text, AGENTS.md's rules, the allowlist (prompt input 3, and the
+#: entry that backs an ALLOW), each world file the family check reads, and
+#: ``LAST_RELEASE``. Two inputs are not read this way, by design: the corpus is rendered
+#: by running the package, which cannot run a blob, so ``release_commit`` pins the
+#: worktree to the release (HEAD is the release, no seat-visible path is dirty); and the
+#: essay is never committed (its sha256 is in the key).
+CANARIES_REL = "docs/audits/class2/canaries.json"
+REJECTED_REL = "docs/audits/class2/rejected.jsonl"
+PROTOCOL_REL = "docs/audits/class2/auditor-protocol.md"
+AGENTS_REL = "AGENTS.md"
+ALLOWLIST_REL = "tests/audit/class2_allowlist.toml"
+WORLD_REL = "worlds/{world}.toml"
+
+
+def committed_text(repo: Path, release: str, path: str, *, required: bool = True
+                   ) -> str | None:
+    """The file ``path`` as committed in ``release`` (``git show <release>:<path>``), the
+    one way the tool reads policy or evidence; None when the release has no such file
+    and it is not ``required`` (refused when it is)."""
+    run = subprocess.run(["git", "-C", str(repo), "show", f"{release}:{path}"],
+                         capture_output=True, text=True)
+    if run.returncode != 0:
+        if required:
+            raise AuditInputInvalid(f"the release {release[:12]} has no {path}")
+        return None
+    return run.stdout
 TRIAGE_DIR = ROOT / "docs/audits/class2"
 #: The last audited release, tracked in the repository and written by the gate when a
 #: release passes it: a JSON object naming its commit (``release_commit``), the digest
@@ -322,7 +350,8 @@ def plant(records: list[dict], *, seed: int, world: str, changed: int | None = N
     release commit), so controls rotate across releases. Every control surface must
     name a kernel leaf of ``world``: the calibration bar reads ten controls, never fewer.
     """
-    spec = spec if spec is not None else load_canaries()
+    if spec is None:
+        raise AuditInputInvalid("plant needs the release's canaries (load_canaries)")
     rng = Random(seed)
     out = list(records)
     boundary = changed
@@ -481,17 +510,18 @@ def diff_section(planted: list[dict], diff: dict[str, Any],
     return "\n".join(lines)
 
 
-def _agents_rules() -> str:
-    agents = (ROOT / "AGENTS.md").read_text()
+def _agents_rules(agents: str) -> str:
+    """AGENTS.md's Chapter II rules 1-5, from its text as committed in the release."""
     return agents.split("## Chapter II, as design rules", 1)[-1].split("6. **The reward", 1)[0]
 
 
-def write_provenance_prompt(out: Path, provenance: str, *, provenance_id: str) -> Path:
+def write_provenance_prompt(out: Path, provenance: str, *, provenance_id: str,
+                            agents: str) -> Path:
     """Protocol input 6, as the protocol orders it: a second prompt to the same model.
     Commit messages can carry behaviour data, which the corpus prompt never holds. Its
     answer is read back (``provenance_problems``), so the prompt states the format and
     the id every answer echoes."""
-    rule2 = _agents_rules().split("2. **Robust simplicity", 1)[-1].split("3. **Physics", 1)[0]
+    rule2 = _agents_rules(agents).split("2. **Robust simplicity", 1)[-1].split("3. **Physics", 1)[0]
     parts = ["# Class 2 audit: provenance pass", "",
              "AGENTS.md rule 2, Robust simplicity" + rule2.rstrip(), "", provenance, "",
              "## Output format", "",
@@ -510,13 +540,13 @@ def write_provenance_prompt(out: Path, provenance: str, *, provenance_id: str) -
 
 
 def write_prompt(out: Path, *, authority: str, previous_text: str | None,
-                 diff: str, rejected: list[dict], corpus_sha: str) -> Path:
+                 diff: str, rejected: list[dict], corpus_sha: str, protocol: str,
+                 agents: str, allowlist: str) -> Path:
     """The corpus prompt: protocol inputs 1-5, the corpus diff before last release's
     triage so a rejected finding's leaf can be read against its change, and the corpus
-    id every sample's summary echoes."""
-    from tests.audit import class2_lexicon as lexicon
-
-    rules = _agents_rules()
+    id every sample's summary echoes. The protocol, rules and allowlist are the texts
+    committed in the release (``committed_text``)."""
+    rules = _agents_rules(agents)
     rejected_text = "\n".join(json.dumps(r, sort_keys=True, ensure_ascii=False)
                               for r in rejected)
     parts = [
@@ -524,7 +554,7 @@ def write_prompt(out: Path, *, authority: str, previous_text: str | None,
         "",
         # The reviewer reads what it is, what it is given, the rubric and the format; the
         # calibration, the dispositions and the operator steps are not its to know.
-        PROTOCOL.read_text().split("## Calibration", 1)[0].rstrip(),
+        protocol.split("## Calibration", 1)[0].rstrip(),
         "",
         "## Authority text (verbatim)",
         "",
@@ -536,7 +566,7 @@ def write_prompt(out: Path, *, authority: str, previous_text: str | None,
         "",
         "## The allowlist and its reasons",
         "",
-        "```toml\n" + lexicon.ALLOWLIST.read_text() + "```",
+        "```toml\n" + allowlist + "```",
         "",
         diff,
         "",
@@ -710,11 +740,11 @@ def release_base(repo: Path, base: str, head: str) -> bool:
     return False
 
 
-def load_canaries() -> dict:
+def load_canaries(text: str) -> dict:
     """``canaries.json``, refused unless it is the protocol's calibration set: one canary
     per question Q3-Q10 with that question's class, Q6/Q7/Q9/Q10 and only they mandatory,
     and ten distinct control surfaces."""
-    spec = json.loads(CANARIES.read_text())
+    spec = json.loads(text)
     problems = []
     canaries = spec.get("canaries") or []
     questions = [c.get("question") for c in canaries]
@@ -738,8 +768,12 @@ def load_canaries() -> dict:
 
 
 def _jsonl(path: Path, what: str) -> list[dict]:
+    return _jsonl_text(Path(path).read_text(), what)
+
+
+def _jsonl_text(text: str, what: str) -> list[dict]:
     rows = []
-    for i, line in enumerate(Path(path).read_text().splitlines(), 1):
+    for i, line in enumerate(text.splitlines(), 1):
         if not line.strip():
             continue
         try:
@@ -784,12 +818,13 @@ def identity_problem(question: Any, cls: Any) -> str | None:
 REJECTED_FIELDS = ("finding_id", "path", "question", "class", "reason")
 
 
-def read_rejected(path: Path | None) -> list[dict]:
-    """Last release's rejected findings, refused unless each names its finding by its
-    full identity (``finding_identity``), its path and a reason, once."""
-    if path is None or not Path(path).exists():
+def read_rejected(text: str | None) -> list[dict]:
+    """The rejected findings ``rejected.jsonl`` holds (its text as committed in the
+    release, ``committed_text``; None for none), refused unless each names its finding by
+    its full identity (``finding_identity``), its path and a reason, once."""
+    if text is None:
         return []
-    rows = _jsonl(path, "rejected.jsonl")
+    rows = _jsonl_text(text, "rejected.jsonl")
     seen = set()
     for i, row in enumerate(rows, 1):
         bad = [f for f in REJECTED_FIELDS
@@ -803,6 +838,15 @@ def read_rejected(path: Path | None) -> list[dict]:
             raise AuditInputInvalid(f"rejected.jsonl line {i} repeats a finding")
         seen.add(finding_identity(row))
     return rows
+
+
+def read_allowlist(text: str) -> dict:
+    """The allowlist as committed in the release (``committed_text``): its collocations
+    and quote-level entries, as ``class2_lexicon.load_allowlist`` reads the file."""
+    import tomllib
+
+    raw = tomllib.loads(text)
+    return {"collocation": list(raw.get("collocation", ())), "allow": list(raw.get("allow", ()))}
 
 
 def triage_header(text: str) -> dict[str, str]:
@@ -855,7 +899,7 @@ def triage_release(text: str) -> str | None:
 
 def render(worlds: list[str], out: Path, *, seed: int, rendered: bool, release_range: str,
            repo: Path = ROOT, essay: Path | None = None, previous: Path | None = None,
-           previous_corpus: Path | None = None, rejected: Path | None = REJECTED) -> dict:
+           previous_corpus: Path | None = None) -> dict:
     """Write the auditor's input, its two prompts, the separate key and the release
     corpus; return the key.
 
@@ -890,7 +934,12 @@ def render(worlds: list[str], out: Path, *, seed: int, rendered: bool, release_r
     if bound:
         raise AuditInputInvalid("; ".join(bound))
     prior = read_corpus(previous_corpus) if previous_corpus is not None else None
-    rejected_rows = read_rejected(rejected)
+    # Policy and evidence, as committed in the release audited (``committed_text``).
+    rejected_rows = read_rejected(committed_text(repo, released, REJECTED_REL,
+                                                 required=False))
+    protocol = committed_text(repo, released, PROTOCOL_REL)
+    agents = committed_text(repo, released, AGENTS_REL)
+    allowlist = committed_text(repo, released, ALLOWLIST_REL)
     previous_text = read_previous_triage(previous, worlds)
     if previous_text is not None:
         recorded = triage_release(previous_text)
@@ -898,7 +947,7 @@ def render(worlds: list[str], out: Path, *, seed: int, rendered: bool, release_r
             raise AuditInputInvalid(f"{previous} triaged release {str(recorded)[:12]}, not "
                                     f"the last audited release this range starts at "
                                     f"({range_shas[0][:12]})")
-    spec = load_canaries()
+    spec = load_canaries(committed_text(repo, released, CANARIES_REL))
     authority = authority_text(essay)
     # Rendered before anything is written: a failed render leaves no corpus behind.
     records = corpus_records(worlds, rendered=rendered)
@@ -917,8 +966,9 @@ def render(worlds: list[str], out: Path, *, seed: int, rendered: bool, release_r
     corpus_sha = sha256_file(out / "auditor_input.jsonl")
     write_prompt(out, authority=authority, previous_text=previous_text,
                  diff=diff_section(planted, diff, rejected_rows), rejected=rejected_rows,
-                 corpus_sha=corpus_sha)
-    write_provenance_prompt(out, provenance, provenance_id=provenance_id)
+                 corpus_sha=corpus_sha, protocol=protocol, agents=agents,
+                 allowlist=allowlist)
+    write_provenance_prompt(out, provenance, provenance_id=provenance_id, agents=agents)
     key.update({
         "schema": KEY_SCHEMA, "worlds": list(worlds), "rendered": rendered,
         "range": release_range, "range_shas": range_shas, "release_commit": released,
@@ -1341,11 +1391,14 @@ def audit_verdict(samples: list[tuple[list[dict], dict | None]],
             "controls_flagged": f"{len(controls)}/{len(key['controls'])}"}
 
 
-def world_families(world: str) -> set[str]:
-    """Every foundation family the world seats or offers on its menu."""
+def world_families(world: str, repo: Path, release: str) -> set[str]:
+    """Every foundation family the world seats or offers on its menu, read from the world
+    file as committed in ``release`` (``committed_text``)."""
+    import tomllib
+
     from factorylab.runtime.families import model_family
 
-    raw = corpus.raw_world(world)
+    raw = tomllib.loads(committed_text(repo, release, WORLD_REL.format(world=world)))
     ids = [a.get("model_id") for a in raw.get("assemblies") or ()]
     ids += [m.get("id") for m in raw.get("models") or ()]
     return {model_family(i) for i in ids if i}
@@ -1356,21 +1409,21 @@ def recorded_family(text: str) -> str | None:
     return triage_header(text).get("Auditor family") or None
 
 
-def family_refusal(family: str, world: str, previous_triage: Path | None) -> str | None:
-    """Why ``family`` may not audit ``world`` this release, or None (the protocol's "Who
-    reads": neither an authoring family nor one the world seats, and rotated)."""
+def family_refusal(family: str, world: str, *, repo: Path, release: str) -> str | None:
+    """Why ``family`` may not audit ``world`` at ``release``, or None (the protocol's
+    "Who reads"): an authoring family, one the world file committed in the release
+    seats or offers, or the family the prior release's gated triage of the world
+    recorded (``rotation_problems``: read from its gate-recording commit, never from a
+    worktree triage file)."""
     from factorylab.runtime.families import model_family
 
     fam = model_family(family)
     if fam in AUTHOR_FAMILIES:
         return f"{family} ({fam}) authored kernel text"
-    if fam in world_families(world):
+    if fam in world_families(world, repo, release):
         return f"{family} ({fam}) sits in {world}"
-    last = (recorded_family(previous_triage.read_text())
-            if previous_triage is not None and previous_triage.exists() else None)
-    if last is not None and model_family(last) == fam:
-        return f"{family} ({fam}) audited the last release: the family rotates"
-    return None
+    rotated = rotation_problems(repo, {"release_commit": release}, world, family)
+    return rotated[0] if rotated else None
 
 
 def rotation_problems(repo: Path, key: dict, world: str, family: str) -> list[str]:
@@ -1426,7 +1479,8 @@ def triage_skeleton(rows: list[dict], verdict: dict, *, world: str, family: str,
              "releasable: the gate fails while a HIGH or MED finding is marked FIX, so fix, "
              "re-render, re-audit, and the fixed finding is gone from the next triage), "
              "ALLOW (an allowlist entry with a reason and a passage), REJECT (the auditor is "
-             "wrong; copied to rejected.jsonl with the reason), CHARTER (a charter card or "
+             "wrong; recorded in rejected.jsonl with the reason; each backs its finding only "
+             "when committed in the release gated), CHARTER (a charter card or "
              "norm: sent to the charter's next revision, never fixed in code), REVERTED (a "
              "flagged commit only: every seat-visible line it added is gone from the "
              "release, which the gate verifies from the repository). A release passes only "
@@ -1709,8 +1763,7 @@ def write_last_release(repo: Path, key: dict, *, world: str, triage_sha256: str)
 
 def gate(world: str, triage: Path, key_path: Path, samples: list[Path],
          provenance: list[Path], *, release: str | None = None,
-         repo: Path | None = None, triage_sha256: str | None = None,
-         rejected: Path | None = None) -> list[str]:
+         repo: Path | None = None, triage_sha256: str | None = None) -> list[str]:
     """The release gate for ``world``: recomputed from bound sources, never read from a
     stored result.
 
@@ -1763,11 +1816,11 @@ def gate(world: str, triage: Path, key_path: Path, samples: list[Path],
             problems.append(f"the sample files given are not the ones the triage file "
                             f"records ({label})")
     family = header.get("Auditor family")
-    refusal = family_refusal(family, world, None) if family else "no auditor family"
+    # A world the key did not render is refused above; its file is not read.
+    refusal = ("no auditor family" if not family else None if world not in key["worlds"]
+               else family_refusal(family, world, repo=repo, release=key["release_commit"]))
     if refusal is not None:
         problems.append(f"the recorded family may not audit {world}: {refusal}")
-    elif family:
-        problems += rotation_problems(repo, key, world, family)
     parsed = [read_output(f) for f in samples]
     parsed_provenance = [read_output(f) for f in provenance]
     verdict = audit_verdict(parsed, parsed_provenance, key, records)
@@ -1775,12 +1828,15 @@ def gate(world: str, triage: Path, key_path: Path, samples: list[Path],
         problems += [f"the audit is invalid: {p}" for p in verdict["problems"]]
     expected = world_findings(union(parsed), provenance_findings(parsed_provenance), key,
                               world)
-    from tests.audit import class2_lexicon as lexicon
-
+    # The allowlist and the rejected records that back an ALLOW or a REJECT are the ones
+    # committed in the release gated, never the worktree's (``committed_text``).
+    release = key["release_commit"]
+    allowlist = read_allowlist(committed_text(repo, release, ALLOWLIST_REL))
+    rejected = read_rejected(committed_text(repo, release, REJECTED_REL, required=False))
     return (problems + release_gate(text, expected=expected)
-            + disposition_problems(text, expected, allowlist=lexicon.load_allowlist(),
+            + disposition_problems(text, expected, allowlist=allowlist,
                                    repo=repo, release=key["release_commit"],
-                                   rejected=read_rejected(rejected or REJECTED)))
+                                   rejected=rejected))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1798,8 +1854,6 @@ def build_parser() -> argparse.ArgumentParser:
                    help="the last release's triage file")
     r.add_argument("--previous-corpus", type=Path, default=None,
                    help="the last audited release's release_corpus.jsonl")
-    r.add_argument("--rejected", type=Path, default=REJECTED,
-                   help="the rejected findings with their reasons")
     r.add_argument("--range", required=True,
                    help="the release range, base..head, read by the provenance pass")
     for name in ("validate", "triage"):
@@ -1823,7 +1877,6 @@ def build_parser() -> argparse.ArgumentParser:
                    help="the release commit being gated (default: HEAD)")
     g.add_argument("--triage-sha256", required=True,
                    help="the sha256 of the triage file as reviewed")
-    g.add_argument("--rejected", type=Path, default=REJECTED)
     b = sub.add_parser("baseline")
     b.add_argument("--static-only", action="store_true")
     return parser
@@ -1843,8 +1896,7 @@ def _run(args: argparse.Namespace) -> int:
         try:
             key = render(args.world, args.out, seed=args.seed, rendered=args.rendered,
                          release_range=args.range, repo=ROOT, essay=args.essay,
-                         previous=args.previous, previous_corpus=args.previous_corpus,
-                         rejected=args.rejected)
+                         previous=args.previous, previous_corpus=args.previous_corpus)
         except RenderFailed as exc:
             print(f"no audit: {exc}", file=sys.stderr)
             return 2
@@ -1866,8 +1918,7 @@ def _run(args: argparse.Namespace) -> int:
     if args.command == "gate":
         path = args.triage or TRIAGE_DIR / f"{args.world}.md"
         problems = gate(args.world, path, args.key, args.samples, args.provenance_samples,
-                        release=args.release, repo=ROOT, triage_sha256=args.triage_sha256,
-                        rejected=args.rejected)
+                        release=args.release, repo=ROOT, triage_sha256=args.triage_sha256)
         for problem in problems:
             print(problem, file=sys.stderr)
         if problems:
@@ -1895,7 +1946,8 @@ def _run(args: argparse.Namespace) -> int:
         print("no triage: the audit is invalid", file=sys.stderr)
         return 1
     path = TRIAGE_DIR / f"{args.world}.md"
-    refusal = family_refusal(args.family, args.world, path)
+    refusal = family_refusal(args.family, args.world, repo=ROOT,
+                             release=key["release_commit"])
     if refusal is not None:
         print(f"no triage: {refusal}", file=sys.stderr)
         return 1

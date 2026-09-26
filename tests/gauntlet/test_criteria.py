@@ -1793,6 +1793,33 @@ def test_s1_an_act_follows_its_decision_and_the_seats_own_return(rows, ok):
     assert g.s1_draw_sovereignty(diary).status == (g.PASS if ok else g.FAIL)
 
 
+# --- Codex pass on 3050436 ----------------------------------------------------------------
+
+
+def test_s8_instrumented_the_arms_and_their_order_are_part_of_what_gain_must_not_touch():
+    """Codex P2 (gauntlet.py:2449): the same weights over other arms, or the same arms in
+    another order, are a changed policy, not a γ step."""
+    base = {"actions": ["a", "b"], "gamma": 0.1, "log_weights": [1.0, 1.0]}
+    assert g.gain_neutral({"bases": [base]}, {"bases": [dict(base, gamma=0.15)]}).ok
+    swapped = dict(base, actions=["a", "c"], gamma=0.15)
+    result = g.gain_neutral({"bases": [base]}, {"bases": [swapped]})
+    assert result.status == g.FAIL and "actions_changed" in result.evidence["problems"][0]
+    reordered = dict(base, actions=["b", "a"], gamma=0.15)
+    assert g.gain_neutral({"bases": [base]}, {"bases": [reordered]}).status == g.FAIL
+
+
+@pytest.mark.parametrize("synthetic", [(0, 0), (1, 0), (-1, 10), (11, 10), (0.5, 10),
+                                       (True, 10), (10, 10)])
+def test_th4_a_degenerate_synthetic_null_is_unsupported_never_a_pass(synthetic):
+    """Codex P2 (gauntlet.py:1624): a null of no windows, invalid counts, or one that
+    flags every window (a bound of 1.0 no rate can exceed) is no evidence: TH-4 is
+    unsupported, never a pass. The sweep: TH-4 is the gauntlet's one binomial bound."""
+    quiet = [_w(i, thrash=False) for i in range(1, 40)]
+    assert g.th4_null(quiet, M, synthetic=synthetic).status == g.UNSUPPORTED
+    with pytest.raises(ValueError):
+        g.clopper_pearson_upper(0, 0)
+
+
 def test_s4_an_unresolved_penalty_row_may_carry_no_raw_score():
     row = {"kind": "price.penalty", "handle": "d", "penalty": 0.1, "raw": None,
            "effective": None}
