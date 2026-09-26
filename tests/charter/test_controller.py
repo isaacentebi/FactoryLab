@@ -262,14 +262,18 @@ def test_failed_ledger_append_leaves_update_or_skip_state_unchanged(ledger, cloc
     assert len(evidence(ledger)) == 2
 
 
-def test_nonfinite_violation_is_rejected_before_ledger_or_state_changes(ledger):
+def test_an_overflowing_violation_is_held_at_the_largest_float_and_ledgered(ledger):
+    """A distance across the whole float range overflows. It is held at the largest
+    float (Codex on #152: a refusal here aborted the window close), never infinity,
+    so the row is ledgerable and the card is priced at its bound for it."""
+    import sys
+
     prices = controller(ledger)
     prices.register(region(hi=-1e308))
-    before = prices.snapshot()
-    with pytest.raises(ValueError, match="violation"):
-        prices.observe("cost", 1e308, 0)
-    assert prices.snapshot() == before
-    assert evidence(ledger) == []
+    prices.observe("cost", 1e308, 0)
+    (row,) = evidence(ledger)
+    assert row["violation"] == sys.float_info.max / 2  # the distance, held, over scale 2
+    assert row["bound"] == 0.9 / (sys.float_info.max / 2)
 
 
 def test_skipped_observations_and_failed_updates_do_not_replace_violation_history(ledger,
@@ -285,3 +289,59 @@ def test_skipped_observations_and_failed_updates_do_not_replace_violation_histor
     prices.observe("cost", 14, 3)
     assert prices.price("cost") == pytest.approx(0.3)  # the integral: 0.05 * 4, + 0.05 * 2
     assert evidence(ledger)[-1]["previous_violation"] == 4
+
+
+@pytest.mark.parametrize("scale,value", [(1.0, 5e-324), (5e-324, 1.0), (1e-310, 1e10)])
+def test_a_subnormal_violation_or_scale_holds_every_bound_at_the_largest_float(
+        ledger, scale, value):
+    """Codex on #152: a finite subnormal violation (5e-324) made ``cap / v`` infinity,
+    which reached ``episode_bound`` and the ``price.update`` row's bound, and the ledger's
+    canonical JSON refused it, aborting the window close. Every bound, violation and
+    term is held at the largest float instead: ledgerable, and still effectively
+    unbounded. A subnormal scale overflows the violation itself the same way."""
+    import sys
+
+    from factorylab.kernel.ledger import canonical
+
+    prices = controller(ledger, eta=1, decay=1, min_window_events=1, kp=2.0, kd=2.0)
+    prices.register(CardRegion("cost", "max", None, 0.0, scale))
+    for event, observed in enumerate([value, value * 2, value]):
+        prices.observe("cost", observed, event, anticipated=1.0)
+    card = prices.snapshot()["cards"]["cost"]
+    canonical(prices.snapshot())
+    rows = evidence(ledger)
+    for row in rows:
+        canonical(row)
+        for key in ("bound", "violation", "p", "i", "d", "f", "lambda_after"):
+            assert row[key] is None or row[key] <= sys.float_info.max, (key, row)
+    bounds = [row["bound"] for row in rows]
+    if value / scale < 1e-300:  # a subnormal violation: the bound overflows
+        assert bounds == [sys.float_info.max] * 3
+        assert card["episode_bound"] == sys.float_info.max
+        assert prices.saturation("cost")["bound"] == sys.float_info.max
+    else:  # a subnormal scale: the violation overflows and the bound is tiny
+        assert rows[0]["violation"] == sys.float_info.max
+        assert 0 < bounds[0] < 1e-300
+
+
+def test_what_is_computed_from_an_overflowing_violation_stays_finite():
+    """The sweep behind Codex's finding on #152: every division by, and sum of, a
+    measured violation, scale or step stays finite. A blame share is a share of the
+    exact total where the float sum of two largest-float violations overflows; a
+    margin whose violations spread past a float identifies no slope; a branch's
+    expected violation and a holdout's added violation are held at the largest float."""
+    import sys
+
+    from factorylab.charter.charter import holdout_violation
+    from factorylab.charter.controller import part, ratio
+    from factorylab.charter.market import branch_violation, margin
+
+    top = sys.float_info.max
+    assert ratio(1.0, 5e-324) == top and ratio(-1.0, 5e-324) == -top
+    assert ratio(1.0, 4.0) == 0.25
+    assert part(top, [top, top]) == 0.5 and part(1.0, [1.0, 3.0]) == 0.25
+    assert part(0.0, [0.0, 0.0]) == 0.0
+    points = [{"v": v, "consequence": 0.5, "micro_usd": 1.0} for v in (0.0, top, top / 2)]
+    assert margin(points)["slope"] is None
+    assert branch_violation(top, 1.0, 1, top) == top
+    assert holdout_violation([False, False], top) == top

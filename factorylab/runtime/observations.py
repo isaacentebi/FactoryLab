@@ -489,6 +489,109 @@ CATALOGUE: tuple[Observation, ...] = (
 )
 
 
+#: What each seed's ``measure`` reads from a window, and nothing else. Chapter II
+#: §II.b (physics is enforced, not announced) and §I.b ("the structures of requests
+#: and rewards" are public): the catalogue's input clause is rendered from this
+#: declaration (``charter.measurement.measurement_catalogue``), and a test holds every
+#: calculator to it, so no published description can name an input its calculator
+#: does not read (Codex on #152: ``forecast_skill`` was published as averaging scored
+#: verdicts it never read).
+WINDOW_INPUTS: Mapping[str, tuple[str, ...]] = MappingProxyType({
+    "cost_per_return": ("costs",),
+    "cost_per_attempt": ("decisions", "invocations"),
+    "well_formed_rate": ("ok", "invocations"),
+    "forecast_skill": ("forecast_skills",),
+    "turnover": ("notional_micro", "equity_start_micro"),
+    "noop_share": ("noop_returns", "producer_returns"),
+    "revision_rate": ("revision_returns", "producer_returns"),
+    "registrations": ("registrations",),
+    "registration_rejections": ("registration_rejections",),
+    "amendments_proposed": ("amendments_proposed",),
+    "amendments_activated": ("amendments_activated",),
+    "verdict_mean": ("verdicts",),
+    "verdict_std": ("verdicts",),
+    "evaluator_disagreement": ("verdicts",),
+    "consequence_paid_off_rate": ("consequences_paid_off", "consequences_settled"),
+    "non_acting_informative_share": ("non_acting_informative", "non_acting_outcomes"),
+    "non_acting_paid_off_rate": ("non_acting_paid_off", "non_acting_informative"),
+    "fills": ("fills",),
+    "realized_pnl_usd": ("realized_pnl_micro",),
+    "position_concentration": ("max_position_notional_micro", "equity_start_micro"),
+    "exposure_win_rate": ("exposures_won", "exposures_settled"),
+    "meta_verdict_mean": ("meta_verdicts",),
+    "avoidably_unresolved_share": (),
+    "censored_share": ("censored", "outcomes"),
+    "tool_calls": ("tool_calls", "invocations"),
+    "market_purchases": ("market_purchases",),
+    "ews_variance": ("ews_variance",),
+    "ews_autocorrelation": ("ews_autocorrelation",),
+    "evaluator_compute_share": ("evaluator_spend_micro", "compute_spend_micro"),
+    "provider_concentration": ("calls_by_provider",),
+    "family_concentration": ("calls_by_family",),
+    "burn_per_window": ("compute_spend_micro",),
+    "prompt_bytes": ("prompt_bytes", "prompts"),
+    "you_bytes": ("you_bytes", "prompts"),
+    "inputs_bytes": ("inputs_bytes", "prompts"),
+    "downstream_read_bytes": ("downstream_read_bytes", "read_measured"),
+})
+#: What each window field a seed reads is, as the catalogue's input clause states it:
+#: where the runtime counts it, never what it is for.
+WINDOW_FIELD_MEANINGS: Mapping[str, str] = MappingProxyType({
+    "costs": "the metered cost of each well-formed producer return",
+    "decisions": "each decision's metered cost, by decision, on the runtime's own window "
+                 "only: a closed record keeps no attribution",
+    "invocations": "the invocations the window made",
+    "ok": "the well-formed returns among them",
+    "forecast_skills": "each evaluator's forecast skill, one value per evaluator with a "
+                       "settled forecast: its mean score 1 - (q - y)^2 over its settled "
+                       "forecasts minus the same mean at the pre-outcome base rate. "
+                       "Settled forecasts only; no verdict's consequence score",
+    "notional_micro": "the filled notional, size times price, summed",
+    "equity_start_micro": "the venue equity at the window's start, or none when the venue "
+                          "did not state it",
+    "noop_returns": "the producer returns declaring action noop or hold",
+    "producer_returns": "the producer returns published",
+    "revision_returns": "the producer returns whose registration was accepted, plus the "
+                        "amendments activated",
+    "registrations": "the accepted population registrations, amendment proposals included",
+    "registration_rejections": "the rejected population registration proposals",
+    "amendments_proposed": "the amendments admitted to the proposal book",
+    "amendments_activated": "the amendments activated",
+    "verdicts": "the raw evaluator verdicts delivered, by judged return and judge",
+    "consequences_paid_off": "the settled return_paid_off consequences with y = 1",
+    "consequences_settled": "the settled return_paid_off consequences of acting returns",
+    "non_acting_informative": "the non-acting outcomes fixed with an informative "
+                              "base-rate key",
+    "non_acting_outcomes": "the outcomes fixed for returns that executed nothing and "
+                           "named a trade (measured, or known absent)",
+    "non_acting_paid_off": "the informative non-acting outcomes with y = 1",
+    "fills": "the venue fills processed",
+    "realized_pnl_micro": "the realized fill P&L before fees and funding",
+    "max_position_notional_micro": "the peak absolute marked notional on one coin",
+    "exposures_won": "the antagonist exposure settlements won",
+    "exposures_settled": "the antagonist exposures settled",
+    "meta_verdicts": "the raw meta verdicts delivered, every tier",
+    "censored": "the censored settlements among those resolved, as each settlement "
+                "path counts them",
+    "outcomes": "the settlements resolved, settled or censored",
+    "tool_calls": "the tool calls attempted, failures included",
+    "market_purchases": "the paid x402 requests with a recorded result",
+    "ews_variance": "the early-warning variance statistic at the window's close",
+    "ews_autocorrelation": "the early-warning lag-one autocorrelation at the window's close",
+    "evaluator_spend_micro": "the compute the evaluator roles spent",
+    "compute_spend_micro": "every invocation's metered cost, summed",
+    "calls_by_provider": "the model calls, counted by the provider that served them",
+    "calls_by_family": "the model calls, counted by foundation model family",
+    "prompt_bytes": "the UTF-8 bytes of the opening prompts rendered, summed",
+    "you_bytes": "the UTF-8 bytes of their YOU sections, summed",
+    "inputs_bytes": "the UTF-8 bytes of their INPUTS sections, summed",
+    "prompts": "the invocations whose opening prompt was rendered",
+    "downstream_read_bytes": "the INPUTS bytes rendered to the invocations commissioned "
+                             "on a published return, summed",
+    "read_measured": "the invocations whose readings are metered",
+})
+
+
 SEED_IDS = frozenset(o.id for o in CATALOGUE)
 # The only observation state at module scope is this immutable seed vocabulary; a
 # book that can be registered into belongs to one runtime and is built per runtime.

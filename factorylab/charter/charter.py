@@ -236,7 +236,9 @@ def holdout_violation(results: list[bool | None], step: float) -> float:
     """
     if type(step) not in (int, float) or step < 0:
         raise ValueError("step must be a nonnegative number")
-    return step * sum(result is False for result in results)
+    from factorylab.charter.controller import held
+
+    return held(step * sum(result is False for result in results))
 
 
 def stated_region(row: Mapping) -> object:

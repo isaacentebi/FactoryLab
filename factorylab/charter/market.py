@@ -109,7 +109,9 @@ def branch_violation(violation: float, q: float, sign: int, step: float) -> floa
         raise ValueError("sign is +1 or -1")
     if type(q) not in (int, float) or not isfinite(q) or not 0 <= q <= 1:
         raise ValueError("q must be a probability")
-    return max(0.0, violation + sign * q * step)
+    from factorylab.charter.controller import held
+
+    return max(0.0, held(violation + sign * q * step))
 
 
 def enactment_rate(passed: int, failed: int) -> float:
@@ -149,13 +151,16 @@ def margin(points: list[dict]) -> dict:
     vs = [float(p["v"]) for p in rows]
     mean_v = sum(vs) / len(vs)
     var = sum((v - mean_v) ** 2 for v in vs)
-    if var <= 0:
+    # A spread of violations too wide for a float (Codex on #152: a subnormal scale
+    # makes a violation as large as a float allows) identifies no slope either.
+    if var <= 0 or not isfinite(var) or not isfinite(mean_v):
         return out
 
-    def slope(key: str) -> float:
+    def slope(key: str) -> float | None:
         ys = [float(p[key]) for p in rows]
         mean_y = sum(ys) / len(ys)
-        return sum((v - mean_v) * (y - mean_y) for v, y in zip(vs, ys, strict=True)) / var
+        value = sum((v - mean_v) * (y - mean_y) for v, y in zip(vs, ys, strict=True)) / var
+        return value if isfinite(value) else None
 
     out["slope"] = slope("consequence")
     out["micro_usd_per_violation"] = slope("micro_usd")

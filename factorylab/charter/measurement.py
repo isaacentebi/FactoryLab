@@ -123,74 +123,139 @@ def _fresh_context(card: MetricCard, samples: CardSamples, observation: str,
     return False
 
 
+#: What ``_measure_rows`` reads from each selected sample row, and nothing else, per
+#: observation measured over rows. Chapter II §I.b ("the structures of requests and
+#: rewards" are public) and §II.b: the catalogue's input clause is rendered from this
+#: declaration and ``observations.WINDOW_INPUTS``, and a test holds each calculator to
+#: it (Codex on #152), so a description cannot name an input its calculator does not
+#: read. The row keys that select or group rows (role, assembly, window) are selection.
+ROW_INPUTS: Mapping[str, tuple[str, ...]] = MappingProxyType({
+    "cost_per_return": ("cost", "ok"),
+    "cost_per_attempt": ("cost",),
+    "well_formed_rate": ("ok",),
+    "noop_share": ("noop",),
+    "revision_rate": ("revision",),
+    "tool_calls": ("tool_calls",),
+    "prompt_bytes": ("prompt_bytes",),
+    "you_bytes": ("you_bytes",),
+    "inputs_bytes": ("inputs_bytes",),
+    "downstream_read_bytes": ("reading", "read_bytes"),
+    "forecast_skill": ("skill",),
+    "verdict_mean": ("verdict",),
+    "verdict_std": ("verdict",),
+    "consequence_paid_off_rate": ("predicate", "status", "subject_acted", "y"),
+    "censored_share": ("status",),
+    "avoidably_unresolved_share": ("excluded", "status"),
+})
+#: What each sample row key a calculator reads is, as the catalogue states it.
+ROW_KEY_MEANINGS: Mapping[str, str] = MappingProxyType({
+    "cost": "the response's metered cost, continuations included",
+    "ok": "whether the response was well formed",
+    "noop": "whether the response declared action noop or hold",
+    "revision": "whether the response's registration was accepted or its amendment "
+                "activated",
+    "tool_calls": "the tool calls the response attempted, failures included",
+    "prompt_bytes": "the UTF-8 bytes of its opening prompt, as its ledger row records them",
+    "you_bytes": "the UTF-8 bytes of that prompt's YOU section",
+    "inputs_bytes": "the UTF-8 bytes of that prompt's INPUTS section",
+    "reading": "whether the row is a reading (the INPUTS bytes of an invocation "
+               "commissioned on a published return, filed under its author) rather "
+               "than a response",
+    "read_bytes": "a reading's INPUTS bytes",
+    "skill": "a settled forecast's score 1 - (q - y)^2 minus the same score at its "
+             "pre-outcome prevalence base rate b, 1 - (b - y)^2",
+    "verdict": "the evaluator verdict the row carries: a response's own, or the one "
+               "attached to a resolved forecast",
+    "predicate": "the forecast's predicate",
+    "status": "the forecast record's status: settled or censored",
+    "subject_acted": "whether the return the forecast is about acted",
+    "y": "the forecast's measured outcome",
+    "excluded": "why a due commitment is excluded from its owner's sample, when it is",
+})
+#: Seeds a card over whole closed windows measures from the selected windows' sample
+#: rows rather than the windows' counters: a closed record keeps no per-response
+#: attribution (``measure_card``).
+ROWS_ON_CLOSED_WINDOWS = frozenset({"forecast_skill", "cost_per_attempt"})
+
+#: What each row-measured seed computes from its inputs. Its inputs are stated only by
+#: the rendered clause (``_input_clause``), never here.
+_FORMULAS: Mapping[str, str] = MappingProxyType({
+    "cost_per_return": "Mean metered cost of the well-formed responses.",
+    "cost_per_attempt": "Mean metered cost of every response, failed ones included.",
+    "well_formed_rate": "Well-formed responses over responses, ballots included.",
+    "tool_calls": "Mean attempted tool calls per response, failures included.",
+    "forecast_skill": "Mean forecast skill, each the score 1 - (q - y)^2 minus the "
+    "same score at the pre-outcome prevalence base rate b, 1 - (b - y)^2; positive when "
+    "forecasts beat the base rate. Settled forecasts only: a verdict's consequence score "
+    "is never included.",
+    "noop_share": "Share of responses declaring action noop or hold.",
+    "revision_rate": "Share of responses whose registration was accepted, amendments "
+    "activated included.",
+    "verdict_mean": "Mean evaluator verdict; forecast selectors group the verdicts by the "
+    "judged return's assembly or role.",
+    "verdict_std": "Population standard deviation of evaluator verdicts; forecast "
+    "selectors group them by the judged return's assembly or role.",
+    "consequence_paid_off_rate": "Positive return_paid_off outcomes over the settled "
+    "consequences of acting returns.",
+    "censored_share": "Censored outcomes over resolved outcomes.",
+    "avoidably_unresolved_share": "Attributable, avoidably unresolved accepted "
+    "commitments over the eligible commitments due in the responsible scope. A "
+    "commitment not yet due is not in the sample; one the owner documented as "
+    "externally unobservable without its own fault, and an event the seat never "
+    "committed to observe, are excluded. No eligible sample is unmeasured, never zero.",
+    "prompt_bytes": "Mean UTF-8 bytes of the opening prompt rendered for each "
+    "invocation, every section included; tool-round continuations are not counted.",
+    "you_bytes": "Mean UTF-8 bytes of the YOU section of the opening prompt rendered for "
+    "each invocation.",
+    "inputs_bytes": "Mean UTF-8 bytes of the INPUTS section of the opening prompt "
+    "rendered for each invocation.",
+    "downstream_read_bytes": "INPUTS bytes of the invocations commissioned on a published "
+    "return, filed under that return's author in the window each reading was metered, "
+    "over the author scope's responses in the same windows; a scope whose returns no "
+    "invocation read measures zero, and a response sampled before readings were metered "
+    "is in neither the numerator nor the denominator.",
+})
+
+
+def _named(names, meanings) -> str:
+    return "; ".join(f"{name} ({meanings[name]})" for name in names) or "nothing"
+
+
+def _input_clause(observation: str) -> str:
+    """The published statement of a seed's inputs, rendered from the declarations
+    (``observations.WINDOW_INPUTS``, ``ROW_INPUTS``) and nothing else."""
+    from factorylab.runtime.observations import WINDOW_FIELD_MEANINGS, WINDOW_INPUTS
+
+    window = _named(WINDOW_INPUTS[observation], WINDOW_FIELD_MEANINGS)
+    parts = [f"Inputs. A closed window's value reads its {window}."]
+    rows = ROW_INPUTS.get(observation)
+    if rows is not None:
+        read = _named(rows, ROW_KEY_MEANINGS)
+        if observation in ROWS_ON_CLOSED_WINDOWS:
+            parts.append(f"A card over closed windows reads each of their sample rows' {read}.")
+        parts.append(f"A card over returns or forecasts reads each selected row's {read}.")
+    return " ".join(parts)
+
+
 def measurement_catalogue(observations=None) -> list[dict]:
     """Public card metadata states selector semantics separately from raw window diagnostics.
 
     A population-registered observation appears here beside the seeds, with
-    its declared units and range, so a card can name it the same way.
+    its declared units and range, so a card can name it the same way. Guarantees
+    every seed's description ends in its input clause, rendered from the same
+    declarations its calculators are held to (``_input_clause``), and its row
+    carries them as ``inputs``: no description names an input some other way.
     """
-    from factorylab.runtime.observations import seed_book
+    from factorylab.runtime.observations import SEED_IDS, WINDOW_INPUTS, seed_book
 
-    descriptions = {
-        "cost_per_return": "Mean successful response cost in the selected rows; global closed "
-        "windows use successful producer returns.",
-        "cost_per_attempt": "Mean cost over every selected response, failed ones included; "
-        "global closed windows use every return the window made.",
-        "well_formed_rate": "Successful responses over selected invocation responses, "
-        "including ballots.",
-        "tool_calls": "Mean attempted tool calls per selected response, failures included; "
-        "global closed windows divide the window's attempted calls by its invocations.",
-        "forecast_skill": "Mean over selected settled forecasts of the forecast's score "
-        "1 - (q - y)^2 minus the same score at its pre-outcome prevalence base rate b, "
-        "1 - (b - y)^2; positive when forecasts beat the base rate. Global closed windows use "
-        "the mean of the same difference over each settled evaluator's forecasts and scored "
-        "verdicts, y a verdict's measured outcome.",
-        "noop_share": "Share of selected responses declaring noop or hold; global closed "
-        "windows use producer returns.",
-        "revision_rate": "Share of selected responses with accepted registrations or activated "
-        "amendments; global closed windows use their revision counters.",
-        "verdict_mean": "Mean evaluator verdict; forecast selectors use the verdicts attached "
-        "to resolved forecasts, grouped by the judged return's assembly or role.",
-        "verdict_std": "Population standard deviation of evaluator verdicts; forecast "
-        "selectors group verdicts by the judged return's assembly or role.",
-        "consequence_paid_off_rate": "Positive return_paid_off outcomes over selected settled "
-        "consequences of acting returns; forecast selectors restrict this to selected "
-        "forecast records about acting returns.",
-        "non_acting_informative_share": "Global closed windows only: non-acting outcomes "
-        "measured with an informative base-rate key over all non-acting outcomes fixed.",
-        "non_acting_paid_off_rate": "Global closed windows only: the share with y = 1 of "
-        "the informative non-acting outcomes.",
-        "censored_share": "Censored outcomes over resolved outcomes; forecast selectors use "
-        "forecast records, global closed windows also include judgements and exposures.",
-        "avoidably_unresolved_share": "Attributable, avoidably unresolved accepted commitments "
-        "over the eligible commitments due in the responsible scope. A commitment not yet due "
-        "is not in the sample; one the owner documented as externally unobservable without its "
-        "own fault, and an event the seat never committed to observe, are excluded. No eligible "
-        "sample is unmeasured, never zero.",
-        "prompt_bytes": "Mean UTF-8 bytes of the opening prompt rendered for each selected "
-        "invocation, every section included: the total of the sections its ledger row "
-        "records. Tool-round continuations are not counted. Global closed windows divide "
-        "the window's summed prompt bytes by its prompts: the invocations whose prompt "
-        "was rendered.",
-        "you_bytes": "Mean UTF-8 bytes of the YOU section of the opening prompt rendered for "
-        "each selected invocation, as its ledger row records them. Global closed windows "
-        "divide the window's summed YOU bytes by its prompts.",
-        "inputs_bytes": "Mean UTF-8 bytes of the INPUTS section of the opening prompt rendered "
-        "for each selected invocation, as its ledger row records them. Global closed windows "
-        "divide the window's summed INPUTS bytes by its prompts.",
-        "downstream_read_bytes": "INPUTS bytes of the invocations commissioned on a published "
-        "return, filed under that return's author in the window each reading was metered, "
-        "over the author scope's selected responses. Readings metered in the same windows as "
-        "the selected responses count, whichever return they read; a scope whose returns no "
-        "invocation read in those windows measures zero. Only responses whose readings are "
-        "measured are selected: one sampled before readings were metered is in neither the "
-        "numerator nor the denominator. Global closed windows divide the window's summed "
-        "reading bytes by its read_measured invocations.",
-    }
     result = (observations or seed_book()).catalogue()
     for row in result:
         observation = row["id"]
-        row["description"] = descriptions.get(observation, row["description"])
+        if observation in SEED_IDS:
+            row["description"] = (f"{_FORMULAS.get(observation, row['description'])} "
+                                  f"{_input_clause(observation)}")
+            row["inputs"] = {"windows": list(WINDOW_INPUTS[observation]),
+                             "rows": list(ROW_INPUTS.get(observation, ()))}
         row["window_kinds"] = ["windows"]
         if observation in RETURN_OBSERVATIONS:
             row["window_kinds"].append("returns")
@@ -767,7 +832,7 @@ def measure_card(card: MetricCard, samples: CardSamples, observations=None) -> d
                     elif isinstance(value, int | float):
                         # A record closed before a counter existed lacks it: zero.
                         merged[key] = (merged.get(key) or 0) + value
-            if observation.id in ("forecast_skill", "cost_per_attempt"):
+            if observation.id in ROWS_ON_CLOSED_WINDOWS:
                 # A closed record keeps no per-response attribution, so these
                 # are measured from the samples the selected windows retained.
                 source = samples.forecasts if observation.id == "forecast_skill" else (

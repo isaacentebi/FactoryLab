@@ -8,7 +8,14 @@ from fractions import Fraction
 from math import ceil
 
 from factorylab.charter.charter import MetricCard
-from factorylab.charter.controller import CardRegion, relative_region, violation
+from factorylab.charter.controller import (
+    CardRegion,
+    held,
+    part,
+    ratio,
+    relative_region,
+    violation,
+)
 from factorylab.charter.controller import pressure as card_pressure
 from factorylab.charter.measurement import _groups, _horizon, measure_cards
 from factorylab.cortex.registration import measured_role
@@ -958,7 +965,9 @@ class PricingMixin:
         observation = self.observations.get(card.observation) if card is not None else None
         if region is None or observation is None or region.scale <= 0:
             return 0.0
-        return self.m.committee.promise_resolution * observation.scale / region.scale
+        # Held finite: a subnormal region scale overflows the quotient (Codex on #152).
+        return ratio(held(self.m.committee.promise_resolution * observation.scale),
+                     region.scale)
 
     def _resolve_holdout(self, entry: str, facts: dict) -> bool | None:
         """One ``predicate@version`` on public facts; unknown or unresolved is None."""
@@ -1013,7 +1022,7 @@ class PricingMixin:
                 self.ledger.append({
                     "kind": "price.unattributed", "card_id": card.id, "scope": scope,
                     "per": per, "window": window.index, "lambda": price,
-                    "violation": excess[scope], "part": excess[scope] / total,
+                    "violation": excess[scope], "part": part(excess[scope], excess.values()),
                     "ts": self.clock.now_ns,
                 })
 
@@ -1136,8 +1145,9 @@ class PricingMixin:
                  if h != handle and (d["invocations"] or d["ok"] or not d["cost"])
                  and self._scope_of(window, h, per) == own}
         peers.add(handle)
-        part = excess[own] / total
-        return part * max(self.m.prices.min_blame_share, 1 / len(peers)), own
+        # A share of the exact total even where the float sum overflows (``part``).
+        share = part(excess[own], excess.values())
+        return share * max(self.m.prices.min_blame_share, 1 / len(peers)), own
 
     def _cost_share(self, card, window, handle: str, contributed: float) -> float:
         """A closed window owns the shares it froze; a live one re-reads its sample now.

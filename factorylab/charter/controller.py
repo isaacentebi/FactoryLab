@@ -1,7 +1,8 @@
 """Settled metric windows carry bounded prices and ledger-first revision evidence."""
 
+import sys
 from dataclasses import dataclass, replace
-from math import isfinite
+from math import copysign, isfinite
 from typing import Literal
 
 from factorylab.charter.amendment import proposed_price
@@ -19,6 +20,45 @@ def _number(value: float, name: str) -> float:
     if not isfinite(result):
         raise ValueError(f"{name} must be a finite number")
     return result
+
+
+#: The largest finite float: what an overflowing bound, violation or term is held at.
+#: Codex on #152: a finite subnormal violation (5e-324) made ``cap / v`` infinity,
+#: which no ledger row can state; the largest float is ledgerable and still
+#: effectively unbounded (wave 16, ruling R-E: a price has no bound of its own).
+FLOAT_MAX = sys.float_info.max
+
+
+def held(value: float) -> float:
+    """``value``, or the largest finite float of its sign where it overflowed.
+
+    Guarantees a finite result for any non-NaN float: an infinity from an
+    overflowing product or sum is held at ``FLOAT_MAX``, never ledgered as infinity.
+    """
+    return value if isfinite(value) else copysign(FLOAT_MAX, value)
+
+
+def part(own: float, values) -> float:
+    """``own`` as a share of the sum of the nonnegative ``values``, in [0, 1].
+
+    Guarantees the share of the exact sum even where that sum overflows a float
+    (violations held at ``FLOAT_MAX``; Codex on #152): every term is read relative
+    to the largest first. Zero when every value is zero.
+    """
+    values = list(values)
+    top = max(values, default=0.0)
+    if top <= 0:
+        return 0.0
+    return (own / top) / sum(v / top for v in values)
+
+
+def ratio(numerator: float, denominator: float) -> float:
+    """``numerator / denominator`` for a positive ``denominator``, held finite.
+
+    Guarantees a finite quotient: one that overflows (a measured denominator as
+    small as a subnormal float) is ``FLOAT_MAX`` of its sign (``held``).
+    """
+    return held(held(numerator) / denominator)
 
 
 @dataclass(frozen=True)
@@ -76,7 +116,9 @@ def violation(region: CardRegion, value: float) -> float:
         distance = region.lo - value
     elif region.kind in ("max", "band") and value > region.hi:
         distance = value - region.hi
-    return _number(distance / region.scale, "violation")
+    # Held finite: a subnormal scale, or a distance across the whole float range,
+    # overflows (Codex on #152).
+    return _number(ratio(distance, region.scale), "violation")
 
 
 def promise_kept(direction: str, baseline: float, value: float, region: CardRegion, *,
@@ -148,9 +190,9 @@ def pressure(price: float, violation: float, cap: float) -> float:
     """
     if violation <= 0:
         return 0.0
-    if price >= cap / violation:
+    if price >= ratio(cap, violation):
         return cap
-    return price * violation
+    return held(price * violation)
 
 
 _pressure = pressure
@@ -359,7 +401,7 @@ class PriceController:
 
     def _bound(self, violation: float) -> float | None:
         """The price at which a card's own penalty takes the whole cap, or None unviolated."""
-        return self.__cap / violation if violation > 0 else None
+        return ratio(self.__cap, violation) if violation > 0 else None
 
     def _at_cap(self, state: _CardState) -> bool:
         """Whether a card's own price sits at its bound at its last violation: the gate
@@ -370,13 +412,14 @@ class PriceController:
         """Whether a violating card at ``price`` is at its own bound ``cap / v`` (compared
         as a price, so a price clipped to the bound is at it whatever the float product
         rounds to)."""
-        return violation > 0 and price >= self.__cap / violation
+        return violation > 0 and price >= ratio(self.__cap, violation)
 
     def _presses(self, price: float, violation: float, pressure: float) -> bool:
         """Whether a violating card at ``price`` presses the cap: its price at or above
         its bound (compared as a price, so a price clipped to the bound is at it
         whatever the float product rounds to), or the roles' pressure at the cap."""
-        return violation > 0 and (price >= self.__cap / violation or pressure >= self.__cap)
+        return violation > 0 and (price >= ratio(self.__cap, violation)
+                                  or pressure >= self.__cap)
 
     def redefine(self, card_id: str, *, edition: int | str | None = None) -> None:
         """A card redefined under the same id with a different observation is a new
@@ -491,13 +534,13 @@ class PriceController:
         # holds; another card's pressure never holds it (ruling R10-e).
         frozen = self._own_bound(state.price, violation)
         # The failure episode's largest own bound, this window's included (R10-n).
-        episode = (max(state.episode_bound, self.__cap / violation) if violation > 0
+        episode = (max(state.episode_bound, ratio(self.__cap, violation)) if violation > 0
                    else 0.0)
         requested, integral, terms = self._pid(state, value, violation, frozen=frozen,
                                                episode=episode)
         if anticipated is not None and violation > 0:
-            feed_forward = self.__kp * max(anticipated, -violation)
-            requested += feed_forward
+            feed_forward = held(self.__kp * max(anticipated, -violation))
+            requested = held(requested + feed_forward)
             terms = {**terms, "f": feed_forward, "anticipated": anticipated}
         bound = self._bound(violation)
         price = max(0.0, requested) if bound is None else min(bound, max(0.0, requested))
@@ -578,30 +621,30 @@ class PriceController:
             # getting worse. A signed term would let a card still out of its region
             # but improving fast cancel P and I and be priced at zero (essay II.II.b:
             # Kd "dampen[s] price escalation", it does not waive the price).
-            derivative = max(0.0, self.__kd * sign * (value - state.previous_value)
-                             / region.scale)
-        proportional = self.__kp * violation
+            derivative = max(0.0, held(self.__kd * sign * ratio(
+                value - state.previous_value, region.scale)))
+        proportional = held(self.__kp * violation)
         if violation <= 0:
             # The episode that ends here leaks from at most its largest bound.
-            held = state.integral
+            kept = state.integral
             if state.episode_bound > 0:
-                held = min(held, state.episode_bound)
-            integral = max(0.0, held - self.__decay)
+                kept = min(kept, state.episode_bound)
+            integral = max(0.0, kept - self.__decay)
         else:
-            bound = self.__cap / violation
+            bound = ratio(self.__cap, violation)
             # Used at most at the episode's largest own bound (ruling R10-n): above it
             # an integral prices nothing and could never decay; a spike's smaller
             # bound never cuts it.
-            held = min(episode, state.integral)
-            if frozen or (proportional + held >= bound
+            kept = min(episode, state.integral)
+            if frozen or (proportional + kept >= bound
                           and violation > state.previous_violation):
                 # At the cap, or saturated high without any new integration and still
                 # climbing: hold, never wind up, and never cut: a spike's lower bound
                 # clips the price, not the pressure the card has accumulated.
-                integral = held
+                integral = kept
             else:
-                integral = min(bound, held + self.__eta * violation)
-        return (proportional + integral + derivative, integral,
+                integral = min(bound, kept + self.__eta * violation)
+        return (held(proportional + integral + derivative), integral,
                 {"p": proportional, "i": integral, "d": derivative})
 
     def saturation(self, card_id: str) -> dict[str, float | int | None]:
