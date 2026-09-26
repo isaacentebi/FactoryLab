@@ -1519,7 +1519,8 @@ class FeedbackMixin:
         lapsed = self.clock.now_ns > self._frozen_lapse_ns(frozen)
         if res is None or due is None:
             return ("none" if lapsed else "open"), None
-        rates = funding_due(frozen.get("funding"), frozen["open_ns"], res[0])
+        # Ruling R10-m: funding times up to H only, however late the measuring mid.
+        rates = funding_due(frozen.get("funding"), frozen["open_ns"], due)
         if rates == FUNDING_PENDING:
             return ("none" if lapsed else "open"), None
         if rates is None:
@@ -2333,7 +2334,8 @@ class FeedbackMixin:
             if ((first is None or first.status is not SettleStatus.SETTLED)
                     and self._abstention_awaits_close(handle)):
                 continue  # priced as its router prices it, at its window's close
-            reward = (self._round_learned(handle, float(first.score))
+            reward = (self._learning_value(handle,
+                                           *self._round_priced(handle, float(first.score)))
                       if first is not None and first.status is SettleStatus.SETTLED
                       else None)
             self._close_assembly_round(handle, reward, priced=first)
@@ -2361,7 +2363,8 @@ class FeedbackMixin:
         declared = self.queue.declared_propensity(handle)
         imputed = reward is None
         if declared is not None and reward is None:
-            reward, _penalty = self._priced_abstention(handle, self._router_neutral(handle))
+            reward = self._learning_value(handle, self._router_neutral(handle),
+                                          self._priced_abstention(handle))
         if reward is None or declared is None:
             try:
                 learner.discard_for(handle)
@@ -2486,25 +2489,27 @@ class FeedbackMixin:
                 "definition": lr.definition_version}
             return
         if settled:
-            # Its raw score less its penalty on the one affine map (ruling R10-g).
-            reward = self._round_learned(lr.handle, float(lr.score))
+            raw, penalty = self._round_priced(lr.handle, float(lr.score))
         else:
             # A decline, a censoring or a cutoff delivered nothing measurable: credited
             # as an abstention, the router's observed mean raw score less the card
             # penalty of its role (wave 16, D4), never its own mean (the #128 review:
             # judges otherwise earned more by avoiding the world than by facing it).
-            neutral = target.neutral()
-            reward, penalty = self._priced_abstention(lr.handle, neutral)
+            raw = target.neutral()
+            penalty = self._priced_abstention(lr.handle)
+        if keyed and key is None:
+            return  # its frozen round is already spent: nothing trains, nothing is booked
+        # Its raw score and its total charge, card share plus thrash, on the one map
+        # (ruling R10-l).
+        charged = self._learning_value(lr.handle, raw, penalty, router=state)
+        if not settled:
             self.ledger.append({"kind": ("router.decline_priced"
                                          if lr.definition_version == DECLINED_DEFINITION
                                          else "router.unscored_priced"),
                                 "handle": lr.handle, "router": state.learner.id,
-                                "status": str(lr.status), "neutral": neutral,
-                                "penalty": penalty, "reward": reward,
+                                "status": str(lr.status), "neutral": raw,
+                                "penalty": penalty, "reward": charged,
                                 "ts": self.clock.now_ns})
-        if keyed and key is None:
-            return  # its frozen round is already spent: nothing trains, nothing is booked
-        charged = self._thrash_charged(state, lr.handle, reward)
         fb = BanditFeedback(prop.chosen, charged, prop.probs[prop.action_ids.index(prop.chosen)])
         if target is not state:
             p, executed = state.learner.inner.take_for(key) if keyed else (None, None)
@@ -2535,7 +2540,7 @@ class FeedbackMixin:
             target.latency[1] += 1
             self.clockwork.record(f"router:{state.kind}", ticks)
         if settled:
-            target.observed.record(prop.chosen, reward)
+            target.observed.record(prop.chosen, charged)
             # Read, not consumed: the seat's own learner reads it too (R10-g); the
             # price evidence is pruned once both have (``_prune_price_evidence``).
             target.record_round(lr.definition_version,
@@ -2602,7 +2607,11 @@ class FeedbackMixin:
             # by then, less the charter prices a woken decision bears in the window it
             # was drawn in (wave 16, D4).
             neutral = self._successor_state(drawer).neutral()
-            reward, penalty = self._priced_abstention(handle, neutral)
+            penalty = self._priced_abstention(handle)
+            # Ruling R9: waking nobody bears the thrash price a woken round of the core
+            # would, so abstaining is never the way out of paying for thrash; both
+            # charges on the one map (R10-l).
+            reward = self._learning_value(handle, neutral, penalty, router=drawer)
             action = credit.get("action", NOOP)
             kind = ("router.abstention_priced" if action == NOOP
                     else "router.decline_priced" if credit.get("definition")
@@ -2611,14 +2620,12 @@ class FeedbackMixin:
                                 "router": credit["router"], "neutral": neutral,
                                 **({"status": credit["status"]} if "status" in credit else {}),
                                 "penalty": penalty, "reward": reward, "ts": now})
-            # Ruling R9: waking nobody bears the thrash price a woken round of the core
-            # would, so abstaining is never the way out of paying for thrash.
-            reward = self._thrash_charged(drawer, handle, reward)
             fb = BanditFeedback(action, reward, prop.probs[prop.action_ids.index(action)])
             self._apply_router_round(drawer, handle, credit["p"], credit["executed"], fb)
 
-    def _priced_abstention(self, handle: str, neutral: float) -> tuple[float, float]:
-        """An abstention's credit: the router's observed mean raw score less its price.
+    def _priced_abstention(self, handle: str) -> float:
+        """An abstention's price: the card penalty charged against the router's
+        observed mean raw score.
 
         Ruling R9 (versioning P4, primitive F1): the arm that wakes nobody bears the
         same charter prices a woken decision bears in the window it was drawn in,
@@ -2632,22 +2639,21 @@ class FeedbackMixin:
         An abstention drawn before its window recorded it is credited unpriced. A
         declined, censored or timed-out decision is priced the same way, on the role
         its seat was measured in when it answered (wave 16, D4: NOOP, decline and
-        censored are one imputation). Returns (learned reward, penalty), the reward
-        on the one affine map every learner learns (``_learned``; ruling R10-g).
+        censored are one imputation). Returns the penalty, unmapped: the raw neutral
+        and this penalty are learned on the one map (``_learning_value``; R10-l).
         """
         origin = self.price_origins.get(handle, {}).get("origin")
         window = self.price_windows.get(origin)
         sample = window.decisions.get(handle) if window is not None else None
         if sample is None:
-            return self._learned(neutral, 0.0), 0.0
+            return 0.0
         roles = sample.get("menu_roles") or {sample["role"]: 1.0}
         # Each role's price is measured with the abstention scoped in that role (the
         # Wave 2 review, item 8b): a less-weighted role's floor and attribution are
         # that role's, never the role the window filed the abstention under.
         penalty = sum(weight * self._penalty_for(role, handle, as_role=role)
                       for role, weight in sorted(roles.items()))
-        # Learned on the one affine map every learner uses (ruling R10-g): no clip.
-        return self._learned(neutral, penalty), penalty
+        return penalty
 
     def _abstention_awaits_close(self, handle: str) -> bool:
         """Whether a round that delivered nothing waits for its origin window to close
@@ -2661,8 +2667,8 @@ class FeedbackMixin:
         roles = sample.get("menu_roles") or {sample["role"]: 1.0}
         return any(self._awaits_close(role, handle) for role in sorted(roles))
 
-    def _thrash_charged(self, state: Any, handle: str, reward: float) -> float:
-        """A router's reward, less the thrash charge on its own movement.
+    def _thrash_charge(self, handle: str) -> float:
+        """The thrash charge a router's round bears, taken once: ``c``, unmapped.
 
         Essay II.II.b: "in the case of thrash, one should penalize the duration of
         spectral-gap volatility, incentivizing the surplus-retaining core of
@@ -2672,26 +2678,35 @@ class FeedbackMixin:
         m)``: the thrash price in force when the round was drawn times the router's
         own policy movement at that draw (``RoutingMixin._record_movement``, the TV
         from its previous draw). A router that holds its policy still is charged
-        nothing; abstentions are charged the same way (ruling R9).
-
-        Guarantees the learned reward is ``(r + cap - c) / (1 + cap)`` for every round
-        of every router, charged or not (c = 0 uncharged): one affine map and one scale
-        per router for the world's life, so no clip at 0 lets a low-reward arm escape
-        part of its charge, an uncharged round sits on the same scale as a charged one,
-        and a charge never raises a reward (wave 16, ruling R10-c). Any router can be
+        nothing; abstentions are charged the same way (ruling R9). Any router can be
         charged: the thrash price lands on the tier whose behaviour moved (I-10;
-        ``RoutingMixin._thrash_attributed``). A charge is ledgered
+        ``RoutingMixin._thrash_attributed``). Guarantees 0 for a round with none, and
+        that a round's charge is returned at most once.
+        """
+        return float(self.thrash_charges.pop(handle, 0.0))
+
+    def _learning_value(self, handle: str, raw: float, penalty: float, *,
+                        router: Any = None) -> float:
+        """What a learner learns for a round: its raw score and total charge on the one
+        map, ``(r + B - P) / (1 + B)`` (``PricingMixin._learned``; ruling R10-l).
+
+        Guarantees the map is applied exactly once per round, here: ``r`` raw (a
+        settled round's raw score, or the raw neutral credited to a round that
+        delivered nothing, D4), ``P`` the card share ``penalty`` plus, for a
+        ``router`` (its state), the round's thrash charge (``_thrash_charge``), and
+        ``B`` the learner's own bound (``_charge_bound``). Every learner, router and
+        seat, sits on one scale for the world's life, and a card share and a thrash
+        charge of equal size lower it equally. A thrash charge is ledgered
         (``thrash.charged``).
         """
-        cap = self.m.prices.penalty_cap
-        charge = self.thrash_charges.pop(handle, 0.0)
-        charged = (reward + cap - charge) / (1.0 + cap)
+        charge = self._thrash_charge(handle) if router is not None else 0.0
+        learned = self._learned(raw, penalty + charge, self._charge_bound(router is not None))
         if charge > 0:
             self.ledger.append({"kind": "thrash.charged", "handle": handle,
-                                "router": state.learner.id, "charge": charge,
-                                "reward_before": reward, "reward": charged,
+                                "router": router.learner.id, "charge": charge,
+                                "penalty": penalty, "raw": raw, "reward": learned,
                                 "ts": self.clock.now_ns})
-        return charged
+        return learned
 
     def _router_owed_abstention(self, learner_id: str) -> bool:
         """Keep a router addressable until every abstention it drew has been credited."""

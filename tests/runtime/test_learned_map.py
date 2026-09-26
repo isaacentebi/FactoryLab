@@ -96,3 +96,76 @@ def test_a_learned_round_s_evidence_is_dropped_once_nobody_is_owed_it(monkeypatc
     monkeypatch.setattr(rt.queue, "owed", lambda h: None if h == handle else owed(h))
     rt._prune_price_evidence()  # read: nothing is owed any more
     assert handle not in rt.raw_scores and handle not in rt.round_penalties
+
+
+# --- R10-l: one map per learner, applied exactly once ----------------------------------
+
+
+def test_an_uncharged_raw_score_is_mapped_once_on_each_learner_s_own_bound():
+    """cap 0.5, raw 0.1, P = 0: a router (B = 1.0) learns 0.55 and a seat's own learner
+    (B = 0.5) 0.4. Composing the card map and the thrash map gave a router 0.6, a
+    scale compressed twice."""
+    from tests.conftest import make_runtime
+
+    rt = make_runtime()
+    assert rt.m.prices.penalty_cap == 0.5
+    router = rt._all_router_states()[0]
+    assert rt._learning_value("r-round", 0.1, 0.0, router=router) == pytest.approx(0.55)
+    assert rt._learning_value("s-round", 0.1, 0.0) == pytest.approx(0.4)
+
+
+def test_a_card_share_and_a_thrash_charge_of_equal_size_lower_a_router_equally():
+    """Both are charges on the one total P: neither is weighed 1 / (1 + cap) less."""
+    from tests.conftest import make_runtime
+
+    rt = make_runtime()
+    router = rt._all_router_states()[0]
+    uncharged = rt._learning_value("none", 0.3, 0.0, router=router)
+    carded = rt._learning_value("card", 0.3, 0.2, router=router)
+    rt.thrash_charges["thrash"] = 0.2
+    thrashed = rt._learning_value("thrash", 0.3, 0.0, router=router)
+    rt.thrash_charges["both"] = 0.2
+    both = rt._learning_value("both", 0.3, 0.2, router=router)
+    assert carded == pytest.approx(thrashed) and thrashed < uncharged
+    assert uncharged - both == pytest.approx(2 * (uncharged - carded))
+    # At the bound (both charges at the cap) a zero raw score learns exactly 0.
+    rt.thrash_charges["max"] = rt.m.prices.penalty_cap
+    assert rt._learning_value("max", 0.0, rt.m.prices.penalty_cap,
+                              router=router) == pytest.approx(0.0)
+
+
+def test_the_map_is_applied_in_exactly_one_place():
+    """Grep-level: ``_learned`` (the map) has one caller, ``_learning_value``, and no
+    other learning-path code writes the affine formula or maps a value it returns."""
+    import ast
+    import pathlib
+
+    import factorylab
+
+    def one_plus(node):
+        return (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add)
+                and isinstance(node.left, ast.Constant) and node.left.value == 1)
+
+    root = pathlib.Path(factorylab.__file__).parent
+    callers, formulas = [], []
+    for path in sorted(root.rglob("*.py")):
+        tree = ast.parse(path.read_text())
+        for fn in ast.walk(tree):
+            if not isinstance(fn, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            for node in ast.walk(fn):
+                if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                        and node.func.attr == "_learned"):
+                    callers.append((path.name, fn.name))
+                # Code dividing by ``1 + x``: the shape of the affine map.
+                if (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div)
+                        and one_plus(node.right)):
+                    formulas.append((path.name, fn.name))
+    assert callers == [("feedback.py", "_learning_value")]
+    # On the learning path (the runtime's feedback, pricing and routing), the one
+    # formula is the map itself; the bound it takes is ``_charge_bound``'s.
+    assert ("pricing.py", "_learned") in formulas
+    assert not [f for f in formulas if f[0] in ("feedback.py", "pricing.py", "routing.py")
+                and f != ("pricing.py", "_learned")], formulas
+    for name in ("_round_learned", "_thrash_charged"):
+        assert not any(name in path.read_text() for path in root.rglob("*.py")), name

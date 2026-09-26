@@ -300,3 +300,55 @@ def test_a_named_trade_opened_after_its_decision_is_kept_until_its_own_lapse():
     rt.clock.now_ns = opened + rt._patience_ns() + 1
     rt._settle_evaluations()
     assert producer not in rt.reference_mids
+
+
+# --- R10-m: funding stops at H -----------------------------------------------------------
+
+
+def _funding_past_h(late: bool):
+    """A declined BTC buy and an acting long, both opened 100 s before an hourly funding
+    boundary (H = 90 s: the boundary is 10 s past H). A funding payment before H counts;
+    the boundary past H is printed at a large rate. ``late``: the first mid at or after
+    H arrives only after that boundary."""
+    from tests.runtime.test_consequence_horizon import _named_hold
+    from tests.runtime.test_reward_chain import _advance, _rows
+
+    rt = _long_patience_world(40)
+    boundary = 5 * NS_PER_HOUR
+    start = boundary - 100 * S
+    assert start + rt._horizon_ns() < boundary
+    rt._observe_funding("BTC", start - 10 * S, "0.0004")
+    producer, _judge = _named_hold(rt, start)
+    lot = _open_long(rt, "BTC", "100")
+    rt.consequences.observe("Funding", {"coin": "BTC", "paid_usd": "0.00002",
+                                        "ts_ns": start + 60 * S}, rt.n)  # before H
+    if late:
+        rt._observe_funding("BTC", boundary + 5 * S, "0.01")
+        rt.consequences.observe("Funding", {"coin": "BTC", "paid_usd": "0.001",
+                                            "ts_ns": boundary}, rt.n)  # past H
+        rt.clock.now_ns = boundary + 10 * S
+        _mids(rt, BTC="100.1")
+        _advance(rt, 1)
+    else:
+        _walk(rt, start, 10, 90, lambda s: "100.1")
+    rt._settle_evaluations()
+    (priced,) = _rows(rt, "consequence.opportunity", handle=producer)
+    payoff = rt.consequences.payoff(lot)
+    assert payoff is not None and payoff.censored is None
+    return priced, payoff
+
+
+def test_a_funding_boundary_past_h_changes_neither_road_however_late_the_mark():
+    """Ruling R10-m: both roads accrue funding only for funding times at or before H.
+    The mark that fixes them arriving after an extra funding boundary past H changes
+    neither outcome: the named trade pays no funding at it, and the acting lot's
+    payment for it is set aside (the money itself is still booked as charged)."""
+    on_time, on_time_lot = _funding_past_h(late=False)
+    late, late_lot = _funding_past_h(late=True)
+    for key in ("funding_payments", "funding_bps", "net_bps", "score"):
+        assert late[key] == on_time[key], key
+    assert late["funding_payments"] == 0
+    assert late_lot.net_micro == on_time_lot.net_micro
+    assert (late_lot.y, late_lot.cost_micro) == (on_time_lot.y, on_time_lot.cost_micro)
+    # (100.1 - 100) * 0.001 BTC, less the $0.00002 paid before H and the exit fee at H.
+    assert on_time_lot.net_micro == 100 - 20 - on_time_lot.exit_fee_micro

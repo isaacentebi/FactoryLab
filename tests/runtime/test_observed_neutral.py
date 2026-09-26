@@ -88,15 +88,14 @@ def test_noop_decline_and_censored_are_one_credit_to_the_micro_unit(monkeypatch)
     rt._deliver_returns()
     rows = {row["handle"]: row for row in rt.ledger._recovery_items()
             if row.get("kind") in ("router.decline_priced", "router.unscored_priced")}
-    cap = rt.m.prices.penalty_cap  # the one affine map (ruling R10-g)
-    expected = (state.neutral() + cap - penalty) / (1 + cap)
+    bound = 2 * rt.m.prices.penalty_cap  # a router's one map (ruling R10-l)
+    expected = (state.neutral() + bound - penalty) / (1 + bound)
     assert state.neutral() == pytest.approx(0.5566666666666666)
     assert rows[declined]["reward"] == pytest.approx(expected)
     assert rows[censored]["reward"] == pytest.approx(expected)
-    reward, charged = rt._priced_abstention(noop, state.neutral())
-    assert charged == pytest.approx(penalty) and reward == pytest.approx(expected)
+    assert rt._priced_abstention(noop) == pytest.approx(penalty)
     # Never a flat 0.5: the credit moves with what the router's rounds earned.
-    assert abs(expected - (NEUTRAL_REWARD + cap - penalty) / (1 + cap)) > 0.03
+    assert abs(expected - (NEUTRAL_REWARD + bound - penalty) / (1 + bound)) > 0.02
 
 
 def test_a_router_that_stops_waking_seats_keeps_its_last_observed_mean(monkeypatch):

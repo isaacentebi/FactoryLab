@@ -17,10 +17,11 @@ from factorylab.runtime.worlds import load_manifest
 from tests.runtime.test_attributable_blame import _card, _commitments, _decision, _runtime
 
 
-def _learned(rt, r, p):
-    """Ruling R10-g: every learner learns (r + cap - p) / (1 + cap), no clip."""
-    cap = rt.m.prices.penalty_cap
-    return (r + cap - p) / (1 + cap)
+def _learned(rt, r, p, *, router=True):
+    """Ruling R10-l: every learner learns (r + B - P) / (1 + B), no clip, B = 2 * cap for
+    a router (card share plus thrash) and cap for a seat's own learner."""
+    bound = rt.m.prices.penalty_cap * (2 if router else 1)
+    return (r + bound - p) / (1 + bound)
 
 
 def _abstention(rt, role="evaluator"):
@@ -43,11 +44,11 @@ def test_an_abstention_bears_the_price_a_woken_decision_of_its_role_bears(monkey
     penalty = rt._penalty_for("evaluator", woken[0])
     assert penalty > 0
     assert rt._penalty_for("evaluator", noop) == pytest.approx(penalty)
-    reward, charged = rt._priced_abstention(noop, 0.5)
-    assert charged == pytest.approx(penalty) and reward == pytest.approx(
-        _learned(rt, 0.5, penalty))
-    # A woken seat that delivered what an abstention is worth is no worse off than it.
-    assert _learned(rt, 0.5, rt._penalty_for("evaluator", woken[1])) == pytest.approx(reward)
+    charged = rt._priced_abstention(noop)
+    assert charged == pytest.approx(penalty)
+    # A woken seat that delivered what an abstention is worth is no worse off than it:
+    # the same raw value and the same charge, on the same map.
+    assert rt._penalty_for("evaluator", woken[1]) == pytest.approx(charged)
 
 
 def test_an_abstention_the_window_never_recorded_is_credited_unpriced():
@@ -57,7 +58,7 @@ def test_an_abstention_the_window_never_recorded_is_credited_unpriced():
         parent_handle=None, cost_ceiling=0,
         propensity=PropensityRecord((NOOP,), (1.0,), NOOP, 0, "test-router", "state"),
     )
-    assert rt._priced_abstention(handle, 0.5) == (pytest.approx(_learned(rt, 0.5, 0.0)), 0.0)
+    assert rt._priced_abstention(handle) == 0.0
 
 
 def test_a_mixed_menu_abstention_is_priced_as_the_draw_would_have_woken(monkeypatch):
@@ -82,9 +83,7 @@ def test_a_mixed_menu_abstention_is_priced_as_the_draw_would_have_woken(monkeypa
     expected = (0.75 * rt._penalty_for("evaluator", noop)
                 + 0.25 * rt._penalty_for("producer", noop))
     assert expected > 0
-    reward, charged = rt._priced_abstention(noop, 0.5)
-    assert charged == pytest.approx(expected) and reward == pytest.approx(
-        _learned(rt, 0.5, expected))
+    assert rt._priced_abstention(noop) == pytest.approx(expected)
     # A one-role menu is that role alone, and an empty draw weighs its seats equally.
     judges = Sample(("eval-a", "eval-b", NOOP), (0.0, 0.0, 1.0), NOOP, 0, "r", "h", ())
     assert rt._abstention_roles(judges) == {"evaluator": 1.0}

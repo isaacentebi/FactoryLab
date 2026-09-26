@@ -915,8 +915,11 @@ class TapeVenue(FakeExchange):
             self._cash -= paid
             self._funding_payments.append(FundingPayment(f"{ident}:{coin}", coin, paid, rate,
                                                          instant))
+            # ``funding_ns``: the funding time this payment is for, which the
+            # advance that emits it may have passed.
             events.append(WorldEvent(WorldEventKind.FUNDING, self._now_ns, self.name,
-                                     {"coin": coin, "rate": str(rate), "paid_usd": str(paid)}))
+                                     {"coin": coin, "rate": str(rate), "paid_usd": str(paid),
+                                      "funding_ns": instant}))
         return events
 
     def settle_accrued_funding(self, ts_ns: int) -> list[WorldEvent]:

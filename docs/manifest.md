@@ -484,7 +484,7 @@ consequence mix and ledgers `sampling.blind` (published in
   less the venue's taker fee rate on its notional (wave 16, D7), so the acting road
   pays the same round trip as the road not taken. The mark is never money: what the
   lot realises when it really closes is booked once, late, with the fee the venue
-  charged (`consequence.late`). Funding the venue paid on the lot is in its charges.
+  charged (`consequence.late`). Funding the venue paid on the lot for funding times at or before `H` is in its charges, however late the mark arrives (ruling R10-m).
   A venue write counts once the venue accepted it or may have (`uncertain`); a
   return whose every write the venue rejected executed nothing. A return that acted
   is measured this way and any counterfactual it named is ignored: one predicate,
@@ -502,7 +502,7 @@ consequence mix and ledgers `sampling.blind` (published in
   leg with no rate read by its instant fixes the outcome as uninformative
   (`consequence.uninformative`, reason `fee_unknown`). Less `s * sum(rho) * 10^4` for
   the venue's funding rate `rho` in force at each
-  of its funding times between `m0` and `m1` (perps only; longs pay a positive rate;
+  of its funding times after `m0` and at or before `H` (ruling R10-m; perps only; longs pay a positive rate;
   the rate at a funding time is the venue's latest print at or before it); `y = 1`
   when `net <= 0` (declining was right in money), else `0`. The taker
   rate is read from the venue's own listing (`instruments`, `taker_fee_rate`) at the
@@ -1373,10 +1373,12 @@ router draws, its abstentions included, carries
 `c = min(prices.penalty_cap, lambda * m)`, `m` the total-variation distance between
 that draw's distribution and the router's previous draw's: the router's own policy
 movement, so holding still is what lowers it (a charge every round bore alike would
-be a constant shift a no-regret learner ignores). Every router learns
-`(r + penalty_cap - c) / (1 + penalty_cap)` for every round, charged or not (`c = 0`
-uncharged), one affine map with no clip and one scale per router for the world's
-life, so a charge never raises a reward (wave 16, ruling R10-c; `thrash.charged`). The price is published in
+be a constant shift a no-regret learner ignores). The charge joins the round's card
+penalty `p` in one total charge, and every router learns `(r + B - p - c) / (1 + B)`,
+`r` raw and `B = 2 * penalty_cap`, for every round, charged or not (`c = 0`
+uncharged): one affine map applied once, with no clip and one scale per router for the
+world's life, so a charge never raises a reward and a card penalty and a thrash charge
+of equal size lower it equally (wave 16, rulings R10-c, R10-l; `thrash.charged`). The price is published in
 `world.adaptive_scoring.thrash_price`; its controller resumes with the checkpoint
 (`thrash_controller`), and each open round's charge with `thrash_charges`.
 
@@ -1584,12 +1586,14 @@ that scope's decisions that responded in the window; the term records the
 windows freeze the per-scope values as `closed_scopes`. The published score is
 `clip(raw_score - penalty, 0, 1)`: the penalty is subtracted (the essay's
 Lagrangian), and the clip at zero only keeps a settled reward in the unit interval.
-What every learner learns has no clip (wave 16, ruling R10-g): the router that drew the
-decision and the seat's own learner learn `(raw_score + penalty_cap - penalty) / (1 +
-penalty_cap)`, one affine map for the world's life, with `penalty` 0 for a round that
-bore none, so a low-reward decision never escapes part of its penalty. A round that
-delivered nothing is learned on the same map with the router's observed mean as its
-score; a router's thrash charge is then taken on the router's own map (R10-c).
+What every learner learns has no clip (wave 16, rulings R10-g, R10-l): the router that
+drew the decision and the seat's own learner each learn one affine map for the world's
+life, applied exactly once, `(raw_score + B - P) / (1 + B)`: `P` the total charge the
+round bears (`penalty`, plus the router's thrash charge for the router; 0 for a round
+that bore none) and `B` the largest `P` can be for that learner (`penalty_cap` for a
+seat's own learner, `2 * penalty_cap` for a router), so a low-reward decision never
+escapes part of its charge. A round that delivered nothing is learned on the same map
+with the router's observed mean raw score as its `raw_score`.
 A forecast-shaped decision whose accepted commitment came due avoidably unresolved
 (censored with no documented exclusion) still settles censored, never as a zero,
 but under `forecast-unresolved-priced-v1` carrying its penalty as the score; its

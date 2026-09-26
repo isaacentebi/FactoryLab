@@ -564,7 +564,8 @@ class LotTable:
                 tick: int | None = None, now_ns: int | None = None,
                 horizon_ns: int | None = None,
                 exit_rates: Mapping[str, str | None] | None = None,
-                horizon_marks: Mapping[str, Mapping[str, str]] | None = None
+                horizon_marks: Mapping[str, Mapping[str, str]] | None = None,
+                after_horizon: Mapping[str, Fraction] | None = None
                 ) -> "LotTable":
         """Fix ready outcomes once; marks require a valid mid for every remaining coin.
 
@@ -591,6 +592,12 @@ class LotTable:
         timestamped at or after its horizon (wave 16, D2), and it waits until every
         instrument it holds has one; the latest cached ``mids`` never stand in for it.
 
+        ``after_horizon`` (handle -> micro-USD): funding the venue charged a return's
+        lots for funding times after its horizon. It is added back, so an outcome
+        accrues funding only for funding times at or before its horizon, however late
+        the mark that fixes it arrives (wave 16, ruling R10-m). The money itself is
+        booked as charged.
+
         ``censored`` names returns that also sent an order nobody could observe
         (handle -> documented reason). Such a return resolves on its own schedule
         like any other, and its outcome carries the money its observed orders
@@ -615,7 +622,7 @@ class LotTable:
                 young = age < backstop
             if (lots or waiting) and young:
                 continue
-            net = account.realized_micro
+            net = account.realized_micro + (after_horizon or {}).get(account.handle, 0)
             exit_fee = Fraction(0)
             unknown = False
             if lots:

@@ -2,9 +2,10 @@
 
 from collections import Counter
 from dataclasses import asdict
+from fractions import Fraction
 
 from factorylab.kernel.ledger import Ledger
-from factorylab.settlement.lots import FEE_UNKNOWN, RELEASED_ORDER, LotTable, Payoff
+from factorylab.settlement.lots import FEE_UNKNOWN, RELEASED_ORDER, LotTable, Payoff, exact
 from factorylab.settlement.receipts import ExecutionReceipt, ReceiptBook
 from factorylab.settlement.vocabulary import _require_event_index
 
@@ -27,6 +28,9 @@ class ReturnConsequences:
         # venue mid timestamped at or after its horizon, fixed when that mid arrives:
         # never the latest mid cached from an earlier event.
         self.horizon_marks: dict[str, dict[str, str]] = {}
+        # Ruling R10-m: funding charged to an open return's lots for a funding time
+        # after its horizon (micro-USD, exact), added back when its outcome is fixed.
+        self.after_horizon: dict[str, Fraction] = {}
         self.pending_orders: dict[str, dict] = {}
         # R4-C: intents the venue never answered and never will. The hold on
         # consequence resolution is released for them, but the exposure is not
@@ -314,6 +318,7 @@ class ReturnConsequences:
                     "liquidation": bool(payload.get("liquidation", False)),
                 })
         elif kind == "Funding" and payload.get("paid_usd") is not None:
+            self._set_aside_after_horizon(payload)
             table = self.table.funding(payload["coin"], str(payload["paid_usd"]))
             self._apply("funding", {"event": event, "payload": dict(payload)}, table)
         elif kind == "OrderRejected" and payload.get("order_id") is not None:
@@ -341,6 +346,33 @@ class ReturnConsequences:
                 "realized_micro": realized[handle]})
         return realized
 
+    def _set_aside_after_horizon(self, payload: dict) -> None:
+        """Set aside each open return's share of a funding payment made after its horizon.
+
+        Wave 16, ruling R10-m: an outcome accrues funding only for funding times at or
+        before its horizon, however late its mark arrives. Guarantees each open
+        return's share is exactly the share ``LotTable.funding`` allocates to its lots
+        (by open quantity), taken at the payment's funding time (``ts_ns``, else the
+        venue's clock) on the venue's clock.
+        """
+        at = payload.get("ts_ns", self._now_ns())
+        if self.horizon_ns is None or at is None:
+            return
+        coin = payload["coin"]
+        lots = [lot for lot in self.table.lots if lot.coin == coin]
+        total = sum((lot.size for lot in lots), Fraction(0))
+        paid = exact(str(payload["paid_usd"])) * 1_000_000
+        if not total or not paid:
+            return
+        accounts = {account.handle: account for account in self.table.returns}
+        for lot in lots:
+            account = accounts.get(lot.handle)
+            if (account is not None and account.payoff is None and not account.voided
+                    and account.opened_at_ns is not None
+                    and int(at) > account.opened_at_ns + self.horizon_ns):
+                self.after_horizon[lot.handle] = (self.after_horizon.get(lot.handle, 0)
+                                                  + paid * lot.size / total)
+
     def _mark_horizons(self, coin: str, ts_ns: int, mid: str) -> None:
         """Fix ``mid`` as the horizon mark of every open return holding ``coin`` whose
         horizon it reaches (``ts_ns`` at or after its opening plus ``horizon_ns``) and
@@ -362,12 +394,14 @@ class ReturnConsequences:
         if self.pending_orders:
             for payoff in fixed:
                 self.horizon_marks.pop(payoff.handle, None)
+                self.after_horizon.pop(payoff.handle, None)
             return fixed  # Unknown inventory ownership cannot manufacture a no-fill outcome.
         table = self.table.resolve(event, self.backstop, self.mids,
                                    censored=self._unknown_portions(), tick=self._tick(event),
                                    now_ns=self._now_ns(), horizon_ns=self.horizon_ns,
                                    exit_rates=self._exit_rates(),
-                                   horizon_marks=self.horizon_marks)
+                                   horizon_marks=self.horizon_marks,
+                                   after_horizon=self.after_horizon)
         for before, after in zip(self.table.returns, table.returns, strict=True):
             if before.payoff is None and after.payoff is not None:
                 self.ledger.append({"kind": "consequence.outcome", **asdict(after.payoff)})
@@ -381,8 +415,9 @@ class ReturnConsequences:
         self.table = table
         # A horizon mark is pinned by its return's open outcome: fixed or voided, no
         # reader remains.
-        for handle in [h for h in self.horizon_marks if not self.account_open(h)]:
-            del self.horizon_marks[handle]
+        for kept in (self.horizon_marks, self.after_horizon):
+            for handle in [h for h in kept if not self.account_open(h)]:
+                del kept[handle]
         return fixed
 
     def payoff(self, handle: str) -> Payoff | None:

@@ -113,7 +113,7 @@ def test_credit_reaches_the_executors_handle_only_after_its_requester_settles(mo
     # The request router that drew it learns from it.
     rt._deliver_returns()
     state = rt.routers[request_router_key("ProducerReturn")][0]
-    cap = rt.m.prices.penalty_cap  # learned on the one affine map (ruling R10-g)
+    cap = 2 * rt.m.prices.penalty_cap  # a router's one map, B = 2 * cap (R10-l)
     assert state.observed.sums["helper-a"] == [pytest.approx((0.6 + cap) / (1 + cap)), 1]
     assert list(state.definitions) == [DEF_COMPOSED] and state.definitions[DEF_COMPOSED][0] == 1
 

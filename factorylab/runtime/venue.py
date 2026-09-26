@@ -619,6 +619,10 @@ class VenueMixin:
                     # The mid's own venue time: a horizon is marked by the first mid at
                     # or after it (wave 16, D2), never by the event that follows it.
                     payload["ts_ns"] = we.ts_ns
+                elif we.kind is WorldEventKind.FUNDING:
+                    # The funding time the payment is for (R10-m: an outcome accrues
+                    # funding only for funding times at or before its horizon).
+                    payload["ts_ns"] = int(we.payload.get("funding_ns", we.ts_ns))
                 self.consequences.observe(str(we.kind), payload, self.n)
         for we in evs:
             if id(we) in refused:

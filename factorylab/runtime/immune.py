@@ -22,7 +22,7 @@ report also replays (``versioning.versions.diagnose``). The answers:
   short-lived configurations) is priced by the charter's one price law, a PID whose
   integral accumulates how long it lasts (``THRASH_CARD``), and each round of a
   no-swap-regret router, abstentions included, is charged that price times the
-  router's own policy movement (``FeedbackMixin._thrash_charged``): holding still
+  router's own policy movement (``FeedbackMixin._thrash_charge``): holding still
   is what lowers the charge.
 * **learning death**: "delivered as a fact about the world", never as a response:
   the novelty reserve is usable by unhistoried actions of every seat (ruling R5,
@@ -126,7 +126,7 @@ def thrash_penalty(rt) -> dict:
     penalty is ``min(lambda * v, prices.penalty_cap)``, where ``v`` is ``u``'s
     distance above ``immune.tv_threshold``, zero while it is unsupported or inside
     that bound. The penalty is the published reading; what a round is charged is
-    the price times the router's own movement (``FeedbackMixin._thrash_charged``).
+    the price times the router's own movement (``FeedbackMixin._thrash_charge``).
 
     ``prices.penalty_cap`` binds this and the stable-failure ratchet alike (versioning
     audit P4 asked whether it should). It is kept: a reward is a unit-interval score,

@@ -40,10 +40,11 @@ from factorylab.world.scripted import (
 from tests.runtime.test_attributable_blame import _card, _commitments
 
 
-def _learned(rt, r, p):
-    """Ruling R10-g: every learner learns (r + cap - p) / (1 + cap), no clip."""
-    cap = rt.m.prices.penalty_cap
-    return (r + cap - p) / (1 + cap)
+def _learned(rt, r, p, *, router=True):
+    """Ruling R10-l: every learner learns (r + B - P) / (1 + B), no clip, B = 2 * cap for
+    a router (card share plus thrash) and cap for a seat's own learner."""
+    bound = rt.m.prices.penalty_cap * (2 if router else 1)
+    return (r + bound - p) / (1 + bound)
 
 
 REASON = "no concrete task was given"
@@ -143,7 +144,7 @@ def test_a_refusal_no_judge_graded_is_priced_as_an_abstention_never_credited_fre
     assert priced["reward"] == pytest.approx(_learned(rt, state.neutral(), priced["penalty"]))
     # Priced: never credited above a NOOP drawn in the same window, and below the
     # unpriced neutral a censored refusal used to be credited.
-    noop_reward, _noop_penalty = rt._priced_abstention(noop, state.neutral())
+    noop_reward = _learned(rt, state.neutral(), rt._priced_abstention(noop))
     assert priced["reward"] <= noop_reward
     assert priced["reward"] < _learned(rt, state.neutral(), 0.0)
 
@@ -185,7 +186,8 @@ def test_the_refusing_seats_own_learner_is_priced_as_its_router_is(monkeypatch):
     _past_the_verdict_timeout(rt)
     rt._close_assembly_rounds()
     ((handle, fb),) = updates
-    expected, penalty = rt._priced_abstention(refused, NEUTRAL_REWARD)
+    penalty = rt._priced_abstention(refused)
+    expected = _learned(rt, NEUTRAL_REWARD, penalty, router=False)
     assert handle == refused and fb.action == "declined"
     assert penalty > 0 and fb.reward == pytest.approx(expected)
     assert fb.reward < NEUTRAL_REWARD
@@ -228,10 +230,11 @@ def test_a_requested_childs_refusal_is_priced_as_an_abstention_on_its_request_ro
     (priced,) = _rows(rt, "router.decline_priced", handle=handle)
     assert priced["router"] == state.learner.id and priced["penalty"] > 0
     assert priced["reward"] == pytest.approx(_learned(rt, state.neutral(), priced["penalty"]))
-    noop_reward, _noop_penalty = rt._priced_abstention(noop, state.neutral())
+    noop_reward = _learned(rt, state.neutral(), rt._priced_abstention(noop))
     assert priced["reward"] <= noop_reward
     ((learned, fb),) = updates
-    expected, penalty = rt._priced_abstention(handle, NEUTRAL_REWARD)
+    penalty = rt._priced_abstention(handle)
+    expected = _learned(rt, NEUTRAL_REWARD, penalty, router=False)
     assert learned == handle and penalty > 0 and fb.reward == pytest.approx(expected)
 
 
@@ -284,7 +287,7 @@ def test_an_ungraded_refusal_on_any_producing_channel_settles_declined_at_the_pr
     assert priced["reward"] == pytest.approx(_learned(rt, state.neutral(), priced["penalty"]))
     _noop_state, noop = _drawn(rt, NOOP, channel)
     rt._contribution(noop, rt.window.decisions[handle]["role"])
-    noop_reward, _noop_penalty = rt._priced_abstention(noop, state.neutral())
+    noop_reward = _learned(rt, state.neutral(), rt._priced_abstention(noop))
     assert priced["reward"] <= noop_reward
 
 
@@ -498,7 +501,7 @@ def test_a_judging_seat_that_declines_is_priced_as_an_abstention_never_censored_
     # Never above a NOOP the same router drew in the same window.
     _noop_state, noop = _draw(rt, NOOP, channel)
     rt._contribution(noop, rt.window.decisions[handle]["role"])
-    noop_reward, _noop_penalty = rt._priced_abstention(noop, state.neutral())
+    noop_reward = _learned(rt, state.neutral(), rt._priced_abstention(noop))
     assert priced["reward"] <= noop_reward
 
 
@@ -631,7 +634,7 @@ def test_a_seat_that_declines_every_round_leaves_the_niche_when_its_trial_ends(m
         rt._close_price_window()
         _past_the_verdict_timeout(rt)
         rt._deliver_returns()
-        return handle, rt._is_niche(handle), rt._priced_abstention(handle, 0.5)[1]
+        return handle, rt._is_niche(handle), rt._priced_abstention(handle)
 
     inside = decline_penalty()
     assert inside[1] and inside[2] == 0.0  # the trial: protected, charged nothing

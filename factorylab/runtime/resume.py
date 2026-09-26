@@ -920,8 +920,9 @@ _COMPONENT_FIELDS = (
                           # R4-C: a released hold's exposure, and the censored
                           # outcomes not yet handed to the runtime.
                           "unresolved_orders", "censored_payoffs",
-                          # Wave 16, D2: open returns' horizon marks.
-                          "horizon_marks")),
+                          # Wave 16, D2: open returns' horizon marks; R10-m: the
+                          # funding after their horizons, set aside.
+                          "horizon_marks", "after_horizon")),
     ("consequence_fills", "", ("since_ns", "seen")),
     ("reconciler", "", ("every", "_ticks")),
     # The artifact archive's index (C9): hash -> owner, kind, size, time, published.

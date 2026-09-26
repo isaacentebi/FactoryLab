@@ -398,26 +398,40 @@ class PricingMixin:
         cards = [c for c in self.charter.cards if c.id in self.regions]
         return min((self._card_inner(c) for c in cards), default=1)
 
-    def _learned(self, raw: float, penalty: float) -> float:
-        """The value a learner learns for a round: ``(r + cap - p) / (1 + cap)``.
+    def _learned(self, raw: float, charge: float, bound: float) -> float:
+        """The one map every learner learns a round on: ``(r + B - P) / (1 + B)``.
 
-        Wave 16, ruling R10-g (widening R10-c): every learner, router and assembly,
-        learns one affine map for the world's life, ``r`` the round's score before its
-        card penalty (or the router's observed mean, for a round that delivered
-        nothing) and ``p`` the penalty it bears (0 when none). No clip: a clip at 0
-        would let a low-reward round escape part of its penalty. With ``0 <= r <= 1``
-        and ``0 <= p <= penalty_cap`` the value lies in ``[0, 1]``.
+        Wave 16, ruling R10-l (superseding R10-g's per-charge maps): ``r`` is the round's
+        raw score (or the raw neutral a round that delivered nothing is credited, D4),
+        ``P`` the total charge the round bears (its D5 card share plus, for a router,
+        its I-10 thrash charge, each bounded by ``prices.penalty_cap``) and ``B`` the
+        largest ``P`` can be for that learner (``_charge_bound``). Applied exactly once
+        per round (``_learning_value`` is its one caller): composing one map per charge
+        compresses the scale and weighs one charge against another. No clip: with
+        ``0 <= r <= 1`` and ``0 <= P <= B`` the value lies in ``[0, 1]``.
+        """
+        return (float(raw) + float(bound) - float(charge)) / (1.0 + float(bound))
+
+    def _charge_bound(self, router: bool) -> float:
+        """``B``, the largest total charge a learner's round can bear, for the world's life.
+
+        A seat's own learner bears only its card share, at most ``prices.penalty_cap``;
+        a router can bear a card share and a thrash charge, each at most the cap (any
+        router can be charged: I-10), so ``2 * penalty_cap`` (ruling R10-l).
         """
         cap = self.m.prices.penalty_cap
-        return (float(raw) + cap - float(penalty)) / (1.0 + cap)
+        return 2 * cap if router else cap
 
-    def _round_learned(self, handle: str, score: float) -> float:
-        """What a settled round is learned as: its raw score and penalty when it was
-        priced (``raw_scores``, ``round_penalties``), else its score with no penalty."""
+    def _round_priced(self, handle: str, score: float) -> tuple[float, float]:
+        """A settled round's raw score and card penalty, unmapped: ``(r, p)``.
+
+        Its raw score and penalty when it was priced (``raw_scores``,
+        ``round_penalties``), else its score with no penalty.
+        """
         raw = self.raw_scores.get(handle)
         if raw is None:
-            return self._learned(score, 0.0)
-        return self._learned(raw, self.round_penalties.get(handle, 0.0))
+            return float(score), 0.0
+        return float(raw), float(self.round_penalties.get(handle, 0.0))
 
     def _prune_price_evidence(self) -> None:
         """Completed decisions release old attribution windows after their totals are frozen."""

@@ -1327,12 +1327,12 @@ class RoutingMixin:
 
         Essay II.II.b: thrash is priced "incentivizing the surplus-retaining core of
         no-swap-regret learners to stabilize". What a router can hold still is its own
-        policy, so the thrash charge on this round (``FeedbackMixin._thrash_charged``)
+        policy, so the thrash charge on this round (``FeedbackMixin._thrash_charge``)
         scales with how far this draw's distribution moved from the router's last,
         over the union of their actions; a first draw has not moved. The charge is
         held for a router the price is attributed to (``_thrash_attributed``), and
         only when positive: every round of every router is learned on the one map
-        (``FeedbackMixin._thrash_charged``; ruling R10-c), so an uncharged round needs
+        (``FeedbackMixin._learning_value``; rulings R10-c, R10-l), so an uncharged round needs
         no record.
         """
         now = dict(zip(sample.action_ids, (float(p) for p in sample.probs), strict=True))

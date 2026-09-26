@@ -32,10 +32,11 @@ from tests.runtime.test_loop import (
 )
 
 
-def _learned(rt, r, p):
-    """Ruling R10-g: every learner learns (r + cap - p) / (1 + cap), no clip."""
-    cap = rt.m.prices.penalty_cap
-    return (r + cap - p) / (1 + cap)
+def _learned(rt, r, p, *, router=True):
+    """Ruling R10-l: every learner learns (r + B - P) / (1 + B), no clip, B = 2 * cap for
+    a router (card share plus thrash) and cap for a seat's own learner."""
+    bound = rt.m.prices.penalty_cap * (2 if router else 1)
+    return (r + bound - p) / (1 + bound)
 
 
 class Population(ScriptedProvider):

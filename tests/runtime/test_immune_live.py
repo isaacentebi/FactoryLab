@@ -118,6 +118,12 @@ def _draw(state, probs):
     return Sample((*seats, NOOP), tuple(probs), NOOP, 1, state.learner.id, "h", ())
 
 
+def _charged(rt, state, handle, raw):
+    """What ``state`` (a router) learns for a round of raw score ``raw`` and no card
+    share: its thrash charge on the one map (ruling R10-l)."""
+    return rt._learning_value(handle, raw, 0.0, router=state)
+
+
 def test_a_core_router_that_stops_moving_pays_less_and_the_frontier_nothing():
     """The #134 review: a charge every round bore alike is a constant shift no-regret
     learners ignore. Each round is charged the price times the router's own movement,
@@ -126,25 +132,25 @@ def test_a_core_router_that_stops_moving_pays_less_and_the_frontier_nothing():
     rt.m = replace(rt.m, evaluation=replace(rt.m.evaluation, no_swap_regret_kinds=("Tick",)))
     rt.stats.thrash = {"lambda": 0.4}
     core, frontier = rt.routers["Tick"][0], rt.routers["MarketMid"][0]
-    cap = rt.m.prices.penalty_cap
+    cap = 2 * rt.m.prices.penalty_cap  # a router's B (ruling R10-l)
     rt._record_movement(core, _draw(core, (0.8, 0.1, 0.1)), "h1")  # the first draw
     rt._record_movement(core, _draw(core, (0.1, 0.8, 0.1)), "h2")  # moved: TV 0.7
     rt._record_movement(core, _draw(core, (0.1, 0.8, 0.1)), "h3")  # held still
     assert "h1" not in rt.thrash_charges and "h3" not in rt.thrash_charges
     assert rt.thrash_charges["h2"] == pytest.approx(0.4 * 0.7)
-    moved, still = rt._thrash_charged(core, "h2", 0.7), rt._thrash_charged(core, "h3", 0.7)
+    moved, still = _charged(rt, core, "h2", 0.7), _charged(rt, core, "h3", 0.7)
     assert still == pytest.approx((0.7 + cap) / (1 + cap)) and moved < still
     assert still - moved == pytest.approx(0.28 / (1 + cap))
     # One affine map: a low reward loses the same charge as a high one, never clipped.
     rt.thrash_charges.update(lo=0.28, hi=0.28)
-    assert (rt._thrash_charged(core, "x", 0.05) - rt._thrash_charged(core, "lo", 0.05)
-            == pytest.approx(rt._thrash_charged(core, "y", 0.95)
-                             - rt._thrash_charged(core, "hi", 0.95)))
+    assert (_charged(rt, core, "x", 0.05) - _charged(rt, core, "lo", 0.05)
+            == pytest.approx(_charged(rt, core, "y", 0.95)
+                             - _charged(rt, core, "hi", 0.95)))
     rt._record_movement(frontier, _draw(frontier, (0.8, 0.2)), "f1")
     rt._record_movement(frontier, _draw(frontier, (0.2, 0.8)), "f2")
     # Unattributed, uncharged: still learned on the one map (ruling R10-c).
     assert "f2" not in rt.thrash_charges
-    assert rt._thrash_charged(frontier, "f2", 0.7) == pytest.approx((0.7 + cap) / (1 + cap))
+    assert _charged(rt, frontier, "f2", 0.7) == pytest.approx((0.7 + cap) / (1 + cap))
     # Waking nobody pays it too (ruling R9).
     handle = rt.queue.open(
         actor=core.learner.id, event_id="noop", channel="verdict", deadline_ns=10**18,
@@ -225,12 +231,12 @@ def test_a_stable_failures_duration_price_reaches_abstention(monkeypatch):
     rt._close_price_window()
     rt.window = MeasureWindow(rt.window.index + 1, rt.wallet.balance)
     noop = _abstention(rt)
-    before = rt._priced_abstention(noop, 0.9)[1]
+    before = rt._priced_abstention(noop)
     rt.controller.set_price("censorship-bound", 0.2, amendment_id="lower")
-    lowered = rt._priced_abstention(noop, 0.9)[1]
+    lowered = rt._priced_abstention(noop)
     for window in range(3):
         rt.controller.ratchet("censorship-bound", window=window, step=0.1)
-    ratcheted = rt._priced_abstention(noop, 0.9)[1]
+    ratcheted = rt._priced_abstention(noop)
     assert lowered < before and ratcheted > lowered
     assert ratcheted <= rt.m.prices.penalty_cap
 
