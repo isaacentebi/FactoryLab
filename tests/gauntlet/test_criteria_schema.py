@@ -322,6 +322,7 @@ def _criteria():
     tree = ast.parse(Path(g.__file__).read_text())
     return {node.name for node in tree.body
             if isinstance(node, ast.FunctionDef) and not node.name.startswith("_")
+            and node.name != "aggregate"  # combines criteria's readings; none of its own
             and isinstance(node.returns, ast.Constant | ast.Name)
             and getattr(node.returns, "value", getattr(node.returns, "id", None)) == "Result"}
 
@@ -423,6 +424,69 @@ def test_the_entity_builders_read_every_source():
     # The prefix is removed only in fields the organ writes with it (immune.py:303).
     assert all(path in g.CARD_SOURCES.get(kind, ()) for kind, path in g.CARD_PREFIXED)
     assert g.diary_cards([{"kind": "price.update", "card_id": "card:x"}]) == ["card:x"]
+
+
+# --- Codex pass on 47c5929: acts traced to the write tool that ledgers them ---------------
+
+
+def test_the_act_tools_are_the_kernels_own_dispatch():
+    """``ACT_TOOLS`` is read from ``_run_tool``'s dispatch: the tool ids whose branch calls
+    ``_venue_write`` (which ledgers ``order.intent``), and the treasury tool's id (whose
+    branch ledgers ``treasury.intent``)."""
+    tree = ast.parse((ROOT / "factorylab/runtime/compute.py").read_text())
+    venue = set()
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.If) and isinstance(node.test, ast.Compare)
+                and isinstance(node.test.comparators[0], ast.Tuple)
+                and any(isinstance(n, ast.Attribute) and n.attr == "_venue_write"
+                        for stmt in node.body for n in ast.walk(stmt))):
+            venue |= {e.value for e in node.test.comparators[0].elts}
+    assert venue == g.ACT_TOOLS["order.intent"]
+    source = (ROOT / "factorylab/runtime/compute.py").read_text()
+    assert all(f'"{tool}"' in source for tool in g.ACT_TOOLS["treasury.intent"])
+    assert set(g.ACT_TOOLS) <= set(g.ACT_KINDS)
+
+
+def test_every_aggregation_goes_through_the_one_rule():
+    """The class (Codex P2, populations.py:479): no code in gauntlet.py or populations.py
+    filters readings by status (keeping only FAILs, or only PASSes) outside
+    ``aggregate``: every combination of readings is ``aggregate``'s."""
+    hits = []
+    for path in (Path(g.__file__), ROOT / "tests/gauntlet/populations.py"):
+        tree = ast.parse(path.read_text())
+        for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
+            if fn.name == "aggregate":
+                continue
+            for node in ast.walk(fn):
+                if isinstance(node, ast.ListComp | ast.SetComp | ast.DictComp
+                              | ast.GeneratorExp):
+                    for gen in node.generators:
+                        for cond in gen.ifs:
+                            if any(isinstance(a, ast.Attribute) and a.attr == "status"
+                                   for a in ast.walk(cond)):
+                                hits.append((path.name, fn.name, node.lineno))
+    assert hits == []
+
+
+# --- Codex pass on 47c5929: every row field read goes through need() -----------------------
+
+
+def test_no_criterion_reads_a_row_field_by_direct_subscript():
+    """The mechanical sweep: a ``row["field"]`` read raises KeyError on a malformed row
+    instead of failing it; every field read in ``gauntlet.py`` goes through ``need()``
+    (or ``.get``, the explicitly nullable accessor). Only the diary validators, which
+    refuse a malformed diary as ``DiaryInvalid`` before any criterion runs, subscript."""
+    tree = ast.parse(Path(g.__file__).read_text())
+    hits = []
+    for fn in [n for n in tree.body if isinstance(n, ast.FunctionDef)]:
+        if fn.name in ("load_events", "diary_identity", "bind_diary"):
+            continue
+        for node in ast.walk(fn):
+            if (isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Load)
+                    and isinstance(node.slice, ast.Constant)
+                    and isinstance(node.slice.value, str)):
+                hits.append((fn.name, node.lineno, ast.unparse(node)))
+    assert hits == []
 
 
 # --- Codex pass on 7c714a2: the loader drops nothing a criterion reads ---------------------

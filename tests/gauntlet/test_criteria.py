@@ -1609,7 +1609,8 @@ def test_sf1d_a_broken_saturation_count_fails_before_any_sustained_run():
 def test_sf1f_a_wrong_accrual_or_a_shut_route_fails_with_thin_evidence():
     wrong = [_novelty(amount=1)]
     result = g.sf1f_route_open(wrong, M)
-    assert result.status == g.FAIL and result.evidence["accrual"] == g.FAIL
+    assert result.status == g.FAIL
+    assert [f["name"] for f in result.evidence["failed"]] == ["LD-1a"]
     shut = [_w(1, profile={"access:registration_route": 0.0})]
     assert g.sf1f_route_open(shut, M).status == g.FAIL
 
@@ -1775,9 +1776,17 @@ def test_s1_a_propensity_breaking_its_contract_fails_as_malformed(change, why):
     ([("act",), ("open",), ("invocation", "ok")], False),
     # A tool call's act: inside the invocation, recorded by its tool.call row, whatever
     # the final answer's status (compute.py ``_run_tool`` -> ``_venue_write``).
-    ([("open",), ("act",), ("tool.call",), ("invocation", "malformed")], True),
+    ([("open",), ("act",), ("tool.call", "venue.place_market"),
+      ("invocation", "malformed")], True),
+    # The call after it must be the write tool that ledgers the act (``ACT_TOOLS``): a
+    # read-only or unrelated call never traces it, nor does a write after a read.
+    ([("open",), ("act",), ("tool.call", "catalogue.search"), ("invocation", "ok")], False),
+    ([("open",), ("act",), ("tool.call", "treasury.transfer"), ("invocation", "ok")], False),
+    ([("open",), ("act",), ("tool.call", "catalogue.search"),
+      ("tool.call", "venue.place_market"), ("invocation", "ok")], False),
     # A tool.call after the invocation closed is not the call that made it.
-    ([("open",), ("act",), ("invocation", "ok"), ("tool.call",)], False),
+    ([("open",), ("act",), ("invocation", "ok"), ("tool.call", "venue.place_market")],
+     False),
 ])
 def test_s1_an_act_follows_its_decision_and_the_seats_own_return(rows, ok):
     """Codex P2 (gauntlet.py:2057): an act traces only in ledger order: after a
@@ -1786,7 +1795,7 @@ def test_s1_an_act_follows_its_decision_and_the_seats_own_return(rows, ok):
     act). A later, failed or malformed invocation does not trace it."""
     build = {"open": lambda: _open("d1", "a"),
              "act": lambda: {"kind": "order.intent", "handle": "d1"},
-             "tool.call": lambda: {"kind": "tool.call", "handle": "d1"},
+             "tool.call": lambda tool: {"kind": "tool.call", "handle": "d1", "tool": tool},
              "invocation": lambda status: {"kind": "invocation", "handle": "d1",
                                            "status": status}}
     diary = _seq([build[kind](*rest) for kind, *rest in rows])
@@ -1818,6 +1827,52 @@ def test_th4_a_degenerate_synthetic_null_is_unsupported_never_a_pass(synthetic):
     assert g.th4_null(quiet, M, synthetic=synthetic).status == g.UNSUPPORTED
     with pytest.raises(ValueError):
         g.clopper_pearson_upper(0, 0)
+
+
+# --- Codex pass on 47c5929 ----------------------------------------------------------------
+
+
+@pytest.mark.parametrize("statuses, expected", [
+    ([g.PASS, g.PASS], g.PASS),
+    ([g.PASS, g.UNSUPPORTED], g.UNSUPPORTED),
+    ([g.UNSUPPORTED, g.FAIL], g.FAIL),
+    ([g.PASS, g.FAIL], g.FAIL),
+    ([g.UNSUPPORTED], g.UNSUPPORTED),
+    ([], g.UNSUPPORTED),
+])
+def test_an_aggregate_passes_only_when_every_component_passes(statuses, expected):
+    """Codex P2 (populations.py:479): one rule for every aggregation: FAIL if any
+    component fails, PASS only when every component passes and one did, otherwise
+    UNSUPPORTED (an unsupported component is never read as a pass)."""
+    parts = [g.Result(f"c{i}", s, {}) for i, s in enumerate(statuses)]
+    assert g.aggregate("agg", parts).status == expected
+
+
+def test_the_instrumented_s8_aggregate_keeps_an_unsupported_gain_act():
+    """An unsupported gain_neutral (a router that saved no base) is not dropped: the
+    instrumented S8 reading is unsupported, never a pass."""
+    from types import SimpleNamespace
+
+    from tests.gauntlet import populations as P
+
+    base = {"actions": ["a", "b"], "gamma": 0.1, "log_weights": [1.0, 1.0]}
+    good = {"router": "router:Tick", "window": 1, "before": {"bases": [base]},
+            "after": {"bases": [dict(base, gamma=0.15)]}}
+    empty = {"router": "router:Tick", "window": 2, "before": {"bases": []},
+             "after": {"bases": []}}
+    run = SimpleNamespace(events=[], manifest=M, requests=[], closes=[], gains=[good])
+    assert P.assert_prices_not_steers(run)["S8-instrumented"].ok
+    run.gains = [good, empty]
+    assert P.assert_prices_not_steers(run)["S8-instrumented"].status == g.UNSUPPORTED
+
+
+def test_s5_a_row_missing_a_field_fails_as_malformed_never_raises():
+    """Codex P2 (gauntlet.py:2329): a field read goes through need(), so a priced
+    abstention with no reward fails S5 naming the field instead of raising KeyError."""
+    row = {"kind": "router.abstention_priced", "handle": "d", "router": "router:Tick",
+           "neutral": 0.5, "penalty": 0.2}
+    result = g.s5_neutral_imputation([row], M)
+    assert result.status == g.FAIL and result.evidence["malformed"]["field"] == "reward"
 
 
 def test_s4_an_unresolved_penalty_row_may_carry_no_raw_score():
