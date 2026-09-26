@@ -208,3 +208,95 @@ def test_a_leg_whose_rate_was_never_read_leaves_the_declined_road_uninformative(
         assert not _rows(rt, "consequence.opportunity", handle=producer), unread
         (row,) = _rows(rt, "consequence.uninformative", handle=producer)
         assert row["reason"] == FEE_UNKNOWN, unread
+
+
+# --- retention is need-based (Codex on #152, 7e78d6a) ----------------------------------
+
+
+def _long_patience_world(verdict_timeout_ticks: int):
+    from dataclasses import replace
+
+    rt = _world(10)
+    rt.m = replace(rt.m, evaluation=replace(rt.m.evaluation,
+                                            verdict_timeout_events=verdict_timeout_ticks))
+    rt.ev = rt.m.evaluation
+    return rt
+
+
+def test_the_rate_at_h_is_kept_while_the_mid_at_h_is_awaited_past_many_repricings():
+    """The first mid after H arrives more than three repricing periods after H, inside
+    a long verdict window. The fee is re-read every period meanwhile, and falls from
+    4.5 bp to 3.5 bp just after H: both roads still exit at the rate at H, never
+    fee_unknown. A fixed two-period window had dropped it."""
+    from decimal import Decimal
+
+    from tests.runtime.test_reward_chain import _advance, _rows
+
+    rt = _long_patience_world(400)
+    period, horizon = rt.m.timing.world_repricing_ns, rt._horizon_ns()
+    start = 3 * NS_PER_HOUR
+    assert rt._patience_ns() > horizon + 4 * period
+
+    def listing():
+        rate = "0.00045" if rt.clock.now_ns <= start + horizon else "0.00035"
+        return {"perp": [{"coin": "BTC", "taker_fee_rate": rate}], "spot": []}
+
+    rt.exchange.instruments = listing
+    rt.fee_schedule = None
+    rt.clock.now_ns = start
+    _mids(rt, BTC="100")
+    producer, _event = _consequence_produce(rt)
+    lot = _open_long(rt, "BTC", "100", fee_usd="0.000045")
+    for k in range(1, 5):  # four re-reads, no BTC mid: the mid at H is not yet broadcast
+        rt.clock.now_ns = start + k * period
+        rt._read_fee_schedule()
+    rt.clock.now_ns = start + horizon + 3 * period + 10 * 10**9
+    _mids(rt, BTC="100")
+    _advance(rt, 1)
+    rt._settle_evaluations()
+    (priced,) = _rows(rt, "consequence.opportunity", handle=producer)
+    assert (priced["entry_fee_bps"], priced["exit_fee_bps"]) == ("4.5", "4.5")
+    assert not _rows(rt, "consequence.uninformative", reason="fee_unknown")
+    payoff = rt.consequences.payoff(lot)
+    assert payoff is not None and payoff.censored is None
+    assert Decimal(-payoff.net_micro) / 100_000 * 10_000 == 9  # 4.5 in, 4.5 out at H
+
+
+def test_with_nothing_open_the_fee_history_is_the_latest_read():
+    """Bounded: with no open consequence, a read keeps only the latest rate per
+    instrument, however many were read before."""
+    rt = _world(10)
+    rates = iter(["0.00045", "0.00040", "0.00035", "0.00030"])
+
+    def listing():
+        return {"perp": [{"coin": "BTC", "taker_fee_rate": next(rates)}], "spot": []}
+
+    rt.exchange.instruments = listing
+    rt.fee_schedule = None
+    period = rt.m.timing.world_repricing_ns
+    for k in range(4):
+        rt.clock.now_ns = 3 * NS_PER_HOUR + k * period
+        rt._read_fee_schedule()
+    assert not rt.reference_mids
+    assert rt.fee_schedule["history"]["BTC"] == [[3 * NS_PER_HOUR + 3 * period, "0.00030"]]
+
+
+def test_a_named_trade_opened_after_its_decision_is_kept_until_its_own_lapse():
+    """R10-h: a trade opened at its coin's first venue mid after the decision is priced
+    up to a patience past that opening; the prune never ages it from its decision."""
+    rt = _world(10)
+    start = 5 * NS_PER_HOUR
+    rt.clock.now_ns = start
+    _mids(rt, BTC="100")
+    rt.venue_marks.clear()
+    producer, _event = _consequence_produce(rt)
+    opened = start + rt._patience_ns() // 2
+    rt.clock.now_ns = opened
+    rt._observe_mid("BTC", opened, "100")
+    frozen = rt.reference_mids[producer]
+    rt.clock.now_ns = start + rt._patience_ns() + 1  # a patience past the decision
+    rt._settle_evaluations()
+    assert rt.reference_mids.get(producer) is frozen  # not yet a patience past opening
+    rt.clock.now_ns = opened + rt._patience_ns() + 1
+    rt._settle_evaluations()
+    assert producer not in rt.reference_mids

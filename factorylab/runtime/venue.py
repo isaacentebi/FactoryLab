@@ -9,7 +9,7 @@ from decimal import Decimal
 from factorylab.cortex.request import Return
 from factorylab.kernel.money import usd_to_micro
 from factorylab.runtime.shared import _to_plain
-from factorylab.settlement.lots import LotTable
+from factorylab.settlement.lots import VENUE_FEE_MARKETS, LotTable
 from factorylab.world.events import WorldEvent, WorldEventKind
 from factorylab.world.exchange import (
     AccountState,
@@ -253,8 +253,11 @@ class VenueMixin:
 
         Ruling R10-i: a read that states no rate for an instrument keeps its last
         successfully read rate, and every successful read is kept with its time
-        (``history``, per instrument, two repricing periods deep) so a horizon's exit
-        fee is the venue's most recent successful rate at or before it (``_rate_at``).
+        (``history``, per instrument) so a horizon's exit fee is the venue's most recent
+        successful rate at or before it (``_rate_at``). Retention is need-based, as
+        wave 17b pins its books: per instrument, the latest read at or before the
+        earliest instant an open consequence can still ask for (``_fee_needs``) and
+        every read after it; with none open, only the latest read.
         """
         refresh = getattr(self.exchange, "refresh_fee_rates", None)
         if callable(refresh):
@@ -275,18 +278,20 @@ class VenueMixin:
         previous = self.fee_schedule or {}
         before = dict(previous.get("rates") or {})
         now = self.clock.now_ns
-        period = self.m.timing.world_repricing_ns
         history = {name: [list(row) for row in rows]
                    for name, rows in (previous.get("history") or {}).items()}
         for instrument, rate in read.items():
             history.setdefault(instrument, []).append([now, rate])
+        needs = self._fee_needs()
         for instrument, rows in history.items():
-            if period is not None:
-                # Keep what a horizon still open can ask for: the reads of the last two
-                # repricing periods and the one in force at their start.
-                recent = [i for i, row in enumerate(rows) if row[0] >= now - 2 * period]
-                start = max(0, (recent[0] if recent else len(rows)) - 1)
-                history[instrument] = rows[start:]
+            # Keep what an open consequence can still ask for (Codex on #152: a fixed
+            # window dropped the rate at H while a long verdict window still waited
+            # for the mid at H): the read in force at the earliest needed instant and
+            # everything after it. Nothing open: the latest read, which any later
+            # decision's legs read at or after.
+            floor = needs.get(instrument, now)
+            in_force = [i for i, row in enumerate(rows) if row[0] <= floor]
+            history[instrument] = rows[in_force[-1] if in_force else 0:]
         rates = {**before, **read}  # an instrument this read left unstated keeps its last
         self.fee_schedule = {"rates": rates, "read_ns": now, "history": history}
         if not previous or rates != before:
@@ -306,6 +311,41 @@ class VenueMixin:
         """The taker rate in force for ``coin`` (a perp coin or spot pair) as last read:
         its own rate, never another instrument's or a market's pooled one."""
         return ((self.fee_schedule or {}).get("rates") or {}).get(coin)
+
+    def _fee_needs(self) -> dict[str, int]:
+        """The earliest instant, per instrument, an open consequence can still read the
+        venue's fee rate at.
+
+        Guarantees every instant ``_rate_at`` can yet be asked for is at or after its
+        instrument's value: a named trade still frozen (``reference_mids``) needs its
+        decision, its opening and its horizon; an acting return whose outcome is not
+        fixed needs its opening and its horizon for every perp or spot lot it holds
+        (``lots._exit_rates_for``). An instrument nothing open holds is absent.
+        """
+        needs: dict[str, int] = {}
+
+        def need(instrument: str, *instants: int | None) -> None:
+            for at in instants:
+                if isinstance(at, int):
+                    needs[instrument] = min(at, needs.get(instrument, at))
+
+        for frozen in (getattr(self, "reference_mids", None) or {}).values():
+            if frozen.get("coin") is not None:
+                need(frozen["coin"], frozen.get("ns"), frozen.get("open_ns"),
+                     frozen.get("due_ns"))
+        consequences = getattr(self, "consequences", None)
+        table = getattr(consequences, "table", None)
+        if table is not None:
+            # The horizon the book itself asks its exit rates at (``_exit_rates_for``);
+            # without one it asks at the present, which the latest read answers.
+            horizon = getattr(consequences, "horizon_ns", None) or 0
+            opened = {account.handle: account.opened_at_ns for account in table.returns
+                      if account.payoff is None and not account.voided}
+            for lot in table.lots:
+                at = opened.get(lot.handle)
+                if lot.market in VENUE_FEE_MARKETS and at is not None:
+                    need(lot.coin, at, at + horizon)
+        return needs
 
     def _rate_at(self, instrument: str, at_ns: int) -> str | None:
         """The venue's most recent successfully read taker rate for ``instrument`` at or

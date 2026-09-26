@@ -1499,6 +1499,13 @@ class FeedbackMixin:
         return (opportunity_cost(opened, due_mids, entry, exit_, frozen["declined"],
                                  funding_rates), OPPORTUNITY_DEFINITION)
 
+    def _frozen_lapse_ns(self, frozen: dict) -> int:
+        """The instant after which a frozen named trade can no longer be priced: a
+        patience past its opening. A trade waiting for its coin's first venue mid is
+        aged from its decision (ruling R10-h), never on another event's clock."""
+        opened = frozen["open_ns"] if frozen.get("open_ns") is not None else frozen["ns"]
+        return opened + self._patience_ns()
+
     def _reference_outcome(self, frozen: dict) -> tuple[str, list[str] | None]:
         """Whether a frozen named trade can be priced now: ``(state, funding rates)``.
 
@@ -1509,10 +1516,7 @@ class FeedbackMixin:
         funding rates otherwise.
         """
         due, res = frozen.get("due_ns"), frozen.get("res")
-        # A trade waiting for its coin's first venue mid is aged from its decision
-        # (ruling R10-h): it lapses a patience after it, never on another event's clock.
-        opened = frozen["open_ns"] if frozen.get("open_ns") is not None else frozen["ns"]
-        lapsed = self.clock.now_ns > opened + self._patience_ns()
+        lapsed = self.clock.now_ns > self._frozen_lapse_ns(frozen)
         if res is None or due is None:
             return ("none" if lapsed else "open"), None
         rates = funding_due(frozen.get("funding"), frozen["open_ns"], res[0])
@@ -1925,10 +1929,16 @@ class FeedbackMixin:
         for handle in list(self.reference_mids):
             self._final_outcome(handle)
         horizon = self.clock.now_ns - self._patience_ns()
-        for kept in (self.consequence_scores, self.world_outcomes, self.reference_mids,
-                     self.verdict_views):
+        for kept in (self.consequence_scores, self.world_outcomes, self.verdict_views):
             for handle in [h for h, v in kept.items() if self._kept_ns(v) < horizon]:
                 del kept[handle]
+        # A frozen trade is pinned by its own need, never a window from its decision:
+        # one opened at a mid after its decision (R10-h) is priced up to a patience
+        # past that opening (Codex on #152). One a return that acted left unread lapses
+        # on the same clock.
+        for handle in [h for h, frozen in self.reference_mids.items()
+                       if self.clock.now_ns > self._frozen_lapse_ns(frozen)]:
+            del self.reference_mids[handle]
 
     def _kept_ns(self, value: Any) -> int:
         """When a kept entry was recorded on the world's clock (an entry recorded

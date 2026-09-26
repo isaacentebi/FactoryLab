@@ -360,6 +360,8 @@ class ReturnConsequences:
         # its hold was released; it is handed over here with everything else.
         fixed, self.censored_payoffs = self.censored_payoffs, []
         if self.pending_orders:
+            for payoff in fixed:
+                self.horizon_marks.pop(payoff.handle, None)
             return fixed  # Unknown inventory ownership cannot manufacture a no-fill outcome.
         table = self.table.resolve(event, self.backstop, self.mids,
                                    censored=self._unknown_portions(), tick=self._tick(event),
@@ -377,8 +379,10 @@ class ReturnConsequences:
                                         "reason": FEE_UNKNOWN})
                 fixed.append(after.payoff)
         self.table = table
-        for payoff in fixed:
-            self.horizon_marks.pop(payoff.handle, None)
+        # A horizon mark is pinned by its return's open outcome: fixed or voided, no
+        # reader remains.
+        for handle in [h for h in self.horizon_marks if not self.account_open(h)]:
+            del self.horizon_marks[handle]
         return fixed
 
     def payoff(self, handle: str) -> Payoff | None:
