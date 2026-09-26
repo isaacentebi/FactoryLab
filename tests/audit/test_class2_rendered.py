@@ -47,11 +47,14 @@ def test_every_rendered_request_has_no_untriaged_finding_and_no_stale_one(
 
 @pytest.mark.parametrize("world", WORLDS)
 def test_no_request_leaks_what_the_population_wrote_into_the_lint(world, rendered):
-    """Provenance: a leaf carrying a string the scripted population emitted is dropped, so
-    the lint never reads the population's own text as the architect's."""
+    """Provenance (Sol COV-4): a leaf that is a whole string the scripted population
+    emitted, and not one the kernel writes, is dropped, so the lint never reads the
+    population's own text as the architect's; a kernel leaf is never dropped because a
+    seat's text is a substring of it or a seat echoed it."""
     run = _render(rendered, world)
-    long = [s for s in run.emitted if len(s) >= 12]
-    assert not [p for p, t in run.leaves if any(s in t for s in long)]
+    kernel = {t for _p, t in corpus.render_static(world)} | {
+        t for _p, t in corpus.render_seat_text()}
+    assert not [p for p, t in run.leaves if t in run.emitted and t not in kernel]
 
 
 def test_rendered_surfaces_match_the_coverage_registry(rendered, allowlist):

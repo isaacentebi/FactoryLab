@@ -50,9 +50,42 @@ EXCLUDED = {
 }
 
 #: Headers of the rendered request, in the order ``Request.sections`` writes them.
-REQUEST_HEADERS = ("WORLD CONTRACT", "BASE CAPABILITIES", "INSTITUTIONS", "YOU",
-                   "WORLD UPDATE", "REQUEST", "INPUTS", "SUBJECT PROPENSITY", "SCORING",
-                   "OUTCOME SCHEMA", "OUTCOME CONTRACT", "COMPLETION CRITERION")
+REQUEST_HEADERS = ("WORLD CONTRACT", "OPERATING ACCESS", "BASE CAPABILITIES",
+                   "INSTITUTIONS", "YOU", "WORLD UPDATE", "REQUEST", "INPUTS",
+                   "SUBJECT PROPENSITY", "SCORING", "OUTCOME SCHEMA", "OUTCOME CONTRACT",
+                   "COMPLETION CRITERION")
+#: The modules that write a request's sections (``Request.sections`` and the
+#: schematics it carries): the headers are read from their code.
+REQUEST_BUILDER_MODULES = ("factorylab/cortex/request.py", "factorylab/cortex/schematics.py")
+
+
+def request_headers_in_code() -> set[str]:
+    """Every section header the request builders write, from their source: a string that
+    opens with a header line (capitals and spaces, then a newline), and every module
+    constant named ``*_HEADER``."""
+    import ast
+
+    header = re.compile(r"^([A-Z][A-Z0-9 ]{1,40})\n")
+    found: set[str] = set()
+    for rel in REQUEST_BUILDER_MODULES:
+        tree = ast.parse((ROOT / rel).read_text())
+        for node in ast.walk(tree):
+            values = []
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                values.append(node.value)
+            elif isinstance(node, ast.JoinedStr) and node.values \
+                    and isinstance(node.values[0], ast.Constant):
+                values.append(str(node.values[0].value))
+            for value in values:
+                match = header.match(value)
+                if match:
+                    found.add(match.group(1))
+            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant) \
+                    and isinstance(node.value.value, str) \
+                    and any(isinstance(t, ast.Name) and t.id.endswith("_HEADER")
+                            for t in node.targets):
+                found.add(node.value.value.split("\n", 1)[0])
+    return found
 
 
 def slug(text: str) -> str:
@@ -138,6 +171,19 @@ def static_runtime(name: str):
                    provider=fastloop.PolicyProvider(WORLDS / f"{name}.toml"))
 
 
+#: The one tool kind a seat, not the kernel, writes (``registry`` population tools).
+POPULATION_TOOL_KIND = "population"
+
+
+class UnknownSection(ValueError):
+    """A request carries a header line the corpus does not know: its text would fold into
+    the section before it."""
+
+
+#: A line that reads as a request section header: capitals, digits and spaces only.
+_HEADER_LINE = re.compile(r"^[A-Z][A-Z0-9 ]{1,40}$", re.M)
+
+
 def render_static(name: str, rt=None) -> list[Leaf]:
     """Every seat-visible string of ``name`` that exists before any seat acts."""
     from factorylab.cortex import schematics
@@ -145,6 +191,9 @@ def render_static(name: str, rt=None) -> list[Leaf]:
     from factorylab.settlement.vocabulary import COMMISSIONED_JUDGE_REFUSAL
 
     rt = rt or static_runtime(name)
+    # The kernel's own fixed tools (the connector fetch, treasury and web tools) are
+    # published on first use; render them as a seat sees them.
+    rt._ensure_connector_tool()
     leaves: list[Leaf] = []
     own = set(rt.population_tools)
     for aid, assembly in sorted(rt.assemblies.items()):
@@ -163,7 +212,9 @@ def render_static(name: str, rt=None) -> list[Leaf]:
         leaves.extend(flatten(f"{name}/institutions/{section}/",
                               _plain(rt.institution_section(section))))
     for tool_id, spec in sorted(rt.tool_specs.items()):
-        if tool_id in own or spec.get("kind") in ("population", "connector"):
+        # Excluded by provenance only: a population tool is the population's own text.
+        # Every kernel tool (connector.fetch included) is read.
+        if tool_id in own or spec.get("kind") == POPULATION_TOOL_KIND:
             continue
         leaves.extend(flatten(f"{name}/tools/{tool_id}/", _plain(spec)))
     leaves.append((f"{name}/refusal/judging/commissioned", COMMISSIONED_JUDGE_REFUSAL))
@@ -269,7 +320,15 @@ class Rendered:
 
 
 def split_request(text: str) -> dict[str, str]:
-    """The request's sections by header, in the order they were written."""
+    """The request's sections by header, in the order they were written.
+
+    Refuses (``UnknownSection``) a header line that is not one of ``REQUEST_HEADERS``: a
+    renamed or added section would otherwise fold its text into the section before it.
+    ``test_class2_static`` derives the headers from ``Request.sections`` itself and
+    fails when this list is not theirs."""
+    unknown = sorted({m.group(0) for m in _HEADER_LINE.finditer(text)} - set(REQUEST_HEADERS))
+    if unknown:
+        raise UnknownSection(f"request headers the corpus does not know: {unknown}")
     pattern = re.compile(r"^(" + "|".join(re.escape(h) for h in REQUEST_HEADERS) + r")$", re.M)
     marks = [(m.start(), m.group(1)) for m in pattern.finditer(text)]
     out: dict[str, str] = {}
@@ -326,8 +385,13 @@ def render_dynamic(name: str, *, ticks: int = 60) -> Rendered:
         rendered.status = "completed"
     except Exception as exc:  # noqa: BLE001 - what was rendered before a failure still counts
         rendered.status = f"failed: {type(exc).__name__}: {exc}"[:300]
+    # What the kernel writes is kernel text whoever else says it too; read only for a
+    # completed run (a failed one is refused whole by ``require_complete``).
+    kernel = ({t for _p, t in render_static(name)} | {t for _p, t in render_seat_text()}
+              if rendered.status == "completed" else set())
     rendered.leaves = [(p, t) for p, t in rendered.leaves
-                       if excluded(p) is None and not _authored(t, rendered.emitted)]
+                       if excluded(p) is None
+                       and not _population_authored(t, rendered.emitted, kernel)]
     return rendered
 
 
@@ -414,8 +478,10 @@ def render_governance(name: str) -> Rendered:
     except Exception as exc:  # noqa: BLE001 - what rendered before a failure still counts
         rendered.status = f"failed: {type(exc).__name__}: {exc}"[:300]
     rendered.leaves = [(p, t) for p, t in rendered.leaves
-                       if excluded(p) is None and not _authored(t, rendered.emitted)]
-    return rendered
+                       if excluded(p) is None
+                       and not _population_authored(t, rendered.emitted, frozenset())]
+    # A partial governance render is never returned: every caller gets the refusal.
+    return require_complete(rendered)
 
 
 #: Every kernel function that builds a request a seat is sent, by ``file::function``.
@@ -493,6 +559,9 @@ def _strings(value: Any) -> Iterator[str]:
             yield from _strings(item)
 
 
-def _authored(text: str, emitted: Iterable[str]) -> bool:
-    """Whether a leaf carries text the population itself wrote (provenance, not lint)."""
-    return any(len(s) >= 12 and s in text for s in emitted)
+def _population_authored(text: str, emitted: Iterable[str], kernel: Iterable[str]) -> bool:
+    """Whether a leaf is text the population wrote, by provenance: the leaf is a whole
+    string a seat emitted (its value carried into a request as written), and not a
+    string the kernel itself writes. A kernel string a seat echoes stays in the corpus,
+    and a leaf is never dropped because a seat's text is a substring of it."""
+    return text in set(emitted) and text not in set(kernel)

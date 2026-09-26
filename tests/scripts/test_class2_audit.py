@@ -2,10 +2,11 @@
 
 Phase-2 design B2, as amended by Astra H-2: one canary per rubric question Q3-Q10, and
 an audit is valid only if the auditor finds at least 7 of 8 and every mandatory one
-(Q6, Q9, Q10), flags at most 1 of 10 controls, and leaves nothing unread. The model call
+(Q6, Q7, Q9, Q10), flags at most 1 of 10 controls, and leaves nothing unread. The model call
 is the operator's; nothing here makes one.
 """
 
+import hashlib
 import json
 import os
 import subprocess
@@ -58,11 +59,16 @@ def _seat_text_scan():
     return class2_seat_text.scan()
 
 
+#: The history fixture's repository, for the gate's release check (set by ``history``).
+REPO: list = []
+
+
 @pytest.fixture(scope="module")
 def history(tmp_path_factory):
     """A repository with a base, a surface commit justified by a behaviour mix, and a
     commit that touches no seat-visible surface."""
     repo = tmp_path_factory.mktemp("repo")
+    REPO[:] = [repo]
     _git(repo, "init", "-q")
     base = _commit(repo, "README.md", "x\n", "base")
     surface = _commit(repo, "factorylab/cortex/schematics.py", "HOLD = 'hold'\n",
@@ -202,8 +208,8 @@ def test_the_canary_corpus_has_one_canary_per_question_and_three_mandatory():
     spec = tool.load_canaries()
     questions = [c["question"] for c in spec["canaries"]]
     assert questions == [f"Q{i}" for i in range(3, 11)]
-    assert {c["question"] for c in spec["canaries"] if c.get("mandatory")} == {"Q6", "Q9",
-                                                                                "Q10"}
+    assert {c["question"] for c in spec["canaries"] if c.get("mandatory")} == {
+        "Q6", "Q7", "Q9", "Q10"}
     assert len(spec["control_surfaces"]) == 10
 
 
@@ -581,12 +587,20 @@ def test_triage_rotates_the_family_across_releases(rendered, tmp_path, monkeypat
 # --- the release gate, bound to the key and its findings ----------------------------------------
 
 
-def _dispose(text, disposition="REJECT", reason="the auditor misread"):
-    lines = []
+def _dispose(text, disposition="REJECT", reason="the auditor misread", rejected=None):
+    """Every open row disposed of; each REJECT also recorded in ``rejected`` (the
+    protocol's rejected.jsonl), as the gate requires."""
+    lines, records = [], []
     for line in text.splitlines():
         if line.startswith("| ") and not line.startswith("| id ") and line.endswith("|  |  |"):
             line = line[:-len("|  |  |")] + f"| {disposition} | {reason} |"
+            cells = tool._cells(line)
+            records.append({"finding_id": cells[0], "path": cells[1].strip("`"),
+                            "reason": reason})
         lines.append(line)
+    if rejected is not None and disposition == "REJECT":
+        with rejected.open("a") as handle:
+            handle.writelines(json.dumps(r) + "\n" for r in records)
     return "\n".join(lines) + "\n"
 
 
@@ -606,25 +620,31 @@ def triaged(with_commit, tmp_path, monkeypatch):
     return out, key, tmp_path / f"{WORLD}.md", sha, samples, prov
 
 
-def _gate(triaged, world=WORLD, samples=None, prov=None, release=None):
+def _gate(triaged, world=WORLD, samples=None, prov=None, release=None, reviewed=None):
     out, key, path, _sha, s, p = triaged
     return tool.gate(world, path, out / "canary_key.json", samples or s, prov or p,
-                     release=release or key["release_commit"])
+                     release=release or key["release_commit"], repo=REPO[0],
+                     triage_sha256=reviewed or tool.sha256_file(path),
+                     rejected=path.parent / "rejected.jsonl")
 
 
-def test_the_provenance_finding_reaches_the_triage_and_the_gate(triaged):
+def test_the_provenance_finding_reaches_the_triage_and_the_gate(triaged, monkeypatch):
     """Codex P2: a flagged behaviour-mix commit is a HIGH finding the gate holds."""
     out, key, path, sha, samples, prov = triaged
+    monkeypatch.setattr(tool, "ROOT", REPO[0])  # the CLI gates its own repository
     text = path.read_text()
     assert f"`commit:{sha}` | P1 | BEHAVIOUR-MIX | HIGH |" in text
-    gate = ["gate", "--world", WORLD, "--key", str(out / "canary_key.json"),
-            "--samples", *map(str, samples), "--provenance-samples", *map(str, prov),
-            "--release", key["release_commit"]]
+    def gate():
+        return ["gate", "--world", WORLD, "--key", str(out / "canary_key.json"),
+                "--samples", *map(str, samples), "--provenance-samples", *map(str, prov),
+                "--release", key["release_commit"], "--rejected",
+                str(path.parent / "rejected.jsonl"),
+                "--triage-sha256", tool.sha256_file(path)]
     assert any("untriaged HIGH" in p for p in _gate(triaged))
-    assert tool.main(gate) == 1
-    path.write_text(_dispose(text))
+    assert tool.main(gate()) == 1
+    path.write_text(_dispose(text, rejected=path.parent / "rejected.jsonl"))
     assert _gate(triaged) == []
-    assert tool.main(gate) == 0
+    assert tool.main(gate()) == 0
 
 
 def test_the_gate_recomputes_the_findings_from_the_bound_samples(triaged, tmp_path):
@@ -632,7 +652,7 @@ def test_the_gate_recomputes_the_findings_from_the_bound_samples(triaged, tmp_pa
     the triage file records by hash, so rewriting the table (and its header) cannot drop
     a finding, and a sample file that changed is not the one the triage read."""
     out, key, path, sha, samples, prov = triaged
-    path.write_text(_dispose(path.read_text()))
+    path.write_text(_dispose(path.read_text(), rejected=path.parent / "rejected.jsonl"))
     assert _gate(triaged) == []
     assert any("'edition6-capital-loop'" in p for p in _gate(triaged, "edition6-capital-loop"))
     text = path.read_text()
@@ -663,7 +683,7 @@ def test_the_gate_recomputes_the_findings_from_the_bound_samples(triaged, tmp_pa
 def test_the_gate_recomputes_the_verdict(triaged, tmp_path):
     """A triage file that says valid, over samples whose audit is not, fails the gate."""
     out, key, path, _sha, samples, prov = triaged
-    path.write_text(_dispose(path.read_text()))
+    path.write_text(_dispose(path.read_text(), rejected=path.parent / "rejected.jsonl"))
     missing = {c["id"] for c in key["canaries"]} - {"canary-q6"}
     bad = [_sample(tmp_path / f"b{i}.jsonl", *_output(out, key, sample=i, canaries=missing))
            for i in (1, 2)]
@@ -875,12 +895,18 @@ def test_render_binds_the_release_commit_and_refuses_another(rendered, history, 
     assert not (tmp_path / "old").exists() and not (tmp_path / "dirty").exists()
 
 
-def test_the_gate_refuses_a_key_of_another_release(triaged):
+def test_the_gate_refuses_a_key_of_another_release(triaged, history):
     out, key, path, _sha, _samples, _prov = triaged
-    path.write_text(_dispose(path.read_text()))
+    path.write_text(_dispose(path.read_text(), rejected=path.parent / "rejected.jsonl"))
     assert _gate(triaged) == []
-    other = "0" * 40
-    assert any("not the release gated" in p for p in _gate(triaged, release=other))
+    _repo, base, _surface, _head = history
+    assert any("not the release gated" in p for p in _gate(triaged, release=base))
+
+
+def test_an_invalid_release_ref_is_refused_as_an_invalid_ref(triaged):
+    """Sol EXIT-3: a --release that names no commit is refused as such, never compared."""
+    with pytest.raises(tool.AuditInputInvalid, match="invalid ref"):
+        _gate(triaged, release="no-such-ref")
 
 
 
@@ -916,9 +942,11 @@ def test_one_quote_under_two_questions_is_two_findings_through_triage_and_gate(
 
     def gate():
         return tool.gate(WORLD, path, out / "canary_key.json", samples, prov,
-                         release=key["release_commit"])
+                         release=key["release_commit"], repo=REPO[0],
+                         triage_sha256=tool.sha256_file(path),
+                         rejected=path.parent / "rejected.jsonl")
 
-    disposed = _dispose(path.read_text())
+    disposed = _dispose(path.read_text(), rejected=path.parent / "rejected.jsonl")
     path.write_text(disposed)
     assert gate() == []
     q6_row = next(line for line in disposed.splitlines()
@@ -966,3 +994,185 @@ def test_a_q3_to_q5_finding_on_an_every_call_leaf_below_high_is_invalid(rendered
         assert any("is not 'HIGH'" in p for p in problems), problems
     assert tool.finding_problems(_finding(refusal, "Q4", severity="HIGH"), records)
     assert not tool.finding_problems(_finding(refusal, "Q4"), records)
+
+
+
+# --- Sol's pass on the audit tooling (b75003b) ----------------------------------------------
+
+
+def test_exit2_the_baseline_and_registry_are_written_together_or_not_at_all(tmp_path,
+                                                                            monkeypatch):
+    """Sol EXIT-2: a failure swapping the second file puts the first back: never new
+    surfaces with old findings."""
+    from tests.audit import class2_audit
+
+    one, two = tmp_path / "surfaces.toml", tmp_path / "findings.json"
+    one.write_text("old surfaces\n")
+    two.write_text("old findings\n")
+    real, calls = os.replace, {"n": 0}
+
+    def failing(src, dst):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise OSError("disk full")
+        return real(src, dst)
+
+    monkeypatch.setattr(class2_audit.os, "replace", failing)
+    with pytest.raises(OSError, match="disk full"):
+        class2_audit.write_together({one: "new surfaces\n", two: "new findings\n"})
+    assert (one.read_text(), two.read_text()) == ("old surfaces\n", "old findings\n")
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["findings.json", "surfaces.toml"]
+
+
+def test_exit1_a_partial_governance_render_raises_by_itself(monkeypatch):
+    """Sol EXIT-1: render_governance never returns a partial render to its caller."""
+    from factorylab.runtime.loop import Runtime
+    from tests.audit import class2_corpus
+
+    def fails(self, *args, **kwargs):
+        raise RuntimeError("the committee could not sit")
+
+    monkeypatch.setattr(Runtime, "_testify", fails)
+    with pytest.raises(class2_corpus.RenderFailed, match="the committee could not sit"):
+        class2_corpus.render_governance(WORLD)
+
+
+def test_cov2_every_surface_kind_is_described_and_an_unknown_one_is_refused():
+    """Sol COV-2: every kind the corpus renders has an audience and a reach; a kind the
+    tool does not know is refused, never given an empty audience."""
+    from tests.audit import class2_audit as registry
+
+    surfaces = registry.load_surfaces()
+    kinds = {s.split("/")[0] for s in surfaces["static"] + surfaces["rendered"]}
+    for kind in sorted(kinds | {"charter"}):
+        path = {"request": "w/request/judge/inputs/x", "genesis": "w/genesis/seat/lens",
+                "seat_text": "kernel/seat_text/sink/x/abcd"}.get(kind, f"w/{kind}/x")
+        described = tool.describe(path)
+        assert described["audience"] and described["frequency"] != "unknown", kind
+    with pytest.raises(tool.AuditInputInvalid, match="unknown surface kind"):
+        tool.describe("w/inference_hint/x")
+
+
+def test_bnd2_the_canary_score_is_the_headers_field_not_a_substring():
+    """Sol BND-2: a quote reading "valid: True" does not stand in for the header."""
+    body = ("# Class 2 audit triage: scripted\n\n- Auditor family: gemini\n"
+            "- Canaries found: 6/8; controls flagged: 0/10; valid: False\n\n"
+            "| id | path | question | class | severity | confidence | quote | disposition "
+            "| reason |\n|---|---|---|---|---|---|---|---|---|\n"
+            "| f1 | `scripted/tools/a` | Q8 | C1 | LOW | low | valid: True |  |  |\n")
+    assert any("canary score" in p for p in tool.release_gate(body))
+    assert not any("canary score" in p for p in tool.release_gate(
+        body.replace("6/8; controls flagged: 0/10; valid: False",
+                     "8/8; controls flagged: 0/10; valid: True")))
+
+
+def test_bnd3_the_previous_corpus_is_required_and_verified(rendered, history, tmp_path):
+    """Sol BND-3: the key names the previous corpus it diffed against; a key without the
+    field, or a previous corpus changed since, is refused."""
+    out, _key = rendered
+    repo, _base, surface, head = history
+    prior = tmp_path / "prior.jsonl"
+    prior.write_bytes((out / "release_corpus.jsonl").read_bytes())
+    release = tmp_path / "release"
+    tool.render([WORLD], release, seed=7, rendered=False, essay=ESSAY,
+                release_range=f"{surface}..{head}", repo=repo, previous_corpus=prior)
+    key, _records = tool.load_key(release / "canary_key.json")
+    assert key["previous_corpus"] == str(prior.resolve())
+    prior.write_text(prior.read_text() + "\n")
+    with pytest.raises(tool.AuditInputInvalid, match="previous corpus"):
+        tool.load_key(release / "canary_key.json")
+    bare = json.loads((out / "canary_key.json").read_text())
+    bare.pop("previous_corpus")
+    for name in ("auditor_input.jsonl", "prompt.md", "provenance_prompt.md"):
+        (tmp_path / name).write_bytes((out / name).read_bytes())
+    (tmp_path / "canary_key.json").write_text(json.dumps(bare))
+    with pytest.raises(tool.AuditInputInvalid, match="records no previous corpus"):
+        tool.load_key(tmp_path / "canary_key.json")
+
+
+def test_rub2_a_malformed_provenance_finding_invalidates_the_audit(with_commit,
+                                                                   monkeypatch):
+    """Sol RUB-2: provenance findings pass their own schema at validate time."""
+    out, key = with_commit
+    (sha,) = [c["sha"] for c in key["provenance_commits"]]
+    good = [_provenance(key, sample=i, flag={sha}) for i in (1, 2)]
+    assert _verdict(out, key, provenance=good)["valid"]
+    original = tool.provenance_findings
+
+    def malformed(samples):
+        return [{**f, "severity": "LOW", "quote": ""} for f in original(samples)]
+
+    monkeypatch.setattr(tool, "provenance_findings", malformed)
+    verdict = _verdict(out, key, provenance=good)
+    assert not verdict["valid"]
+    assert any(p.startswith(f"provenance finding commit:{sha}") for p in verdict["problems"])
+
+
+def test_can1_controls_rotate_with_the_release_and_repeat_within_it(rendered):
+    """Sol CAN-1: controls are drawn by the release commit: reproducible for one release,
+    different across releases."""
+    out, key = rendered
+    planted = {c["leaf_id"] for c in key["canaries"]}
+    base = [r for r in _records(out) if r["leaf_id"] not in planted]
+    _, one = tool.plant(base, seed=7, world=WORLD, control_seed="a" * 40)
+    _, again = tool.plant(base, seed=7, world=WORLD, control_seed="a" * 40)
+    _, other = tool.plant(base, seed=7, world=WORLD, control_seed="b" * 40)
+    assert one["controls"] == again["controls"]
+    assert one["controls"] != other["controls"]
+
+
+def test_can2_a_canary_is_added_text_inside_the_changed_block(rendered, history, tmp_path):
+    """Sol CAN-2: a canary reads as new text wherever it lands, and it lands inside the
+    block of added and changed leaves, so no added leaf stands outside that block."""
+    release, _changed, _added = _diffed(rendered, history, tmp_path)
+    key = json.loads((release / "canary_key.json").read_text())
+    planted = {c["leaf_id"] for c in key["canaries"]}
+    records = _records(release)
+    boundary = sum(1 for r in records if r["change"] in ("added", "changed"))
+    assert all(r["change"] in ("added", "changed") for r in records[:boundary])
+    assert not any(r["change"] in ("added", "changed") for r in records[boundary:])
+    assert all(records[i]["change"] == "added" for i in range(len(records))
+               if records[i]["leaf_id"] in planted)
+
+
+def test_can3_missing_the_q7_canary_invalidates_the_audit(rendered):
+    """The architect's ruling: Q7 (false physics) is mandatory."""
+    out, key = rendered
+    found = {c["id"] for c in key["canaries"]} - {"canary-q7"}
+    verdict = _verdict(out, key, canaries=found)
+    assert not verdict["valid"] and verdict["canaries_found"] == "7/8"
+    assert any("mandatory" in p for p in verdict["problems"])
+
+
+
+def test_bnd1_a_disposition_must_be_one_the_rubric_allows_and_the_protocol_backs(triaged):
+    """Sol BND-1: the gate reads each disposition against the finding it names: CHARTER is
+    never a kernel leaf's, ALLOW needs an allowlist entry covering the finding, REJECT a
+    rejected.jsonl record, a provenance finding is FIX or REJECT; and the triage file is
+    the one reviewed (its sha256 is a gate input)."""
+    out, key, path, sha, samples, prov = triaged
+    rejected = path.parent / "rejected.jsonl"
+    text = path.read_text()
+    reviewed = _dispose(text, rejected=rejected)
+    path.write_text(reviewed)
+    assert _gate(triaged) == []
+    kernel_row = next(line for line in reviewed.splitlines() if "| Q4 | C1 | HIGH |" in line)
+    commit_row = next(line for line in reviewed.splitlines() if f"commit:{sha}" in line)
+    for row, replacement, why in (
+            (kernel_row, "| CHARTER |", "not a disposition the rubric allows"),
+            (kernel_row, "| ALLOW |", "no allowlist entry"),
+            (commit_row, "| ALLOW |", "not a disposition the rubric allows")):
+        path.write_text(reviewed.replace(row, row.replace("| REJECT |", replacement)))
+        assert any(why in p for p in _gate(triaged)), why
+    # A REJECT with no rejected.jsonl record is not the protocol's REJECT.
+    path.write_text(reviewed)
+    rejected.write_text("")
+    assert any("not recorded in rejected.jsonl" in p for p in _gate(triaged))
+    # An edit after review is refused: the reviewed sha256 is a gate input.
+    _dispose(text, rejected=rejected)
+    as_reviewed = hashlib.sha256(reviewed.encode()).hexdigest()
+    path.write_text(reviewed.replace("the auditor misread", "the auditor misread twice"))
+    assert any("not the one reviewed" in p for p in _gate(triaged, reviewed=as_reviewed))
+    with pytest.raises(tool.AuditInputInvalid, match="reviewed triage"):
+        tool.gate(WORLD, path, out / "canary_key.json", samples, prov,
+                  release=key["release_commit"], repo=REPO[0])

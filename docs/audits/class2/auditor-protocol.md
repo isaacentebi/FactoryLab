@@ -125,11 +125,14 @@ The audit is **valid** only if all of these hold (`scripts/class2_audit.py valid
   every one of them must appear in the summary's `read` set or its `unread` list; any
   unread leaf fails the audit, and `leaves_total` and `leaves_read` must match those
   sets;
-- at least **7 of the 8** canaries are found under their question or class;
-- each **mandatory** canary is found: **Q6** (salience), **Q9** (disclosure) and **Q10**
-  (standing label). These are the classes the closed lexicon cannot read at all, so they
-  fall entirely on this reader, and a miss there invalidates the audit whatever the
-  overall score (Astra H-2);
+- at least **7 of the 8** canaries are found under their question and class;
+- each **mandatory** canary is found: **Q6** (salience), **Q7** (false physics), **Q9**
+  (disclosure) and **Q10** (standing label). Q6, Q9 and Q10 are the classes the closed
+  lexicon cannot read at all, so they fall entirely on this reader (Astra H-2); Q7 is
+  mandatory by the architect's ruling, because published = enforced is AGENTS rule 3,
+  the core of the hard cast, and an auditor that misses a contradiction between a
+  surface and the physics must not pass calibration. A miss on any of the four
+  invalidates the audit whatever the overall score;
 - at most **1 of the 10** controls is flagged.
 
 An invalid audit is rerun with the next family on the rotation. Its findings are not

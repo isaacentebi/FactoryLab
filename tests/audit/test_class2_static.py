@@ -409,3 +409,57 @@ def test_every_literal_a_seat_receives_in_a_payload_is_in_the_corpus(seat):
                for text, src in payloads)
     # A value added after the dict was bound (payload["account"] = {...}) is read too.
     assert ("unavailable", "factorylab/runtime/loop.py::Runtime._producer_step") in payloads
+
+
+
+# --- Sol's coverage pass on the audit tooling (b75003b) --------------------------------------
+
+
+def test_cov1_every_kernel_tool_spec_is_read_connector_fetch_included(static):
+    """Sol COV-1: the connector fetch tool is the kernel's (``cortex.tools.connector_spec``);
+    only a population tool is excluded, by provenance. A world replaying a tape publishes
+    no fetch (``_ensure_connector_tool``), so it has none to read."""
+    for world, leaves in static.items():
+        rt = corpus.static_runtime(world)
+        rt._ensure_connector_tool()
+        kernel_tools = {tool_id for tool_id, spec in rt.tool_specs.items()
+                        if spec.get("kind") != corpus.POPULATION_TOOL_KIND
+                        and tool_id not in rt.population_tools}
+        read = {path.split("/")[2] for path, _text in leaves if path.split("/")[1] == "tools"}
+        assert kernel_tools <= read, (world, sorted(kernel_tools - read))
+        if "connector.fetch" in kernel_tools:
+            assert (f"{world}/tools/connector.fetch/description",
+                    "GET a registered connector path as text") in leaves
+
+
+def test_cov3_the_request_headers_are_the_builders_own_and_an_unknown_one_is_refused():
+    """Sol COV-3: the headers are read from the request builders' code, and a header the
+    corpus does not know is refused rather than folded into its neighbour (this found
+    ``OPERATING ACCESS``, a grounded judge's section, folded into WORLD CONTRACT)."""
+    assert corpus.request_headers_in_code() == set(corpus.REQUEST_HEADERS)
+    with pytest.raises(corpus.UnknownSection, match="TOOL CONTEXT"):
+        corpus.split_request("REQUEST\nDo nothing.\nTOOL CONTEXT\nHidden text.\n")
+    parts = corpus.split_request("OPERATING ACCESS\nBASE CAPABILITIES\nOne line.\n")
+    assert set(parts) == {"OPERATING ACCESS", "BASE CAPABILITIES"}
+
+
+def test_cov4_population_text_is_dropped_by_provenance_never_by_substring():
+    """Sol COV-4: a kernel string a seat echoes stays; a leaf is dropped only when it is a
+    whole string the population emitted and not one the kernel writes."""
+    kernel = {"publish the final answer"}
+    emitted = {"I will publish the final answer", "publish the final answer"}
+    assert not corpus._population_authored("publish the final answer", emitted, kernel)
+    assert not corpus._population_authored("Then publish the final answer now.", emitted,
+                                           kernel)
+    assert corpus._population_authored("I will publish the final answer", emitted, kernel)
+
+
+def test_cov5_a_tool_result_under_any_key_is_seat_text(seat):
+    """Sol COV-5: a successful tool result's text is read whatever its key: every value a
+    tool entry point returns is a payload."""
+    payloads = {(t.source, t.text) for t in seat.texts if t.kind == "payload"}
+    # ``{"status": "rejected", "error": reason}``: the status is read too, not only the
+    # error, and so is every other key of a result a tool returns.
+    assert ("factorylab/runtime/compute.py::ComputeMixin._run_tool.execute",
+            "rejected") in payloads
+    assert not any(t.kind == "result" and t.text == "rejected" for t in seat.texts)

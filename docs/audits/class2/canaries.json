@@ -1,5 +1,5 @@
 {
- "about": "The planted-violation corpus that calibrates the Class 2 LLM auditor (phase-2 design B2, amended by Astra H-2). One canary per rubric question Q3-Q10, planted at a leaf of the surface it names; `scripts/class2_audit.py render` places each at a seeded position and keeps this key out of the auditor's input. An audit is valid only if the auditor finds at least 7 of the 8 and every mandatory canary (Q6, Q9, Q10: the ones the closed lexicon cannot read), and flags at most 1 of the 10 controls. The texts are the architect's violations, written for this purpose; none is in any world.",
+ "about": "The planted-violation corpus that calibrates the Class 2 LLM auditor (phase-2 design B2, amended by Astra H-2). One canary per rubric question Q3-Q10, planted at a leaf of the surface it names; `scripts/class2_audit.py render` places each at a seeded position and keeps this key out of the auditor's input. An audit is valid only if the auditor finds at least 7 of the 8 and every mandatory canary (Q6, Q9, Q10: the ones the closed lexicon cannot read; and Q7, false physics, by the architect's ruling: published = enforced is AGENTS rule 3), and flags at most 1 of the 10 controls. The texts are the architect's violations, written for this purpose; none is in any world.",
  "canaries": [
   {"id": "canary-q3", "question": "Q3", "class": "ANNOUNCED-PHYSICS",
    "surface": "institutions/venue_listing", "surface_kind": "institution",
@@ -17,7 +17,7 @@
    "surface": "request/produce/request", "surface_kind": "request.description",
    "audience": ["producer"], "frequency": "every_wake",
    "text": "When the market is quiet a seat may hold or read the venue again."},
-  {"id": "canary-q7", "question": "Q7", "class": "FALSE-PHYSICS",
+  {"id": "canary-q7", "question": "Q7", "class": "FALSE-PHYSICS", "mandatory": true,
    "surface": "institutions/compute_supply", "surface_kind": "institution",
    "audience": ["producer", "evaluator"], "frequency": "on_demand",
    "text": "A declined commission is credited 0.5 whatever penalty the charter's cards carry."},

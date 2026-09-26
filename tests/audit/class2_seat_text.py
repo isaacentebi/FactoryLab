@@ -17,10 +17,11 @@ reached by a short run, so it is found here, statically, in the source:
 * **Sources.** On those paths: every ``raise``'s message and every error/reason value;
   anywhere: every sink's reason argument; and every string a *reason function* returns
   (a function whose result is placed in a seat position).
-* **Payloads.** Every literal a seat receives in a request or its inbox, whatever its
-  key: the arguments of every payload call (``PAYLOAD_CALLS``: a request's description,
-  inputs and schema; a continuation's inputs; an inbox outcome; a fact noted to the
-  owner), followed through dict values, list items, ``**`` spreads, local bindings and
+* **Payloads.** Every literal a seat receives in a request, a tool result or its inbox,
+  whatever its key: the arguments of every payload call (``PAYLOAD_CALLS``: a request's
+  description, inputs and schema; a continuation's inputs; an inbox outcome; a fact
+  noted to the owner) and every value a tool entry point returns (``ROOTS``, success
+  and refusal alike), followed through dict values, list items, ``**`` spreads, local bindings and
   what is added to them, and into the return values of every function called there.
 
 Calls are resolved as far as the source says: ``self.f`` within the runtime's mixins to
@@ -685,6 +686,12 @@ class Scan:
             for node in _own_nodes(fn.node):
                 if isinstance(node, ast.Call):
                     work += [(key, arg) for arg in self._payload_args(node)]
+        # A tool's result is a payload whatever its keys, on success as on refusal: the
+        # values the tool entry points (and the callbacks they run) return.
+        for root in ROOTS:
+            for key in [root, *self.children.get(root, ())]:
+                work += [(key, r.value) for r in _own_nodes(self.fns[key].node)
+                         if isinstance(r, ast.Return) and r.value is not None]
         seen: set[tuple[str, int]] = set()
         builders: set[str] = set()
         renderers: dict[str, Renderer] = {}

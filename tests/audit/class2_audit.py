@@ -8,8 +8,10 @@ rewrite after the architect's triage). Nothing here changes seat-visible text.
 from __future__ import annotations
 
 import json
+import os
 import tomllib
 from collections.abc import Iterable
+from pathlib import Path
 
 from tests.audit import class2_corpus as corpus
 from tests.audit import class2_lexicon as lexicon
@@ -148,7 +150,7 @@ def write_baseline(worlds: Iterable[str], *, rendered: bool = True) -> dict:
     lines.append("sources = [")
     lines += [f'  "{s}",' for s in sorted(seat.sources)]
     lines += ["]"]
-    SURFACES.write_text("\n".join(lines) + "\n")
+    registry = "\n".join(lines) + "\n"
     document = {
         "status": ("Untriaged. The Class 2 audit's findings await the architect's ruling for "
                    "the edition-7 text wave; no seat-visible text is rewritten on the branch "
@@ -159,5 +161,39 @@ def write_baseline(worlds: Iterable[str], *, rendered: bool = True) -> dict:
         "findings": sorted(out, key=lambda r: (r["world"], r["surface"], r["rule"],
                                                r["path"], r["quote"])),
     }
-    lexicon.BASELINE.write_text(json.dumps(document, indent=1, ensure_ascii=False) + "\n")
+    write_together({SURFACES: registry,
+                    lexicon.BASELINE: json.dumps(document, indent=1, ensure_ascii=False)
+                    + "\n"})
     return document
+
+
+def write_together(files: dict[Path, str]) -> None:
+    """Write every file, or none: each is written to a temporary file beside it first,
+    then each is swapped in with ``os.replace``; if a swap fails, the files already
+    swapped are put back as they were, so the registry and the findings never disagree
+    on disk (a partial rewrite would pair new surfaces with old findings)."""
+    staged: list[tuple[Path, Path]] = []
+    try:
+        for path, text in files.items():
+            temporary = path.with_name(f".{path.name}.tmp")
+            temporary.write_text(text)
+            staged.append((path, temporary))
+    except BaseException:
+        for _path, temporary in staged:
+            temporary.unlink(missing_ok=True)
+        raise
+    previous = {path: path.read_bytes() if path.exists() else None for path, _ in staged}
+    swapped: list[Path] = []
+    try:
+        for path, temporary in staged:
+            os.replace(temporary, path)
+            swapped.append(path)
+    except BaseException:
+        for path in swapped:
+            if previous[path] is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.write_bytes(previous[path])
+        for _path, temporary in staged:
+            temporary.unlink(missing_ok=True)
+        raise

@@ -32,7 +32,7 @@ does everything around that call, offline:
             and severity the rubric's); every summary covers every leaf the key records
             (none unread, none unaccounted for) and counts its findings by class; every
             provenance sample answers every commit once; at least 7 of the 8 canaries
-            are found in the union and every mandatory one (Q6, Q9, Q10) is; and at most
+            are found in the union and every mandatory one (Q6, Q7, Q9, Q10) is; and at most
             1 of 10 controls is flagged. An invalid audit is rerun with the next family.
   triage    From a valid audit, write ``docs/audits/class2/<world>.md``: one row per
             finding the world owns, that world's findings of the union (a finding one
@@ -109,6 +109,10 @@ TRIAGE_DIR = ROOT / "docs/audits/class2"
 MIN_CANARIES = 7
 #: At most this many of the clean controls may be flagged.
 MAX_CONTROLS = 1
+#: The canaries an audit must find whatever its score: salience (Q6), false physics
+#: (Q7: published = enforced is AGENTS rule 3, the hard cast), disclosure (Q9) and the
+#: standing label (Q10), which the closed lexicon cannot read.
+MANDATORY = frozenset({"Q6", "Q7", "Q9", "Q10"})
 #: The auditor is run this many times; the union of the samples is triaged.
 SAMPLES = 2
 #: The families that author kernel text (Claude through Claude Code, GPT through Codex),
@@ -152,7 +156,13 @@ def describe(path: str) -> dict[str, Any]:
                 "frequency": "on that refusal or error"}
     if kind == "system":
         return {"surface_kind": "system", "audience": ["every role"], "frequency": "every call"}
-    return {"surface_kind": kind, "audience": [], "frequency": "unknown"}
+    if kind == "charter":
+        return {"surface_kind": f"charter.{parts[2].split('[')[0] if len(parts) > 2 else ''}",
+                "audience": ["every role"],
+                "frequency": "every wake (the world contract and the cards it prices)"}
+    # A surface kind this tool does not know has no audience or reach it could tell the
+    # auditor: refused, so a new kind is described before it is audited.
+    raise AuditInputInvalid(f"unknown surface kind {kind!r} at {path!r}: describe() needs it")
 
 
 def corpus_records(worlds: list[str], *, rendered: bool) -> list[dict]:
@@ -243,15 +253,19 @@ def changed_first(records: list[dict], diff: dict[str, Any]) -> tuple[list[dict]
 
 
 def plant(records: list[dict], *, seed: int, world: str, changed: int | None = None,
-          spec: dict | None = None) -> tuple[list[dict], dict]:
+          spec: dict | None = None,
+          control_seed: str = "") -> tuple[list[dict], dict]:
     """Insert the canaries at seeded positions and choose the controls; return the key.
 
-    ``changed`` is the size of the changed block that leads ``records`` (``changed_first``).
-    A canary takes the change tag of the block it lands in, so a planted leaf reads like
-    its neighbours: ``added`` inside the changed block, ``unchanged`` after it (and
-    ``added`` throughout when no previous corpus was given: ``changed`` is None).
-    Every control surface must name a kernel leaf of ``world``: the calibration bar
-    reads ten controls, never fewer.
+    A canary is new text, so it is tagged ``added`` wherever it is planted, and it is
+    planted inside the block of added and changed leaves that leads ``records``
+    (``changed``, its size; ``None`` when no previous corpus was given and every leaf is
+    added): an ``added`` leaf never stands outside that block, so neither its tag nor
+    its position sets it apart. (Tagging it ``changed`` would: a changed leaf's diff
+    entry shows the text it replaced, and a canary replaced none.) Each control is
+    drawn, reproducibly, from its surface's kernel leaves by ``control_seed`` (the
+    release commit), so controls rotate across releases. Every control surface must
+    name a kernel leaf of ``world``: the calibration bar reads ten controls, never fewer.
     """
     spec = spec if spec is not None else load_canaries()
     rng = Random(seed)
@@ -261,15 +275,13 @@ def plant(records: list[dict], *, seed: int, world: str, changed: int | None = N
     for canary in spec["canaries"]:
         path = f"{world}/{canary['surface']}"
         record = {"leaf_id": leaf_id(path, canary["text"]), "world": world, "path": path,
-                  "text": canary["text"], "provenance": "kernel", **describe(path)}
-        position = rng.randrange(len(out) + 1)
+                  "text": canary["text"], "provenance": "kernel", **describe(path),
+                  "change": "added"}
         if boundary is None:
-            record["change"] = "added"
-        elif position < boundary:
-            record["change"] = "added"
-            boundary += 1
+            position = rng.randrange(len(out) + 1)
         else:
-            record["change"] = "unchanged"
+            position = rng.randrange(boundary + 1)
+            boundary += 1
         out.insert(position, record)
         key["canaries"].append({"id": canary["id"], "leaf_id": record["leaf_id"],
                                 "path": path, "question": canary["question"],
@@ -277,11 +289,13 @@ def plant(records: list[dict], *, seed: int, world: str, changed: int | None = N
                                 "mandatory": bool(canary.get("mandatory"))})
     for surface in spec["control_surfaces"]:
         prefix = f"{world}/{surface}"
-        match = next((r for r in sorted(records, key=lambda r: r["path"])
-                      if r["provenance"] == "kernel" and r["path"].startswith(prefix)), None)
-        if match is None:
+        matches = sorted((r for r in records
+                          if r["provenance"] == "kernel" and r["path"].startswith(prefix)),
+                         key=lambda r: (r["path"], r["leaf_id"]))
+        if not matches:
             raise AuditInputInvalid(f"the control surface {surface!r} names no leaf of "
                                     f"{world}")
+        match = Random(f"{control_seed}:{world}:{surface}").choice(matches)
         key["controls"].append({"leaf_id": match["leaf_id"], "path": match["path"]})
     # The trusted record of what is under audit: every leaf the auditor must answer,
     # canaries included. ``validate`` reads the auditor's read set against this, never
@@ -421,7 +435,7 @@ def write_provenance_prompt(out: Path, provenance: str, *, provenance_id: str) -
              "```json",
              '{"sha": "<the full commit sha>", "behaviour_mix": true, '
              '"quote": "<the message\'s own words, when true>", "rationale": "..."}',
-             f'{{"summary": true, "provenance_id": "{provenance_id}", "sample": 1, '
+             f'{{"summary": true, "provenance_id": "{provenance_id}", "sample": <1 or 2>, '
              '"commits_read": ["<every sha above>"]}',
              "```", "",
              f"`provenance_id` is `{provenance_id}`. `sample` is 1 on the first run and "
@@ -529,7 +543,7 @@ def release_commit(repo: Path, release_range: str) -> str:
 
 def load_canaries() -> dict:
     """``canaries.json``, refused unless it is the protocol's calibration set: one canary
-    per question Q3-Q10 with that question's class, Q6/Q9/Q10 and only they mandatory,
+    per question Q3-Q10 with that question's class, Q6/Q7/Q9/Q10 and only they mandatory,
     and ten distinct control surfaces."""
     spec = json.loads(CANARIES.read_text())
     problems = []
@@ -544,8 +558,8 @@ def load_canaries() -> dict:
             problems.append(f"{c.get('id')}: no text")
         if not isinstance(c.get("surface"), str) or not c["surface"]:
             problems.append(f"{c.get('id')}: no surface")
-    if {c.get("question") for c in canaries if c.get("mandatory")} != {"Q6", "Q9", "Q10"}:
-        problems.append("the mandatory canaries are not exactly Q6, Q9 and Q10")
+    if {c.get("question") for c in canaries if c.get("mandatory")} != MANDATORY:
+        problems.append(f"the mandatory canaries are not exactly {sorted(MANDATORY)}")
     surfaces = spec.get("control_surfaces") or []
     if len(surfaces) != 10 or len(set(surfaces)) != 10:
         problems.append("the control surfaces are not ten distinct surfaces")
@@ -667,7 +681,8 @@ def render(worlds: list[str], out: Path, *, seed: int, rendered: bool, release_r
     diff = corpus_diff(prior, records)
     ordered, changed = changed_first(records, diff)
     planted, key = plant(ordered, seed=seed, world=worlds[0],
-                         changed=changed if prior is not None else None, spec=spec)
+                         changed=changed if prior is not None else None, spec=spec,
+                         control_seed=released)
     out.mkdir(parents=True, exist_ok=True)
     with (out / "auditor_input.jsonl").open("w") as handle:
         for record in planted:
@@ -691,6 +706,8 @@ def render(worlds: list[str], out: Path, *, seed: int, rendered: bool, release_r
         "release_corpus_sha": sha256_file(out / "release_corpus.jsonl"),
         "previous_corpus_sha": (sha256_file(previous_corpus)
                                 if previous_corpus is not None else None),
+        "previous_corpus": (str(Path(previous_corpus).resolve())
+                            if previous_corpus is not None else None),
         "essay_sha": sha256_file(essay) if essay is not None and essay.exists() else None,
     })
     (out / "canary_key.json").write_text(json.dumps(key, indent=1, sort_keys=True) + "\n")
@@ -817,6 +834,15 @@ def load_key(path: Path) -> tuple[dict, list[dict]]:
     bad = [n for n, t in required.items() if not isinstance(key.get(n), t)]
     if bad or key.get("schema") != KEY_SCHEMA:
         raise AuditInputInvalid(f"the key is not a schema-{KEY_SCHEMA} key: {bad}")
+    if "previous_corpus_sha" not in key or "previous_corpus" not in key:
+        raise AuditInputInvalid("the key records no previous corpus (null for a first audit)")
+    if (key["previous_corpus_sha"] is None) != (key["previous_corpus"] is None):
+        raise AuditInputInvalid("the key's previous corpus and its hash disagree")
+    if key["previous_corpus"] is not None:
+        prior = Path(key["previous_corpus"])
+        if not prior.exists() or sha256_file(prior) != key["previous_corpus_sha"]:
+            raise AuditInputInvalid("the previous corpus the diff was made against is not "
+                                    "the one the key records")
     for name, field in (("auditor_input.jsonl", "corpus_sha"), ("prompt.md", "prompt_sha"),
                         ("provenance_prompt.md", "provenance_prompt_sha")):
         beside = path.parent / name
@@ -1002,6 +1028,33 @@ def provenance_findings(samples: list[tuple[list[dict], dict | None]]) -> list[d
     return out
 
 
+def provenance_finding_problems(f: dict, key: dict) -> list[str]:
+    """Why a provenance finding is malformed (none when it is sound): its path names a
+    commit the prompt asked about and its id is that path's; it is P1, BEHAVIOUR-MIX,
+    HIGH; its quote is the commit message's own words; it has a rationale; it counts
+    its samples and says whether they all agreed."""
+    messages = {c["sha"]: c["message"] for c in key["provenance_commits"]}
+    problems = []
+    path = f.get("path")
+    sha = path.removeprefix("commit:") if isinstance(path, str) else None
+    if not isinstance(path, str) or not path.startswith("commit:") or sha not in messages:
+        return [f"the path {path!r} names no commit asked about"]
+    if f.get("finding_id") != leaf_id(path, ""):
+        problems.append("finding_id is not the commit path's id")
+    for name, want in PROVENANCE.items():
+        if f.get(name) != want:
+            problems.append(f"{name} {f.get(name)!r} is not {want!r}")
+    quote = f.get("quote")
+    if not isinstance(quote, str) or not quote.strip() or quote not in messages[sha]:
+        problems.append("the quote is not the commit message's own words")
+    if not isinstance(f.get("rationale"), str):
+        problems.append("no rationale")
+    if not isinstance(f.get("samples"), int) or isinstance(f.get("samples"), bool) \
+            or not isinstance(f.get("low_confidence"), bool):
+        problems.append("samples or low_confidence malformed")
+    return problems
+
+
 def _sample_ids(samples: list[tuple[list, dict | None]]) -> list:
     return [s.get("sample") if isinstance(s, dict) else None for _rows, s in samples]
 
@@ -1030,6 +1083,9 @@ def audit_verdict(samples: list[tuple[list[dict], dict | None]],
     for i, (rows, summary) in enumerate(provenance, 1):
         problems += [f"provenance sample {i}: {p}"
                      for p in provenance_problems(rows, summary, key)]
+    for f in provenance_findings(provenance):
+        problems += [f"provenance finding {f.get('path')}: {p}"
+                     for p in provenance_finding_problems(f, key)]
     findings = union(samples)
 
     def flagged(target: dict) -> list[dict]:
@@ -1177,7 +1233,10 @@ def release_gate(text: str, *, expected: list[dict] | None = None) -> list[str]:
     if expected is None:
         if not header.get("Auditor family"):
             problems.append("the triage file records no auditor family")
-        if "valid: True" not in text:
+        # The header's own field, parsed; never a substring anywhere in the file.
+        score = re.fullmatch(r"(\d+)/(\d+); controls flagged: (\d+)/(\d+); valid: (True|False)",
+                             header.get("Canaries found", ""))
+        if score is None or score.group(5) != "True":
             problems.append("the triage file records no valid canary score")
     rows = table_rows(text)
     if expected is not None:
@@ -1215,13 +1274,57 @@ def release_gate(text: str, *, expected: list[dict] | None = None) -> list[str]:
     return problems
 
 
+def allowed_dispositions(finding: dict) -> frozenset[str]:
+    """The dispositions the rubric allows a finding: a charter card or norm is sent to
+    the charter (never FIX); a kernel leaf is FIX, ALLOW or REJECT (never CHARTER); a
+    commit the provenance pass flagged is FIX or REJECT (an allowlist excuses text, not
+    a commit's reasons)."""
+    if finding.get("provenance_pass"):
+        return frozenset({"FIX", "REJECT"})
+    if "/charter/" in str(finding.get("path", "")):
+        return frozenset({"ALLOW", "REJECT", "CHARTER"})
+    return frozenset({"FIX", "ALLOW", "REJECT"})
+
+
+def disposition_problems(text: str, expected: list[dict], *, allowlist: dict,
+                         rejected: list[dict]) -> list[str]:
+    """Why a row's disposition is not one the rubric allows its finding, or is not
+    backed where the protocol says it lands: an ALLOW by an allowlist entry covering
+    the finding's path and quote; a REJECT by a ``rejected.jsonl`` row naming the
+    finding with its reason."""
+    import fnmatch
+
+    want = {finding_identity(f): f for f in expected}
+    problems = []
+    rejected_ids = {(r.get("finding_id"), r.get("path")) for r in rejected}
+    for row in table_rows(text):
+        ident = (row.get("id", ""), row.get("question", ""), row.get("class", ""))
+        f = want.get(ident)
+        disposition = row.get("disposition", "").upper()
+        if f is None or not disposition:
+            continue
+        if disposition not in allowed_dispositions(f):
+            problems.append(f"{ident}: {disposition} is not a disposition the rubric allows "
+                            f"this finding ({sorted(allowed_dispositions(f))})")
+        if disposition == "ALLOW" and not any(
+                fnmatch.fnmatchcase(str(f.get("path")), entry.get("path", ""))
+                and entry.get("quote", "\0") in str(f.get("quote", ""))
+                for entry in allowlist.get("allow", ())):
+            problems.append(f"{ident}: ALLOW with no allowlist entry covering its path and "
+                            "quote")
+        if disposition == "REJECT" and (f.get("finding_id"), f.get("path")) not in rejected_ids:
+            problems.append(f"{ident}: REJECT not recorded in rejected.jsonl")
+    return problems
+
+
 def _hashes(value: str | None) -> list[str]:
     return sorted(h.strip() for h in (value or "").split(",") if h.strip())
 
 
 def gate(world: str, triage: Path, key_path: Path, samples: list[Path],
          provenance: list[Path], *, release: str | None = None,
-         repo: Path | None = None) -> list[str]:
+         repo: Path | None = None, triage_sha256: str | None = None,
+         rejected: Path | None = None) -> list[str]:
     """The release gate for ``world``: recomputed from bound sources, never read from a
     stored result.
 
@@ -1234,20 +1337,28 @@ def gate(world: str, triage: Path, key_path: Path, samples: list[Path],
     audit the world (``family_refusal``, less the rotation, which the triage checked
     against the file it replaced); and the findings the world owns are recomputed from
     the samples (``world_findings``), each needing exactly one row with its severity,
-    question and class, and each HIGH or MED one a disposition (``release_gate``).
+    question and class, and each HIGH or MED one a disposition (``release_gate``) the
+    rubric allows that finding and the protocol backs (``disposition_problems``: an
+    ALLOW by the allowlist, a REJECT by ``rejected.jsonl``). The triage file is the one
+    reviewed: its sha256 is a gate input (``triage_sha256``), so an edit after review is
+    refused.
     """
     if not triage.exists():
         return [f"no triage file at {triage}"]
+    if triage_sha256 is None:
+        raise AuditInputInvalid("the gate needs the reviewed triage file's sha256")
     key, records = load_key(key_path)
     text = triage.read_text()
     header = triage_header(text)
     problems = []
+    if sha256_file(triage) != triage_sha256:
+        problems.append("the triage file is not the one reviewed (its sha256 differs)")
     repo = repo or ROOT
-    gated = release or _git(repo, "rev-parse", "--verify", "HEAD^{commit}").strip()
+    gated = release or "HEAD"
     try:
         gated = _git(repo, "rev-parse", "--verify", f"{gated}^{{commit}}").strip()
-    except subprocess.CalledProcessError:
-        pass
+    except subprocess.CalledProcessError as exc:
+        raise AuditInputInvalid(f"invalid ref: --release {gated!r} is not a commit") from exc
     if key["release_commit"] != gated:
         problems.append(f"the key audited {key['release_commit'][:12]}, not the release "
                         f"gated {gated[:12]}")
@@ -1274,7 +1385,11 @@ def gate(world: str, triage: Path, key_path: Path, samples: list[Path],
         problems += [f"the audit is invalid: {p}" for p in verdict["problems"]]
     expected = world_findings(union(parsed), provenance_findings(parsed_provenance), key,
                               world)
-    return problems + release_gate(text, expected=expected)
+    from tests.audit import class2_lexicon as lexicon
+
+    return (problems + release_gate(text, expected=expected)
+            + disposition_problems(text, expected, allowlist=lexicon.load_allowlist(),
+                                   rejected=read_rejected(rejected or REJECTED)))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1313,6 +1428,9 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--triage", type=Path, default=None)
     g.add_argument("--release", default=None,
                    help="the release commit being gated (default: HEAD)")
+    g.add_argument("--triage-sha256", required=True,
+                   help="the sha256 of the triage file as reviewed")
+    g.add_argument("--rejected", type=Path, default=REJECTED)
     b = sub.add_parser("baseline")
     b.add_argument("--static-only", action="store_true")
     args = parser.parse_args(argv)
@@ -1351,7 +1469,8 @@ def _run(args: argparse.Namespace) -> int:
     if args.command == "gate":
         path = args.triage or TRIAGE_DIR / f"{args.world}.md"
         problems = gate(args.world, path, args.key, args.samples, args.provenance_samples,
-                        release=args.release)
+                        release=args.release, triage_sha256=args.triage_sha256,
+                        rejected=args.rejected)
         for problem in problems:
             print(problem, file=sys.stderr)
         return 1 if problems else 0
