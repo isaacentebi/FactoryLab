@@ -200,3 +200,52 @@ def test_every_published_input_is_exactly_what_its_calculator_reads():
             assert f"{key} ({ROW_KEY_MEANINGS[key]})" in row["description"]
     skill = published["forecast_skill"]["description"]
     assert "scored verdicts" not in skill and "never included" in skill
+    censored = published["censored_share"]["description"]
+    assert "censored / outcomes" in censored and "UNRESOLVED_PRICED" in censored
+
+
+def test_a_card_over_one_closed_window_computes_the_window_published_value():
+    """Codex on #152 (rule 3: one metric name, one formula): for every seed, the value a
+    card over closed windows computes from one window equals the value ``price.window``
+    publishes for that window (``book.value`` on the runtime's window, as
+    ``_close_price_window`` computes it), unless the catalogue declares the two differ,
+    with the reason (``CLOSED_WINDOW_DIFFERS``). ``forecast_skill`` and
+    ``cost_per_attempt`` read the window's sample rows on the card side, so the rows here
+    carry what a runtime records beside its counters: a censored forecast (no skill) and
+    a ballot whose assembly was unavailable (no invocation)."""
+    from dataclasses import replace
+
+    from factorylab.charter.measurement import (
+        CLOSED_WINDOW_DIFFERS,
+        CardSamples,
+        measure_cards,
+        window_forecast_skills,
+    )
+    from factorylab.runtime.observations import SEED_IDS, SEEDS, seed_book
+
+    samples = CardSamples()
+    for skill in (0.1, None, -0.2):
+        samples.forecasts.append({"handle": "f", "assembly": "e", "role": "evaluator",
+                                  "window": 1, "skill": skill, "verdict": None,
+                                  "predicate": "return_paid_off", "y": 1,
+                                  "status": "settled" if skill is not None else "censored",
+                                  "excluded": None})
+    for cost, invoked in ((5, True), (0, True), (0, True), (0, False)):
+        samples.returns.append({"handle": "h", "assembly": "a", "role": "producer",
+                                "window": 1, "cost": cost, "ok": invoked, "invoked": invoked,
+                                "noop": False, "revision": False, "tool_calls": 0})
+    # The window the runtime closes: its forecast skills are the window's own rows.
+    window = replace(_full_window(), forecast_skills=window_forecast_skills(samples, 1))
+    book = seed_book()
+    published = {seed: book.value(SEEDS[seed], window) for seed in SEED_IDS}
+    cards = [MetricCard(id=f"card-{seed}", norm="n", description="d",
+                        units=SEEDS[seed].units, window=MetricWindow("windows", 1, None),
+                        acceptable_region="at most 1", observation=seed, answers_for="all")
+             for seed in sorted(SEED_IDS)]
+    carded = measure_cards(cards, samples, window, observations=book)
+    assert published["forecast_skill"] == carded["card-forecast_skill"] == pytest.approx(-0.05)
+    assert published["cost_per_attempt"] == carded["card-cost_per_attempt"] == 5 / 3
+    for seed in SEED_IDS:
+        if seed in CLOSED_WINDOW_DIFFERS:
+            continue
+        assert carded.get(f"card-{seed}") == published[seed], seed

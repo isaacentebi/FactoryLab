@@ -131,7 +131,7 @@ def _fresh_context(card: MetricCard, samples: CardSamples, observation: str,
 #: read. The row keys that select or group rows (role, assembly, window) are selection.
 ROW_INPUTS: Mapping[str, tuple[str, ...]] = MappingProxyType({
     "cost_per_return": ("cost", "ok"),
-    "cost_per_attempt": ("cost",),
+    "cost_per_attempt": ("invoked", "cost"),
     "well_formed_rate": ("ok",),
     "noop_share": ("noop",),
     "revision_rate": ("revision",),
@@ -150,6 +150,8 @@ ROW_INPUTS: Mapping[str, tuple[str, ...]] = MappingProxyType({
 #: What each sample row key a calculator reads is, as the catalogue states it.
 ROW_KEY_MEANINGS: Mapping[str, str] = MappingProxyType({
     "cost": "the response's metered cost, continuations included",
+    "invoked": "whether the response was an invocation (a ballot whose assembly was "
+               "unavailable is none; a row sampled before this was recorded was one)",
     "ok": "whether the response was well formed",
     "noop": "whether the response declared action noop or hold",
     "revision": "whether the response's registration was accepted or its amendment "
@@ -176,12 +178,30 @@ ROW_KEY_MEANINGS: Mapping[str, str] = MappingProxyType({
 #: rows rather than the windows' counters: a closed record keeps no per-response
 #: attribution (``measure_card``).
 ROWS_ON_CLOSED_WINDOWS = frozenset({"forecast_skill", "cost_per_attempt"})
+#: Seeds whose card over closed windows computes a different number from the
+#: window's own published value (``price.window`` observations), each with its reason.
+#: Empty: rule 3 (published = enforced) and Codex on #152, one name, one formula. A
+#: test holds every seed not named here to the same number on the same window.
+CLOSED_WINDOW_DIFFERS: Mapping[str, str] = MappingProxyType({})
+
+
+def window_forecast_skills(samples, index: int) -> list[float]:
+    """The skill of each forecast settled in window ``index``, in settlement order.
+
+    Guarantees the one sample list both ``forecast_skill`` readings average: a closed
+    window's own value (the runtime sets it as the window's ``forecast_skills``) and a
+    card over closed windows (``measure_card`` reads the same rows).
+    """
+    return [row["skill"] for row in samples.forecasts
+            if row["window"] == index and row["skill"] is not None]
 
 #: What each row-measured seed computes from its inputs. Its inputs are stated only by
 #: the rendered clause (``_input_clause``), never here.
 _FORMULAS: Mapping[str, str] = MappingProxyType({
     "cost_per_return": "Mean metered cost of the well-formed responses.",
-    "cost_per_attempt": "Mean metered cost of every response, failed ones included.",
+    "cost_per_attempt": "Mean metered cost of every attempt, failed ones included: an "
+    "attempt is an invocation, so a response that was none (a ballot whose assembly was "
+    "unavailable) is not one.",
     "well_formed_rate": "Well-formed responses over responses, ballots included.",
     "tool_calls": "Mean attempted tool calls per response, failures included.",
     "forecast_skill": "Mean forecast skill, each the score 1 - (q - y)^2 minus the "
@@ -197,7 +217,9 @@ _FORMULAS: Mapping[str, str] = MappingProxyType({
     "selectors group them by the judged return's assembly or role.",
     "consequence_paid_off_rate": "Positive return_paid_off outcomes over the settled "
     "consequences of acting returns.",
-    "censored_share": "Censored outcomes over resolved outcomes.",
+    "censored_share": "censored / outcomes over a closed window: the settlements it "
+    "resolved censored over every settlement it resolved. Over forecast rows: the rows "
+    "whose status is censored over the selected rows.",
     "avoidably_unresolved_share": "Attributable, avoidably unresolved accepted "
     "commitments over the eligible commitments due in the responsible scope. A "
     "commitment not yet due is not in the sample; one the owner documented as "
@@ -232,8 +254,12 @@ def _input_clause(observation: str) -> str:
     if rows is not None:
         read = _named(rows, ROW_KEY_MEANINGS)
         if observation in ROWS_ON_CLOSED_WINDOWS:
-            parts.append(f"A card over closed windows reads each of their sample rows' {read}.")
+            parts.append(f"A card over closed windows reads each of their sample rows' {read}"
+                         ", which gives the window's own value for one window.")
         parts.append(f"A card over returns or forecasts reads each selected row's {read}.")
+    if observation in CLOSED_WINDOW_DIFFERS:
+        parts.append("A card over closed windows computes a different number from the "
+                     f"window's own value: {CLOSED_WINDOW_DIFFERS[observation]}")
     return " ".join(parts)
 
 
@@ -721,10 +747,18 @@ def _groups(card: MetricCard, rows: list[dict]) -> dict[str, list[dict]]:
 
 
 def _cost_responses(observation: str, rows: list[dict]) -> list[dict]:
-    """The responses a cost selection divides over: successful ones per return, all per attempt."""
+    """The responses a cost selection divides over: successful ones per return, every
+    attempt per attempt.
+
+    Guarantees an attempt is an invocation, as the window's own ``invocations`` counts
+    one: a response that was none (a ballot whose assembly was unavailable: nothing was
+    rendered or called) is no attempt, so the cost per attempt of a closed window's rows
+    is the window's own value (Codex on #152). A row sampled before the ``invoked``
+    marker existed was a real invocation.
+    """
     if observation == "cost_per_return":
         return [row for row in rows if row["ok"]]
-    return rows
+    return [row for row in rows if row.get("invoked") is not False]
 
 
 def _measure_rows(observation: str, rows: list[dict]) -> float | None:

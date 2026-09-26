@@ -600,23 +600,23 @@ class PricingMixin:
     def _close_price_window(self) -> None:
         """The window that just closed yields at most one observation per priced card.
 
-        cost_per_return: mean wallet cost (micro-USD) of well-formed producer
-        returns; well_formed_rate: ok returns over all invocations;
-        forecast_skill: mean skill of the settled forecasts of evaluators with any
-        (the forecasts they sealed and the world resolved); turnover: filled notional
-        over equity at the window start (0 with no fills). A quantity without support
+        Every observation is the one its catalogue entry states
+        (``charter.measurement.measurement_catalogue``), and the value published
+        here for a window is the value a card over that closed window computes
+        (rule 3, published = enforced; Codex on #152). A quantity without support
         is not observed.
 
         The consequence score that grades an evaluator's verdict never enters a card
         (wave 16, section 9: realized consequence "must never be priced or traded
         through λ or the charter", the nonfungible core of essay II.IV.a's
-        Kantorovich marketplace): ``forecast_skill`` reads settled forecasts alone.
+        Kantorovich marketplace): ``forecast_skill`` reads settled forecasts alone,
+        the skill of each forecast this window settled (``window_forecast_skills``),
+        the same rows a card over closed windows averages.
         """
-        evaluators = {a.spec.id for a in self.assemblies.values()
-                      if measured_role(a.spec.emits) == "evaluator"}
-        skills = [v["payoff_skill"] for eid, v in self.standing.snapshot().items()
-                  if eid in evaluators and v.get("n")]
-        w = replace(self.window, forecast_skills=skills)
+        from factorylab.charter.measurement import window_forecast_skills
+
+        w = replace(self.window,
+                    forecast_skills=window_forecast_skills(self.card_samples, self.window.index))
         history, series = self._early_warning_open(w)
         book = self.observations
         # An observation is in use while a card names it: the charter's, a card a
@@ -1413,6 +1413,9 @@ class PricingMixin:
             sampling_ref=sampling_ref,
         )
         self.window.outcomes += 1
+        # Codex on #152: a settlement with no measured world outcome is censored, the
+        # UNRESOLVED_PRICED one included, whatever penalty it carries for the record.
+        self.window.censored += int(status is SettleStatus.CENSORED)
         entry = {
             "kind": "price.penalty",
             "handle": handle,

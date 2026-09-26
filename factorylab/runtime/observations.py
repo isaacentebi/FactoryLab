@@ -187,19 +187,20 @@ CATALOGUE: tuple[Observation, ...] = (
     ),
     Observation(
         "well_formed_rate",
-        "Well-formed returns over runtime invocations (excluding votes).",
+        "Well-formed returns over runtime invocations, ballots included.",
         "fraction",
         lambda w: _ratio(w.ok, w.invocations),
         (0.0, 1.0),
     ),
     Observation(
         "forecast_skill",
-        "Mean cumulative skill of evaluators with settled forecasts: each evaluator's "
-        "mean score 1 - (q - y)^2 over its settled forecasts minus the same score at the "
-        "pre-outcome base rate; positive when they beat the base rate. A verdict's "
-        "consequence score is never included.",
+        "Mean skill of the forecasts settled: each forecast's score 1 - (q - y)^2 minus "
+        "the same score at its pre-outcome base rate; positive when they beat the base "
+        "rate. A verdict's consequence score is never included.",
         "score difference",
-        lambda w: _mean(w.forecast_skills),
+        # ``fmean``, as a card over closed windows averages the same rows (Codex on #152:
+        # one name, one formula, one number).
+        lambda w: fmean(w.forecast_skills) if w.forecast_skills else None,
         (-1.0, 1.0),
     ),
     Observation(
@@ -542,10 +543,10 @@ WINDOW_FIELD_MEANINGS: Mapping[str, str] = MappingProxyType({
                  "only: a closed record keeps no attribution",
     "invocations": "the invocations the window made",
     "ok": "the well-formed returns among them",
-    "forecast_skills": "each evaluator's forecast skill, one value per evaluator with a "
-                       "settled forecast: its mean score 1 - (q - y)^2 over its settled "
-                       "forecasts minus the same mean at the pre-outcome base rate. "
-                       "Settled forecasts only; no verdict's consequence score",
+    "forecast_skills": "the skill of each forecast the window settled, in settlement "
+                       "order: its score 1 - (q - y)^2 minus the same score at its "
+                       "pre-outcome prevalence base rate. Settled forecasts only; no "
+                       "verdict's consequence score",
     "notional_micro": "the filled notional, size times price, summed",
     "equity_start_micro": "the venue equity at the window's start, or none when the venue "
                           "did not state it",
@@ -571,9 +572,12 @@ WINDOW_FIELD_MEANINGS: Mapping[str, str] = MappingProxyType({
     "exposures_won": "the antagonist exposure settlements won",
     "exposures_settled": "the antagonist exposures settled",
     "meta_verdicts": "the raw meta verdicts delivered, every tier",
-    "censored": "the censored settlements among those resolved, as each settlement "
-                "path counts them",
-    "outcomes": "the settlements resolved, settled or censored",
+    "censored": "the settlements the window resolved censored, with no measured "
+                "outcome: an UNRESOLVED_PRICED settlement included",
+    "outcomes": "every settlement the window resolved, settled or censored: each "
+                "card-priced settlement, each forecast, and each judgement, exposure, "
+                "counter, evaluation or composed settlement censored for want of an "
+                "outcome",
     "tool_calls": "the tool calls attempted, failures included",
     "market_purchases": "the paid x402 requests with a recorded result",
     "ews_variance": "the early-warning variance statistic at the window's close",
