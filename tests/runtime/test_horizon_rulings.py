@@ -315,6 +315,87 @@ def test_a_failed_fills_read_holds_the_outcome():
     assert payoff is not None and not payoff.marked and payoff.net_micro == 0  # no fill
 
 
+def _tape_runtime():
+    """A runtime on the recorded longrun1 slice (a venue that advances), BTC fees read."""
+    from decimal import Decimal
+
+    from factorylab.world.tape import Tape, TapeVenue
+    from tests.world.test_tape import LONGRUN
+
+    tape = Tape.load(LONGRUN)
+    fees = {"BTC": {"venue_read": {side: [[tape.start_ns, "0", ["test read"]]]
+                                   for side in ("taker", "maker")}}}
+    venue = TapeVenue(Tape.from_data(dict(tape.data, fees=fees)), coins=("BTC",),
+                      start_cash_usd=Decimal(120))
+    rt = _world(10)
+    rt.exchange, rt.fee_schedule = venue, None
+    return rt, tape
+
+
+def test_a_safety_pass_advance_accounts_the_mid_at_h_it_delivers(monkeypatch):
+    """Codex on #152 (a9e7e7e): a safety pass advances a recorded venue while a model
+    thinks. Its watermark covers every fact of that advance, so every fact is accounted,
+    the mid at or after H included, though it is not broadcast to the seats: the return
+    is marked at that mid, never at the next tick's."""
+    from types import SimpleNamespace
+
+    from factorylab.runtime import loop as loop_module
+
+    rt, tape = _tape_runtime()
+    horizon = rt._horizon_ns()
+    ticks = tape.ticks
+    # An opening tick whose H falls between two recorded ticks with different mids.
+    for opened_at in ticks:
+        due = opened_at + horizon
+        later = [t for t in ticks if t > due]
+        if later and tape.mid_at("BTC", due)[1] != tape.mid_at("BTC", later[0])[1]:
+            break
+    rt.clock.now_ns = opened_at
+    rt._settle_exchange_effects(rt._advance_venue(opened_at))
+    handle = _open_long(rt, "BTC", str(tape.mid_at("BTC", opened_at)[1]))
+    monkeypatch.setattr(loop_module, "wall_paced", lambda _clock: True)
+    rt.wall = SimpleNamespace(now_ns=lambda: due, tick_ns=lambda: 1)
+    rt._safety_ns = 0
+    internal = len(rt.internal)
+    rt._safety_pass()  # advances the tape to H, between two ticks
+    assert not [e for e in list(rt.internal)[internal:] if str(e.kind) == "MarketMid"]
+    rt.clock.now_ns = later[0]
+    rt._settle_exchange_effects(rt._advance_venue(later[0]))  # the next tick's mids
+    rt.tick_through_ns = rt.consequences.tick_through_ns = later[0]
+    rt.consequences.resolve(rt.n)
+    payoff = rt.consequences.payoff(handle)
+    assert payoff is not None and payoff.marked
+    at_h = tape.mid_at("BTC", due)[1]
+    opened_px = tape.mid_at("BTC", opened_at)[1]
+    assert payoff.net_micro == int((at_h - opened_px) * 1000)  # 0.001 BTC, in micro-USD
+
+
+def test_a_mark_the_final_tape_advance_delivers_is_graded_before_terminated():
+    """Codex on #152 (a9e7e7e): a declined trade whose mark at H arrives only in the
+    tape's final advance through its close is priced, and its judge's consequence grade
+    delivered, before the kill winds down and the world is Terminated."""
+    from tests.runtime.test_consequence_horizon import _named_hold
+    from tests.runtime.test_reward_chain import _advance, _rows
+
+    rt, tape = _tape_runtime()
+    closes = rt.exchange.closes_ns
+    decided = closes - rt._horizon_ns() - 20 * S
+    rt.clock.now_ns = decided
+    rt._settle_exchange_effects(rt._advance_venue(decided))
+    producer, judge = _named_hold(rt, decided, str(tape.mid_at("BTC", decided)[1]))
+    before_close = decided + 30 * S
+    rt.clock.now_ns = before_close
+    rt._settle_exchange_effects(rt._advance_venue(before_close))
+    _advance(rt, 1)
+    assert not _rows(rt, "consequence.opportunity", handle=producer)  # H not reached
+    rt.kill("tape ended", through_tape_end=True)
+    (priced,) = _rows(rt, "consequence.opportunity", handle=producer)
+    (graded,) = _rows(rt, "verdict.consequence", handle=judge)
+    items = rt.ledger._recovery_items()
+    killed = next(i["seq"] for i in items if i.get("kind") == "kill.production")
+    assert priced["seq"] < killed and graded["seq"] < killed
+
+
 def test_a_tick_at_h_before_the_mid_at_h_marks_at_the_mid_at_h():
     """D2: the mark is the first venue mid timestamped at or after the horizon. The
     batch's Tick at H comes first, with an earlier instant's mid cached: nothing is

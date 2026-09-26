@@ -19,9 +19,12 @@ on a stand-in carrying only their state, so 200 variants fit in the check tier.
 Assumed of the venue, as every venue in this repository delivers: facts arrive in
 fact-time order across batches (a batch holds the facts through its instant), and two
 fills of one instant keep the venue's own order (their order is itself a fact); a
-funding payment is stated at its funding time (``funding_ns``). Half the variants read
-a polled venue whose fills and funding arrive only at polls that lag the ticks, with the
-venue's delivered-through watermark at each poll (ruling R10-o).
+funding payment is stated at its funding time (``funding_ns``). A third of the variants
+read a polled venue whose fills and funding arrive only at polls that lag the ticks, with
+the venue's delivered-through watermark at each poll (ruling R10-o); the others read an
+advancing venue, each batch one advance to any instant (a tick or a safety pass) whose
+watermark covers only what it delivered to accounting, and a third end at the tape's
+close with the terminal settlement right after the final advance.
 """
 
 from __future__ import annotations
@@ -53,7 +56,7 @@ class _Named(FeedbackMixin, VenueMixin):
         self.reference_mids: dict = {}
         self.venue_marks: dict = {}
         self.funding_prints: dict = {}
-        self.facts_seen_ns = self.tick_through_ns = None
+        self.facts_seen_ns = self.tick_through_ns = self.advance_through_ns = None
         self.clock = SimpleNamespace(now_ns=T0)
         self.fee_schedule = {"rates": {}, "read_ns": T0, "history": history}
         self.exchange = SimpleNamespace(funding_interval_ns=3600 * S)
@@ -75,15 +78,17 @@ class _Book(ReturnConsequences):
         self.clock_ns = T0
         self.history = history
         # A polled venue's delivered-through instant of its fills and funding (ruling
-        # R10-o); None for a venue whose advance delivers everything at once.
+        # R10-o), and an advancing venue's: the time it was last advanced to.
         self.stream_ns: int | None = None
+        self.advance_ns: int | None = None
 
     def _now_ns(self) -> int:
         return self.clock_ns
 
     def _stream_through_ns(self) -> int | None:
-        # A poll at an instant may miss a fact of that very instant.
-        return None if self.stream_ns is None else self.stream_ns - 1
+        if self.stream_ns is not None:
+            return self.stream_ns - 1  # a poll may miss a fact of its very instant
+        return self.advance_ns
 
     def _patience_ns(self) -> int:
         return PATIENCE
@@ -173,10 +178,16 @@ def _groups(facts: list[tuple], rng: random.Random) -> list[tuple]:
 def _run(rng: random.Random) -> dict:
     history: dict = {}
     named, book = _Named(history), _Book(history)
-    # Half the variants read a polled venue (ruling R10-o): fills and funding payments
-    # are reported only at polls at random instants, which lag the ticks; each poll
-    # delivers what executed by then and raises the venue's watermark to its time.
-    lag = rng.random() < 0.5
+    # A third of the variants read a polled venue (ruling R10-o): fills and funding
+    # payments are reported only at polls at random instants, which lag the ticks; each
+    # poll delivers what executed by then and raises the venue's watermark to its time.
+    # The others read an advancing venue (fake, tape): each batch is one advance, to an
+    # instant anywhere (a tick, or a safety pass while a model thinks), which delivers
+    # every fact through it to accounting before its watermark rises. In a third, the
+    # tape ends with the last fact: its final advance is followed at once by the
+    # terminal settlement, complete through the tape's close, and nothing after it.
+    mode = rng.choice(("advance", "lag", "tape_end"))
+    lag = mode == "lag"
     facts = _facts()
     if lag:
         at = T0
@@ -187,7 +198,10 @@ def _run(rng: random.Random) -> dict:
         book.stream_ns = T0
     polled: list[tuple] = []
     sequence = _groups(facts, rng)
-    cuts = sorted(rng.sample(range(1, len(sequence)), rng.randint(3, 40)))
+    # An advance delivers every fact through its instant, so it never splits an instant.
+    boundaries = [i for i in range(1, len(sequence))
+                  if lag or sequence[i][0] != sequence[i - 1][0]]
+    cuts = sorted(rng.sample(boundaries, rng.randint(3, min(40, len(boundaries)))))
     batches = [sequence[a:b] for a, b in zip([0, *cuts], [*cuts, len(sequence)],
                                              strict=True)]
     outcomes: dict = {}
@@ -215,8 +229,9 @@ def _run(rng: random.Random) -> dict:
                     handle, frozen, ((frozen["coin"], frozen["res"][1]),), rates)
                 outcomes[handle] = ["measured", definition, priced]
 
-    for batch in batches:
+    for number, batch in enumerate(batches):
         batch_end = max(fact[0] for fact in batch)
+        final_advance = mode == "tape_end" and number == len(batches) - 1
         for fact in batch:
             at, kind = fact[0], fact[1]
             named.clock.now_ns = book.clock_ns = batch_end
@@ -260,12 +275,18 @@ def _run(rng: random.Random) -> dict:
                                             "filled_size": size if fact[4] == "filled"
                                             else "0"}, {"size": size}, event)
                 book.finish(fact[2], 0)
-            if rng.random() < 0.3:
+            if rng.random() < 0.3 and not final_advance:
                 settle()
-        if rng.random() < 0.5:
+        if not lag:
+            book.advance_ns = named.advance_through_ns = batch_end
+        if rng.random() < 0.5 and not final_advance:
             settle()
-    # The world goes on: a tick long after every patience, and every outcome is fixed.
-    book.tick_through_ns = named.tick_through_ns = _t(10_000)
+    if mode == "tape_end":
+        # The tape closed with its last fact: complete through it, and settled at once.
+        book.tick_through_ns = named.tick_through_ns = sequence[-1][0]
+    else:
+        # The world goes on: a tick long after every patience, and every outcome is fixed.
+        book.tick_through_ns = named.tick_through_ns = _t(10_000)
     for reported in sorted(polled, key=lambda f: f[0]):
         (_fill if reported[1] == "fill" else _pay)(book, reported, event)
     if lag:

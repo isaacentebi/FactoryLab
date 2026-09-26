@@ -104,6 +104,28 @@ def close_recorded_market(rt, *, through_tape_end: bool = False) -> None:
               file=sys.stderr)
 
 
+def settle_terminal(rt) -> None:
+    """Settle, before the wind-down and the seal, everything the final facts made ready.
+
+    Codex on #152: the world ends here, so a fake or recorded venue has delivered
+    every fact it ever will through its last advance (``close_recorded_market``):
+    the runtime's facts are complete through it. A live venue's streams keep their
+    own watermarks. Every outcome that became ready is fixed, and every evaluator it
+    grades is scored and delivered its grade, before ``Terminated``; the wind-down's
+    own fills come after, as late money. Never raises into a kill.
+    """
+    try:
+        through = getattr(rt, "advance_through_ns", None)
+        if through is not None:
+            rt.tick_through_ns = rt.consequences.tick_through_ns = through
+        rt._settle_arrived_verdicts()
+        rt._settle_due_forecasts()
+        rt._deliver_returns()
+    except Exception as exc:  # noqa: BLE001 - nothing may raise into a kill
+        print(f"factorylab kill: the final consequences were not settled "
+              f"({type(exc).__name__})", file=sys.stderr)
+
+
 def seal_recorded_market(rt) -> None:
     """Book what the wind-down's closes did on a recorded venue, then seal the venue.
 
@@ -163,6 +185,9 @@ class VenueMixin:
         if self.termination.final:
             return getattr(self, "wind_down_report", dead_report())
         close_recorded_market(self, through_tape_end=through_tape_end)
+        # Everything the final facts made ready is fixed and graded before the
+        # wind-down; the wind-down's own fills are late money (Codex on #152).
+        settle_terminal(self)
         owed = bool(self.m.kill.wind_down)
         report = dead_report()
         try:
@@ -604,7 +629,17 @@ class VenueMixin:
         return table.order_owner(str(order_id))
 
     def _settle_exchange_effects(self, evs: list[WorldEvent], *,
-                                 observe_positions: bool = True) -> None:
+                                 observe_positions: bool = True,
+                                 broadcast_mids: bool = True) -> None:
+        """Settle a batch of venue facts into money, consequence accounting and the world.
+
+        Guarantees every fact of the batch reaches consequence accounting now: the
+        consequence book (``consequences.observe``) and the named trades
+        (``_observe_mid``, ``_observe_funding``), so a venue's delivered-through
+        watermark never runs ahead of what accounting has seen (Codex on #152).
+        ``broadcast_mids`` False keeps the batch's mids from the seats (a pass that
+        delivers no mid of its own); they are accounted all the same.
+        """
         if any(we.kind is not WorldEventKind.MARKET_MID for we in evs):
             # A fill, a funding payment or a liquidation is the venue's books moving.
             self._venue_moved()
@@ -664,9 +699,21 @@ class VenueMixin:
                     # funding only for funding times at or before its horizon).
                     payload["ts_ns"] = funding_instant(we.payload, we.ts_ns)
                 self.consequences.observe(str(we.kind), payload, self.n)
+                # The named trades read the same facts at the same moment; reading
+                # them again when the kernel event is routed changes nothing.
+                if we.kind is WorldEventKind.MARKET_MID:
+                    self._observe_mid(str(we.payload["coin"]), int(we.ts_ns),
+                                      str(we.payload["mid"]))
+                elif (we.kind is WorldEventKind.FUNDING
+                        and we.payload.get("rate") is not None):
+                    self._observe_funding(str(we.payload["coin"]),
+                                          funding_instant(we.payload, we.ts_ns),
+                                          str(we.payload["rate"]))
         for we in evs:
             if id(we) in refused:
                 self.internal.append(self._kernel_event(we))
+                continue
+            if not broadcast_mids and we.kind is WorldEventKind.MARKET_MID:
                 continue
             if we.kind is WorldEventKind.FILL:
                 self.stats.fills += 1

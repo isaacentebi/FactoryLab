@@ -246,8 +246,10 @@ class Runtime(
         self.raw_scores[handle] = kwargs["score"]
         return super()._settle_priced(handle, cards=cards, **kwargs)
 
-    def _settle_exchange_effects(self, events, *, observe_positions=True) -> None:
-        super()._settle_exchange_effects(events, observe_positions=observe_positions)
+    def _settle_exchange_effects(self, events, *, observe_positions=True,
+                                 broadcast_mids=True) -> None:
+        super()._settle_exchange_effects(events, observe_positions=observe_positions,
+                                         broadcast_mids=broadcast_mids)
         self._record_pricing_fills(events)
 
     def _universe_for(self, kind: str, ev: Event | None = None) -> list[str]:
@@ -585,11 +587,12 @@ class Runtime(
                                                                      now_ns=now)]
         else:
             # The recorded market moved while a model thought: whatever it filled,
-            # refused or charged by now settles here. Its mids are read afresh by the
-            # next read; as on the live path, the pass delivers no mid of its own.
-            fills = [we for we in self._advance_venue(now)
-                     if we.kind is not WorldEventKind.MARKET_MID]
-        self._settle_exchange_effects(fills)
+            # refused or charged by now settles here, and its mids are accounted; the
+            # seats read mids afresh at the next tick, as on the live path.
+            fills = self._advance_venue(now)
+        # Every fact of the advance is accounted (the watermark covers it), and the
+        # pass broadcasts no mid of its own to the seats (Codex on #152).
+        self._settle_exchange_effects(fills, broadcast_mids=False)
         self._reconcile_orders()
         self._evaluate_watchers(sweep=f"safety-{now}")
         terminal = self.termination.check(self.wallet, self.clock.now_ns,

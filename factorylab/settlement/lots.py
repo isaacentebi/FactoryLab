@@ -647,7 +647,6 @@ class LotTable:
                 young = age < backstop
             if (lots or waiting) and young:
                 continue
-            table_lots = lots
             state = (horizon_state or {}).get(account.handle)
             if state is not None:
                 # Frozen before the first fill after H (Codex on #152): what the table
@@ -706,9 +705,11 @@ class LotTable:
             # An unmarked outcome is settled money, booked to the owner when it is
             # fixed: the late baseline starts there. A marked outcome books nothing
             # at the mark, so everything its account realises, before or after the
-            # mark, is booked late once it is real.
+            # mark, is booked late once it is real. Which one is the graded state's
+            # (its lots at H), never the table's when this runs, so the late money
+            # does not depend on when the outcome was fixed (Codex on #152).
             updates[account.handle] = replace(account, payoff=outcome,
-                                              late_micro=0 if table_lots else micro)
+                                              late_micro=0 if lots else micro)
         return self._accounts(updates)
 
     def closed(self, handle: str) -> bool:
