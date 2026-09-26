@@ -116,10 +116,7 @@ more distinct leaves of one world) with `leaf_id` null; its `path`, tags and `qu
 those of one leaf of the set, and its `finding_id` is
 `sha256("leaf-set|" + the sorted leaf_ids joined by "|")[:12]`. Its identity, in the
 union, the triage and the gate, is that sorted set with its question and class, so the
-same set in any order is one finding. No other question takes a set. A set never mixes
-planted leaves with real ones: report a canary and a real finding apart. A finding whose
-set is wholly planted is a canary hit and leaves the triage; one that mixes planted and
-real leaves invalidates its sample.
+same set in any order is one finding. No other question takes a set.
 
 `read` lists the `leaf_id` of every leaf the auditor answered, context leaves included,
 and `unread` every one it did not. The counts are checked against those sets, and the sets against the corpus.
@@ -140,7 +137,10 @@ Before the review, `render` plants the canaries of `docs/audits/class2/canaries.
 seeded positions: **one known violation for each of Q3, Q4, Q5, Q6, Q7, Q8, Q9, Q10 and
 Q11**, nine in all. The Q11 canary is a set: three lenses of one role, planted as three
 system-prompt leaves, whose net direction is an objective with no rival; it is found
-only by a Q11 finding whose set holds all three. It also marks ten clean controls taken from the smuggling audit's D7 KEEP
+only by a Q11 finding whose set holds all three. A set never mixes planted leaves with
+real ones: a finding whose set is wholly planted is a canary hit and leaves the triage,
+and one that mixes planted and real leaves invalidates its sample, so a real objective
+is never hidden inside a canary hit. It also marks ten clean controls taken from the smuggling audit's D7 KEEP
 list. The key is written to `canary_key.json`, which is never part of the auditor's input.
 
 The audit is **valid** only if all of these hold (`scripts/class2_audit.py validate`):
