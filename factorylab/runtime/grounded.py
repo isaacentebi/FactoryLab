@@ -104,17 +104,20 @@ def counterfactual_refusal(outputs: Mapping, listed: Iterable[str]) -> str | Non
 
 
 def _net(open_mids: Iterable[tuple[str, str]], due_mids: Iterable[tuple[str, str]],
-         taker_rate: Decimal | str | None, named: Mapping[str, str] | None,
+         entry_rate: Decimal | str | None, exit_rate: Decimal | str | None,
+         named: Mapping[str, str] | None,
          funding_rates: Iterable[Decimal | str]) -> dict[str, Any] | None:
     """The named trade's move over the horizon, net of the venue's round trip and funding.
 
-    Guarantees ``net_bps = s * (due - open) / open * 10^4 - 2 * taker_rate * 10^4 - s *
-    sum(funding_rates) * 10^4`` in exact decimals, ``s`` = +1 for a buy and -1 for a
-    sell (longs pay a positive funding rate), or None when no trade is named, a price
-    is missing or unusable, or the venue's taker rate was never read (an unread rate
-    is never a number).
+    Guarantees ``net_bps = s * (due - open) / open * 10^4 - (entry_rate + exit_rate) *
+    10^4 - s * sum(funding_rates) * 10^4`` in exact decimals, ``s`` = +1 for a buy and
+    -1 for a sell (longs pay a positive funding rate), or None when no trade is named,
+    a price is missing or unusable, or either leg's taker rate was never read (an
+    unread rate is never a number). Each leg pays its own rate (wave 16, D7: the road
+    not taken pays the round trip an acting lot opened and marked at the same instants
+    pays).
     """
-    if named is None or taker_rate is None:
+    if named is None or entry_rate is None or exit_rate is None:
         return None
     opened = dict(open_mids)
     due = dict(due_mids)
@@ -128,21 +131,25 @@ def _net(open_mids: Iterable[tuple[str, str]], due_mids: Iterable[tuple[str, str
             moves[coin] = (after - before) / before * Decimal(10_000)
     move = moves.get(named["coin"])
     try:
-        rate = Decimal(str(taker_rate))
+        legs = (Decimal(str(entry_rate)), Decimal(str(exit_rate)))
         rates = [Decimal(str(r)) for r in funding_rates]
     except (InvalidOperation, ValueError):
         return None
-    if move is None or not rate.is_finite() or rate < 0 or not all(r.is_finite() for r in rates):
+    if (move is None or not all(leg.is_finite() and leg >= 0 for leg in legs)
+            or not all(r.is_finite() for r in rates)):
         return None
     sign = 1 if named["side"] == "buy" else -1
     gross = sign * move
-    fee = 2 * rate * Decimal(10_000)
+    entry_fee, exit_fee = (leg * Decimal(10_000) for leg in legs)
+    fee = entry_fee + exit_fee
     funding = -sign * sum(rates, Decimal(0)) * Decimal(10_000)
     net = gross - fee + funding
     return {"moves": [{"coin": c, "move_bps": str(m.quantize(Decimal("0.01")))}
                       for c, m in moves.items()],
             "gross_bps": str(gross.quantize(Decimal("0.01"))),
             "round_trip_fee_bps": str(fee.normalize()),
+            "entry_fee_bps": str(entry_fee.normalize()),
+            "exit_fee_bps": str(exit_fee.normalize()),
             "funding_bps": str(funding.quantize(Decimal("0.0001"))),
             "funding_payments": len(rates),
             "net_bps": str(net.quantize(Decimal("0.0001"))),
@@ -195,7 +202,8 @@ def funding_due(state: dict | None, open_ns: int, due_ns: int) -> list[str] | st
 
 def opportunity_cost(open_mids: Iterable[tuple[str, str]],
                      due_mids: Iterable[tuple[str, str]],
-                     taker_rate: Decimal | str | None,
+                     entry_rate: Decimal | str | None,
+                     exit_rate: Decimal | str | None,
                      declined: Mapping[str, str] | None,
                      funding_rates: Iterable[Decimal | str] = ()) -> dict[str, Any] | None:
     """Price the road not taken: the trade the decision itself said it declined.
@@ -204,13 +212,15 @@ def opportunity_cost(open_mids: Iterable[tuple[str, str]],
     net of fees, priced ex ante on the named trade"). Guarantees ``y = 1`` when the
     named trade would not have beaten the venue's round trip over the horizon
     (``net_bps <= 0``, declining was right in money) and ``y = 0`` otherwise, with
-    ``net_bps`` from ``_net``: the gross move signed by the named side, less twice the
-    venue's taker rate, less the funding the named side would have paid at the
-    venue's funding times inside the horizon. Every term is a money fact the venue
-    states; no scale is an architect's. Returns None when no trade is named, a price
-    is missing or the taker rate is unread: a bare hold has no world outcome.
+    ``net_bps`` from ``_net``: the gross move signed by the named side, less the
+    venue's taker rate on each leg (``entry_rate`` in force at the decision, the ex-ante
+    element; ``exit_rate`` in force at the horizon), less the funding the named side
+    would have paid at the venue's funding times inside the horizon. Every term is a
+    money fact the venue states; no scale is an architect's. Returns None when no trade
+    is named, a price is missing or either leg's taker rate is unread: a bare hold has
+    no world outcome.
     """
-    priced = _net(open_mids, due_mids, taker_rate, declined, funding_rates)
+    priced = _net(open_mids, due_mids, entry_rate, exit_rate, declined, funding_rates)
     if priced is None:
         return None
     net = priced.pop("_net")
@@ -235,7 +245,8 @@ def attempted_trade(outputs: Mapping, listed: Iterable[str]) -> dict[str, str] |
 
 def attempted_cost(open_mids: Iterable[tuple[str, str]],
                    due_mids: Iterable[tuple[str, str]],
-                   taker_rate: Decimal | str | None,
+                   entry_rate: Decimal | str | None,
+                   exit_rate: Decimal | str | None,
                    attempted: Mapping[str, str] | None,
                    funding_rates: Iterable[Decimal | str] = ()) -> dict[str, Any] | None:
     """Price the road a refused order tried to take: the trade it named, for its side.
@@ -246,9 +257,9 @@ def attempted_cost(open_mids: Iterable[tuple[str, str]],
     ``opportunity_cost``. Guarantees the complement of the declined form: ``y = 1``
     when the attempted trade would have beaten the venue's round trip
     (``net_bps > 0``) and ``y = 0`` otherwise. Returns None when no trade is named, a
-    price is missing or the taker rate is unread.
+    price is missing or either leg's taker rate is unread.
     """
-    priced = _net(open_mids, due_mids, taker_rate, attempted, funding_rates)
+    priced = _net(open_mids, due_mids, entry_rate, exit_rate, attempted, funding_rates)
     if priced is None:
         return None
     net = priced.pop("_net")

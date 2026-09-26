@@ -79,7 +79,7 @@ def test_the_margin_horizon_counts_the_verdict_window_once():
 # --- world truth at an instant (Codex on #152) -----------------------------------------
 
 
-def _open_long(rt, coin="BTC", px="60000"):
+def _open_long(rt, coin="BTC", px="60000", fee_usd="0"):
     from factorylab.kernel.queue import PropensityRecord
 
     prop = PropensityRecord(("seed-decider",), (1.0,), "seed-decider", 0, "router:Tick", "t")
@@ -90,7 +90,7 @@ def _open_long(rt, coin="BTC", px="60000"):
     rt.consequences.order_result(handle, {"status": "filled", "order_id": f"o-{coin}",
                                           "filled_size": "0.001"}, {"size": "0.001"}, rt.n)
     rt.consequences.observe("Fill", {"order_id": f"o-{coin}", "coin": coin, "is_buy": True,
-                                     "size": "0.001", "px": px, "fee_usd": "0"}, rt.n)
+                                     "size": "0.001", "px": px, "fee_usd": fee_usd}, rt.n)
     rt.consequences.finish(handle, 0)
     return handle
 
@@ -140,7 +140,71 @@ def test_a_tape_s_per_coin_rates_price_each_trade_at_its_own_rate():
     assert rt._taker_rate("BTC") == "0.00045" and rt._taker_rate("ETH") == "0.00035"
     for coin, bps in (("BTC", "9"), ("ETH", "7")):
         priced = opportunity_cost([(coin, "100")], [(coin, "100")], rt._taker_rate(coin),
+                                  rt._taker_rate(coin),
                                   {"coin": coin, "side": "buy"})
         assert Decimal(priced["round_trip_fee_bps"]) == Decimal(bps), coin
     assert rt._rate_at("BTC", tape.start_ns) == "0.00045"
     assert rt._rate_at("ETH", tape.start_ns) == "0.00035"
+
+
+def test_the_declined_road_pays_each_leg_at_its_own_instant_as_an_acting_lot_does():
+    """Wave 16, D7: both roads pay the same round trip. The venue's rate falls from
+    4.5 bp to 3.5 bp between the decision and H: the declined road pays 4.5 bp in (the
+    rate at the decision, D1's ex-ante leg) and 3.5 bp out (the rate at H), 8 bp, the
+    fee an acting lot opened and marked at the same instants pays. Twice the entry rate
+    (9 bp) would price a round trip no acting lot pays."""
+    from decimal import Decimal
+
+    from tests.runtime.test_reward_chain import _rows
+
+    rt = _world(10)
+    start = 3 * NS_PER_HOUR
+    change = start + rt._horizon_ns() // 2
+
+    def listing():
+        rate = "0.00045" if rt.clock.now_ns < change else "0.00035"
+        return {"perp": [{"coin": "BTC", "taker_fee_rate": rate}], "spot": []}
+
+    rt.exchange.instruments = listing
+    rt.fee_schedule = None
+    rt.clock.now_ns = start
+    _mids(rt, BTC="100")
+    producer, _event = _consequence_produce(rt)
+    assert rt.reference_mids[producer]["taker_rate"] == "0.00045"
+    lot = _open_long(rt, "BTC", "100", fee_usd="0.000045")  # 4.5 bp of a $0.1 fill
+    rt.clock.now_ns = change
+    rt._read_fee_schedule()
+    _walk(rt, start, 10, 120, lambda s: "100")
+    rt._settle_evaluations()
+    (priced,) = _rows(rt, "consequence.opportunity", handle=producer)
+    assert (priced["entry_fee_bps"], priced["exit_fee_bps"]) == ("4.5", "3.5")
+    assert Decimal(priced["round_trip_fee_bps"]) == 8
+    payoff = rt.consequences.payoff(lot)
+    assert payoff is not None and payoff.censored is None
+    notional_micro = 100_000  # 0.001 BTC at 100
+    assert Decimal(-payoff.net_micro) / notional_micro * 10_000 == 8  # flat mid: fees only
+
+
+def test_a_leg_whose_rate_was_never_read_leaves_the_declined_road_uninformative():
+    """Ruling R10-i, per leg: no rate read by the decision (entry) or by H (exit) fixes
+    the outcome with no y, ledgered ``consequence.uninformative``, reason fee_unknown."""
+    from factorylab.settlement.lots import FEE_UNKNOWN
+    from tests.runtime.test_reward_chain import _rows
+
+    for unread in ("entry", "exit"):
+        rt = _world(10)
+        start = 3 * NS_PER_HOUR
+        rt.clock.now_ns = start
+        _mids(rt, BTC="100")
+        producer, _event = _consequence_produce(rt)
+        frozen = rt.reference_mids[producer]
+        if unread == "entry":
+            frozen["taker_rate"] = None
+        else:  # the first rate the venue ever stated came after H
+            rt.fee_schedule["history"]["BTC"] = [[frozen["due_ns"] + 1, "0.00045"]]
+        _walk(rt, start, 10, 120, lambda s: "90")
+        rt._settle_evaluations()
+        assert rt.world_outcomes[producer]["state"] == "none", unread
+        assert not _rows(rt, "consequence.opportunity", handle=producer), unread
+        (row,) = _rows(rt, "consequence.uninformative", handle=producer)
+        assert row["reason"] == FEE_UNKNOWN, unread

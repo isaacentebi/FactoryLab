@@ -314,17 +314,18 @@ def test_the_attempted_trade_is_the_mirror_of_the_declined_one(side):
     the same named trade."""
     trade = {"coin": "BTC", "side": side}
     opened = (("BTC", "100"),)
-    flat = attempted_cost(opened, (("BTC", "100"),), "0.00035", trade)
+    flat = attempted_cost(opened, (("BTC", "100"),), "0.00035", "0.00035", trade)
     assert flat["score"] == 0.0
-    up, down = (attempted_cost(opened, (("BTC", px),), "0.00035", trade)
+    up, down = (attempted_cost(opened, (("BTC", px),), "0.00035", "0.00035", trade)
                 for px in ("101", "99"))
     favourable, adverse = (up, down) if side == "buy" else (down, up)
     assert favourable["score"] == 1.0 and adverse["score"] == 0.0
-    declined = opportunity_cost(opened, (("BTC", "101"),), "0.00035", trade)
+    declined = opportunity_cost(opened, (("BTC", "101"),), "0.00035", "0.00035", trade)
     assert up["score"] + declined["score"] == 1.0
     # No price, no y; no stated taker rate, no y.
-    assert attempted_cost(opened, (("ETH", "1"),), "0.00035", trade) is None
-    assert attempted_cost(opened, (("BTC", "101"),), None, trade) is None
+    assert attempted_cost(opened, (("ETH", "1"),), "0.00035", "0.00035", trade) is None
+    assert attempted_cost(opened, (("BTC", "101"),), None, "0.00035", trade) is None
+    assert attempted_cost(opened, (("BTC", "101"),), "0.00035", None, trade) is None
 
 
 def test_nothing_is_required_while_the_world_lists_no_coin():

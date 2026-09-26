@@ -47,6 +47,7 @@ from factorylab.settlement import (
     WindowFacts,
     open_forecast_decision,
 )
+from factorylab.settlement.lots import FEE_UNKNOWN
 from factorylab.settlement.settle import PredicateForecast
 from factorylab.settlement.vocabulary import (
     DECLINED_DEFINITION,
@@ -1468,6 +1469,17 @@ class FeedbackMixin:
             advance_funding(funding, int(ts_ns), str(rate))
         self.funding_prints[coin] = [int(ts_ns), str(rate)]
 
+    def _fee_legs(self, frozen: dict) -> tuple[str | None, str | None]:
+        """The taker rate of each leg of a frozen named trade: ``(entry, exit)``.
+
+        Guarantees the round trip an acting lot opened and marked at the same instants
+        pays (wave 16, D7): the entry leg is the instrument's rate frozen with the trade
+        (its latest read at or before the decision, D1's ex-ante element), the exit leg
+        the instrument's latest successful read at or before the trade's horizon
+        (``_rate_at``, ruling R10-i). A leg with no rate read by then is None.
+        """
+        return frozen.get("taker_rate"), self._rate_at(frozen["coin"], frozen["due_ns"])
+
     def _price_declined(self, about: str, frozen: dict, due_mids, funding_rates
                         ) -> tuple[dict[str, Any] | None, str]:
         """The frozen named trade priced from its frozen mid to its measuring mid.
@@ -1475,17 +1487,17 @@ class FeedbackMixin:
         Guarantees ``attempted-trade-net-v1`` (``attempted_cost``) for the trade a
         refused answer order named, and ``declined-trade-net-v1`` (``opportunity_cost``,
         ruling R2) for a declined one: the same mids, horizon and money terms for both,
-        at the venue's taker rate frozen with the trade (ex ante, the schedule in force
-        when the return was made) and the funding rates of the venue's funding times in
-        the window. A trade frozen with no rate is not priced.
+        each leg at its own taker rate (``_fee_legs``) and the funding rates of the
+        venue's funding times in the window. A trade with a leg whose rate was never
+        read is not priced.
         """
         opened = tuple(tuple(m) for m in frozen["mids"])
-        rate = frozen.get("taker_rate")
+        entry, exit_ = self._fee_legs(frozen)
         if frozen.get("attempted") is not None:
-            return (attempted_cost(opened, due_mids, rate, frozen["attempted"],
+            return (attempted_cost(opened, due_mids, entry, exit_, frozen["attempted"],
                                    funding_rates), ATTEMPTED_DEFINITION)
-        return (opportunity_cost(opened, due_mids, rate, frozen["declined"], funding_rates),
-                OPPORTUNITY_DEFINITION)
+        return (opportunity_cost(opened, due_mids, entry, exit_, frozen["declined"],
+                                 funding_rates), OPPORTUNITY_DEFINITION)
 
     def _reference_outcome(self, frozen: dict) -> tuple[str, list[str] | None]:
         """Whether a frozen named trade can be priced now: ``(state, funding rates)``.
@@ -1571,6 +1583,12 @@ class FeedbackMixin:
         self.reference_mids.pop(about, None)
         self.window.non_acting_outcomes += 1  # wave 16, R-H: fixed now, either way
         if state == "none":
+            return self._keep_outcome(self.world_outcomes, about, "none", None, None)
+        if None in self._fee_legs(frozen):
+            # Ruling R10-i, per leg: the venue never stated the rate one leg pays by its
+            # instant, so the outcome is fixed and uninformative, as an acting lot's is.
+            self.ledger.append({"kind": "consequence.uninformative", "handle": about,
+                                "reason": FEE_UNKNOWN})
             return self._keep_outcome(self.world_outcomes, about, "none", None, None)
         res_ns, res_mid = frozen["res"]
         priced, definition = self._price_declined(about, frozen, ((frozen["coin"], res_mid),),

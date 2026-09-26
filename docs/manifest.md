@@ -492,11 +492,16 @@ consequence mix and ledgers `sampling.blind` (published in
 - for a return that executed nothing and named a declined trade
   (`counterfactual {coin, side}`): `declined-trade-net-v1` (wave 16, D1; ruling
   R2: "net of fees, priced ex ante on the named trade"). `net = s * (m1 - m0) / m0
-  * 10^4 - 2 * f * 10^4` bp, `s` = +1 for a buy and -1 for a sell, `m0` the coin's
+  * 10^4 - (f0 + f1) * 10^4` bp, `s` = +1 for a buy and -1 for a sell, `m0` the coin's
   mid the world had broadcast when the return was made, `m1` its mid at the
-  horizon, `f` the venue's taker fee rate for the coin's market (the spot schedule
-  for a pair, the perp schedule otherwise; ruling R-I) in force when the return was
-  made, less `s * sum(rho) * 10^4` for the venue's funding rate `rho` in force at each
+  horizon, `f0` and `f1` the venue's taker fee rate for the coin's market (the spot
+  schedule for a pair, the perp schedule otherwise; ruling R-I), each leg at its own
+  instant: `f0` the instrument's latest rate at or before the decision (D1's ex-ante
+  element), `f1` its latest successful read at or before `H` (ruling R10-i). That is
+  the round trip an acting lot opened and marked at the same instants pays (D7). A
+  leg with no rate read by its instant fixes the outcome as uninformative
+  (`consequence.uninformative`, reason `fee_unknown`). Less `s * sum(rho) * 10^4` for
+  the venue's funding rate `rho` in force at each
   of its funding times between `m0` and `m1` (perps only; longs pay a positive rate;
   the rate at a funding time is the venue's latest print at or before it); `y = 1`
   when `net <= 0` (declining was right in money), else `0`. The taker

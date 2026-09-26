@@ -37,7 +37,7 @@ def _price(side, bps):
 def test_a_move_the_round_trip_would_have_eaten_is_declining_right(side, bps):
     """Money sign: every 0 < g <= fee gives y = 1. The v2 tanh read such moves as the
     hold being wrong, on trades that would have lost money after the venue's fee."""
-    priced = opportunity_cost(*_price(side, bps), TAKER, side)
+    priced = opportunity_cost(*_price(side, bps), TAKER, TAKER, side)
     assert Decimal(priced["gross_bps"]) > 0
     assert priced["round_trip_fee_bps"] == "9"
     assert priced["score"] == 1.0
@@ -45,19 +45,20 @@ def test_a_move_the_round_trip_would_have_eaten_is_declining_right(side, bps):
 
 @pytest.mark.parametrize("side", [BUY, SELL])
 def test_a_trade_that_beats_the_round_trip_makes_declining_wrong(side):
-    assert opportunity_cost(*_price(side, "9.01"), TAKER, side)["score"] == 0.0
-    assert opportunity_cost(*_price(side, "-50"), TAKER, side)["score"] == 1.0
+    assert opportunity_cost(*_price(side, "9.01"), TAKER, TAKER, side)["score"] == 0.0
+    assert opportunity_cost(*_price(side, "-50"), TAKER, TAKER, side)["score"] == 1.0
 
 
 def test_the_fee_is_the_venues_and_changing_it_changes_y():
     """The same move is right to decline at one venue's rate and wrong at another's:
     the fee is read from the venue, never a module constant."""
     path = _price(BUY, "6")
-    assert opportunity_cost(*path, "0.00045", BUY)["score"] == 1.0
-    assert opportunity_cost(*path, "0.00025", BUY)["score"] == 0.0
-    assert opportunity_cost(*path, "0", BUY)["score"] == 0.0
+    assert opportunity_cost(*path, "0.00045", "0.00045", BUY)["score"] == 1.0
+    assert opportunity_cost(*path, "0.00025", "0.00025", BUY)["score"] == 0.0
+    assert opportunity_cost(*path, "0", "0", BUY)["score"] == 0.0
     # An unread rate is never a number: no rate, no y.
-    assert opportunity_cost(*path, None, BUY) is None
+    assert opportunity_cost(*path, None, TAKER, BUY) is None
+    assert opportunity_cost(*path, TAKER, None, BUY) is None
     import factorylab.runtime.grounded as grounded
 
     constants = [v for k, v in vars(grounded).items()
@@ -75,13 +76,13 @@ def test_a_funding_payment_inside_the_window_flips_y_where_its_term_crosses_zero
     4 bp one makes it lose. A payment the named side would have received never flips
     a winner."""
     path = _price(side, "12")
-    assert opportunity_cost(*path, TAKER, side)["score"] == 0.0
-    assert opportunity_cost(*path, TAKER, side, [rate])["score"] == 0.0
-    doubled = opportunity_cost(*path, TAKER, side, [rate, rate])
+    assert opportunity_cost(*path, TAKER, TAKER, side)["score"] == 0.0
+    assert opportunity_cost(*path, TAKER, TAKER, side, [rate])["score"] == 0.0
+    doubled = opportunity_cost(*path, TAKER, TAKER, side, [rate, rate])
     assert doubled["score"] == (1.0 if flips else 0.0)
     assert doubled["funding_payments"] == 2
     # The rate term alone decides the flip: at a net of exactly zero declining is right.
-    exact = opportunity_cost(*path, TAKER, side, ["0.0003" if side is BUY else "-0.0003"])
+    exact = opportunity_cost(*path, TAKER, TAKER, side, ["0.0003" if side is BUY else "-0.0003"])
     assert Decimal(exact["net_bps"]) == 0 and exact["score"] == 1.0
 
 
@@ -89,8 +90,8 @@ def test_no_hold_y_is_ever_outside_zero_and_one():
     for bps in ("-500", "-9", "-0.5", "0", "0.5", "8.9", "9", "9.1", "500"):
         for side in (BUY, SELL):
             for rates in ((), ["0.0001"], ["-0.0003", "0.0001"]):
-                for priced in (opportunity_cost(*_price(side, bps), TAKER, side, rates),
-                               attempted_cost(*_price(side, bps), TAKER, side, rates)):
+                for priced in (opportunity_cost(*_price(side, bps), TAKER, TAKER, side, rates),
+                               attempted_cost(*_price(side, bps), TAKER, TAKER, side, rates)):
                     assert priced["score"] in (0.0, 1.0)
 
 
@@ -98,20 +99,21 @@ def test_no_hold_y_is_ever_outside_zero_and_one():
 def test_the_attempted_trade_is_one_when_it_would_have_beaten_the_round_trip(side):
     """The complement of the declined form on the same named trade and money terms."""
     for bps in ("-20", "0", "5", "9", "9.01", "40"):
-        attempted = attempted_cost(*_price(side, bps), TAKER, side)
-        declined = opportunity_cost(*_price(side, bps), TAKER, side)
+        attempted = attempted_cost(*_price(side, bps), TAKER, TAKER, side)
+        declined = opportunity_cost(*_price(side, bps), TAKER, TAKER, side)
         assert attempted["score"] == (1.0 if Decimal(bps) > 9 else 0.0)
         assert attempted["score"] + declined["score"] == 1.0
         assert attempted["attempted"] == side and attempted["net_bps"] == declined["net_bps"]
 
 
 def test_a_bare_hold_or_missing_prices_mean_the_world_did_not_speak():
-    assert opportunity_cost([("BTC", "100")], [("BTC", "103")], TAKER, None) is None
-    assert opportunity_cost([("BTC", "100")], [("ETH", "10")], TAKER, BUY) is None
-    assert opportunity_cost([], [], TAKER, BUY) is None
-    assert opportunity_cost([("BTC", "100")], [("BTC", "101")], TAKER,
+    assert opportunity_cost([("BTC", "100")], [("BTC", "103")], TAKER, TAKER, None) is None
+    assert opportunity_cost([("BTC", "100")], [("ETH", "10")], TAKER, TAKER, BUY) is None
+    assert opportunity_cost([], [], TAKER, TAKER, BUY) is None
+    assert opportunity_cost([("BTC", "100")], [("BTC", "101")], TAKER, TAKER,
                             {"coin": "ETH", "side": "buy"}) is None
-    assert attempted_cost([("BTC", "100")], [("BTC", "101")], None, BUY) is None
+    assert attempted_cost([("BTC", "100")], [("BTC", "101")], None, TAKER, BUY) is None
+    assert attempted_cost([("BTC", "100")], [("BTC", "101")], TAKER, None, BUY) is None
 
 
 def test_the_definitions_are_new_and_the_old_ones_are_names_only():

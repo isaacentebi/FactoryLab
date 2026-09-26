@@ -230,6 +230,7 @@ def test_a_verdict_on_a_declined_trade_is_scored_against_its_opportunity_price()
     base rate in one pass (wave 16, D2: no mark, no late re-scoring)."""
     rt, producer, (wrong, right) = _declined_trade_run((0.9, 0.1))
     price = opportunity_cost([("BTC", "100")], [("BTC", "101")], rt._taker_rate("BTC"),
+                             rt._taker_rate("BTC"),
                              {"coin": "BTC", "side": "buy"})["score"]
     assert price == 0.0  # the rally beat the round trip: declining it was wrong
     scored = {row["handle"]: row for row in _rows(rt, "verdict.consequence")}
