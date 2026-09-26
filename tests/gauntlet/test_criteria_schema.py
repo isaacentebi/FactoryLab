@@ -28,6 +28,9 @@ NOT_EMITTED = {
                           "record (its handle included); no gauntlet world files a challenge",
     "price.register": "emitted by PriceController.register_pending with kind and card_id "
                       "(the fields the fixture uses); the captured set holds none",
+    "propensity.unlearned": "emitted with handle, reason and either assembly_id (compute.py "
+                            "3003/3015, feedback.py 2094) or learner_id (feedback.py "
+                            "2211/2283/2402); the captured set holds none",
     "router.created": "emitted by routing._build_router with learner_id, event_kind and "
                       "replaces (the fields the fixture uses); the captured set holds none",
     "tool.call": "emitted by compute.py _invoke's tool loop with kind and handle (the "

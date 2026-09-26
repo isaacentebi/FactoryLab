@@ -272,7 +272,10 @@ The tool defends against inconsistency, stale artifacts and operator error:
   hashes, and the gate re-verifies them against that commit.
 - **Recomputed.** Derived values are recomputed from bound sources, never stored and
   trusted: the gate recomputes the verdict and every finding from the samples; nothing
-  beside a triage file is authoritative.
+  beside a triage file is authoritative. The key's calibration is recomputed too: at
+  validate, triage and gate the canaries and controls are planted again from the
+  release's committed `canaries.json`, the key's seed and release commit, over the
+  release corpus beside the key, and the key must equal them exactly.
 - **Validated.** Every input is schema-validated before use; one invalid field refuses
   the artifact (exit 2) or invalidates the sample.
 

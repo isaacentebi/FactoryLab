@@ -1744,6 +1744,48 @@ def test_no_policy_or_evidence_read_bypasses_the_release_commit():
         assert not hasattr(tool, gone), gone
 
 
+# --- Codex pass on 2c85f43: the key's calibration is recomputed, never trusted -----------
+
+
+def _key_copy(rendered, tmp_path):
+    out, _key = rendered
+    for name in ("auditor_input.jsonl", "canary_key.json", "prompt.md",
+                 "provenance_prompt.md", "release_corpus.jsonl"):
+        (tmp_path / name).write_bytes((out / name).read_bytes())
+    return tmp_path / "canary_key.json"
+
+
+@pytest.mark.parametrize("edit", ["q7 removed", "seven canaries", "q7 not mandatory",
+                                  "no controls"])
+def test_a_key_whose_calibration_is_not_the_releases_is_refused(rendered, tmp_path,
+                                                                capsys, edit):
+    """Codex P1 (class2_audit.py:1188): the canaries and controls are planted again from
+    the release's committed canaries.json, the key's seed and release commit; a key that
+    differs (a canary removed, a flag flipped, the controls emptied) is refused at
+    validate and gate, however valid its leaf ids."""
+    path = _key_copy(rendered, tmp_path)
+    assert tool.load_calibrated_key(path, REPO[0])
+    key = json.loads(path.read_text())
+    if edit == "q7 removed":
+        key["canaries"] = [c for c in key["canaries"] if c["question"] != "Q7"]
+    elif edit == "seven canaries":
+        key["canaries"] = [c for c in key["canaries"] if c["question"] != "Q3"]
+    elif edit == "q7 not mandatory":
+        key["canaries"] = [c | {"mandatory": False} if c["question"] == "Q7" else c
+                           for c in key["canaries"]]
+    else:
+        key["controls"] = []
+    path.write_text(json.dumps(key))
+    tool.load_key(path)  # every leaf id still exists: the old check passed it
+    with pytest.raises(tool.AuditInputInvalid, match="not the ones the release plants"):
+        tool.load_calibrated_key(path, REPO[0])
+    out, _ = rendered
+    argv = ["validate", "a.jsonl", "b.jsonl", "--provenance-samples", "c.jsonl", "d.jsonl",
+            "--key", str(path)]
+    assert tool.main(argv) == 2
+    assert "not the ones the release plants" in capsys.readouterr().err
+
+
 # --- Codex pass on 50ce3f8: the renderer's own executed code is the release's ------------
 
 

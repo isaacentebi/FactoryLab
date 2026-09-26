@@ -1629,8 +1629,15 @@ def th1c_movement(events: list[Mapping], manifest: Mapping) -> Result:
     # ``_learn_router_return`` -> ``_thrash_charged``: a seat round at its settlement, an
     # abstention when its deferred credit is priced). A positive charge whose round has
     # not been learned yet is pending, never missing.
+    # Only a router's own learning failure unlearns its round: a ``propensity.unlearned``
+    # naming a router ``learner_id`` (feedback.py ``_learn_router_return`` and
+    # ``_apply_router_round``). One naming an ``assembly_id`` is a seat's declared-
+    # propensity learner failing (compute.py:3003, :3015; feedback.py:2094), which leaves
+    # the router's round, and its charge, as it was.
+    router_unlearned = {row.get("handle") for row in rows_of(events, "propensity.unlearned")
+                        if str(row.get("learner_id", "")).startswith("router:")}
     learned = ({need(row, "return.handle") for row in rows_of(events, "decision.settle")}
-               - {row.get("handle") for row in rows_of(events, "propensity.unlearned")})
+               - router_unlearned)
     noops = {h for h, seat in decision_seats(events).items() if seat == "NOOP"}
     credited = {need(row, "handle") for row in rows_of(events, "router.abstention_priced")}
     learned = {h for h in learned if h not in noops} | credited
@@ -2678,13 +2685,19 @@ def gain_neutral(before: Mapping[str, Any], after: Mapping[str, Any]) -> Result:
 
 
 def _weights(base: Mapping) -> list[float]:
-    """A base's weights in its action order (saved as ``{action: log weight}``)."""
-    # An EXP3 base's state always holds its actions and log weights
-    # (learners/exp3.py ``EXP3.state``).
+    """A base's weights in its action order (saved as ``{action: log weight}``, or a list
+    in that order). Raises ``Malformed`` unless the weights name exactly the declared
+    actions, none missing and none extra: an EXP3 state holds one log weight per action
+    (learners/exp3.py ``EXP3.__init__``: ``dict.fromkeys(self.actions, 0.0)``), so a
+    weight vector over other arms is no state of it."""
     raw = need(base, "log_weights")
+    actions = list(need(base, "actions"))
     if isinstance(raw, Mapping):
-        actions = list(need(base, "actions"))
-        return [float(raw[a]) for a in actions if a in raw]
+        if set(raw) != set(actions) or len(set(actions)) != len(actions):
+            raise Malformed(base, "log_weights")
+        return [float(raw[a]) for a in actions]
+    if len(raw) != len(actions):
+        raise Malformed(base, "log_weights")
     return [float(x) for x in raw]
 
 

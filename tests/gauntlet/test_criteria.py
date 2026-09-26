@@ -2025,6 +2025,40 @@ def test_sf2a_a_single_seat_arm_is_not_comparable_not_failed():
     assert g.sf2_gradient(window + [_penalty("d2", 1.0)], M, **KW).status == g.UNSUPPORTED
 
 
+# --- Codex pass on 2c85f43 ----------------------------------------------------------------
+
+
+def test_th1c_a_seat_learner_failure_does_not_excuse_a_missing_router_charge():
+    """Codex P2 (gauntlet.py:1633): only a router's own learning failure (a
+    ``propensity.unlearned`` naming a router ``learner_id``) unlearns its round; a
+    seat's declared-propensity failure (``assembly_id``, compute.py:3003, :3015) leaves
+    the round learned, so its missing charge fails."""
+    rows = _seq([
+        _w(1, lam=0.4),
+        _open("d1", "a", ids=["a", "NOOP"], probs=[0.8, 0.2]),
+        _open("d2", "a", ids=["a", "NOOP"], probs=[0.1, 0.9]),  # moved 0.7
+        _settled("d2"),
+        {"kind": "propensity.unlearned", "handle": "d2", "assembly_id": "a",
+         "reason": "declared actions outside the registered action set"}])
+    result = g.th1c_movement(rows, M)
+    assert result.status == g.FAIL and result.evidence["missing"] == ["d2"]
+    router = [*rows[:-1], {"kind": "propensity.unlearned", "handle": "d2",
+                           "learner_id": "router:Tick", "reason": "outside the universe"}]
+    assert g.th1c_movement(router, M).status == g.UNSUPPORTED  # unlearned: pending
+
+
+@pytest.mark.parametrize("weights", [{"a": 1.0}, {"a": 1.0, "b": 1.0, "c": 0.0}, [1.0]])
+def test_gain_neutral_weights_must_name_exactly_the_declared_actions(weights):
+    """Codex P2 (gauntlet.py:2687): a weight vector with an arm missing or extra is no
+    EXP3 state (one log weight per action), so the reading is malformed and fails."""
+    good = {"actions": ["a", "b"], "gamma": 0.1, "log_weights": {"a": 1.0, "b": 1.0}}
+    bad = dict(good, log_weights=weights)
+    for before, after in ((bad, dict(good, gamma=0.15)), (good, dict(bad, gamma=0.15))):
+        result = g.gain_neutral({"bases": [before]}, {"bases": [after]})
+        assert result.status == g.FAIL
+        assert result.evidence["malformed"]["field"] == "log_weights"
+
+
 def test_s4_an_unresolved_penalty_row_may_carry_no_raw_score():
     row = {"kind": "price.penalty", "handle": "d", "penalty": 0.1, "raw": None,
            "effective": None}

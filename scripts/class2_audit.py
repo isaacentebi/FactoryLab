@@ -1189,6 +1189,46 @@ def load_key(path: Path) -> tuple[dict, list[dict]]:
     return key, records
 
 
+def calibration_problems(key_path: Path, key: dict, repo: Path) -> list[str]:
+    """Why the key's calibration is not the one the release makes (none when it is):
+    recomputed, never trusted. The canaries and controls are planted again (``plant``)
+    from the release's committed ``canaries.json`` (``committed_text``), the key's seed
+    and release commit (CAN-1: controls rotate with the release), over the release corpus
+    beside the key (bound by its sha256) ordered as render ordered it (``corpus_diff``
+    against the previous corpus the key names, ``changed_first``); the key's canaries
+    (count, questions, classes, mandatory flags, leaves) and controls must equal them
+    exactly."""
+    corpus_path = Path(key_path).parent / "release_corpus.jsonl"
+    if not corpus_path.exists() or sha256_file(corpus_path) != key.get("release_corpus_sha"):
+        return ["the release corpus beside the key is not the one it records"]
+    if type(key.get("seed")) is not int:
+        return ["the key records no integer seed"]
+    records = read_corpus(corpus_path)
+    prior = read_corpus(Path(key["previous_corpus"])) if key.get("previous_corpus") else None
+    ordered, changed = changed_first(records, corpus_diff(prior, records))
+    spec = load_canaries(committed_text(repo, key["release_commit"], CANARIES_REL))
+    _planted, expected = plant(ordered, seed=key["seed"], world=key["worlds"][0],
+                               changed=changed if prior is not None else None, spec=spec,
+                               control_seed=key["release_commit"])
+    problems = []
+    for field in ("canaries", "controls"):
+        if key.get(field) != expected[field]:
+            problems.append(f"the key's {field} are not the ones the release plants "
+                            f"({len(key.get(field) or [])} recorded, "
+                            f"{len(expected[field])} planted)")
+    return problems
+
+
+def load_calibrated_key(key_path: Path, repo: Path) -> tuple[dict, list[dict]]:
+    """``load_key``, refused unless its calibration is the release's
+    (``calibration_problems``)."""
+    key, records = load_key(key_path)
+    problems = calibration_problems(key_path, key, repo)
+    if problems:
+        raise AuditInputInvalid("; ".join(problems))
+    return key, records
+
+
 def read_output(path: Path) -> tuple[list[dict], dict | None]:
     """A sample's findings and its one summary (JSON Lines); refused if a line is not a
     JSON object or two summaries are given."""
@@ -1835,13 +1875,13 @@ def gate(world: str, triage: Path, key_path: Path, samples: list[Path],
         return [f"no triage file at {triage}"]
     if triage_sha256 is None:
         raise AuditInputInvalid("the gate needs the reviewed triage file's sha256")
-    key, records = load_key(key_path)
+    repo = repo or ROOT
+    key, records = load_calibrated_key(key_path, repo)
     text = triage.read_text()
     header = triage_header(text)
     problems = []
     if sha256_file(triage) != triage_sha256:
         problems.append("the triage file is not the one reviewed (its sha256 differs)")
-    repo = repo or ROOT
     gated = release or "HEAD"
     try:
         gated = _git(repo, "rev-parse", "--verify", f"{gated}^{{commit}}").strip()
@@ -1980,7 +2020,7 @@ def _run(args: argparse.Namespace) -> int:
         print(f"gate passed; {written} names the release: commit it with the triage "
               "files alone, directly on the release")
         return 0
-    key, records = load_key(args.key)
+    key, records = load_calibrated_key(args.key, ROOT)
     samples = [read_output(path) for path in args.output]
     provenance = [read_output(path) for path in args.provenance_samples]
     verdict = audit_verdict(samples, provenance, key, records)
