@@ -52,8 +52,8 @@ therefore cannot recommend text that steers (AGENTS rule 2).
    leaf carries its `change`.
 6. **The provenance pass** (a second prompt, same model: `provenance_prompt.md`, since a
    commit message may carry behaviour data): every commit since the last
-   release that touched a seat-visible surface, with its message and its diff to those
-   files. The question: does any message justify text by a behaviour mix ("seats held too
+   release that touched a seat-visible surface or the essay's committed digest
+   (`essay.sha256`), with its message and its diff to those files. The question: does any message justify text by a behaviour mix ("seats held too
    much", "judges scored refusals high")? This enforces rule 2 at the point of authorship.
 
 ## The rubric: answer each leaf separately
@@ -243,8 +243,9 @@ first release); `gate` re-verifies the base and the previous digests the key nam
 recomputes the provenance prompt from the range. When a gate passes it writes the
 release, its release corpus's digest and the gated triage file's digest to
 `last_release`; commit it with the triage files (and `rejected.jsonl`), and nothing else, as one commit directly on the gated release: that is a gate-recording commit, the only kind that may edit `last_release`. `render` fills the authority text from `--essay` (default `docs/essay.md`, which is
-copied into the worktree and never committed) and refuses to render without it, or when
-it lacks a heading that bounds the text. No prompt is ever edited after rendering: both
+copied into the worktree and never committed) and refuses to render without it, when
+it lacks a heading that bounds the text, or when it does not hash to the digest
+`docs/audits/class2/essay.sha256` holds at the release commit. No prompt is ever edited after rendering: both
 prompts are bound to the key by hash.
 
 `canary_key.json` and `release_corpus.jsonl` are never part of the auditor's input: the
@@ -266,7 +267,10 @@ against inconsistency, stale artifacts, operator error and artifacts rewritten t
   this protocol's reviewer text, AGENTS.md's rules, the allowlist, the world files the
   family check reads, and `last_release`. The corpus is rendered from the worktree,
   which the render pins to the release (HEAD is the release, no seat-visible path is
-  dirty); the essay is never committed and is bound by its sha256 in the key. The
+  dirty). The essay is never committed (`.gitignore`), so its sha256 is:
+  `docs/audits/class2/essay.sha256`. At render and at every later step the supplied
+  essay must hash to the digest committed at the release, and a changed essay needs a
+  commit changing that file, which the provenance pass shows. The
   code that rendered the corpus is the release's too: after rendering, every module of
   the repository that ran (read from the process's loaded modules, never a list) must
   be committed and unmodified at the release commit; the key records their paths and
@@ -279,13 +283,13 @@ against inconsistency, stale artifacts, operator error and artifacts rewritten t
   `auditor_input.jsonl`, and the key's canaries, controls and expected leaves); the
   corpus prompt (`prompt.md` rendered again from the release's protocol, AGENTS.md,
   allowlist and `rejected.jsonl`, the last release's triage as its gate-recording
-  commit holds it, and the recomputed input); and the provenance pass (the range from
+  commit holds it, the recomputed input, and the authority text extracted again from
+  the essay verified against the committed digest); and the provenance pass (the range from
   the last audited release, its commit shas and messages, the key's `provenance_id`,
   and `provenance_prompt.md` rendered again). The verdict and every finding are
   recomputed from the samples; nothing beside a triage file is authoritative.
-- **Taken as given.** Only what the release commit cannot produce: the auditor's
-  samples, validated against the recomputed inputs, and the authority text in
-  `prompt.md`, since the essay is never committed (its sha256 is in the key).
+- **Taken as given.** Only the auditor's samples, which the release commit cannot
+  produce; they are validated against the recomputed inputs.
 - **Validated.** Every input is schema-validated before use; one invalid field refuses
   the artifact (exit 2) or invalidates the sample.
 

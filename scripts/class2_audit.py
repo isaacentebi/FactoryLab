@@ -15,7 +15,8 @@ does everything around that call, offline:
             is never given. Also writes ``prompt.md`` (protocol inputs 1-5: the rubric,
             the authority text, the allowlist, the corpus diff against
             --previous-corpus, then last release's triage and rejected findings; the
-            authority text filled from --essay, or no render) and
+            authority text filled from --essay, which must hash to the digest
+            ``docs/audits/class2/essay.sha256`` holds at the release, or no render) and
             ``provenance_prompt.md``, the second prompt (input 6): every commit in
             --range base..head that touches a seat-visible surface, with its message and
             diff. Commit messages may carry behaviour data, so they never enter the
@@ -125,13 +126,18 @@ from tests.audit.class2_corpus import RenderFailed  # noqa: E402
 #: ``LAST_RELEASE``. Two inputs are not read this way, by design: the corpus is rendered
 #: by running the package, which cannot run a blob, so ``release_commit`` pins the
 #: worktree to the release (HEAD is the release, no seat-visible path is dirty); and the
-#: essay is never committed (its sha256 is in the key).
+#: essay is never committed (.gitignore), so its sha256 is (``ESSAY_DIGEST_REL``).
 CANARIES_REL = "docs/audits/class2/canaries.json"
 REJECTED_REL = "docs/audits/class2/rejected.jsonl"
 PROTOCOL_REL = "docs/audits/class2/auditor-protocol.md"
 AGENTS_REL = "AGENTS.md"
 ALLOWLIST_REL = "tests/audit/class2_allowlist.toml"
 WORLD_REL = "worlds/{world}.toml"
+#: The sha256 of the canonical ``docs/essay.md``, committed: the essay is the
+#: experimenter's document and never committed, so the digest committed at the release
+#: is what binds the authority text the prompt quotes. A changed essay needs a commit
+#: changing this file, which the provenance pass shows.
+ESSAY_DIGEST_REL = "docs/audits/class2/essay.sha256"
 
 
 def executed_code(repo: Path) -> dict[str, str]:
@@ -509,12 +515,28 @@ def authority_text(essay: Path | None) -> str:
     return "\n".join(lines[head:stop] + ["", "---", ""] + lines[start2:end2])
 
 
+def verified_authority(repo: Path, release: str, essay: Path | None) -> str:
+    """The authority text of ``essay`` (``authority_text``), refused unless the essay
+    hashes to the digest committed at ``release`` (``ESSAY_DIGEST_REL``)."""
+    authority = authority_text(essay)
+    committed = committed_text(repo, release, ESSAY_DIGEST_REL).strip()
+    if not SHA256.fullmatch(committed):
+        raise AuditInputInvalid(f"{ESSAY_DIGEST_REL} at {release[:12]} holds no sha256")
+    if sha256_file(essay) != committed:
+        raise AuditInputInvalid(f"the essay at {essay} is not the one {ESSAY_DIGEST_REL} "
+                                f"commits at {release[:12]}")
+    return authority
+
+
 #: Where seat-visible text is written: exactly the paths the corpus is rendered from
 #: (``class2_corpus.corpus_sources``: the whole package the seat-text scan indexes, and
 #: the world files), so the dirty check and the provenance pass can never watch less
 #: than the corpus reads. Deliberately wide: a commit touching one of these is read by
 #: the provenance pass whether or not its diff turns out to change a seat-visible string.
 SURFACE_PATHS = corpus.corpus_sources()
+#: What the provenance pass reads: the seat-visible paths and the essay's committed
+#: digest (``ESSAY_DIGEST_REL``), since the essay's text is the prompt's authority.
+PROVENANCE_PATHS = (*SURFACE_PATHS, ESSAY_DIGEST_REL)
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -541,13 +563,13 @@ def provenance_commits(repo: Path, release_range: str, *, from_root: bool = Fals
     # Full history: no commit on either side of a merge is simplified away.
     revs = release_range.split("..", 1)[1] if from_root else release_range
     shas = _git(repo, "rev-list", "--reverse", "--full-history", revs, "--",
-                *SURFACE_PATHS).split()
+                *PROVENANCE_PATHS).split()
     commits = []
     for sha in shas:
         message = _git(repo, "log", "-1", "--format=%B", sha).strip()
         merge = len(_git(repo, "rev-list", "--parents", "-n", "1", sha).split()) > 2
         diff = _git(repo, "show", "--no-color", "--format=", *(["--cc"] if merge else []),
-                    sha, "--", *SURFACE_PATHS)
+                    sha, "--", *PROVENANCE_PATHS)
         if merge and not diff.strip():
             diff = "(merge: every surface hunk is one of its parents', shown with that commit)"
         commits.append({"sha": sha, "message": message, "diff": diff, "merge": merge})
@@ -558,12 +580,14 @@ def provenance_section(release_range: str, commits: list[dict]) -> str:
     """The prompt's provenance pass: the question, then every commit, or an explicit none."""
     lines = ["## Provenance pass", "",
              f"Release range `{release_range}`. Each commit below touched a seat-visible "
-             f"surface ({', '.join(SURFACE_PATHS)}). Answer, for each: does its message "
+             f"surface ({', '.join(SURFACE_PATHS)}) or the essay's committed digest "
+             f"({ESSAY_DIGEST_REL}). Answer, for each: does its message "
              "justify the change by a behaviour mix (what seats did, how often they did it, "
              "what scores they got)? A yes is a finding (AGENTS rule 2), whatever the diff "
              "itself says.", ""]
     if not commits:
-        lines.append("(no commit in this range touched a seat-visible surface)")
+        lines.append("(no commit in this range touched a seat-visible surface or the "
+                     "essay's digest)")
     for commit in commits:
         title = f"### {commit['sha']}" + (" (merge, combined diff)" if commit.get("merge")
                                              else "")
@@ -641,11 +665,6 @@ def write_prompt(out: Path, **inputs) -> Path:
     path = out / "prompt.md"
     path.write_text(prompt_text(**inputs))
     return path
-
-
-#: The headings that bound the authority text in the corpus prompt.
-AUTHORITY_OPEN = "## Authority text (verbatim)\n\n"
-AUTHORITY_CLOSE = "\n\n## AGENTS.md rules 1-5\n"
 
 
 def prompt_text(*, authority: str, previous_text: str | None, diff: str,
@@ -1068,7 +1087,7 @@ def render(worlds: list[str], out: Path, *, seed: int, rendered: bool, release_r
                                     f"the last audited release this range starts at "
                                     f"({range_shas[0][:12]})")
     spec = load_canaries(committed_text(repo, released, CANARIES_REL))
-    authority = authority_text(essay)
+    authority = verified_authority(repo, released, essay)
     # Rendered before anything is written: a failed render leaves no corpus behind.
     records = [json.loads(line) for line in
                _rendered_corpus(corpus_records, tuple(worlds), rendered,
@@ -1268,7 +1287,8 @@ def load_key(path: Path) -> tuple[dict, list[dict]]:
     return key, records
 
 
-def calibration_problems(key_path: Path, key: dict, repo: Path) -> list[str]:
+def calibration_problems(key_path: Path, key: dict, repo: Path,
+                         essay: Path | None = None) -> list[str]:
     """Why the audit's inputs are not the ones the release commit makes (none when they
     are). The gate trusts nothing it can recompute from the release commit: every input
     below is recomputed from it and compared exactly; only the auditor's samples, which
@@ -1286,8 +1306,9 @@ def calibration_problems(key_path: Path, key: dict, repo: Path) -> list[str]:
     * the corpus prompt: rendered again (``prompt_text``) from the release's committed
       protocol, AGENTS.md, allowlist and ``rejected.jsonl``, the last release's triage
       as its gate-recording commit holds it, and the recomputed input, equal to
-      ``prompt.md``; its authority text alone is read from the prompt, since the essay
-      is never committed;
+      ``prompt.md``, its authority text taken from ``essay`` (default: the repository's
+      ``docs/essay.md``) only once it hashes to the digest committed at the release
+      (``verified_authority``);
     * the range and the provenance: the range and the previous files are the release's
       (``range_commits``), the key's record of the code that ran is the release's
       bytes, and the commit list (shas and messages) of the range, the key's
@@ -1333,11 +1354,14 @@ def calibration_problems(key_path: Path, key: dict, repo: Path) -> list[str]:
     if not beside.exists() or beside.read_bytes() != corpus_text(planted).encode():
         problems.append("the auditor_input.jsonl beside the key is not the corpus the "
                         "release plants")
-    # (c) The corpus prompt, rendered again: the essay is not in the release commit, so
-    # its authority text is the one section read from the prompt as given.
-    given = beside_text(here / "prompt.md")
-    authority = (given.split(AUTHORITY_OPEN, 1)[1].split(AUTHORITY_CLOSE, 1)[0]
-                 if AUTHORITY_OPEN in given and AUTHORITY_CLOSE in given else "")
+    # (c) The corpus prompt, rendered again, its authority text from the essay the
+    # release commits the digest of.
+    try:
+        authority = verified_authority(repo, release, Path(repo) / "docs/essay.md"
+                                       if essay is None else essay)
+    except AuditInputInvalid as exc:
+        problems.append(str(exc))
+        authority = None
     rejected_rows = read_rejected(committed_text(repo, release, REJECTED_REL,
                                                  required=False))
     try:
@@ -1345,14 +1369,13 @@ def calibration_problems(key_path: Path, key: dict, repo: Path) -> list[str]:
     except AuditInputInvalid as exc:
         problems.append(str(exc))
         previous_text = None
-    prompt = prompt_text(authority=authority, previous_text=previous_text,
-                         diff=diff_section(planted, diff, rejected_rows),
-                         rejected=rejected_rows,
-                         corpus_sha=hashlib.sha256(corpus_text(planted).encode()).hexdigest(),
-                         protocol=committed_text(repo, release, PROTOCOL_REL),
-                         agents=committed_text(repo, release, AGENTS_REL),
-                         allowlist=committed_text(repo, release, ALLOWLIST_REL))
-    if given != prompt:
+    if authority is not None and beside_text(here / "prompt.md") != prompt_text(
+            authority=authority, previous_text=previous_text,
+            diff=diff_section(planted, diff, rejected_rows), rejected=rejected_rows,
+            corpus_sha=hashlib.sha256(corpus_text(planted).encode()).hexdigest(),
+            protocol=committed_text(repo, release, PROTOCOL_REL),
+            agents=committed_text(repo, release, AGENTS_REL),
+            allowlist=committed_text(repo, release, ALLOWLIST_REL)):
         problems.append("the prompt.md beside the key is not the one the release renders")
     # (d) The range and the provenance pass, from the range the release commit fixes.
     ranged, commits = range_commits(repo, key)
@@ -1379,11 +1402,12 @@ def beside_text(path: Path) -> str:
     return path.read_bytes().decode() if path.exists() else ""
 
 
-def load_calibrated_key(key_path: Path, repo: Path) -> tuple[dict, list[dict]]:
+def load_calibrated_key(key_path: Path, repo: Path,
+                        essay: Path | None = None) -> tuple[dict, list[dict]]:
     """``load_key``, refused unless its calibration is the release's
     (``calibration_problems``)."""
     key, records = load_key(key_path)
-    problems = calibration_problems(key_path, key, repo)
+    problems = calibration_problems(key_path, key, repo, essay)
     if problems:
         raise AuditInputInvalid("; ".join(problems))
     return key, records
@@ -1905,9 +1929,9 @@ def _added_lines(repo: Path, commit: str) -> dict[str, list[str]]:
     with no letter or digit (a bracket, a blank) carries no text and is left out."""
     parents = _git(repo, "rev-list", "--parents", "-n", "1", commit).split()[1:]
     diff = (_git(repo, "diff", "--no-color", "--unified=0", parents[0], commit, "--",
-                 *SURFACE_PATHS) if parents else
+                 *PROVENANCE_PATHS) if parents else
             _git(repo, "show", "--no-color", "--format=", "--unified=0", commit, "--",
-                 *SURFACE_PATHS))
+                 *PROVENANCE_PATHS))
     added: dict[str, list[str]] = {}
     path = None
     for line in diff.splitlines():
@@ -1926,7 +1950,7 @@ def _seat_visible_lines(repo: Path, release: str) -> dict[str, str]:
     corpus's own scope, ``SURFACE_PATHS`` = ``corpus_sources()``), each with the first
     file it stands in. One ``git grep`` over the tree, text files only."""
     run = subprocess.run(["git", "-C", str(repo), "grep", "-I", "--no-color", "-e", "",
-                          release, "--", *SURFACE_PATHS], capture_output=True, text=True)
+                          release, "--", *PROVENANCE_PATHS], capture_output=True, text=True)
     if run.returncode not in (0, 1):  # 1: no text file at all
         raise AuditInputInvalid(f"cannot read the release's seat-visible files: "
                                 f"{run.stderr.strip()[:200]}")
@@ -2036,7 +2060,8 @@ def write_last_release(repo: Path, key: dict, *, world: str, triage_sha256: str)
 
 def gate(world: str, triage: Path, key_path: Path, samples: list[Path],
          provenance: list[Path], *, release: str | None = None,
-         repo: Path | None = None, triage_sha256: str | None = None) -> list[str]:
+         repo: Path | None = None, triage_sha256: str | None = None,
+         essay: Path | None = None) -> list[str]:
     """The release gate for ``world``: recomputed from bound sources, never read from a
     stored result.
 
@@ -2061,7 +2086,7 @@ def gate(world: str, triage: Path, key_path: Path, samples: list[Path],
     if triage_sha256 is None:
         raise AuditInputInvalid("the gate needs the reviewed triage file's sha256")
     repo = repo or ROOT
-    key, records = load_calibrated_key(key_path, repo)
+    key, records = load_calibrated_key(key_path, repo, essay)
     text = triage.read_text()
     header = triage_header(text)
     problems = []
@@ -2134,6 +2159,8 @@ def build_parser() -> argparse.ArgumentParser:
         v.add_argument("--provenance-samples", type=Path, nargs="+", required=True,
                        help="one JSON Lines file per provenance sample")
         v.add_argument("--key", type=Path, required=True)
+        v.add_argument("--essay", type=Path, default=None,
+                       help="the essay (default: docs/essay.md)")
         if name == "triage":
             v.add_argument("--world", required=True)
             v.add_argument("--family", required=True)
@@ -2149,6 +2176,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="the release commit being gated (default: HEAD)")
     g.add_argument("--triage-sha256", required=True,
                    help="the sha256 of the triage file as reviewed")
+    g.add_argument("--essay", type=Path, default=None,
+                   help="the essay (default: docs/essay.md)")
     b = sub.add_parser("baseline")
     b.add_argument("--static-only", action="store_true")
     return parser
@@ -2190,7 +2219,8 @@ def _run(args: argparse.Namespace) -> int:
     if args.command == "gate":
         path = args.triage or TRIAGE_DIR / f"{args.world}.md"
         problems = gate(args.world, path, args.key, args.samples, args.provenance_samples,
-                        release=args.release, repo=ROOT, triage_sha256=args.triage_sha256)
+                        release=args.release, repo=ROOT, triage_sha256=args.triage_sha256,
+                        essay=args.essay)
         for problem in problems:
             print(problem, file=sys.stderr)
         if problems:
@@ -2200,7 +2230,7 @@ def _run(args: argparse.Namespace) -> int:
         print(f"gate passed; {written} names the release: commit it with the triage "
               "files alone, directly on the release")
         return 0
-    key, records = load_calibrated_key(args.key, ROOT)
+    key, records = load_calibrated_key(args.key, ROOT, args.essay)
     samples = [read_output(path) for path in args.output]
     provenance = [read_output(path) for path in args.provenance_samples]
     verdict = audit_verdict(samples, provenance, key, records)

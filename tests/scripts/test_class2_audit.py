@@ -46,12 +46,23 @@ POLICY = (tool.CANARIES_REL, tool.PROTOCOL_REL, tool.AGENTS_REL, tool.ALLOWLIST_
 
 def _seed_policy(repo):
     """Write the policy files into ``repo``'s worktree and stage them (the next commit
-    carries them)."""
+    carries them), with the stand-in essay's digest as the committed anchor and the
+    essay itself in the worktree, never committed, as the operator copies it."""
     for rel in POLICY:
         target = repo / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text((ROOT / rel).read_text())
         _git(repo, "add", rel)
+    (repo / tool.ESSAY_DIGEST_REL).write_text(tool.sha256_file(ESSAY) + "\n")
+    _git(repo, "add", tool.ESSAY_DIGEST_REL)
+    (repo / "docs/essay.md").write_text(ESSAY.read_text())
+
+
+def _surface_commit(key):
+    """The one surface commit of the history's range (the base, which seeds the policy
+    and the essay's digest, is in a first release's provenance pass too)."""
+    (sha,) = [c["sha"] for c in key["provenance_commits"] if c["message"] == BEHAVIOUR_MIX]
+    return sha
 
 
 def _commit(repo, path, text, message):
@@ -232,18 +243,22 @@ def test_a_merge_whose_conflict_resolution_adds_surface_text_is_in_the_provenanc
 
 
 def test_a_range_with_no_surface_commit_renders_an_explicit_empty_section(tmp_path):
+    """A range with no commit to read says so; the first release's range still holds the
+    root, which commits the essay's digest (``ESSAY_DIGEST_REL``) and nothing seat-visible."""
+    assert "(no commit in this range touched a seat-visible surface or the essay's " \
+           "digest)" in tool.provenance_section("a..b", [])
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init", "-q")
     _seed_policy(repo)
     root = _commit(repo, "README.md", "x\n", "root")
     head = _commit(repo, "docs/notes.md", "notes\n", "notes only")
-    tool.render([WORLD], tmp_path / "out", seed=7, rendered=False, essay=ESSAY,
-                release_range=f"{root}..{head}", repo=repo)
+    key = tool.render([WORLD], tmp_path / "out", seed=7, rendered=False, essay=ESSAY,
+                      release_range=f"{root}..{head}", repo=repo)
+    assert [c["sha"] for c in key["provenance_commits"]] == [root]
     section = ((tmp_path / "out" / "provenance_prompt.md").read_text()
                .split("## Provenance pass", 1)[1])
-    assert "(no commit in this range touched a seat-visible surface)" in section
-    assert BEHAVIOUR_MIX not in section
+    assert f"+{tool.sha256_file(ESSAY)}" in section and "notes only" not in section
 
 
 def test_the_release_range_is_base_dot_dot_head(history, tmp_path):
@@ -600,13 +615,13 @@ def test_the_provenance_answer_is_validated(with_commit):
     """Codex P2: the second prompt's answer is a required, validated input: every commit
     answered once, the prompt's id echoed, a yes quoting the message."""
     out, key = with_commit
-    (sha,) = [c["sha"] for c in key["provenance_commits"]]
+    sha = _surface_commit(key)
     good = [_provenance(key, sample=i, flag={sha}) for i in (1, 2)]
     assert _verdict(out, key, provenance=good)["valid"]
     rows, summary = _provenance(key, sample=2, flag={sha})
     unanswered = _verdict(out, key, provenance=[good[0], ([], summary)])
     assert any("answered exactly once" in p for p in unanswered["problems"])
-    misquoted = [{**rows[0], "quote": "seats liked it"}]
+    misquoted = [r | {"quote": "seats liked it"} if r["sha"] == sha else r for r in rows]
     assert any("does not quote" in p for p in _verdict(
         out, key, provenance=[good[0], (misquoted, summary)])["problems"])
     unbound = _verdict(out, key, provenance=[good[0], (rows, {**summary,
@@ -723,7 +738,7 @@ def triaged(with_commit, tmp_path, monkeypatch):
     provenance sample and a real finding of the world by both corpus samples."""
     out, key = with_commit
     monkeypatch.setattr(tool, "TRIAGE_DIR", tmp_path)
-    (sha,) = [c["sha"] for c in key["provenance_commits"]]
+    sha = _surface_commit(key)
     real = next(r for r in _records(out) if r["provenance"] == "kernel"
                 and r["leaf_id"] not in {c["leaf_id"] for c in key["canaries"] + key["controls"]})
     samples, prov = _paths(tmp_path, out, key, flag={sha}, extra=[_finding(real, "Q4")])
@@ -1240,7 +1255,7 @@ def test_rub2_a_malformed_provenance_finding_invalidates_the_audit(with_commit,
                                                                    monkeypatch):
     """Sol RUB-2: provenance findings pass their own schema at validate time."""
     out, key = with_commit
-    (sha,) = [c["sha"] for c in key["provenance_commits"]]
+    sha = _surface_commit(key)
     good = [_provenance(key, sample=i, flag={sha}) for i in (1, 2)]
     assert _verdict(out, key, provenance=good)["valid"]
     original = tool.provenance_findings
@@ -1889,9 +1904,8 @@ def test_an_emptied_commit_list_with_a_rewritten_provenance_prompt_is_refused(
 
 
 def test_a_rewritten_corpus_prompt_is_refused(rendered, tmp_path):
-    """The same class: prompt.md is rendered again from the release (only its authority
-    text, from the uncommitted essay, is read as given), so a rubric line dropped from
-    it, with the key's digest rewritten, is refused."""
+    """The same class: prompt.md is rendered again from the release, so a rubric line
+    dropped from it, with the key's digest rewritten, is refused."""
     path = _key_copy(rendered, tmp_path)
     key = json.loads(path.read_text())
     prompt = (tmp_path / "prompt.md").read_text()
@@ -1902,6 +1916,45 @@ def test_a_rewritten_corpus_prompt_is_refused(rendered, tmp_path):
     tool.load_key(path)  # consistent with itself
     with pytest.raises(tool.AuditInputInvalid, match="prompt.md beside the key is not"):
         tool.load_calibrated_key(path, REPO[0])
+
+
+# --- Codex pass on 05e678b: the essay is anchored by a digest committed at the release -------
+
+
+def test_an_altered_essay_with_the_right_headings_is_refused(rendered, history, tmp_path):
+    """Codex P1 (class2_audit.py:1340): the essay is never committed, but its digest is
+    (``ESSAY_DIGEST_REL``). An essay with every heading but other text is refused at
+    render and at validate and gate; the canonical one passes."""
+    repo, base, _surface, head = history
+    altered = tmp_path / "essay.md"
+    altered.write_text(ESSAY_TEXT.replace("(stand-in).", "(an edited stand-in)."))
+    tool.authority_text(altered)  # every heading is there
+    with pytest.raises(tool.AuditInputInvalid, match="is not the one .*essay.sha256 commits"):
+        tool.render([WORLD], tmp_path / "out", seed=7, rendered=False, essay=altered,
+                     release_range=f"{base}..{head}", repo=repo)
+    assert not (tmp_path / "out").exists()
+    (tmp_path / "copy").mkdir()
+    path = _key_copy(rendered, tmp_path / "copy")
+    assert tool.load_calibrated_key(path, REPO[0], ESSAY)
+    with pytest.raises(tool.AuditInputInvalid, match="is not the one .*essay.sha256 commits"):
+        tool.load_calibrated_key(path, REPO[0], altered)
+
+
+def test_a_rewritten_authority_section_is_refused(rendered, tmp_path):
+    """The prompt's authority text is extracted again from the verified essay, so an
+    authority section rewritten in prompt.md, with the key's digest rewritten to match,
+    is refused."""
+    path = _key_copy(rendered, tmp_path)
+    key = json.loads(path.read_text())
+    prompt = (tmp_path / "prompt.md").read_text()
+    assert "THE DARK STACK (stand-in)" in prompt
+    (tmp_path / "prompt.md").write_text(prompt.replace("THE DARK STACK (stand-in)",
+                                                       "THE DARK STACK (abridged)"))
+    key["prompt_sha"] = tool.sha256_file(tmp_path / "prompt.md")
+    path.write_text(json.dumps(key))
+    tool.load_key(path)  # consistent with itself
+    with pytest.raises(tool.AuditInputInvalid, match="prompt.md beside the key is not"):
+        tool.load_calibrated_key(path, REPO[0], ESSAY)
 
 
 # --- Codex pass on 50ce3f8: the renderer's own executed code is the release's ------------
