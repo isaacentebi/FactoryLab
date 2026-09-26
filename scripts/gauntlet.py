@@ -2220,7 +2220,9 @@ def of2d_authorship(events: list[Mapping], manifest: Mapping, *,
 
 #: The world-fact row a ``verdict.consequence`` row's ``y`` is measured from, by its
 #: (``outcome``, ``phase``): feedback.py ``_reward_outcome`` / ``_final_outcome`` ledger
-#: exactly one of these for the judged return before scoring any verdict on it.
+#: exactly one of these for the judged return before scoring any verdict on it. The
+#: ``mark`` phase is pre-wave-16 (wave 16 removes ``consequence.marked``); a diary with
+#: no mark rows is normal.
 CONSEQUENCE_FACTS = {
     ("return_paid_off", "final"): "consequence.outcome",
     ("return_paid_off", "mark"): "consequence.marked",
@@ -2231,14 +2233,23 @@ CONSEQUENCE_FACTS = {
 }
 
 
-def consequence_y(fact: Mapping, outcome: str, manifest: Mapping) -> float | None:
-    """The ``y`` the kernel's own formula gives from one world-fact row, or None when the
-    row does not carry the facts it needs (so ``y`` is not derivable from the world).
+#: A ``y`` the world's recorded facts do not decide: a pre-wave-16 ``consequence.marked``
+#: row records no ``earned_micro`` (the return's service income), so the Payoff rule
+#: cannot be recomputed on it. It is an unsupported reading, never a pass and never a
+#: failure (the architect's ruling).
+UNRECOMPUTABLE = "unrecomputable"
 
-    * ``return_paid_off`` (settlement/lots.py ``Payoff``: ``int(acted and net + earned >
-      cost)``): the realised or marked P&L net of fees and funding (``net_micro``), the
-      return's service income (``earned_micro``; a mark row records none, read as 0)
-      and its compute and tool cost (``cost_micro``); a censored outcome has no ``y``.
+
+def consequence_y(fact: Mapping, outcome: str, manifest: Mapping) -> float | str | None:
+    """The ``y`` the kernel's own formula gives from one world-fact row; None when the
+    row does not carry the facts it needs (so ``y`` is not derivable from the world);
+    ``UNRECOMPUTABLE`` when a pre-wave-16 mark lacks the income that decides it.
+
+    * ``return_paid_off`` (settlement/lots.py ``Payoff``: y is 1 exactly when the outcome
+      is not censored and ``net_micro + earned_micro > cost_micro``): the realised or
+      marked P&L net of fees and funding, the return's service income and its compute
+      and tool cost. ``consequence.outcome`` (``asdict(Payoff)``) always writes
+      ``earned_micro``; a ``consequence.marked`` row without it is ``UNRECOMPUTABLE``.
     * ``opportunity-cost-v2`` / ``attempted-trade-v1`` (runtime/grounded.py
       ``opportunity_cost`` / ``attempted_cost``): the named trade's move from the mids
       at open to the mids at the horizon (``moves``), signed by its side, as
@@ -2247,11 +2258,12 @@ def consequence_y(fact: Mapping, outcome: str, manifest: Mapping) -> float | Non
     """
     try:
         if outcome == "return_paid_off":
-            if fact.get("censored") is not None:
-                return None
             net, cost = int(need(fact, "net_micro")), int(need(fact, "cost_micro"))
-            earned = int(fact.get("earned_micro") or 0)
-            return float(int(net + earned > cost))
+            if fact.get("kind") == "consequence.marked" and "earned_micro" not in fact:
+                return UNRECOMPUTABLE
+            earned = int(need(fact, "earned_micro"))
+            censored = fact.get("censored") is not None
+            return float(int(not censored and net + earned > cost))
         trade = need(fact, "attempted" if outcome == "attempted-trade-v1" else "declined")
         moves = {need(m, "coin"): Decimal(str(need(m, "move_bps")))
                  for m in need(fact, "moves")}
@@ -2277,9 +2289,10 @@ def of1a_outside_the_loop(events: list[Mapping], manifest: Mapping) -> Result:
     Origin: every ``verdict.consequence`` row's ``y`` equals the ``y`` the kernel's own
     formula gives from the world-fact row ledgered for that return before it
     (``CONSEQUENCE_FACTS``, ``consequence_y``): mids at open and at the horizon, fee
-    and funding legs in the net, cost. A ``y`` with no such row, or not derivable from
-    it, fails: an internally consistent ``y`` the world did not measure is the loop
-    grading itself.
+    and funding legs in the net, income, cost. A ``y`` with no such row, or not
+    derivable from it, fails: an internally consistent ``y`` the world did not measure
+    is the loop grading itself. A pre-wave-16 mark the recorded facts cannot decide
+    (``UNRECOMPUTABLE``) makes the reading unsupported, unless something else fails.
 
     Consistency: every row on one return, in one phase, carries the same ``y`` whatever
     that judge's ``q``. Repetition is the count of consequence rows on one (return,
@@ -2287,7 +2300,7 @@ def of1a_outside_the_loop(events: list[Mapping], manifest: Mapping) -> Result:
     by_return: dict[tuple, list] = defaultdict(list)
     facts: dict[tuple[str, str], Mapping] = {}
     wanted = set(CONSEQUENCE_FACTS.values())
-    underived = []
+    underived, unrecomputable = [], []
     for row in events:
         kind = row.get("kind")
         if kind in wanted:
@@ -2305,7 +2318,9 @@ def of1a_outside_the_loop(events: list[Mapping], manifest: Mapping) -> Result:
         outcome = row.get("outcome")
         fact = facts.get((CONSEQUENCE_FACTS.get((outcome, phase), ""), str(about)))
         derived = None if fact is None else consequence_y(fact, str(outcome), manifest)
-        if derived is None or float(y) != derived:
+        if derived == UNRECOMPUTABLE:
+            unrecomputable.append({"about": about, "phase": phase, "y": y})
+        elif derived is None or float(y) != derived:
             underived.append({"about": about, "phase": phase, "outcome": outcome, "y": y,
                               "derived": derived, "fact": fact is not None})
     if not by_return:
@@ -2314,9 +2329,13 @@ def of1a_outside_the_loop(events: list[Mapping], manifest: Mapping) -> Result:
     split = {str(key): sorted(set(ys), key=str) for key, ys in shared.items()
              if len(set(ys)) > 1}
     evidence = {"returns": len(shared), "split": list(split.items())[:5],
-                "underived": underived[:5], "rows": sum(map(len, by_return.values()))}
+                "underived": underived[:5], "unrecomputable": len(unrecomputable),
+                "rows": sum(map(len, by_return.values()))}
     if split or underived:
         return _result("OF-1a", False, **evidence)
+    if unrecomputable:
+        return _unsupported("OF-1a", "a pre-wave-16 mark records no earned_micro: its y "
+                            "cannot be recomputed", **evidence)
     if not shared:
         return _unsupported("OF-1a", "no return carries two consequence rows in one phase",
                             **evidence)

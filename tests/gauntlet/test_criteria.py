@@ -966,6 +966,34 @@ def test_of1a_a_consistent_y_the_world_did_not_measure_fails():
     assert g.of1a_outside_the_loop(rows, M).ok
     unpaid = [{**paid, "earned_micro": 0}, *rows[1:]]
     assert g.of1a_outside_the_loop(unpaid, M).status == g.FAIL
+    # earned_micro is always written on consequence.outcome: its absence is malformed.
+    bare = [{k: v for k, v in paid.items() if k != "earned_micro"}, *rows[1:]]
+    assert g.of1a_outside_the_loop(bare, M).status == g.FAIL
+    censored = [{**paid, "censored": "external_unobservable"}, *rows[1:]]
+    assert g.of1a_outside_the_loop(censored, M).status == g.FAIL
+
+
+def test_of1a_a_pre_wave16_mark_without_income_is_unsupported_never_read_as_zero():
+    """The architect's ruling: a ``consequence.marked`` row records no ``earned_micro``,
+    so service income could decide its y. Such a row is an unsupported reading, whatever
+    its y: never a failure (a correct mark paid by income) and never a pass."""
+    mark = {"kind": "consequence.marked", "handle": "r3", "y": 1, "net_micro": 900,
+            "cost_micro": 1000}
+    for y in (1.0, 0.0):
+        rows = [mark | {"y": int(y)},
+                _consequence("r3", 0.9, y, phase="mark", outcome="return_paid_off"),
+                _consequence("r3", 0.2, y, phase="mark", outcome="return_paid_off")]
+        result = g.of1a_outside_the_loop(rows, M)
+        assert result.status == g.UNSUPPORTED and result.evidence["unrecomputable"] == 2
+    # A mark that records its income is recomputed like an outcome.
+    paid = [mark | {"earned_micro": 200},
+            _consequence("r3", 0.9, 1.0, phase="mark", outcome="return_paid_off"),
+            _consequence("r3", 0.2, 1.0, phase="mark", outcome="return_paid_off")]
+    assert g.of1a_outside_the_loop(paid, M).ok
+    # Another return's failure is never hidden by an unrecomputable mark.
+    wrong = [*rows, _opportunity("r1"), _consequence("r1", 0.5, 0.9),
+             _consequence("r1", 0.4, 0.9)]
+    assert g.of1a_outside_the_loop(wrong, M).status == g.FAIL
 
 
 def _returned_event(handle, about, seq):
