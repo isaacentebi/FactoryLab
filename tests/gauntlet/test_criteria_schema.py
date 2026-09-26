@@ -150,6 +150,8 @@ def test_the_criteria_read_real_rows_without_error():
     rows = [dict(r, seq=r.get("seq", 0)) for r in [*REAL["rows"].values(), REAL["launch"]]]
     for result in g.replay(sorted(rows, key=lambda r: r["seq"])):
         assert result.status in (g.PASS, g.FAIL, g.UNSUPPORTED)
+        # Every field a criterion requires is one the kernel really writes.
+        assert "malformed" not in result.evidence, (result.name, result.evidence)
 
 
 # --- S4: every reward-bearing kind, enumerated from the emitting code (Codex review) ------
@@ -254,9 +256,9 @@ NULLABLE_BY_VALUE = {
 }
 
 
-def _literally_nullable():
-    """Every (kind, field) of ``UNIT_FIELDS`` some emitter leaves out, writes as the
-    constant None, or writes as a conditional with a None branch."""
+def _literally_nullable(*, omitted):
+    """Every (kind, field) of ``UNIT_FIELDS`` some emitter leaves out (``omitted``), or
+    writes as the constant None or as a conditional with a None branch (not ``omitted``)."""
     found = set()
     for path in sorted((ROOT / "factorylab").rglob("*.py")):
         for node in ast.walk(ast.parse(path.read_text())):
@@ -269,15 +271,21 @@ def _literally_nullable():
                 continue
             for name in g.UNIT_FIELDS[kind.value]:
                 value = fields.get(name.split(".")[0])
-                if (value is None and "." not in name) or any(
+                if omitted and value is None and "." not in name:
+                    found.add((kind.value, name))
+                elif not omitted and value is not None and any(
                         isinstance(n, ast.Constant) and n.value is None
-                        for n in ast.walk(value or ast.Constant(0))):
+                        for n in ast.walk(value)):
                     found.add((kind.value, name))
     return found
 
 
 def test_s4_nullable_fields_are_exactly_what_the_emitters_write_as_none():
-    assert set(g.NULLABLE) == _literally_nullable() | set(NULLABLE_BY_VALUE)
+    """Codex P2 (gauntlet.py:2012): an absent field and an explicit null are told apart,
+    each pinned to the emitters: ``OMITTED`` is exactly what some emitter leaves out,
+    ``NULLABLE`` exactly what some emitter writes as None."""
+    assert set(g.OMITTED) == _literally_nullable(omitted=True)
+    assert set(g.NULLABLE) == _literally_nullable(omitted=False) | set(NULLABLE_BY_VALUE)
 
 
 def test_s4_a_missing_required_field_fails_on_every_real_row():
@@ -289,7 +297,7 @@ def test_s4_a_missing_required_field_fails_on_every_real_row():
         if kind not in REAL["rows"]:
             continue
         for name in fields:
-            if (kind, name) in g.NULLABLE or "." in name:
+            if (kind, name) in g.OMITTED or "." in name:
                 continue
             row = json.loads(json.dumps(REAL["rows"][kind]))
             row.pop(name, None)
@@ -410,3 +418,59 @@ def test_the_entity_builders_read_every_source():
     assert g.diary_loops([lifespan, {"kind": "config.lifespan", "loop": "gain"}]) == [
         "gain", "price"]
     assert set(g.ENTITY_SETS) and all(v.strip() for v in g.ENTITY_SETS.values())
+
+
+# --- Codex pass on 7c714a2: the loader drops nothing a criterion reads ---------------------
+
+
+def _read_set():
+    """Every ledger kind ``gauntlet.py`` can read, as it names one: an argument of
+    ``rows_of``, a string compared (``==``, ``in``) with anything, a key of a module-level
+    table keyed by kind; and each prefix or suffix it matches kinds by."""
+    tree = ast.parse(Path(g.__file__).read_text())
+
+    def strings(node):
+        return {n.value for n in ast.walk(node)
+                if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+
+    constants, affixes = set(), set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "rows_of":
+            constants |= strings(ast.Tuple(elts=node.args[1:]))
+        elif isinstance(node, ast.Compare):
+            constants |= strings(node)
+        elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr in ("startswith", "endswith") and node.args
+                and isinstance(node.args[0], ast.Constant)):
+            affixes.add((node.func.attr, node.args[0].value))
+    for table in (g.ACT_KINDS, g.UNIT_FIELDS, g.CAPPED_FIELDS, g.CARD_SOURCES,
+                  g.ROUTER_SOURCES, g.LOOP_SOURCES):
+        constants |= set(table)
+    constants |= {kind for kind, _field in [*g.NULLABLE, *g.OMITTED]}
+    constants |= set(g.WEIGHTED_PENALTY_KINDS)
+    return constants, affixes
+
+
+def test_the_loader_never_skips_a_kind_an_entity_set_or_a_criterion_reads():
+    """Codex P2 (gauntlet.py:53): the opened-diary loader's skip set (``HEAVY_KINDS``) is
+    disjoint from every ``ENTITY_SETS`` source and from every kind a criterion names
+    (``compute.route``, a router source, was skipped)."""
+    sources = set(g.CARD_SOURCES) | set(g.ROUTER_SOURCES) | set(g.LOOP_SOURCES)
+    assert "compute.route" in sources
+    assert not g.HEAVY_KINDS & sources
+    constants, affixes = _read_set()
+    assert not g.HEAVY_KINDS & constants, g.HEAVY_KINDS & constants
+    for kind in g.HEAVY_KINDS:
+        assert not any(getattr(kind, how)(affix) for how, affix in affixes
+                       if affix), (kind, affixes)
+    assert not g.HEAVY_KINDS & set(g.ACT_KINDS) and not g.HEAVY_KINDS & set(g.UNIT_FIELDS)
+
+
+def test_every_criterion_turns_a_malformed_row_into_a_failure():
+    """The sweep's mechanism: every criterion is wrapped (``criterion``), so a row
+    lacking a field the kernel always writes fails it, naming the field."""
+    for name in _criteria():
+        assert hasattr(getattr(g, name), "criterion"), name
+    with pytest.raises(g.Malformed):
+        g.need({"kind": "immune.window"}, "thrash.lambda")
+    assert g.need({"kind": "x", "a": {"b": None}}, "a.b") is None

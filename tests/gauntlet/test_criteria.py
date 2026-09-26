@@ -33,7 +33,7 @@ def _w(index, *, acts=False, sf=False, thrash=False, ld=False, lam=0.0, pen=0.0,
             # The organ's learning-death evidence names the routers it read quarantined.
             "frontier": {"quarantined_routers": sorted(
                 r["router"] for r in frontier if r.get("quarantined") and not r.get("core"))
-                if ld else []},
+                if ld else [], "uninvoked_routers": []},
             "profile": profile or {"access:registration_route": 1.0},
             "frontier_invocation": list(frontier)}
 
@@ -86,8 +86,8 @@ def test_release_gain_and_learning_scales():
 
 
 def test_violation_is_the_controllers_formula():
-    assert g.violation({"kind": "min", "lo": 0.2, "scale": 0.2}, 0.0) == 1.0
-    assert g.violation({"kind": "max", "hi": 5.0, "scale": 5.0}, 10.0) == 1.0
+    assert g.violation({"kind": "min", "lo": 0.2, "hi": None, "scale": 0.2}, 0.0) == 1.0
+    assert g.violation({"kind": "max", "lo": None, "hi": 5.0, "scale": 5.0}, 10.0) == 1.0
     assert g.violation({"kind": "band", "lo": 0.0, "hi": 1.0, "scale": 1.0}, 0.5) == 0.0
 
 
@@ -209,7 +209,7 @@ def test_sf1b_an_unmeasured_card_stays_in_its_attractor():
 
 def _updates(card, triples):
     return [{"kind": "price.update", "card_id": card, "lambda_after": lam, "violation": v,
-             "i": i} for lam, v, i in triples]
+             "i": i, "window_end_event": 10 * n} for n, (lam, v, i) in enumerate(triples, 1)]
 
 
 def test_sf1c_the_integral_is_frozen_exactly_at_the_cap():
@@ -770,7 +770,7 @@ def test_ld1e_a_flag_naming_another_router_is_not_detection():
     closes = [_w(i, ld=i >= 5, frontier=[r1, r2] if i >= 5 else [r1]) for i in range(1, 15)]
     for w in closes:
         w["frontier"] = {"quarantined_routers": ["router:r2"] if w["flags"]["learning_death"]
-                         else []}
+                         else [], "uninvoked_routers": []}
     result = g.ld1e_detection(closes, M)
     assert result.status == g.FAIL and result.evidence["late"][0][2] == "router:r1"
 
@@ -1228,8 +1228,9 @@ def test_d1_sf2a_a_noop_counts_only_for_a_router_that_drew_an_arm_that_window():
 
 
 def test_e1_of3a_an_invocation_without_a_handle_returns_nothing():
-    """Sol E1: a handle-less invocation is no return, and a ProducerReturn naming no
-    handle names none of it."""
+    """Sol E1: a handle-less invocation is no return. A ProducerReturn always names its
+    handle (loop.py emits it with ``about_handle``), so one naming none is a malformed
+    row and fails, never a draw on nothing (Codex pass on 7c714a2)."""
     ok = [{"kind": "invocation", "handle": "p1", "seq": 1}, _returned_event("e", "p1", 2),
           {"kind": "decision.open", "handle": "j1", "event_id": "producerreturn-2", "seq": 3}]
     stray = [{"kind": "event", "seq": 12, "event": {"id": "ev1", "kind": "ProducerReturn",
@@ -1237,6 +1238,11 @@ def test_e1_of3a_an_invocation_without_a_handle_returns_nothing():
              {"kind": "decision.open", "handle": "j2", "event_id": "ev1", "seq": 13},
              {"kind": "invocation", "seq": 15}]
     result = g.of3a_sampling_behind_return(ok + stray, M)
+    assert result.status == g.FAIL, result.evidence
+    assert result.evidence["malformed"]["field"] == "event.payload.about_handle"
+    named = [{**stray[0], "event": {**stray[0]["event"], "payload": {"about_handle": "zz"}}},
+             *stray[1:]]
+    result = g.of3a_sampling_behind_return(ok + named, M)
     assert result.ok and result.evidence["draws"] == 1, result.evidence
 
 
@@ -1278,11 +1284,15 @@ def test_i1_th3_one_activation_instant_is_bound_by_its_slowest_period():
     assert result.status == g.FAIL and result.evidence["bad"][0]["required"] == 600
 
 
-def test_j1_of1a_a_pending_y_is_not_a_reading():
-    """Sol J1: a consequence row whose y is not yet known does not split a return."""
+def test_j1_of1a_a_null_y_is_a_malformed_row_not_a_pending_one():
+    """Sol J1, corrected by Codex's pass on 7c714a2: the kernel writes a
+    ``verdict.consequence`` row only on a measured outcome, with its float ``y``
+    (feedback.py ``_settle_evaluations``: ``if state == "measured": _score_verdict``), so a
+    null ``y`` is a malformed row and fails, never a reading to skip."""
     pending = [_consequence("h5", 0.6, None), _consequence("h5", 0.8, 0.7)]
-    assert g.of1a_outside_the_loop(pending, M).status == g.UNSUPPORTED
-    settled = pending + [_consequence("h5", 0.2, 0.7)]
+    result = g.of1a_outside_the_loop(pending, M)
+    assert result.status == g.FAIL and result.evidence["malformed"]["field"] == "y"
+    settled = [_consequence("h5", 0.8, 0.7), _consequence("h5", 0.2, 0.7)]
     assert g.of1a_outside_the_loop(settled, M).ok
 
 
@@ -1430,7 +1440,7 @@ def test_ld1e_a_flag_after_the_quarantine_cleared_is_not_detection():
     does."""
     r1 = {"router": "router:r1", "quarantined": True, "core": False}
     closes = [_w(i, ld=i == 6, frontier=[r1] if i <= 4 else []) for i in range(1, 15)]
-    closes[5]["frontier"] = {"quarantined_routers": ["router:r1"]}
+    closes[5]["frontier"] = {"quarantined_routers": ["router:r1"], "uninvoked_routers": []}
     assert g.physics(M).H > 6
     result = g.ld1e_detection(closes, M)
     assert result.status == g.FAIL, result.evidence
@@ -1505,6 +1515,69 @@ def test_sf1e_a_router_the_diary_names_only_at_its_creation_is_judged():
     result = g.sf1e_gain([created, *closes, *steps], M)
     assert result.status == g.UNSUPPORTED, result.evidence
     assert result.evidence["stateless"][0]["router"] == "router:Quiet"
+
+
+# --- Codex pass on 7c714a2: missing evidence is never a value ------------------------------
+
+
+@pytest.mark.parametrize("row, ok", [
+    # An explicit null where the kernel writes one: allowed.
+    ({"kind": "evaluator.settled", "handle": "d", "grade": None, "consequence": None,
+      "reward": None}, True),
+    ({"kind": "exposure.settled", "handle": "d", "score": None}, True),
+    ({"kind": "composed.settled", "handle": "d", "verdict": None, "reward": 0.4}, True),
+    # The same fields absent: the kernel always writes them, so absence fails.
+    ({"kind": "evaluator.settled", "handle": "d", "consequence": None, "reward": None},
+     False),
+    ({"kind": "exposure.settled", "handle": "d"}, False),
+    ({"kind": "composed.settled", "handle": "d", "reward": 0.4}, False),
+    # The censored counter leaves out q, judge_q and y beside an explicit null score;
+    # without the score key it is no emitter's row.
+    ({"kind": "counter.settled", "handle": "d", "score": None}, True),
+    ({"kind": "counter.settled", "handle": "d"}, False),
+])
+def test_s4_an_absent_field_is_not_an_explicit_null(row, ok):
+    """Codex P2 (gauntlet.py:2012): absence is allowed only where an emitter leaves the
+    field out (``OMITTED``), an explicit null only where one writes it (``NULLABLE``)."""
+    assert g.s4_boundedness([row], M).status == (g.PASS if ok else g.FAIL)
+
+
+@pytest.mark.parametrize("drop", ["thrash", "thrash.lambda", "thrash.penalty", "flags"])
+def test_th1e_a_window_missing_its_thrash_price_fails_never_reads_zero(drop):
+    """Codex P2 (gauntlet.py:1224): immune.py ``close_window`` ledgers ``"thrash":
+    rt.stats.thrash`` on every window, and ``thrash_penalty`` always returns its
+    ``lambda`` and ``penalty``: a window without them is malformed, never a zero price
+    that "released" the cycle."""
+    closes = [_w(i, thrash=i < 10, lam=0.5) for i in range(1, 25)]
+    assert g.th1e_release(closes, M, steady_from=8).status == g.FAIL  # never released
+    head, _, leaf = drop.partition(".")
+    for w in closes[10:]:
+        if leaf:
+            del w[head][leaf]
+        else:
+            del w[head]
+    result = g.th1e_release(closes, M, steady_from=8)
+    assert result.status == g.FAIL and result.evidence["malformed"]["field"].startswith(
+        head), result.evidence
+    assert g.th1b_duration(closes, M).status == g.FAIL
+
+
+def test_a_window_missing_an_always_written_field_fails_every_criterion_that_reads_it():
+    """The sweep: the organ's window always carries its flags, acts, violated cards and
+    frontier evidence (versions.py ``diagnose``, immune.py ``close_window``); a
+    criterion that reads one from a window lacking it fails, naming it."""
+    row = {"router": "router:r1", "quarantined": True, "core": False}
+    base = [_w(i, acts=i % 3 == 0, sf=i >= 3, ld=i >= 5, frontier=[row])
+            for i in range(1, 15)]
+    for field, fn in (("flags", g.ld1e_detection), ("acts", g.sf1b_ratchet_cadence),
+                      ("violated_cards", g.sf1b_ratchet_cadence),
+                      ("frontier_invocation", g.ld1e_detection),
+                      ("frontier", g.ld1e_detection)):
+        rows = json.loads(json.dumps(base))
+        del rows[6][field]
+        result = fn(rows, M)
+        assert result.status == g.FAIL, (field, result.evidence)
+        assert result.evidence["malformed"]["field"].split(".")[0] == field
 
 
 def test_s4_an_unresolved_penalty_row_may_carry_no_raw_score():

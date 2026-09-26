@@ -31,6 +31,7 @@ Examples::
 from __future__ import annotations
 
 import argparse
+import functools
 import hashlib
 import json
 import math
@@ -50,7 +51,7 @@ PASS, FAIL, UNSUPPORTED = "pass", "fail", "unsupported"
 #: Row kinds a diary replay never needs (the snapshot state, raw model I/O and the
 #: rendered public blocks dominate a diary's bytes and carry no criterion's evidence).
 HEAVY_KINDS = frozenset({"snapshot", "io.result", "io.call", "runtime.input", "artifact.put",
-                         "wake.public", "budget", "compute.route", "consequence.cost"})
+                         "wake.public", "budget", "consequence.cost"})
 
 #: Observations whose penalty share is each decision's own measured contribution
 #: (``runtime.pricing._EXACT_SHARES``): their shares differ by design, not by order.
@@ -76,6 +77,46 @@ class Result:
 
     def __bool__(self) -> bool:  # pragma: no cover - guards accidental truthiness
         raise TypeError("read Result.ok or Result.status, not the Result itself")
+
+
+class Malformed(Exception):
+    """A row lacks a field its kind's emitter always writes: missing evidence, never a
+    value. A criterion that reads it fails (``criterion``), naming the row and field."""
+
+    def __init__(self, row: Mapping, path: str) -> None:
+        super().__init__(f"{row.get('kind')} lacks {path}")
+        self.evidence = {"kind": row.get("kind"), "field": path, "seq": row.get("seq"),
+                         "handle": row.get("handle"), "window": row.get("window")}
+
+
+def need(row: Mapping, path: str) -> Any:
+    """The value at the dotted ``path`` of ``row`` (None only where the row holds an
+    explicit null). Raises ``Malformed`` when a key on the way is absent: the caller
+    reads only fields its kind's emitter always writes, so absence is a malformed row,
+    never a default."""
+    value: Any = row
+    for part in path.split("."):
+        if not isinstance(value, Mapping) or part not in value:
+            raise Malformed(row, path)
+        value = value[part]
+    return value
+
+
+def criterion(name: str) -> Callable[[Callable[..., Result]], Callable[..., Result]]:
+    """Guarantees the criterion fails, naming the row and field, when a row it reads
+    lacks a field the kernel always writes (``Malformed``), instead of reading the
+    absence as a value."""
+    def wrap(fn: Callable[..., Result]) -> Callable[..., Result]:
+        @functools.wraps(fn)
+        def run(*args: Any, **kwargs: Any) -> Result:
+            try:
+                return fn(*args, **kwargs)
+            except Malformed as exc:
+                return _result(name, False, malformed=exc.evidence,
+                               why="a row lacks a field its kind's emitter always writes")
+        run.criterion = name  # type: ignore[attr-defined]
+        return run
+    return wrap
 
 
 def _result(name: str, ok: bool, **evidence: Any) -> Result:
@@ -226,8 +267,11 @@ def t_learn(delta: float, arms: int) -> int:
 
 def violation(region: Mapping, value: float) -> float:
     """Region-relative distance outside inclusive bounds (``controller.violation``)."""
-    kind, lo, hi = region.get("kind"), region.get("lo"), region.get("hi")
-    scale = float(region.get("scale") or 1.0)
+    # A region is ``asdict(CardRegion)``: kind, lo, hi and a positive scale are always
+    # written (charter/controller.py ``CardRegion``); lo or hi is None by the kernel's
+    # own schema where the kind has no such bound.
+    kind, lo, hi = need(region, "kind"), need(region, "lo"), need(region, "hi")
+    scale = float(need(region, "scale"))
     distance = 0.0
     if kind in ("min", "band") and lo is not None and value < lo:
         distance = lo - value
@@ -250,6 +294,7 @@ def reference_violation(region: Mapping) -> float:
     return 1.0
 
 
+@criterion("SF-0")
 def sf0_relation(manifest: Mapping, *, regions: Mapping[str, Mapping] | None = None,
                  cards: Iterable[Mapping] | None = None) -> Result:
     """SF-0: the integrator still has headroom at the detection horizon, per card kind.
@@ -407,7 +452,8 @@ def windows(events: Iterable[Mapping]) -> list[Mapping]:
 
 def flagged(events: Iterable[Mapping], pathology: str) -> list[int]:
     """The window indexes the organ flagged ``pathology`` in."""
-    return [w["window"] for w in windows(events) if (w.get("flags") or {}).get(pathology)]
+    # ``immune.window`` carries every pathology's flag (versions.py ``diagnose``).
+    return [w["window"] for w in windows(events) if need(w, f"flags.{pathology}")]
 
 
 def _runs(indexes: list[int]) -> list[tuple[int, int]]:
@@ -539,7 +585,7 @@ def acting_period(events: Iterable[Mapping], ph: Physics) -> int:
     At least ``min_ratio`` (versioning P5); the measured value when the run acted
     twice or more, since jitter only lengthens it.
     """
-    acts = [w["window"] for w in windows(events) if w.get("acts")]
+    acts = [w["window"] for w in windows(events) if need(w, "acts")]
     gaps = [b - a for a, b in zip(acts, acts[1:], strict=False)]
     return max([ph.r, *gaps])
 
@@ -553,7 +599,8 @@ def card_violations(events: Iterable[Mapping], card: str) -> dict[int, float]:
     """The card's region-relative violation at each closed price window that measured it."""
     result = {}
     for row in card_windows(events):
-        values, regions = row.get("values") or {}, row.get("regions") or {}
+        # ``price.window`` always writes both (pricing.py ``close_window``).
+        values, regions = need(row, "values"), need(row, "regions")
         if card in values and card in regions:
             result[row["window"]] = violation(regions[card], float(values[card]))
     return result
@@ -598,10 +645,11 @@ def card_flagged(events: Iterable[Mapping], card: str) -> list[int]:
     among the tail's persistently violated cards (``violated_cards``, the kernel's own
     per-card reading, ``versions.diagnose``)."""
     return [w["window"] for w in windows(events)
-            if (w.get("flags") or {}).get("stable_failure")
-            and f"card:{card}" in (w.get("violated_cards") or ())]
+            if need(w, "flags.stable_failure")
+            and f"card:{card}" in need(w, "violated_cards")]
 
 
+@criterion("SF-1a")
 def sf1a_detection(events: list[Mapping], manifest: Mapping, *, card: str) -> Result:
     """SF-1a: in every violation episode of the card, stable failure is flagged on it by
     the time ``H`` measured violations past the episode's onset have been observed.
@@ -641,6 +689,7 @@ def sf1a_detection(events: list[Mapping], manifest: Mapping, *, card: str) -> Re
                    short=len(short))
 
 
+@criterion("SF-1b")
 def sf1b_ratchet_cadence(events: list[Mapping], manifest: Mapping) -> Result:
     """SF-1b: ratchets move on the organ's loop, and duration strictly rises while flagged.
 
@@ -670,10 +719,10 @@ def sf1b_ratchet_cadence(events: list[Mapping], manifest: Mapping) -> Result:
     first ratchets alone never exercised the duration.
     """
     closes = windows(events)
-    acting = [w["window"] for w in closes if w.get("acts")]
+    acting = [w["window"] for w in closes if need(w, "acts")]
     thrash = set(flagged(events, "thrash"))
-    holding = {w["window"]: {c.removeprefix("card:") for c in w.get("violated_cards") or ()}
-               for w in closes if (w.get("flags") or {}).get("stable_failure")
+    holding = {w["window"]: {c.removeprefix("card:") for c in need(w, "violated_cards")}
+               for w in closes if need(w, "flags.stable_failure")
                and w["window"] not in thrash}
     ratchets = rows_of(events, "immune.price_ratchet")
     at: dict[tuple[str, int], int] = {(row["card_id"], row["window"]): row["duration"]
@@ -766,13 +815,14 @@ def capped_runs(events: list[Mapping], card: str, ph: Physics) -> list[list[Mapp
 def update_windows(events: Iterable[Mapping]) -> dict[int, int]:
     """Each ``price.update`` row's price window, by the row's ``id``: the window whose
     ``price.window`` row closed at the same ``window_end_event``."""
-    closes = {row.get("window_end_event"): row["window"] for row in card_windows(events)
-              if row.get("window_end_event") is not None}
-    return {id(row): closes[row["window_end_event"]]
+    # Both kinds always write ``window_end_event`` (pricing.py, controller.py ``observe``).
+    closes = {need(row, "window_end_event"): row["window"] for row in card_windows(events)}
+    return {id(row): closes[need(row, "window_end_event")]
             for row in rows_of(events, "price.update")
-            if row.get("window_end_event") in closes}
+            if need(row, "window_end_event") in closes}
 
 
+@criterion("SF-1c")
 def sf1c_anti_windup(events: list[Mapping], manifest: Mapping, *, card: str) -> Result:
     """SF-1c: once the penalty sits at ``penalty_cap``, the integral is exactly constant.
 
@@ -788,13 +838,16 @@ def sf1c_anti_windup(events: list[Mapping], manifest: Mapping, *, card: str) -> 
     if not runs:
         return _unsupported("SF-1c", "the penalty never sat at the cap for two updates",
                             card=card)
-    moved = [(a.get("i"), b.get("i")) for run in runs
-             for a, b in zip(run, run[1:], strict=False) if a.get("i") != b.get("i")]
+    # ``price.update`` always carries the PID's integral ``i`` (controller.py ``_pid``
+    # terms): two rows without one are malformed, never "equal".
+    moved = [(need(a, "i"), need(b, "i")) for run in runs
+             for a, b in zip(run, run[1:], strict=False) if need(a, "i") != need(b, "i")]
     return _result("SF-1c", not moved, card=card, runs=len(runs),
                    integrals=[[row.get("i") for row in run][:12] for run in runs[:3]],
                    moved=moved[:5])
 
 
+@criterion("SF-1d")
 def sf1d_escalation(events: list[Mapping], manifest: Mapping, *, card: str) -> Result:
     """SF-1d: sustained saturation is ledgered and its duration rises by one per window.
 
@@ -897,7 +950,7 @@ def router_retirements(events: list[Mapping]) -> dict[str, int]:
         if row.get("kind") == "price.window":
             window = row["window"] + 1
         elif row.get("kind") == "router.created":
-            for old in row.get("replaces") or ():
+            for old in need(row, "replaces"):  # routing.py ``_build_router``: always
                 out.setdefault(old, window)
     return out
 
@@ -916,7 +969,7 @@ def router_round_periods(events: list[Mapping]) -> dict[str, int]:
         if row.get("kind") == "price.window":
             window = row["window"] + 1
         elif row.get("kind") == "decision.settle":
-            handle = (row.get("return") or {}).get("handle")
+            handle = need(row, "return.handle")  # queue.py ``settle``: always
             router, start = actor.get(handle), opened.get(handle)
             if isinstance(router, str) and start is not None:
                 closures[router].append(max(0, window - start))
@@ -927,6 +980,7 @@ def router_round_periods(events: list[Mapping]) -> dict[str, int]:
     return out
 
 
+@criterion("SF-1e")
 def sf1e_gain(events: list[Mapping], manifest: Mapping) -> Result:
     """SF-1e: in each stable-failure episode, γ reaches ``gamma_max`` within
     ``(steps + 1)·A`` windows of the episode's first window, and never unwinds while
@@ -987,7 +1041,7 @@ def sf1e_gain(events: list[Mapping], manifest: Mapping) -> Result:
     rounds = router_round_periods(events)
     for router in routers:
         rows = by_router.get(router, [])
-        born = presence.get(router, rows[0]["window"] if rows else 1)
+        born = presence[router]  # every router judged is present (gain rows included)
         gone = retired.get(router)
         own = max(period, ph.r * rounds.get(router, 1))
         for start, end in episodes:
@@ -1054,6 +1108,7 @@ def novelty_share_ratio(ph: Physics) -> tuple[int, int]:
     return Decimal(str(ph.novelty_share)).as_integer_ratio()
 
 
+@criterion("LD-1a")
 def ld1a_accrual(events: list[Mapping], manifest: Mapping) -> Result:
     """LD-1a: each reserve window accrues exactly ``min(cap, carried + cap × accrued)``,
     ``cap = ⌊budget × novelty.share⌋`` (integer micro-USD), whatever the population did.
@@ -1079,6 +1134,7 @@ def ld1a_accrual(events: list[Mapping], manifest: Mapping) -> Result:
     return _result("LD-1a", not bad, windows=len(rows), bad=bad[:5])
 
 
+@criterion("SF-1f")
 def sf1f_route_open(events: list[Mapping], manifest: Mapping) -> Result:
     """SF-1f: the registration route stays open in every window that measured it, and the
     reserve accrues.
@@ -1091,7 +1147,9 @@ def sf1f_route_open(events: list[Mapping], manifest: Mapping) -> Result:
     closes = windows(events)
     if not closes:
         return _unsupported("SF-1f", "no window closed")
-    readings = {w["window"]: (w.get("profile") or {}).get("access:registration_route")
+    # The profile is always written; an ``access:`` key absent from it is the organ's own
+    # "unknown" (versions.py ``ACCESS``: "absent unknown"), read as unmeasured.
+    readings = {w["window"]: need(w, "profile").get("access:registration_route")
                 for w in closes}
     measured = {w: v for w, v in readings.items() if v is not None}
     shut = [w for w, v in measured.items() if v != 1.0]
@@ -1110,6 +1168,7 @@ def penalty_by_handle(events: list[Mapping]) -> dict[str, Mapping]:
     return {row["handle"]: row for row in rows_of(events, "price.penalty")}
 
 
+@criterion("SF-2a")
 def sf2_gradient(events: list[Mapping], manifest: Mapping, *, card: str,
                  relievers: set[str], holders: set[str]) -> Result:
     """SF-2a: Δ(t) = penalty(holder) − penalty(reliever) follows the D5 attribution.
@@ -1132,8 +1191,8 @@ def sf2_gradient(events: list[Mapping], manifest: Mapping, *, card: str,
     routers: dict[int, set[str]] = defaultdict(set)
     for handle, row in penalty_by_handle(events).items():
         seat = seats.get(handle)
-        for term in row.get("terms") or ():
-            if term.get("card_id") != card or term.get("violation", 0) <= 0:
+        for term in need(row, "terms"):  # pricing.py ``_settle_priced``: always
+            if need(term, "card_id") != card or need(term, "violation") <= 0:
                 continue
             if seat not in relievers:
                 nonrelieving[term["window"]].add(handle)
@@ -1148,7 +1207,7 @@ def sf2_gradient(events: list[Mapping], manifest: Mapping, *, card: str,
         window = opened_in.get(row["handle"])
         # A NOOP is non-relieving in its window only for a router that drew either arm
         # in that same window (R9, D5): the draws it abstained among.
-        if window in shares and row.get("router") in routers.get(window, ()):
+        if window in shares and need(row, "router") in routers.get(window, ()):
             nonrelieving[window].add(row["handle"])
     problems = []
     for window, sides in sorted(shares.items()):
@@ -1165,6 +1224,7 @@ def sf2_gradient(events: list[Mapping], manifest: Mapping, *, card: str,
     return _result("SF-2a", not problems, problems=problems[:10], windows=len(shares))
 
 
+@criterion("SF-2b")
 def sf2b_order_blind(events: list[Mapping], manifest: Mapping, *, card: str,
                      role_of: Callable[[str], str | None] | None = None) -> Result:
     """SF-2b: two non-relieving decisions of one role in one window bear equal shares,
@@ -1174,8 +1234,8 @@ def sf2b_order_blind(events: list[Mapping], manifest: Mapping, *, card: str,
     order: dict[tuple, list[float]] = defaultdict(list)
     for row in rows_of(events, "price.penalty"):
         role = role_of(row["handle"]) if role_of else None
-        for term in row.get("terms") or ():
-            if term.get("card_id") != card or term.get("violation", 0) <= 0:
+        for term in need(row, "terms"):  # pricing.py ``_settle_priced``: always
+            if need(term, "card_id") != card or need(term, "violation") <= 0:
                 continue
             if term.get("owner") is not None or term.get("observation") in EXACT_SHARES:
                 continue  # an attributable or own-contribution share is not a generic split
@@ -1202,7 +1262,7 @@ def sf2b_order_blind(events: list[Mapping], manifest: Mapping, *, card: str,
 
 def decision_seats(events: Iterable[Mapping]) -> dict[str, str]:
     """Each decision handle's drawn arm (a seat id, or NOOP), from ``decision.open``."""
-    return {row["handle"]: (row.get("propensity") or {}).get("chosen")
+    return {row["handle"]: need(row, "propensity.chosen")
             for row in rows_of(events, "decision.open")}
 
 
@@ -1218,13 +1278,15 @@ def thrash_series(events: list[Mapping]) -> list[tuple[int, float, float, bool]]
     """Per closed window: (index, thrash λ, thrash penalty, thrash flagged)."""
     out = []
     for w in windows(events):
-        thrash = w.get("thrash") or {}
-        out.append((w["window"], float(thrash.get("lambda") or 0.0),
-                    float(thrash.get("penalty") or 0.0), bool((w.get("flags") or {})
-                                                            .get("thrash"))))
+        # immune.py ``close_window`` ledgers ``"thrash": rt.stats.thrash``, which
+        # ``thrash_penalty`` always returns with its ``lambda`` and ``penalty``: a window
+        # without them is malformed, never a zero price.
+        out.append((w["window"], float(need(w, "thrash.lambda")),
+                    float(need(w, "thrash.penalty")), bool(need(w, "flags.thrash"))))
     return out
 
 
+@criterion("TH-1a")
 def th1a_detection(events: list[Mapping], manifest: Mapping, *, cycle_start: int) -> Result:
     """TH-1a: thrash is flagged at most ``H`` windows after a cycle starts.
 
@@ -1247,6 +1309,7 @@ def th1a_detection(events: list[Mapping], manifest: Mapping, *, cycle_start: int
                    cycle_start=cycle_start, first_flag=first, H=ph.H)
 
 
+@criterion("TH-1b")
 def th1b_duration(events: list[Mapping], manifest: Mapping) -> Result:
     """TH-1b: the thrash price does not fall across consecutive flagged windows until its
     penalty reaches the cap, and rises over some such run (its integral holds duration)."""
@@ -1271,6 +1334,7 @@ def th1b_duration(events: list[Mapping], manifest: Mapping) -> Result:
     return _result("TH-1b", rose and not falls, runs=runs[:8], falls=falls[:5], rose=rose)
 
 
+@criterion("TH-1b-antiwindup")
 def th1b2_frozen(events: list[Mapping], manifest: Mapping) -> Result:
     """TH-1b (wave 16): at the cap the thrash price's integral is frozen (SF-1c's rule)."""
     result = sf1c_anti_windup(events, manifest, card="pathology:thrash")
@@ -1293,17 +1357,16 @@ def expected_thrash_charges(events: list[Mapping], manifest: Mapping) -> dict[st
     for row in events:
         kind = row.get("kind")
         if kind == "immune.window":
-            lam = float((row.get("thrash") or {}).get("lambda") or 0.0)
+            lam = float(need(row, "thrash.lambda"))
         elif kind == "decision.open":
-            prop = row.get("propensity") or {}
-            router = row.get("actor")
+            prop = need(row, "propensity")
+            router = need(row, "actor")
             if not isinstance(router, str) or not router.startswith("router:"):
                 continue
             if router.split(":", 1)[1].split("#")[0].split("@")[0] \
                     not in ph.no_swap_regret_kinds:
                 continue
-            now = dict(zip(prop.get("action_ids") or (), prop.get("probs") or (),
-                           strict=False))
+            now = dict(zip(need(prop, "action_ids"), need(prop, "probs"), strict=True))
             before = last.get(router)
             moved = _tv(now, before) if before else 0.0
             last[router] = now
@@ -1311,6 +1374,7 @@ def expected_thrash_charges(events: list[Mapping], manifest: Mapping) -> dict[st
     return out
 
 
+@criterion("TH-1c")
 def th1c_movement(events: list[Mapping], manifest: Mapping) -> Result:
     """TH-1c: every charge is price × the router's own movement, and every one lands.
 
@@ -1341,13 +1405,14 @@ def th1c_movement(events: list[Mapping], manifest: Mapping) -> Result:
                    duplicated=duplicated[:5])
 
 
+@criterion("TH-1d")
 def th1d_frontier(events: list[Mapping], manifest: Mapping) -> Result:
     """TH-1d: no charge reaches a mean-based router, a niche decision or a frontier NOOP."""
     ph = physics(manifest)
     niche = {row["handle"] for row in rows_of(events, "niche.action")}
     bad = []
     for row in rows_of(events, "thrash.charged"):
-        kind = str(row.get("router", "")).split(":", 1)[-1].split("#")[0].split("@")[0]
+        kind = str(need(row, "router")).split(":", 1)[-1].split("#")[0].split("@")[0]
         if kind not in ph.no_swap_regret_kinds or row["handle"] in niche:
             bad.append({"handle": row["handle"], "router": row.get("router")})
     charged = len(rows_of(events, "thrash.charged"))
@@ -1356,6 +1421,7 @@ def th1d_frontier(events: list[Mapping], manifest: Mapping) -> Result:
     return _result("TH-1d", not bad, bad=bad[:5], charged=charged)
 
 
+@criterion("TH-1e")
 def th1e_release(events: list[Mapping], manifest: Mapping, *, steady_from: int) -> Result:
     """TH-1e: after the cycle stops, the flag clears within H windows and the thrash price
     reaches zero within ``T_rel(λ_peak) + 1`` windows of the clear.
@@ -1401,13 +1467,14 @@ def th1e_release(events: list[Mapping], manifest: Mapping, *, steady_from: int) 
     return _result("TH-1e", False, **evidence)
 
 
+@criterion("TH-1f")
 def th1f_priority(events: list[Mapping], manifest: Mapping) -> Result:
     """TH-1f: in a window flagged thrash and stable failure, gain moves γ down only."""
     both = set(flagged(events, "thrash")) & set(flagged(events, "stable_failure"))
     if not both:
         return _unsupported("TH-1f", "no window was flagged with both")
     acts = [row for row in rows_of(events, "immune.gain") if row["window"] in both]
-    bad = [row for row in acts if row.get("pathology") != "thrash" or raises(row)]
+    bad = [row for row in acts if need(row, "pathology") != "thrash" or raises(row)]
     if not acts:
         # (B): with no gain act in such a window the priority was never exercised.
         return _unsupported("TH-1f", "no gain act in a window flagged with both",
@@ -1419,7 +1486,7 @@ def thrash_rate(events: list[Mapping], manifest: Mapping) -> tuple[int, int]:
     """(flagged, supported) closed windows after the first ``H``: the null's reading."""
     ph = physics(manifest)
     closes = windows(events)[ph.H:]
-    return sum(1 for w in closes if (w.get("flags") or {}).get("thrash")), len(closes)
+    return sum(1 for w in closes if need(w, "flags.thrash")), len(closes)
 
 
 def _log_binom_cdf(x: int, n: int, p: float) -> float:
@@ -1455,6 +1522,7 @@ def clopper_pearson_upper(x: int, n: int, confidence: float = 0.95) -> float:
     return hi
 
 
+@criterion("TH-4")
 def th4_null(events: list[Mapping], manifest: Mapping, *, synthetic: tuple[int, int],
              confidence: float = 0.95) -> Result:
     """TH-4: iid card behaviour in a world is flagged thrash no more than the detector's
@@ -1469,6 +1537,7 @@ def th4_null(events: list[Mapping], manifest: Mapping, *, synthetic: tuple[int, 
                    synthetic=[x_syn, n_syn], bound=bound)
 
 
+@criterion("TH-2")
 def th2_short_lived(events: list[Mapping], manifest: Mapping, *, loop: str) -> Result:
     """TH-2: every refactor of ``loop`` after the first yields a lifespan row, a lifespan
     shorter than its correcting loop is read as thrash with ``unsettled >= 1 − ratio``,
@@ -1493,21 +1562,23 @@ def th2_short_lived(events: list[Mapping], manifest: Mapping, *, loop: str) -> R
         if row["ratio"] >= 1:
             continue
         carrier = next((i for i, w in enumerate(closes)
-                        if any(item.get("loop") == loop and item.get("tick") == row.get("tick")
-                               for item in w.get("lifespans") or ())), None)
+                        if any(need(item, "loop") == loop
+                               and need(item, "tick") == need(row, "tick")
+                               for item in need(w, "lifespans"))), None)
         if carrier is None:
-            if any(w.get("seq", math.inf) > row.get("seq", -math.inf) for w in closes):
+            if any(need(w, "seq") > need(row, "seq") for w in closes):
                 unread.append(row.get("tick"))
             continue
-        tail = [w for w in closes[carrier:carrier + ph.k] if w.get("unsettled") is not None]
+        tail = [w for w in closes[carrier:carrier + ph.k]
+                if need(w, "unsettled") is not None]  # None: an unsupported tail
         if tail:
             checked += 1
         for w in tail:
-            if not (w.get("flags") or {}).get("thrash") or w["unsettled"] < 1.0 - row["ratio"]:
+            if not need(w, "flags.thrash") or w["unsettled"] < 1.0 - row["ratio"]:
                 misread.append({"window": w["window"], "ratio": row["ratio"],
                                 "unsettled": w["unsettled"]})
     speed = [row for row in rows_of(events, "registration.rejected")
-             if any(word in str(row.get("reason", "")).lower()
+             if any(word in str(need(row, "reason")).lower()
                     for word in ("too soon", "too fast", "lifespan", "speed", "rate limit"))]
     worst = min(rows, key=lambda row: row["ratio"])
     evidence = {"lifespans": len(rows), "worst_ratio": worst["ratio"],
@@ -1521,6 +1592,7 @@ def th2_short_lived(events: list[Mapping], manifest: Mapping, *, loop: str) -> R
     return _result("TH-2", not unread and not misread and not speed, **evidence)
 
 
+@criterion("TH-3")
 def th3_governance_gap(events: list[Mapping], manifest: Mapping) -> Result:
     """TH-3: charter revisions stand at least ``min_ratio`` × the slowest loop apart.
 
@@ -1582,9 +1654,10 @@ def niche_handles(events: Iterable[Mapping]) -> set[str]:
     or an unhistoried seat's protected compute (``novelty.compute`` that used some)."""
     return ({row["handle"] for row in rows_of(events, "niche.action")}
             | {row["handle"] for row in rows_of(events, "novelty.compute")
-               if int(row.get("used") or 0) > 0})
+               if int(need(row, "used")) > 0})  # kernel/reserve.py: always written
 
 
+@criterion("LD-1d")
 def ld1d_exemption(events: list[Mapping], manifest: Mapping, *, minimum: int = 10) -> Result:
     """LD-1d: every niche decision bears no card penalty, exactly (wave 16 R-E amended)."""
     niche = niche_handles(events)
@@ -1596,6 +1669,7 @@ def ld1d_exemption(events: list[Mapping], manifest: Mapping, *, minimum: int = 1
     return _result("LD-1d", not bad, niche=len(priced), penalized=bad[:10])
 
 
+@criterion("LD-1e")
 def ld1e_detection(events: list[Mapping], manifest: Mapping) -> Result:
     """LD-1e: a frontier router quarantined for a whole tail is flagged learning-dead
     within H.
@@ -1612,9 +1686,10 @@ def ld1e_detection(events: list[Mapping], manifest: Mapping) -> Result:
     closes = windows(events)
     by_router: dict[str, list[int]] = defaultdict(list)
     for w in closes:
-        for row in w.get("frontier_invocation") or ():
-            if row.get("quarantined") and not row.get("core"):
-                by_router[str(row.get("router"))].append(w["window"])
+        for row in need(w, "frontier_invocation"):
+            # routing.py ``frontier_invocation`` writes each of these on every row.
+            if need(row, "quarantined") and not need(row, "core"):
+                by_router[str(need(row, "router"))].append(w["window"])
     runs = sorted((start, end, router) for router, indexes in by_router.items()
                   for start, end in _runs(indexes) if end - start + 1 >= ph.k)
     if not runs:
@@ -1623,9 +1698,10 @@ def ld1e_detection(events: list[Mapping], manifest: Mapping) -> Result:
     naming: dict[str, set[int]] = defaultdict(set)
     for w in closes:
         if w["window"] in set(dead):
-            frontier = w.get("frontier") or {}
-            for router in [*(frontier.get("quarantined_routers") or ()),
-                           *(frontier.get("uninvoked_routers") or ())]:
+            # ``frontier_evidence`` writes both lists whenever every tail window
+            # recorded ``frontier_invocation``, which ``close_window`` always does.
+            for router in [*need(w, "frontier.quarantined_routers"),
+                           *need(w, "frontier.uninvoked_routers")]:
                 naming[str(router)].add(w["window"])
     last = max(w["window"] for w in closes)
     # A flag detects a run only inside it and by its deadline: after the run cleared,
@@ -1642,6 +1718,7 @@ def ld1e_detection(events: list[Mapping], manifest: Mapping) -> Result:
     return _result("LD-1e", not late, runs=runs[:5], flagged=dead[:10], late=late[:5])
 
 
+@criterion("LD-1f")
 def ld1f_hold(events: list[Mapping], manifest: Mapping) -> Result:
     """LD-1f: while learning death is flagged, no gain row lowers γ.
 
@@ -1660,7 +1737,7 @@ def ld1f_hold(events: list[Mapping], manifest: Mapping) -> Result:
         by_router[row["router"]].append(row)
     exercised = []
     for w in windows(events):
-        if w["window"] not in dead or not w.get("acts"):
+        if w["window"] not in dead or not need(w, "acts"):
             continue
         for router, rows in by_router.items():
             floor = min(min(row["gamma_before"] + row["gamma_after"]) for row in rows)
@@ -1673,6 +1750,7 @@ def ld1f_hold(events: list[Mapping], manifest: Mapping) -> Result:
     return _result("LD-1f", not bad, flagged=len(dead), exercised=exercised[:5], bad=bad[:3])
 
 
+@criterion("I-3c")
 def i3c_niche_no_worse_than_noop(events: list[Mapping], manifest: Mapping) -> Result:
     """I-3c: a niche decision bears no more card penalty than a NOOP of the same window
     (R-E: "Failed exploration there must never be worse than NOOP", read in penalty
@@ -1708,6 +1786,7 @@ def _decision_windows(events: Iterable[Mapping]) -> dict[str, int]:
     return out
 
 
+@criterion("I-4a")
 def i4a_no_blind_step_back(events: list[Mapping], manifest: Mapping) -> Result:
     """I-4a: the sampling actuator never steps the mix back while it cannot see.
 
@@ -1721,7 +1800,8 @@ def i4a_no_blind_step_back(events: list[Mapping], manifest: Mapping) -> Result:
     if not lowers:
         # (B): a raise never steps back, so only a lower exercises the property.
         return _unsupported("I-4a", "the actuator never stepped back", moves=len(rows))
-    blind = [row for row in lowers if row.get("outcome_slope") is None]
+    # feedback.py writes ``outcome_slope`` on every step, None when unmeasured.
+    blind = [row for row in lowers if need(row, "outcome_slope") is None]
     return _result("I-4a", not blind, moves=len(rows), blind_lowers=len(blind),
                    example=blind[:2])
 
@@ -1729,6 +1809,7 @@ def i4a_no_blind_step_back(events: list[Mapping], manifest: Mapping) -> Result:
 # --- overfitting (§3.3) -----------------------------------------------------------------------
 
 
+@criterion("OF-2d")
 def of2d_authorship(events: list[Mapping], manifest: Mapping, *,
                     seats: set[str] | None = None) -> Result:
     """OF-2d: every holdout and challenge traces to a seat's return; the kernel adds none.
@@ -1751,6 +1832,7 @@ def of2d_authorship(events: list[Mapping], manifest: Mapping, *,
                    traced=len(proposals) - len(bad), bad=bad[:5])
 
 
+@criterion("OF-1a")
 def of1a_outside_the_loop(events: list[Mapping], manifest: Mapping) -> Result:
     """OF-1a: the realized consequence of a return is a fact of the world, the same for
     every judge that read it: every ``verdict.consequence`` row on one return, in one
@@ -1763,9 +1845,12 @@ def of1a_outside_the_loop(events: list[Mapping], manifest: Mapping) -> Result:
     not their ``q`` differ. A row with ``y`` null (not yet known) is not a reading."""
     by_return: dict[tuple, list] = defaultdict(list)
     for row in rows_of(events, "verdict.consequence"):
-        # A row whose y is not yet known (null) reads no fact to compare.
-        if row.get("y") is not None:
-            by_return[(row["about_handle"], row.get("phase"))].append(row.get("y"))
+        # feedback.py ``_score_verdict`` writes ``y`` (a measured float) and ``phase``
+        # in every row: a null or absent one is malformed, never "not yet known".
+        y = need(row, "y")
+        if y is None:
+            raise Malformed(row, "y")
+        by_return[(need(row, "about_handle"), need(row, "phase"))].append(y)
     shared = {key: ys for key, ys in by_return.items() if len(ys) > 1}
     if not shared:
         return _unsupported("OF-1a", "no return carries two consequence rows in one phase")
@@ -1774,6 +1859,7 @@ def of1a_outside_the_loop(events: list[Mapping], manifest: Mapping) -> Result:
     return _result("OF-1a", not split, returns=len(shared), split=list(split.items())[:5])
 
 
+@criterion("OF-3a")
 def of3a_sampling_behind_return(events: list[Mapping], manifest: Mapping) -> Result:
     """OF-3a: every judge draw on a return is ledgered after that return: the sampling
     decision stays behind the return, so no seat can alias a sampler it cannot predict.
@@ -1783,13 +1869,14 @@ def of3a_sampling_behind_return(events: list[Mapping], manifest: Mapping) -> Res
     invocation that made it."""
     returned = {row["handle"]: row["seq"] for row in rows_of(events, "invocation")
                 if isinstance(row.get("handle"), str) and row["handle"]}
-    published = {row["event"]["id"]: ((row["event"].get("payload") or {}).get("about_handle"),
-                                      row["seq"])
+    # loop.py emits every ProducerReturn with its ``about_handle``.
+    published = {row["event"]["id"]: (need(row, "event.payload.about_handle"), row["seq"])
                  for row in rows_of(events, "event")
-                 if (row.get("event") or {}).get("kind") == "ProducerReturn"}
+                 if need(row, "event.kind") == "ProducerReturn"}
     checked, early = 0, []
     for row in rows_of(events, "decision.open"):
-        handle, event_seq = published.get(row.get("event_id"), (None, None))
+        # A draw on an event that is no ProducerReturn is not a draw on a return.
+        handle, event_seq = published.get(need(row, "event_id"), (None, None))
         if handle in returned:
             checked += 1
             if row["seq"] <= event_seq or row["seq"] <= returned[handle]:
@@ -1799,6 +1886,7 @@ def of3a_sampling_behind_return(events: list[Mapping], manifest: Mapping) -> Res
     return _result("OF-3a", not early, draws=checked, early=early[:5])
 
 
+@criterion("OF-2c")
 def of2c_holdout_bites(events: list[Mapping], manifest: Mapping, *, card: str,
                       seats: set[str], after_window: int) -> Result:
     """OF-2c: after the holdout's activation, some decision of ``seats`` bears a share of
@@ -1811,8 +1899,8 @@ def of2c_holdout_bites(events: list[Mapping], manifest: Mapping, *, card: str,
     for handle, row in penalty_by_handle(events).items():
         if drawn.get(handle) not in seats:
             continue
-        for term in row.get("terms") or ():
-            if term["card_id"] != card or term["window"] <= after_window:
+        for term in need(row, "terms"):
+            if need(term, "card_id") != card or need(term, "window") <= after_window:
                 continue
             # A decision settled while its window was still open is priced on the last
             # closed measurement (``_penalty_terms`` reads the live card samples).
@@ -1854,6 +1942,7 @@ ACT_KINDS: dict[str, str] = {
 }
 
 
+@criterion("S1")
 def s1_draw_sovereignty(events: list[Mapping], manifest: Mapping | None = None) -> Result:
     """S1: every drawn arm is the router's own sample, replayed from its logged seed.
 
@@ -1932,18 +2021,18 @@ WEIGHTED_PENALTY_KINDS = frozenset({"router.abstention_priced", "router.decline_
 #: field (a reward, a grade, a probability, a score, a realized y) is a number, and a
 #: boolean there fails S4.
 BOOLEAN_OUTCOMES = frozenset({("policy.outcome", "y")})
-#: The unit fields the kernel writes as None or leaves out, each with the condition on
-#: its own row under which the emitting code does so. Every other ``UNIT_FIELDS`` field
-#: is written by every emitter of its kind, and a row missing it (or carrying None)
-#: fails S4. Read from the emitters, and pinned against them by
-#: tests/gauntlet/test_criteria_schema.py:
+#: The unit fields the kernel writes as an explicit None, each with the condition on its
+#: own row under which the emitting code does so (``OMITTED`` names the ones it leaves
+#: out). Every other ``UNIT_FIELDS`` field is written, as a value, by every emitter of
+#: its kind: absent or None there fails S4. Read from the emitters, and pinned against
+#: them by tests/gauntlet/test_criteria_schema.py:
 #: - ``price.penalty`` ``raw``/``effective``: None when the settlement is unresolved,
 #:   and then the row names ``unresolved`` (pricing.py ``_settle_priced``).
 #: - ``exposure.settled`` ``score``: None when no judge was scored on the antagonist's
 #:   return (feedback.py, the two ``"score": None`` emitters).
-#: - ``counter.settled`` ``q``/``judge_q``/``y`` absent and ``score`` None together, when
-#:   the judged return's outcome was not measured (feedback.py, the censored emitter);
-#:   the measured emitter writes all four.
+#: - ``counter.settled`` ``score``: None when the judged return's outcome was not
+#:   measured (feedback.py, the censored emitter), which also leaves out ``q``,
+#:   ``judge_q`` and ``y`` (``OMITTED``); the measured emitter writes all four.
 #: - ``policy.outcome`` ``y``: None unless the motion's outcome settled
 #:   (governance.py: ``outcome = promise_kept(...) if status is SETTLED else None``).
 #: - ``evaluator.settled`` ``grade``/``consequence``: each None when that signal did not
@@ -1956,8 +2045,6 @@ NULLABLE: dict[tuple[str, str], Any] = {
     ("price.penalty", "raw"): lambda row: "unresolved" in row,
     ("price.penalty", "effective"): lambda row: "unresolved" in row,
     ("exposure.settled", "score"): lambda row: True,
-    **{("counter.settled", name): (lambda row: row.get("score") is None)
-       for name in ("q", "judge_q", "y")},
     ("counter.settled", "score"): lambda row: not {"q", "judge_q", "y"} & set(row),
     ("policy.outcome", "y"): lambda row: row.get("status") != "settled",
     ("evaluator.settled", "grade"): lambda row: True,
@@ -1968,6 +2055,13 @@ NULLABLE: dict[tuple[str, str], Any] = {
     ("composed.settled", "reward"): (
         lambda row: all(row.get(k) is None for k in ("verdict", "credit",
                                                      "tool_use_credit"))),
+}
+#: The unit fields an emitter leaves out of its row, each with the condition under which
+#: it does: only ``counter.settled``'s censored emitter, which writes ``score: None`` and
+#: no ``q``, ``judge_q`` or ``y``. Every other field is present in every row of its kind.
+OMITTED: dict[tuple[str, str], Any] = {
+    ("counter.settled", name): (lambda row: "score" in row and row["score"] is None)
+    for name in ("q", "judge_q", "y")
 }
 #: The penalty a settlement or an abstention bears is bounded by ``penalty_cap``.
 CAPPED_FIELDS: dict[str, tuple[str, ...]] = {
@@ -1985,12 +2079,28 @@ def _field(row: Mapping, path: str) -> Any:
     return value
 
 
+#: What ``_lookup`` returns for a key the row does not hold (never an explicit null).
+ABSENT = object()
+
+
+def _lookup(row: Mapping, path: str) -> Any:
+    """The value at the dotted ``path``, ``ABSENT`` when a key on the way is missing: an
+    absent field and an explicit null are different evidence."""
+    value: Any = row
+    for part in path.split("."):
+        if not isinstance(value, Mapping) or part not in value:
+            return ABSENT
+        value = value[part]
+    return value
+
+
 def _bounded(value: Any, lo: float, hi: float) -> bool:
     """A real number (never a bool, a string or None), finite, within [lo, hi]."""
     return (isinstance(value, int | float) and not isinstance(value, bool)
             and math.isfinite(value) and lo <= value <= hi)
 
 
+@criterion("S4")
 def s4_boundedness(events: list[Mapping], manifest: Mapping) -> Result:
     """S4: every settled penalty is a finite number in [0, ``penalty_cap``], present in
     every row of its kind (``CAPPED_FIELDS``); every learned, settled or graded score of
@@ -2003,11 +2113,20 @@ def s4_boundedness(events: list[Mapping], manifest: Mapping) -> Result:
     for kind, fields in UNIT_FIELDS.items():
         for row in rows_of(events, kind):
             for name in fields:
-                value = _field(row, name)
+                value = _lookup(row, name)
                 checked += 1
+                if value is ABSENT:
+                    # Only a field the kernel's emitter leaves out, under the condition
+                    # it does, may be absent (``OMITTED``); every other absence fails.
+                    omitted = OMITTED.get((kind, name))
+                    if omitted is None or not omitted(row):
+                        bad.append({"kind": kind, "field": name, "value": None,
+                                    "missing": True, "absent": True,
+                                    "handle": row.get("handle")})
+                    continue
                 if value is None:
-                    # Only a field the kernel writes as None, under the condition it
-                    # does so, may be absent; every other one missing fails.
+                    # An explicit null only where the kernel writes one, under the
+                    # condition it does (``NULLABLE``).
                     allowed = NULLABLE.get((kind, name))
                     if allowed is None or not allowed(row):
                         bad.append({"kind": kind, "field": name, "value": None,
@@ -2024,7 +2143,8 @@ def s4_boundedness(events: list[Mapping], manifest: Mapping) -> Result:
                 # Every capped field of its kind is written by the kernel: a missing,
                 # non-numeric, non-finite, negative or over-cap value fails, and each
                 # one read is evidence (a penalty-only diary is checked, not unsupported).
-                value = _field(row, name)
+                value = _lookup(row, name)
+                value = None if value is ABSENT else value
                 slack = 1e-12 if kind in WEIGHTED_PENALTY_KINDS else 0.0
                 checked += 1
                 if not _bounded(value, 0.0, ph.cap + slack):
@@ -2039,6 +2159,7 @@ def s4_boundedness(events: list[Mapping], manifest: Mapping) -> Result:
     return _result("S4", not bad, checked=checked, bad=bad[:5])
 
 
+@criterion("S5")
 def s5_neutral_imputation(events: list[Mapping], manifest: Mapping) -> Result:
     """S5: an abstention and a declined commission are credited by one formula:
     ``clip(neutral − penalty, 0, 1)`` on the router's own neutral (R9, D4), exactly as
@@ -2052,6 +2173,7 @@ def s5_neutral_imputation(events: list[Mapping], manifest: Mapping) -> Result:
     return _result("S5", not bad, priced=len(rows), bad=bad[:5])
 
 
+@criterion("S5b")
 def s5b_observed_neutral(events: list[Mapping], manifest: Mapping) -> Result:
     """S5b / I-2b (wave 16 D4): after a router's first settled round, what nothing
     delivered is credited is the router's observed mean, never the 0.5 prior.
@@ -2071,15 +2193,18 @@ def s5b_observed_neutral(events: list[Mapping], manifest: Mapping) -> Result:
         kind = row.get("kind")
         if kind == "price.penalty":
             handle = row.get("handle")
-            if row.get("raw") is not None and seats.get(handle) not in (None, "NOOP"):
+            # ``raw`` is always written, None when unresolved (pricing.py).
+            if need(row, "raw") is not None and seats.get(handle) != "NOOP":
                 actor = actors.get(handle)
                 if not isinstance(actor, str):
+                    # A penalized handle with no draw (no decision.open, or no actor) is
+                    # counted untraced, never read as a NOOP.
                     # A round no router drew (S1's rule: untraceable) is no router's mean.
                     untraced += 1
                     continue
                 raws[actor].append(float(row["raw"]))
         elif kind in ("router.abstention_priced", "router.decline_priced"):
-            router = row.get("router")
+            router = need(row, "router")  # feedback.py: every priced abstention names it
             observed = raws.get(router) if isinstance(router, str) else None
             if observed:
                 checked += 1
@@ -2094,6 +2219,7 @@ def s5b_observed_neutral(events: list[Mapping], manifest: Mapping) -> Result:
                    untraced=untraced)
 
 
+@criterion("S7")
 def s7_gain_targets(events: list[Mapping], manifest: Mapping | None = None) -> Result:
     """S7: gain rows name only the kernel's own routers, never a seat-registered learner."""
     gains = rows_of(events, "immune.gain")
@@ -2103,6 +2229,7 @@ def s7_gain_targets(events: list[Mapping], manifest: Mapping | None = None) -> R
     return _result("S7", not bad, gains=len(gains), bad=bad[:5])
 
 
+@criterion("S8")
 def s8_gain_rows_uniform(events: list[Mapping], manifest: Mapping) -> Result:
     """S8 (ledger half): each gain act moves every exploration row of a router by one
     common step, within ``[seed, gamma_max]``: γ is a scalar over all arms, so the act
@@ -2126,7 +2253,7 @@ def s8_gain_rows_uniform(events: list[Mapping], manifest: Mapping) -> Result:
         # ``immune._gain``'s own step, exactly (immune.py:145-148): up is
         # max(old, min(gamma_max, old + gain_step)); down is
         # min(old, max(seed_gamma, old − gain_step)), a partial step only onto the seed.
-        if row.get("pathology") == "stable_failure":
+        if need(row, "pathology") == "stable_failure":
             wrong = [b for a, b in pairs if b != max(a, min(ph.gamma_max, a + ph.gain_step))]
         else:
             wrong = []
@@ -2144,7 +2271,7 @@ def s8_gain_rows_uniform(events: list[Mapping], manifest: Mapping) -> Result:
         if not seed and not wrong and not below:
             # The seed is the floor a lowering stops at; with it out of the diary the
             # lower bound of this row is not verified.
-            if row.get("pathology") != "stable_failure":
+            if need(row, "pathology") != "stable_failure":
                 unverified.append({"router": row["router"], "window": row["window"]})
         if len(steps) != 1 or wrong or below:
             bad.append({"router": row["router"], "window": row["window"],
@@ -2157,6 +2284,7 @@ def s8_gain_rows_uniform(events: list[Mapping], manifest: Mapping) -> Result:
     return _result("S8", not bad, gains=len(gains), bad=bad[:5])
 
 
+@criterion("S8-instrumented")
 def gain_neutral(before: Mapping[str, Any], after: Mapping[str, Any]) -> Result:
     """S8 (instrumented half): one gain act changed only γ, uniformly across arms.
 
@@ -2195,9 +2323,11 @@ def gain_neutral(before: Mapping[str, Any], after: Mapping[str, Any]) -> Result:
 
 def _weights(base: Mapping) -> list[float]:
     """A base's weights in its action order (saved as ``{action: log weight}``)."""
-    raw = base.get("log_weights", base.get("weights")) or []
+    # An EXP3 base's state always holds its actions and log weights
+    # (learners/exp3.py ``EXP3.state``).
+    raw = need(base, "log_weights")
     if isinstance(raw, Mapping):
-        actions = list(base.get("actions") or raw)
+        actions = list(need(base, "actions"))
         return [float(raw[a]) for a in actions if a in raw]
     return [float(x) for x in raw]
 
@@ -2303,7 +2433,7 @@ def replay(events: list[Mapping], manifest: Mapping | None = None, *,
 def _sf0_parts(manifest: Mapping, events: list[Mapping]) -> tuple[str, dict]:
     regions = {}
     for row in card_windows(events):
-        regions.update(row.get("regions") or {})
+        regions.update(need(row, "regions"))
     result = sf0_relation(manifest, regions=regions)
     return result.status, result.evidence
 
