@@ -1146,6 +1146,52 @@ def test_s5b_compares_neutral_with_the_routers_computed_mean():
     assert g.s5b_observed_neutral(rounds(0.6, 0.8) + [credit | {"neutral": 0.7}], M).ok
 
 
+def _self_child(handle, parent, seat, actor="router:Tick"):
+    """A ``target: self`` child (``CompositionMixin._invoke_child``): opened under its
+    parent's router with the parent's choice, a ``parent-selected`` propensity of 1.0."""
+    return {"kind": "decision.open", "handle": handle, "actor": actor,
+            "parent_handle": parent,
+            "propensity": {"action_ids": [seat], "probs": [1.0], "chosen": seat,
+                           "rng_seed": 0, "learner_id": actor,
+                           "learner_state_hash": "parent-selected", "source": "sampled"}}
+
+
+def test_a_self_child_is_no_router_draw():
+    """Codex on 3b5bb6a: ``FeedbackMixin._router_sampled`` excludes a parent-selected
+    child from the router's learning and charges; so does every criterion reading
+    draws (``router_draw``). Under an active thrash price it creates no expected charge
+    and moves no baseline, and its score never enters S5b's mean."""
+    assert g.router_draw(_open("d1", "a") | {"parent_handle": None})
+    child = _self_child("c1", "d1", "a")
+    assert not g.router_draw(child)
+    # A request router's child draw is sampled by it; a parented draw elsewhere is not.
+    request = _open("r1", "a", actor="router:request Finding") | {"parent_handle": "d1"}
+    assert g.router_draw(request)
+    assert not g.router_draw(request | {"actor": "router:Tick"})
+    rows = _seq([
+        _w(1, lam=0.4),
+        _open("d1", "a", ids=["a", "NOOP"], probs=[0.8, 0.2]),
+        child,
+        _open("d2", "a", ids=["a", "NOOP"], probs=[0.1, 0.9]),  # moved 0.7 from d1
+    ])
+    expected = g.expected_thrash_charges(rows, M)
+    assert "c1" not in expected and expected["d2"] == min(0.5, 0.4 * 0.7)
+    charged = rows + [{"kind": "thrash.charged", "handle": "d2", "router": "router:Tick",
+                       "charge": 0.4 * 0.7, "reward": 0.4}]
+    assert g.th1c_movement(charged, M).ok
+    on_child = charged + [{"kind": "thrash.charged", "handle": "c1", "router": "router:Tick",
+                           "charge": 0.1, "reward": 0.4}]
+    assert g.th1c_movement(on_child, M).status == g.FAIL
+    assert g.th1d_frontier(on_child, M).status == g.FAIL
+    # S5b: the router's mean is over the rounds it drew (0.3, 0.7), not the child's 1.0.
+    credit = {"kind": "router.abstention_priced", "handle": "z", "router": "router:Tick",
+              "neutral": 0.5, "penalty": 0.0, "reward": 0.5}
+    s5 = [_open("s0", "seat"), _penalty("s0", 0.0) | {"raw": 0.3},
+          _open("s1", "seat"), _penalty("s1", 0.0) | {"raw": 0.7},
+          _self_child("c2", "s1", "seat"), _penalty("c2", 0.0) | {"raw": 1.0}, credit]
+    assert g.s5b_observed_neutral(s5, M).ok
+
+
 def test_s7_s8_gain_names_routers_and_moves_gamma_by_one_common_step():
     assert g.s7_gain_targets([_gain(1, 0.1, 0.15)]).ok
     assert g.s7_gain_targets([_gain(1, 0.1, 0.15, router="learner:seat")]).status == g.FAIL

@@ -1025,6 +1025,24 @@ def raises(row: Mapping) -> bool:
                                      strict=True))
 
 
+def router_draw(row: Mapping) -> bool:
+    """Whether a ``decision.open`` row is a round its router drew: the runtime's own rule,
+    ``FeedbackMixin._router_sampled`` (feedback.py): no parent, or a request router's
+    (``shared.is_request_router``), and a ``sampled`` propensity that is not
+    ``parent-selected``. A ``self`` child (``CompositionMixin._invoke_child``) is opened
+    under its parent's router with a propensity of 1.0 no router sampled: the router
+    neither learns from it nor is charged for it."""
+    from factorylab.runtime.shared import is_request_router
+
+    actor, prop = row.get("actor"), row.get("propensity")
+    if not isinstance(actor, str) or not actor.startswith("router:") \
+            or not isinstance(prop, Mapping):
+        return False
+    return ((row.get("parent_handle") is None or is_request_router(actor))
+            and prop.get("source", "sampled") == "sampled"
+            and prop.get("learner_state_hash") != "parent-selected")
+
+
 def router_presence(events: list[Mapping]) -> dict[str, int]:
     """Each router's first window in the diary, over every kind that names a router
     (``ROUTER_SOURCES``): a row the organ writes (``immune.*``) at its own ``window``,
@@ -1037,6 +1055,8 @@ def router_presence(events: list[Mapping]) -> dict[str, int]:
             window = need(row, "window") + 1
         at = need(row, "window") if (str(kind).startswith("immune.")
                                and isinstance(row.get("window"), int)) else window
+        if kind == "decision.open" and not router_draw(row):
+            continue  # a self child names its parent's router, which drew nothing
         for _row, name in _entities([row], ROUTER_SOURCES):
             if name.startswith("router:"):
                 first[name] = min(first.get(name, at), at)
@@ -1065,7 +1085,8 @@ def router_round_periods(events: list[Mapping]) -> dict[str, int]:
     ``FeedbackMixin._learn_router_return``), read from the rounds, never from the gain
     rows it bounds."""
     opened = _decision_windows(events)
-    actor = {need(row, "handle"): row.get("actor") for row in rows_of(events, "decision.open")}
+    actor = {need(row, "handle"): row.get("actor") for row in rows_of(events, "decision.open")
+             if router_draw(row)}
     window, closures = 1, defaultdict(list)
     for row in events:
         if row.get("kind") == "price.window":
@@ -1339,7 +1360,8 @@ def sf2_gradient(events: list[Mapping], manifest: Mapping, *, card: str,
     evidence. ``pass`` needs a window with a priced reliever and a priced holder.
     """
     seats = decision_seats(events)
-    actors = {need(row, "handle"): row.get("actor") for row in rows_of(events, "decision.open")}
+    actors = {need(row, "handle"): row.get("actor") for row in rows_of(events, "decision.open")
+              if router_draw(row)}
     opened_in = _decision_windows(events)
     members = split_members(events)
     violated = {w for w, v in card_violations(events, card).items() if v > 0}
@@ -1646,10 +1668,10 @@ def expected_thrash_charges(events: list[Mapping], manifest: Mapping, *,
         if kind == "immune.window":
             lam = float(need(row, "thrash.lambda"))
         elif kind == "decision.open":
+            if not router_draw(row):
+                continue  # no router drew it: nothing moved, nothing is charged
             prop = need(row, "propensity")
             router = need(row, "actor")
-            if not isinstance(router, str) or not router.startswith("router:"):
-                continue
             if core_only and router.split(":", 1)[1].split("#")[0].split("@")[0] \
                     not in ph.no_swap_regret_kinds:
                 continue
@@ -1751,9 +1773,9 @@ def thrash_attributed(events: list[Mapping], manifest: Mapping) -> dict[str, boo
             if isinstance(schema, Mapping):
                 emits[str(contract.get("id"))] = schema.get("emits")
         elif kind == "decision.open":
-            router = need(row, "actor")
-            if not isinstance(router, str) or not router.startswith("router:"):
+            if not router_draw(row):
                 continue
+            router = need(row, "actor")
             menus[router].update(need(row, "propensity.action_ids"))
             if roles:
                 filled = {measured_role(emits[a]) for a in menus[router] if a in emits}
@@ -2490,6 +2512,8 @@ def s1_draw_sovereignty(events: list[Mapping], manifest: Mapping | None = None) 
             continue
         if prop.get("source", "sampled") != "sampled":
             continue  # a declared field was drawn by the seat, not the kernel
+        if str(row.get("actor", "")).startswith("router:") and not router_draw(row):
+            continue  # a self child: its parent chose it, no router drew it
         ids, probs = list(need(prop, "action_ids")), [float(p) for p in need(prop, "probs")]
         checked += 1
         drawn = Random(need(prop, "rng_seed")).choices(ids, weights=probs, k=1)[0]
@@ -2719,6 +2743,9 @@ def s5b_observed_neutral(events: list[Mapping], manifest: Mapping) -> Result:
     """
     seats = decision_seats(events)
     actors = {need(row, "handle"): row.get("actor") for row in rows_of(events, "decision.open")}
+    # Only a round its router drew enters that router's mean (``router_draw``): a self
+    # child's score is its parent's choice, never a round the router played.
+    drawn = {need(row, "handle") for row in rows_of(events, "decision.open") if router_draw(row)}
     raws: dict[str, list[float]] = defaultdict(list)
     bad, checked, untraced = [], 0, 0
     for row in events:
@@ -2737,7 +2764,8 @@ def s5b_observed_neutral(events: list[Mapping], manifest: Mapping) -> Result:
                     # untraced score is a failure, never a round to skip.
                     untraced += 1
                     continue
-                raws[actor].append(float(need(row, "raw")))
+                if handle in drawn:
+                    raws[actor].append(float(need(row, "raw")))
         elif kind in ("router.abstention_priced", "router.decline_priced"):
             router = need(row, "router")  # feedback.py: every priced abstention names it
             observed = raws.get(router) if isinstance(router, str) else None

@@ -422,6 +422,9 @@ def test_the_entity_builders_read_every_source():
                 name = part.removesuffix("[]")
                 leaf = {name: [leaf] if part.endswith("[]") else leaf}
             row = {"kind": kind, "window": 3, **leaf}
+            if kind == "decision.open":
+                # A decision names its router only when the router drew it (router_draw).
+                row |= {"parent_handle": None, "propensity": {"source": "sampled"}}
             assert "router:R" in g.router_presence([row]), (kind, path)
     lifespan = {"kind": "immune.window", "window": 1, "lifespans": [{"loop": "price"}]}
     assert g.diary_loops([lifespan, {"kind": "config.lifespan", "loop": "gain"}]) == [
