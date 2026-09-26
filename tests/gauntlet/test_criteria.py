@@ -582,6 +582,26 @@ def test_th1c_a_duplicate_charge_fails_even_at_the_right_amount():
     assert result.status == g.FAIL and result.evidence["duplicated"] == ["d2"]
 
 
+def test_th1c_checks_every_charge_even_with_no_core_kind_configured():
+    """Astra G-1: with ``no_swap_regret_kinds`` empty, a ``thrash.charged`` row is still
+    read against price × movement, the cap and the one-row rule, never UNSUPPORTED."""
+    mean = {**M, "evaluation": {**M.get("evaluation", {}), "no_swap_regret_kinds": []}}
+    assert g.physics(mean).no_swap_regret_kinds == ()
+    rows = _seq([
+        _w(1, lam=0.4),
+        _open("d1", "a", ids=["a", "NOOP"], probs=[0.8, 0.2]),
+        _open("d2", "a", ids=["a", "NOOP"], probs=[0.1, 0.9]),  # moved 0.7
+        _open("d3", "a", ids=["a", "NOOP"], probs=[0.1, 0.9]),  # did not move
+    ])
+    charge = {"kind": "thrash.charged", "handle": "d2", "router": "router:Tick",
+              "charge": 0.4 * 0.7, "reward": 0.4}
+    assert g.th1c_movement(rows, mean).status == g.UNSUPPORTED
+    assert g.th1c_movement(rows + [charge], mean).ok
+    for bad in ([charge | {"charge": 0.1}], [charge | {"handle": "d3"}],
+                [charge, dict(charge)], [charge | {"charge": M["prices"]["penalty_cap"] + 1}]):
+        assert g.th1c_movement(rows + bad, mean).status == g.FAIL, bad
+
+
 def test_th1d_no_charge_reaches_the_frontier_or_the_niche():
     ok = [{"kind": "thrash.charged", "handle": "d1", "router": "router:Tick", "charge": 0.1}]
     assert g.th1d_frontier(ok, M).ok

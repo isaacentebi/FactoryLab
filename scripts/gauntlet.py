@@ -1622,12 +1622,14 @@ def _tv(a: Mapping[str, float], b: Mapping[str, float]) -> float:
     return 0.5 * math.fsum(abs(a.get(x, 0.0) - b.get(x, 0.0)) for x in set(a) | set(b))
 
 
-def expected_thrash_charges(events: list[Mapping], manifest: Mapping) -> dict[str, float]:
+def expected_thrash_charges(events: list[Mapping], manifest: Mapping, *,
+                            core_only: bool = True) -> dict[str, float]:
     """Each core router draw's charge: ``min(cap, λ_t · min(1, TV))`` (``_record_movement``).
 
     λ_t is the thrash price the last closed window left in force before the draw; TV
     is the total variation from the same router's previous draw, over the union of
-    both menus. Zero for a router's first draw.
+    both menus. Zero for a router's first draw. ``core_only=False`` prices every
+    router's draws, whatever ``evaluation.no_swap_regret_kinds`` names.
     """
     ph = physics(manifest)
     lam, last, out = 0.0, {}, {}
@@ -1640,7 +1642,7 @@ def expected_thrash_charges(events: list[Mapping], manifest: Mapping) -> dict[st
             router = need(row, "actor")
             if not isinstance(router, str) or not router.startswith("router:"):
                 continue
-            if router.split(":", 1)[1].split("#")[0].split("@")[0] \
+            if core_only and router.split(":", 1)[1].split("#")[0].split("@")[0] \
                     not in ph.no_swap_regret_kinds:
                 continue
             now = dict(zip(need(prop, "action_ids"), need(prop, "probs"), strict=True))
@@ -1662,10 +1664,18 @@ def th1c_movement(events: list[Mapping], manifest: Mapping) -> Result:
     duplicate charge fails even at the right amount), and each charge equals its
     expected amount exactly: the expectation is ``_record_movement``'s own arithmetic
     (``fsum`` TV, ``min(cap, λ·min(1, TV))``) on the same floats.
+
+    Every ``thrash.charged`` row is checked against that arithmetic whatever
+    ``evaluation.no_swap_regret_kinds`` says: a charge on any router's draw must be its
+    price × movement, under the cap, one row per handle (wave 16's I-10 lets a charge
+    land on any router), so an empty core list never leaves a charge unread. The core
+    list only names the draws that must be charged.
     """
     expected = expected_thrash_charges(events, manifest)
+    amounts = expected_thrash_charges(events, manifest, core_only=False)
     charged = rows_of(events, "thrash.charged")
     positive = {h for h, c in expected.items() if c > 0}
+    priced = {h for h, c in amounts.items() if c > 0}
     if not positive and not charged:
         return _unsupported("TH-1c", "no core draw moved under a thrash price")
     counts = Counter(need(row, "handle") for row in charged)
@@ -1690,11 +1700,11 @@ def th1c_movement(events: list[Mapping], manifest: Mapping) -> Result:
     unlanded = positive - landed
     missing = sorted(unlanded & learned)
     pending = sorted(unlanded - learned)
-    unexpected = sorted(landed - positive)
+    unexpected = sorted(landed - positive - priced)
     bad = [{"handle": need(row, "handle"), "charge": need(row, "charge"),
-            "expected": expected.get(need(row, "handle"))}
+            "expected": amounts.get(need(row, "handle"))}
            for row in charged
-           if float(need(row, "charge")) != float(expected.get(need(row, "handle"), 0.0))]
+           if float(need(row, "charge")) != float(amounts.get(need(row, "handle"), 0.0))]
     evidence = {"charged": len(charged), "expected_positive": len(positive),
                 "missing": missing[:5], "pending": len(pending), "unexpected": unexpected[:5],
                 "bad": bad[:5], "duplicated": duplicated[:5]}
