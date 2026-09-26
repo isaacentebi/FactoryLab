@@ -565,3 +565,16 @@ def test_s2_scans_for_every_pathology_word():
     # The published price's key is the schematic, not a diagnosis.
     assert P._diagnosis_labels(json.dumps({"thrash_price": {"lambda": 0.1}})) == []
     assert P._diagnosis_labels(json.dumps({"thrash_price": 1, "thrash": 1})) == ["thrash"]
+
+
+# --- Astra V-3: S3 is registered as population-only, with its reason -----------------------
+
+
+def test_s3_is_registered_and_replay_names_it_unsupported():
+    """S3 has no diary reading (it compares two runs); replay reports it UNSUPPORTED with
+    the registered reason rather than omitting it."""
+    assert g.POPULATION_METAMORPHIC["S3"].strip()
+    rows = unit._seq([unit._launch(name="w"), unit._w(1)])
+    s3 = [r for r in g.replay(rows) if r.name == "S3"]
+    assert len(s3) == 1 and s3[0].status == g.UNSUPPORTED
+    assert s3[0].evidence["why"] == g.POPULATION_METAMORPHIC["S3"]

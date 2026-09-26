@@ -2833,6 +2833,14 @@ POPULATION_ONLY: dict[str, str] = {
     "gain_neutral": "the learners' states before and after a gain act, instrumented "
                     "in the run; the diary holds only the gain rows (S8 reads those)",
 }
+#: Criteria with no diary reading at all: each needs two runs of one population, and a
+#: diary is one run. ``replay`` reports each as UNSUPPORTED with its reason, so a diary's
+#: readings name the gap instead of omitting it (Astra V-3).
+POPULATION_METAMORPHIC: dict[str, str] = {
+    "S3": "metamorphic: the same population run twice, one action relabelled "
+          "(populations.relabelled), bears a different penalty only through the price; "
+          "a diary is one run",
+}
 #: Criteria ``replay`` runs by their own rule rather than a registry above.
 REPLAY_DIRECT: dict[str, str] = {
     "sf0_relation": "SF-0, from the manifest and every region the diary measured",
@@ -2858,6 +2866,7 @@ def replay(events: list[Mapping], manifest: Mapping | None = None, *,
         for loop in diary_loops(events):
             result = fn(events, manifest, loop=loop)
             results.append(Result(f"{name}[{loop}]", result.status, result.evidence))
+    results += [_unsupported(name, why) for name, why in POPULATION_METAMORPHIC.items()]
     return results
 
 
