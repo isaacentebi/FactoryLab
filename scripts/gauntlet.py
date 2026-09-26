@@ -155,6 +155,10 @@ def aggregate(name: str, results: Iterable[Result], **evidence: Any) -> Result:
 # --- the world's physics, derived (design §1.3) -------------------------------------
 
 
+#: The manifest sections ``physics`` reads.
+PHYSICS_SECTIONS = ("prices", "immune", "timing", "novelty", "evaluation")
+
+
 def _section(manifest: Mapping, name: str) -> Mapping:
     value = manifest.get(name) if isinstance(manifest, Mapping) else None
     return value if isinstance(value, Mapping) else {}
@@ -398,8 +402,7 @@ def load_events(path: str | Path, *, kinds: Iterable[str] | None = None,
             with file.open() as handle:
                 read = [json.loads(line) for line in handle if line.strip()]
             for row in read:
-                event_kind = (row.get("event") or {}).get("kind") if isinstance(row, dict) \
-                    else None
+                event_kind = _event_of(row).get("kind") if kind == "event" else None
                 if not isinstance(row, dict) or row.get("kind") != kind or (
                         kind == "event" and f"event_{event_kind}" != file.stem):
                     raise DiaryInvalid(f"{file.name} holds a row of another kind")
@@ -416,10 +419,28 @@ def load_events(path: str | Path, *, kinds: Iterable[str] | None = None,
            or isinstance(row.get("seq"), bool)]
     if bad:
         raise DiaryInvalid(f"{len(bad)} rows lack a kind or an integer seq (first: {bad[0]})")
+    for row in rows:
+        if row["kind"] == "event":
+            _event_of(row)
     seqs = [row["seq"] for row in rows]
     if len(seqs) != len(set(seqs)):
         raise DiaryInvalid("a seq repeats: two rows claim one place in the ledger")
     return sorted(rows, key=lambda row: row["seq"])
+
+
+def _event_of(row: Any) -> Mapping:
+    """An ``event`` row's event: a mapping (absent reads as empty), whose ``payload`` is
+    a mapping when present. Anything else raises ``DiaryInvalid``, never another error."""
+    if not isinstance(row, Mapping):
+        raise DiaryInvalid("a diary row is not an object")
+    event = row.get("event")
+    if event is None:
+        return {}
+    if not isinstance(event, Mapping):
+        raise DiaryInvalid(f"an event row's event is a {type(event).__name__}, not an object")
+    if event.get("payload") is not None and not isinstance(event["payload"], Mapping):
+        raise DiaryInvalid("an event's payload is not an object")
+    return event
 
 
 def manifest_hash(manifest: Mapping) -> str:
@@ -432,16 +453,26 @@ def manifest_hash(manifest: Mapping) -> str:
 def diary_identity(events: Iterable[Mapping]) -> dict[str, Any]:
     """The world a diary ran: its Launch event's manifest, verified against the
     ``manifest_hash`` the Launch ledgered. Refused (``DiaryInvalid``) when the diary has
-    no Launch or two, or the manifest does not hash to its hash."""
-    launches = [row for row in rows_of(events, "event")
-                if (row.get("event") or {}).get("kind") == "Launch"]
+    no Launch or two, a row or its event, payload or physics section is not an object,
+    or the manifest does not hash to its hash."""
+    rows = list(events)
+    if not all(isinstance(row, Mapping) for row in rows):
+        raise DiaryInvalid("a diary row is not an object")
+    launches = [_event_of(row) for row in rows_of(rows, "event")]
+    launches = [event for event in launches if event.get("kind") == "Launch"]
     if len(launches) != 1:
         raise DiaryInvalid(f"{len(launches)} Launch rows: a diary is bound to one launch")
-    payload = launches[0]["event"].get("payload") or {}
+    payload = launches[0].get("payload") or {}
     manifest = payload.get("manifest")
     if not isinstance(manifest, dict) or manifest_hash(manifest) != payload.get(
             "manifest_hash"):
         raise DiaryInvalid("the Launch manifest does not hash to its manifest_hash")
+    # ``physics`` reads a non-mapping section as absent (its defaults); a launched
+    # section that is present but not a mapping is a malformed diary, not a default.
+    bad = [name for name in PHYSICS_SECTIONS
+           if manifest.get(name) is not None and not isinstance(manifest[name], Mapping)]
+    if bad:
+        raise DiaryInvalid(f"the launched manifest's {bad[0]} section is not an object")
     return {"name": manifest.get("name"), "seed": manifest.get("seed"),
             "manifest_hash": payload["manifest_hash"],
             "launch_nonce": payload.get("launch_nonce"), "manifest": manifest}
@@ -467,7 +498,11 @@ def bind_diary(events: list[Mapping], *, world: str | None = None, seed: int | N
         raise DiaryInvalid(f"the diary launched {identity['name']!r}, not {world!r}")
     if seed is not None and identity["seed"] != seed:
         raise DiaryInvalid(f"the diary launched seed {identity['seed']!r}, not {seed}")
-    if manifest is not None and physics(manifest) != physics(launched):
+    try:
+        launched_physics = physics(launched)
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise DiaryInvalid(f"the launched manifest's physics is malformed: {exc}") from exc
+    if manifest is not None and physics(manifest) != launched_physics:
         raise DiaryInvalid("the manifest given is not the physics the diary launched")
     return launched, evidence
 

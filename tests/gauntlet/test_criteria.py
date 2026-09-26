@@ -1135,6 +1135,47 @@ def test_a_malformed_diary_is_refused(tmp_path):
         g.load_events(opened)
 
 
+#: Every nested field the diary loader dereferences, as a path from the row.
+NESTED = [(), ("event",), ("event", "payload"), ("event", "payload", "manifest"),
+          *[("event", "payload", "manifest", section)
+            for section in g.PHYSICS_SECTIONS]]
+
+
+@pytest.mark.parametrize("path", NESTED, ids=lambda p: ".".join(p) or "row")
+@pytest.mark.parametrize("value", [[1], "x", 3, None], ids=["list", "str", "number", "null"])
+def test_a_non_mapping_where_the_loader_reads_a_mapping_is_diary_invalid(tmp_path, path,
+                                                                         value):
+    """Codex on d1f0903: a non-mapping at any nested field the loader, ``diary_identity``
+    or ``bind_diary`` dereferences is refused as ``DiaryInvalid``, never another error.
+    The Launch's manifest_hash is recomputed, so a bad section reaches the physics read."""
+    if len(path) == 4 and value is None:
+        pytest.skip("a null physics section reads as absent: the section's defaults")
+    rows = _seq([_launch(name="w", seed=7), _w(1)])
+    if path:
+        *parents, leaf = path
+        holder = rows[0]
+        for key in parents:
+            holder = holder[key]
+        holder[leaf] = value
+        payload = rows[0].get("event", {})
+        if isinstance(payload, dict) and isinstance(payload.get("payload"), dict) \
+                and isinstance(payload["payload"].get("manifest"), dict):
+            payload["payload"]["manifest_hash"] = g.manifest_hash(payload["payload"]["manifest"])
+    else:
+        rows[0] = value
+    calls = [lambda: g.diary_identity(rows), lambda: g.bind_diary(rows, manifest=M)]
+    if path:
+        (tmp_path / "rows.json").write_text(json.dumps(rows))
+        opened = tmp_path / "open"
+        opened.mkdir()
+        (opened / "event_Launch.jsonl").write_text(json.dumps(rows[0]) + "\n")
+        calls += [lambda: g.bind_diary(g.load_events(tmp_path / "rows.json"), manifest=M),
+                  lambda: g.bind_diary(g.load_events(opened), manifest=M)]
+    for call in calls:
+        with pytest.raises(g.DiaryInvalid):
+            call()
+
+
 def test_the_replay_command_refuses_an_unbound_diary(tmp_path, capsys):
     (tmp_path / "rows.json").write_text(json.dumps(_seq([_launch(name="w"), _w(1)])))
     assert g.main(["replay", str(tmp_path / "rows.json"), "--world", "v"]) == 2
