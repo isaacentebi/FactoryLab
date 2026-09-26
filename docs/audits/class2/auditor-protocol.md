@@ -171,14 +171,15 @@ the skeleton):
 - **CHARTER.** A charter card or norm (see the release gate): sent to the charter's next
   revision as an observation, never fixed in code.
 - **REVERTED.** A commit the provenance pass flagged (and only such a finding) that was a
-  behaviour mix, and whose whole seat-visible effect has been undone: the commit stays
-  in the range, but every seat-visible line it added (whitespace-normalised; a line
-  with no letter or digit carries no text) is absent, as a whole line, from every
-  seat-visible file at the release commit (the corpus's own scope, not only the file it
-  was added to: moving the text is not reverting it), and every seat-visible line it
-  deleted (a removed disclosure, the old half of a replacement) is present again, as a
-  whole line, in some seat-visible file at the release commit. The gate recomputes this
-  from the repository and never trusts the triage row.
+  behaviour mix, and whose net effect on seat-visible text has been undone: the commit
+  stays in the range, but, counting occurrences of each whole line
+  (whitespace-normalised; a line with no letter or digit carries no text) over every
+  seat-visible file (the corpus's own scope, whatever the path), every line it added
+  stands no more often at the release commit than at the commit's parent (moving the
+  text is not reverting it), and every line it deleted (a removed disclosure, the old
+  half of a replacement) stands no less often (a copy that was already elsewhere does
+  not stand in for it). The gate recomputes this from the repository and never trusts
+  the triage row.
   REJECT stays for a flagged commit that is not a behaviour mix, with its reason.
 
 ## The release gate
@@ -186,8 +187,8 @@ the skeleton):
 - Zero untriaged HIGH or MED findings and none marked FIX: a release passes only when
   every HIGH or MED finding present is ALLOW (backed by the allowlist), REJECT (backed
   by `rejected.jsonl`), CHARTER (a charter leaf) or REVERTED (a flagged commit whose
-  seat-visible effect the gate finds undone at the release: its added text gone, its
-  deleted text back), and a reason on every non-FIX
+  net effect on seat-visible text the gate finds undone at the release, by occurrence
+  counts), and a reason on every non-FIX
   disposition
   (`scripts/class2_audit.py gate`). The gate recomputes rather than reads: given the key
   and the four sample files, it checks that the triage file names the world, the key's

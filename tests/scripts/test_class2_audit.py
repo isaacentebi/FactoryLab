@@ -1567,6 +1567,36 @@ def test_a_replacement_passes_reverted_only_with_the_old_line_back_and_the_new_g
     assert tool.reverted_problems(repo, flagged, reverted) == []
 
 
+def test_a_deleted_line_with_a_copy_elsewhere_fails_until_its_occurrence_is_back(tmp_path):
+    """Codex P1 (class2_audit.py:1995): REVERTED counts occurrences over the seat-visible
+    scope. A deleted disclosure that also stood in another file is not restored by that
+    other copy: the count at the release must reach the parent's again."""
+    repo, (_root,) = _schematics_repo(tmp_path, "HOLD = 'hold'\n" + DISCLOSURE)
+    _commit(repo, "worlds/fees.toml", DISCLOSURE, "the disclosure in a world too")
+    flagged = _commit(repo, "factorylab/cortex/schematics.py", "HOLD = 'hold'\n",
+                      BEHAVIOUR_MIX)
+    problems = tool.reverted_problems(repo, flagged, flagged)
+    assert problems and "not back" in problems[0] and "(1 copies, 2 before it)" in problems[0]
+    restored = _commit(repo, "factorylab/cortex/schematics.py",
+                       "HOLD = 'hold'\n" + DISCLOSURE, "restore the disclosure")
+    assert tool.reverted_problems(repo, flagged, restored) == []
+
+
+def test_an_added_line_that_already_stood_once_passes_when_back_to_one_copy(tmp_path):
+    """An added line that already had one copy at the commit's parent is undone when the
+    release is back to one copy, wherever that copy stands; two copies still fail."""
+    advice = "ADVICE = 'you should hold when unsure'\n"
+    repo, (_root,) = _schematics_repo(tmp_path, "HOLD = 'hold'\n")
+    _commit(repo, "worlds/advice.toml", advice, "the advice in a world")
+    flagged = _commit(repo, "factorylab/cortex/schematics.py", "HOLD = 'hold'\n" + advice,
+                      BEHAVIOUR_MIX)
+    problems = tool.reverted_problems(repo, flagged, flagged)
+    assert problems and "still in" in problems[0] and "(2 copies, 1 before it)" in problems[0]
+    reverted = _commit(repo, "factorylab/cortex/schematics.py", "HOLD = 'hold'\n",
+                       "Revert the advice")
+    assert tool.reverted_problems(repo, flagged, reverted) == []
+
+
 def test_reverted_on_a_corpus_finding_is_refused(tmp_path):
     finding = {"finding_id": "f1", "path": "scripted/tools/a", "question": "Q4",
                "class": "C1", "severity": "HIGH"}
