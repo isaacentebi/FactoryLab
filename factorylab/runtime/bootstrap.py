@@ -613,6 +613,13 @@ class BootstrapMixin:
         self.venue_marks: dict[str, list] = {}
         self.funding_prints: dict[str, list] = {}
         self.reference_mids: dict[str, dict[str, Any]] = {}
+        # Codex on #152 (eaf23e0): the venue time through which every world fact a named
+        # trade reads has been delivered: the latest venue mid or funding print seen,
+        # or the previous tick (every fact through it was delivered before this tick's).
+        # A named trade's lapse and horizon pass on it, never on the processing clock.
+        self.facts_seen_ns: int | None = None
+        self.tick_through_ns: int | None = None
+        self.last_tick_ns: int | None = None
         self.consequence_mix: float = self.ev.consequence_share  # live sampling actuator
         # The consequence scores the last closed window issued, and whether the actuator
         # is blind for want of them (wave 16, ruling R-B).

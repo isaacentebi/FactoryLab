@@ -132,9 +132,11 @@ def test_a_resting_order_filled_at_h_in_the_batch_of_the_mid_at_h_is_marked_by_i
     assert payoff.net_micro == 1_000_000  # (61000 - 60000) * 0.001, at MarketMid(H)
 
 
-def test_a_fill_after_a_return_s_mark_is_marked_by_the_next_mid():
-    """The inherited mark never predates the lot: a fill after the first mid at or
-    after H is marked by the first mid at or after the fill."""
+def test_a_fill_after_h_is_late_money_and_never_graded():
+    """Codex on #152 (eaf23e0): a resting order filled after H, in a batch processed
+    before the outcome is fixed, never enters the graded outcome and never unmarks it:
+    the return is graded on what it held at H (nothing), and the lot is its late
+    money."""
     from factorylab.kernel.queue import PropensityRecord
     from tests.conftest import make_runtime
 
@@ -157,7 +159,9 @@ def test_a_fill_after_a_return_s_mark_is_marked_by_the_next_mid():
                                           "ts_ns": at_h + 6}, rt.n)
     rt.clock.now_ns = at_h + 6
     rt.consequences.resolve(rt.n)
-    assert rt.consequences.payoff(handle).net_micro == 500_000  # marked at the later mid
+    payoff = rt.consequences.payoff(handle)
+    assert payoff is not None and not payoff.marked and payoff.net_micro == 0
+    assert [lot.handle for lot in rt.consequences.table.lots] == [handle]  # late money
 
 
 def test_an_instrument_never_priced_after_h_fixes_the_outcome_as_none_after_patience():
@@ -178,9 +182,11 @@ def test_an_instrument_never_priced_after_h_fixes_the_outcome_as_none_after_pati
     rt.consequences.observe("MarketMid", {"coin": "BTC", "mid": "60000", "ts_ns": opened},
                             rt.n)  # the instrument's last mid, before H
     rt.clock.now_ns = opened + rt._patience_ns()
+    rt.consequences.tick_through_ns = rt.clock.now_ns  # a tick: facts through now are in
     assert all(p.handle != handle for p in rt.consequences.resolve(rt.n))  # still waiting
     assert rt.consequences.payoff(handle) is None
     rt.clock.now_ns += 1
+    rt.consequences.tick_through_ns = rt.clock.now_ns
     (payoff,) = [p for p in rt.consequences.resolve(rt.n) if p.handle == handle]
     assert payoff.censored == NO_MARK and payoff.y == 0
     (row,) = _rows(rt, "consequence.uninformative", handle=handle)
@@ -401,9 +407,11 @@ def test_a_named_trade_opened_after_its_decision_is_kept_until_its_own_lapse():
     rt._observe_mid("BTC", opened, "100")
     frozen = rt.reference_mids[producer]
     rt.clock.now_ns = start + rt._patience_ns() + 1  # a patience past the decision
+    rt.tick_through_ns = rt.clock.now_ns  # a tick: every fact through now is in
     rt._settle_evaluations()
     assert rt.reference_mids.get(producer) is frozen  # not yet a patience past opening
     rt.clock.now_ns = opened + rt._patience_ns() + 1
+    rt.tick_through_ns = rt.clock.now_ns
     rt._settle_evaluations()
     assert producer not in rt.reference_mids
 

@@ -35,9 +35,15 @@ class ReturnConsequences:
         # venue mid timestamped at or after its horizon, fixed when that mid arrives:
         # never the latest mid cached from an earlier event.
         self.horizon_marks: dict[str, dict[str, str]] = {}
-        # The venue time of each such mark (Codex on #152, fee12ff): a lot a fill opens
-        # after its mark's instant is never marked by it.
-        self.horizon_mark_ns: dict[str, dict[str, int]] = {}
+        # Codex on #152 (eaf23e0): the venue time through which every world fact has
+        # been delivered, the latest fact this book has seen (its own, and the runtime's
+        # previous tick, ``tick_through_ns``). A horizon or a patience passes on it,
+        # never on when ``resolve`` runs.
+        self.facts_ns: int | None = None
+        self.tick_through_ns: int | None = None
+        # Each return's economics frozen before the first fill after its horizon was
+        # applied: a fill after H is late money, booked and never graded.
+        self.horizon_state: dict[str, dict] = {}
         # Ruling R10-m: funding charged to an open return's lots for a funding time
         # after its horizon (micro-USD, exact), added back when its outcome is fixed.
         self.after_horizon: dict[str, Fraction] = {}
@@ -283,7 +289,14 @@ class ReturnConsequences:
             ts = payload.get("ts_ns", self._now_ns())
             if ts is not None:
                 self._mark_horizons(str(payload["coin"]), int(ts), str(payload["mid"]))
+                self._saw_fact(int(ts))
         elif kind == "Fill":
+            at = payload.get("ts_ns", self._now_ns())
+            if at is not None:
+                # Every return whose horizon this fill is after keeps the economics it
+                # had at H (Codex on #152): the fill is late money for it.
+                self._freeze_past_horizon(int(at))
+                self._saw_fact(int(at))
             try:
                 table = self.table.fill(
                     order_id=str(payload["order_id"]),
@@ -323,9 +336,6 @@ class ReturnConsequences:
                                     "reason": RELEASED_ORDER})
             self._apply("fill", {"event": event, "payload": dict(payload)}, table)
             order = next((o for o in table.orders if o.order_id == str(payload["order_id"])), None)
-            if order is not None:
-                self._unmark_before(order.handle, payload["coin"],
-                                    payload.get("ts_ns", self._now_ns()))
             handle = order.handle if order is not None else self.table.service_return(
                 str(payload["order_id"]))
             if handle is not None:
@@ -338,6 +348,9 @@ class ReturnConsequences:
                 })
         elif kind == "Funding" and payload.get("paid_usd") is not None:
             self._set_aside_after_horizon(payload)
+            at = payload.get("ts_ns", self._now_ns())
+            if at is not None:
+                self._saw_fact(int(at))
             table = self.table.funding(payload["coin"], str(payload["paid_usd"]))
             self._apply("funding", {"event": event, "payload": dict(payload)}, table)
         elif kind == "OrderRejected" and payload.get("order_id") is not None:
@@ -364,6 +377,41 @@ class ReturnConsequences:
                 **facts, "coin": coin, "payout": str(payout),
                 "realized_micro": realized[handle]})
         return realized
+
+    def _saw_fact(self, at_ns: int) -> None:
+        """Raise the venue time this book has seen facts through to ``at_ns``."""
+        self.facts_ns = at_ns if self.facts_ns is None else max(self.facts_ns, at_ns)
+
+    def _through_ns(self) -> int | None:
+        """The venue time every world fact has been delivered through, inclusive.
+
+        Guarantees a value ``C`` such that no fact with fact-time at or before ``C``
+        is still to come: the instant before the latest fact seen (facts at that very
+        instant may still be in flight), or the runtime's previous tick (every fact
+        through it was delivered before this tick's), whichever is later; the clock
+        only when neither is known. A horizon has passed once ``C`` reaches it.
+        """
+        known = [v for v in (None if self.facts_ns is None else self.facts_ns - 1,
+                             self.tick_through_ns) if v is not None]
+        return max(known) if known else self._now_ns()
+
+    def _freeze_past_horizon(self, at_ns: int) -> None:
+        """Freeze, before a fill at ``at_ns`` is applied, the economics of every open
+        return whose horizon it is after and that has none frozen yet: its lots, its
+        realised money and the funding after H already set aside. Guarantees the graded
+        outcome is a function of fills at or before H only (Codex on #152)."""
+        if self.horizon_ns is None:
+            return
+        for account in self.table.returns:
+            if (account.payoff is None and not account.voided
+                    and account.opened_at_ns is not None
+                    and at_ns > account.opened_at_ns + self.horizon_ns
+                    and account.handle not in self.horizon_state):
+                self.horizon_state[account.handle] = {
+                    "lots": [lot for lot in self.table.lots if lot.handle == account.handle],
+                    "realized": account.realized_micro,
+                    "set_aside": self.after_horizon.get(account.handle, Fraction(0)),
+                }
 
     def _set_aside_after_horizon(self, payload: dict) -> None:
         """Set aside each open return's share of a funding payment made after its horizon.
@@ -400,8 +448,8 @@ class ReturnConsequences:
         Guarantees the mark does not depend on the order of events within a batch
         (Codex on #152): a return is marked whether or not it holds ``coin`` yet, so
         a resting order filled at H, whose Fill a venue emits after MarketMid(H) in
-        the same batch, inherits MarketMid(H). A fill after the mark's own instant
-        drops it (``_unmark_before``): a lot is never marked by a mid older than it.
+        the same batch, inherits MarketMid(H). A fill whose fact-time is after H is
+        late money and never enters the graded outcome (``_freeze_past_horizon``).
         """
         if self.horizon_ns is None:
             return
@@ -411,18 +459,6 @@ class ReturnConsequences:
                     and ts_ns >= account.opened_at_ns + self.horizon_ns
                     and coin not in self.horizon_marks.get(account.handle, {})):
                 self.horizon_marks.setdefault(account.handle, {})[coin] = mid
-                self.horizon_mark_ns.setdefault(account.handle, {})[coin] = int(ts_ns)
-
-    def _unmark_before(self, handle: str | None, coin: str, ts_ns: int | None) -> None:
-        """Drop ``handle``'s mark of ``coin`` when it predates a fill at ``ts_ns``: the
-        lot the fill opens is marked by the first mid at or after both its horizon and
-        its own existence."""
-        if handle is None or ts_ns is None:
-            return
-        marked = self.horizon_mark_ns.get(handle, {}).get(coin)
-        if marked is not None and marked < int(ts_ns):
-            self.horizon_marks.get(handle, {}).pop(coin, None)
-            self.horizon_mark_ns[handle].pop(coin, None)
 
     def resolve(self, event: int) -> list[Payoff]:
         """Persist all newly fixed outcomes before publishing the successor accounting state."""
@@ -432,12 +468,14 @@ class ReturnConsequences:
         if self.pending_orders:
             for payoff in fixed:
                 self.horizon_marks.pop(payoff.handle, None)
-                self.horizon_mark_ns.pop(payoff.handle, None)
+                self.horizon_state.pop(payoff.handle, None)
                 self.after_horizon.pop(payoff.handle, None)
             return fixed  # Unknown inventory ownership cannot manufacture a no-fill outcome.
         table = self.table.resolve(event, self.backstop, self.mids,
                                    censored=self._unknown_portions(), tick=self._tick(event),
-                                   now_ns=self._now_ns(), horizon_ns=self.horizon_ns,
+                                   now_ns=self._now_ns(), through_ns=self._through_ns(),
+                                   horizon_ns=self.horizon_ns,
+                                   horizon_state=self.horizon_state,
                                    exit_rates=self._exit_rates(),
                                    horizon_marks=self.horizon_marks,
                                    after_horizon=self.after_horizon,
@@ -455,9 +493,11 @@ class ReturnConsequences:
                     # Fixed a patience past its opening, uninformative: the venue never
                     # priced these instruments at or after its horizon by then.
                     marked = self.horizon_marks.get(after.payoff.handle, {})
-                    held = sorted({lot.coin for lot in self.table.lots
-                                   if lot.handle == after.payoff.handle
-                                   and lot.coin not in marked})
+                    frozen = self.horizon_state.get(after.payoff.handle)
+                    graded = (frozen["lots"] if frozen is not None else
+                              [lot for lot in self.table.lots
+                               if lot.handle == after.payoff.handle])
+                    held = sorted({lot.coin for lot in graded if lot.coin not in marked})
                     self.ledger.append({"kind": "consequence.uninformative",
                                         "handle": after.payoff.handle,
                                         "reason": NO_MARK, "instruments": held})
@@ -465,7 +505,7 @@ class ReturnConsequences:
         self.table = table
         # A horizon mark is pinned by its return's open outcome: fixed or voided, no
         # reader remains.
-        for kept in (self.horizon_marks, self.horizon_mark_ns, self.after_horizon):
+        for kept in (self.horizon_marks, self.horizon_state, self.after_horizon):
             for handle in [h for h in kept if not self.account_open(h)]:
                 del kept[handle]
         return fixed

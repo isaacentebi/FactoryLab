@@ -705,6 +705,8 @@ _RUNTIME_FIELDS = (
     # each coin's latest mid and funding-rate print. Absent from an older checkpoint:
     # the next broadcast reads them.
     "fee_schedule", "venue_marks", "funding_prints",
+    # Codex on #152: the venue time facts were delivered through, and the last tick.
+    "facts_seen_ns", "tick_through_ns", "last_tick_ns",
     # Wave 16 (D4): settled raw scores awaiting their router. An older checkpoint has
     # none: its routers learn effective scores until the next settlement.
     "raw_scores", "round_penalties",
@@ -922,7 +924,10 @@ _COMPONENT_FIELDS = (
                           "unresolved_orders", "censored_payoffs",
                           # Wave 16, D2: open returns' horizon marks; R10-m: the
                           # funding after their horizons, set aside.
-                          "horizon_marks", "horizon_mark_ns", "after_horizon")),
+                          "horizon_marks", "after_horizon",
+                          # Codex on #152: the facts seen through, and returns' economics
+                          # frozen at their horizon.
+                          "facts_ns", "tick_through_ns", "horizon_state")),
     ("consequence_fills", "", ("since_ns", "seen")),
     ("reconciler", "", ("every", "_ticks")),
     # The artifact archive's index (C9): hash -> owner, kind, size, time, published.

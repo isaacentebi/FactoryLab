@@ -410,6 +410,10 @@ class Runtime(
             self._sampling_actuator()
         self._observe_delivered_event(ev)
         if ev.kind is EventKind.TICK:
+            # Every world fact through the previous tick was delivered before this one
+            # (the internal queue drains first): the floor of what is known complete.
+            self.tick_through_ns, self.last_tick_ns = self.last_tick_ns, ev.ts_ns
+            self.consequences.tick_through_ns = self.tick_through_ns
             self._open_pending_epochs()
             self._assign_waiting_readers()
             self._prune_read_use()

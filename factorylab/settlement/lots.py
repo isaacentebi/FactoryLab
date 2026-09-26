@@ -27,6 +27,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from fractions import Fraction
+from typing import Any
 
 from factorylab.kernel.money import require_money
 from factorylab.settlement.scoring import _require_id
@@ -570,7 +571,9 @@ class LotTable:
                 exit_rates: Mapping[str, str | None] | None = None,
                 horizon_marks: Mapping[str, Mapping[str, str]] | None = None,
                 after_horizon: Mapping[str, Fraction] | None = None,
-                patience_ns: int | None = None
+                patience_ns: int | None = None,
+                through_ns: int | None = None,
+                horizon_state: Mapping[str, Mapping[str, Any]] | None = None
                 ) -> "LotTable":
         """Fix ready outcomes once; marks require a valid mid for every remaining coin.
 
@@ -607,6 +610,16 @@ class LotTable:
         the mark that fixes it arrives (wave 16, ruling R10-m). The money itself is
         booked as charged.
 
+        ``through_ns`` is the venue time through which every world fact has been
+        delivered, inclusive. With it, a return's horizon has passed once
+        ``through_ns`` reaches it, and its patience once ``through_ns`` is after it, so
+        an outcome never depends on how the venue's facts were batched or when this
+        runs. ``horizon_state`` (handle ->
+        ``{"lots", "realized", "set_aside"}``) is a return's economics frozen before the
+        first fill after its horizon was applied: a fill after H is late money, never
+        graded, so the outcome values the frozen lots and realised money instead of the
+        table's.
+
         ``censored`` names returns that also sent an order nobody could observe
         (handle -> documented reason). Such a return resolves on its own schedule
         like any other, and its outcome carries the money its observed orders
@@ -621,7 +634,10 @@ class LotTable:
                 continue
             lots = [lot for lot in self.lots if lot.handle == account.handle]
             waiting = any(o.handle == account.handle and o.remaining for o in self.orders)
-            if (now_ns is not None and horizon_ns is not None
+            if (through_ns is not None and horizon_ns is not None
+                    and account.opened_at_ns is not None):
+                young = through_ns < account.opened_at_ns + horizon_ns
+            elif (now_ns is not None and horizon_ns is not None
                     and account.opened_at_ns is not None):
                 young = now_ns - account.opened_at_ns < horizon_ns
             else:
@@ -631,7 +647,15 @@ class LotTable:
                 young = age < backstop
             if (lots or waiting) and young:
                 continue
-            net = account.realized_micro + (after_horizon or {}).get(account.handle, 0)
+            table_lots = lots
+            state = (horizon_state or {}).get(account.handle)
+            if state is not None:
+                # Frozen before the first fill after H (Codex on #152): what the table
+                # moved since is late money.
+                lots = list(state["lots"])
+                net = state["realized"] + state["set_aside"]
+            else:
+                net = account.realized_micro + (after_horizon or {}).get(account.handle, 0)
             exit_fee = Fraction(0)
             unknown = False
             unmarked = False
@@ -641,9 +665,10 @@ class LotTable:
                         and account.opened_at_ns is not None):
                     marked = horizon_marks.get(account.handle, {})
                 missing = any(lot.coin not in marked for lot in lots)
-                if missing and not (patience_ns is not None and now_ns is not None
+                lapse_clock = through_ns if through_ns is not None else now_ns
+                if missing and not (patience_ns is not None and lapse_clock is not None
                                     and account.opened_at_ns is not None
-                                    and now_ns > account.opened_at_ns + patience_ns):
+                                    and lapse_clock > account.opened_at_ns + patience_ns):
                     continue
                 unmarked = missing
                 valued = [lot for lot in lots if lot.coin in marked]
@@ -683,7 +708,7 @@ class LotTable:
             # at the mark, so everything its account realises, before or after the
             # mark, is booked late once it is real.
             updates[account.handle] = replace(account, payoff=outcome,
-                                              late_micro=0 if lots else micro)
+                                              late_micro=0 if table_lots else micro)
         return self._accounts(updates)
 
     def closed(self, handle: str) -> bool:

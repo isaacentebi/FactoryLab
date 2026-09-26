@@ -105,9 +105,12 @@ def _meta(rt, verdict_handle, meta="meta-a", *, returned=None):
 
 
 def _advance(rt, ticks):
+    """``ticks`` later ticks: every world fact through the clock was delivered before
+    them (what a Tick tells the runtime; ``_facts_through``)."""
     for _ in range(ticks):
         rt.n += 1
         rt.ticks_consumed += 1
+        rt.tick_through_ns = rt.consequences.tick_through_ns = rt.clock.now_ns
         rt._settle_due_forecasts()
 
 

@@ -70,6 +70,10 @@ def test_the_consequence_horizon_marks_an_open_position_on_the_venue_clock():
     assert all(p.handle != handle for p in rt.consequences.resolve(rt.n))
     rt.consequences.observe("MarketMid", {"coin": "BTC", "mid": "60000",
                                           "ts_ns": rt.clock.now_ns}, rt.n)
+    # A fact at H itself may still be in flight in this batch (Codex on #152): the
+    # outcome is fixed once every fact through H is delivered, at the next tick.
+    assert all(p.handle != handle for p in rt.consequences.resolve(rt.n))
+    rt.consequences.tick_through_ns = rt.clock.now_ns
     (payoff,) = [p for p in rt.consequences.resolve(rt.n) if p.handle == handle]
     assert payoff.marked
     # Marked to liquidation value: 60 USD of notional at the venue's 3.5 bp taker rate.

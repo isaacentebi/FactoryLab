@@ -1427,17 +1427,38 @@ class FeedbackMixin:
         at or after ``open + H`` (wave 16, D2).
         """
         self.venue_marks[coin] = [int(ts_ns), str(mid)]
+        self._saw_fact(int(ts_ns))
         for frozen in self.reference_mids.values():
             if frozen.get("coin") != coin:
                 continue
             if frozen.get("open_ns") is None and ts_ns >= frozen["ns"]:
                 # Ruling R10-h: a trade named before its coin's first venue mid opens at
-                # that coin's first venue mid at or after the decision, priced from it.
-                self._open_named_trade(frozen, int(ts_ns), str(mid))
+                # that coin's first venue mid at or after the decision, priced from it,
+                # and only before its original lapse (Codex on #152): a first quote after
+                # it neither opens the trade nor resets its lapse; it is unmeasurable.
+                if ts_ns <= self._frozen_lapse_ns(frozen):
+                    self._open_named_trade(frozen, int(ts_ns), str(mid))
                 continue
             if (frozen.get("res") is None and frozen.get("due_ns") is not None
-                    and ts_ns >= frozen["due_ns"]):
+                    and frozen["due_ns"] <= ts_ns <= self._frozen_lapse_ns(frozen)):
                 frozen["res"] = [int(ts_ns), str(mid)]
+
+    def _saw_fact(self, at_ns: int) -> None:
+        """Raise the venue time named trades have seen facts through to ``at_ns``."""
+        seen = getattr(self, "facts_seen_ns", None)
+        self.facts_seen_ns = at_ns if seen is None else max(seen, at_ns)
+
+    def _facts_through(self) -> int:
+        """The venue time every fact a named trade reads has been delivered through,
+        inclusive: the instant before the latest venue mid or funding print seen
+        (facts at that very instant may still be in flight), or the previous tick,
+        whichever is later; the world's clock only when neither is known. Guarantees
+        a named trade's lapse and horizon pass on world facts, never on when this
+        runs (Codex on #152)."""
+        seen = getattr(self, "facts_seen_ns", None)
+        known = [v for v in (None if seen is None else seen - 1,
+                             getattr(self, "tick_through_ns", None)) if v is not None]
+        return max(known) if known else self.clock.now_ns
 
     def _open_named_trade(self, frozen: dict, ts_ns: int, mid: str) -> None:
         """Open a frozen named trade at a venue mid of its own coin: ``t_open`` is that
@@ -1468,6 +1489,7 @@ class FeedbackMixin:
                 continue
             advance_funding(funding, int(ts_ns), str(rate))
         self.funding_prints[coin] = [int(ts_ns), str(rate)]
+        self._saw_fact(int(ts_ns))
 
     def _fee_legs(self, frozen: dict) -> tuple[str | None, str | None]:
         """The taker rate of each leg of a frozen named trade: ``(entry, exit)``.
@@ -1516,9 +1538,13 @@ class FeedbackMixin:
         funding rates otherwise.
         """
         due, res = frozen.get("due_ns"), frozen.get("res")
-        lapsed = self.clock.now_ns > self._frozen_lapse_ns(frozen)
+        through = self._facts_through()
+        lapsed = through > self._frozen_lapse_ns(frozen)
         if res is None or due is None:
             return ("none" if lapsed else "open"), None
+        if through < due:
+            # A fact at H (a fee read, a funding print) may still be in flight.
+            return "open", None
         # Ruling R10-m: funding times up to H only, however late the measuring mid.
         rates = funding_due(frozen.get("funding"), frozen["open_ns"], due)
         if rates == FUNDING_PENDING:
@@ -1739,7 +1765,17 @@ class FeedbackMixin:
         declined = None if attempted is not None else declined_trade(outputs, listed)
         if attempted is None and declined is None:
             return
-        named = attempted or declined
+        self._freeze_named(handle, attempted or declined, mids, declined=declined,
+                           attempted=attempted)
+
+    def _freeze_named(self, handle: str, named: dict, mids, *, declined: dict | None,
+                      attempted: dict | None) -> None:
+        """Freeze the named trade ``named`` of ``handle`` at the world's clock.
+
+        Guarantees the trade opens at its coin's venue mark when there is one (its
+        opening mid and time), else at the coin's first venue mid at or after now
+        (ruling R10-h, ``_observe_mid``); the horizon counts from its opening; its
+        entry leg's taker rate and the funding state are the ones in force now."""
         coin = named["coin"]
         # The named coin's opening on the venue's clock: the timestamp of the mid it is
         # priced from, and the horizon H after it (wave 16, D2). With no venue mid of the
@@ -1938,7 +1974,7 @@ class FeedbackMixin:
         # past that opening (Codex on #152). One a return that acted left unread lapses
         # on the same clock.
         for handle in [h for h, frozen in self.reference_mids.items()
-                       if self.clock.now_ns > self._frozen_lapse_ns(frozen)]:
+                       if self._facts_through() > self._frozen_lapse_ns(frozen)]:
             del self.reference_mids[handle]
 
     def _kept_ns(self, value: Any) -> int:

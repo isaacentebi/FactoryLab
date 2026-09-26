@@ -2097,7 +2097,7 @@ class SchematicsMixin:
                 "compute and tool cost, fixed at H or when its lots close; a held "
                 "instrument with no mid at or after H within the consequence patience, "
                 "H + verdict_timeout_ticks after the return, makes it uninformative, "
-                f"{NO_MARK}; any "
+                f"{NO_MARK}; a fill after H is late money, booked and never graded; any "
                 "counterfactual such a return named is ignored. "
                 "For a return that executed nothing and named a counterfactual {coin, side}, "
                 "net = s * (m1 - m0) / m0 * 10^4 - (f0 + f1) * 10^4 - s * sum(rho) * 10^4 "
