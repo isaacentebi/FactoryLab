@@ -1729,6 +1729,34 @@ def test_a_card_whose_id_starts_with_card_keeps_its_id_through_replay():
     assert results[f"SF-1c[{cid}]"].ok, results[f"SF-1c[{cid}]"].evidence
 
 
+# --- Codex pass on 1de5c37 ----------------------------------------------------------------
+
+
+@pytest.mark.parametrize("change, why", [
+    ({"probs": [-0.1, 1.1]}, "finite number in [0, 1]"),
+    ({"probs": [float("nan"), 0.5]}, "finite number in [0, 1]"),
+    ({"probs": [True, False]}, "finite number in [0, 1]"),
+    ({"action_ids": ["a", "a"]}, "repeats"),
+    ({"probs": [1.0]}, "differ in length"),
+    ({"chosen": "z"}, "outside the support"),
+    ({"probs": [0.5, 0.5 + 1e-9]}, "sum to 1"),
+    ({"rng_seed": 1.5}, "not an integer"),
+    ({"rng_seed": True}, "not an integer"),
+    ({"action_ids": []}, "no action support"),
+])
+def test_s1_a_propensity_breaking_its_contract_fails_as_malformed(change, why):
+    """Codex P2 (gauntlet.py:2011): the whole ``PropensityRecord`` contract is checked
+    before a draw is replayed (queue.py ``validate``, sum within ``abs_tol=1e-12``); a
+    row that breaks it fails as malformed, never raises and never passes."""
+    good = _open("d1", "a")
+    assert g.s1_draw_sovereignty([good]).ok
+    row = json.loads(json.dumps(good))
+    row["propensity"].update(change)
+    result = g.s1_draw_sovereignty([row])
+    assert result.status == g.FAIL, result.evidence
+    assert why in result.evidence["malformed_propensities"][0]["why"]
+
+
 def test_s4_an_unresolved_penalty_row_may_carry_no_raw_score():
     row = {"kind": "price.penalty", "handle": "d", "penalty": 0.1, "raw": None,
            "effective": None}

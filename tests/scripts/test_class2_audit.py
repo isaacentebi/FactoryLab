@@ -86,23 +86,35 @@ def _triage_text(base, rel, world=WORLD):
             "disposition | reason |\n|---|---|---|---|---|---|---|---|---|\n")
 
 
-def _release_repo(where, prior):
-    """A repository whose last audited release is ``rel``, gated with ``prior`` as its
-    release corpus and a triage file of WORLD, both recorded in ``LAST_RELEASE`` at the
-    head; one surface commit before the release and one after."""
+def _gate_record(repo, rel, prior, triage_text, *, world=WORLD):
+    """Commit what a passed gate leaves: ``LAST_RELEASE`` naming ``rel`` (the commit the
+    gate ran on) with the corpus and triage digests, and the triage file beside it."""
+    triage = repo / tool.TRIAGE_REL / f"{world}.md"
+    triage.parent.mkdir(parents=True, exist_ok=True)
+    triage.write_text(triage_text)
+    record = {"release_commit": rel, "release_corpus_sha": tool.sha256_file(prior),
+              "triages": {world: tool.sha256_file(triage)}}
+    (repo / tool.LAST_RELEASE).write_text(json.dumps(record) + "\n")
+    _git(repo, "add", tool.LAST_RELEASE, str(triage.relative_to(repo)))
+    _git(repo, "commit", "-q", "-m", "record the gated release")
+    return _git(repo, "rev-parse", "HEAD"), triage
+
+
+def _release_repo(where, prior, *, family="fam-x"):
+    """A repository whose last audited release is ``rel``: one surface commit before it,
+    the gate-recording commit right after it (``LAST_RELEASE`` with ``prior``'s digest,
+    and WORLD's triage file, recording ``family``), then one surface commit and the
+    head. Returns the repository, (root, early, rel, later, head) and the triage file."""
     repo = where / "repo"
     repo.mkdir()
     _git(repo, "init", "-q")
     root = _commit(repo, "README.md", "x\n", "root")
     early = _commit(repo, "factorylab/cortex/schematics.py", "HOLD = 'hold'\n", "early")
     rel = _commit(repo, "docs/notes.md", "release\n", "the release audited last")
+    _recorded, triage = _gate_record(repo, rel, prior,
+                                     _triage_text(root, rel).replace("fam-x", family))
     later = _commit(repo, "factorylab/cortex/schematics.py", "HOLD = 'keep'\n", "later")
-    triage = where / f"{WORLD}.md"
-    triage.write_text(_triage_text(root, rel))
-    record = {"release_commit": rel, "release_corpus_sha": tool.sha256_file(prior),
-              "triages": {WORLD: tool.sha256_file(triage)}}
-    head = _commit(repo, tool.LAST_RELEASE, json.dumps(record) + "\n",
-                   "record the last release")
+    head = _commit(repo, "docs/notes.md", "release 2\n", "the release audited now")
     return repo, (root, early, rel, later, head), triage
 
 
@@ -1294,9 +1306,65 @@ def test_a_release_after_the_first_needs_the_gated_previous_files(released, tmp_
     with pytest.raises(tool.AuditInputInvalid, match="triage file of 'scripted'"):
         render(previous=edited, previous_corpus=prior)
     assert not (tmp_path / "out").exists()
-    key = render(previous=triage, previous_corpus=prior)
-    assert key["previous_corpus_sha"] == tool.sha256_file(prior)
-    assert key["previous_triage_sha256"] == tool.sha256_file(triage)
+
+
+# --- Codex pass on 1de5c37: last_release edited only by gate-recording commits; rotation --
+
+
+@pytest.mark.parametrize("edit", ["beside another file", "naming another release"])
+def test_a_range_with_a_commit_editing_last_release_is_refused(rendered, tmp_path, edit):
+    """Codex P2 (class2_audit.py:579): only a gate-recording commit (``LAST_RELEASE`` and
+    triage files alone, its record naming its parent, the release it gated) may edit the
+    record; the record in force must be the most recent one's. A commit that edits it
+    alongside other files, or re-points it, is refused."""
+    prior = tmp_path / "prior.jsonl"
+    prior.write_bytes((rendered[0] / "release_corpus.jsonl").read_bytes())
+    repo, (_root, _early, rel, later, _head), _triage = _release_repo(tmp_path, prior)
+    record = json.loads((repo / tool.LAST_RELEASE).read_text())
+    if edit == "beside another file":
+        (repo / "docs/notes.md").write_text("edited\n")
+        _git(repo, "add", "docs/notes.md")
+    else:
+        record["release_commit"] = later
+    (repo / tool.LAST_RELEASE).write_text(json.dumps(record | {"note": edit}) + "\n")
+    _git(repo, "add", tool.LAST_RELEASE)
+    _git(repo, "commit", "-q", "-m", "an unreviewed edit")
+    head = _git(repo, "rev-parse", "HEAD")
+    base = later if edit == "naming another release" else rel
+    with pytest.raises(tool.AuditInputInvalid, match="gate-recording commit"):
+        tool.release_base(repo, base, head)
+
+
+def test_before_the_first_release_no_commit_may_have_edited_last_release(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    root = _commit(repo, "README.md", "x\n", "root")
+    _commit(repo, tool.LAST_RELEASE, json.dumps({"release_commit": root}), "added")
+    _git(repo, "rm", "-q", tool.LAST_RELEASE)
+    _git(repo, "commit", "-q", "-m", "removed")
+    head = _git(repo, "rev-parse", "HEAD")
+    with pytest.raises(tool.AuditInputInvalid, match="outside a gate-recording commit"):
+        tool.release_base(repo, root, head)
+
+
+def test_the_gate_rechecks_rotation_against_the_prior_releases_triage(rendered, tmp_path,
+                                                                     triaged, monkeypatch):
+    """Codex P2 (class2_audit.py:1605): rotation is re-read at gate time from the prior
+    release's gated triage of the world (from its gate-recording commit, verified against
+    the recorded digest): the family it records may not audit the next release."""
+    prior = tmp_path / "prior.jsonl"
+    prior.write_bytes((rendered[0] / "release_corpus.jsonl").read_bytes())
+    repo, (*_commits, head), _triage = _release_repo(tmp_path, prior,
+                                                     family="google/gemini-3")
+    key = {"release_commit": head}
+    assert any("the family rotates" in p for p in
+               tool.rotation_problems(repo, key, WORLD, "gemini-3-flash"))
+    assert tool.rotation_problems(repo, key, WORLD, "mistralai/mistral-large") == []
+    assert tool.rotation_problems(repo, key, "another-world", "gemini-3-flash") == []
+    # The gate runs it: a rotation refusal is a gate problem.
+    monkeypatch.setattr(tool, "rotation_problems", lambda *a: ["rotation checked"])
+    assert "rotation checked" in _gate(triaged)
 
 
 def test_the_gate_record_adds_each_world_of_one_release(tmp_path):
@@ -1361,6 +1429,9 @@ def test_the_gate_re_verifies_the_range_against_the_last_release(released, tmp_p
     key = tool.render([WORLD], tmp_path / "out", seed=7, rendered=False, essay=ESSAY,
                       release_range=f"{rel}..{head}", repo=repo, **_previous(released))
     assert tool.range_problems(repo, key) == []
+    # The key names the gated previous files the render was bound to.
+    assert key["previous_corpus_sha"] == tool.sha256_file(released[6])
+    assert key["previous_triage_sha256"] == tool.sha256_file(released[7])
     for field in ("previous_corpus_sha", "previous_triage_sha256"):
         other = key | {field: "2" * 64}
         assert any("last release's gate recorded" in p

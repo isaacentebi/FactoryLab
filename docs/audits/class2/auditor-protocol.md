@@ -222,7 +222,7 @@ sha256. `render` refuses any other base or previous file (and any previous file 
 first release); `gate` re-verifies the base and the previous digests the key names, and
 recomputes the provenance prompt from the range. When a gate passes it writes the
 release, its release corpus's digest and the gated triage file's digest to
-`last_release`; commit it with the triage files. `render` fills the authority text from `--essay` (default `docs/essay.md`, which is
+`last_release`; commit it with the triage files (and `rejected.jsonl`), and nothing else, as one commit directly on the gated release: that is a gate-recording commit, the only kind that may edit `last_release`. `render` fills the authority text from `--essay` (default `docs/essay.md`, which is
 copied into the worktree and never committed) and refuses to render without it, or when
 it lacks a heading that bounds the text. No prompt is ever edited after rendering: both
 prompts are bound to the key by hash.
@@ -245,6 +245,14 @@ The tool defends against inconsistency, stale artifacts and operator error:
   beside a triage file is authoritative.
 - **Validated.** Every input is schema-validated before use; one invalid field refuses
   the artifact (exit 2) or invalidates the sample.
+
+`last_release` is protected against accidental or unreviewed edits, not adversarial
+ones: the gate refuses a range in which any commit other than a gate-recording commit
+(one that changes only `last_release` and the triage files, and whose record names the
+release it gated, its parent) edited it, and the record in force must be the one the
+most recent gate-recording commit on the first-parent history wrote. The gate also
+re-reads the prior release's triage of the world from that commit, verified against its
+recorded digest, and refuses the family it records (rotation).
 
 It does **not** defend against an adversary with write access to every artifact and to
 the repository: such a writer can re-render, re-sample and re-triage consistently. Git

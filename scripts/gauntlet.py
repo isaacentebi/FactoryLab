@@ -1980,6 +1980,48 @@ ACT_KINDS: dict[str, str] = {
 }
 
 
+#: The kernel's tolerance on a propensity's sum (queue.py ``PropensityRecord.validate``:
+#: ``math.isclose(math.fsum(probs), 1.0, rel_tol=0, abs_tol=1e-12)``).
+PROPENSITY_SUM_TOLERANCE = 1e-12
+
+
+def propensity_problem(prop: Any) -> str | None:
+    """Why ``prop`` breaks the ``PropensityRecord`` contract the kernel validates at
+    open (queue.py ``PropensityRecord.validate``), or None. Guarantees every clause is
+    read before any value is used: source sampled or declared (its default "sampled");
+    ``action_ids`` a non-empty list of unique non-empty strings; ``probs`` the same
+    length, each a finite real (never a bool) in [0, 1], summing to 1 within
+    ``PROPENSITY_SUM_TOLERANCE``; ``chosen`` in ``action_ids`` (a declared one with
+    positive mass); ``rng_seed`` an integer (never a bool)."""
+    if not isinstance(prop, Mapping):
+        return "no propensity"
+    if prop.get("source", "sampled") not in ("sampled", "declared"):
+        return "source is neither sampled nor declared"
+    ids, probs = prop.get("action_ids"), prop.get("probs")
+    if not isinstance(ids, list | tuple) or not ids:
+        return "no action support"
+    if any(not isinstance(a, str) or not a for a in ids):
+        return "an action id is not a non-empty string"
+    if len(set(ids)) != len(ids):
+        return "an action id repeats"
+    if not isinstance(probs, list | tuple) or len(probs) != len(ids):
+        return "probs and action_ids differ in length"
+    if any(type(p) not in (int, float) or not math.isfinite(p) or not 0 <= p <= 1
+           for p in probs):
+        return "a probability is not a finite number in [0, 1]"
+    if not math.isclose(math.fsum(probs), 1.0, rel_tol=0,
+                        abs_tol=PROPENSITY_SUM_TOLERANCE):
+        return "the probabilities do not sum to 1"
+    if type(prop.get("rng_seed")) is not int:
+        return "the seed is not an integer"
+    chosen = prop.get("chosen")
+    if chosen not in ids:
+        return "the chosen action is outside the support"
+    if prop.get("source", "sampled") == "declared" and probs[ids.index(chosen)] <= 0:
+        return "a declared choice has no mass"
+    return None
+
+
 @criterion("S1")
 def s1_draw_sovereignty(events: list[Mapping], manifest: Mapping | None = None) -> Result:
     """S1: every drawn arm is the router's own sample, replayed from its logged seed.
@@ -1990,25 +2032,23 @@ def s1_draw_sovereignty(events: list[Mapping], manifest: Mapping | None = None) 
     field, a decision a seat returned on. No act row is skipped: one with no handle, or
     a handle that is not a returned decision, is an act the kernel took for a seat.
     """
-    bad, checked = [], 0
+    bad, checked, malformed = [], 0, []
     for row in rows_of(events, "decision.open"):
-        # ``Decision.propensity`` is a required ``PropensityRecord`` and every field of
-        # it is required (queue.py ``PropensityRecord.validate``: an int seed, the
-        # support, the probabilities, the chosen arm; source sampled or declared). A
-        # decision row missing any of them is malformed, never skipped.
+        # ``Decision.propensity`` is a required ``PropensityRecord``: its whole contract
+        # is checked before the draw is replayed, and a row that breaks it is malformed
+        # (it fails, never raises, never passes).
         prop = row.get("propensity")
-        if (not isinstance(prop, Mapping)
-                or prop.get("source", "sampled") not in ("sampled", "declared")
-                or any(prop.get(f) is None for f in ("action_ids", "probs", "chosen",
-                                                      "rng_seed"))):
+        why = propensity_problem(prop)
+        if why is not None:
             bad.append(row.get("handle"))
+            malformed.append({"handle": row.get("handle"), "why": why})
             continue
         if prop.get("source", "sampled") != "sampled":
             continue  # a declared field was drawn by the seat, not the kernel
         ids, probs = list(prop["action_ids"]), [float(p) for p in prop["probs"]]
         checked += 1
-        drawn = Random(int(prop["rng_seed"])).choices(ids, weights=probs, k=1)[0]
-        if drawn != prop["chosen"] or abs(math.fsum(probs) - 1.0) > 1e-9:
+        drawn = Random(prop["rng_seed"]).choices(ids, weights=probs, k=1)[0]
+        if drawn != prop["chosen"]:
             bad.append(row["handle"])
     returned = returned_handles(events)
     acts = [(row["kind"], row.get(ACT_KINDS[row["kind"]]))
@@ -2016,7 +2056,7 @@ def s1_draw_sovereignty(events: list[Mapping], manifest: Mapping | None = None) 
     unreturned = [{"kind": kind, "handle": h} for kind, h in acts
                   if not isinstance(h, str) or h not in returned]
     evidence = {"draws": checked, "bad_draws": bad[:5], "acts": len(acts),
-                "unreturned": unreturned[:5]}
+                "unreturned": unreturned[:5], "malformed_propensities": malformed[:5]}
     if bad or unreturned:
         # An observed violation fails whatever else the diary lacks: an act no seat's
         # return traces to is the kernel acting for a seat.

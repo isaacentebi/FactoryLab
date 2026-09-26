@@ -121,6 +121,41 @@ TRIAGE_DIR = ROOT / "docs/audits/class2"
 #: files; before the first release it is absent and the range starts at the root.
 LAST_RELEASE = "docs/audits/class2/last_release"
 SHA256 = re.compile(r"[0-9a-f]{64}")
+#: Where the triage files live in the repository (``TRIAGE_DIR``, relative).
+TRIAGE_REL = "docs/audits/class2"
+
+
+def _gate_recorded_path(path: str) -> bool:
+    """Whether a gate-recording commit may change ``path``: ``LAST_RELEASE`` and the
+    files triage writes beside it (a world's triage file, ``rejected.jsonl``)."""
+    if path in (LAST_RELEASE, f"{TRIAGE_REL}/rejected.jsonl"):
+        return True
+    head, _, name = path.rpartition("/")
+    return head == TRIAGE_REL and name.endswith(".md") and name != "auditor-protocol.md"
+
+
+def gate_recording_problem(repo: Path, commit: str) -> str | None:
+    """Why ``commit`` is not a gate-recording commit, or None: one that changes, against
+    its first parent, only ``LAST_RELEASE`` and triage files, and whose record names the
+    release it gated (its first parent, the commit the gate ran on). ``LAST_RELEASE`` is
+    guarded against accidental or unreviewed edits this way, not adversarial ones."""
+    parents = _git(repo, "rev-list", "--parents", "-n", "1", commit).split()[1:]
+    if not parents:
+        return f"{commit[:12]} is a root commit"
+    changed = _git(repo, "diff", "--name-only", parents[0], commit).split()
+    other = [path for path in changed if not _gate_recorded_path(path)]
+    if other:
+        return (f"{commit[:12]} changes {', '.join(other[:3])} beside {LAST_RELEASE}: only "
+                "a gate-recording commit may edit it")
+    try:
+        record = json.loads(_git(repo, "show", f"{commit}:{LAST_RELEASE}"))
+    except (subprocess.CalledProcessError, json.JSONDecodeError):
+        return f"{commit[:12]} leaves no gate record in {LAST_RELEASE}"
+    named = record.get("release_commit") if isinstance(record, dict) else None
+    if named != parents[0]:
+        return (f"{commit[:12]} records {str(named)[:12]}, not the release it gated "
+                f"({parents[0][:12]})")
+    return None
 #: The overall calibration bar (Astra H-2): at least this many of the canaries found.
 MIN_CANARIES = 7
 #: At most this many of the clean controls may be flagged.
@@ -596,7 +631,16 @@ def last_release(repo: Path, commit: str) -> dict | None:
     if ancestor.returncode != 0:
         raise AuditInputInvalid(f"{LAST_RELEASE} names {sha[:12]}, which is not a commit "
                                 f"before {commit[:12]}")
-    return record
+    # The record in force is the one the most recent gate-recording commit on the
+    # first-parent history wrote: the last commit there to change ``LAST_RELEASE``
+    # must be one, and name the release it gated.
+    recorded_at = _git(repo, "rev-list", "--first-parent", "-n", "1", commit, "--",
+                       LAST_RELEASE).strip()
+    why = gate_recording_problem(repo, recorded_at) if recorded_at else "no commit wrote it"
+    if why is not None:
+        raise AuditInputInvalid(f"{LAST_RELEASE} was not written by a gate-recording "
+                                f"commit: {why}")
+    return {**record, "recorded_at": recorded_at}
 
 
 def prior_release(repo: Path, commit: str) -> str | None:
@@ -639,6 +683,15 @@ def release_base(repo: Path, base: str, head: str) -> bool:
     release, a root of ``head``'s history. A base chosen later (``HEAD^``) would hide the
     commits between the last release and it from the provenance pass."""
     prior = prior_release(repo, head)
+    # Every commit in the audited range that changed ``LAST_RELEASE`` must be a
+    # gate-recording commit (before the first release, none may have changed it).
+    edits = _git(repo, "rev-list", "--full-history",
+                 head if prior is None else f"{base}..{head}", "--", LAST_RELEASE).split()
+    for edit in edits:
+        why = gate_recording_problem(repo, edit)
+        if why is not None:
+            raise AuditInputInvalid(f"the audited range edits {LAST_RELEASE} outside a "
+                                    f"gate-recording commit: {why}")
     if prior is None:
         roots = _git(repo, "rev-list", "--max-parents=0", head).split()
         if base not in roots:
@@ -1316,6 +1369,31 @@ def family_refusal(family: str, world: str, previous_triage: Path | None) -> str
     return None
 
 
+def rotation_problems(repo: Path, key: dict, world: str, family: str) -> list[str]:
+    """Why ``family`` may not audit ``world`` this release by rotation, re-read at gate
+    time from the prior release: the family its gated triage of ``world`` recorded,
+    read from the gate-recording commit (``last_release``'s ``recorded_at``) and
+    verified against the digest the record holds. A world the prior release did not
+    gate has no family to rotate from; a first release has no prior release."""
+    from factorylab.runtime.families import model_family
+
+    record = last_release(repo, key["release_commit"])
+    if record is None or world not in record["triages"]:
+        return []
+    path = f"{TRIAGE_REL}/{world}.md"
+    try:
+        text = _git(repo, "show", f"{record['recorded_at']}:{path}")
+    except subprocess.CalledProcessError:
+        return [f"the prior release's triage of {world} is not in the gate-recording commit"]
+    if hashlib.sha256(text.encode()).hexdigest() != record["triages"][world]:
+        return [f"the prior release's triage of {world} is not the one its gate recorded"]
+    last = recorded_family(text)
+    if last is not None and model_family(last) == model_family(family):
+        return [f"{family} ({model_family(family)}) audited {world} at the prior release: "
+                "the family rotates"]
+    return []
+
+
 def world_findings(findings: list[dict], provenance: list[dict], key: dict,
                    world: str) -> list[dict]:
     """The findings one world's triage owns: that world's non-canary findings, the
@@ -1605,6 +1683,8 @@ def gate(world: str, triage: Path, key_path: Path, samples: list[Path],
     refusal = family_refusal(family, world, None) if family else "no auditor family"
     if refusal is not None:
         problems.append(f"the recorded family may not audit {world}: {refusal}")
+    elif family:
+        problems += rotation_problems(repo, key, world, family)
     parsed = [read_output(f) for f in samples]
     parsed_provenance = [read_output(f) for f in provenance]
     verdict = audit_verdict(parsed, parsed_provenance, key, records)
@@ -1710,7 +1790,8 @@ def _run(args: argparse.Namespace) -> int:
             return 1
         written = write_last_release(ROOT, load_key(args.key)[0], world=args.world,
                                      triage_sha256=args.triage_sha256)
-        print(f"gate passed; {written} names the release: commit it with the triage files")
+        print(f"gate passed; {written} names the release: commit it with the triage "
+              "files alone, directly on the release")
         return 0
     key, records = load_key(args.key)
     samples = [read_output(path) for path in args.output]
