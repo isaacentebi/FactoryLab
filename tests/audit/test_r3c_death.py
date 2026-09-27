@@ -320,6 +320,47 @@ def test_the_executor_cannot_reach_the_population():
         assert forbidden not in source
 
 
+def test_the_executor_a_world_kills_with_holds_no_population_capability(tmp_path,
+                                                                        monkeypatch):
+    """The executor a real kill builds holds, anywhere in its attributes or the
+    containers they hold, no runtime, seat, registry, router or decision queue: it
+    can reduce the account and write the diary, and reach nothing that decides."""
+    from factorylab.cortex.assembly import Assembly
+    from factorylab.kernel.queue import DecisionQueue
+    from factorylab.kernel.registry import Registry
+    from factorylab.learners.router import Router
+    from factorylab.runtime import winddown
+
+    built = []
+    run = winddown.WindDownExecutor.run
+
+    def recording(self):
+        built.append(self)
+        return run(self)
+
+    monkeypatch.setattr(winddown.WindDownExecutor, "run", recording)
+    manifest = replace(load_manifest("scripted"), kill=KillSpec(wind_down=True))
+    run_world(manifest, events=1, seed=1, ledger_path=str(tmp_path / "w.jsonl"),
+              kill_at_end=True)
+    assert built, "the kill built no executor"
+    forbidden = (Runtime, Assembly, Registry, Router, DecisionQueue)
+
+    def held(value):
+        """Every value an attribute holds, through lists, tuples, sets and dicts."""
+        yield value
+        if isinstance(value, dict):
+            for item in (*value.keys(), *value.values()):
+                yield from held(item)
+        elif isinstance(value, (list, tuple, set, frozenset)):
+            for item in value:
+                yield from held(item)
+
+    for executor in built:
+        for name, value in vars(executor).items():
+            bad = [type(v).__name__ for v in held(value) if isinstance(v, forbidden)]
+            assert not bad, (name, bad)
+
+
 def test_the_witness_line_carries_both_states_and_the_operation_count(tmp_path):
     """A world that owed a wind-down: two lines, the second with what the account held."""
     manifest = replace(load_manifest("scripted"), kill=KillSpec(wind_down=True))

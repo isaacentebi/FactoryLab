@@ -200,13 +200,13 @@ def _kill_in_write(rt, n, how):
     store._write = watch
 
 
-def _kill_in_sidecar(n, mode, monkeypatch):
+def _kill_in_sidecar(rt, n, mode, monkeypatch):
     """Die at one step of the wave 17 sidecar protocol, the Nth time it is reached.
 
     Checkpoint: inside the file write (a torn temporary), after the file is durable
-    and before the diary names it, and after the diary names it and before older files
-    are removed. Recorded answer: inside the file write, and after the file is durable
-    and before the ``io.result`` item.
+    and before the diary names it, after the diary names it and before older files
+    are removed, and after they are removed. Recorded answer: inside the file write,
+    after the file is durable and before the ``io.result`` item, and after the item.
     """
     from factorylab.runtime import sidecar
 
@@ -239,16 +239,18 @@ def _kill_in_sidecar(n, mode, monkeypatch):
             return reference
 
         monkeypatch.setattr(sidecar.CheckpointStore, "write", written)
-    elif mode == "checkpoint-named":
+    elif mode in ("checkpoint-named", "checkpoint-retired"):
         retire = sidecar.CheckpointStore.retire_others
 
-        def named(self, reference):
-            if reached():
+        def retired(self, reference):
+            if step == "named" and reached():
                 raise Crash
             retire(self, reference)
+            if step == "retired" and reached():
+                raise Crash
 
-        monkeypatch.setattr(sidecar.CheckpointStore, "retire_others", named)
-    else:  # io-written
+        monkeypatch.setattr(sidecar.CheckpointStore, "retire_others", retired)
+    elif mode == "io-written":
         put = sidecar.IoStore.put
 
         def written(self, body):
@@ -258,13 +260,24 @@ def _kill_in_sidecar(n, mode, monkeypatch):
             return reference
 
         monkeypatch.setattr(sidecar.IoStore, "put", written)
+    else:  # io-named
+        append = rt.ledger.append
+
+        def named(entry):
+            seq = append(entry)
+            if entry.get("kind") == "io.result" and "result_sha" in entry and reached():
+                raise Crash
+            return seq
+
+        rt.ledger.append = named
 
 
 # One row per point class: a clean crash between events, mid-event after an item
 # (collected, unlink), inside a durable write (write, torn, torn-final), and at each
 # step of the checkpoint and recorded-answer sidecar protocol.
 SIDECAR_MODES = [("checkpoint-torn", 3), ("checkpoint-written", 3), ("checkpoint-named", 3),
-                 ("io-torn", 5), ("io-written", 5)]
+                 ("checkpoint-retired", 3), ("io-torn", 5), ("io-written", 5),
+                 ("io-named", 5)]
 
 
 @pytest.mark.parametrize("mode,n", [("event", 37), ("collected", 1),
@@ -281,7 +294,7 @@ def test_a_crash_anywhere_resumes_to_the_uninterrupted_run(uninterrupted, tmp_pa
     elif mode == "unlink":
         _kill_after_unlink(rt, n, monkeypatch)
     elif (mode, n) in SIDECAR_MODES:
-        _kill_in_sidecar(n, mode, monkeypatch)
+        _kill_in_sidecar(rt, n, mode, monkeypatch)
     else:
         _kill_in_write(rt, n, mode)
     with pytest.raises(Crash):

@@ -6,9 +6,10 @@ from pathlib import Path
 import pytest
 
 
-# Both acquisitions are the one LedgerLock: each owner path and each contender path is
-# exercised once (the kill path contends in test_r3_f1_kill).
-@pytest.mark.parametrize(("owner", "contender"), [("run", "resume"), ("resume", "run")])
+# Single writer is a kernel invariant: every owner path against every contender path
+# (the kill path contends in test_r3_f1_kill).
+@pytest.mark.parametrize("owner", ["run", "resume"])
+@pytest.mark.parametrize("contender", ["run", "resume"])
 @pytest.mark.gate  # measured over 0.9 s: a subprocess, a jail timeout or a long loop
 def test_two_processes_cannot_own_one_world(tmp_path, owner, contender):
     repo = str(Path(__file__).resolve().parents[2])
