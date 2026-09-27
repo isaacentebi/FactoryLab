@@ -268,6 +268,9 @@
     });
     cap.innerHTML = "<b>" + String(i + 1).padStart(2, "0") + " / " + TRACE.length + "</b>" + esc(s[1]);
     renderPanel(byId[s[0]]);
+    // Keep the lit part in view; on a phone the map is taller than the screen.
+    var lit = map.querySelector(".node.step");
+    if (lit) lit.scrollIntoView({ behavior: reduce.matches ? "auto" : "smooth", block: "nearest" });
   };
 
   function stopTrace() {
