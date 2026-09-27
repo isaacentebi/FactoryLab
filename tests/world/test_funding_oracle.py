@@ -36,6 +36,11 @@ def test_delayed_settlement_keeps_boundary_oracle_and_never_fills_a_skipped_hour
         funding_payments=lambda start: [])
     venue = LiveVenue(exchange)
     venue.on_tick(now)
+    # A later published boundary must not strand an absent earlier boundary.
+    now, price = 2 * H, None
+    published = [FundingEvent("BTC", Decimal("0.002"), None, 2 * H)]
+    venue.on_tick(now)
+    assert venue.through["settled:BTC"] == H
     now, price = 3 * H, Decimal(500)
     published = [FundingEvent("BTC", Decimal("0.001"), None, H),
                  FundingEvent("BTC", Decimal("0.002"), None, 2 * H)]

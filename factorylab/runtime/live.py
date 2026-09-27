@@ -396,7 +396,7 @@ class LiveVenue:
                                        "funding_ns": row.ts_ns, "settled": True,
                                        "mark": oracle[0] if oracle else None,
                                        "oracle_observed_at_ns": oracle[1] if oracle else None}))
-            while cursor + interval in stamps:
+            while cursor in stamps and cursor + interval in stamps:
                 cursor += interval
             self.through[key] = cursor
             self.funding_oracles[coin] = {
