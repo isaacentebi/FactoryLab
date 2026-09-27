@@ -1,0 +1,57 @@
+"""The tier harness in tests/conftest.py: which tests run a world, and the check limit.
+
+A unit test misread as a world leaves the inner loop silently; a world misread as a
+unit test is caught at run time by the CPU limit. These pin both reads.
+"""
+
+import ast
+
+from tests.conftest import CHECK_WALL_CEILING_S, _check_limit_problem, _world_functions
+
+SOURCE = '''
+from factorylab.runtime.loop import Runtime, run_world
+
+def built_not_run():
+    rt = Runtime(m, events=40)
+    rt._manage_reserve_window()
+
+def _runtime(path):
+    return Runtime(m, events=30, ledger_path=path)
+
+def runs_its_loop():
+    rt = Runtime(m, events=0)
+    rt.run()
+
+def runs_a_built_runtime():
+    _runtime("p").run()
+
+def runs_something_else():
+    Executor(venue).run()
+    subprocess.run(["git", "status"])
+
+def via_run_world():
+    run_world(m, events=5, seed=1)
+
+def via_the_cli():
+    main(["run", "--world", "scripted"])
+
+def via_a_helper():
+    via_run_world()
+
+def imports_run_world_only():
+    from factorylab.runtime.loop import run_world  # noqa: F401
+'''
+
+
+def test_only_a_running_loop_is_a_world_however_the_runtime_is_built():
+    assert _world_functions(ast.parse(SOURCE)) == {
+        "runs_its_loop", "runs_a_built_runtime", "via_run_world", "via_the_cli",
+        "via_a_helper"}
+
+
+def test_the_check_limit_is_cpu_with_a_separate_wall_ceiling():
+    assert _check_limit_problem(1.9, 9.0, 2.0) is None
+    assert "CPU" in _check_limit_problem(2.1, 2.1, 2.0)
+    # A call that waits uses no CPU; the wall ceiling still fails it.
+    assert "wall" in _check_limit_problem(0.1, CHECK_WALL_CEILING_S + 1, 2.0)
+    assert _check_limit_problem(50.0, 50.0, None) is None

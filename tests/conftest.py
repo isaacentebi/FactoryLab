@@ -3,9 +3,11 @@
 import ast
 import fcntl
 import hashlib
+import inspect
 import json
 import os
 import pickle
+import resource
 import shutil
 from dataclasses import dataclass, is_dataclass, replace
 from pathlib import Path
@@ -57,10 +59,6 @@ class ScriptedRun:
     def entries(self):
         return self._field("entries")
 
-    @property
-    def requests(self):
-        return self._field("requests")
-
     def copy_to(self, directory):
         """Return a private ledger with every sidecar and original permission preserved."""
         if self.ledger_path is None:
@@ -97,22 +95,11 @@ def _cached_scripted_run(directory, manifest, events, seed, *, mode):
                 result = {"summary": run_world(manifest, events=events, seed=seed,
                                                ledger_path=str(path))}
             else:
-                from factorylab.world.scripted import _inputs_from_prompt
-
-                entries, requests = [], []
-
-                class RecordingProvider(ScriptedProvider):
-                    def complete(self, request):
-                        text = "\n".join(str(m.get("content", ""))
-                                         for m in request.messages)
-                        requests.append(_inputs_from_prompt(text))
-                        return super().complete(request)
-
+                entries = []
                 # These consumers originally used in-memory ledgers. Preserve that call:
                 # persisting every encrypted append here would add thousands of fsyncs.
                 rt = Runtime(manifest, events=events, seed=seed, initial_balance_micro=None,
-                             ledger_path=None, router_gamma=.1,
-                             provider=RecordingProvider() if mode == "recorded_runtime" else None)
+                             ledger_path=None, router_gamma=.1)
                 append = rt.ledger.append
 
                 def capture(item):
@@ -127,8 +114,7 @@ def _cached_scripted_run(directory, manifest, events, seed, *, mode):
                 finally:
                     rt.ledger.append = append
                     rt._ledger_lock.close()
-                result = dict(summary=summary, entries=entries, requests=requests,
-                              state=runtime_state(rt))
+                result = dict(summary=summary, entries=entries, state=runtime_state(rt))
             fields = {name: pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
                       for name, value in result.items()}
             temporary = result_path.with_suffix(".tmp")
@@ -175,10 +161,9 @@ def scripted_run(_scripted_run_cache):
 @pytest.fixture(scope="session")
 def scripted_runtime_run(_scripted_run_cache):
     """Share direct Runtime evidence without changing run_world's separate launch checks."""
-    def run(manifest, events, seed, *, record_requests=False):
-        mode = "recorded_runtime" if record_requests else "runtime"
+    def run(manifest, events, seed):
         return _cached_scripted_run(_scripted_run_cache, manifest, events, seed,
-                                    mode=mode)
+                                    mode="runtime")
 
     return run
 
@@ -190,9 +175,14 @@ def scripted_runtime_run(_scripted_run_cache):
 # ``fast`` and ``world`` are the old names of ``check`` and ``gate`` and are still set.
 _SHARED_WORLD_FIXTURES = frozenset({"scripted_run", "scripted_runtime_run"})
 _WORLD_CLI_COMMANDS = frozenset({"run", "resume"})
-# A check-tier test whose call phase takes longer than this fails: it belongs in gate.
+_GATE_MARKS = ("gate", "world")
+_TESTS_ROOT = Path(__file__).resolve().parent
+# A check-tier test whose call phase uses more CPU than this fails: it belongs in gate.
+# CPU, not wall time, so a loaded machine cannot fail a test; the wall ceiling still
+# fails a check test that sleeps or waits.
 CHECK_LIMIT_ENV = "FACTORYLAB_CHECK_LIMIT_S"
 CHECK_LIMIT_DEFAULT_S = 2.0
+CHECK_WALL_CEILING_S = 10.0
 
 
 def _call_name(node: ast.Call) -> str | None:
@@ -204,20 +194,23 @@ def _call_name(node: ast.Call) -> str | None:
     return None
 
 
-def _runs_world_here(call: ast.Call) -> bool:
-    """Whether one call, read on its own, starts a world's event loop."""
+def _runs_world_here(call: ast.Call, builders=frozenset({"Runtime"})) -> bool:
+    """Whether one call, read on its own, starts a world's event loop.
+
+    Building a ``Runtime`` is not a world, whatever its events budget: only running
+    its loop is (``rt.run()``, ``Runtime(...).run()`` or ``f(...).run()`` where ``f``
+    is one of ``builders``, ``run_world``, or the CLI).
+    """
     name = _call_name(call)
     if name == "run_world":
         return True
-    if name == "Runtime":
-        # ``Runtime(..., events=0)`` builds a runtime without running one; any other
-        # events budget, or one passed positionally, is a world.
-        events = next((k.value for k in call.keywords if k.arg == "events"), None)
-        return not (isinstance(events, ast.Constant) and events.value == 0)
     if (name == "run" and isinstance(call.func, ast.Attribute)
-            and isinstance(call.func.value, ast.Name) and call.func.value.id != "subprocess"
             and not call.args and not call.keywords):
-        return True  # ``rt.run()``: the loop itself
+        receiver = call.func.value
+        if isinstance(receiver, ast.Name):
+            return receiver.id != "subprocess"  # ``rt.run()``: the loop itself
+        if isinstance(receiver, ast.Call):
+            return _call_name(receiver) in builders
     # The CLI, in process or as a child: ``main(["run", ...])`` or ``[..., "resume", ...]``.
     for argument in call.args:
         if isinstance(argument, (ast.List, ast.Tuple)):
@@ -235,7 +228,11 @@ def _world_functions(tree: ast.Module) -> set[str]:
                  if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
     calls = {name: [n for n in ast.walk(node) if isinstance(n, ast.Call)]
              for name, node in functions.items()}
-    world = {name for name, found in calls.items() if any(map(_runs_world_here, found))}
+    # A helper that builds a Runtime: ``_runtime(path).run()`` runs its loop.
+    builders = frozenset({"Runtime"} | {name for name, found in calls.items()
+                                        if any(_call_name(c) == "Runtime" for c in found)})
+    world = {name for name, found in calls.items()
+             if any(_runs_world_here(c, builders) for c in found)}
     changed = True
     while changed:
         changed = False
@@ -247,75 +244,161 @@ def _world_functions(tree: ast.Module) -> set[str]:
     return world
 
 
-def _module_facts(path: Path) -> tuple[bool, set[str]]:
-    tree = ast.parse(path.read_text())
-    imports_run_world = any(
-        isinstance(node, ast.ImportFrom)
-        and node.module == "factorylab.runtime.loop"
-        and any(alias.name == "run_world" for alias in node.names)
-        for node in ast.walk(tree)
-    )
-    return imports_run_world, _world_functions(tree)
+def _fixture_runs_world(fixturedef, world_functions_of) -> bool:
+    """Whether a fixture defined under ``tests/`` runs a world when it is set up."""
+    func = inspect.unwrap(getattr(fixturedef, "func", None) or (lambda: None))
+    code = getattr(func, "__code__", None)
+    if code is None:
+        return False
+    path = Path(code.co_filename).resolve()
+    if not path.is_relative_to(_TESTS_ROOT):
+        return False
+    return func.__name__ in world_functions_of(path)
+
+
+def _world_fixtures(item, world_functions_of) -> list:
+    """The fixtures this test uses whose setup runs a world."""
+    info = getattr(item, "_fixtureinfo", None)
+    definitions = info.name2fixturedefs if info is not None else {}
+    return [definition for name in getattr(item, "fixturenames", ())
+            for definition in definitions.get(name, ())
+            if _fixture_runs_world(definition, world_functions_of)]
+
+
+def _runs_world(item, world_functions_of, world_fixtures) -> bool:
+    """The static per-test read: its body, a helper of its module, or a fixture it uses."""
+    if _SHARED_WORLD_FIXTURES & set(getattr(item, "fixturenames", ())):
+        return True
+    name = getattr(item, "originalname", None) or item.name.split("[")[0]
+    return name in world_functions_of(Path(item.path)) or bool(world_fixtures)
 
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(items):
-    """Partition collected tests into tiers without changing selection or existing markers.
+    """Partition collected tests into tiers, one test at a time.
 
-    A test is ``gate`` when it is marked so (or ``world``), when its module imports
-    ``run_world``, when it uses a shared scripted run, or when its body, a helper in
-    its module, or a fixture in its module runs a world (``Runtime`` with a nonzero
-    events budget, ``rt.run()``, ``run_world``, or the CLI's ``run``/``resume``).
-    Everything else that is not ``network`` or ``slow`` is ``check``. The static read
-    can miss a world; the check-tier time limit below catches what it misses.
+    A test is ``gate`` when the test itself (or its class) is marked ``gate`` (or
+    ``world``), when it uses a shared scripted run, or when its body, a helper in its
+    module, or a fixture it uses runs a world (``rt.run()``, ``run_world``, or the CLI's
+    ``run``/``resume``). A test marked ``check`` is ``check``. Everything else that is
+    not ``network`` or ``slow`` is ``check``.
+
+    A gate test that shares a class- or module-scoped world fixture is grouped with its
+    module (``xdist_group``; ``--dist loadgroup`` in pyproject): the module runs on one
+    worker, so its shared reference run is built once, never once per worker.
+
+    A module's ``pytestmark = gate`` does not make every test in it gate: it is removed
+    and each test is read on its own, so the unit tests beside a world test stay in the
+    inner loop. The static read can miss a world; the check-tier CPU limit below
+    catches what it misses.
     """
-    modules = {}
+    facts: dict[Path, set[str]] = {}
+
+    def world_functions_of(path: Path) -> set[str]:
+        if path not in facts:
+            facts[path] = _world_functions(ast.parse(path.read_text()))
+        return facts[path]
+
+    stripped = set()
     for item in items:
-        path = Path(item.path)
-        if path not in modules:
-            modules[path] = _module_facts(path)
-        imports_run_world, world_functions = modules[path]
+        module = item.getparent(pytest.Module)
+        if module is not None and id(module) not in stripped:
+            stripped.add(id(module))
+            module.own_markers[:] = [m for m in module.own_markers
+                                     if m.name not in _GATE_MARKS]
+    for item in items:
         if any(item.get_closest_marker(m) for m in ("network", "slow")):
             continue
-        fixtures = set(getattr(item, "fixturenames", ()))
-        name = getattr(item, "originalname", None) or item.name.split("[")[0]
-        gate = (bool(item.get_closest_marker("gate") or item.get_closest_marker("world"))
-                or imports_run_world
-                or bool(_SHARED_WORLD_FIXTURES & fixtures)
-                or name in world_functions
-                or bool(world_functions & fixtures))
+        world_fixtures = _world_fixtures(item, world_functions_of)
+        if any(item.get_closest_marker(m) for m in _GATE_MARKS):
+            gate = True
+        elif item.get_closest_marker("check"):
+            gate = False
+        else:
+            gate = _runs_world(item, world_functions_of, world_fixtures)
         if gate:
             item.add_marker(pytest.mark.gate)
             item.add_marker(pytest.mark.world)
+            if any(d.scope in ("class", "module", "package") for d in world_fixtures):
+                item.add_marker(pytest.mark.xdist_group(item.nodeid.split("::", 1)[0]))
         else:
             item.add_marker(pytest.mark.check)
             item.add_marker(pytest.mark.fast)
 
 
-def _check_limit_s() -> float | None:
-    raw = os.environ.get(CHECK_LIMIT_ENV, "").strip()
+def _seconds_from_env(name: str, default: float) -> float | None:
+    raw = os.environ.get(name, "").strip()
     if not raw:
-        return CHECK_LIMIT_DEFAULT_S
+        return default
     if raw.lower() in ("0", "off", "none"):
         return None
     return float(raw)
 
 
-@pytest.hookimpl(hookwrapper=True)
+def _check_limit_problem(cpu_s: float, wall_s: float, limit_s: float | None) -> str | None:
+    """Why a passing check-tier call breaks the tier's limits, or None if it does not."""
+    if limit_s is None:
+        return None
+    if cpu_s > limit_s:
+        return f"used {cpu_s:.2f}s of CPU (limit {limit_s:.1f}s)"
+    if wall_s > CHECK_WALL_CEILING_S:
+        return f"took {wall_s:.2f}s of wall time (ceiling {CHECK_WALL_CEILING_S:.0f}s)"
+    return None
+
+
+_PHASE_CPU = pytest.StashKey[dict]()
+
+
+def _cpu_s() -> float:
+    """This process's CPU, plus that of every child it has waited for."""
+    own = resource.getrusage(resource.RUSAGE_SELF)
+    children = resource.getrusage(resource.RUSAGE_CHILDREN)
+    return own.ru_utime + own.ru_stime + children.ru_utime + children.ru_stime
+
+
+def _measured(item, when):
+    start = _cpu_s()
+    try:
+        return (yield)
+    finally:
+        item.stash.setdefault(_PHASE_CPU, {})[when] = _cpu_s() - start
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_setup(item):
+    return (yield from _measured(item, "setup"))
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_call(item):
+    return (yield from _measured(item, "call"))
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_teardown(item):
+    return (yield from _measured(item, "teardown"))
+
+
+@pytest.hookimpl(wrapper=True)
 def pytest_runtest_makereport(item, call):
-    """A ``check`` test that runs longer than the limit fails, naming the fix."""
-    outcome = yield
-    report = outcome.get_result()
-    limit = _check_limit_s()
-    if (limit is None or report.when != "call" or not report.passed
-            or item.get_closest_marker("check") is None or report.duration <= limit):
-        return
-    report.outcome = "failed"
-    report.longrepr = (
-        f"{item.nodeid} is in the check tier but its call took {report.duration:.2f}s "
-        f"(limit {limit:.1f}s). The check tier is the inner loop and runs no world: mark "
-        "this test @pytest.mark.gate (or make it faster). On a slow machine raise the "
-        f"limit with {CHECK_LIMIT_ENV}=<seconds>, or disable it with {CHECK_LIMIT_ENV}=off.")
+    """Every report carries its phase's CPU and its tier; a ``check`` call over the
+    limits fails, naming the fix."""
+    report = yield
+    report.factorylab_cpu_s = item.stash.get(_PHASE_CPU, {}).get(call.when, 0.0)
+    report.factorylab_tier = ("gate" if item.get_closest_marker("gate")
+                              else "check" if item.get_closest_marker("check") else None)
+    if report.when != "call" or not report.passed or report.factorylab_tier != "check":
+        return report
+    problem = _check_limit_problem(report.factorylab_cpu_s, report.duration,
+                                   _seconds_from_env(CHECK_LIMIT_ENV, CHECK_LIMIT_DEFAULT_S))
+    if problem is not None:
+        report.outcome = "failed"
+        report.longrepr = (
+            f"{item.nodeid} is in the check tier but its call {problem}. The check tier "
+            "is the inner loop and runs no world: mark this test @pytest.mark.gate (or "
+            f"make it faster). Raise the CPU limit with {CHECK_LIMIT_ENV}=<seconds>, or "
+            f"disable both limits with {CHECK_LIMIT_ENV}=off.")
+    return report
 
 
 def make_runtime(*, balance=100_000_000, live=False, clock_source=None):
