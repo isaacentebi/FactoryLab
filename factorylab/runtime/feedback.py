@@ -1532,6 +1532,12 @@ class FeedbackMixin:
             funding["rates"] = [row for row in funding["rates"] if row[0] > ts_ns]
             funding["marks"] = [row for row in funding.get("marks") or [] if row[0] > ts_ns]
 
+    def _strict_funding(self, coin: str) -> bool:
+        """Require settled evidence only for markets whose venue declares that regime."""
+        regime = getattr(self.exchange, "funding_regime", None)
+        return (regime(coin) == "settled" if regime is not None
+                else bool(getattr(self.exchange, "settled_funding", False)))
+
     def _observe_funding(self, coin: str, ts_ns: int, rate: str,
                          mark: str | None = None, *, settled: bool = False) -> None:
         """One venue funding-rate print: the rate in force at each funding time it passes.
@@ -1543,7 +1549,7 @@ class FeedbackMixin:
         with its fact time (``_funding_history``; Codex on #152): a trade opened at a
         stale venue mark reads each funding time's own print, never the latest.
         """
-        if getattr(self.exchange, "settled_funding", False) and not settled:
+        if self._strict_funding(coin) and not settled:
             return
         for frozen in self.reference_mids.values():
             funding = frozen.get("funding")
@@ -1966,7 +1972,7 @@ class FeedbackMixin:
             # the rate in force at each is read from the venue's own prints.
             "funding": (None if interval is None else
                         {"interval": int(interval),
-                         **({"strict": True} if getattr(self.exchange, "settled_funding", False)
+                         **({"strict": True} if self._strict_funding(coin)
                             else {}),
                          "cursor": cursor,
                          # The print in force at its opening, never a later one.

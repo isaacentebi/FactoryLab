@@ -457,6 +457,15 @@ class LiveVenue:
 
     def on_tick(self, now_ns: int) -> list[WorldEvent]:
         traded = self._broadcast()
+        # Chapter II §III.b: capability is evidence even when every history read fails.
+        if self.ledger is not None:
+            for coin in sorted(traded if traded is not None else self.exchange.coins):
+                if "/" not in coin:
+                    regime = getattr(self.exchange, "funding_regime", None)
+                    self.ledger.append({"kind": "funding.regime", "market": coin,
+                                        "regime": regime(coin) if regime is not None else (
+                                            "settled" if getattr(self.exchange, "settled_funding",
+                                                                 False) else "legacy")})
         out: list[WorldEvent] = []
         try:
             mids = self.exchange.mids()

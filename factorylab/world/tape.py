@@ -353,6 +353,7 @@ def cut(path: str | Path) -> dict:
     mids: dict[str, dict[int, str]] = {}
     funding: dict[str, dict[int, list]] = {}
     settled_funding: dict[str, list[dict]] = {}
+    funding_regime: dict[str, str] = {}
     books: dict[str, dict[int, list]] = {}
     instruments = None
     names: dict[int, str] = {}
@@ -363,6 +364,14 @@ def cut(path: str | Path) -> dict:
     acks: dict[str, tuple[dict, int]] = {}
     for item in items:
         kind = item.get("kind")
+        if kind == "funding.regime":
+            market, regime = str(item["market"]), str(item["regime"])
+            if regime not in ("legacy", "settled"):
+                raise ValueError("unknown funding evidence regime")
+            if market in funding_regime and funding_regime[market] != regime:
+                raise ValueError("funding evidence regime changed within recording")
+            funding_regime[market] = regime
+            continue
         if kind == "io.call":
             names[item["seq"]] = item.get("name")
             continue
@@ -412,6 +421,8 @@ def cut(path: str | Path) -> dict:
             if payload.get("settled") is True:
                 settled_funding.setdefault(str(payload["coin"]), []).append({
                     "published_at_ns": ts, "funding_ns": funding_instant(payload, ts),
+                    **({"venue_published_at_ns": payload["published_at_ns"]}
+                       if payload.get("published_at_ns") is not None else {}),
                     "settled": True, "rate": str(payload["rate"]),
                     "premium": None if payload.get("premium") is None else str(payload["premium"]),
                     "mark": None if payload.get("mark") is None else str(payload["mark"]),
@@ -448,6 +459,8 @@ def cut(path: str | Path) -> dict:
         "mids": {c: [[ts, px] for ts, px in sorted(mids[c].items())] for c in kept},
         "funding": {c: [[ts, *row] for ts, row in sorted(funding[c].items())]
                     for c in kept if c in funding},
+        "funding_regime": {c: funding_regime.get(c, "settled" if c in settled_funding
+                                                else "legacy") for c in kept if "/" not in c},
         "settled_funding": {c: sorted(rows, key=lambda r: r["published_at_ns"])
                             for c, rows in settled_funding.items() if c in kept},
         "books": {c: [[ts, *sides] for ts, sides in sorted(books[c].items())]
@@ -759,10 +772,13 @@ class TapeVenue(FakeExchange):
         missing = [m for m in (*coins, *spot_pairs) if m not in tape.markets]
         if missing:
             raise ValueError(f"the tape recorded no mids for {missing}")
-        settled = tape.data.get("settled_funding", {})
-        if settled and any(c in tape.data.get("funding", {}) and c not in settled
-                           for c in tape.perps):
-            raise ValueError("mixed legacy and settled funding markets are not replayable")
+        regimes = tape.data.get("funding_regime", {})
+        if any(value not in ("legacy", "settled") for value in regimes.values()):
+            raise ValueError("unknown funding evidence regime")
+        self._settled_markets = frozenset(
+            c for c in tape.perps
+            if regimes.get(c, "settled" if c in tape.data.get("settled_funding", {})
+                           else "legacy") == "settled")
         self._tape = tape
         # The fake's own terms are never read here, and are set so that none could leak
         # if one were (Codex review of #151, 7b8de4f): every fee is the recorded rate
@@ -805,7 +821,11 @@ class TapeVenue(FakeExchange):
         self._settled_seen: dict[str, int] = {}
         self._settled_paid: dict[tuple[str, int], Decimal] = {}
         self._settled_evidence: dict[tuple[str, int], tuple] = {}
-        self.settled_funding = bool(tape.data.get("settled_funding"))
+        self.settled_funding = bool(self._settled_markets)
+
+    def funding_regime(self, coin: str) -> str:
+        """Each market keeps its own evidence requirement, including empty histories."""
+        return "settled" if coin in self._settled_markets else "legacy"
 
     @property
     def tape(self) -> Tape:
@@ -968,6 +988,8 @@ class TapeVenue(FakeExchange):
                                          self.name, {"coin": coin, "rate": str(rate),
                                          "paid_usd": str(paid), "funding_ns": boundary,
                                          "settled": True,
+                                         **({"published_at_ns": row["venue_published_at_ns"]}
+                                            if "venue_published_at_ns" in row else {}),
                                          "mark": None if mark is None else str(mark),
                                          "oracle_observed_at_ns": row["oracle_observed_at_ns"]}))
             self._settled_seen[coin] = index
@@ -1019,7 +1041,7 @@ class TapeVenue(FakeExchange):
         # before it is owed again.
         self._accrued, self._accrued_at = {}, boundary
         sizes = {c: p.size for c, p in self._positions.items()}
-        if self._tape.data.get("settled_funding"):
+        if self._settled_markets:
             self._funding_sizes[boundary] = sizes
         return self._charge(boundary, sizes, f"{boundary}")
 
@@ -1027,7 +1049,7 @@ class TapeVenue(FakeExchange):
         """Charge ``sizes`` (signed, in position-hours) at the recorded rate and mid."""
         events: list[WorldEvent] = []
         for coin in dict.fromkeys((*self.coins, *self.listed_coins)):
-            if coin in self._tape.data.get("settled_funding", {}):
+            if coin in self._settled_markets:
                 continue  # settled recordings charge only their published boundary evidence
             rate_row = self._tape.funding_at(coin, instant)
             mark_row = self._tape.mid_at(coin, instant)

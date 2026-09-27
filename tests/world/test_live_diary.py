@@ -267,12 +267,59 @@ def test_settled_history_uses_effective_order_and_upserts_corrections(tmp_path):
                                                (2 * h, Decimal("0.01"))]
 
 
-def test_settled_tape_rejects_mixed_legacy_market_semantics(tmp_path):
+def test_settled_tape_preserves_each_markets_missing_evidence(tmp_path):
     tape = _settled_tape(tmp_path)
     tape.data["mids"]["ETH"] = tape.data["mids"]["BTC"]
     tape.data["funding"]["ETH"] = [[NS_PER_HOUR, "0.01", None]]
-    with pytest.raises(ValueError, match="mixed legacy and settled"):
-        TapeVenue(tape, coins=("BTC", "ETH"), start_cash_usd=Decimal(1000))
+    tape.data["funding_regime"] = {"BTC": "settled", "ETH": "settled"}
+    tape = Tape.from_data(tape.data)
+    venue = TapeVenue(tape, coins=("BTC", "ETH"), start_cash_usd=Decimal(1000))
+    venue._positions["ETH"] = Position("ETH", Decimal(1), Decimal(100))
+    events = venue.advance(NS_PER_HOUR + 10)
+    assert [e.payload["coin"] for e in events if e.kind == "Funding"] == ["BTC"]
+    assert venue._cash == Decimal(1000)
+
+
+def test_mixed_funding_regimes_apply_runtime_strictness_per_market(tmp_path):
+    from factorylab.runtime.feedback import FeedbackMixin
+
+    tape = _settled_tape(tmp_path)
+    tape.data["mids"]["ETH"] = tape.data["mids"]["BTC"]
+    tape.data["funding_regime"] = {"BTC": "settled", "ETH": "legacy"}
+    venue = TapeVenue(Tape.from_data(tape.data), coins=("BTC", "ETH"),
+                      start_cash_usd=Decimal(1000))
+    runtime = object.__new__(FeedbackMixin)
+    runtime.exchange = venue
+    assert runtime._strict_funding("BTC") is True
+    assert runtime._strict_funding("ETH") is False
+
+
+def test_empty_settled_capability_is_recorded_without_publications(tmp_path):
+    now = [T]
+    adapter = _adapter(now, [], {})
+    adapter.settled_funding = True
+    adapter.funding_interval_ns = NS_PER_HOUR
+    adapter.settled_funding_history = lambda *args: []
+    ledger = Ledger(clock_ns=lambda: now[0])
+    live = LiveVenue(adapter, ledger=ledger, markets=lambda: ("BTC",))
+    live.on_tick(T)
+    regime = [row for row in ledger.items() if row.get("kind") == "funding.regime"]
+    assert regime and regime[0]["market"] == "BTC" and regime[0]["regime"] == "settled"
+    _settled_tape(tmp_path)
+    path = tmp_path / "settled.json"
+    items = [i for i in json.loads(path.read_text())
+             if i.get("event", {}).get("kind") != "Funding"]
+    items.extend(regime)
+    items.append({"kind": "event", "event": {"kind": "Funding", "ts_ns": NS_PER_HOUR,
+                  "payload": {"coin": "BTC", "rate": "0.01", "paid_usd": "0"}}})
+    path.write_text(json.dumps(items))
+    tape = Tape.from_data(cut(path))
+    assert tape.data["funding_regime"] == {"BTC": "settled"}
+    venue = TapeVenue(tape, coins=("BTC",), start_cash_usd=Decimal(1000))
+    venue._positions["BTC"] = Position("BTC", Decimal(1), Decimal(100))
+    assert venue.settled_funding
+    assert not [e for e in venue.advance(NS_PER_HOUR + 10) if e.kind == "Funding"]
+    assert venue._cash == Decimal(1000)
 
 
 def test_fee_refresh_journals_failure_separately_from_cached_rates(tmp_path):
