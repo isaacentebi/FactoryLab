@@ -408,10 +408,17 @@ def _seconds_from_env(name: str, default: float) -> float | None:
     return float(raw)
 
 
-def _check_limit_problem(cpu_s: float, wall_s: float, limit_s: float | None) -> str | None:
-    """Why a passing check-tier call breaks the tier's limits, or None if it does not."""
+def _check_limit_problem(cpu: dict[str, float], wall: dict[str, float],
+                         limit_s: float | None) -> str | None:
+    """Why a passing check-tier test breaks the tier's limits, or None if it does not.
+
+    ``cpu`` and ``wall`` map a phase to its seconds; setup and call are charged
+    together, so a world a fixture runs is the test's world.
+    """
     if limit_s is None:
         return None
+    cpu_s = cpu.get("setup", 0.0) + cpu.get("call", 0.0)
+    wall_s = wall.get("setup", 0.0) + wall.get("call", 0.0)
     if cpu_s > limit_s:
         return f"used {cpu_s:.2f}s of CPU (limit {limit_s:.1f}s)"
     if wall_s > CHECK_WALL_CEILING_S:
@@ -477,9 +484,7 @@ def pytest_runtest_makereport(item, call):
                               else "check" if item.get_closest_marker("check") else None)
     if report.when != "call" or not report.passed or report.factorylab_tier != "check":
         return report
-    cpu, wall = item.stash[_PHASE_CPU], item.stash[_PHASE_WALL]
-    problem = _check_limit_problem(cpu.get("setup", 0.0) + cpu.get("call", 0.0),
-                                   wall.get("setup", 0.0) + wall.get("call", 0.0),
+    problem = _check_limit_problem(item.stash[_PHASE_CPU], item.stash[_PHASE_WALL],
                                    _seconds_from_env(CHECK_LIMIT_ENV, CHECK_LIMIT_DEFAULT_S))
     if problem is not None:
         report.outcome = "failed"

@@ -97,11 +97,17 @@ def via_a_script():
 
 
 def test_the_check_limit_is_cpu_with_a_separate_wall_ceiling():
-    assert _check_limit_problem(1.9, 9.0, 2.0) is None
-    assert "CPU" in _check_limit_problem(2.1, 2.1, 2.0)
+    assert _check_limit_problem({"call": 1.9}, {"call": 9.0}, 2.0) is None
+    assert "CPU" in _check_limit_problem({"call": 2.1}, {"call": 2.1}, 2.0)
     # A call that waits uses no CPU; the wall ceiling still fails it.
-    assert "wall" in _check_limit_problem(0.1, CHECK_WALL_CEILING_S + 1, 2.0)
-    assert _check_limit_problem(50.0, 50.0, None) is None
+    assert "wall" in _check_limit_problem({"call": 0.1}, {"call": CHECK_WALL_CEILING_S + 1},
+                                          2.0)
+    assert _check_limit_problem({"call": 50.0}, {"call": 50.0}, None) is None
+    # A world a fixture runs at setup is the test's own: setup and call are charged
+    # together; teardown is not.
+    assert "CPU" in _check_limit_problem({"setup": 1.5, "call": 1.0}, {}, 2.0)
+    assert "wall" in _check_limit_problem({}, {"setup": 6.0, "call": 5.0}, 2.0)
+    assert _check_limit_problem({"call": 1.0, "teardown": 5.0}, {}, 2.0) is None
 
 
 def test_a_gate_file_over_its_budget_fails_unless_it_is_excepted_by_name():
