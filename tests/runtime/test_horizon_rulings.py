@@ -308,6 +308,9 @@ class _PolledVenue:
 
         return {"BTC": Decimal(self.mid)}
 
+    def order_book(self, coin, depth):
+        raise RuntimeError("book unavailable")
+
     def funding(self):
         return []
 
@@ -495,6 +498,9 @@ def test_a_failing_funding_read_holds_a_named_perp_trade_never_a_spot_one():
 
         def mids(self):
             return {"BTC": Decimal("100"), "PURR/USDC": Decimal("0.2")}
+
+        def order_book(self, coin, depth):
+            raise RuntimeError("book unavailable")
 
         def funding(self):
             raise RuntimeError("funding is unavailable")

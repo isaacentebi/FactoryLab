@@ -580,7 +580,7 @@ def _read_only(name: str) -> bool:
         "open_orders", "balance_micro", "balance_of", "affordable", "catalogue", "discover",
         "quote", "fetch",
         "registration_price", "seller_models", "funding_payments", "lookup",
-        "reserve_balance", "discover_index", "instruments",
+        "reserve_balance", "discover_index", "instruments", "refresh_fee_rates",
         # The live adapter's count of venue request weight it has sent: a read of its
         # own counter, replayed from the journal and never a write to the venue.
         "request_weight_sent",

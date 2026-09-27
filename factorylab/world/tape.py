@@ -65,7 +65,7 @@ NO_TAKER_RATE = ("the recording states no taker fee rate for this market by now:
 NO_MAKER_RATE = ("the recording states no maker fee rate for this market by now: orders "
                  "that can rest are refused")
 #: Where a fee rate on the tape came from (``Tape.fee_at``): the venue's own statement
-#: of this account's rates (``userFees``, read with the instrument listing), the fills
+#: of this account's rates (``userFees``, or a legacy instrument listing), the fills
 #: the venue booked on this market, or the fills it booked on the venue's other markets
 #: of the same class (perp or spot), pooled.
 FEE_SOURCES = ("venue_read", "fills", "fills_pooled")
@@ -176,7 +176,7 @@ def _split_items(directory: Path) -> Iterator[dict]:
 
 
 #: The recorded venue reads a tape keeps besides its events.
-_KEPT_READS = ("exchange.instruments", "exchange.order_book")
+_KEPT_READS = ("exchange.instruments", "exchange.order_book", "exchange.refresh_fee_rates")
 
 
 def _nonzero(text: Any) -> bool:
@@ -222,17 +222,18 @@ _IMMEDIATE = frozenset({"venue.place_market", "venue.close"})
 
 
 def _fill_side(fill_ts: int, payload: dict, orders: dict) -> str | None:
-    """Whether a recorded fill took liquidity ("taker") or provided it ("maker"), from
-    what the diary recorded of its order, or None where that does not settle it.
+    """The venue's recorded liquidity side, or None when explicitly unknown.
 
-    The diary does not record the venue's ``crossed`` flag, so the side is read off the
-    order: every fill of an immediate-or-cancel order took liquidity; so did every fill
-    of a limit the venue acknowledged as filled; a fill of a limit the venue
-    acknowledged as resting with nothing filled, observed after that acknowledgement,
-    met it on the book, so it provided liquidity. A limit acknowledged resting with a
-    part already filled, a liquidation, and a fill whose order the diary does not name
-    are left out: their side is not recorded.
+    A boolean ``crossed`` is authoritative, including for partial fills of one order.
+    A present but unknown flag stays unknown. Older diaries without the field retain
+    their order-evidence inference: immediate orders and limits acknowledged filled
+    took liquidity; limits acknowledged resting with nothing filled, observed after
+    acknowledgement, provided it. Ambiguous orders supply no rate.
     """
+    # Chapter II §III.b: the venue's execution fact outranks an order-level inference.
+    if "crossed" in payload:
+        crossed = payload["crossed"]
+        return ("taker" if crossed else "maker") if type(crossed) is bool else None
     order = orders.get(str(payload.get("order_id")))
     if order is None or payload.get("liquidation"):
         return None
@@ -261,10 +262,27 @@ def _steps(observations: list[tuple[int, str, str]], *, every: bool) -> list[lis
     return steps
 
 
-def _fee_record(kept: list[str], reads: list, fills: list, orders: dict) -> dict:
+def _fee_record(kept: list[str], reads: list, fills: list, orders: dict,
+                fee_reads: list, *, raw_fees: bool) -> dict:
     """Each kept market's fee rates as the diary recorded them, by source and side."""
     observed: dict[tuple[str, str, str], list] = {}
-    for ts, call, listing in reads:
+    for ts, call, answer in fee_reads:
+        if not isinstance(answer, dict):
+            continue
+        for market in kept:
+            fields = ("userSpotCrossRate", "userSpotAddRate") if "/" in market else (
+                "userCrossRate", "userAddRate")
+            for side, name in zip(("taker", "maker"), fields, strict=True):
+                try:
+                    rate = Decimal(str(answer[name]))
+                except (KeyError, TypeError, ArithmeticError, ValueError):
+                    continue
+                if rate.is_finite():
+                    observed.setdefault((market, "venue_read", side), []).append(
+                        (ts, str(rate.normalize()), f"exchange.refresh_fee_rates call {call}"))
+    # Chapter II §III.b: a cached listing is not a fresh fee observation. Legacy
+    # diaries carried only listings; new diaries retain the actual userFees read.
+    for ts, call, listing in (() if raw_fees else reads):
         if not isinstance(listing, dict):
             continue
         for kind in ("perp", "spot"):
@@ -304,8 +322,8 @@ def cut(path: str | Path) -> dict:
     perp's funding-rate observations, stamped as delivered; the recorded order books,
     stamped with the venue's own book time; the first recorded instrument listing; and
     the account's fee rates, each stamped with the instant the diary recorded it and
-    naming what it was read from (``_fee_record``): the venue's own statement of them
-    with each instrument read, and the fills the venue booked. A funding row that
+    naming what it was read from (``_fee_record``): the venue's own userFees answers
+    (instrument reads in legacy diaries), and the fills the venue booked. A funding row that
     moved money (``paid_usd`` non-zero) is an account payment of the run that recorded
     it, not market data, and is left out: a replay's payments are computed from its
     own positions (Chapter II §II.b). Only a diary of a live venue states fee rates: a
@@ -322,6 +340,8 @@ def cut(path: str | Path) -> dict:
     instruments = None
     names: dict[int, str] = {}
     reads: list[tuple[int, int, Any]] = []
+    fee_reads: list[tuple[int, int, Any]] = []
+    raw_fees = False
     fills: list[tuple[int, dict]] = []
     intents: dict[str, str] = {}
     acks: dict[str, tuple[dict, int]] = {}
@@ -344,6 +364,12 @@ def cut(path: str | Path) -> dict:
                 listing = _decode(item["result"])
                 instruments = listing if instruments is None else instruments
                 reads.append((int(item.get("ts") or 0), item.get("call"), listing))
+            elif name == "exchange.refresh_fee_rates":
+                answer = _decode(item["result"])
+                # Old refresh calls returned None; they did not record userFees.
+                if isinstance(answer, dict):
+                    raw_fees = True
+                    fee_reads.append((int(item.get("ts") or 0), item.get("call"), answer))
             elif name == "exchange.order_book":
                 book = _decode(item["result"])
                 if isinstance(book, dict) and book.get("ts_ns"):
@@ -382,7 +408,7 @@ def cut(path: str | Path) -> dict:
                 intents[client_id], result.get("status"),
                 Decimal(str(result.get("filled_size") or 0)), ack_ts)
     live = exchange.get("kind") == "hyperliquid"
-    fees = _fee_record(kept, reads, fills, orders) if live else {}
+    fees = _fee_record(kept, reads, fills, orders, fee_reads, raw_fees=raw_fees) if live else {}
     listing = None
     if isinstance(instruments, dict):
         listing = {market: [row for row in rows if isinstance(row, dict)

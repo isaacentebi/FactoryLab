@@ -123,6 +123,7 @@ class Fill:
     market: str = "perp"
     inventory_size: Decimal | None = None
     observed_at_ns: int | None = None
+    crossed: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -1210,6 +1211,7 @@ class HyperliquidExchange:
                 reason = "the venue's userFees answer did not state them"
             except Exception as exc:  # noqa: BLE001 - an unread rate is unavailable
                 reason = f"the venue's userFees read failed: {type(exc).__name__}"
+        self._fee_answer = answer if isinstance(answer, dict) else {}
         rates: dict[str, dict[str, str]] = {}
         for market, (taker, maker) in self.FEE_FIELDS.items():
             try:
@@ -1221,15 +1223,19 @@ class HyperliquidExchange:
                 rates[market] = {"fee_rates": "unavailable", "reason": reason}
         return rates
 
-    def refresh_fee_rates(self) -> None:
-        """Read this account's fee rates again, keeping a market's last stated rates when
-        the venue does not state them now (wave 16, D1: the schedule a named road not
-        taken is priced at is re-read once per world repricing). Nothing is written."""
+    def refresh_fee_rates(self) -> dict:
+        """Return the actual userFees answer, retaining last stated rates in the cache.
+
+        An unanswered read returns an empty mapping, never the previous answer.
+        The journal retains this outside fact at the existing repricing cadence
+        (Chapter II §III.b), independently of the cached instrument listing.
+        """
         fresh = self._read_fee_rates()
         previous = getattr(self, "_fee_rates", None) or {}
         self._fee_rates = {market: (row if "taker_fee_rate" in row
                                     else previous.get(market, row))
                            for market, row in fresh.items()}
+        return dict(self._fee_answer)
 
     def _configure_spot(self, meta: dict) -> None:
         """Record the venue's whole spot universe, and the wire names of traded pairs."""
@@ -1651,6 +1657,7 @@ class HyperliquidExchange:
                     liquidation=bool(f.get("liquidation")),
                     market=market,
                     inventory_size=size,
+                    crossed=f.get("crossed") if type(f.get("crossed")) is bool else None,
                 ))
             except (KeyError, TypeError, ValueError, ArithmeticError, AttributeError):
                 continue

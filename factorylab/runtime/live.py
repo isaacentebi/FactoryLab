@@ -300,7 +300,7 @@ class WallClock:
 class LiveVenue:
     """Adapts a real ``Exchange`` to per-tick world events.
 
-    Each tick reads mids and funding. Rates remain observations; separate
+    Each tick reads mids, L2 books and funding. Rates remain observations; separate
     venue-identified funding payments carry actual cash. Fills are never read here:
     the consequence fill cursor (``settlement.consequence.FillCursor``) is the one fill
     path, whose watermark is the fills stream's.
@@ -423,6 +423,13 @@ class LiveVenue:
                     {"coin": coin, "mid": str(mid)},
                 )
             )
+        # Chapter II §II.b/§III.b: retain the venue's liquidity as an outside fact,
+        # independent of whether a seat asks for a book or the mids read succeeds.
+        for coin in sorted(traded if traded is not None else mids):
+            try:
+                self.exchange.order_book(coin, 20)
+            except (RuntimeError, OSError, ValueError, ArithmeticError):
+                continue
         try:
             funding = self.exchange.funding()
             self.through["rates"] = now_ns

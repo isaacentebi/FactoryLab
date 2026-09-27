@@ -913,7 +913,8 @@ class FillCursor:
             counts[key] += 1
             if counts[key] > self.seen.get(key, 0):
                 # Its own venue time, outside the cursor's identity key (R10-o).
-                result.append((fill.ts_ns, {**payload, "fill_ns": fill.ts_ns}))
+                result.append((fill.ts_ns, {**payload, "fill_ns": fill.ts_ns,
+                                           "crossed": getattr(fill, "crossed", None)}))
                 observed = getattr(fill, "observed_at_ns", None)
                 if self.measured and observed is not None:
                     observations.append((fill.ts_ns, observed))

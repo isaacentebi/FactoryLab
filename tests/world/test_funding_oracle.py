@@ -30,6 +30,7 @@ def test_delayed_settlement_keeps_boundary_oracle_and_never_fills_a_skipped_hour
     exchange = SimpleNamespace(
         name="synthetic-live", funding_interval_ns=H, settled_funding=True,
         mids=lambda: {"BTC": Decimal(900)},
+        order_book=lambda coin, depth: {"coin": coin, "ts_ns": now, "bids": [], "asks": []},
         funding=lambda: [FundingEvent("BTC", Decimal("0.9"), None, now, price)],
         settled_funding_history=lambda coin, start, end: published,
         funding_payments=lambda start: [])

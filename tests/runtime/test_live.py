@@ -60,6 +60,9 @@ class StubExchange:
         self.calls += 1
         return {"BTC": Decimal("70000") + self.calls, "ETH": Decimal("2500")}
 
+    def order_book(self, coin, depth):
+        raise RuntimeError("book unavailable")
+
     def funding(self):
         return [FundingEvent("BTC", Decimal("0.0001"), Decimal("0.001"), 0)]
 
