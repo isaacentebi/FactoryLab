@@ -31,7 +31,8 @@ COST_OBSERVATIONS = frozenset({"cost_per_return", "cost_per_attempt"})
 ATTRIBUTION_FIELDS = ("decisions", "closed_values", "closed_regions", "closed_cards",
                       "closed_prices", "closed_scopes", "closed_holdouts", "series_discarded",
                       # Wave 16, D5: who relieved a rate, by decision handle.
-                      "closed_relief", "paid_off_settled", "paid_off_handles",
+                      "closed_relief", "closed_holdout_attribution",
+                      "paid_off_settled", "paid_off_handles",
                       # The price loop's own schedule is the clock's, not an observation.
                       "opened_tick", "due_tick")
 FORECAST_OBSERVATIONS = frozenset({

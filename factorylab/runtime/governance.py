@@ -217,6 +217,9 @@ class GovernanceMixin:
                         self.window.revision_handles.add(handle)
                 self.stats.registrations_accepted += 1
                 self.window.registrations += 1
+                # §IV.a: holdouts price actual registrations, not the proxy's revision flag.
+                sample = self._contribution(handle, self._decision_role(handle))
+                sample["registrations"] = sample.get("registrations", 0) + 1
                 if item.get("kind") not in ("amendment", "retire"):
                     self.card_samples.revised(handle)
             except (Infeasible, PermissionError, ValueError, OverflowError, KeyError,
@@ -233,6 +236,8 @@ class GovernanceMixin:
             item["index"] = index
         self.ledger.append({**item, "ts": self.clock.now_ns})
         self.window.registration_rejections += 1
+        sample = self._contribution(handle, self._decision_role(handle))
+        sample["registration_rejections"] = sample.get("registration_rejections", 0) + 1
         self._refusal_to_owner(handle, "registration_rejected", reason,
                                **({"index": index} if index is not None else {}))
 

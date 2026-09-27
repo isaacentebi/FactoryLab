@@ -213,6 +213,150 @@ def test_a_behavioural_holdout_names_what_it_reads():
                              "f.get('tool_calls', 0))\n") == {"tool_calls"}
 
 
+@pytest.mark.parametrize(("observation", "revisions"), [
+    ("revision_rate", 1), ("revision_rate", 3), ("well_formed_rate", 3),
+])
+@pytest.mark.parametrize("predicates", [
+    ("facts['registrations'] == 0",),
+    ("facts['registrations'] == 0", "facts['tool_calls'] > 0",
+     "facts['invocations'] <= 1", "facts['fills'] == 0"),
+    ("facts['invocations'] <= 1", "facts['fills'] == 0"),
+    ("facts['registrations'] >= 0",),
+])
+def test_holdout_steps_follow_only_failing_decisions_and_survive_checkpoint(
+        monkeypatch, observation, revisions, predicates):
+    """§IV.a: proxy relief cannot pardon holdout failure; absent owners invent no charge.
+
+    The rows distinguish one failure, unequal failing counts plus unsupported
+    evidence, ownerless failures and passing predicates. Exact proxy cards wait for close.
+    """
+    import json
+    from dataclasses import replace
+
+    from factorylab.charter.charter import Charter
+    from factorylab.charter.windows import MetricWindow
+    from factorylab.kernel.queue import SettleStatus
+    from factorylab.runtime import pricing
+    from factorylab.runtime.observations import window_facts
+    from factorylab.runtime.resume import decode, encode
+
+    monkeypatch.setattr(pricing, "close_window", lambda *_a: None)
+    rt = _runtime(monkeypatch)
+    entries = []
+    for i, expression in enumerate(predicates):
+        name = f"hold-{i}"
+        rt.predicates.register(name, "A behavioural constraint",
+                               f"def resolve(facts):\n    return {expression}\n",
+                               facts={"registrations": 1, "tool_calls": 0,
+                                      "invocations": 2, "fills": 1}, persist=lambda _p: None)
+        entries.append(f"{name}@1")
+    card = MetricCard("proxy", "care with scarce resources", "A proxy", "fraction",
+                      MetricWindow("windows", 1, None), {"rule": "at least", "lo": 0.5},
+                      observation, "producer", holdout=tuple(entries))
+    rt.charter = Charter(rt.charter.edition, rt.charter.norms, (card,))
+    rt._derive_regions()
+    rt.controller.set_price(card.id, 0.4, amendment_id="test")
+    handles = [_handle(rt, seat) for seat in ("seed-decider", "seed-observer", "eval-a")]
+    for handle in handles:
+        rt._contribution(handle, "producer").update(invocations=1, ok=1)
+        rt.card_samples.returned(handle=handle, assembly="seed-decider", role="producer",
+                                 window=rt.window.index, ret=Return(handle, {}, 0, "ok"))
+    rt.window.decisions[handles[-1]]["niche"] = True
+    # A delayed fill contributes now but cannot dilute a card priced on its old origin.
+    old = _handle(rt, "antagonist-a")
+    rt._contribution(old, "producer")["notional_micro"] = 100
+    rt.price_origins[old] = {"origin": rt.window.index - 1, "turnover": rt.window.index}
+    # Real registration admission records the exact count for attribution.
+    rt._apply_registrations(handles[0], Return(handles[0], {"register": [
+        {"kind": "predicate", "id": "admitted", "description": "A fact",
+         "code": "def resolve(facts):\n    return facts['ok'] > 0\n"}]}, 0, "ok"))
+    assert rt.window.decisions[handles[0]]["registrations"] == 1
+    rt.window.ok = rt.window.invocations = rt.window.producer_returns = 3
+    rt.window.revision_returns = revisions  # relief holds even when the pooled proxy fails
+    rt.window.fills = 1  # globally failing, but has no supported per-decision input
+    rt.card_samples.windows.clear()
+    rt._settle_priced(handles[0], channel="verdict", score=0.9,
+                      definition_version="test", sampling_ref=None, cards="producer")
+    assert rt.queue.get(handles[0]).status is SettleStatus.PENDING
+    rt._close_price_window()
+    (term,) = rt._penalty_terms("producer", handles[0])
+    step = rt._resolution_step(card.id)
+    passing = predicates == ("facts['registrations'] >= 0",)
+    expected_steps = (0 if passing or len(predicates) == 2 else
+                      (1 if len(predicates) == 1 else 2))
+    proxy = 1 / 3 if observation == "revision_rate" and revisions == 1 else 0
+    assert term["proxy_violation"] == pytest.approx(proxy)
+    if observation == "revision_rate":
+        assert term["proxy_share"] == 0  # the registrar relieved the proxy
+    if passing:
+        assert term["holdout_violation"] == 0 and term["holdout_attributees"] == {}
+    assert term["attributed_holdout_violation"] == pytest.approx(expected_steps * step)
+    expected_share = 0 if not expected_steps else (1 if expected_steps == 1 else 0.75)
+    assert term["holdout_share"] == pytest.approx(expected_share)
+    total = proxy + expected_steps * step
+    expected = min(rt.m.prices.penalty_cap, term["lambda"] * total)
+    holdout_part = expected_steps * step / total if total else 0
+    assert rt._penalty_for("producer", handles[0]) == pytest.approx(
+        expected * holdout_part * expected_share)
+    assert rt._penalty_for("producer", handles[-1]) == 0
+    assert rt._penalty_for("producer", handles[1]) == pytest.approx(
+        expected * ((1 - holdout_part) / 2
+                    + holdout_part * (0.25 if expected_steps == 2 else 0))
+        if total else 0)
+    if len(predicates) > 1:
+        details = term["holdout_attributees"]
+        assert details[entries[-1]]["results"] == {h: None for h in handles[:2]}
+        assert details[entries[-2]]["attributees"] == []
+    assert "closed_holdout_attribution" not in window_facts(rt.window)
+    restored = decode(json.loads(json.dumps(encode(rt.window))))
+    rt.price_windows[restored.index] = restored
+    rt.window = replace(restored)
+    assert rt._penalty_terms("producer", handles[0]) == [term]
+
+
+def test_late_fill_holdout_waits_for_its_attributed_window(monkeypatch):
+    """A fill window, not the closed original window, fixes a turnover holdout's charge."""
+    from factorylab.charter.charter import Charter
+    from factorylab.charter.windows import MetricWindow
+    from factorylab.kernel.queue import SettleStatus
+    from factorylab.runtime import pricing
+
+    monkeypatch.setattr(pricing, "close_window", lambda *_a: None)
+    rt = _runtime(monkeypatch)
+    rt.predicates.register("calls", "A behavioural fact",
+                           "def resolve(facts):\n    return facts['tool_calls'] > 0\n",
+                           facts={"tool_calls": 0}, persist=lambda _p: None)
+    card = MetricCard("turn", "care with scarce resources", "Turnover", "ratio",
+                      MetricWindow("windows", 1, None), {"rule": "at most", "hi": 1},
+                      "turnover", "producer", holdout=("calls@1",))
+    rt.charter = Charter(rt.charter.edition, rt.charter.norms, (card,))
+    rt._derive_regions()
+    handle = _handle(rt, "seed-decider")
+    rt._contribution(handle, "producer").update(invocations=1, ok=1)
+    rt.card_samples.returned(handle=handle, assembly="seed-decider", role="producer",
+                             window=rt.window.index, ret=Return(handle, {}, 0, "ok"))
+    rt.card_samples.windows.clear()
+    rt._close_price_window()
+    original = rt.window
+    rt.window = pricing.MeasureWindow(original.index + 1, 1_000_000)
+    rt.price_windows[rt.window.index] = rt.window
+    rt.consequences.table = rt.consequences.table.start(handle, rt.n).order(
+        "late", handle, "0.1", coin="BTC")
+    rt._record_fill_notional({"order_id": "late", "size": "0.1", "px": "1"})
+    rt.window.notional_micro = 100_000
+    rt.controller.set_price(card.id, 0.4, amendment_id="test")
+    rt.ticks_consumed = 7
+    rt._settle_priced(handle, channel="verdict", score=0.9, definition_version="test",
+                      sampling_ref=None, cards="producer", ready_tick=3)
+    assert rt.queue.get(handle).status is SettleStatus.PENDING
+    assert rt.deferred_settlements[handle]["windows"] == [rt.window.index]
+    assert rt.deferred_settlements[handle]["ready_tick"] == 3
+    rt._close_price_window()
+    assert rt.queue.get(handle).status is SettleStatus.SETTLED
+    assert handle not in rt.deferred_settlements
+    assert _items(rt, "price.penalty")[-1]["penalty"] > 0
+
+
 def _boundary(rt):
     rt.clock.now_ns = rt.cadence.earliest_ns(rt.tick_clock)
     rt.n = rt.cadence.earliest_event()
