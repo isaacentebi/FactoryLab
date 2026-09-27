@@ -22,8 +22,6 @@ REAL = json.loads((ROOT / "tests/fixtures/gauntlet_real_rows.json").read_text())
 
 #: Kinds a fixture may use that no gauntlet world emits, each with its reason.
 NOT_EMITTED = {
-    "immune.price_ratchet_saturated": "wave 16 D5/R-E names the saturation row; no kernel "
-                                      "on this branch emits it (SF-1d is a strict xfail)",
     "challenge.proposed": "emitted by governance._register_challenge with the challenge "
                           "record (its handle included); no gauntlet world files a challenge",
     "price.register": "emitted by PriceController.register_pending with kind and card_id "

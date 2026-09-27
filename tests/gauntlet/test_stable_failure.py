@@ -18,11 +18,6 @@ from factorylab.charter.controller import PriceController
 from scripts import gauntlet as g
 from tests.gauntlet import populations as P
 
-#: Wave 16's price-loop runaway, for wave 16b (reported on the wave 16 merge).
-RUNAWAY = ("kernel gap (a): price-loop runaway — the price window's measured inner loop "
-           "includes the deferred-settlement wait for the price window itself (§IV.c); "
-           "fixed by wave 16b")
-
 pytestmark = pytest.mark.gate
 
 UPTAKE = P.UPTAKE["id"]
@@ -34,8 +29,11 @@ def sf1(shared_run):
 
 
 def _transient_world():
-    """SF-1 with one transient resolution: hold-a registers observations for four windows."""
-    return P.sf1(hold_a=P.relieving_in(range(30, 34), P.hold, "relief"))
+    """SF-1 with one transient resolution: hold-a registers observations for twenty
+    windows. (Four sufficed while the price loop ran away and its windows grew to
+    hundreds of ticks; at the steady cadence a window is four ticks, and the organ's
+    horizon needs the relief to outlast it before the flag clears, wave 16b.)"""
+    return P.sf1(hold_a=P.relieving_in(range(30, 50), P.hold, "relief"))
 
 
 @pytest.fixture(scope="module")
@@ -51,12 +49,13 @@ def test_sf1a_stable_failure_is_detected_within_the_horizon(sf1):
     assert result.ok, result.evidence
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=RUNAWAY)
 def test_sf1b_the_card_is_ratcheted_by_duration_on_the_organs_loop(sf1):
     result = g.sf1b_ratchet_cadence(sf1.events, sf1.manifest)
     assert result.ok, result.evidence
+    # At the card's own bound the ratchet is ledgered saturated, its duration counting
+    # on (R-E, R10-e): both kinds are the one ratchet.
     durations = [r["duration"] for r in sf1.rows("immune.price_ratchet")
-                 if r["card_id"] == UPTAKE]
+                 + sf1.rows("immune.price_ratchet_saturated") if r["card_id"] == UPTAKE]
     assert max(durations) >= sf1.physics.r  # the duration really accrued
 
 
@@ -84,7 +83,6 @@ def test_sf1b_negative_control_a_ratchet_that_never_fires_is_not_a_pass():
     assert g.sf1b_ratchet_cadence(mutant.events, mutant.manifest).status != g.PASS
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=RUNAWAY)
 def test_sf1b_a_transient_resolution_resets_the_duration(transient):
     """Astra M-6's control: when the card is briefly satisfied the flag clears at an
     acting window, the duration ends, and the next ratchet starts again from one."""
@@ -93,7 +91,6 @@ def test_sf1b_a_transient_resolution_resets_the_duration(transient):
     assert result.ok, result.evidence
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=RUNAWAY)
 def test_sf1b_negative_control_without_the_reset_the_transient_world_fails():
     mutant = P.run(*_transient_world(), events=300, patches=[
         (PriceController, "end_failure", lambda self, card_id, *, window: None)])
@@ -107,21 +104,19 @@ def test_sf1c_the_integral_is_frozen_while_the_penalty_sits_at_the_cap(sf1):
     assert result.ok, result.evidence
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="kernel gap reported to the architect (wave 16 merge): the card "
-                   "penalty sits at the cap for 2 updates, never min_ratio = 3. The price "
-                   "loop's period is min_ratio x its measured settle loop, and producers "
-                   "settle only at price-window closes, so each window lasts ~1.6-2x the "
-                   "last (sf1 closes at ticks 12, 29, 44, 58, 90, 157, 322, 537, 854, "
-                   "1467): no run reaches a sustained saturation (essay IV.c)")
 def test_sf1d_saturation_is_escalated_with_a_rising_duration(sf1):
     result = g.sf1d_escalation(sf1.events, sf1.manifest, card=UPTAKE)
     assert result.ok, result.evidence
 
 
-# No Tick router bound is reached in the windows the runaway leaves, so the reading has
-# no ``router:Tick`` entry (KeyError) rather than a failed assertion.
-@pytest.mark.xfail(strict=True, raises=(AssertionError, KeyError), reason=RUNAWAY)
+# R16b-2: the Tick router's loop now counts its cutoffs and credited rounds (open to
+# learned, ``router.learned``): 5 windows, so its gain may step every 15 and its bound
+# (1 + 9 x 15 windows) lies beyond a 300-event world. SF-1e reads it unsupported, and
+# the reading has no ``router:Tick`` entry (KeyError). Not the runaway: a longer run.
+@pytest.mark.xfail(strict=True, raises=(AssertionError, KeyError),
+                   reason="the Tick router's gain bound lies beyond a 300-event world once "
+                   "its loop counts cutoffs (R16b-2); a run long enough to reach it is "
+                   "needed")
 def test_sf1e_gain_rises_to_its_bound_and_holds_while_flagged(sf1):
     """No router unwound while flagged or missed a bound the run covered, and the Tick
     router, whose own loop is the organ's, reached gamma_max. The judges' routers step on

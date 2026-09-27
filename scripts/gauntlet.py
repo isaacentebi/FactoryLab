@@ -1197,13 +1197,17 @@ def sf1d_escalation(events: list[Mapping], manifest: Mapping, *, card: str) -> R
     Wave 16 R-E: "At saturation, ledger the fact and publish it to governance". Demanded
     only once the penalty has sat at the cap for ``min_ratio`` consecutive updates (the
     same partition as SF-1c: one capped update followed by uncapped ones is not
-    sustained saturation). Durations are read per saturation episode (A): an episode
-    starts at duration 1 and each next row is the previous plus one, at the next window;
-    a new episode may start at 1 after the cap released, never mid-count. Episodes are aligned, not
-    counted: every sustained run needs an episode whose rows *inside the run's windows*
-    (``update_windows``) reach a duration of ``min_ratio``: overlapping the run, or
-    reaching ``min_ratio`` outside it, is not escalation of that run. A saturation row
-    names its ``window``.
+    sustained saturation). Durations are read per saturation episode (A), as the kernel
+    writes them (R-E, R10-e): a saturated ratchet carries the failing attractor's own
+    duration, which kept counting from the ratchets before it, so an episode starts at
+    whatever duration the attractor stood at, and each next row is the previous plus
+    one at a later window (the organ's acting grid, not every window). A row whose
+    duration does not continue the episode starts another; whether the duration fell
+    back while the attractor held is SF-1b's reading, over both ratchet kinds. Episodes
+    are aligned, not counted: every sustained run needs an episode whose rows *inside
+    the run's windows* (``update_windows``) reach a duration of ``min_ratio``:
+    overlapping the run, or reaching ``min_ratio`` outside it, is not escalation of that
+    run. A saturation row names its ``window`` and its ``duration``.
     """
     ph = physics(manifest)
     at = update_windows(events)
@@ -1216,20 +1220,21 @@ def sf1d_escalation(events: list[Mapping], manifest: Mapping, *, card: str) -> R
     current: list[Mapping] | None = None
     for row in rows:
         d, window = row.get("duration"), row.get("window")
-        if not isinstance(window, int) or isinstance(window, bool):
+        if (not isinstance(window, int) or isinstance(window, bool)
+                or not isinstance(d, int) or isinstance(d, bool) or d < 1):
             malformed.append({"duration": d, "window": window})
             current = None
-        elif isinstance(d, int) and not isinstance(d, bool) and d == 1:
-            current = [row]
-            episodes.append(current)
-        elif (current is not None and isinstance(d, int) and not isinstance(d, bool)
-              and d == need(current[-1], "duration") + 1
-              and window == need(current[-1], "window") + 1):
+        elif current is not None and d == need(current[-1], "duration") + 1:
+            if window <= need(current[-1], "window"):
+                # The count rose without the organ acting again: never a duration.
+                malformed.append({"duration": d, "window": window})
+                current = None
+                continue
             current.append(row)
         else:
-            # A broken count stays broken until a new episode starts at 1.
-            malformed.append({"duration": d, "window": window})
-            current = None
+            # A new episode, at the duration the attractor stood at (R10-e).
+            current = [row]
+            episodes.append(current)
     spans = [(min(need(r, "window") for r in e), max(need(r, "window") for r in e),
               need(e[-1], "duration"))
              for e in episodes]
@@ -1334,8 +1339,25 @@ def router_round_periods(events: list[Mapping]) -> dict[str, int]:
     world's measure of the router's loop (``clockwork.record("router:<kind>")`` in
     ``FeedbackMixin._learn_router_return``), read from the rounds, never from the gain
     rows it bounds. A round closes once: a late settlement after its timeout is not a
-    second closure."""
+    second closure.
+
+    A diary that writes ``router.learned`` (R16b-5) states when each round was learned,
+    which is exactly what the kernel's meter measures (open to learned, a decline,
+    censoring or cutoff credited at its window's close included; a NOOP never): its
+    closures are read from those rows, per drawing router."""
     opened = _decision_windows(events)
+    if any(row.get("kind") == "router.learned" for row in events):
+        window, closures = 1, defaultdict(list)
+        for row in events:
+            if row.get("kind") == "price.window":
+                window = need(row, "window") + 1
+            elif row.get("kind") == "router.learned" and need(row, "action") != "NOOP":
+                start = opened.get(need(row, "handle"))
+                if start is not None:
+                    closures[need(row, "router")].append(max(0, window - start))
+        return {router: max(1, sorted(values)[min(len(values) - 1,
+                                                  math.ceil(0.9 * len(values)) - 1)])
+                for router, values in closures.items()}
     actor = unique_map((row for row in rows_of(events, "decision.open") if router_draw(row)),
                        lambda row: need(row, "handle"), lambda row: need(row, "actor"))
     window, closures, closed = 1, defaultdict(list), set()
@@ -3162,7 +3184,14 @@ def s5b_observed_neutral(events: list[Mapping], manifest: Mapping) -> Result:
     effective ones"). Once a router has one, its ``neutral`` must equal their mean to
     1e-9, whatever that mean is (a router whose rounds truly average 0.5 credits 0.5);
     before the first, the prior stands and the row is not read.
+
+    A diary that writes ``router.learned`` (R16b-5) states when each round entered its
+    router's mean: a scored round at the moment its router learned it (the kernel's
+    ``record_round``, on the learning router), never at its ``price.penalty`` (a round
+    deferred to its window's close is settled there and learned at the next delivery,
+    after a credit priced at that close). Its scored rows are read instead.
     """
+    learned_rows = any(row.get("kind") == "router.learned" for row in events)
     seats = decision_seats(events)
     actors = unique_map(rows_of(events, "decision.open"), lambda row: need(row, "handle"),
                         lambda row: need(row, "actor"))
@@ -3215,6 +3244,13 @@ def s5b_observed_neutral(events: list[Mapping], manifest: Mapping) -> Result:
             old = new.rsplit("@", 1)[0]
             raws[new] = list(raws.get(old, ()))
             hand_over(old, new)
+            continue
+        if learned_rows and kind == "router.learned":
+            if (need(row, "scored") and need(row, "action") != "NOOP"
+                    and need(row, "raw") is not None):
+                raws[learner_of(need(row, "learner"))].append(float(need(row, "raw")))
+            continue
+        if learned_rows and kind == "price.penalty":
             continue
         if kind == "price.penalty" and need(row, "handle") in timed_out:
             continue

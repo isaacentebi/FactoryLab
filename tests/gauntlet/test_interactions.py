@@ -24,11 +24,24 @@ def i10(shared_run):
     return shared_run("i10", lambda: P.run(*P.i10(), events=300))
 
 
+#: Wave 16b finding, for the architect (not the runaway, which it masked): at the steady
+#: cadence a price window lasts four ticks and can close with no verdict sample. The
+#: organ then reads the judges' period-2 oscillation sampled [0.4, unmeasured, 0.4] as a
+#: persistent violation (missing evidence is not compliance, M-6), flags stable failure
+#: on the producers' card (windows 25 and 65) and names no moving role in those windows,
+#: so the thrash price lands on the core (router:Tick, windows 24-32). Under the runaway
+#: every window was long enough to hold verdicts.
+SPARSE = ("wave 16b finding: an unmeasured window inside a period-2 oscillation is read as "
+          "persistence and as no moving role (i10 windows 24-32); a ruling on how the organ "
+          "reads missing evidence in a cycle is needed")
+
+
 def _producer_card_flagged(run):
     return [r["window"] for r in run.rows("pathology.stable_failure")
             if "card:verdict-floor" in r.get("violated_cards", ())]
 
 
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=SPARSE)
 def test_i10_oscillating_judges_are_read_as_thrash_not_as_producer_stable_failure(i10):
     """Judges alternate 0.3 / 0.7 by window over a steady producer; the producers' verdict
     card is violated every other window. The organ must read the tier's oscillation as
@@ -74,12 +87,14 @@ def _always_wide(advance):
     return wrapped
 
 
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=SPARSE)
 def test_i10_either_half_of_the_definition_alone_refuses_the_phantom():
     """The persistence rule alone (every gap read as wide) still keeps the tiers apart."""
     alone = P.run(*P.i10(), events=300, patches=[(live, "advance", _always_wide(live.advance))])
     assert not _producer_card_flagged(alone)
 
 
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=SPARSE)
 def test_i10_the_thrash_price_lands_on_the_tier_that_moved(i10):
     """Where the thrash price lands (TH-1d, wave 16 I-10): on the routers of the tier
     whose behaviour moved, which the organ names in ``thrash.roles``. The judges
@@ -136,9 +151,6 @@ def test_i5_an_unmeasured_card_is_never_a_failing_card(i5):
                 if r["card_id"] == "independent-consequence"]
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="blocked by SF-1d: the ld1 card never saturates for min_ratio "
-                   "updates, for the price-loop runaway reported with SF-1d (kernel gap)")
 def test_i8_saturation_informs_governance_but_never_shortens_its_period(ld1):
     assert g.sf1d_escalation(ld1.events, ld1.manifest, card="independent-uptake").ok
     assert g.th3_governance_gap(ld1.events, ld1.manifest).status != g.FAIL

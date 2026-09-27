@@ -297,19 +297,24 @@ def _saturated(*pairs):
 
 
 def test_sf1d_durations_are_read_per_saturation_episode():
-    """The sweep (A): two sustained runs at the cap, each counted from 1, pass; the count
-    may restart only at 1, and every sustained run needs its own episode reaching r."""
+    """The sweep (A), as the kernel writes the duration (R-E, R10-e): a saturated ratchet
+    carries the failing attractor's own duration, so an episode starts wherever the
+    attractor stood and rises by one per row at a later window; every sustained run
+    needs its own episode reaching r inside its windows."""
     two = _windowed("c", [*[(0.5, 1.0, 0.5)] * 3, (0.2, 1.0, 0.2), *[(0.5, 1.0, 0.5)] * 3])
     both = _saturated((1, 1), (2, 2), (3, 3), (5, 1), (6, 2), (7, 3))
     assert g.sf1d_escalation(two + both, M, card="c").ok
-    one_episode = g.sf1d_escalation(two + _saturated((1, 1), (2, 2), (3, 3), (5, 4)),
-                                    M, card="c")
-    assert one_episode.status == g.FAIL and one_episode.evidence["unmatched"] == [
-        {"run": [5, 7]}]
-    skipped = g.sf1d_escalation(
+    # The attractor held across the uncapped update: its duration continued (4).
+    held = g.sf1d_escalation(two + _saturated((1, 1), (2, 2), (3, 3), (5, 4)), M, card="c")
+    assert held.ok, held.evidence
+    # It resumed at the duration it stood at, after plain ratchets (2): a new episode.
+    resumed = g.sf1d_escalation(
         two + _saturated((1, 1), (2, 2), (3, 3), (5, 2), (6, 3), (7, 4)), M, card="c")
-    assert skipped.status == g.FAIL
-    assert [m["duration"] for m in skipped.evidence["malformed"]] == [2, 3, 4]
+    assert resumed.ok, resumed.evidence
+    # Violating: the second run's saturation never reached r inside its windows.
+    short = g.sf1d_escalation(two + _saturated((1, 1), (2, 2), (3, 3), (5, 1)), M,
+                              card="c")
+    assert short.status == g.FAIL and short.evidence["unmatched"] == [{"run": [5, 7]}]
 
 
 def test_sf1d_episodes_are_aligned_to_their_runs_not_counted():
@@ -2215,9 +2220,11 @@ def test_s1_an_orphaned_act_fails_with_no_sampled_decision_at_all():
 
 
 def test_sf1d_a_broken_saturation_count_fails_before_any_sustained_run():
-    broken = _saturated((5, 1), (6, 3))
-    result = g.sf1d_escalation(broken, M, card="c")
-    assert result.status == g.FAIL and result.evidence["malformed"]
+    """A duration below one, or a count that rose without the organ acting again (the
+    same window), is no duration at all: it fails whatever the runs show."""
+    for broken in (_saturated((5, 1), (6, 0)), _saturated((5, 1), (5, 2))):
+        result = g.sf1d_escalation(broken, M, card="c")
+        assert result.status == g.FAIL and result.evidence["malformed"], broken
     assert g.sf1d_escalation(_saturated((5, 1), (6, 2)), M,
                              card="c").status == g.UNSUPPORTED
 
@@ -2259,7 +2266,7 @@ def _thin_violations():
         "SF-1b": (g.sf1b_ratchet_cadence, [_w(3, acts=True), *_ratchets((3, 1))], {}),
         "SF-1c": (g.sf1c_anti_windup, _updates("c", [(0.5, 1.0, 0.5), (0.5, 1.0, 0.6)]),
                   {"card": "c"}),
-        "SF-1d": (g.sf1d_escalation, _saturated((5, 1), (6, 3)), {"card": "c"}),
+        "SF-1d": (g.sf1d_escalation, _saturated((5, 1), (6, 0)), {"card": "c"}),
         "SF-1e": (g.sf1e_gain, [_w(1, sf=True), _gain(1, 0.2, 0.15, "cleared")], {}),
         "SF-1f": (g.sf1f_route_open, [_novelty(amount=1)], {}),
         "SF-2b": (g.sf2b_order_blind, [_penalty("a", 0.5), _penalty("b", 0.25)],
@@ -2679,12 +2686,6 @@ def test_s4_an_unresolved_penalty_row_may_carry_no_raw_score():
 
 
 # --- wave 16b follow-ups -----------------------------------------------------------------
-
-
-def _saturated(*pairs):
-    """``immune.price_ratchet_saturated``: the ratchet at the card's own bound (R-E)."""
-    return [{"kind": "immune.price_ratchet_saturated", "card_id": "c", "window": w,
-             "duration": d, "lambda": 1.0, "bound": 1.0} for w, d in pairs]
 
 
 def test_sf1b_reads_a_saturated_ratchet_as_the_ratchet_at_its_bound():
