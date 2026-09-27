@@ -105,11 +105,11 @@ def thrash_roles(rt, windows: list[dict]) -> list[str]:
     """The roles whose behaviour the thrash signals read as moving.
 
     Guarantees the roles measured by the cards whose region-relative cell changed
-    between two consecutive windows of the retained horizon the diagnosis read
-    (``timing.min_ratio × immune.k`` windows) that both measured the card
-    (``live.card_cell``; R16b-10: a window that did not measure it is neither movement
-    nor stillness, so one gap never hides the rest of the horizon's movement and sends
-    the price to the core), each read under the
+    between two consecutive MEASURED readings of the card in the retained horizon the
+    diagnosis read (``timing.min_ratio × immune.k`` windows; ``live.card_cell``;
+    R16b-10: a window that did not measure it is neither movement nor stillness, so a
+    gap is skipped and never hides a movement across it and sends the price to the
+    core), each read under the
     semantics the window RECORDED at its close (``semantics``), never the charter in
     force now (Codex on #152): an amendment that redefines a card under the same id
     cannot move old movement onto its new role. A change between two windows that
@@ -132,16 +132,21 @@ def thrash_roles(rt, windows: list[dict]) -> list[str]:
 
     roles = set()
     for name in names:
-        for before, after in zip(span, span[1:], strict=False):
-            cell_before, cell_after = live.card_cell(before, name), live.card_cell(after, name)
-            if cell_before is None or cell_after is None or cell_before == cell_after:
+        # Each measured reading against the card's previous MEASURED reading (Sol on
+        # #157): a gap is skipped, never a reset, so [inside, unmeasured, violating]
+        # is the one movement it is.
+        previous = None
+        for window in span:
+            cell = live.card_cell(window, name)
+            if cell is None:
                 continue
-            was, now = meaning(before, name), meaning(after, name)
-            if (was is None or now is None or was.get("role") != now.get("role")
-                    or not live.same_metric(was, now)):
-                continue  # a redefinition (a new observation or role), not movement
-            if now["role"] != "all":
-                roles.add(now["role"])
+            if previous is not None and previous[1] != cell:
+                was, now = meaning(previous[0], name), meaning(window, name)
+                if (was is not None and now is not None
+                        and was.get("role") == now.get("role")
+                        and live.same_metric(was, now) and now["role"] != "all"):
+                    roles.add(now["role"])  # else a redefinition, not movement
+            previous = (window, cell)
     return sorted(roles)
 
 

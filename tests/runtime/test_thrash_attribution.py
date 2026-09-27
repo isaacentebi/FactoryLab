@@ -259,3 +259,19 @@ def test_one_unmeasured_window_never_hides_the_horizons_movement():
     windows = _windows((moving,), "moving")
     windows[4]["profile"]["card:moving"] = None  # sampled nothing in that window
     assert immune.thrash_roles(rt, windows) == ["evaluator"]
+
+
+def test_a_movement_across_a_gap_is_movement():
+    """Sol on #157: cells [inside, unmeasured, violating]. The one movement is between
+    the two measured readings, across the gap; comparing only adjacent windows skipped
+    both pairs, named no role, and the thrash price fell to the core."""
+    rt = make_runtime()
+    moving = _card("moving", "verdict_mean", "producer")
+    rt.charter = replace(rt.charter, cards=(moving,))
+    windows = _windows((moving,), "moving", n=3)
+    windows[0]["profile"]["card:moving"] = 0.9  # inside
+    windows[1]["profile"]["card:moving"] = None  # unmeasured
+    windows[2]["profile"]["card:moving"] = 0.1  # violating
+    assert immune.thrash_roles(rt, windows) == ["evaluator"]
+    windows[2]["profile"]["card:moving"] = 0.9  # inside again: no movement
+    assert immune.thrash_roles(rt, windows) == []
