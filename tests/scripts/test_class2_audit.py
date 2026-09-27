@@ -2032,20 +2032,22 @@ def test_no_policy_or_evidence_read_bypasses_the_release_commit():
         if isinstance(node, ast.FunctionDef):
             body = ast.get_source_segment(source, node)
             found = [p for p in ("read_text(", "read_bytes(", "raw_world(", "corpus.WORLDS",
-                                 "lexicon.ALLOWLIST", "load_allowlist(")
+                                 "lexicon.ALLOWLIST", "load_allowlist(", "read_input(")
                      if p in body]
             if found:
                 reads[node.name] = found
     assert reads == {
-        "authority_text": ["read_text("],       # the essay: never committed
+        # The one reader of operator-supplied files, refusing a broken one.
+        "read_input": ["read_bytes(", "read_input("],
+        "authority_text": ["read_input("],       # the essay: never committed
         "sha256_file": ["read_bytes("],         # digests, of any file
-        "_jsonl": ["read_text("],               # samples, corpus, previous corpus
-        "read_previous_triage": ["read_text("],  # bound by the recorded digest
-        "previous_problems": ["read_text("],     # the same file, digest-checked
-        "load_key": ["read_text("],              # bound to its corpus and prompts
+        "_jsonl": ["read_input("],               # samples, corpus, previous corpus
+        "read_previous_triage": ["read_input("],  # bound by the recorded digest
+        "previous_problems": ["read_input("],     # the same file, digest-checked
+        "load_key": ["read_input("],              # bound to its corpus and prompts
         "calibration_problems": ["read_bytes("],  # the input, compared to its recompute
-        "beside_text": ["read_bytes("],          # a prompt, compared to its recompute
-        "gate": ["read_text("],                  # the triage file, by its sha256
+        "beside_text": ["read_input("],          # a prompt, compared to its recompute
+        "gate": ["read_input("],                  # the triage file, by its sha256
         "write_last_release": ["read_text("],    # the record the gate writes
         "corpus_records": ["raw_world("],        # the render, pinned by release_commit
         "render": ["corpus.WORLDS"],             # the renderer's own world files
