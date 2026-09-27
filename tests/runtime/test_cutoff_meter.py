@@ -9,6 +9,8 @@ from that meter). No closure is recorded twice.
 
 from __future__ import annotations
 
+import pytest
+
 from factorylab.kernel.queue import PropensityRecord, SettleStatus
 from tests.runtime.test_penalty_attribution import _runtime
 
@@ -100,30 +102,33 @@ def test_a_decline_credited_at_its_windows_close_closes_the_routers_loop_once(
     assert rt.clockwork.latencies[meter] == [learned_at - 10]  # never twice, NOOP never
 
 
-def test_a_cutoff_credited_at_the_close_closes_the_routers_loop_at_its_cutoff(monkeypatch):
-    """Astra on #157 (II.IV.c; R16b-1/2): a round opened at tick 10 and cut off at 15,
-    whose credit waits for its window's close at 20, closed its router's loop at 15. The
-    router sample is 5, as its role's is, never 10: the wait for the price close is the
-    outer loop's. A late score at 18 moves nothing and trains nothing again."""
+@pytest.mark.parametrize(("cutoff", "late", "close"), [(15, 18, 20), (20, 25, 30)])
+def test_a_cutoff_credited_at_the_close_closes_the_routers_loop_at_its_cutoff(
+        monkeypatch, cutoff, late, close):
+    """Astra and Sol on #157 (II.IV.c; R16b-1/2): a round opened at tick 10 and cut off
+    at ``cutoff``, whose credit waits for its window's close, closed its router's loop at
+    its cutoff. The router sample is ``cutoff - 10``, as its role's is, never ``close -
+    10``: the wait for the price close is the outer loop's. A late score moves nothing
+    and trains nothing again."""
     from tests.runtime.test_refusal_price import _priced_runtime
 
     rt = _priced_runtime(monkeypatch)
     state, handle = _drawn_at(rt, "seed-decider", at=10)
     rt._contribution(handle, "producer")
-    rt.decision_ticks[handle][1] = 15
-    rt.ticks_consumed = 15
+    rt.decision_ticks[handle][1] = cutoff
+    rt.ticks_consumed = cutoff
     assert rt.queue.expire_due() == [handle]
     rt._deliver_returns()
     assert handle in rt.noop_credits  # owed until its window's close (D5)
-    rt.ticks_consumed = 18
+    rt.ticks_consumed = late
     rt.queue.settle(handle, channel="verdict", score=0.8, status=SettleStatus.SETTLED,
                     definition_version="t", sampling_ref=None)  # late: no new closure
     rt._deliver_returns()
-    rt.ticks_consumed = 20
+    rt.ticks_consumed = close
     rt._close_price_window()
     rt._deliver_returns()
-    assert rt.clockwork.latencies[f"router:{state.kind}"] == [5]
-    assert rt.clockwork.latencies["settle:producer"] == [5]
+    assert rt.clockwork.latencies[f"router:{state.kind}"] == [cutoff - 10]
+    assert rt.clockwork.latencies["settle:producer"] == [cutoff - 10]
     learned = [i for i in rt.ledger._recovery_items()
                if i["kind"] == "router.learned" and i["handle"] == handle]
     assert [(i["path"], i["scored"]) for i in learned] == [("credit", False)]
