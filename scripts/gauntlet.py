@@ -89,6 +89,26 @@ class Malformed(Exception):
                          "handle": row.get("handle"), "window": row.get("window")}
 
 
+def unique_put(mapping: dict, key: Any, value: Any, row: Mapping) -> None:
+    """Put ``value`` at ``key``, where the kernel writes one row per key (one world fact
+    per return, one ``decision.open`` per handle, one close per window): a second row
+    for the key is a malformed diary (``Malformed``), never a silent overwrite that could
+    hide a conflicting row (Codex on 45c3ccd)."""
+    if key in mapping:
+        raise Malformed(row, f"a single row per {key!r}")
+    mapping[key] = value
+
+
+def unique_map(rows: Iterable[Mapping], key: Callable[[Mapping], Any],
+               value: Callable[[Mapping], Any] = lambda row: row) -> dict:
+    """``{key(row): value(row)}`` over rows whose key the kernel writes once
+    (``unique_put``): a duplicate is ``Malformed``."""
+    out: dict = {}
+    for row in rows:
+        unique_put(out, key(row), value(row), row)
+    return out
+
+
 def need(row: Mapping, path: str) -> Any:
     """The value at the dotted ``path`` of ``row`` (None only where the row holds an
     explicit null). Raises ``Malformed`` when a key on the way is absent: the caller
@@ -776,7 +796,8 @@ def card_violations(events: Iterable[Mapping], card: str) -> dict[int, float]:
         # ``price.window`` always writes both (pricing.py ``close_window``).
         values, regions = need(row, "values"), need(row, "regions")
         if card in values and card in regions:
-            result[need(row, "window")] = violation(regions[card], float(values[card]))
+            unique_put(result, need(row, "window"),
+                       violation(regions[card], float(values[card])), row)
     return result
 
 
@@ -919,7 +940,7 @@ def sf1b_ratchet_cadence(events: list[Mapping], manifest: Mapping) -> Result:
         elif kind == "price.removed":
             known.discard(need(row, "card_id"))
         elif kind == "immune.window":
-            known_at[need(row, "window")] = frozenset(known)
+            unique_put(known_at, need(row, "window"), frozenset(known), row)
     # Every card the diary names (``diary_cards``), not only the ratcheted ones: a card
     # the organ should have ratcheted and never did is read too.
     for cid in diary_cards(events):
@@ -994,7 +1015,8 @@ def update_windows(events: Iterable[Mapping]) -> dict[int, int]:
     """Each ``price.update`` row's price window, by the row's ``id``: the window whose
     ``price.window`` row closed at the same ``window_end_event``."""
     # Both kinds always write ``window_end_event`` (pricing.py, controller.py ``observe``).
-    closes = {need(row, "window_end_event"): need(row, "window") for row in card_windows(events)}
+    closes = unique_map(card_windows(events), lambda row: need(row, "window_end_event"),
+                        lambda row: need(row, "window"))
     return {id(row): closes[need(row, "window_end_event")]
             for row in rows_of(events, "price.update")
             if need(row, "window_end_event") in closes}
@@ -1169,8 +1191,8 @@ def router_round_periods(events: list[Mapping]) -> dict[str, int]:
     ``FeedbackMixin._learn_router_return``), read from the rounds, never from the gain
     rows it bounds."""
     opened = _decision_windows(events)
-    actor = {need(row, "handle"): row.get("actor") for row in rows_of(events, "decision.open")
-             if router_draw(row)}
+    actor = unique_map((row for row in rows_of(events, "decision.open") if router_draw(row)),
+                       lambda row: need(row, "handle"), lambda row: row.get("actor"))
     window, closures = 1, defaultdict(list)
     for row in events:
         if row.get("kind") == "price.window":
@@ -1382,7 +1404,7 @@ def sf1f_route_open(events: list[Mapping], manifest: Mapping) -> Result:
 
 def penalty_by_handle(events: list[Mapping]) -> dict[str, Mapping]:
     """The ``price.penalty`` row of each settled decision."""
-    return {need(row, "handle"): row for row in rows_of(events, "price.penalty")}
+    return unique_map(rows_of(events, "price.penalty"), lambda row: need(row, "handle"))
 
 
 #: The settlement channels the kernel settles with a score but no ``price.penalty`` row:
@@ -1406,7 +1428,7 @@ def split_members(events: list[Mapping]) -> dict[int, dict[str, str | None]]:
     for row in rows_of(events, "decision.open"):
         handle = need(row, "handle")
         if handle in roles and handle not in niche and handle in opened:
-            out[opened[handle]][handle] = roles[handle]
+            unique_put(out[opened[handle]], handle, roles[handle], row)
     return out
 
 
@@ -1444,8 +1466,8 @@ def sf2_gradient(events: list[Mapping], manifest: Mapping, *, card: str,
     evidence. ``pass`` needs a window with a priced reliever and a priced holder.
     """
     seats = decision_seats(events)
-    actors = {need(row, "handle"): row.get("actor") for row in rows_of(events, "decision.open")
-              if router_draw(row)}
+    actors = unique_map((row for row in rows_of(events, "decision.open") if router_draw(row)),
+                        lambda row: need(row, "handle"), lambda row: row.get("actor"))
     opened_in = _decision_windows(events)
     members = split_members(events)
     violated = {w for w, v in card_violations(events, card).items() if v > 0}
@@ -1545,8 +1567,8 @@ def sf2b_order_blind(events: list[Mapping], manifest: Mapping, *, card: str,
 
 def decision_seats(events: Iterable[Mapping]) -> dict[str, str]:
     """Each decision handle's drawn arm (a seat id, or NOOP), from ``decision.open``."""
-    return {need(row, "handle"): need(row, "propensity.chosen")
-            for row in rows_of(events, "decision.open")}
+    return unique_map(rows_of(events, "decision.open"), lambda row: need(row, "handle"),
+                      lambda row: need(row, "propensity.chosen"))
 
 
 def returned_handles(events: Iterable[Mapping]) -> set[str]:
@@ -1693,7 +1715,7 @@ def thrash_integrals(events: list[Mapping]) -> dict[int, float]:
         if kind == "price.update" and row.get("card_id") == "pathology:thrash":
             current = float(need(row, "i"))
         elif kind == "immune.window" and current is not None:
-            out[need(row, "window")] = current
+            unique_put(out, need(row, "window"), current, row)
     return out
 
 
@@ -1722,8 +1744,10 @@ def th1b_duration(events: list[Mapping], manifest: Mapping) -> Result:
     # ``thrash_penalty`` observes ``unsettled``). ``v`` is read from the organ's own
     # ``unsettled``, never from the price rows under test. A rise is owed only at a
     # flagged window with ``v > 0`` whose price had room below ``lambda_max``.
-    violation = {need(w, "window"): max(0.0, float(need(w, "unsettled")) - ph.tv_threshold)
-                 if need(w, "unsettled") is not None else 0.0 for w in windows(events)}
+    violation = unique_map(
+        windows(events), lambda w: need(w, "window"),
+        lambda w: (max(0.0, float(need(w, "unsettled")) - ph.tv_threshold)
+                   if need(w, "unsettled") is not None else 0.0))
     falls, rose, room = [], False, False
     for start, end in runs:
         # The window before the run is the price the thrash started from.
@@ -1790,7 +1814,7 @@ def expected_thrash_charges(events: list[Mapping], manifest: Mapping, *,
             before = last.get(router)
             moved = _tv(now, before) if before else 0.0
             last[router] = now
-            out[need(row, "handle")] = min(ph.cap, lam * min(1.0, moved))
+            unique_put(out, need(row, "handle"), min(ph.cap, lam * min(1.0, moved)), row)
     return out
 
 
@@ -1865,8 +1889,8 @@ def th1c_movement(events: list[Mapping], manifest: Mapping) -> Result:
     # A charge lands on the router that drew its round (feedback.py ``_thrash_charged``
     # books ``state.learner.id``, the drawing router): the row's router is the opening
     # draw's actor (``router_draw``), or the charge is another router's.
-    drew = {need(row, "handle"): need(row, "actor") for row in rows_of(events, "decision.open")
-            if router_draw(row)}
+    drew = unique_map((row for row in rows_of(events, "decision.open") if router_draw(row)),
+                      lambda row: need(row, "handle"), lambda row: need(row, "actor"))
     misrouted = [{"handle": need(row, "handle"), "router": need(row, "router"),
                   "drew": drew.get(need(row, "handle"))}
                  for row in charged if need(row, "router") != drew.get(need(row, "handle"))]
@@ -1918,10 +1942,10 @@ def thrash_attributed(events: list[Mapping], manifest: Mapping) -> dict[str, boo
             menus[router].update(need(row, "propensity.action_ids"))
             if roles:
                 filled = {measured_role(emits[a]) for a in menus[router] if a in emits}
-                out[need(row, "handle")] = bool(filled & set(roles))
+                unique_put(out, need(row, "handle"), bool(filled & set(roles)), row)
             else:
                 core = router.split(":", 1)[1].split("#")[0].split("@")[0]
-                out[need(row, "handle")] = core in ph.no_swap_regret_kinds
+                unique_put(out, need(row, "handle"), core in ph.no_swap_regret_kinds, row)
     return out
 
 
@@ -2332,7 +2356,7 @@ def _decision_windows(events: Iterable[Mapping]) -> dict[str, int]:
         if row.get("kind") == "price.window":
             window = need(row, "window") + 1
         elif row.get("kind") == "decision.open":
-            out[need(row, "handle")] = window
+            unique_put(out, need(row, "handle"), window, row)
     return out
 
 
@@ -2493,7 +2517,7 @@ def of1a_outside_the_loop(events: list[Mapping], manifest: Mapping) -> Result:
     for row in events:
         kind = row.get("kind")
         if kind in wanted:
-            facts[(kind, str(row.get("handle")))] = row
+            unique_put(facts, (kind, str(row.get("handle"))), row, row)
             continue
         if kind != "verdict.consequence":
             continue
@@ -2548,9 +2572,10 @@ def of3a_sampling_behind_return(events: list[Mapping], manifest: Mapping) -> Res
         if isinstance(handle, str) and handle and need(row, "status") == "ok":
             made[handle].append(need(row, "seq"))
     # loop.py emits every ProducerReturn with its ``about_handle``.
-    published = {need(row, "event.id"): (need(row, "event.payload.about_handle"), need(row, "seq"))
-                 for row in rows_of(events, "event")
-                 if need(row, "event.kind") == "ProducerReturn"}
+    published = unique_map(
+        (row for row in rows_of(events, "event") if need(row, "event.kind") == "ProducerReturn"),
+        lambda row: need(row, "event.id"),
+        lambda row: (need(row, "event.payload.about_handle"), need(row, "seq")))
     checked, early, unmade = 0, [], []
     for row in rows_of(events, "decision.open"):
         # A draw on an event that is no ProducerReturn is not a draw on a return.
@@ -2575,7 +2600,8 @@ def of2c_holdout_bites(events: list[Mapping], manifest: Mapping, *, card: str,
     the card's violation *beyond* its region violation: the part the failed holdout
     adds (``PriceController.observe``'s ``holdout``), attributed to that decision."""
     region_violation = card_violations(events, card)
-    closed_at = {need(row, "window"): need(row, "seq") for row in card_windows(events)}
+    closed_at = unique_map(card_windows(events), lambda row: need(row, "window"),
+                           lambda row: need(row, "seq"))
     drawn = decision_seats(events)
     bitten, checked = [], 0
     for handle, row in penalty_by_handle(events).items():
@@ -2931,8 +2957,8 @@ def s5_neutral_imputation(events: list[Mapping], manifest: Mapping) -> Result:
     prices = _section(manifest, "prices")
     before_wave16 = "lambda_max" in prices
     bound = 2 * float(prices.get("penalty_cap") or physics(manifest).cap)
-    thrash = {need(row, "handle"): float(need(row, "charge"))
-              for row in rows_of(events, "thrash.charged")}
+    thrash = unique_map(rows_of(events, "thrash.charged"), lambda row: need(row, "handle"),
+                        lambda row: float(need(row, "charge")))
 
     def credited(row: Mapping) -> float:
         neutral, penalty = float(need(row, "neutral")), float(need(row, "penalty"))
@@ -2958,7 +2984,8 @@ def s5b_observed_neutral(events: list[Mapping], manifest: Mapping) -> Result:
     before the first, the prior stands and the row is not read.
     """
     seats = decision_seats(events)
-    actors = {need(row, "handle"): row.get("actor") for row in rows_of(events, "decision.open")}
+    actors = unique_map(rows_of(events, "decision.open"), lambda row: need(row, "handle"),
+                        lambda row: row.get("actor"))
     # Only a round its router drew enters that router's mean (``router_draw``): a self
     # child's score is its parent's choice, never a round the router played.
     drawn = {need(row, "handle") for row in rows_of(events, "decision.open") if router_draw(row)}

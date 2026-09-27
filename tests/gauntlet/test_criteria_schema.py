@@ -720,3 +720,77 @@ def test_the_iterative_readings_are_bounded_and_kernel_exact():
     assert g.t_release(ph, 0.0) == 0
     with pytest.raises(g.Malformed):
         g.t_release(ph, float("inf"))
+
+
+# --- Codex on 45c3ccd: an evidence map never silently overwrites a row ---------------------
+
+#: Subscript assignments with a computed key gauntlet.py keeps, by (function, map), each
+#: with its reason: an accumulator or running state, not one row per key.
+KEYED_ASSIGN_ALLOWED: dict[tuple[str, str], str] = {
+    ("_runs", "result"): "extends the last run in place (a list, by index)",
+    ("router_presence", "first"): "the earliest window each router is named in (a min)",
+    ("router_round_periods", "out"): "a p90 computed per router from its accumulated rounds",
+    ("th3_governance_gap", "slowest"): "the largest period seen per instant (a max)",
+    ("i3c_niche_no_worse_than_noop", "noop_penalty"): "the least NOOP penalty per window "
+                                                      "(a min)",
+    ("expected_thrash_charges", "last"): "each router's previous draw: running state",
+    ("thrash_attributed", "emits"): "a contract id re-registered with a new version "
+                                    "emits what its latest registration says",
+    ("hand_over", "successor"): "the router succession, rewritten as _hand_over does",
+    ("s5b_observed_neutral", "raws"): "a fresh identity inherits its predecessor's rounds",
+    ("s8_gain_rows_uniform", "seeds"): "set once per router, guarded by `not in`",
+}
+#: Dict comprehensions over ledger rows gauntlet.py keeps, by function, with reasons.
+ROW_COMPREHENSION_ALLOWED: dict[str, str] = {
+    "split_members": "several invocation rows per handle (tool rounds), one role",
+    "update_windows": "keyed by id(row): one entry per row object",
+}
+
+
+def test_every_evidence_map_keyed_by_a_row_is_unique_or_explicitly_accumulating():
+    """Codex on 45c3ccd: a map the kernel writes one row per key for goes through
+    ``unique_put`` / ``unique_map`` (a duplicate is Malformed); a subscript assignment
+    with a computed key, or a dict comprehension over ledger rows, is allowed only where
+    it accumulates on purpose, with its reason."""
+    tree = ast.parse(Path(g.__file__).read_text())
+    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+
+    def owner(node):
+        while node in parents:
+            node = parents[node]
+            if isinstance(node, ast.FunctionDef):
+                return node.name
+        return "<module>"
+    assigned, comprehended = set(), set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if (isinstance(target, ast.Subscript) and not isinstance(target.slice,
+                                                                          ast.Constant)
+                        and owner(node) != "unique_put"):
+                    assigned.add((owner(node), ast.unparse(target.value)))
+        if isinstance(node, ast.DictComp):
+            source = ast.unparse(node.generators[0].iter)
+            if any(word in source for word in ("rows_of", "card_windows", "windows(",
+                                               "events")):
+                comprehended.add(owner(node))
+    assert sorted(assigned - set(KEYED_ASSIGN_ALLOWED)) == [], "a keyed assignment"
+    assert sorted(comprehended - set(ROW_COMPREHENSION_ALLOWED)) == [], "a row comprehension"
+    assert all(r.strip() for r in [*KEYED_ASSIGN_ALLOWED.values(),
+                                   *ROW_COMPREHENSION_ALLOWED.values()])
+
+
+def test_a_duplicate_world_fact_is_malformed_not_overwritten():
+    """Codex on 45c3ccd: the runtime writes one external fact per return, so a second
+    fact for the same return fails OF-1a as malformed, never hides the first."""
+    fact = {"kind": "consequence.outcome", "handle": "r", "y": 1, "net_micro": 900,
+            "earned_micro": 200, "cost_micro": 1000, "censored": None}
+    verdicts = [{"kind": "verdict.consequence", "about_handle": "r", "q": q, "y": 1.0,
+                 "outcome": "return_paid_off"} for q in (0.2, 0.8)]
+    assert g.of1a_outside_the_loop([fact, *verdicts], {}).ok
+    second = fact | {"net_micro": 0, "earned_micro": 0}
+    result = g.of1a_outside_the_loop([fact, second, *verdicts], {})
+    assert result.status == g.FAIL and "single row" in result.evidence["malformed"]["field"]
+    with pytest.raises(g.Malformed):
+        g.decision_seats([{"kind": "decision.open", "handle": "d", "propensity": {"chosen": "a"}},
+                          {"kind": "decision.open", "handle": "d", "propensity": {"chosen": "b"}}])
