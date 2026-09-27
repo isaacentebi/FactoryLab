@@ -332,6 +332,14 @@ class LiveVenue:
     # substituted when the settled rate becomes visible. The read time is evidence.
     funding_oracles: dict[str, dict[int, tuple[str, int]]] = field(default_factory=dict)
 
+    # Chapter II §III.b: rate evidence starts at launch, not its first answered poll.
+    settled_launch_ns: int | None = None
+
+    def __post_init__(self) -> None:
+        """Keep the initial funding bound independent of the moving payment cursor."""
+        if self.settled_launch_ns is None:
+            self.settled_launch_ns = self.last_funding_ns
+
     def funding_payments(self, now_ns: int) -> list[WorldEvent]:
         """Emit post-launch funding once, with an inclusive cursor that keeps timestamp peers."""
         if self.last_funding_ns is None:
@@ -378,9 +386,12 @@ class LiveVenue:
         """
         interval = int(self.exchange.funding_interval_ns)
         out = []
+        if self.settled_launch_ns is None:
+            self.settled_launch_ns = now_ns
         for coin in sorted(coins):
             key = f"settled:{coin}"
-            cursor = self.through.setdefault(key, now_ns - now_ns % interval)
+            cursor = self.through.setdefault(
+                key, self.settled_launch_ns - self.settled_launch_ns % interval)
             try:
                 rows = self.exchange.settled_funding_history(coin, cursor, now_ns)
             except (RuntimeError, OSError, ValueError, ArithmeticError):
