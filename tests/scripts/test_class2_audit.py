@@ -271,6 +271,7 @@ def test_the_release_range_is_base_dot_dot_head(history, tmp_path):
                     release_range=head, repo=repo)
 
 
+@pytest.mark.gate  # end to end: over 1 s serially, so never in the check tier
 def test_a_render_whose_world_raises_midway_writes_no_corpus_and_exits_nonzero(
         history, tmp_path, monkeypatch, capsys):
     """Codex review: a rendered world that fails partway is refused, naming the failure;
@@ -781,6 +782,7 @@ def test_triage_refuses_an_authoring_or_seated_family(rendered, tmp_path, monkey
     assert not (tmp_path / f"{WORLD}.md").exists()
 
 
+@pytest.mark.gate  # end to end: over 1 s serially, so never in the check tier
 def test_triage_rotates_the_family_across_releases(rendered, tmp_path, monkeypatch, capsys):
     """The family the prior release's gated triage of the world records (read from its
     gate-recording commit, never a worktree triage file) may not audit the next."""
@@ -844,6 +846,7 @@ def _gate(triaged, world=WORLD, samples=None, prov=None, release=None, reviewed=
                      triage_sha256=reviewed or tool.sha256_file(path))
 
 
+@pytest.mark.gate  # end to end: over 1 s serially, so never in the check tier
 def test_the_provenance_finding_reaches_the_triage_and_the_gate(triaged, monkeypatch):
     """Codex P2: a flagged behaviour-mix commit is a HIGH finding the gate holds."""
     out, key, path, sha, samples, prov = triaged
@@ -872,6 +875,7 @@ def test_the_provenance_finding_reaches_the_triage_and_the_gate(triaged, monkeyp
         last.unlink(missing_ok=True)
 
 
+@pytest.mark.gate  # end to end: over 1 s serially, so never in the check tier
 def test_the_gate_recomputes_the_findings_from_the_bound_samples(triaged, tmp_path):
     """Codex P1: the gate trusts no stored findings. It recomputes them from the samples
     the triage file records by hash, so rewriting the table (and its header) cannot drop
@@ -1163,6 +1167,7 @@ def test_an_invalid_release_ref_is_refused_as_an_invalid_ref(triaged):
 # --- a finding's identity is its id with its question and class (Codex P2) -----------------
 
 
+@pytest.mark.gate  # end to end: over 1 s serially, so never in the check tier
 def test_one_quote_under_two_questions_is_two_findings_through_triage_and_gate(
         with_commit, tmp_path, monkeypatch):
     """The same quote at the same path, flagged under Q3 and Q6, is two findings: both
@@ -1396,6 +1401,7 @@ def test_can3_missing_the_q7_canary_invalidates_the_audit(rendered):
 
 
 
+@pytest.mark.gate  # end to end: over 1 s serially, so never in the check tier
 def test_bnd1_a_disposition_must_be_one_the_rubric_allows_and_the_protocol_backs(triaged):
     """Sol BND-1: the gate reads each disposition against the finding it names: CHARTER is
     never a kernel leaf's, ALLOW needs an allowlist entry covering the finding, REJECT a
@@ -1495,6 +1501,7 @@ def test_a_release_after_the_first_needs_the_gated_previous_files(released, tmp_
 # --- Codex pass on 4024237: FIX is not releasable --------------------------------------------
 
 
+@pytest.mark.gate  # end to end: over 1 s serially, so never in the check tier
 def test_a_fix_disposition_fails_until_the_fixed_leaf_is_re_rendered_and_re_audited(
         triaged, history, tmp_path, monkeypatch):
     """Codex P1 (class2_audit.py:1516): the key audits the very commit being gated, so a
