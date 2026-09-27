@@ -649,7 +649,15 @@ def test_early_warning_is_shown_only_to_evaluators(multi_judged):
     every close (``test_ews``) reaches the seats that judge, never a producer's request
     or the public observations."""
     rt, requests = multi_judged
-    assert [i for i in rt.ledger._recovery_items() if i["kind"] == "ews.window"]
+    items = rt.ledger._recovery_items()
+    # Computed at every close the price loop schedules: one ews.window per closed
+    # window, the same windows the close ledgers, in order, none skipped or repeated.
+    fires = [i for i in items if i["kind"] == "clock.loop" and i["loop"] == "price"]
+    closed = [i["window"] for i in items if i["kind"] == "price.window"]
+    warned = [i["window"] for i in items if i["kind"] == "ews.window"]
+    assert len(warned) >= 2 and warned == closed
+    assert warned == list(range(warned[0], warned[0] + len(warned)))
+    assert len(fires) - 1 <= len(warned) <= len(fires)  # the first firing opens, closes none
     judged = [inputs for description, inputs in requests if description.startswith("Give")]
     produced = [inputs for description, inputs in requests if description.startswith("Respond")]
     assert judged and all(inputs["early_warning"]["window"] is not None for inputs in judged[-3:])
