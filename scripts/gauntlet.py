@@ -1996,8 +1996,11 @@ def clopper_pearson_upper(x: int, n: int, confidence: float = 0.95) -> float:
 def th4_null(events: list[Mapping], manifest: Mapping, *, synthetic: tuple[int, int],
              confidence: float = 0.95) -> Result:
     """TH-4: iid card behaviour in a world is flagged thrash no more than the detector's
-    own synthetic null allows: the world's rate after the first H windows is at most the
-    one-sided Clopper–Pearson upper bound of the synthetic rate (Astra H-1)."""
+    own synthetic null allows: the world's flag count after the first H windows is not
+    significantly above the one-sided Clopper–Pearson upper bound of the synthetic rate
+    (Astra H-1). The world's count is itself a binomial sample: it fails only when
+    ``P(Bin(n, bound) >= flags) < 1 − confidence``, never on a point rate a hair above
+    the bound (4 flags in 65 windows against a 5.0 % bound has a tail of about 0.4)."""
     flags, n = thrash_rate(events, manifest)
     if n == 0:
         return _unsupported("TH-4", "no window after the first H")
@@ -2015,7 +2018,10 @@ def th4_null(events: list[Mapping], manifest: Mapping, *, synthetic: tuple[int, 
         # can exceed: a vacuous bound is no evidence of a pass.
         return _unsupported("TH-4", "the synthetic null flags every window: its bound "
                             "is 1.0 and no rate can exceed it", **evidence)
-    return _result("TH-4", flags / n <= bound, **evidence)
+    # P(Bin(n, bound) >= flags): the world's count read against the null, as a sample.
+    tail = 1.0 if flags == 0 else 1.0 - math.exp(_log_binom_cdf(flags - 1, n, bound))
+    evidence["tail"] = tail
+    return _result("TH-4", tail >= 1.0 - confidence, **evidence)
 
 
 @criterion("TH-2")

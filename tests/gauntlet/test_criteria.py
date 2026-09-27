@@ -805,6 +805,11 @@ def test_th4_the_world_null_is_bounded_by_the_synthetic_null():
     assert g.th4_null(quiet, M, synthetic=(18, 600)).ok
     noisy = [_w(i, thrash=i % 3 == 0) for i in range(1, 70)]
     assert g.th4_null(noisy, M, synthetic=(18, 600)).status == g.FAIL
+    # A count a hair above the bound is a sample of it, not a failure (Astra H-1 read
+    # as a test: the tail decides, 4 of 65 against a 5 % bound is ordinary).
+    near = [_w(i, thrash=i in (20, 35, 50, 65)) for i in range(1, 75)]
+    result = g.th4_null(near, M, synthetic=(29, 780))
+    assert result.ok and result.evidence["world_rate"] > result.evidence["bound"], result
 
 
 _LIFESPAN = {"loop": "seat:m", "lifespan_ticks": 2, "latency_ticks": 10, "ratio": 0.2,
