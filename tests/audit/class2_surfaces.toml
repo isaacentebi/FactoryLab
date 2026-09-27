@@ -101,6 +101,15 @@ surfaces = [
 
 [rendered]
 surfaces = [
+  "request/counter/base_capabilities",
+  "request/counter/completion_criterion",
+  "request/counter/inputs",
+  "request/counter/outcome_contract",
+  "request/counter/outcome_schema",
+  "request/counter/request",
+  "request/counter/scoring",
+  "request/counter/subject_propensity",
+  "request/counter/system",
   "request/judge/base_capabilities",
   "request/judge/completion_criterion",
   "request/judge/inputs",

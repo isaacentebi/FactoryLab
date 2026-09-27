@@ -226,6 +226,11 @@ GATE_FILE_BUDGET_EXCEPTIONS: dict[str, str] = {
         "65 s: SF-1 (sf1c reads the integral frozen at the cap, which a two-thirds run "
         "does not reach) with its two negative controls, and the transient world and its "
         "control, strict xfails wave 16b turns green, all at 300 events; sf2 is halved"),
+    "tests/gauntlet/test_overfitting.py": (
+        "105-124 s: three 400-event worlds at about 40 s each, the fewest in which a seated "
+        "adversary's holdout is proposed, trialled, balloted and activated at the steady "
+        "cadence: of2 (OF-2a/c/d), of4 (a trivial predicate) and OF-2c's negative control "
+        "(holdouts ignored); of1 and its control are 300 events and shared"),
 }
 
 
