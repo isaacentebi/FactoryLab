@@ -142,12 +142,9 @@ class GovernanceCadence:
         self._floor_source = source
 
     def _current_floor(self) -> int:
-        if self._floor_source is None:
-            return self._floor
-        ticks = self._floor_source()
-        if type(ticks) is not int or ticks < 1:
-            raise ValueError("the consequence floor is a positive number of ticks")
-        return ticks
+        """The floor now: the bound source's (``_horizon_ticks``: ``ticks_for`` is at least
+        one, and a backstop is validated positive at load), else the recorded one."""
+        return self._floor if self._floor_source is None else self._floor_source()
 
     def consequence_period_events(self) -> int:
         """The consequence loop in ticks: its floor, or the p90 settlement above it.
