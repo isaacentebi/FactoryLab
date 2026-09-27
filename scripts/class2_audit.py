@@ -1007,7 +1007,8 @@ def release_base(repo: Path, base: str, head: str) -> bool:
 
 def load_canaries(text: str) -> dict:
     """``canaries.json``, refused unless it is the protocol's calibration set: one canary
-    per question Q3-Q11 with that question's class, Q6/Q7/Q9/Q10/Q11 and only they
+    per question Q3-Q11 with that question's class and its question's own id
+    (``canary-q<n>``, so ids are non-empty and unique), Q6/Q7/Q9/Q10/Q11 and only they
     mandatory, a cross-leaf canary (``CROSS_LEAF``) a set of two or more texts each on its
     own surface, and ten distinct control surfaces."""
     spec = json.loads(text)
@@ -1016,6 +1017,19 @@ def load_canaries(text: str) -> dict:
     questions = [c.get("question") for c in canaries]
     if questions != [f"Q{i}" for i in range(3, 12)]:
         problems.append(f"canary questions {questions} are not Q3-Q11 once each")
+    # A canary is scored by its id (``audit_verdict``): each id is its question's own
+    # (``canary-q7`` for Q7), so no two canaries share one and a found optional canary
+    # can never stand in for a missed mandatory one (Codex on 37f568a).
+    ids = [c.get("id") for c in canaries]
+    if len(set(map(str, ids))) != len(ids):
+        problems.append(f"canary ids {ids} repeat")
+    for c in canaries:
+        cid, question = c.get("id"), c.get("question")
+        if not isinstance(cid, str) or not cid.strip():
+            problems.append(f"a canary for {question} has no id")
+        elif not isinstance(question, str) or cid != f"canary-{question.lower()}":
+            problems.append(f"canary id {cid!r} is not its question's (canary-"
+                            f"{str(question).lower()})")
     for c in canaries:
         if CLASS_OF.get(c.get("question")) != c.get("class"):
             problems.append(f"{c.get('id')}: class {c.get('class')!r} is not its question's")

@@ -345,6 +345,23 @@ def test_a_malformed_canary_set_is_refused():
         tool.load_canaries(json.dumps(spec))
 
 
+@pytest.mark.parametrize("change,why", [
+    (lambda c: c[4].update(id=c[2]["id"]), "repeat"),        # Q7 takes Q5's id
+    (lambda c: c[4].update(id=""), "no id"),
+    (lambda c: c[4].pop("id"), "no id"),
+    (lambda c: c[4].update(id="canary-q5x"), "not its question's"),
+], ids=["duplicate", "empty", "missing", "unbound"])
+def test_a_canary_id_that_is_not_its_questions_own_is_refused(change, why):
+    """Codex on 37f568a: canaries are scored by id, so a mandatory Q7 sharing the id of
+    a found optional canary would pass an audit that missed Q7. Each id is non-empty,
+    unique and its question's own; anything else refuses render and validate."""
+    spec = json.loads((ROOT / tool.CANARIES_REL).read_text())
+    assert spec["canaries"][4]["question"] == "Q7"
+    change(spec["canaries"])
+    with pytest.raises(tool.AuditInputInvalid, match=why):
+        tool.load_canaries(json.dumps(spec))
+
+
 def test_render_is_deterministic(rendered, history, tmp_path):
     out, key = rendered
     repo, base, _surface, head = history
