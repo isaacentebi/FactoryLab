@@ -145,15 +145,19 @@ def _authors_and_readers(rt):
     return pairs
 
 
-@pytest.mark.gate
-def test_no_seat_ever_judges_a_chain_authored_on_its_own_family():
+@pytest.fixture(scope="module")
+def scripted_world(scripted_runtime_run):
+    """The shared uninterrupted scripted run (100 events, seed 1): its restored runtime
+    and its ledger entries."""
+    manifest = load_manifest("scripted")
+    record = scripted_runtime_run(manifest, 100, 1)
+    return record.runtime(manifest), record.entries
+
+
+def test_no_seat_ever_judges_a_chain_authored_on_its_own_family(scripted_world):
     """A judge avoids the producer's family; a meta the judge's and the producer's; a
     grader of a meta the meta's and the judge's (the #132 review, item 3)."""
-    from factorylab.runtime.loop import Runtime
-
-    rt = Runtime(load_manifest("scripted"), events=60, seed=2, initial_balance_micro=None,
-                 ledger_path=None, router_gamma=0.1)
-    rt.run()
+    rt, _entries = scripted_world
     pairs = _authors_and_readers(rt)
     assert len(pairs) > 20
     assert any(len(authors) == 2 for _reader, authors in pairs)
@@ -707,16 +711,9 @@ def test_evaluator_compute_share_is_an_observation_a_card_may_price():
     assert share.measure(MeasureWindow(1, 100)) is None
 
 
-@pytest.mark.gate
-def test_evaluator_compute_share_is_measured_every_window_and_published():
-    from factorylab.runtime.loop import Runtime
-
-    base = load_manifest("scripted")
-    manifest = base  # every window is derived from the loop it commands (time audit T1)
-    rt = Runtime(manifest, events=60, seed=1, initial_balance_micro=None,
-                 ledger_path=None, router_gamma=0.1)
-    rt.run()
-    windows = [i for i in rt.ledger._recovery_items() if i["kind"] == "price.window"]
+def test_evaluator_compute_share_is_measured_every_window_and_published(scripted_world):
+    rt, entries = scripted_world
+    windows = [i for i in entries if i["kind"] == "price.window"]
     shares = [w["observations"].get("evaluator_compute_share") for w in windows]
     assert any(s is not None and 0 < s < 1 for s in shares)
     assert "evaluator_compute_share" in rt._public_observations()["last_closed_window_values"]
