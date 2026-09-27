@@ -572,6 +572,38 @@ def make_runtime(*, balance=100_000_000, live=False, clock_source=None):
                    clock_source=clock_source)
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _jail_probed_once():
+    """The jail probe runs once per test process: whether confined code can run is a
+    fact about this host, and each probe starts a jailed interpreter (about 40 ms, three
+    per ``Runtime`` built, most of a unit test's cost).
+
+    The kept answer is the real probe's, on the host's own seams. A test that replaces
+    ``shutil.which`` or ``subprocess.Popen`` (a jail missing or unable to start) gets a
+    fresh probe through its replacement, and one that patches ``jail_probe`` itself
+    replaces this for its own duration (``jail_available`` reads it at call time).
+    """
+    import shutil
+
+    from factorylab.cortex import sandbox
+    from factorylab.runtime import loop
+
+    real, answers = sandbox.jail_probe, []
+    seams = (shutil.which, sandbox.subprocess.Popen)
+
+    def probed():
+        if (shutil.which, sandbox.subprocess.Popen) != seams:
+            return real()
+        if not answers:
+            answers.append(real())
+        return answers[0]
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(sandbox, "jail_probe", probed)
+        patch.setattr(loop, "jail_probe", probed)
+        yield
+
+
 @pytest.fixture(autouse=True)
 def _forget_in_process_kills():
     """Every test starts with no kill remembered in this process.
