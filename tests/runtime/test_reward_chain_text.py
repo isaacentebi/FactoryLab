@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 from factorylab.runtime.resume import restore_runtime, runtime_state
 from factorylab.runtime.shared import CH_CONFORMITY
-from tests.runtime.test_loop import _consequence_decision, _consequence_runtime
+from tests.runtime.test_loop import _consequence_decision, _consequence_runtime, lists_nothing
 from tests.runtime.test_reward_chain import Population, _unsettled_produce
 
 
@@ -124,6 +124,6 @@ def test_a_return_declined_trade_is_frozen_from_the_mids_already_broadcast():
     frozen = rt.reference_mids[producer]
     assert frozen["declined"] == {"coin": "BTC", "side": "sell"}
     assert frozen["mids"] == [["BTC", "100"], ["ETH", "10"]]
-    quiet = _consequence_runtime(provider=Population())
+    quiet = lists_nothing(_consequence_runtime(provider=Population()))
     handle, _event = _unsettled_produce(quiet)
     assert handle not in quiet.reference_mids  # a bare hold names nothing to price

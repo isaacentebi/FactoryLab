@@ -24,13 +24,14 @@ from factorylab.settlement.vocabulary import COMMISSIONED_JUDGE_REFUSAL
 from factorylab.world.models import ModelResponse
 from tests.conftest import make_runtime
 from tests.runtime.test_child_requests import parent_request
+from tests.runtime.test_loop import lists_nothing
 
 TASK = ChildRequest("ProducerReturn", "helper task", {"q": 1}, {"type": "object"})
 
 
 def _world(monkeypatch, *helpers, reply=None):
     """A scripted world with extra ProducerReturn seats and a fixed child answer."""
-    rt = make_runtime()
+    rt = lists_nothing(make_runtime())
     spec = rt.assemblies["seed-decider"].spec
     for aid in helpers:
         rt._instantiate(replace(spec, id=aid))

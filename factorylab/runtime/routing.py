@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
-from types import MappingProxyType
 from typing import Any
 
 from factorylab.cortex.assembly import PROGRAM_MODEL_ID
@@ -185,6 +183,9 @@ class ContractQueue:
         now_tick, now_ns = rt.ticks_consumed, rt.clock.now_ns
         due = []
         for decision in self.queue.outstanding():
+            if decision.handle in getattr(rt, "deferred_settlements", {}):
+                # Its score is in; its penalty waits for its window's close (wave 16, D5).
+                continue
             cutoff = self.deadline_tick(decision.handle)
             if (decision.deadline_ns <= now_ns) if cutoff is None else cutoff <= now_tick:
                 reason = rt._carried_decline(decision.handle)
@@ -276,42 +277,17 @@ class ContractQueue:
         return self.queue.delivered_count(actor)
 
 
-#: What a round that delivered nothing scores, per score definition a router can be
-#: trained on: the reward an abstention (NOOP) is credited, so a seat is woken more
-#: only by beating what doing nothing would have scored on the same scale. A NOOP
-#: that a know-nothing seat outscores is a dead arm: the router pays to wake someone
-#: every time, which is thrash's bill, "the entire cost of exploration" for nothing
-#: delivered (essay II.II.a). Only settled scores need a value: censored,
-#: inapplicable, unmeasured, declined, timed-out and uninformative rounds carry no
-#: score and are imputed. A definition not listed is worth ``NEUTRAL_REWARD``.
-ZERO_CONSEQUENCE: Mapping[str, float] = MappingProxyType({
-    # Producer scores on the midpoint scale: the mean verdict of an uninformed judge.
-    DEF_VERDICT: 0.5,
-    # A composed return's two signals, its verdict and its requester's settled score,
-    # are both on the producer scale.
-    DEF_COMPOSED: 0.5,
-    # An evaluator decision's two signals are both centred at 0.5: an uninformed tier
-    # grade, and a prediction no better than the base rate (``consequence_score``).
-    DEF_EVALUATION: 0.5,
-    # 1 when a ballot matched the promise the world kept: a coin-flip ballot expects 0.5.
-    "policy-promise-brier-v2": 0.5,
-    # Brier scores, 1 - (q - y)^2: the uninformed forecaster (q = 0.5) earns 0.75
-    # whatever happens. The per-predicate prevalence baseline scores at least that,
-    # but it prices a judge's standing question by question, not a router's round.
-    "brier-v1": 0.75,
-    "forecast-mean-v1": 0.75,  # the mean brier-v1 of a forecast return's predictions
-    # 1 - the judges' consequence score on the antagonist's return: an antagonist
-    # whose return they predicted exactly as well as the base rate earns 0.5.
-    DEF_EXPOSURE: 0.5,
-    # 0.5 + 0.5 * (the counter's Brier - the verdict's): a counter that repeats the
-    # verdict it read earns 0.5 whatever happens.
-    DEF_COUNTER: 0.5,
+#: The score definitions on the midpoint scale: the ones whose uninformed score is 0.5
+#: (an uninformed judge's verdict, a composed return's two producer-scale signals, an
+#: evaluator decision's grade and consequence score, a coin-flip ballot, an exposure or
+#: a counter that repeats what it read). A Brier forecast (``brier-v1``,
+#: ``forecast-mean-v1``) is on another scale, where the uninformed forecaster earns
+#: 0.75. This names a scale, never a price: what a round that delivered nothing is
+#: credited is the router's observed mean (``RouterState.neutral``; wave 16, D4).
+MIDPOINT_DEFINITIONS: frozenset[str] = frozenset({
+    DEF_VERDICT, DEF_COMPOSED, DEF_EVALUATION, "policy-promise-brier-v2", DEF_EXPOSURE,
+    DEF_COUNTER,
 })
-
-
-def zero_consequence(definition: str) -> float:
-    """What a round settled under ``definition`` scores when it delivered nothing."""
-    return ZERO_CONSEQUENCE.get(definition, NEUTRAL_REWARD)
 
 
 def learning_death_floor(gamma: float) -> float:
@@ -341,9 +317,10 @@ class RouterState:
     # [total ticks, rounds]: how long this router's learned seat rounds took to be
     # learned, in world ticks, the delay an abstention's credit is deferred by.
     latency: list[int] = field(default_factory=lambda: [0, 0])
-    # definition -> learned seat rounds settled under it: the scales this router's
-    # rewards are on, and so what an abstention is worth to it (``neutral``).
-    definitions: dict[str, int] = field(default_factory=dict)
+    # definition -> [learned seat rounds settled under it, the sum of their raw scores
+    # before any card penalty]: what this router's woken rounds actually earned, and so
+    # what a round that delivered nothing is credited (``neutral``; wave 16, D4).
+    definitions: dict[str, list] = field(default_factory=dict)
     # This window's NOOP watch, {"window", "draws", "min_p"} and, per draw that offered
     # an unhistoried seat, "unhistoried_offered", the "unhistoried_mass" it put on such
     # seats, the largest such seat's probability over the exploration floor
@@ -356,20 +333,31 @@ class RouterState:
     last_draw: dict = field(default_factory=dict)
 
     def neutral(self) -> float:
-        """Guarantees the zero-consequence reward of the rounds this router learns from.
+        """Guarantees the observed mean raw score of the settled seat rounds this router
+        learned: what a round that delivered nothing is credited, before its penalty.
 
-        It is the mean of ``zero_consequence`` over the definitions its learned seat
-        rounds settled under, weighted by how many settled under each: a router whose
-        seats are scored by Brier credits NOOP 0.75, one scored on producer outcomes
-        0.5, and a mixed router what its own wakes would have scored had every woken
-        seat delivered nothing. ``NEUTRAL_REWARD`` before any seat round is learned.
-        Independent of insertion order, so a resumed router computes the same value.
+        Wave 16, D4 and ruling R-F: a NOOP draw, a decline and a censored or timed-out
+        decision each delivered nothing measurable, and a mean-based learner compares
+        arms by their mean rewards, so the only imputation that tilts the router
+        neither toward waking a seat nor toward abstaining is the mean of the rounds the
+        world did measure, on the same scale: ``sum(raw) / count`` over every
+        definition. The raw score is the one settled before the card penalty (the
+        caller subtracts the same penalty from the credit). The sums are cumulative
+        over the router's life and carried to its successor, so a router that stops
+        waking seats keeps crediting its last observed mean. Before its first settled
+        round there is no observation, and the credit is the published prior,
+        ``NEUTRAL_REWARD`` (``world.scoring.abstention``). Independent of insertion
+        order, so a resumed router computes the same value.
         """
-        total = sum(self.definitions.values())
-        if not total:
+        count = sum(int(row[0]) for row in self.definitions.values())
+        if not count:
             return NEUTRAL_REWARD
-        return math.fsum(zero_consequence(d) * self.definitions[d]
-                         for d in sorted(self.definitions)) / total
+        return math.fsum(float(self.definitions[d][1]) for d in sorted(self.definitions)) / count
+
+    def record_round(self, definition: str, raw: float) -> None:
+        """Count one learned, settled seat round and its raw score (``neutral``)."""
+        count, total = self.definitions.get(definition, (0, 0.0))
+        self.definitions[definition] = [int(count) + 1, float(total) + float(raw)]
 
     def state(self) -> dict:
         """Retain the exact learner, public universe order, comparator epoch and successor."""
@@ -386,7 +374,7 @@ class RouterState:
         if self.latency[1]:
             saved["latency_ticks"] = list(self.latency)
         if self.definitions:
-            saved["definitions"] = dict(self.definitions)
+            saved["definitions"] = {d: list(row) for d, row in self.definitions.items()}
         if self.watch:
             saved["watch"] = dict(self.watch)
         if self.last_draw:
@@ -411,7 +399,11 @@ class RouterState:
                    # A router saved before the tick clock measured its delay in wall
                    # nanoseconds ("latency"): that sample is not read, and restarts.
                    state.get("successor"), list(state.get("latency_ticks", [0, 0])),
-                   dict(state.get("definitions", {})), dict(state.get("watch", {})),
+                   # A router saved before wave 16 counted rounds without their scores:
+                   # that count prices nothing, and its observed mean restarts.
+                   {d: list(row) for d, row in (state.get("definitions") or {}).items()
+                    if isinstance(row, list)},
+                   dict(state.get("watch", {})),
                    dict(state.get("last_draw", {})))
 
 
@@ -663,28 +655,31 @@ class RoutingMixin:
         return lid
 
     def _unhistoried(self, action_id: str) -> bool:
-        """No settled record, or an unfinished population trial, admits protected compute.
+        """No settled record, or an unfinished trial, admits protected compute.
 
-        A population assembly's trial ends when ``novelty.trials`` settled
-        consequences have been delivered to it (continuations and children do not
-        count) or its patience has passed since its registration, whichever comes
-        first: the lifetime ends the trial even when no consequence ever arrived, so
-        silence is not an unbounded entitlement. Its patience is ``min_ratio``
-        measured consequence periods in ticks (``_patience``; time audit T5), so the
-        consequence that pays it can arrive inside it (essay II.IV.b: the
-        compensation period must be shorter than the lifetime). A seed assembly has
-        no registration tick; it is protected until its first settled record. A seat
-        past its trial still reaches the niche through each unhistoried action it
-        takes (``_niche_action``; ruling R5).
+        An assembly's trial ends when ``novelty.trials`` settled consequences have
+        been delivered to it (continuations and children do not count) or its
+        patience has passed since it was born, whichever comes first: the lifetime
+        ends the trial even when no consequence ever arrived, so silence is not an
+        unbounded entitlement. Its patience is ``min_ratio`` measured consequence
+        periods in ticks (``_patience``; time audit T5), so the consequence that pays
+        it can arrive inside it (essay II.IV.b: the compensation period must be
+        shorter than the lifetime). A population assembly is born at its
+        registration; a seed assembly, on the same terms, at the world's first tick
+        (wave 16, ruling R10-b: a seat that only declines leaves a reward trail and
+        is not protected for the world's life). A seat past its trial still reaches
+        the niche through each unhistoried action it takes (``_niche_action``;
+        ruling R5).
         """
         try:
             population = self.registry.get(action_id).provenance != "seed"
         except KeyError:  # no contract: nothing the population registered, so no lifetime
             population = False
-        if not population:
-            return not self.queue.has_history(action_id)
-        # Registered before the tick clock: its patience counts from the first read.
-        born = self.stats.registered_tick.setdefault(action_id, self.ticks_consumed)
+        if population:
+            # Registered before the tick clock: its patience counts from the first read.
+            born = self.stats.registered_tick.setdefault(action_id, self.ticks_consumed)
+        else:
+            born = 0  # the world's first tick
         if self.ticks_consumed - born >= self._patience():
             return False
         if not self.queue.has_history(action_id):
@@ -1200,8 +1195,10 @@ class RoutingMixin:
                                      CH_COUNTER}:
             # An evaluator decision is graded against its judged decision's measured
             # outcome and an exposure against its judges' (ruling R1), so each lives as
-            # long as the return's backstop, like a forecast.
-            horizon = self.ev.consequence_backstop_ticks
+            # long as the consequence patience on the venue's clock, in delivered ticks
+            # (wave 16, D2), and at least the backstop, like a forecast.
+            horizon = max(self.ev.consequence_backstop_ticks,
+                          self._patience_ticks() + self.ev.verdict_timeout_ticks)
         if CH_CONSEQUENCE in channels.values():
             # A population forecast may select any admitted horizon; its invocation
             # must not be cut off before its predictions come due.
@@ -1304,17 +1301,40 @@ class RoutingMixin:
                                            max(fresh) / floor if floor > 0 else math.inf)
             watch["incumbent_min"] = min(watch.get("incumbent_min", 1.0), max(known, default=0.0))
 
+    def _thrash_attributed(self, state: RouterState) -> bool:
+        """Whether the thrash price in force lands on this router's rounds.
+
+        Wave 16, second addendum (I-10), ruling R-E: a penalty is attributed to the
+        decisions, and the routers, whose behaviour the violation measures. A router
+        is charged when a role one of its seats fills is among the roles the organ read
+        as moving (``immune.thrash_roles``); when the movement names no role, the price
+        lands on the no-swap-regret core, as essay II.II.b puts it.
+        """
+        roles = self.stats.thrash.get("roles") or []
+        if not roles:
+            return state.kind in self.m.evaluation.no_swap_regret_kinds
+        return bool(self._router_roles(state) & set(roles))
+
+    def _router_roles(self, state: RouterState) -> set[str]:
+        """The roles the seats a router can wake fill, by the kind each emits."""
+        from factorylab.cortex.registration import measured_role
+
+        return {measured_role(self.assemblies[a].spec.emits)
+                for a in state.universe if a in self.assemblies}
+
     def _record_movement(self, state: RouterState, sample: Sample, handle: str) -> None:
-        """A core router's policy movement at this draw: TV from the draw before it.
+        """A router's policy movement at this draw: TV from the draw before it.
 
         Essay II.II.b: thrash is priced "incentivizing the surplus-retaining core of
         no-swap-regret learners to stabilize". What a router can hold still is its own
-        policy, so the thrash charge on this round (``FeedbackMixin._thrash_charged``)
+        policy, so the thrash charge on this round (``FeedbackMixin._thrash_charge``)
         scales with how far this draw's distribution moved from the router's last,
-        over the union of their actions; a first draw has not moved.
+        over the union of their actions; a first draw has not moved. The charge is
+        held for a router the price is attributed to (``_thrash_attributed``), and
+        only when positive: every round of every router is learned on the one map
+        (``FeedbackMixin._learning_value``; rulings R10-c, R10-l), so an uncharged round needs
+        no record.
         """
-        if state.kind not in self.m.evaluation.no_swap_regret_kinds:
-            return
         now = dict(zip(sample.action_ids, (float(p) for p in sample.probs), strict=True))
         before = state.last_draw
         moved = (0.5 * math.fsum(abs(now.get(a, 0.0) - before.get(a, 0.0))
@@ -1322,6 +1342,8 @@ class RoutingMixin:
         state.last_draw = now
         # The thrash price in force now times this movement is the round's charge; with
         # no price in force (the common case) nothing is held for it.
+        if not self._thrash_attributed(state):
+            return
         charge = min(self.m.prices.penalty_cap,
                      self.stats.thrash.get("lambda", 0.0) * min(1.0, moved))
         if charge > 0:
@@ -1512,7 +1534,7 @@ class RoutingMixin:
                     # The new identity learns on the same arms' evidence it inherits.
                     ObservedRewards(state.observed.state()),
                     latency=list(state.latency),
-                    definitions=dict(state.definitions),
+                    definitions={d: list(row) for d, row in state.definitions.items()},
                     watch=dict(state.watch),
                 )
             self.stats.epochs += 1

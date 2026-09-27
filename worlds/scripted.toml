@@ -137,11 +137,17 @@ share = 0.1
 cadence_sample = 200
 min_ratio = 3
 jitter_fraction = 0.2
+# The world's own repricing period, as this scripted world states it: its consequence
+# horizon is world_repricing / min_ratio = 20 s of venue time, twenty 1 s ticks
+# (wave 16, D2; essay II.IV.c).
+world_repricing = "60s"
 
 [prices]
-eta = 0.5
+# eta is unstated: it is derived from the SF-0 relation (wave 16), (penalty_cap -
+# kp) / (timing.min_ratio * immune.k), so the price law alone presses a unit
+# violation onto the cap in min_ratio times the windows stable failure is
+# diagnosed in (docs/manifest.md, prices.eta).
 decay = 0.1
-lambda_max = 1.0
 min_window_events = 1
 
 [termination]

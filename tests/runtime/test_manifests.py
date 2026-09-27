@@ -23,6 +23,8 @@ def _base() -> dict:
         "novelty": {"share": 0.1},
         "charter": seed_charter_table(),
         "immune": {"price_step": 0.05},
+        # A world that lists a venue states its repricing period (wave 16, D2).
+        "timing": {"world_repricing": "1h"},
     }
 
 
@@ -79,7 +81,7 @@ def test_the_load_half_of_the_ratio_rule_refuses_a_horizon_inside_min_ratio_tick
     """Time audit T2: a horizon a decision waits on is an outer loop over the tick."""
     for key in ("verdict_timeout_events", "consequence_backstop_events"):
         d = _base()
-        d["evaluation"] = {key: 2, "consequence_horizon_ticks": 1}
+        d["evaluation"] = {key: 2}
         with pytest.raises(ValueError, match="at least timing.min_ratio ticks"):
             manifest_from_dict(d)
     d = _base()
@@ -96,20 +98,25 @@ def test_the_load_half_of_the_ratio_rule_refuses_a_horizon_inside_min_ratio_tick
 
 def test_prices_section_defaults_and_validation() -> None:
     m = manifest_from_dict(_base())
-    assert (m.prices.eta, m.prices.decay, m.prices.lambda_max, m.prices.min_window_events) == (
-        0.5,
+    # Unstated, eta is derived from the SF-0 relation: (cap - kp) / (min_ratio * k).
+    assert (m.prices.eta, m.prices.decay, m.prices.penalty_cap, m.prices.min_window_events) == (
+        0.5 / 9,
         0.1,
-        1.0,
+        0.5,
         1,
     )
     d = _base()
-    d["prices"] = {"eta": 0.25, "decay": 0.05, "lambda_max": 2, "min_window_events": 3}
+    d["prices"] = {"decay": 0.05, "penalty_cap": 0.25, "min_window_events": 3}
     m2 = manifest_from_dict(d)
-    assert m2.prices.lambda_max == 2.0 and m2.prices.min_window_events == 3
+    assert m2.prices.penalty_cap == 0.25 and m2.prices.min_window_events == 3
+    assert m2.prices.eta == 0.25 / 9  # derived from its own cap
     assert (
         m2.manifest_hash() != m.manifest_hash()
     )  # the controller's parameters are part of the seed
-    for bad in ({"eta": 0}, {"decay": -1}, {"lambda_max": 0}, {"min_window_events": 0}):
+    for bad in ({"eta": 0}, {"decay": -1}, {"penalty_cap": 0}, {"penalty_cap": 1},
+                {"min_window_events": 0},
+                # SF-0 (wave 16): saturating before the organ can see an attractor.
+                {"eta": 0.5}, {"kp": 0.5}, {"eta": 0.5 / 8}):
         d = _base()
         d["prices"] = bad
         with pytest.raises(ValueError):
@@ -146,11 +153,15 @@ def test_a_manifest_hashes_what_it_says_and_a_default_is_no_exception():
     (read_requests_per_minute 900, kernel_reserve_per_minute 300), and again when that
     budget came to be counted over Polymarket's own sliding 10 s
     (read_requests_per_10s 200, kernel_reserve_per_10s 100) and watcher work gained its
-    hard limit ([subscriptions] max_watcher_evaluations_per_sweep), and again when a
-    fake venue could replay a recorded tape ([exchange.tape], absent by default), and
-    again when each model came to state its training cutoff (models.training_cutoff,
-    unknown by default; the look-ahead guard of a tape world); each time it is a new
-    v0."""
+    hard limit ([subscriptions] max_watcher_evaluations_per_sweep), and again when the
+    road not taken came to be priced net of the venue's own fee
+    (evaluation.opportunity_scale_bps left; wave 16, D1), and again when the consequence
+    horizon became world_repricing / min_ratio on the venue's clock (the mark's
+    evaluation.consequence_horizon_ticks left, and the scripted world states its
+    timing.world_repricing; wave 16, D2), and again when a fake venue could replay a
+    recorded tape ([exchange.tape], absent by default), and again when each model came
+    to state its training cutoff (models.training_cutoff, unknown by default; the
+    look-ahead guard of a tape world); each time it is a new v0."""
     scripted = load_manifest("scripted")
     assert '"forecast_horizon_events":10' in scripted.canonical_json()
     assert '"chaos":{"connector_timeout":0.0' in scripted.canonical_json()
@@ -158,7 +169,7 @@ def test_a_manifest_hashes_what_it_says_and_a_default_is_no_exception():
     assert '"tape":null' in scripted.canonical_json()
     assert '"training_cutoff":null' in scripted.canonical_json()
     assert scripted.manifest_hash() == (
-        "085e80b6f454e6ac56d53c0932568551ecfdc71c70ba5c3eead73ad47b5273a9"
+        "c5e9be550f27b1a4aecd8399e288d7a1c39c5d5f051200a5fdcea9f4ca0d1480"
     )
 
     implicit = manifest_from_dict(_base())
@@ -187,18 +198,26 @@ def test_the_deleted_reward_chain_keys_are_refused_not_ignored(key, value):
 
 
 def test_clock_bounds_seed_validation_and_hash():
-    """max_tick is derived from the world's repricing period (time audit T7).
+    """max_tick is derived from the consequence horizon (wave 16, D2; time audit T7).
 
-    A governance period is at least min_ratio consequence backstops, so a tick is
-    admissible while that many ticks fit inside the world's repricing period. A
-    world that states no repricing period has no upper bound.
+    The horizon is world_repricing / min_ratio on the venue's clock, and the decision
+    loop settles min_ratio times faster than it, so a tick is admissible while it is at
+    most world_repricing / min_ratio^2. A world that lists no venue states no repricing
+    period and has no upper bound; one that lists a venue must state it.
     """
     d = _base()
     d["clock"] = {"min_tick": "10s"}
     d["tick_interval"] = "10s"
+    d.pop("timing")
+    with pytest.raises(ValueError, match="world_repricing is required"):
+        manifest_from_dict(d)
+    d["exchange"] = {"kind": "fake", "coins": []}
     assert manifest_from_dict(d).max_tick_ns is None
-    d["timing"] = {"world_repricing": "10h"}  # 36,000 s over 3 x 200 backstop ticks
+    assert manifest_from_dict(d).consequence_horizon_ns is None
+    del d["exchange"]
+    d["timing"] = {"world_repricing": "9m"}  # H = 540 s / 3 = 180 s; max tick 180 s / 3
     m = manifest_from_dict(d)
+    assert m.consequence_horizon_ns == 180_000_000_000
     assert m.clock.min_tick_ns == 10_000_000_000
     assert m.max_tick_ns == 60_000_000_000
     assert "max_tick" not in m.canonical_json()
@@ -239,7 +258,7 @@ def _with_charter():
 @pytest.mark.parametrize(("field", "value"), [
     ("observation", "missing"), ("acceptable_region", "roughly adequate"),
     ("norm", "unknown"), ("description", None), ("observation", 12),
-    ("lambda", -0.1), ("lambda", 1.1), ("lambda", True), ("lambda", "0.5"),
+    ("lambda", -0.1), ("lambda", True), ("lambda", "0.5"),
     ("lambda", float("nan")), ("lambda", float("inf")),
 ])
 def test_manifest_charter_rejects_card_field_with_identity(field, value):
@@ -254,9 +273,8 @@ def test_manifest_charter_duplicate_ids_and_lambda_bounds():
     raw["charter"]["cards"].append(raw["charter"]["cards"][0])
     with pytest.raises(ValueError, match="cost_per_return.*id"):
         manifest_from_dict(raw)
-    for value in (0, 2):
+    for value in (0, 2):  # a price has no bound of its own (wave 16, R-E)
         raw = _with_charter()
-        raw["prices"] = {"lambda_max": 2}
         raw["charter"]["cards"][0]["lambda"] = value
         assert manifest_from_dict(raw).charter_prices == (("cost_per_return", value),)
 
@@ -292,7 +310,7 @@ def test_manifest_card_rejects_unknown_role(value):
     ("evaluation", "adversarial_share", 1.5), ("evaluation", "sibling_share", -0.1),
     ("evaluation", "sampling_step", 2), ("evaluation", "sampling_cap", 0.2),
     ("committee", "min_settled", False), ("immune", "k", 1), ("immune", "k", 3.0),
-    ("immune", "price_step", 0), ("immune", "price_step", 2.0),
+    ("immune", "price_step", 0), ("immune", "price_step", float("inf")),
     ("immune", "tv_threshold", -1),
     ("immune", "gamma_max", 1.1), ("immune", "gap_threshold", float("nan")),
     ("immune", "gain_step", True), ("immune", "decay_step", 0),

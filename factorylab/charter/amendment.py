@@ -19,16 +19,25 @@ def proposed_answers_for(value: object, card_id: str) -> str:
     return value.strip().lower()
 
 
-def proposed_price(value: object, lambda_max: float) -> float:
-    """Return a finite proposed lambda within the inclusive bound, rejecting booleans."""
-    reason = f"lambda must be a finite number in [0, {lambda_max}]; booleans are invalid"
+def proposed_price(value: object, upper: float | None = None) -> float:
+    """Return a finite nonnegative proposed lambda, at most ``upper`` when one is given,
+    rejecting booleans.
+
+    A card's price has no bound of its own (wave 16, ruling R-E: one bound,
+    ``penalty_cap``, on the reward): a price above the one at which its card's
+    penalty takes the whole cap changes no reward, and the controller holds it there.
+    ``upper`` bounds a posted price on a scale a scoring rule needs (the charter's
+    markets).
+    """
+    span = f"[0, {upper}]" if upper is not None else "[0, inf)"
+    reason = f"lambda must be a finite number in {span}; booleans are invalid"
     if type(value) not in (int, float):
         raise ValueError(reason)
     try:
         price = float(value)
     except OverflowError as exc:
         raise ValueError(reason) from exc
-    if not isfinite(price) or not 0 <= price <= lambda_max:
+    if not isfinite(price) or price < 0 or (upper is not None and price > upper):
         raise ValueError(reason)
     return price
 

@@ -100,7 +100,10 @@ def test_a1_polymorphic_decision_replays_after_its_durable_binding_before_mutati
         seed, accepts=('Tick',), emits=('ProducerReturn', 'Verdict')),))
 
     def provider():
-        return FakeModel(default='{"emits":"ProducerReturn","action":"hold"}',
+        # The world lists BTC, so a hold names the trade it declined (the contract
+        # reads the venue's listing since 10e9c67; Codex on #152).
+        return FakeModel(default='{"emits":"ProducerReturn","action":"hold",'
+                                 '"counterfactual":{"coin":"BTC","side":"buy"}}',
                          fixed_input_tokens=1, fixed_output_tokens=1)
 
     def runtime(path=None):

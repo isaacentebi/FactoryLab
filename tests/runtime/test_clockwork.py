@@ -487,7 +487,7 @@ def test_a_terminal_state_the_safety_pass_sees_refuses_every_later_call_unbilled
 
     ft = _FakeTime()
     rt = _live(ft)
-    rt.consequence_fills.poll = lambda _exchange: []
+    rt.consequence_fills.poll = lambda _exchange, **_kw: []
     rt.termination.check = lambda *a, **k: "balance_zero"
     rt._safety_ns = ft.t
     ft.t += 10**9
@@ -525,7 +525,7 @@ def test_the_safety_pass_runs_between_calls_only_once_a_delivered_tick_has_passe
     rt._reconcile_orders = lambda **_: calls.append("reconcile")
     rt._evaluate_watchers = lambda **kw: calls.append(kw.get("sweep"))
     rt._settle_exchange_effects = lambda fills, **_: calls.append(("fills", len(fills)))
-    rt.consequence_fills.poll = lambda _exchange: []
+    rt.consequence_fills.poll = lambda _exchange, **_kw: []
     rt._safety_ns = ft.t
     ft.t += 10**9 - 1
     rt._safety_pass()
@@ -584,7 +584,7 @@ def test_a_capital_loop_shaped_world_s_safety_path_reads_wall_time_mid_event():
     rt._reconcile_orders = lambda **_: calls.append("reconcile")
     rt._evaluate_watchers = lambda **kw: calls.append(kw.get("sweep"))
     rt._settle_exchange_effects = lambda fills, **_: calls.append(("fills", len(fills)))
-    rt.consequence_fills.poll = lambda _exchange: []
+    rt.consequence_fills.poll = lambda _exchange, **_kw: []
     event_instant = rt.clock.now_ns
     rt._safety_ns = event_instant
     ft.t = event_instant + 10**9  # a tick of wall time passes while a model thinks

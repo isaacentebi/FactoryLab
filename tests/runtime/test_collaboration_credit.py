@@ -27,6 +27,7 @@ from factorylab.runtime.shared import (
 )
 from factorylab.world.models import ModelResponse
 from tests.conftest import make_runtime as _runtime
+from tests.runtime.test_loop import lists_nothing
 
 TASK = ChildRequest("ProducerReturn", "helper task", {"q": 1}, {"type": "object"})
 FAR = 10**18
@@ -90,7 +91,7 @@ def _verdicts(rt, about, *scores):
 
 
 def test_credit_reaches_the_executors_handle_only_after_its_requester_settles(monkeypatch):
-    rt = make_runtime()
+    rt = lists_nothing(make_runtime())
     _only(rt, monkeypatch)
     req = _decision(rt, "seed-decider")
     child = _child(rt, req)["handle"]
@@ -113,8 +114,9 @@ def test_credit_reaches_the_executors_handle_only_after_its_requester_settles(mo
     # The request router that drew it learns from it.
     rt._deliver_returns()
     state = rt.routers[request_router_key("ProducerReturn")][0]
-    assert state.observed.sums["helper-a"] == [pytest.approx(0.6), 1]
-    assert state.definitions == {DEF_COMPOSED: 1}
+    cap = 2 * rt.m.prices.penalty_cap  # a router's one map, B = 2 * cap (R10-l)
+    assert state.observed.sums["helper-a"] == [pytest.approx((0.6 + cap) / (1 + cap)), 1]
+    assert list(state.definitions) == [DEF_COMPOSED] and state.definitions[DEF_COMPOSED][0] == 1
 
 
 def test_a_requester_that_settles_unscored_leaves_the_child_its_own_verdict(monkeypatch):
@@ -138,7 +140,7 @@ def test_credit_flows_only_from_a_requester_settled_on_a_producer_verdict(
         monkeypatch, definition, credited):
     """Review item 2: an exposure score or an evaluation reward is not a verdict on
     whether composed work paid, so it never reaches a child as composed credit."""
-    rt = make_runtime()
+    rt = lists_nothing(make_runtime())
     _only(rt, monkeypatch)
     req = _decision(rt, "seed-decider")
     child = _child(rt, req)["handle"]
@@ -156,7 +158,7 @@ def test_credit_flows_only_from_a_requester_settled_on_a_producer_verdict(
 
 
 def test_an_unjudged_child_settles_on_its_requesters_credit_alone(monkeypatch):
-    rt = make_runtime()
+    rt = lists_nothing(make_runtime())
     _only(rt, monkeypatch)
     req = _decision(rt, "seed-decider")
     child = _child(rt, req)["handle"]
@@ -170,7 +172,7 @@ def test_an_unjudged_child_settles_on_its_requesters_credit_alone(monkeypatch):
 
 
 def test_a_child_of_the_requesters_own_lineage_earns_nothing_extra(monkeypatch):
-    rt = make_runtime()
+    rt = lists_nothing(make_runtime())
     _only(rt, monkeypatch, registered_by="seed-decider")
     assert rt.budget.lineage("helper-a") == rt.budget.lineage("seed-decider")
     req = _decision(rt, "seed-decider")
@@ -187,7 +189,7 @@ def test_a_child_of_the_requesters_own_lineage_earns_nothing_extra(monkeypatch):
 def test_self_dealing_through_an_intermediary_earns_nothing(monkeypatch):
     """Review item 4, A -> B -> A2: A requests B's work, and B, as a child, requests
     work that A's own lineage executes. A2 is not credited from B's settlement."""
-    rt = make_runtime()
+    rt = lists_nothing(make_runtime())
     rt._instantiate(replace(rt.assemblies["seed-decider"].spec, id="helper-b",
                             emits=("Relay",), schemas={"Relay": {"type": "object"}}))
     _registered(rt, "helper-a2", "seed-decider")  # A's lineage, emits ProducerReturn
@@ -206,14 +208,14 @@ def test_self_dealing_through_an_intermediary_earns_nothing(monkeypatch):
 
 
 def test_a_held_child_and_its_credit_survive_a_checkpoint(monkeypatch):
-    rt = make_runtime()
+    rt = lists_nothing(make_runtime())
     _only(rt, monkeypatch)
     req = _decision(rt, "seed-decider")
     child = _child(rt, req)["handle"]
     _verdicts(rt, child, 0.8)
     monkeypatch.undo()
     rt.provider.target.__dict__.pop("complete", None)
-    restored = _runtime()
+    restored = lists_nothing(_runtime())
     restored._instantiate(replace(restored.assemblies["seed-decider"].spec, id="helper-a"))
     restore_runtime(restored, runtime_state(rt))
     assert restored.pending[child].requester == req.handle

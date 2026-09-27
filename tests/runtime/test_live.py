@@ -104,17 +104,15 @@ class StubExchange:
         ]
 
 
-def test_live_venue_emits_mids_funding_and_new_fills_once() -> None:
-    v = LiveVenue(StubExchange(), last_fill_ns=0)
+def test_live_venue_emits_mids_and_funding_and_never_fills() -> None:
+    """The consequence fill cursor is the one fill path (Codex and Sol on #152): the
+    venue's per-tick read never emits a fill, whatever the account filled."""
+    v = LiveVenue(StubExchange())
     first = v.on_tick(10)
     kinds = [e.kind for e in first]
     assert kinds.count(WorldEventKind.MARKET_MID) == 2 and WorldEventKind.FUNDING in kinds
-    assert WorldEventKind.FILL not in kinds
-    second = v.on_tick(20)
-    fills = [e for e in second if e.kind is WorldEventKind.FILL]
-    assert len(fills) == 2 and fills[1].payload["realized_usd"] == "0.1"
-    third = v.on_tick(30)
-    assert not [e for e in third if e.kind is WorldEventKind.FILL]  # not re-emitted
+    for now in (10, 20, 30):
+        assert WorldEventKind.FILL not in [e.kind for e in v.on_tick(now)]
 
 
 def test_reconciler_snapshot_never_compares_authority_with_money() -> None:
@@ -165,6 +163,8 @@ def test_runtime_runs_a_live_shaped_world_with_stub_venue_and_scripted_models() 
         "seed": 5,
         "initial_balance_usd": "20",
         "tick_interval": "1s",
+        # A world that lists a venue states its repricing period (wave 16, D2).
+        "timing": {"world_repricing": "1h"},
         "exchange": {"kind": "hyperliquid", "mainnet": False, "coins": ["BTC", "ETH"]},
         # Three fake families: a world that seeds judging holds the evaluator population
         # Chapter II requires, and no judge reads its author's family (Wave 5a).

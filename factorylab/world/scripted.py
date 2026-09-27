@@ -341,17 +341,35 @@ class ScriptedProvider:
 
 
 
-def listed_coin(inputs: dict[str, Any]) -> str | None:
+def listed_coin(inputs: dict[str, Any], schema: Any = None) -> str | None:
     """A coin the prompt shows the world listing: BTC when shown, else the first shown.
 
-    Guarantees the coin is read from the listing the seat was shown (the world's
-    ``recent_mids``, the record a declined trade is priced from), never assumed,
-    and None when the prompt shows none.
+    Guarantees the coin is read from the listing the seat was shown, never assumed:
+    the coins the request's outcome schema publishes for ``counterfactual`` (the
+    instruments the venue lists, quoted or not), else the world's ``recent_mids``;
+    None when the prompt shows none.
     """
-    world = inputs.get("world")
-    mids = world.get("recent_mids") if isinstance(world, dict) else None
-    shown = {str(coin) for coin in mids} if isinstance(mids, dict) else set()
+    shown = _published_coins(schema)
+    if not shown:
+        world = inputs.get("world")
+        mids = world.get("recent_mids") if isinstance(world, dict) else None
+        shown = {str(coin) for coin in mids} if isinstance(mids, dict) else set()
     return "BTC" if "BTC" in shown else (min(shown) if shown else None)
+
+
+def _published_coins(schema: Any) -> set[str]:
+    """Every coin an outcome schema's ``counterfactual`` field enumerates, or none."""
+    found: set[str] = set()
+    if isinstance(schema, dict):
+        field = (schema.get("properties") or {}).get("counterfactual")
+        coin = ((field or {}).get("properties") or {}).get("coin") if isinstance(
+            field, dict) else None
+        if isinstance(coin, dict) and isinstance(coin.get("enum"), list):
+            found.update(str(c) for c in coin["enum"])
+        for key in ("anyOf", "oneOf"):
+            for shape in schema.get(key) or []:
+                found |= _published_coins(shape)
+    return found
 
 
 def names_declined_trade(reply: dict[str, Any], text: str, inputs: dict[str, Any],
@@ -374,7 +392,11 @@ def names_declined_trade(reply: dict[str, Any], text: str, inputs: dict[str, Any
             or reply.get("tool_calls") or reply.get("requests")
             or reply.get("status") == "cannot"):
         return reply
-    coin = listed_coin(inputs)
+    try:
+        published = json.loads(schema[1].split("\n", 1)[0])
+    except ValueError:
+        published = None
+    coin = listed_coin(inputs, published)
     if coin is None:
         return reply
     return {**reply, "counterfactual": {"coin": coin, "side": "buy" if n % 2 else "sell"}}

@@ -965,12 +965,10 @@ def _learning_death_signals(events: list[dict[str, Any]],
     spec = manifest["immune"]
     k = spec["k"]
     horizon = (manifest.get("timing") or {}).get("min_ratio", 3) * k
-    records = [{"index": w["window"], "tick": w.get("tick", w["window"]),
-                "charter_edition": w.get("charter_edition"), "terms": w.get("terms"),
-                "profile": w.get("profile") or {}, "regions": w.get("regions") or {},
-                **({"frontier_invocation": w["frontier_invocation"]}
-                   if "frontier_invocation" in w else {}),
-                "lifespans": w.get("lifespans") or []} for w in windows]
+    from factorylab.versioning.live import organ_record
+
+    # The organ's own record of each window, rebuilt as the organ read it.
+    records = [organ_record(w) for w in windows]
     readings = replay(records, k=k, horizon=horizon, tv_threshold=spec["tv_threshold"],
                       gap_threshold=spec["gap_threshold"],
                       registration_bins=tuple(spec["registration_bins"]),

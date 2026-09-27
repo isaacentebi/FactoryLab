@@ -34,6 +34,8 @@ from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from factorylab.world.events import funding_instant
+
 #: The world's own heartbeat and prints: the events a seat may sleep through.
 ROUTINE_KINDS = frozenset({"Tick", "Drip", "MarketMid", "Funding", "WorldUpdate"})
 #: Money and safety: these reach the affected seat whatever it deferred.
@@ -624,8 +626,10 @@ class ThinkingMixin:
             # A stale-mids fault: this tick's prints do not reach the seats' folds
             # (runtime.chaos); the world's own record keeps them.
             return
+        # A funding print is shown at the instant it is about (``funding_instant``).
+        at = funding_instant(ev.payload, ev.ts_ns) if kind == "Funding" else ev.ts_ns
         self.subscription_book.observe(
-            self._live_seats(), kind, dict(ev.payload), ev.ts_ns, now=self.tick_index)
+            self._live_seats(), kind, dict(ev.payload), at, now=self.tick_index)
 
     def _wants_world_update(self) -> bool:
         return any("WorldUpdate" in self.assemblies[aid].spec.accepts

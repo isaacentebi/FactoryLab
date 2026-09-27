@@ -448,12 +448,32 @@ class ContractConsequences(ReturnConsequences):
     """
 
     def __init__(self, ledger, backstop, runtime):
-        super().__init__(ledger, backstop)
+        super().__init__(ledger, backstop, horizon_ns=runtime.m.consequence_horizon_ns)
         self.runtime = runtime
 
     def _tick(self, event: int) -> int:
         """The runtime's world ticks consumed: the unit the backstop counts (defect 1)."""
         return self.runtime.ticks_consumed
+
+    def _now_ns(self) -> int | None:
+        """The world's clock at the event being processed: the venue's clock the
+        consequence horizon is counted on (wave 16, D2), never the factory's ticks."""
+        return self.runtime.clock.now_ns
+
+    def _patience_ns(self) -> int:
+        """A named trade's patience, ``H`` plus the verdict window (``_patience_ns``):
+        an acting return waits no longer for its horizon marks (Codex on #152)."""
+        return self.runtime._patience_ns()
+
+    def _stream_watermark(self, stream: str) -> int | float | None:
+        """The runtime's watermark of one fact stream (Codex on #152, R10-o)."""
+        return self.runtime._stream_watermark(stream)
+
+    def _exit_rates(self):
+        """The venue's taker rate per instrument at a horizon (wave 16, D7; ruling
+        R10-i): the most recent successfully read rate at or before it, None when none
+        was; never pooled across instruments."""
+        return self.runtime._rate_at
 
     def observe(self, kind, payload, event):
         if kind != "Fill" or payload.get("market") != "event":
@@ -533,6 +553,9 @@ class ComputeMixin:
             return None
         key = self._niche_action(handle, reason)
         if key is not None:
+            # A decision that took an unhistoried action is taken in the niche: it bears
+            # no card penalty (wave 16, R-E).
+            self._contribution(handle, self._decision_role(handle))["niche"] = True
             self.ledger.append({"kind": "niche.action", "handle": handle,
                                 "assembly_id": action_id, "action": key,
                                 "reserve_remaining": self.reserve.remaining(),
@@ -1684,11 +1707,11 @@ class ComputeMixin:
         world's measurement also reads: a venue write accepted or possibly accepted,
         lots or earnings; a write the venue refused is not acting), and for an answer
         order this decision may place (``_execute_outputs``); otherwise the answer is
-        held to the contract against the coins the world lists now (``latest_mids``,
-        the mids a declined trade is frozen from).
+        held to the contract against the instruments the venue lists now
+        (``_listed_instruments``, never only those it has quoted).
         """
         from factorylab.cortex.assembly import ANSWER_ORDER_KINDS
-        from factorylab.runtime.grounded import counterfactual_refusal, latest_mids
+        from factorylab.runtime.grounded import counterfactual_refusal
 
         if self._acted(handle):
             return None
@@ -1696,7 +1719,7 @@ class ComputeMixin:
                 and all(k in parsed for k in ("coin", "side", "size"))
                 and self._may_write(handle)):
             return None
-        return counterfactual_refusal(parsed, dict(latest_mids(self)))
+        return counterfactual_refusal(parsed, self._listed_instruments())
 
     def _published_contract(self, action_id: str, handle: str, schema: Any,
                             scoring_channel: str | None) -> Any:
@@ -1705,8 +1728,8 @@ class ComputeMixin:
         Chapter II §II.b (physics is enforced, and the published contract is the
         enforced one). Guarantees every answer shape of a producing kind is the union
         ``producing_contract`` builds from the same facts ``_counterfactual_refusal``
-        reads: whether the decision acted (``_acted``), the coins the world lists now
-        (``latest_mids``), and whether an answer order may be placed (``_may_write``).
+        reads: whether the decision acted (``_acted``), the instruments the venue lists
+        now (``_listed_instruments``), and whether an answer order may be placed (``_may_write``).
         A shape's kind is the ``emits`` it pins, else the seat's only kind; a shape a
         seat of several kinds may answer as any of them is expanded only when all of
         them produce, so nothing is required of an answer the kernel would not require
@@ -1720,14 +1743,13 @@ class ComputeMixin:
             _answer_shapes,
             producing_contract,
         )
-        from factorylab.runtime.grounded import latest_mids
 
         assembly = self.assemblies.get(action_id)
         if (assembly is None or scoring_channel == "policy" or not isinstance(schema, dict)):
             return schema
         spec = assembly.spec
         acted = self._acted(handle)
-        listed = None if acted else [coin for coin, _ in latest_mids(self)]
+        listed = None if acted else list(self._listed_instruments())
         writes = not acted and self._may_write(handle)
 
         def named(shape: Any) -> Any:

@@ -51,7 +51,7 @@ description = "The mean verdict score assigned by evaluators to the producer's r
 units = "score (0-1)"
 window = { kind = "forecasts", n = 50, per = "assembly" }
 acceptable_region = "at least 0.8"
-observation = "verdict_mean"
+observation = "resolved_verdict_mean"
 answers_for = "producer"
 
 ```

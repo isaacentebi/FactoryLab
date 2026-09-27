@@ -1228,7 +1228,7 @@ class GovernanceMixin:
                                         "ts": self.clock.now_ns})
                     value = posted["lambda"]
                 try:
-                    prices.append((str(card_id), proposed_price(value, self.m.prices.lambda_max)))
+                    prices.append((str(card_id), proposed_price(value)))
                 except ValueError as exc:
                     self._refuse_amendment(item, str(exc))
 
@@ -1833,14 +1833,20 @@ class GovernanceMixin:
         return "Vote on an amendment to the charter's metric cards."
 
     def _card_statistics(self) -> list[dict]:
-        """Each priced card's lambda, windows priced at lambda_max and violation duration (M7).
+        """Each priced card's lambda, its bound and saturation, and its violation's
+        duration (M7; wave 16, R-E: saturation is published to governance as the card's
+        price at its bound).
 
         Beside the controller's lambda stands the price the factory posted
-        (charter audit M1), when any seat posted one.
+        (charter audit M1), when any seat posted one, and beside its saturation the
+        card's observation and its consecutive unmeasured windows (wave 16, R10-f).
         """
+        observations = {card.id: card.observation for card in self.charter.cards}
         return [{"card_id": card_id, "lambda": self.controller.price(card_id),
                  **({"posted": posted} if (posted := self._posted_lambda(card_id)) else {}),
-                 **self.controller.saturation(card_id)}
+                 **({"observation": observations[card_id]} if card_id in observations
+                    else {}),
+                 **self.controller.saturation(card_id), **self._card_observed(card_id)}
                 for card_id in sorted(self.priced)]
 
     def _posted_lambda(self, card_id: str) -> dict | None:
@@ -1862,7 +1868,7 @@ class GovernanceMixin:
         return {"boundary": committee.boundary, "round": committee.round,
                 "motions": list(committee.agenda), "deferred": list(committee.deferred),
                 **({"markets": markets} if markets else {}),
-                "lambda_max": self.m.prices.lambda_max, "cards": self._card_statistics()}
+                "penalty_cap": self.m.prices.penalty_cap, "cards": self._card_statistics()}
 
     def _activate_passed(self) -> None:
         """Activate every passed motion at this boundary, each as its own edition, in order."""

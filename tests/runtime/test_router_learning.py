@@ -1,8 +1,9 @@
 """Routers learn from what waking a seat was worth (essay II.a, the frontier and the core).
 
-An abstention is worth zero consequence (what a seat that delivered nothing scores on the
-router's own scales: 0.5 for producer outcomes, 0.75 for Brier), never the average the
-seats earned, so a seat is woken more only by beating it. A manifest can seed its
+An abstention is worth what the router's woken, settled rounds earned on average before
+their card penalty (wave 16, D4 and ruling R-F), less the same penalty: the one credit
+that tilts a mean-based router neither toward waking a seat nor toward abstaining. The
+published prior 0.5 stands only before the router's first settled round. A manifest can seed its
 retentive core with a no-swap-regret (Blum-Mansour) router, and a router that is replaced
 hands every round it still owes a reward for to the router that replaced it.
 """
@@ -39,9 +40,9 @@ def _core_runtime(kinds=("ProducerReturn",)):
 # --- NOOP is worth zero consequence ------------------------------------------------------
 
 
-def test_an_abstention_is_credited_the_neutral_reward_not_the_pooled_mean():
-    """The free-average defect: NOOP was credited the mean of the arms that were scored,
-    so doing nothing always looked exactly average. It is credited 0.5 now."""
+def test_an_abstention_is_credited_the_routers_observed_mean_raw_score():
+    """Wave 16, D4: waking nobody is credited what the router's settled rounds earned
+    on average, never a constant: here the one seat round, 0.9."""
     rt = make_runtime()
     state, _lid = _router(rt)
     arm = next(a for a in state.universe if a != NOOP)
@@ -49,11 +50,9 @@ def test_an_abstention_is_credited_the_neutral_reward_not_the_pooled_mean():
     _settle(rt, _drawn(rt, state, NOOP), SettleStatus.INAPPLICABLE)
     rt._deliver_returns()
     weights = _weights(state)
-    floor = min(weights.values())
-    # Same odds for both draws, so the increments are in the ratio of the rewards.
-    assert weights[NOOP] - floor == pytest.approx((weights[arm] - floor) * 0.5 / 0.9)
-    assert NOOP not in state.observed.state()  # a fixed credit is no observation
-
+    # Same odds for both draws and the same credit: the increments are equal.
+    assert weights[NOOP] == pytest.approx(weights[arm])
+    assert NOOP not in state.observed.state()  # an imputed credit is no observation
 
 def test_an_abstention_is_credited_on_the_seats_clock_through_a_resume():
     """NOOP settles at once while a seat's score takes the feedback delay; crediting NOOP
@@ -87,8 +86,7 @@ def test_an_abstention_is_credited_on_the_seats_clock_through_a_resume():
     restored.ticks_consumed += 1
     restored._deliver_returns()
     weights = _weights(live)
-    floor = min(weights.values())
-    assert weights[NOOP] - floor == pytest.approx((weights[arm] - floor) * 0.5 / 0.9)
+    assert weights[NOOP] == pytest.approx(weights[arm])  # both credited 0.9
     assert not restored.noop_credits
     restored._deliver_returns()
     assert _weights(live) == weights  # credited once
@@ -102,53 +100,16 @@ def test_an_unscored_arm_without_its_own_record_is_neutral_not_its_siblings_mean
     assert ObservedRewards().neutral("a") == NEUTRAL_REWARD
 
 
-# --- what nothing delivered is worth, per score definition ------------------------------
-
-# Every score definition a router's seat round can settle with a score, and what a seat
-# that delivered nothing scores on it.
-_ZERO = {
-    "verdict-v1": 0.5, "evaluation-v1": 0.5, "policy-promise-brier-v2": 0.5,
-    "brier-v1": 0.75, "forecast-mean-v1": 0.75, "exposure-v2": 0.5,
-    # W4: a composed return settles on its verdict and its requester's score.
-    "composed-v1": 0.5,
-    # W5a: a counter-verdict that repeats the verdict it read earns 0.5.
-    "counter-v1": 0.5,
-}
+# --- what nothing delivered is worth: the router's observed mean ------------------------
 
 
-@pytest.mark.parametrize("definition", sorted(_ZERO))
-def test_each_score_definition_has_its_own_zero_consequence(definition):
-    from factorylab.runtime.routing import ZERO_CONSEQUENCE, zero_consequence
+def test_an_unlearned_router_is_worth_the_published_prior_and_no_table_remains():
+    from factorylab.runtime import routing
 
-    assert zero_consequence(definition) == ZERO_CONSEQUENCE[definition] == _ZERO[definition]
-
-
-@pytest.mark.parametrize("definition", ["brier-v1", "forecast-mean-v1"])
-def test_a_brier_scale_prices_nothing_at_the_coin_flip_forecasters_score(definition):
-    """A coin-flip forecast scores 0.75 whatever happens: on a Brier router NOOP at 0.5
-    lost to a seat that knew nothing, a dead arm the router paid to avoid every time."""
-    from factorylab.runtime.routing import zero_consequence
-    from factorylab.settlement.scoring import brier
-
-    assert zero_consequence(definition) == brier(0.5, 0) == brier(0.5, 1)
-
-
-def test_the_table_names_every_scored_definition_the_runtime_settles_with():
-    from factorylab.runtime import shared
-    from factorylab.runtime.routing import ZERO_CONSEQUENCE
-
-    scored = {shared.DEF_VERDICT, shared.DEF_EVALUATION, shared.DEF_EXPOSURE,
-              shared.DEF_COMPOSED, shared.DEF_COUNTER}
-    assert scored <= set(ZERO_CONSEQUENCE) and set(ZERO_CONSEQUENCE) == set(_ZERO)
-
-
-def test_an_unknown_definition_and_an_unlearned_router_are_worth_the_midpoint():
-    from factorylab.runtime.routing import zero_consequence
-
-    assert zero_consequence("test-v1") == NEUTRAL_REWARD
     rt = make_runtime()
     state, _lid = _router(rt)
     assert state.neutral() == NEUTRAL_REWARD
+    assert not hasattr(routing, "ZERO_CONSEQUENCE") and not hasattr(routing, "zero_consequence")
 
 
 def _scored(rt, handle, score, definition):
@@ -158,29 +119,28 @@ def _scored(rt, handle, score, definition):
 
 
 def test_on_a_brier_router_a_know_nothing_seat_ties_an_abstention():
-    """Before: a coin-flip seat earned 0.75 and NOOP 0.5, so NOOP lost 0.25 a round to a
-    seat that knew nothing. NOOP is credited the Brier zero now, and the two tie."""
+    """A coin-flip forecaster earns 0.75 whatever happens; on a router scored by Brier
+    that is what its rounds earned, and an abstention is credited exactly that."""
     rt = make_runtime()
     state, _lid = _router(rt)
     arm = next(a for a in state.universe if a != NOOP)
     _scored(rt, _drawn(rt, state, arm), 0.75, "forecast-mean-v1")
     rt._deliver_returns()
-    assert state.neutral() == 0.75 and state.definitions == {"forecast-mean-v1": 1}
+    assert state.neutral() == 0.75 and state.definitions == {"forecast-mean-v1": [1, 0.75]}
     _settle(rt, _drawn(rt, state, NOOP), SettleStatus.INAPPLICABLE)
     rt._deliver_returns()
     weights = _weights(state)
     assert weights[NOOP] == pytest.approx(weights[arm])
 
-
-def test_a_mixed_router_prices_nothing_at_its_own_mix_of_scales():
+def test_a_mixed_router_prices_nothing_at_the_mean_of_what_its_rounds_earned():
     rt = make_runtime()
     state, _lid = _router(rt)
     arm = next(a for a in state.universe if a != NOOP)
-    for definition in ("forecast-mean-v1", "forecast-mean-v1", "verdict-v1", "exposure-v1"):
-        _scored(rt, _drawn(rt, state, arm), 0.6, definition)
+    for definition, score in (("forecast-mean-v1", 0.8), ("forecast-mean-v1", 0.6),
+                              ("verdict-v1", 0.4), ("exposure-v1", 0.2)):
+        _scored(rt, _drawn(rt, state, arm), score, definition)
     rt._deliver_returns()
-    assert state.neutral() == pytest.approx((0.75 * 2 + 0.5 + 0.5) / 4)
-
+    assert state.neutral() == pytest.approx((0.8 + 0.6 + 0.4 + 0.2) / 4)
 
 def test_an_unscored_seat_without_a_record_is_imputed_the_routers_zero():
     rt = make_runtime()
@@ -204,7 +164,7 @@ def test_the_scales_a_router_learned_survive_a_resume_and_default_when_absent():
     rt._deliver_returns()
     restored = make_runtime()
     restore_runtime(restored, runtime_state(rt))
-    assert _router(restored)[0].definitions == {"forecast-mean-v1": 1}
+    assert _router(restored)[0].definitions == {"forecast-mean-v1": [1, 0.9]}
     old = state.state()
     del old["definitions"]
     assert RouterState.restore(old).definitions == {}
@@ -276,15 +236,16 @@ def _one_seat_router(rt, seat):
     return rt._build_router("ProducerReturn", "exp3", 0.1)
 
 
-@pytest.mark.parametrize("score, wakes_more", [(0.8, True), (0.2, False)])
-def test_a_one_seat_router_learns_whether_its_seat_beats_doing_nothing(score, wakes_more):
-    """With one seat and NOOP the router had no signal at all: NOOP was credited the
-    seat's own mean. Now the seat is woken more exactly when it scores above 0.5."""
+@pytest.mark.parametrize("score", [0.8, 0.2])
+def test_a_one_seat_router_credits_doing_nothing_what_its_seat_earned(score):
+    """With one seat, doing nothing is credited what that seat's rounds earned (wave 16,
+    D4): the one imputation that favours neither waking nor abstaining. No constant
+    decides for the router whether its seat is worth waking."""
     rt = make_runtime()
     seat = next(a for a in rt.routers["ProducerReturn"][0].universe if a != NOOP)
     state = _one_seat_router(rt, seat)
     rng = random.Random(7)
-    for i in range(200):
+    for i in range(60):
         dist = state.learner.distribution(state.universe)
         arms = tuple(state.universe)
         probs = tuple(dist[a] for a in arms)
@@ -299,12 +260,11 @@ def test_a_one_seat_router_learns_whether_its_seat_beats_doing_nothing(score, wa
         else:
             _settle(rt, handle, SettleStatus.SETTLED, score)
         rt._deliver_returns()
-    p_seat = state.learner.distribution(state.universe)[seat]
-    assert (p_seat > 0.7) if wakes_more else (p_seat < 0.3)
-
-
-# --- the retentive core ------------------------------------------------------------------
-
+    credits = [row["neutral"] for row in rt.ledger._recovery_items()
+               if row.get("kind") == "router.abstention_priced"]
+    # Every abstention after the seat's first settled round is credited its mean: the
+    # seat's worth is what the world scored it, never a constant's.
+    assert credits and all(c == pytest.approx(score) for c in credits[1:])
 
 def test_the_manifest_seeds_a_swap_regret_core_only_for_the_kinds_it_names():
     core = _core_runtime()
@@ -426,7 +386,8 @@ def test_a_pending_core_round_survives_replacement_and_resume_into_the_successor
     assert live.learner.inner.inner.state() != live_before
     assert retired.learner.inner.inner.state() == retired_before
     assert not retired.learner.inner.state()["snapshots"]
-    assert live.observed.state()[chosen] == [0.9, 1]
+    cap = 2 * restored.m.prices.penalty_cap  # a router's one map, B = 2 * cap (R10-l)
+    assert live.observed.state()[chosen] == [pytest.approx((0.9 + cap) / (1 + cap)), 1]
     assert old.learner.id not in restored.retired_routers  # drained once learned
 
 
