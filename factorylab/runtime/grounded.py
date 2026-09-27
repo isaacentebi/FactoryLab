@@ -237,7 +237,7 @@ def funding_mark(state: dict | None, open_ns: int | None, due_ns: int | None, ts
     the funding times in ``(open_ns, due_ns]``: at most one per funding time of the
     trade's own window, so what a trade keeps is bounded by its lifetime.
     """
-    if state is None or open_ns is None or due_ns is None:
+    if state is None or open_ns is None or due_ns is None or state.get("strict"):
         return
     interval = int(state["interval"])
     tau = (int(open_ns) // interval + 1) * interval
@@ -278,7 +278,9 @@ def funding_due(state: dict | None, open_ns: int, due_ns: int
             return FUNDING_PENDING
     if any(rate is None for _tau, rate in rates):
         return None
-    marks = {row[0]: row[1] for row in state.get("marks") or []}
+    # §III.b: live funding uses the observed venue oracle, never a substituted mid.
+    marks = {row[0]: row[1] for row in state.get("marks") or []
+             if not state.get("strict") or row[2]}
     if any(tau not in marks for tau, _rate in rates):
         return FUNDING_PENDING
     return [(rate, marks[tau]) for tau, rate in rates]

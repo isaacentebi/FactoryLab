@@ -576,6 +576,7 @@ def _read_only(name: str) -> bool:
         # The safety path's wall-clock and delivered-tick reads (time audit T8).
         "now_ns", "tick_ns",
         "mids", "account", "funding", "fills", "candles", "order_book", "funding_history",
+        "settled_funding_history",
         "open_orders", "balance_micro", "balance_of", "affordable", "catalogue", "discover",
         "quote", "fetch",
         "registration_price", "seller_models", "funding_payments", "lookup",
@@ -1064,6 +1065,7 @@ def runtime_state(rt) -> Checkpoint:
         "retired_routers": [st.state() for st in rt.retired_routers.values()],
         "venue": encode({"last_funding_ns": rt.venue.last_funding_ns,
                          "seen_funding": rt.venue.seen_funding,
+                         "funding_oracles": rt.venue.funding_oracles,
                          "through": rt.venue.through}) if rt.venue else None,
         "venue_tool_log": encode(rt.venue_tools.log) if rt.venue_tools else None,
         "fake_exchange": encode(vars(rt.exchange.target)) if rt.exchange.deterministic else None,

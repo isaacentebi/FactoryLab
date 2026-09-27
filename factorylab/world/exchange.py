@@ -131,6 +131,7 @@ class FundingEvent:
     rate: Decimal  # per funding interval, signed
     premium: Decimal | None
     ts_ns: int
+    mark: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -1376,7 +1377,11 @@ class HyperliquidExchange:
                 premium = Decimal(str(ctx["premium"])) if ctx.get("premium") is not None else None
                 if not rate.is_finite() or premium is not None and not premium.is_finite():
                     continue
-                out.append(FundingEvent(name, rate, premium, now_ns))
+                mark = (Decimal(str(ctx["oraclePx"]))
+                        if ctx.get("oraclePx") is not None else None)
+                if mark is not None and (not mark.is_finite() or mark <= 0):
+                    mark = None
+                out.append(FundingEvent(name, rate, premium, now_ns, mark))
             except (KeyError, TypeError, ValueError, ArithmeticError, AttributeError):
                 continue
         return out

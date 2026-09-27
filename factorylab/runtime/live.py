@@ -328,6 +328,9 @@ class LiveVenue:
     # fact-time at or before it has been delivered. A failed or skipped read does not
     # advance it.
     through: dict[str, int] = field(default_factory=dict)
+    # Chapter II §III.b: retain the boundary poll's oracle, never a later quote
+    # substituted when the settled rate becomes visible. The read time is evidence.
+    funding_oracles: dict[str, dict[int, tuple[str, int]]] = field(default_factory=dict)
 
     def funding_payments(self, now_ns: int) -> list[WorldEvent]:
         """Emit post-launch funding once, with an inclusive cursor that keeps timestamp peers."""
@@ -387,12 +390,18 @@ class LiveVenue:
                 if not cursor <= row.ts_ns <= now_ns or row.ts_ns % interval:
                     continue
                 stamps.add(row.ts_ns)
+                oracle = self.funding_oracles.get(coin, {}).get(row.ts_ns)
                 out.append(WorldEvent(WorldEventKind.FUNDING, now_ns, self.exchange.name,
                                       {"coin": coin, "rate": str(row.rate), "paid_usd": "0",
-                                       "funding_ns": row.ts_ns, "settled": True}))
+                                       "funding_ns": row.ts_ns, "settled": True,
+                                       "mark": oracle[0] if oracle else None,
+                                       "oracle_observed_at_ns": oracle[1] if oracle else None}))
             while cursor + interval in stamps:
                 cursor += interval
             self.through[key] = cursor
+            self.funding_oracles[coin] = {
+                stamp: oracle for stamp, oracle in self.funding_oracles.get(coin, {}).items()
+                if stamp >= cursor}
         return out
 
     def on_tick(self, now_ns: int) -> list[WorldEvent]:
@@ -424,6 +433,14 @@ class LiveVenue:
         for f in funding:
             if traded is not None and f.coin not in traded:
                 continue
+            if getattr(self.exchange, "settled_funding", False):
+                interval = int(self.exchange.funding_interval_ns)
+                boundary = f.ts_ns - f.ts_ns % interval
+                # The current context cannot supply an oracle for a skipped hour.
+                # Preserve the first observed oracle of this boundary's poll only.
+                if f.mark is not None:
+                    self.funding_oracles.setdefault(f.coin, {}).setdefault(
+                        boundary, (str(f.mark), f.ts_ns))
             out.append(
                 WorldEvent(
                     WorldEventKind.FUNDING,
