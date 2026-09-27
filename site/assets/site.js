@@ -36,6 +36,10 @@
       dataPromise = fetch("data/progress.json", { cache: "no-cache" }).then(function (r) {
         if (!r.ok) throw new Error("progress.json: HTTP " + r.status);
         return r.json();
+      }).catch(function (err) {
+        // A failed read is not cached: the next caller fetches again.
+        dataPromise = null;
+        throw err;
       });
     }
     return dataPromise;

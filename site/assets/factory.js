@@ -32,7 +32,7 @@
 
     // charter
     { id: "norms", layer: "charter", k: "Charter", t: "Norms",
-      d: "Four at launch: truthful commitments, care with scarce resources, useful inquiry, and the capacity to revise inadequate practices. Everything else the population writes, within fixed bounds.",
+      d: "Each world launches with its own norms, stated in its manifest and fixed for its life; only a signed norm edition from outside changes them. The population cannot edit a norm. It writes everything else (the metric cards that measure the norms, their prices and holdouts) within fixed bounds.",
       p: "The charter is co-written (§IV).",
       c: "charter/charter.py · charter/norm_edition.py", rel: ["cards", "house", "committee"] },
     { id: "cards", layer: "charter", k: "Charter", t: "Metric cards",
