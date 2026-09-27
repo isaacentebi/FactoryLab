@@ -1126,6 +1126,35 @@ def _restored_tick_clock(running, saved: dict, *, instant_ns: int):
     return LiveClock.restore(saved, **callbacks)
 
 
+def _migrate_fill_cursor(saved, running) -> dict:
+    """Reject malformed fill state before mutation; migrate genuine legacy cursors exactly."""
+    # Chapter II §III.b, §II.b: a resumed outside-fact cursor cannot partially replace
+    # a world's accounting state, nor acquire evidence absent from its checkpoint.
+    if not isinstance(saved, dict) or not {"since_ns", "seen", "through_ns"} <= saved.keys():
+        raise ResumeError("invalid fill cursor component")
+    migrated = {"launch_ns": saved["since_ns"], "read_ns": None,
+                "measured": running.measured, "propagation_bound_ns": None,
+                "observation_complete": True, **saved}
+    for field in ("launch_ns", "since_ns", "read_ns", "through_ns", "propagation_bound_ns"):
+        value = migrated[field]
+        optional = field in ("read_ns", "through_ns", "propagation_bound_ns")
+        if value is None and optional:
+            continue
+        if type(value) is not int or (field != "through_ns" and value < 0):
+            raise ResumeError(f"invalid fill cursor {field}")
+    for field in ("measured", "observation_complete"):
+        if type(migrated[field]) is not bool:
+            raise ResumeError(f"invalid fill cursor {field}")
+    seen = migrated["seen"]
+    if not isinstance(seen, dict) or any(
+        not isinstance(key, tuple) or not key or type(key[0]) is not int
+        or key[0] < 0 or type(count) is not int or count <= 0
+        for key, count in seen.items()
+    ):
+        raise ResumeError("invalid fill cursor seen")
+    return migrated
+
+
 def restore_runtime(rt, state: dict) -> None:
     """Restore only authenticated matching-format state, rebinding dependencies to this process.
 
@@ -1215,6 +1244,8 @@ def restore_runtime(rt, state: dict) -> None:
     # assigned: a world does not continue with a seat's memory or a seat's
     # outcomes missing, and a refusal must leave this runtime untouched.
     components = decode(state["components"])
+    components["consequence_fills"] = _migrate_fill_cursor(
+        components.get("consequence_fills"), rt.consequence_fills)
     _check_artifacts(rt.artifacts,
                      index=(components.get("artifacts") or {}).get("index") or {},
                      assemblies=decode(state["assemblies"]),
@@ -1266,14 +1297,6 @@ def restore_runtime(rt, state: dict) -> None:
                                    ordinals=ordinals.get(path))
     for name, prefix, names in _COMPONENT_FIELDS:
         for field in names:
-            if name == "consequence_fills" and field not in components[name]:
-                if field == "launch_ns":
-                    rt.consequence_fills.launch_ns = components[name]["since_ns"]
-                    continue
-                if field == "read_ns":
-                    # Older cursors retained launch history; first resumed poll rereads it.
-                    rt.consequence_fills.read_ns = None
-                    continue
             if (name == "controller" and field in ("kp", "kd")
                     and field not in components[name]):
                 # Older checkpoints inherited these immutable parameters from the same manifest.
