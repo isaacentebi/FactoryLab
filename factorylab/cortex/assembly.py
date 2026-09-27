@@ -154,8 +154,16 @@ class Assembly:
     # the assembly runs outside a world that sets one).
     max_children: int | None = None
 
-    def build_model_request(self, req: Request) -> ModelRequest:
+    def stamp(self, req: Request) -> Request:
+        """``req`` with this assembly's own id as its ``you`` input, and nothing else changed."""
+        return replace(req, inputs={**req.inputs, "you": self.spec.id})
+
+    def build_model_request(self, req: Request, *, stamped: Request | None = None) -> ModelRequest:
         """Render the exact prompt this assembly will be billed for.
+
+        ``stamped``, when given, is ``self.stamp(req)`` as the caller already built
+        it, with nothing run on it since but pure reads: the render is the same, and
+        the request is not stamped (nor its inputs checked) a second time.
 
         The executor's own id is stamped here, where the prompt is rendered, and
         nowhere else: an identity added after a caller has priced the request
@@ -184,11 +192,35 @@ class Assembly:
         sent. Handle-scoped memory, when a world registers it, is the one thing
         that precedes the block and costs that assembly the hit.
         """
-        req = replace(req, inputs={**req.inputs, "you": self.spec.id})
+        req = (stamped if stamped is not None
+               else replace(req, inputs={**req.inputs, "you": self.spec.id}))
         messages: list[dict[str, Any]] = []
         if self.spec.memory_policy == "handle-scoped" and req.parent_handle:
             messages.extend(self.memory.get(req.parent_handle, []))
         messages.append({"role": "user", "content": req.prompt_text()})
+        policy = req.scoring_channel == "policy"
+        # Essay II.IV.c: neither the factory nor its control apparatus may be slower
+        # than its environment, so the loop's own cost is kept down wherever that
+        # changes nothing it does. ``wire_schema`` is a pure function of these four
+        # values and of module constants, and one contract is rendered several
+        # times per invocation, so
+        # its answer is kept by content (``_wire_key``) on this assembly, whose
+        # lifetime bounds the memo. A hit returns a fresh copy equal in every value,
+        # type and key order to what ``wire_schema`` returns, so no request byte and
+        # no journal fingerprint changes; a contract the key cannot state exactly
+        # is rendered as before.
+        key = _wire_key(req.outcome_schema, self.spec.emits, policy, self.max_children)
+        memo = self.__dict__.setdefault("_wire_memo", {})
+        if key is not None and key in memo:
+            cached = memo[key]
+            response_schema = None if cached is None else json.loads(cached)
+        else:
+            response_schema = wire_schema(req.outcome_schema, self.spec.emits,
+                                          policy=policy, max_children=self.max_children)
+            if key is not None and _json_plain(response_schema, 0):
+                if len(memo) >= WIRE_MEMO_SIZE:
+                    del memo[next(iter(memo))]
+                memo[key] = None if response_schema is None else json.dumps(response_schema)
         return ModelRequest(
             model_id=self.spec.model_id,
             system=self.spec.system_prompt,
@@ -196,9 +228,7 @@ class Assembly:
             max_tokens=self.spec.max_tokens,
             effort=self.spec.effort,
             json_object=True,
-            response_schema=wire_schema(req.outcome_schema, self.spec.emits,
-                                        policy=req.scoring_channel == "policy",
-                                        max_children=self.max_children),
+            response_schema=response_schema,
         )
 
     def invoke(self, req: Request) -> Return:
@@ -1448,6 +1478,60 @@ def _validate_return(parsed: dict, schema: dict, kind: str | None = None) -> Non
     validate_schema(parsed, schema, partial=continuation or cannot)
     for child in parsed.get("requests", []):
         _check_child(child)
+
+
+#: How many rendered contracts one assembly keeps (``Assembly.build_model_request``).
+WIRE_MEMO_SIZE = 64
+#: The deepest contract the memo keys; a deeper one is rendered every time.
+WIRE_MEMO_DEPTH = 48
+#: The largest integer the memo keys, in bits (well inside ``json``'s digit limit).
+WIRE_MEMO_INT_BITS = 1024
+
+
+def _json_plain(value: Any, depth: int) -> bool:
+    """Whether ``json.loads(json.dumps(value))`` gives back ``value`` exactly.
+
+    Guarantees True only for a tree of exact ``dict`` (string keys), ``list``,
+    ``str``, ``bool``, ``None``, bounded ``int`` and finite ``float``, at most
+    ``WIRE_MEMO_DEPTH`` deep: for such a tree the round trip returns equal values of
+    the same types in the same key order. A tuple, a subclass or anything else is
+    False, so its value is never replaced by a look-alike.
+    """
+    kind = type(value)
+    if kind is str or kind is bool or value is None:
+        return True
+    if kind is int:
+        return value.bit_length() <= WIRE_MEMO_INT_BITS
+    if kind is float:
+        return math.isfinite(value)
+    if depth >= WIRE_MEMO_DEPTH:
+        return False
+    if kind is dict:
+        return all(type(k) is str and _json_plain(v, depth + 1) for k, v in value.items())
+    if kind is list:
+        return all(_json_plain(v, depth + 1) for v in value)
+    return False
+
+
+def _wire_key(schema: Any, emits: Any, policy: bool, max_children: Any) -> tuple | None:
+    """A key naming every input ``wire_schema`` reads, or None where one cannot.
+
+    Guarantees two equal keys name inputs ``wire_schema`` answers identically: the
+    contract's ``repr`` keeps its key order and tells ``1``, ``1.0`` and ``True``
+    apart, which is everything its comparisons can see, and ``emits`` is read as
+    ``wire_schema`` reads it (``tuple(emits or ())``).
+    """
+    if type(schema) is not dict or not _json_plain(schema, 0):
+        return None
+    if emits is None:
+        kinds: tuple = ()
+    elif type(emits) in (list, tuple) and all(type(k) is str for k in emits):
+        kinds = tuple(emits)
+    else:
+        return None
+    if type(policy) is not bool or not (max_children is None or type(max_children) is int):
+        return None
+    return (repr(schema), kinds, policy, max_children)
 
 
 def wire_schema(schema: Any, emits: Any = None, *, policy: bool = False,

@@ -158,7 +158,10 @@ class ContractQueue:
 
     def get(self, handle):
         decision = self.queue.get(handle)
-        return replace(decision, channel=self._channel(handle, decision.channel))
+        channel = self._channel(handle, decision.channel)
+        # A Decision is frozen: where the selected channel is the kernel's own, the
+        # kernel's record is handed out as is, since a copy would equal it in every field.
+        return decision if channel is decision.channel else replace(decision, channel=channel)
 
     def opened_tick(self, handle: str) -> int | None:
         """The world tick a decision opened at, or None for one opened before the tick record."""
