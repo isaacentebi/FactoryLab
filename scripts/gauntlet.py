@@ -814,6 +814,8 @@ ROUTER_SOURCES: dict[str, tuple[str, ...]] = {
     "router.step_rescaled": ("learner_id",),
     "router.abstention_priced": ("router",),
     "router.decline_priced": ("router",),
+    # R16b-5: the router that drew the round and the one that learned it.
+    "router.learned": ("router", "learner"),
     "propensity.unlearned": ("learner_id",),
     "thrash.charged": ("router",),
     "compute.route": ("router",),
@@ -1018,6 +1020,9 @@ def sf1a_detection(events: list[Mapping], manifest: Mapping, *, card: str) -> Re
 def sf1b_ratchet_cadence(events: list[Mapping], manifest: Mapping) -> Result:
     """SF-1b: ratchets move on the organ's loop, and duration strictly rises while flagged.
 
+    A ratchet is ``immune.price_ratchet`` or, at the card's own bound,
+    ``immune.price_ratchet_saturated``: the duration keeps counting either way.
+
     The organ acts (gain, ratchet) only on its own loop (versioning P5), so duration is
     read on the grid of acting windows. At each acting window flagged stable failure
     and not thrash, a card the organ ratcheted at the previous acting window carries
@@ -1052,7 +1057,11 @@ def sf1b_ratchet_cadence(events: list[Mapping], manifest: Mapping) -> Result:
          and need(w, "window") not in thrash),
         lambda w: need(w, "window"),
         lambda w: {c.removeprefix("card:") for c in need(w, "violated_cards")})
-    ratchets = rows_of(events, "immune.price_ratchet")
+    # A saturated ratchet is the ratchet at the card's own bound: the organ counts its
+    # duration and ledgers ``immune.price_ratchet_saturated`` instead (wave 16, R-E and
+    # R10-e), so both kinds are the one ratchet this reads (wave 16b follow-up).
+    ratchets = (rows_of(events, "immune.price_ratchet")
+                + rows_of(events, "immune.price_ratchet_saturated"))
     # One ratchet per card per window (immune.py ``_ratchet_failing``): a duplicate is
     # malformed, never a second duration that overwrites the first (Codex on d3dc486).
     at: dict[tuple[str, int], int] = unique_map(
@@ -1319,22 +1328,25 @@ def router_retirements(events: list[Mapping]) -> dict[str, int]:
 
 def router_round_periods(events: list[Mapping]) -> dict[str, int]:
     """Each router's round period in windows: the p90 of its rounds' closures, from the
-    window a decision it drew opened in to the window the decision settled in
-    (``decision.settle``, when the router learns the round), never below 1. It is the
+    window a decision it drew opened in to the window its round first closed in
+    (``decision.settle``, or ``decision.timeout`` for a round that reached its cutoff:
+    a cutoff is how long the loop took to close, R16b-2), never below 1. It is the
     world's measure of the router's loop (``clockwork.record("router:<kind>")`` in
     ``FeedbackMixin._learn_router_return``), read from the rounds, never from the gain
-    rows it bounds."""
+    rows it bounds. A round closes once: a late settlement after its timeout is not a
+    second closure."""
     opened = _decision_windows(events)
     actor = unique_map((row for row in rows_of(events, "decision.open") if router_draw(row)),
                        lambda row: need(row, "handle"), lambda row: need(row, "actor"))
-    window, closures = 1, defaultdict(list)
+    window, closures, closed = 1, defaultdict(list), set()
     for row in events:
         if row.get("kind") == "price.window":
             window = need(row, "window") + 1
-        elif row.get("kind") == "decision.settle":
-            handle = need(row, "return.handle")  # queue.py ``settle``: always
+        elif row.get("kind") in ("decision.settle", "decision.timeout"):
+            handle = need(row, "return.handle")  # queue.py ``settle``/``time_out``: always
             router, start = actor.get(handle), opened.get(handle)
-            if isinstance(router, str) and start is not None:
+            if isinstance(router, str) and start is not None and handle not in closed:
+                closed.add(handle)
                 closures[router].append(max(0, window - start))
     out = {}
     for router, values in closures.items():
@@ -1926,16 +1938,30 @@ def _tv(a: Mapping[str, float], b: Mapping[str, float]) -> float:
     return 0.5 * math.fsum(abs(a.get(x, 0.0) - b.get(x, 0.0)) for x in set(a) | set(b))
 
 
+def niche_rounds(events: list[Mapping]) -> set[str]:
+    """The decisions taken in the unhistoried niche, by the kernel's one predicate
+    (``PricingMixin._in_split`` / ``_is_niche``; wave 16, R-E as amended): a decision of
+    a seat in its protected trial, whose ``price.contribution`` carries ``niche: true``,
+    and one that took an unhistoried action the novelty reserve paid for
+    (``niche.action``)."""
+    return ({need(row, "handle") for row in rows_of(events, "price.contribution")
+             if row.get("niche")}
+            | {need(row, "handle") for row in rows_of(events, "niche.action")})
+
+
 def expected_thrash_charges(events: list[Mapping], manifest: Mapping, *,
                             core_only: bool = True) -> dict[str, float]:
     """Each core router draw's charge: ``min(cap, λ_t · min(1, TV))`` (``_record_movement``).
 
     λ_t is the thrash price the last closed window left in force before the draw; TV
     is the total variation from the same router's previous draw, over the union of
-    both menus. Zero for a router's first draw. ``core_only=False`` prices every
-    router's draws, whatever ``evaluation.no_swap_regret_kinds`` names.
+    both menus. Zero for a router's first draw, and zero for a round drawn in the
+    niche (``niche_rounds``: ``_thrash_charge`` drops its stored charge, R-E as
+    amended). ``core_only=False`` prices every router's draws, whatever
+    ``evaluation.no_swap_regret_kinds`` names.
     """
     ph = physics(manifest)
+    niche = niche_rounds(events)
     lam, last, out = 0.0, {}, {}
     for row in events:
         kind = row.get("kind")
@@ -1953,13 +1979,16 @@ def expected_thrash_charges(events: list[Mapping], manifest: Mapping, *,
             before = last.get(router)
             moved = _tv(now, before) if before else 0.0
             last[router] = now
-            unique_put(out, need(row, "handle"), min(ph.cap, lam * min(1.0, moved)), row)
+            charge = 0.0 if need(row, "handle") in niche else min(ph.cap, lam * min(1.0, moved))
+            unique_put(out, need(row, "handle"), charge, row)
     return out
 
 
 #: The rows only a round's learning writes, each naming the round's handle (TH-1c).
 LEARNING_ROWS = frozenset({"propensity.learned", "propensity.unlearned", "thrash.charged",
-                           "router.carried", "router.step_rescaled", "router.decline_priced"})
+                           "router.carried", "router.step_rescaled", "router.decline_priced",
+                           # R16b-5: every round a router trains on writes one.
+                           "router.learned"})
 
 
 def delivered_rounds(events: list[Mapping]) -> set[str]:
@@ -1967,8 +1996,8 @@ def delivered_rounds(events: list[Mapping]) -> set[str]:
     ``LEARNING_ROWS`` row names the handle. A ``runtime.event_done`` after the
     settlement is not enough: ``_learn_router_return`` has returns before any charge
     (a keyed router's spent frozen round: "nothing trains, nothing is booked"), so
-    delivery is not a learning attempt. (The i10 world holds three judge rounds,
-    decision-71, -86 and -109, settled and delivered with no learning row.)"""
+    delivery is not a learning attempt. Every round a router trains on writes
+    ``router.learned`` (R16b-5), so a round it learned is never read as unlearned."""
     # Every learning row names its round (feedback.py writes ``handle`` on each): a row
     # without one is malformed, never a None that matches nothing (Codex on c78f2bc).
     touched = {need(row, "handle") for row in events if row.get("kind") in LEARNING_ROWS}
@@ -2094,9 +2123,11 @@ def thrash_attributed(events: list[Mapping], manifest: Mapping) -> dict[str, boo
 def th1d_frontier(events: list[Mapping], manifest: Mapping) -> Result:
     """TH-1d: every charge lands on a router the diary attributes the thrash price to
     (``thrash_attributed``: the moving roles' routers under I-10, else the core), and
-    none on a niche decision. A charge on a round no attributed draw opened fails."""
+    none on a niche decision (``niche_rounds``, the kernel's predicate: a protected
+    trial's decisions as well as unhistoried actions). A charge on a round no attributed
+    draw opened fails."""
     attributed = thrash_attributed(events, manifest)
-    niche = {need(row, "handle") for row in rows_of(events, "niche.action")}
+    niche = niche_rounds(events)
     bad = []
     for row in rows_of(events, "thrash.charged"):
         handle = need(row, "handle")

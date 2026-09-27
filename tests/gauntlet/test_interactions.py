@@ -85,12 +85,9 @@ def test_i10_the_thrash_price_lands_on_the_tier_that_moved(i10):
     whose behaviour moved, which the organ names in ``thrash.roles``. The judges
     oscillate, so the charges land on the judges' router, not the producers' core one;
     TH-1c requires each attributed round the diary shows delivered to be charged, its
-    price times its movement.
-
-    A lead for wave 16b: in this world three judge rounds (decision-71, -86 and -109)
-    settle and are delivered to the judges' router, with a positive expected charge, yet
-    no ``thrash.charged`` and no learning row names them (TH-1c reads them pending, as
-    its learning-attempt rule says)."""
+    price times its movement; a round drawn in the niche is charged nothing (the
+    kernel's niche predicate, ``g.niche_rounds``), and every round a router learned
+    writes ``router.learned`` (R16b-5), so none is read as unlearned."""
     result = g.th1d_frontier(i10.events, i10.manifest)
     assert result.ok, result.evidence
     roles = {role for w in g.windows(i10.events) for role in w["thrash"].get("roles") or ()}

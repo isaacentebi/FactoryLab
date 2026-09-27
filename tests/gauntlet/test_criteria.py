@@ -2676,3 +2676,68 @@ def test_s4_an_unresolved_penalty_row_may_carry_no_raw_score():
     row = {"kind": "price.penalty", "handle": "d", "penalty": 0.1, "raw": None,
            "effective": None}
     assert g.s4_boundedness([row | {"unresolved": ["c"]}], M).ok
+
+
+# --- wave 16b follow-ups -----------------------------------------------------------------
+
+
+def _saturated(*pairs):
+    """``immune.price_ratchet_saturated``: the ratchet at the card's own bound (R-E)."""
+    return [{"kind": "immune.price_ratchet_saturated", "card_id": "c", "window": w,
+             "duration": d, "lambda": 1.0, "bound": 1.0} for w, d in pairs]
+
+
+def test_sf1b_reads_a_saturated_ratchet_as_the_ratchet_at_its_bound():
+    """Once a card reaches its own bound the organ ledgers a saturated ratchet with the
+    duration still rising; SF-1b reads it as the ratchet, never a missed one."""
+    closes = [_w(i, acts=i % 3 == 0, sf=True) for i in range(1, 13)]
+    rising = closes + _ratchets((3, 1), (6, 2)) + _saturated((9, 3), (12, 4))
+    assert g.sf1b_ratchet_cadence(rising, M).ok
+    # Violating: a saturated ratchet whose duration fell back is still a reset.
+    reset = g.sf1b_ratchet_cadence(closes + _ratchets((3, 1), (6, 2))
+                                   + _saturated((9, 1), (12, 2)), M)
+    assert reset.status == g.FAIL
+    assert any("duration_reset" in p for p in reset.evidence["problems"])
+
+
+def _timeout(handle):
+    """``decision.timeout``: the round reached its tick cutoff (queue.py ``time_out``)."""
+    return {"kind": "decision.timeout", "return": {"handle": handle, "channel": "timeout",
+                                                   "status": "timed_out", "score": 0.0}}
+
+
+def test_sf1e_counts_a_round_that_timed_out_at_its_cutoff_and_once():
+    """R16b-2: a cutoff is how long the router's loop took to close, and a late
+    settlement after it is not a second closure."""
+    def diary(*closing):
+        rows = [_open("r1", "a")]
+        for window in range(1, 9):
+            rows.append(_price_window(window, 0.5))
+            rows += [row for at, row in closing if at == window]
+        return _seq(rows)
+
+    only_late = g.router_round_periods(diary((7, _settled("r1"))))
+    cut_off = g.router_round_periods(diary((2, _timeout("r1")), (7, _settled("r1"))))
+    assert cut_off["router:Tick"] < only_late["router:Tick"]
+    assert cut_off == g.router_round_periods(diary((2, _timeout("r1"))))
+
+
+def test_th1c_and_th1d_charge_nothing_on_a_round_drawn_in_the_niche():
+    """The kernel's niche predicate (``g.niche_rounds``): a protected trial's decision
+    (``price.contribution`` with ``niche: true``) bears no thrash charge, whatever its
+    movement; a charge on one fails both criteria."""
+    rows = _seq([
+        _w(1, lam=0.4),
+        _open("d1", "a", ids=["a", "NOOP"], probs=[0.8, 0.2]),
+        _open("d2", "a", ids=["a", "NOOP"], probs=[0.1, 0.9]),  # moved 0.7
+        {"kind": "price.contribution", "handle": "d2", "window": 1, "niche": True},
+    ])
+    assert g.expected_thrash_charges(rows, M, core_only=False)["d2"] == 0.0
+    learned = rows + [_settled("d2"), {"kind": "router.learned", "handle": "d2",
+                                        "router": "router:Tick", "learner": "router:Tick",
+                                        "path": "direct", "exempt": "niche"}]
+    assert g.th1c_movement(learned, M).status != g.FAIL  # nothing was owed
+    charged = learned + [{"kind": "thrash.charged", "handle": "d2", "router": "router:Tick",
+                          "charge": 0.4 * 0.7, "reward": 0.4}]
+    assert g.th1c_movement(charged, M).status == g.FAIL
+    assert g.th1d_frontier(charged, M).status == g.FAIL
