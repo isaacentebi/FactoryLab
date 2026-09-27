@@ -84,4 +84,3 @@ def test_the_edition6_world_reads_event_markets_and_settles_forecasts_on_them_of
     assert reads and all(r["token_id"] == YES for r in reads)
     # The seeded market resolved inside the run, and a claim due after it read its payout.
     assert any(r["payout"] is not None for r in reads)
-

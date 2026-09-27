@@ -75,4 +75,3 @@ def test_replay_of_an_interrupted_event_does_not_charge_undispatched_model_calls
         assert rt.wallet.balance == balance_at_cut
     finally:
         rt._ledger_lock.close()
-
