@@ -246,3 +246,16 @@ def test_a_redefined_card_s_next_repricing_waits_the_full_ratio_from_the_redefin
     rt.ticks_consumed = 10_000 + wait
     assert rt._price_held(new, rt.window) is None
     assert rt.controller.snapshot()["cards"]["moving"]["last_window_end_event"] == rt.n
+
+
+def test_one_unmeasured_window_never_hides_the_horizons_movement():
+    """R16b-10: a window that did not measure the moving card is neither movement nor
+    stillness. Read over the pairs of windows that both measured it, the oscillation
+    still names its role; before, one gap dropped the card from the whole horizon, no
+    role was named, and the thrash price fell to the core."""
+    rt = make_runtime()
+    moving = _card("moving", "verdict_mean", "producer")
+    rt.charter = replace(rt.charter, cards=(moving,))
+    windows = _windows((moving,), "moving")
+    windows[4]["profile"]["card:moving"] = None  # sampled nothing in that window
+    assert immune.thrash_roles(rt, windows) == ["evaluator"]

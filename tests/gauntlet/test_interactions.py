@@ -24,24 +24,11 @@ def i10(shared_run):
     return shared_run("i10", lambda: P.run(*P.i10(), events=300))
 
 
-#: Wave 16b finding, for the architect (not the runaway, which it masked): at the steady
-#: cadence a price window lasts four ticks and can close with no verdict sample. The
-#: organ then reads the judges' period-2 oscillation sampled [0.4, unmeasured, 0.4] as a
-#: persistent violation (missing evidence is not compliance, M-6), flags stable failure
-#: on the producers' card (windows 25 and 65) and names no moving role in those windows,
-#: so the thrash price lands on the core (router:Tick, windows 24-32). Under the runaway
-#: every window was long enough to hold verdicts.
-SPARSE = ("wave 16b finding: an unmeasured window inside a period-2 oscillation is read as "
-          "persistence and as no moving role (i10 windows 24-32); a ruling on how the organ "
-          "reads missing evidence in a cycle is needed")
-
-
 def _producer_card_flagged(run):
     return [r["window"] for r in run.rows("pathology.stable_failure")
             if "card:verdict-floor" in r.get("violated_cards", ())]
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=SPARSE)
 def test_i10_oscillating_judges_are_read_as_thrash_not_as_producer_stable_failure(i10):
     """Judges alternate 0.3 / 0.7 by window over a steady producer; the producers' verdict
     card is violated every other window. The organ must read the tier's oscillation as
@@ -57,7 +44,7 @@ def test_i10_oscillating_judges_are_read_as_thrash_not_as_producer_stable_failur
     assert not [r for r in i10.rows("immune.price_ratchet") if r["card_id"] == "verdict-floor"]
 
 
-def _any_violation(tail):
+def _any_violation(tail, held=()):
     """A mutant attractor: every card violated in any tail window, measured or not."""
     names = sorted({name for w in tail for name in w.get("regions", {})})
     return [name for name in names
@@ -87,14 +74,12 @@ def _always_wide(advance):
     return wrapped
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=SPARSE)
 def test_i10_either_half_of_the_definition_alone_refuses_the_phantom():
     """The persistence rule alone (every gap read as wide) still keeps the tiers apart."""
     alone = P.run(*P.i10(), events=300, patches=[(live, "advance", _always_wide(live.advance))])
     assert not _producer_card_flagged(alone)
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=SPARSE)
 def test_i10_the_thrash_price_lands_on_the_tier_that_moved(i10):
     """Where the thrash price lands (TH-1d, wave 16 I-10): on the routers of the tier
     whose behaviour moved, which the organ names in ``thrash.roles``. The judges

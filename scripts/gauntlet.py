@@ -990,9 +990,18 @@ def sf1a_detection(events: list[Mapping], manifest: Mapping, *, card: str) -> Re
     episode: a flag by the deadline detects it; a later flag, or none once the episode
     holds more than ``H`` observations, fails it; a shorter unflagged episode is no
     evidence. ``pass`` needs one detected episode and no failed one.
+
+    The kernel enters a card into the failing attractor only over a tail that measured
+    it in every window (R16b-10: a gap is neither compliance nor violation), so an
+    episode is demanded only once, by its deadline, some window's whole ``k``-window tail
+    measured the card violating; one measured intermittently throughout is no evidence
+    here (it escapes the ratchet: answered by the sampling rate, a later wave).
     """
     ph = physics(manifest)
-    episodes = violation_episodes(card_violations(events, card), ph.k)
+    violated = card_violations(events, card)
+    episodes = violation_episodes(violated, ph.k)
+    full = {w for w in violated
+            if all(violated.get(w - i, 0) > 0 for i in range(ph.k))}
     if not episodes:
         return _unsupported("SF-1a", "the card was never violated", card=card)
     flags = card_flagged(events, card)
@@ -1001,6 +1010,8 @@ def sf1a_detection(events: list[Mapping], manifest: Mapping, *, card: str) -> Re
         onset = observed[0]
         first = min((w for w in flags if onset <= w <= end), default=None)
         deadline = observed[ph.H] if len(observed) > ph.H else None
+        if deadline is not None and not any(onset <= w <= deadline for w in full):
+            deadline = None  # never a whole measured tail by then: not demanded
         entry = {"onset": onset, "observations": len(observed), "end": end,
                  "first_flag": first, "deadline": deadline, "H": ph.H}
         if first is not None and (deadline is None or first <= deadline):

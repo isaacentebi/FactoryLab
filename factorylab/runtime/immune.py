@@ -106,7 +106,10 @@ def thrash_roles(rt, windows: list[dict]) -> list[str]:
 
     Guarantees the roles measured by the cards whose region-relative cell changed
     between two consecutive windows of the retained horizon the diagnosis read
-    (``live.cells`` over ``timing.min_ratio × immune.k`` windows), each read under the
+    (``timing.min_ratio × immune.k`` windows) that both measured the card
+    (``live.card_cell``; R16b-10: a window that did not measure it is neither movement
+    nor stillness, so one gap never hides the rest of the horizon's movement and sends
+    the price to the core), each read under the
     semantics the window RECORDED at its close (``semantics``), never the charter in
     force now (Codex on #152): an amendment that redefines a card under the same id
     cannot move old movement onto its new role. A change between two windows that
@@ -120,9 +123,7 @@ def thrash_roles(rt, windows: list[dict]) -> list[str]:
     span = windows[-horizon:]
     if len(span) < 2:
         return []
-    bins = {"registration_bins": rt.m.immune.registration_bins,
-            "revision_bins": rt.m.immune.revision_bins}
-    dims, series = live.cells(span, activity=False, **bins)
+    names = sorted({name for w in span for name in w.get("regions", {})})
     current = {f"card:{card.id}": card_semantics(card) for card in rt.charter.cards}
 
     def meaning(window: dict, name: str) -> dict | None:
@@ -130,10 +131,10 @@ def thrash_roles(rt, windows: list[dict]) -> list[str]:
         return (recorded or {}).get(name) if recorded is not None else current.get(name)
 
     roles = set()
-    for i, name in enumerate(dims):
-        for before, after, cell_before, cell_after in zip(span, span[1:], series,
-                                                          series[1:], strict=False):
-            if cell_before[i] == cell_after[i]:
+    for name in names:
+        for before, after in zip(span, span[1:], strict=False):
+            cell_before, cell_after = live.card_cell(before, name), live.card_cell(after, name)
+            if cell_before is None or cell_after is None or cell_before == cell_after:
                 continue
             was, now = meaning(before, name), meaning(after, name)
             if (was is None or now is None or was.get("role") != now.get("role")

@@ -222,3 +222,34 @@ def test_sf2c_the_lever_the_routers_estimate_follows_the_price(sf2_low):
     reliever = [p for s, p in gaps if s == "reliever"]
     holder = [p for s, p in gaps if s == "holder"]
     assert reliever and holder and max(reliever) < min(p for p in holder if p > 0)
+
+
+# --- future work (R16b-10) ---------------------------------------------------------------
+
+
+def _half_judge(view):
+    """A judge that answers 0.3 (under the 0.5 floor) on even windows and declines on odd
+    ones: the card is violated whenever measured, and measured every other window."""
+    return P.verdict(0.3)(view) if view.window % 2 == 0 else P.decline(view)
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError,
+                   reason="intermittent measurement escapes the ratchet; answered by "
+                   "sampling rate, next wave")
+def test_an_intermittently_measured_failure_is_still_ratcheted():
+    """R16b-10's one support rule enters a card into the failing attractor only over a
+    wholly measured tail. A population that measures its violating card only every
+    other window (the judges alternate a low verdict and a decline, by window) is never
+    entered, so the duration price never reaches it. The answer is the sampling rate
+    (enough samples per window), not a weaker support rule."""
+    seats = [P.producer("steady-a", P.hold), P.producer("steady-b", P.hold),
+             *(P.judge(f"judge-{i}", _half_judge) for i in range(4)),
+             *(P.meta(f"meta-{i}", P.conformity(0.8)) for i in range(2))]
+    cards = [P.card("verdict-floor", "verdict_mean", "at least 0.5", answers_for="producer",
+                    norm="useful inquiry")]
+    run = P.run(P.world(seats, cards=cards), P.Population(seats), events=300)
+    violated = g.card_violations(run.events, "verdict-floor")
+    assert violated and all(v > 0 for v in violated.values())  # violated when measured
+    assert [r for r in run.events
+            if r.get("kind") in ("immune.price_ratchet", "immune.price_ratchet_saturated")
+            and r.get("card_id") == "verdict-floor"]

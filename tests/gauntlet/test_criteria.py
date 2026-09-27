@@ -164,14 +164,20 @@ def test_sf1a_counts_measured_observations_and_expires_with_the_tail():
     result = g.sf1a_detection(sparse + closes, M, card="c")
     assert result.status == g.UNSUPPORTED
     assert result.evidence["episodes"][0]["observations"] == 6
-    # Measured every other window long enough: the deadline is the tenth observation's
-    # window (19), not onset + 9 windows (10).
+    # Measured every other window only: no whole k-window tail ever measured it, so the
+    # kernel never enters it (R16b-10) and no flag is demanded, however long.
     long = [_price_window(w, 0.0) for w in range(1, 41, 2)]
-    closes = [_w(i, sf=i >= 15) for i in range(1, 45)]
-    result = g.sf1a_detection(long + closes, M, card="c")
-    assert result.ok and result.evidence["detected"][0]["deadline"] == 19
     late = [_w(i, sf=i >= 25) for i in range(1, 45)]
-    assert g.sf1a_detection(long + late, M, card="c").status == g.FAIL
+    assert g.sf1a_detection(long + late, M, card="c").status != g.FAIL
+    unflagged = [_w(i) for i in range(1, 45)]
+    assert g.sf1a_detection(long + unflagged, M, card="c").status == g.UNSUPPORTED
+    # A whole tail first (windows 1-3), then every other window: demanded, and the
+    # deadline is the tenth observation's window (17), not onset + 9 windows (10).
+    mixed = [_price_window(w, 0.0) for w in (1, 2, 3, *range(5, 41, 2))]
+    closes = [_w(i, sf=i >= 15) for i in range(1, 45)]
+    result = g.sf1a_detection(mixed + closes, M, card="c")
+    assert result.ok and result.evidence["detected"][0]["deadline"] == 17
+    assert g.sf1a_detection(mixed + late, M, card="c").status == g.FAIL
     # Measurements four windows apart: the tail (k = 3) loses each before the next.
     apart = [_price_window(w, 0.0) for w in range(1, 60, 4)]
     result = g.sf1a_detection(apart + [_w(i) for i in range(1, 62)], M, card="c")
@@ -1760,12 +1766,11 @@ def test_k1_s4_a_penalty_only_diary_is_checked_not_unsupported():
     assert g.s4_boundedness([over | {"penalty": 0.3}], M).ok
 
 
-def test_a1_sf1a_measurements_k_apart_are_one_episode_as_the_kernel_reads_them():
-    """Sol A1 (disagreed, with the kernel's own predicate): the tail is the last k
-    windows (versions.py:82) and a card fails while every window of it that measured the
-    card violated, and one did (live.py:334-347). Measurements k apart keep a violating
-    measurement in every tail between them, so the kernel's failing set never drops the
-    card: one episode. k + 1 apart, one tail holds none: two episodes."""
+def test_a1_sf1a_a_card_enters_the_attractor_only_over_a_wholly_measured_tail():
+    """R16b-10, the kernel's one support rule (``live.persistent_violations``): a card
+    enters the failing attractor only when every window of its ``k``-window tail
+    measured it violating; measurements k apart (a gap in every tail) never enter it;
+    a card already held stays in it across the gaps (M-6)."""
     from factorylab.versioning.live import persistent_violations
 
     k = g.physics(M).k
@@ -1774,15 +1779,20 @@ def test_a1_sf1a_measurements_k_apart_are_one_episode_as_the_kernel_reads_them()
         return {"window": index, "profile": {"foo": 0.5} if measured else {},
                 "regions": {"foo": {"kind": "min", "lo": 1.0, "hi": None, "scale": 1.0}}}
 
-    for gap, episodes in ((k, 1), (k + 1, 2)):
-        last = 2 + gap
-        diary = {i: window(i, i in (2, last)) for i in range(1, last + 1)}
-        # The kernel's reading at every window from the first full tail to the second
-        # measurement: diary[W - k + 1 .. W].
-        failing = {w: persistent_violations([diary[i] for i in range(w - k + 1, w + 1)])
-                   == ["foo"] for w in range(max(k, 2), last + 1)}
-        assert all(failing.values()) is (episodes == 1), failing
-        assert len(g.violation_episodes({2: 1.0, last: 1.0}, k)) == episodes
+    last = 2 + k
+    sparse = {i: window(i, i in (2, last)) for i in range(1, last + 1)}
+    tails = {w: [sparse[i] for i in range(w - k + 1, w + 1)] for w in range(k, last + 1)}
+    assert not any(persistent_violations(t) for t in tails.values())
+    assert all(persistent_violations(t, held=("foo",)) == ["foo"]
+               for w, t in tails.items() if w >= 2 and any(x["profile"] for x in t))
+    dense = [window(i, True) for i in range(1, k + 1)]
+    assert persistent_violations(dense) == ["foo"]
+    # SF-1a never demands a flag of an episode no whole tail measured.
+    violated = {2: 1.0, last: 1.0}
+    rows = [{"kind": "price.window", "window": w, "values": {"foo": 0.5},
+             "regions": {"foo": {"kind": "min", "lo": 1.0, "hi": None, "scale": 1.0}}}
+            for w in violated] + [_w(i) for i in range(1, last + 2)]
+    assert g.sf1a_detection(rows, M, card="foo").status == g.UNSUPPORTED
 
 
 def test_b1_s8_a_down_step_is_the_kernels_exactly():
