@@ -299,6 +299,14 @@ RETIRED_FIELDS: dict[tuple[str, str], str] = {
 }
 
 
+def is_legacy_world(manifest: Mapping | None) -> bool:
+    """Whether the launched manifest predates wave 16: it states a field wave 16 retired
+    (``RETIRED_FIELDS``). The one predicate for every pre-wave-16 reading: the manifest
+    kernel validation, S5's old credit and S4's old row shapes. A kernel change is a new
+    world (§II), so a world's rows all come from the emitters of its own era."""
+    return any(name in _section(manifest, block) for block, name in RETIRED_FIELDS)
+
+
 def kernel_problem(launched: Mapping) -> str | None:
     """Why the kernel would not have launched this manifest, or None, by the kernel's
     own load validation, never restated (Codex on b56e793 and d3dc486): the launched
@@ -318,12 +326,11 @@ def kernel_problem(launched: Mapping) -> str | None:
     from factorylab.runtime.worlds import WorldManifest, derived_eta
 
     candidate = json.loads(json.dumps(launched, default=str))
-    legacy = False
+    legacy = is_legacy_world(candidate)
     for (block, name) in RETIRED_FIELDS:
         section = candidate.get(block)
         if isinstance(section, dict) and name in section:
             del section[name]
-            legacy = True
     if legacy:
         prices, timing, immune = (candidate.get(b) or {} for b in ("prices", "timing",
                                                                      "immune"))
@@ -2801,7 +2808,8 @@ UNIT_FIELDS: dict[str, tuple[str, ...]] = {
     "router.carried": ("reward",),
     "router.step_rescaled": ("reward", "stepped_as"),
     # Wave 16 (R10-l): the round's raw score and its learned value on the one map; a
-    # pre-wave-16 row carried the reward before the charge instead (``LEGACY_OMITTED``).
+    # pre-wave-16 row carried the reward before the charge instead (``LEGACY_OMITTED``,
+    # ``RETIRED_ROW_FIELDS``: each world reads its own era's shape).
     "thrash.charged": ("reward", "reward_before", "raw", "charge"),
     "propensity.learned": ("reward",),
     "evaluator.settled": ("consequence", "grade", "reward"),
@@ -2886,9 +2894,10 @@ OMITTED: dict[tuple[str, str], Any] = {
     **{("consequence.uninformative", name): (lambda row: "reason" in row)
        for name in ("q", "y")},
 }
-#: The unit fields a pre-wave-16 emitter left out, each under the condition it did. The
-#: gauntlet reads a diary its world wrote, and a world launched before wave 16 wrote
-#: the historical shapes (5db5ead, the last main before it). Pinned against that tree's
+#: The unit fields a pre-wave-16 emitter never wrote. The gauntlet reads a diary its
+#: world wrote, and a world launched before wave 16 (``is_legacy_world``) wrote the
+#: historical shapes (5db5ead, the last main before it): in such a world each field
+#: here is absent, and present it is a mixed row, malformed. Pinned against that tree's
 #: emitters by tests/gauntlet/test_criteria_schema.py:
 #: - ``thrash.charged`` ``raw``: the old emitter (5db5ead feedback.py
 #:   ``_thrash_charged``, :2356) wrote ``charge``, ``reward_before`` and ``reward``;
@@ -2897,8 +2906,14 @@ OMITTED: dict[tuple[str, str], Any] = {
 #: priced rows only gained ``status``; ``price.update`` gained ``at_cap``, ``bound`` and
 #: ``integrator_frozen``, none bounded here; ``consequence.marked`` and
 #: ``verdict.consequence_late`` stopped being written, their old rows whole.
-LEGACY_OMITTED: dict[tuple[str, str], Any] = {
-    ("thrash.charged", "raw"): lambda row: "reward_before" in row,
+LEGACY_OMITTED: dict[tuple[str, str], str] = {
+    ("thrash.charged", "raw"): "5db5ead feedback.py _thrash_charged, :2356",
+}
+#: The unit fields only a pre-wave-16 emitter wrote: in a wave-16 world each is absent,
+#: and present it is a legacy-shaped or mixed row, malformed. Pinned the same way.
+RETIRED_ROW_FIELDS: dict[tuple[str, str], str] = {
+    ("thrash.charged", "reward_before"): "wave 16 R10-l: feedback.py _learning_value "
+                                         "writes raw, not the reward before the charge",
 }
 #: The penalty a settlement or an abstention bears is bounded by ``penalty_cap``.
 CAPPED_FIELDS: dict[str, tuple[str, ...]] = {
@@ -2947,16 +2962,24 @@ def s4_boundedness(events: list[Mapping], manifest: Mapping) -> Result:
     ratchet ends in
     [0, ``lambda_max``]. ``unsupported`` when the rows carry no such value at all."""
     ph = physics(manifest)
+    # A world's rows come from its own era's emitters: a field that era never wrote is
+    # absent, and present it is a row of the other era, or a mix of both.
+    foreign = LEGACY_OMITTED if is_legacy_world(manifest) else RETIRED_ROW_FIELDS
     bad, checked = [], 0
     for kind, fields in UNIT_FIELDS.items():
         for row in rows_of(events, kind):
             for name in fields:
                 value = _lookup(row, name)
                 checked += 1
+                if (kind, name) in foreign:
+                    if value is not ABSENT:
+                        bad.append({"kind": kind, "field": name, "value": value,
+                                    "foreign": True, "handle": row.get("handle")})
+                    continue
                 if value is ABSENT:
                     # Only a field the kernel's emitter leaves out, under the condition
                     # it does, may be absent (``OMITTED``); every other absence fails.
-                    omitted = OMITTED.get((kind, name)) or LEGACY_OMITTED.get((kind, name))
+                    omitted = OMITTED.get((kind, name))
                     if omitted is None or not omitted(row):
                         bad.append({"kind": kind, "field": name, "value": None,
                                     "missing": True, "absent": True,
@@ -3014,7 +3037,7 @@ def s5_neutral_imputation(events: list[Mapping], manifest: Mapping) -> Result:
     if not rows:
         return _unsupported("S5", "no abstention or decline was priced")
     prices = _section(manifest, "prices")
-    before_wave16 = "lambda_max" in prices
+    before_wave16 = is_legacy_world(manifest)
     bound = 2 * float(prices.get("penalty_cap") or physics(manifest).cap)
     thrash = unique_map(rows_of(events, "thrash.charged"), lambda row: need(row, "handle"),
                         lambda row: float(need(row, "charge")))

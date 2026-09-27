@@ -265,7 +265,7 @@ def test_every_dataclass_spread_in_a_ledger_row_is_resolved():
     found = _emitted_reward_kinds(unresolved)
     assert unresolved == [], "register the spread's dataclass in SPREADS"
     assert found["consequence.outcome"] == {"y"}
-    manifest = {"prices": {"penalty_cap": 0.5, "lambda_max": 1.0}}
+    manifest = {"prices": {"penalty_cap": 0.5}}  # a wave-16 world: the real rows
     outcome = {"kind": "consequence.outcome", "handle": "h", "y": 1, "net_micro": 900,
                "cost_micro": 500, "earned_micro": 0, "censored": None}
     assert g.s4_boundedness([outcome], manifest).ok
@@ -305,7 +305,7 @@ def test_s4_refuses_an_out_of_range_score_on_every_reward_bearing_kind():
     """Codex review: a 1.5 in any learned, settled or graded score of any kind fails S4;
     the captured real rows pass."""
     rows = [REAL["rows"][kind] for kind in g.UNIT_FIELDS if kind in REAL["rows"]]
-    manifest = {"prices": {"penalty_cap": 0.5, "lambda_max": 1.0}}
+    manifest = {"prices": {"penalty_cap": 0.5}}  # a wave-16 world: the real rows
     assert g.s4_boundedness(rows, manifest).ok
     tried = 0
     for kind, fields in g.UNIT_FIELDS.items():
@@ -389,39 +389,75 @@ def _tree_at(commit, into):
     return into
 
 
+def _emitted_kinds(root):
+    """Every constant ``kind`` of a dict literal under ``root``'s factorylab/."""
+    return {v.value for path in (root / "factorylab").rglob("*.py")
+            for node in ast.walk(ast.parse(path.read_text())) if isinstance(node, ast.Dict)
+            for k, v in zip(node.keys, node.values, strict=True)
+            if isinstance(k, ast.Constant) and k.value == "kind"
+            and isinstance(v, ast.Constant)}
+
+
+@pytest.mark.gate  # measured 1.5 s: parses the factorylab tree of two eras
 def test_s4_legacy_omissions_are_exactly_what_the_pre_wave_16_emitters_left_out(tmp_path):
-    """Codex on c78f2bc: a diary a pre-wave-16 world wrote holds its emitters' shapes.
-    ``LEGACY_OMITTED`` is exactly what those emitters left out and today's write; every
-    field they wrote as None is still ``NULLABLE``."""
+    """Codex on c78f2bc and b075c08: a diary a world wrote holds its own era's shapes.
+    ``LEGACY_OMITTED`` is exactly what the pre-wave-16 emitters left out and today's
+    write; ``RETIRED_ROW_FIELDS`` exactly what today's leave out of a kind those wrote,
+    and they did not; every field they wrote as None is still ``NULLABLE``."""
     old = _tree_at(BEFORE_WAVE_16, tmp_path)
-    assert set(g.LEGACY_OMITTED) == (_literally_nullable(omitted=True, root=old)
-                                     - _literally_nullable(omitted=True))
+    then, now = (_literally_nullable(omitted=True, root=root) for root in (old, ROOT))
+    assert set(g.LEGACY_OMITTED) == then - now
+    old_kinds = _emitted_kinds(old)
+    assert set(g.RETIRED_ROW_FIELDS) == {(kind, name) for kind, name in now - then
+                                         if kind in old_kinds}
     assert _literally_nullable(omitted=False, root=old) <= set(g.NULLABLE)
 
 
 def test_s4_reads_the_real_pre_wave_16_thrash_charge_whole():
-    """Codex on c78f2bc (gauntlet.py:2804): the captured pre-wave-16 ``thrash.charged``
-    row (``reward_before``, no ``raw``) is bounded, not malformed; without either, or
-    with ``raw`` missing from a wave-16 row, it fails."""
-    manifest = {"prices": {"penalty_cap": 0.5}}
+    """Codex on c78f2bc (gauntlet.py:2804): in a pre-wave-16 world the captured
+    ``thrash.charged`` row (``reward_before``, no ``raw``) is bounded, not malformed;
+    without ``reward_before``, or mixed with a ``raw``, it fails."""
+    legacy_world = {"prices": {"penalty_cap": 0.5, "lambda_max": 1.0}}
+    assert g.is_legacy_world(legacy_world)
     legacy = REAL["legacy_rows"]["thrash.charged"]
     assert "raw" not in legacy and "reward_before" in legacy
-    assert g.s4_boundedness([legacy], manifest).ok
+    assert g.s4_boundedness([legacy], legacy_world).ok
     neither = {k: v for k, v in legacy.items() if k != "reward_before"}
-    result = g.s4_boundedness([neither], manifest)
+    result = g.s4_boundedness([neither], legacy_world)
     assert result.status == g.FAIL
-    assert {bad["field"] for bad in result.evidence["bad"]} == {"reward_before", "raw"}
-    assert g.s4_boundedness([_set(legacy, "reward_before", 1.5)], manifest).status == g.FAIL
-    current = {k: v for k, v in REAL["rows"]["thrash.charged"].items() if k != "raw"}
-    result = g.s4_boundedness([current], manifest)
-    assert result.status == g.FAIL
-    assert {bad["field"] for bad in result.evidence["bad"]} == {"reward_before", "raw"}
+    assert [bad["field"] for bad in result.evidence["bad"]] == ["reward_before"]
+    assert g.s4_boundedness([_set(legacy, "reward_before", 1.5)], legacy_world).status \
+        == g.FAIL
+    mixed = g.s4_boundedness([{**legacy, "raw": 0.5}], legacy_world)
+    assert mixed.status == g.FAIL and mixed.evidence["bad"][0]["foreign"]
+    # A wave-16 row (it names raw) is foreign in a pre-wave-16 world.
+    assert g.s4_boundedness([REAL["rows"]["thrash.charged"]], legacy_world).status == g.FAIL
+
+
+def test_s4_a_legacy_shaped_row_in_a_wave_16_world_is_malformed():
+    """Codex on b075c08: legacy shapes are read only in a pre-wave-16 world
+    (``is_legacy_world``). In a wave-16 world the old ``thrash.charged`` row, or a
+    current one carrying ``reward_before`` too, fails; the real current row passes."""
+    world = {"prices": {"penalty_cap": 0.5}}
+    assert not g.is_legacy_world(world)
+    current = REAL["rows"]["thrash.charged"]
+    assert g.s4_boundedness([current], world).ok
+    old = g.s4_boundedness([REAL["legacy_rows"]["thrash.charged"]], world)
+    assert old.status == g.FAIL
+    assert {(bad["field"], bool(bad.get("foreign"))) for bad in old.evidence["bad"]} == {
+        ("reward_before", True), ("raw", False)}
+    mixed = g.s4_boundedness([{**current, "reward_before": 0.5}], world)
+    assert mixed.status == g.FAIL
+    assert [(bad["field"], bad["foreign"]) for bad in mixed.evidence["bad"]] == [
+        ("reward_before", True)]
+    without_raw = {k: v for k, v in current.items() if k != "raw"}
+    assert g.s4_boundedness([without_raw], world).evidence["bad"][0]["field"] == "raw"
 
 
 def test_s4_a_missing_required_field_fails_on_every_real_row():
     """Codex P2: every field the kernel always writes is required: dropping it from the
     real row of its kind fails S4."""
-    manifest = {"prices": {"penalty_cap": 0.5, "lambda_max": 1.0}}
+    manifest = {"prices": {"penalty_cap": 0.5}}  # a wave-16 world: the real rows
     tried = 0
     for kind, fields in g.UNIT_FIELDS.items():
         if kind not in REAL["rows"]:
