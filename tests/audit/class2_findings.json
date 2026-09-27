@@ -303,6 +303,16 @@
    "status": "untriaged"
   },
   {
+   "id": "36f9408b59ae",
+   "world": "compute-continuity-roster",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "compute-continuity-roster/request/produce/institutions/#prose",
+   "quote": "never a judgement's consequence score) on its violation v, clipped to [0, prices.penalty_cap].",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
    "id": "6664142742cf",
    "world": "compute-continuity-roster",
    "surface": "rendered",
@@ -319,6 +329,26 @@
    "rule": "IMP",
    "path": "compute-continuity-roster/request/produce/institutions/#prose",
    "quote": "omit pay for free sources.\",     \"redirects\":",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "41832ffcec8f",
+   "world": "compute-continuity-roster",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "compute-continuity-roster/request/produce/institutions/#prose",
+   "quote": "read_bytes (a reading's inputs bytes).\",       \"groupable\":",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "3a1c51c8f5ad",
+   "world": "compute-continuity-roster",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "compute-continuity-roster/request/produce/institutions/#prose",
+   "quote": "read_measured (the invocations whose readings are metered).",
    "design_ref": null,
    "status": "untriaged"
   },
@@ -403,12 +433,52 @@
    "status": "untriaged"
   },
   {
+   "id": "05edc4b3347c",
+   "world": "compute-continuity-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "compute-continuity-roster/institutions/committee/shadow_prices",
+   "quote": "never a judgement's consequence score) on its violation v, clipped to [0, prices.penalty_cap].",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
    "id": "243d5a07de0d",
    "world": "compute-continuity-roster",
    "surface": "static",
    "rule": "IMP",
    "path": "compute-continuity-roster/institutions/connectors/payment",
    "quote": "omit pay for free sources.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "1a2fcf22d35f",
+   "world": "compute-continuity-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "compute-continuity-roster/institutions/mechanics/committee.shadow_prices",
+   "quote": "never a judgement's consequence score) on its violation v, clipped to [0, prices.penalty_cap].",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "65da2fa165a7",
+   "world": "compute-continuity-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "compute-continuity-roster/institutions/observations/[].description",
+   "quote": "read_bytes (a reading's inputs bytes).",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "cf68452b83f8",
+   "world": "compute-continuity-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "compute-continuity-roster/institutions/observations/[].description",
+   "quote": "read_measured (the invocations whose readings are metered).",
    "design_ref": null,
    "status": "untriaged"
   },
@@ -670,56 +740,6 @@
    "path": "edition6-capital-loop/request/produce/you/working_state.state.lens",
    "quote": "your starting prior is that the value of any use of resources depends on its best available alternative.",
    "design_ref": "B3 (opportunity lens; Astra M-1)",
-   "status": "untriaged"
-  },
-  {
-   "id": "cdc7cd0c46b1",
-   "world": "edition6-capital-loop",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-capital-loop/request/counter/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "d73b9b5cd034",
-   "world": "edition6-capital-loop",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-capital-loop/request/counter/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "243a92c19da0",
-   "world": "edition6-capital-loop",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-capital-loop/request/counter/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "43aaababb42a",
-   "world": "edition6-capital-loop",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-capital-loop/request/counter/outcome_contract/#prose",
-   "quote": "omit final-answer fields you cannot fill yet.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "ad488acc9488",
-   "world": "edition6-capital-loop",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-capital-loop/request/counter/request/#prose",
-   "quote": "give your own verdict 0-1 on the return this verdict judged, against the charter.",
-   "design_ref": "B1-4",
    "status": "untriaged"
   },
   {
@@ -1043,12 +1063,52 @@
    "status": "untriaged"
   },
   {
+   "id": "46a9d4c47b48",
+   "world": "edition6-capital-loop",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-capital-loop/institutions/committee/shadow_prices",
+   "quote": "never a judgement's consequence score) on its violation v, clipped to [0, prices.penalty_cap].",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
    "id": "3b00850caa85",
    "world": "edition6-capital-loop",
    "surface": "static",
    "rule": "IMP",
    "path": "edition6-capital-loop/institutions/connectors/payment",
    "quote": "omit pay for free sources.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "2235537919bc",
+   "world": "edition6-capital-loop",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-capital-loop/institutions/mechanics/committee.shadow_prices",
+   "quote": "never a judgement's consequence score) on its violation v, clipped to [0, prices.penalty_cap].",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "fe9509a75960",
+   "world": "edition6-capital-loop",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-capital-loop/institutions/observations/[].description",
+   "quote": "read_bytes (a reading's inputs bytes).",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "58e6123f8773",
+   "world": "edition6-capital-loop",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-capital-loop/institutions/observations/[].description",
+   "quote": "read_measured (the invocations whose readings are metered).",
    "design_ref": null,
    "status": "untriaged"
   },
@@ -1340,56 +1400,6 @@
    "path": "edition6-testnet-rehearsal/request/produce/you/working_state.state.lens",
    "quote": "your starting prior is that the value of any use of resources depends on its best available alternative.",
    "design_ref": "B3 (opportunity lens; Astra M-1)",
-   "status": "untriaged"
-  },
-  {
-   "id": "16c8aaa8a0ab",
-   "world": "edition6-testnet-rehearsal",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-testnet-rehearsal/request/counter/base_capabilities/#prose",
-   "quote": "do not invent a capability that is not listed here.",
-   "design_ref": "B1-1",
-   "status": "untriaged"
-  },
-  {
-   "id": "4cc0b2f27972",
-   "world": "edition6-testnet-rehearsal",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-testnet-rehearsal/request/counter/base_capabilities/#prose",
-   "quote": "retrieve a full argument schema or proposal shape with catalogue.search before using an unfamiliar one;",
-   "design_ref": "B1-2",
-   "status": "untriaged"
-  },
-  {
-   "id": "18129d061a7d",
-   "world": "edition6-testnet-rehearsal",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-testnet-rehearsal/request/counter/base_capabilities/#prose",
-   "quote": "retrieve it with catalogue.search.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "e852297d8ff8",
-   "world": "edition6-testnet-rehearsal",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-testnet-rehearsal/request/counter/outcome_contract/#prose",
-   "quote": "omit final-answer fields you cannot fill yet.",
-   "design_ref": null,
-   "status": "untriaged"
-  },
-  {
-   "id": "acd5c3b0c0f4",
-   "world": "edition6-testnet-rehearsal",
-   "surface": "rendered",
-   "rule": "IMP",
-   "path": "edition6-testnet-rehearsal/request/counter/request/#prose",
-   "quote": "give your own verdict 0-1 on the return this verdict judged, against the charter.",
-   "design_ref": "B1-4",
    "status": "untriaged"
   },
   {
@@ -1713,12 +1723,52 @@
    "status": "untriaged"
   },
   {
+   "id": "b0e7b8c03692",
+   "world": "edition6-testnet-rehearsal",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-testnet-rehearsal/institutions/committee/shadow_prices",
+   "quote": "never a judgement's consequence score) on its violation v, clipped to [0, prices.penalty_cap].",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
    "id": "188bea7939f1",
    "world": "edition6-testnet-rehearsal",
    "surface": "static",
    "rule": "IMP",
    "path": "edition6-testnet-rehearsal/institutions/connectors/payment",
    "quote": "omit pay for free sources.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "eddc906b4566",
+   "world": "edition6-testnet-rehearsal",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-testnet-rehearsal/institutions/mechanics/committee.shadow_prices",
+   "quote": "never a judgement's consequence score) on its violation v, clipped to [0, prices.penalty_cap].",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "2825025cbf2c",
+   "world": "edition6-testnet-rehearsal",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-testnet-rehearsal/institutions/observations/[].description",
+   "quote": "read_bytes (a reading's inputs bytes).",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "967175f8550b",
+   "world": "edition6-testnet-rehearsal",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "edition6-testnet-rehearsal/institutions/observations/[].description",
+   "quote": "read_measured (the invocations whose readings are metered).",
    "design_ref": null,
    "status": "untriaged"
   },
@@ -2753,6 +2803,16 @@
    "status": "untriaged"
   },
   {
+   "id": "e98b1dbddc3d",
+   "world": "scripted",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "scripted/request/produce/institutions/#prose",
+   "quote": "never a judgement's consequence score) on its violation v, clipped to [0, prices.penalty_cap].",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
    "id": "e987df75ec05",
    "world": "scripted",
    "surface": "rendered",
@@ -2769,6 +2829,26 @@
    "rule": "IMP",
    "path": "scripted/request/produce/institutions/#prose",
    "quote": "omit pay for free sources.\",     \"redirects\":",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "f0a7b10c4e9f",
+   "world": "scripted",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "scripted/request/produce/institutions/#prose",
+   "quote": "read_bytes (a reading's inputs bytes).\",       \"groupable\":",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "f9a8a83b6676",
+   "world": "scripted",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "scripted/request/produce/institutions/#prose",
+   "quote": "read_measured (the invocations whose readings are metered).",
    "design_ref": null,
    "status": "untriaged"
   },
@@ -2853,12 +2933,52 @@
    "status": "untriaged"
   },
   {
+   "id": "f3bf03faceff",
+   "world": "scripted",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted/institutions/committee/shadow_prices",
+   "quote": "never a judgement's consequence score) on its violation v, clipped to [0, prices.penalty_cap].",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
    "id": "1b88221386b1",
    "world": "scripted",
    "surface": "static",
    "rule": "IMP",
    "path": "scripted/institutions/connectors/payment",
    "quote": "omit pay for free sources.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "3100cde91621",
+   "world": "scripted",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted/institutions/mechanics/committee.shadow_prices",
+   "quote": "never a judgement's consequence score) on its violation v, clipped to [0, prices.penalty_cap].",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "ae7ef427ee75",
+   "world": "scripted",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted/institutions/observations/[].description",
+   "quote": "read_bytes (a reading's inputs bytes).",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "da49b025377f",
+   "world": "scripted",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted/institutions/observations/[].description",
+   "quote": "read_measured (the invocations whose readings are metered).",
    "design_ref": null,
    "status": "untriaged"
   },
@@ -3383,6 +3503,16 @@
    "status": "untriaged"
   },
   {
+   "id": "f6dd1de30393",
+   "world": "scripted-crash",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "scripted-crash/request/produce/institutions/#prose",
+   "quote": "never a judgement's consequence score) on its violation v, clipped to [0, prices.penalty_cap].",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
    "id": "c181eaecc9f0",
    "world": "scripted-crash",
    "surface": "rendered",
@@ -3399,6 +3529,26 @@
    "rule": "IMP",
    "path": "scripted-crash/request/produce/institutions/#prose",
    "quote": "omit pay for free sources.\",     \"redirects\":",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "4e35bdbf0083",
+   "world": "scripted-crash",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "scripted-crash/request/produce/institutions/#prose",
+   "quote": "read_bytes (a reading's inputs bytes).\",       \"groupable\":",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "a8b9bb2bbb8b",
+   "world": "scripted-crash",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "scripted-crash/request/produce/institutions/#prose",
+   "quote": "read_measured (the invocations whose readings are metered).",
    "design_ref": null,
    "status": "untriaged"
   },
@@ -3483,12 +3633,52 @@
    "status": "untriaged"
   },
   {
+   "id": "061921a179eb",
+   "world": "scripted-crash",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted-crash/institutions/committee/shadow_prices",
+   "quote": "never a judgement's consequence score) on its violation v, clipped to [0, prices.penalty_cap].",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
    "id": "b5e22225cce4",
    "world": "scripted-crash",
    "surface": "static",
    "rule": "IMP",
    "path": "scripted-crash/institutions/connectors/payment",
    "quote": "omit pay for free sources.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "0bd8b15dcb8b",
+   "world": "scripted-crash",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted-crash/institutions/mechanics/committee.shadow_prices",
+   "quote": "never a judgement's consequence score) on its violation v, clipped to [0, prices.penalty_cap].",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "2b48a4a2676f",
+   "world": "scripted-crash",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted-crash/institutions/observations/[].description",
+   "quote": "read_bytes (a reading's inputs bytes).",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "8f6e657288e3",
+   "world": "scripted-crash",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "scripted-crash/institutions/observations/[].description",
+   "quote": "read_measured (the invocations whose readings are metered).",
    "design_ref": null,
    "status": "untriaged"
   },
@@ -4023,6 +4213,16 @@
    "status": "untriaged"
   },
   {
+   "id": "dc3aa5990e35",
+   "world": "testnet",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "testnet/request/produce/institutions/#prose",
+   "quote": "never a judgement's consequence score) on its violation v, clipped to [0, prices.penalty_cap].",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
    "id": "3a4f518d95c2",
    "world": "testnet",
    "surface": "rendered",
@@ -4039,6 +4239,26 @@
    "rule": "IMP",
    "path": "testnet/request/produce/institutions/#prose",
    "quote": "omit pay for free sources.\",     \"redirects\":",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "661b4aa7ea2e",
+   "world": "testnet",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "testnet/request/produce/institutions/#prose",
+   "quote": "read_bytes (a reading's inputs bytes).\",       \"groupable\":",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "da6463648b03",
+   "world": "testnet",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "testnet/request/produce/institutions/#prose",
+   "quote": "read_measured (the invocations whose readings are metered).",
    "design_ref": null,
    "status": "untriaged"
   },
@@ -4123,12 +4343,52 @@
    "status": "untriaged"
   },
   {
+   "id": "ad7fd12f41fd",
+   "world": "testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet/institutions/committee/shadow_prices",
+   "quote": "never a judgement's consequence score) on its violation v, clipped to [0, prices.penalty_cap].",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
    "id": "dd778a362c45",
    "world": "testnet",
    "surface": "static",
    "rule": "IMP",
    "path": "testnet/institutions/connectors/payment",
    "quote": "omit pay for free sources.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "893fedcfc26c",
+   "world": "testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet/institutions/mechanics/committee.shadow_prices",
+   "quote": "never a judgement's consequence score) on its violation v, clipped to [0, prices.penalty_cap].",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "5943d8b4c248",
+   "world": "testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet/institutions/observations/[].description",
+   "quote": "read_bytes (a reading's inputs bytes).",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "15e79644ed10",
+   "world": "testnet",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet/institutions/observations/[].description",
+   "quote": "read_measured (the invocations whose readings are metered).",
    "design_ref": null,
    "status": "untriaged"
   },
@@ -4663,6 +4923,16 @@
    "status": "untriaged"
   },
   {
+   "id": "a8d4febc359d",
+   "world": "testnet-10m-roster",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "testnet-10m-roster/request/produce/institutions/#prose",
+   "quote": "never a judgement's consequence score) on its violation v, clipped to [0, prices.penalty_cap].",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
    "id": "6dc290ff4ebb",
    "world": "testnet-10m-roster",
    "surface": "rendered",
@@ -4679,6 +4949,26 @@
    "rule": "IMP",
    "path": "testnet-10m-roster/request/produce/institutions/#prose",
    "quote": "omit pay for free sources.\",     \"redirects\":",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "2d4e17365063",
+   "world": "testnet-10m-roster",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "testnet-10m-roster/request/produce/institutions/#prose",
+   "quote": "read_bytes (a reading's inputs bytes).\",       \"groupable\":",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "e1862b6dbe09",
+   "world": "testnet-10m-roster",
+   "surface": "rendered",
+   "rule": "IMP",
+   "path": "testnet-10m-roster/request/produce/institutions/#prose",
+   "quote": "read_measured (the invocations whose readings are metered).",
    "design_ref": null,
    "status": "untriaged"
   },
@@ -4763,12 +5053,52 @@
    "status": "untriaged"
   },
   {
+   "id": "b3c7e6dc078a",
+   "world": "testnet-10m-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet-10m-roster/institutions/committee/shadow_prices",
+   "quote": "never a judgement's consequence score) on its violation v, clipped to [0, prices.penalty_cap].",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
    "id": "49fbb2ff7101",
    "world": "testnet-10m-roster",
    "surface": "static",
    "rule": "IMP",
    "path": "testnet-10m-roster/institutions/connectors/payment",
    "quote": "omit pay for free sources.",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "6be3659a2ff3",
+   "world": "testnet-10m-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet-10m-roster/institutions/mechanics/committee.shadow_prices",
+   "quote": "never a judgement's consequence score) on its violation v, clipped to [0, prices.penalty_cap].",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "8c34f296ca0e",
+   "world": "testnet-10m-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet-10m-roster/institutions/observations/[].description",
+   "quote": "read_bytes (a reading's inputs bytes).",
+   "design_ref": null,
+   "status": "untriaged"
+  },
+  {
+   "id": "9e1b8419d4d2",
+   "world": "testnet-10m-roster",
+   "surface": "static",
+   "rule": "IMP",
+   "path": "testnet-10m-roster/institutions/observations/[].description",
+   "quote": "read_measured (the invocations whose readings are metered).",
    "design_ref": null,
    "status": "untriaged"
   },
