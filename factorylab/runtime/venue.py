@@ -165,6 +165,24 @@ def bind_wind_down_orders(rt, report: dict) -> None:
               f"({type(exc).__name__})", file=sys.stderr)
 
 
+def _fills_booking_failed(rt, fills, exc: BaseException) -> None:
+    """Guarantees fills a successful read consumed but could not book are on the record:
+    ``wind_down.fills_booking_failed`` with each fill's own facts and the failure, so
+    the gap is auditable and no fact is lost. Never raises into a kill."""
+    try:
+        rt.ledger.append({
+            "kind": "wind_down.fills_booking_failed",
+            "fills": [{"fact_ns": ts, **{k: payload.get(k) for k in (
+                "event_kind", "order_id", "coin", "is_buy", "size", "px", "fee_usd",
+                "market", "liquidation", "fill_ns", "paid_usd", "mid") if k in payload}}
+                      for ts, payload in fills],
+            "error": type(exc).__name__, "message": str(exc)[:500], "ts": rt.clock.now_ns})
+    except Exception as again:  # noqa: BLE001 - the diary may refuse; the kill proceeds
+        print(f"factorylab kill: the wind-down's fills were not booked "
+              f"({type(exc).__name__}) nor recorded ({type(again).__name__})",
+              file=sys.stderr)
+
+
 def read_wind_down_fills(rt) -> None:
     """Guarantees a live venue's wind-down fills are read once more after the wind-down,
     or that the failure to read them is on the record.
@@ -195,8 +213,9 @@ def read_wind_down_fills(rt) -> None:
                                    exchange.name, payload) for ts, payload in fills]
             rt._settle_exchange_effects(observed, observe_positions=False)
         except Exception as exc:  # noqa: BLE001 - nothing may raise into a kill
-            print(f"factorylab kill: the wind-down's fills were not booked "
-                  f"({type(exc).__name__})", file=sys.stderr)
+            # The read succeeded and its fills are consumed (the cursor has passed
+            # them): their facts go on the record with the failure (Sol on #152).
+            _fills_booking_failed(rt, fills, exc)
         return
     try:
         rt.ledger.append({"kind": "wind_down.fills_unread", "attempts": len(errors),
@@ -322,11 +341,14 @@ def seal_recorded_market(rt) -> None:
     if exchange is None or getattr(rt, "live", True) \
             or not callable(getattr(exchange, "seal_recording", None)):
         return
+    drained = []
     try:
-        rt._settle_exchange_effects(exchange.drain_events(), observe_positions=False)
+        drained = exchange.drain_events()
+        rt._settle_exchange_effects(drained, observe_positions=False)
     except Exception as exc:  # noqa: BLE001 - nothing may raise into a kill
-        print(f"factorylab kill: the wind-down's fills were not booked ({type(exc).__name__})",
-              file=sys.stderr)
+        # Drained, so consumed: their facts go on the record with the failure.
+        _fills_booking_failed(rt, [(e.ts_ns, {"event_kind": str(e.kind), **e.payload})
+                                   for e in drained], exc)
     try:
         exchange.seal_recording()
     except Exception as exc:  # noqa: BLE001

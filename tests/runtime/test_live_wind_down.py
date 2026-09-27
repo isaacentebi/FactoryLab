@@ -107,3 +107,26 @@ def test_a_censored_decisions_closed_lot_books_its_pnl_once_and_is_never_graded(
     assert rt.consequences.payoff(handle) is None
     rt._settle_realized_at_termination()  # once: nothing more to book
     assert len(_rows(rt, "consequence.realized_at_termination")) == 1
+
+
+def test_wind_down_fills_read_but_not_booked_are_on_the_record():
+    """Sol on #152: the read succeeded, so its fills are consumed; booking them raised.
+    Their facts and the failure are ledgered, and the kill still completes."""
+    rt, _handle = _world_with_an_open_long()
+    booked = rt._settle_exchange_effects
+    calls = []
+
+    def failing(events, **kwargs):
+        calls.append(len(events))
+        if events:
+            raise ValueError("booking failed")
+        return booked(events, **kwargs)
+
+    rt._settle_exchange_effects = failing
+    report = rt.kill("explicit_kill:budget")
+    (row,) = _rows(rt, "wind_down.fills_booking_failed")
+    assert row["error"] == "ValueError" and row["message"] == "booking failed"
+    (fill,) = row["fills"]
+    assert fill["coin"] == "BTC" and fill["is_buy"] is False and fill["size"] == "0.001"
+    assert {"order_id", "px", "fee_usd", "fact_ns"} <= set(fill)
+    assert report["production_state"] == "killed" and rt.termination.final
