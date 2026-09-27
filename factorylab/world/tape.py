@@ -339,10 +339,10 @@ def cut(path: str | Path) -> dict:
     stamped with the venue's own book time; the first recorded instrument listing; and
     the account's fee rates, each stamped with the instant the diary recorded it and
     naming what it was read from (``_fee_record``): the venue's own userFees answers
-    (instrument reads in legacy diaries), and the fills the venue booked. A funding row that
-    moved money (``paid_usd`` non-zero) is an account payment of the run that recorded
-    it, not market data, and is left out: a replay's payments are computed from its
-    own positions (Chapter II §II.b). Only a diary of a live venue states fee rates: a
+    (instrument reads in legacy diaries), and the fills the venue booked. Settled market
+    evidence is retained independently of any account payment on the same event. The
+    payment itself is left out: replay computes payments from its own positions
+    (Chapter II §II.b). Only a diary of a live venue states fee rates: a
     simulated venue's are its own constants, never the world's.
     """
     path = Path(path)
@@ -406,7 +406,7 @@ def cut(path: str | Path) -> dict:
             mids.setdefault(str(payload["coin"]), {})[ts] = str(payload["mid"])
         elif event.get("kind") == "Fill":
             fills.append((ts, payload))
-        elif event.get("kind") == "Funding" and not _nonzero(payload.get("paid_usd", "0")):
+        elif event.get("kind") == "Funding":
             # Chapter II §III.b: publication and effective boundary are distinct facts;
             # the recorded oracle is not interchangeable with a replay's mid.
             if payload.get("settled") is True:
@@ -417,6 +417,8 @@ def cut(path: str | Path) -> dict:
                     "mark": None if payload.get("mark") is None else str(payload["mark"]),
                     "oracle_observed_at_ns": payload.get("oracle_observed_at_ns")})
                 continue
+            if _nonzero(payload.get("paid_usd", "0")):
+                continue  # an account payment alone supplies no settled market evidence
             funding.setdefault(str(payload["coin"]), {})[ts] = [
                 str(payload["rate"]),
                 None if payload.get("premium") is None else str(payload["premium"])]

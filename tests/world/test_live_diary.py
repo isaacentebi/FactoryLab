@@ -138,6 +138,20 @@ def _settled_tape(tmp_path, *, oracle="120.123456789", repeats=False):
     return Tape.from_data(cut(path))
 
 
+def test_cut_preserves_settled_evidence_on_the_same_nonzero_payment(tmp_path):
+    tape = _settled_tape(tmp_path)
+    path = tmp_path / "settled.json"
+    items = json.loads(path.read_text())
+    items[-1]["event"]["payload"]["paid_usd"] = "999"
+    path.write_text(json.dumps(items))
+    recut = Tape.from_data(cut(path))
+    assert recut.data["settled_funding"] == tape.data["settled_funding"]
+    venue = TapeVenue(recut, coins=("BTC",), start_cash_usd=Decimal(1000))
+    venue._positions["BTC"] = Position("BTC", Decimal(2), Decimal(100))
+    venue.advance(NS_PER_HOUR + 10)
+    assert venue._cash == Decimal("997.59753086422")
+
+
 def test_settled_tape_does_not_publish_a_delayed_rate_at_its_boundary(tmp_path):
     tape = _settled_tape(tmp_path)
     h = NS_PER_HOUR
