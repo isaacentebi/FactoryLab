@@ -113,6 +113,15 @@ def settle_terminal(rt) -> None:
     own watermarks. Every outcome that became ready is fixed, and every evaluator it
     grades is scored and delivered its grade, before ``Terminated``; the wind-down's
     own fills come after, as late money. Never raises into a kill.
+
+    The terminal order: (1) the final venue advance (``close_recorded_market``,
+    before this); (2) the facts' watermark; (3) arrived verdicts; (4) consequence
+    resolution and due forecasts; (5) the open price window is closed by the same
+    path a due close takes (``_close_price_window``), so every share freezes exactly
+    as at a normal close and every settlement deferred to it (wave 16, D5) settles;
+    no next window opens; (6) returns are delivered; then, in ``kill``, the
+    production mark, the wind-down (its fills are late money), ``Terminated`` and
+    the seal.
     """
     try:
         through = getattr(rt, "advance_through_ns", None)
@@ -120,6 +129,11 @@ def settle_terminal(rt) -> None:
             rt.tick_through_ns = rt.consequences.tick_through_ns = through
         rt._settle_arrived_verdicts()
         rt._settle_due_forecasts()
+        if (getattr(rt, "reserve_window_start", None) is not None
+                and rt.window.closed_values is None):
+            # A window the world ends inside is closed as a due one is: a score that
+            # waited for its close is earned, never stranded (Codex on #152).
+            rt._close_price_window()
         rt._deliver_returns()
     except Exception as exc:  # noqa: BLE001 - nothing may raise into a kill
         print(f"factorylab kill: the final consequences were not settled "

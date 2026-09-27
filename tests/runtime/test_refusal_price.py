@@ -173,6 +173,49 @@ def test_a_refusal_a_judge_graded_settles_on_its_verdict_like_any_return(monkeyp
     assert row["raw"] == pytest.approx(0.2)
 
 
+def _graded_deferred(monkeypatch):
+    """A refusal a judge graded, its score ready and deferred to the window's close."""
+    rt = _priced_runtime(monkeypatch)
+    _state, refused = _refuse(rt)
+    (event,) = [e for e in rt.internal if str(e.kind) == str(EventKind.PRODUCER_RETURN)
+                and e.payload["about_handle"] == refused]
+    judge = rt.queue.open(actor="test-router", event_id="judge", channel=CH_CONFORMITY,
+                          propensity=PropensityRecord(("eval-a",), (1.0,), "eval-a", 0,
+                                                      "test-router", "state"),
+                          deadline_ns=10**18, parent_handle=None,
+                          cost_ceiling=rt.wallet.available)
+    rt._evaluator_step(event, judge, SimpleNamespace(chosen="eval-a"), 10**18,
+                       returned=Return(judge, {"verdict": 0.2, "rationale": "r"}, 0, "ok"))
+    rt._settle_arrived_verdicts()
+    _past_the_verdict_timeout(rt)
+    assert not rt.queue.history(refused) and refused in rt.deferred_settlements
+    return rt, refused
+
+
+def test_a_score_deferred_to_the_close_is_settled_when_the_world_ends_mid_window(
+        monkeypatch):
+    """Codex on #152: the world is killed inside the window its deferred score waits
+    for. The terminal sequence closes that window by the normal path, so the score is
+    settled with the same penalty a normal close gives, and delivered, before the
+    ledger seals."""
+    normal, handle = _graded_deferred(monkeypatch)
+    normal._close_price_window()
+    (expected,) = _rows(normal, "price.penalty", handle=handle)
+    rt, refused = _graded_deferred(monkeypatch)
+    rt.kill("test: mid-window")
+    (settled,) = rt.queue.history(refused)
+    assert settled.status is SettleStatus.SETTLED and not rt.deferred_settlements
+    (row,) = _rows(rt, "price.penalty", handle=refused)
+    assert {k: row[k] for k in ("raw", "penalty", "effective", "terms")} == pytest.approx(
+        {k: expected[k] for k in ("raw", "penalty", "effective", "terms")})
+    kinds = [i["kind"] for i in rt.ledger._recovery_items()]
+    assert kinds.index("price.penalty") < kinds.index("kill.production")
+    # Delivered: its router has read every return it was owed before the seal.
+    actor = rt.queue.get(refused).actor
+    assert rt.queue.delivered_count(actor) == rt.delivered_seen.get(actor, 0) > 0
+    assert rt.termination.final
+
+
 def test_the_refusing_seats_own_learner_is_priced_as_its_router_is(monkeypatch):
     rt = _priced_runtime(monkeypatch)
     _state, refused = _refuse(rt)
