@@ -26,7 +26,8 @@ def test_asset_context_preserves_exact_oracle_or_unknown(monkeypatch, oracle, ex
 
 
 def test_delayed_settlement_keeps_boundary_oracle_and_never_fills_a_skipped_hour():
-    now, price, published = H, Decimal("123.456789123"), []
+    observed = H + 123_456_789
+    now, price, published = observed, Decimal("123.456789123"), []
     exchange = SimpleNamespace(
         name="synthetic-live", funding_interval_ns=H, settled_funding=True,
         mids=lambda: {"BTC": Decimal(900)},
@@ -46,8 +47,11 @@ def test_delayed_settlement_keeps_boundary_oracle_and_never_fills_a_skipped_hour
                  FundingEvent("BTC", Decimal("0.002"), None, 2 * H)]
     events = [e for e in venue.on_tick(now) if e.payload.get("settled")]
     assert events[0].payload["mark"] == "123.456789123"
-    assert events[0].payload["oracle_observed_at_ns"] == H
+    assert events[0].payload["oracle_observed_at_ns"] == observed
+    assert events[0].payload["oracle_offset_seconds"] == "0.123456789"
     assert events[1].payload["mark"] is None
+    assert events[1].payload["oracle_observed_at_ns"] is None
+    assert events[1].payload["oracle_offset_seconds"] is None
     state = {"interval": H, "cursor": H - 1, "rate": None, "rates": [],
              "marks": [], "strict": True}
     advance_funding(state, H, "0.001", settled=True)

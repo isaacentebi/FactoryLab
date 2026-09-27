@@ -395,7 +395,13 @@ class LiveVenue:
                                       {"coin": coin, "rate": str(row.rate), "paid_usd": "0",
                                        "funding_ns": row.ts_ns, "settled": True,
                                        "mark": oracle[0] if oracle else None,
-                                       "oracle_observed_at_ns": oracle[1] if oracle else None}))
+                                       "oracle_observed_at_ns": oracle[1] if oracle else None,
+                                       # Chapter II §III.b: preserve the signed observation lag
+                                       # as exact evidence, rather than a rounded duration.
+                                       "oracle_offset_seconds": (
+                                           str(Decimal(oracle[1] - row.ts_ns)
+                                               / Decimal(NS_PER_SECOND))
+                                           if oracle else None)}))
             while cursor in stamps and cursor + interval in stamps:
                 cursor += interval
             self.through[key] = cursor
