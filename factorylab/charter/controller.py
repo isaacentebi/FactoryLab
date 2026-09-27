@@ -406,9 +406,11 @@ class PriceController:
             })
             self.__cards[card_id] = replace(state, failing_windows=duration)
             return
-        raised = step * duration
-        price = state.price + raised
-        integral = state.integral + raised
+        # Held finite before the arithmetic and the ledger (Codex on #152): a step
+        # near FLOAT_MAX times a duration of two would otherwise ledger infinity.
+        raised = held(step * duration)
+        price = held_sum(state.price, raised)
+        integral = held_sum(state.integral, raised)
         if bound is not None:
             price, integral = min(bound, price), min(bound, integral)
         self.__ledger.append({
