@@ -273,6 +273,32 @@ def _groups(facts: list[tuple], rng: random.Random) -> list[tuple]:
     return out
 
 
+def _corrected_live_funding(rng: random.Random) -> dict:
+    """A delayed settled print corrects a provisional rate after the horizon quote."""
+    named = _Named({"BTC": [[T0, "0"]]})
+    named.exchange.settled_funding = True
+    named.fee_schedule["rates"]["BTC"] = "0"
+    named._observe_mid("BTC", T0, "100")
+    named._freeze_named("live", {"coin": "BTC", "side": "buy"}, (("BTC", "100"),),
+                        declined={"coin": "BTC", "side": "buy"}, attempted=None)
+    frozen = named.reference_mids["live"]
+    # A previously cached provisional entry must not survive the settled correction.
+    frozen["funding"]["rates"] = [[_t(60), "0.9"]]
+    frozen["funding"]["cursor"] = _t(100)
+    named._observe_mid("BTC", _t(90), "100")
+    named.rates_ns = named.tick_through_ns = _t(100)
+    for _ in range(rng.randint(1, 4)):
+        named._observe_funding("BTC", _t(60), "0.9")
+        assert named._reference_outcome(frozen) == ("open", None)
+    # The price is the recorded boundary oracle, not the horizon's mid.
+    named._observe_funding("BTC", _t(60), "0.001", "120", settled=True)
+    state, rates = named._reference_outcome(frozen)
+    assert state == "measured"
+    priced, _ = named._price_declined("live", frozen, (("BTC", "100"),), rates)
+    assert priced["funding_bps"] == "-12.0000"
+    return priced
+
+
 def _run(rng: random.Random) -> dict:
     history: dict = {}
     named, book = _Named(history), _Book(history)
@@ -472,7 +498,7 @@ def _run(rng: random.Random) -> dict:
     for row in book.ledger._recovery_items():
         if row.get("kind") == "consequence.late":
             late[row["handle"]] = late.get(row["handle"], 0) + row["micro"]
-    return {"named": outcomes,
+    return {"named": outcomes, "live_funding": _corrected_live_funding(rng),
             "rows": sorted(rows, key=lambda r: (r.get("handle"), r["kind"])),
             "late": late}
 
