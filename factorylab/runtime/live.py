@@ -366,6 +366,35 @@ class LiveVenue:
             return None
         return frozenset(self.markets())
 
+    def _settled_rates(self, now_ns: int, coins: set[str]) -> list[WorldEvent]:
+        """Each published boundary is delivered; missing boundaries remain retryable.
+
+        The per-coin contiguous cursor lives in the already checkpointed stream state.
+        A successful empty read is not evidence that a settlement does not exist
+        (Chapter II §III.b). Re-reading its boundary permits late rate corrections.
+        """
+        interval = int(self.exchange.funding_interval_ns)
+        out = []
+        for coin in sorted(coins):
+            key = f"settled:{coin}"
+            cursor = self.through.setdefault(key, now_ns - now_ns % interval)
+            try:
+                rows = self.exchange.settled_funding_history(coin, cursor, now_ns)
+            except (RuntimeError, OSError, ValueError, ArithmeticError):
+                continue
+            stamps = set()
+            for row in rows:
+                if not cursor <= row.ts_ns <= now_ns or row.ts_ns % interval:
+                    continue
+                stamps.add(row.ts_ns)
+                out.append(WorldEvent(WorldEventKind.FUNDING, now_ns, self.exchange.name,
+                                      {"coin": coin, "rate": str(row.rate), "paid_usd": "0",
+                                       "funding_ns": row.ts_ns, "settled": True}))
+            while cursor + interval in stamps:
+                cursor += interval
+            self.through[key] = cursor
+        return out
+
     def on_tick(self, now_ns: int) -> list[WorldEvent]:
         traded = self._broadcast()
         out: list[WorldEvent] = []
@@ -410,6 +439,12 @@ class LiveVenue:
                     },
                 )
             )
+        if getattr(self.exchange, "settled_funding", False):
+            # Keep polling previously traded coins: their named outcomes may still be open.
+            coins = {f.coin for f in funding if traded is None or f.coin in traded}
+            coins.update(key.removeprefix("settled:") for key in self.through
+                         if key.startswith("settled:"))
+            out.extend(self._settled_rates(now_ns, coins))
         out.extend(self.funding_payments(now_ns))
         return out
 

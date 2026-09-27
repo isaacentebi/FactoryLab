@@ -1136,6 +1136,7 @@ class HyperliquidExchange:
     #: hour. A fact about the venue, read by the price of a named road not taken
     #: (wave 16, D1), never a setting.
     funding_interval_ns = NS_PER_HOUR
+    settled_funding = True
 
     def __init__(
         self,
@@ -1692,6 +1693,32 @@ class HyperliquidExchange:
             "bids": sides[0],
             "asks": sides[1],
         }
+
+    def settled_funding_history(self, coin: str, since_ns: int,
+                                until_ns: int) -> list[FundingEvent]:
+        """Settled public rates in the inclusive range, never predicted asset contexts.
+
+        Each request covers at most 100 hourly boundaries, below the venue's page
+        limit. Missing publications remain absent and are retried by the live cursor.
+        """
+        rows: dict[int, FundingEvent] = {}
+        start = since_ns // NS_PER_MS
+        end = until_ns // NS_PER_MS
+        while start <= end:
+            stop = min(end, start + 99 * NS_PER_HOUR // NS_PER_MS)
+            raw = self._guarded("funding_history", lambda start=start, stop=stop:
+                                self._info.funding_history(coin, start, stop))
+            if not isinstance(raw, list):
+                raise ValueError("invalid settled funding response")
+            for row in raw:
+                stamp = int(row["time"]) * NS_PER_MS
+                rate = Decimal(str(row["fundingRate"]))
+                if not rate.is_finite() or stamp % NS_PER_HOUR:
+                    raise ValueError("invalid settled funding boundary")
+                if since_ns <= stamp <= until_ns:
+                    rows[stamp] = FundingEvent(coin, rate, None, stamp)
+            start = stop + 1
+        return [rows[stamp] for stamp in sorted(rows)]
 
     def funding_history(self, coin: str, n: int) -> list[FundingEvent]:
         """Return up to n recent hourly funding observations, oldest first."""

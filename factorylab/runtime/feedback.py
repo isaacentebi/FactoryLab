@@ -1518,7 +1518,7 @@ class FeedbackMixin:
             funding["marks"] = [row for row in funding.get("marks") or [] if row[0] > ts_ns]
 
     def _observe_funding(self, coin: str, ts_ns: int, rate: str,
-                         mark: str | None = None) -> None:
+                         mark: str | None = None, *, settled: bool = False) -> None:
         """One venue funding-rate print: the rate in force at each funding time it passes.
 
         Guarantees every open named trade on ``coin`` assigns the funding times this
@@ -1528,15 +1528,22 @@ class FeedbackMixin:
         with its fact time (``_funding_history``; Codex on #152): a trade opened at a
         stale venue mark reads each funding time's own print, never the latest.
         """
+        if getattr(self.exchange, "settled_funding", False) and not settled:
+            return
         for frozen in self.reference_mids.values():
             funding = frozen.get("funding")
             if frozen.get("coin") != coin or funding is None:
                 continue
             res = frozen.get("res")
-            if res is not None and funding["cursor"] >= res[0]:
+            if res is not None and funding["cursor"] >= res[0] and not settled:
                 continue
-            advance_funding(funding, int(ts_ns), str(rate), mark)
-        history = self._funding_history(coin)
+            if settled and (ts_ns <= funding["cursor"] and
+                            frozen.get("open_ns") is not None and ts_ns <= frozen["open_ns"]):
+                continue
+            if settled and frozen.get("due_ns") is not None and ts_ns > frozen["due_ns"]:
+                continue
+            advance_funding(funding, int(ts_ns), str(rate), mark, settled=settled)
+        history = [row for row in self._funding_history(coin) if row[0] != int(ts_ns)]
         history.append([int(ts_ns), str(rate), None if mark is None else str(mark)])
         history.sort(key=lambda row: row[0])
         # Need-based retention (wave 17b): the print in force at the earliest instant a
@@ -1617,6 +1624,9 @@ class FeedbackMixin:
         # Ruling R10-m: funding times up to H only, however late the measuring mid.
         rates = funding_due(frozen.get("funding"), frozen["open_ns"], due)
         if rates == FUNDING_PENDING:
+            # §III.b: absence of a settled live rate cannot fix a measured outcome.
+            if (frozen.get("funding") or {}).get("strict"):
+                return "open", None
             return ("none" if lapsed else "open"), None
         if rates is None:
             return "none", FUNDING_UNKNOWN
@@ -1912,6 +1922,8 @@ class FeedbackMixin:
             # the rate in force at each is read from the venue's own prints.
             "funding": (None if interval is None else
                         {"interval": int(interval),
+                         **({"strict": True} if getattr(self.exchange, "settled_funding", False)
+                            else {}),
                          "cursor": cursor,
                          # The print in force at its opening, never a later one.
                          "rate": latest[1] if latest is not None else None, "rates": [],
@@ -1924,7 +1936,8 @@ class FeedbackMixin:
             # Opened at a stale venue mark: the prints since it pass their own funding
             # times, each at the rate in force at it (Codex on #152).
             for ts_ns, rate, mark in (row for row in history if row[0] > cursor):
-                advance_funding(funding, int(ts_ns), str(rate), mark)
+                advance_funding(funding, int(ts_ns), str(rate), mark,
+                                settled=funding.get("strict", False))
 
     def _score_verdict(self, rec: PendingJudgement, y: float, kind: str) -> None:
         """Score one judge's verdict against its return's measured outcome (ruling R1).
@@ -2095,7 +2108,8 @@ class FeedbackMixin:
         # past that opening (Codex on #152). One a return that acted left unread lapses
         # on the same clock.
         for handle in [h for h, frozen in self.reference_mids.items()
-                       if self._facts_through(frozen) > self._frozen_lapse_ns(frozen)]:
+                       if self._facts_through(frozen) > self._frozen_lapse_ns(frozen)
+                       and self._reference_outcome(frozen)[0] != "open"]:
             del self.reference_mids[handle]
 
     def _kept_ns(self, value: Any) -> int:
