@@ -806,6 +806,28 @@ def test_a_judge_may_choose_an_older_open_return_until_its_horizon():
     assert rt.queue.history(late)[0].status is SettleStatus.CENSORED
 
 
+def test_a_named_trade_opened_late_is_judgeable_until_its_own_horizon():
+    """Codex on #152: a hold named BTC before BTC's first venue mid; that mid arrives
+    after the return's time plus H, still inside the trade's lapse. The trade opens
+    there and is due a horizon later, so a judgement made before that due is accepted;
+    one after it is refused. Measuring H from the return's time refused both."""
+    rt = _runtime(counterfactual={"coin": "BTC", "side": "buy"}, verdicts=(0.7, 0.3))
+    unread, _unread_event = _unsettled_produce(rt)
+    frozen = rt.reference_mids[unread]
+    assert frozen["open_ns"] is None  # no BTC mid yet: it opens at the first one
+    rt.clock.now_ns = frozen["ns"] + rt._horizon_ns() + 1
+    assert rt.clock.now_ns < rt._frozen_lapse_ns(frozen)
+    _mids(rt, BTC="100")  # the first BTC quote: the trade opens here
+    assert frozen["due_ns"] == rt.clock.now_ns + rt._horizon_ns()
+    _producer, event = _consequence_produce(rt)
+    accepted = _judge(rt, event, "eval-a",
+                      returned=Return("x", {"verdict": 0.7, "about_handle": unread}, 0, "ok"))
+    assert not _rows(rt, "return.refused", handle=accepted)
+    assert rt.pending[accepted].about == unread
+    rt.clock.now_ns = frozen["due_ns"]
+    assert "before its consequence horizon" in rt._hindsight_reason("probe", unread)
+
+
 # --- no judgement at any tier is scored on a consequence already known ------------------
 
 

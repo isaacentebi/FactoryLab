@@ -870,7 +870,7 @@ class Runtime(
                     account = self.consequences.table.account(about)
                 except KeyError:
                     continue
-                if not account.voided and not self._past_horizon(account):
+                if not account.voided and not self._target_past_horizon(about, account):
                     continue
             self.return_events[about] = replace(event, payload=slim)
 
@@ -1229,9 +1229,25 @@ class Runtime(
         if ((account.payoff is not None and self._acted(about))
                 or about in self.world_outcomes):
             return "judgement needs a chosen return whose consequence is still open"
-        if self._past_horizon(account):
+        if self._target_past_horizon(about, account):
             return "judgement needs a chosen return before its consequence horizon"
         return None
+
+    def _target_past_horizon(self, about: str, account) -> bool:
+        """Whether the horizon the world measures return ``about`` at has passed.
+
+        A return that acted is measured from its own opening (``_past_horizon``). One
+        that did not is measured by its frozen named trade, at that trade's own
+        ``due_ns`` (Codex on #152): the first venue mark it opened at plus H, which
+        for a trade opened after its decision is later than the return's time plus H,
+        and before that mark it has no horizon yet. Without a frozen trade, the
+        return's own opening.
+        """
+        frozen = self.reference_mids.get(about)
+        if frozen is not None and not self._acted(about):
+            due = frozen.get("due_ns")
+            return due is not None and self.clock.now_ns >= due
+        return self._past_horizon(account)
 
     def _past_horizon(self, account) -> bool:
         """Whether a return's consequence horizon has passed on the world's clock.
