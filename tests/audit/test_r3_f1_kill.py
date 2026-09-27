@@ -39,11 +39,7 @@ def test_kill_ends_a_living_world_and_releases_its_seal(living, capsys):
     assert out["terminated"] and out["seal_key_released"]
     assert out["termination_reason"] == "explicit_kill:operator"
     assert _terminated(path, manifest)["terminated"]
-
-
-def test_the_killed_world_records_the_operators_reason_in_its_own_diary(living):
-    path, manifest = living
-    assert main(["kill", "--world", "scripted", "--ledger", str(path)]) == TERMINATED_EXIT
+    # The world records the operator's reason in its own diary, once.
     frozen = Ledger.open_read_only(path, manifest=json.loads(manifest.canonical_json()))
     final = [item for item in frozen.items()
              if item.get("kind") == "event" and item["event"]["kind"] == "Terminated"]

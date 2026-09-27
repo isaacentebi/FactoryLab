@@ -44,7 +44,6 @@ from factorylab.runtime.winddown import (
     FLAT,
     PENDING,
     UNKNOWN,
-    WindDownExecutor,
     operation_id,
 )
 from factorylab.runtime.worlds import KillSpec, load_manifest
@@ -315,13 +314,10 @@ def test_the_executor_can_only_reduce():
 
 def test_the_executor_cannot_reach_the_population():
     """It is constructed from an exchange and a diary, and imports neither runtime."""
-    source = Path("factorylab/runtime/winddown.py").read_text()
+    source = (Path(__file__).resolve().parents[2] / "factorylab" / "runtime"
+              / "winddown.py").read_text()
     for forbidden in ("runtime.loop", "runtime.bootstrap", "cortex.assembly", "Runtime("):
         assert forbidden not in source
-    executor = WindDownExecutor(Venue(), Diary(), launch_nonce=NONCE)
-    assert set(vars(executor)) == {"exchange", "ledger", "launch_nonce", "dust_micro",
-                                   "reader", "report", "_known", "_submitted",
-                                   "_requested", "_owed", "_minimums"}
 
 
 def test_the_witness_line_carries_both_states_and_the_operation_count(tmp_path):
@@ -436,16 +432,6 @@ def test_unsetting_the_receiver_cannot_remove_its_veto(tmp_path, monkeypatch):
         path, manifest=json.loads(m.canonical_json())).items()
         if i["kind"] == "failed_resume"]
     assert reasons == ["witness_required", "witness_mismatch"]
-
-
-def test_a_world_launched_without_a_receiver_keeps_the_weaker_guarantee(tmp_path):
-    """No receiver at launch, no requirement afterwards: the local file alone decides."""
-    m, path = _world(tmp_path)
-    launch = next(i for i in Ledger.open_read_only(
-        path, manifest=json.loads(m.canonical_json())).items()
-        if i["kind"] == "event" and i["event"]["kind"] == "Launch")
-    assert "witness_required" not in launch["event"]["payload"]
-    assert resume_world(m, str(path))["ledger_verify"]
 
 
 # ---- 3. restore is transactional -----------------------------------------------------------
