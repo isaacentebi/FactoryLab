@@ -383,6 +383,20 @@ def test_the_exit_rate_is_the_one_read_at_or_before_the_horizon():
     assert table.account("opener").payoff.censored == FEE_UNKNOWN
 
 
+def test_an_exit_rate_with_no_instant_to_ask_at_fails_closed():
+    """Sol on #152: with no venue clock (no ``now_ns`` and no horizon), the time the
+    exit rate is asked for is unknown. The lot is never marked free of its exit fee:
+    it is censored fee_unknown, exactly like a missing rate, and nothing is asked."""
+    from factorylab.settlement.lots import FEE_UNKNOWN
+
+    asked = []
+    table = _open_long().resolve(2, 1, {"BTC": "100"},
+                                 exit_rates=lambda market, at: asked.append(at) or "0.00045")
+    payoff = table.account("opener").payoff
+    assert payoff is not None and payoff.censored == FEE_UNKNOWN and payoff.y == 0
+    assert payoff.exit_fee_micro == 0 and not asked
+
+
 def test_the_exit_fee_is_never_booked_as_money_and_the_real_close_is_booked_once():
     """The mark is not money: a marked outcome books nothing when it is fixed, and the
     real closing fee the venue charged is booked once, late, with the realised P&L."""

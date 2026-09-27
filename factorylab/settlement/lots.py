@@ -204,15 +204,15 @@ def _exit_rates_for(exit_rates, lots, account, now_ns, horizon_ns) -> dict[str, 
     instrument's own rate at the account's opening plus ``horizon_ns`` on the venue's
     clock, or at ``now_ns`` when either is unknown; an event token carries no venue
     exit fee. Keyed by instrument (a lot's coin), never pooled across instruments.
+    With no instant to ask at, every perp or spot instrument's rate is None: unknown,
+    so the outcome is ``fee_unknown``, never marked free of its exit fee (fail closed).
     """
     if exit_rates is None:
         return {}
     if callable(exit_rates):
         at = (account.opened_at_ns + horizon_ns
               if account.opened_at_ns is not None and horizon_ns is not None else now_ns)
-        if at is None:
-            return {}
-        return {lot.coin: exit_rates(lot.coin, at) for lot in lots
+        return {lot.coin: None if at is None else exit_rates(lot.coin, at) for lot in lots
                 if lot.market in VENUE_FEE_MARKETS}
     return {lot.coin: exit_rates[lot.market] for lot in lots if lot.market in exit_rates}
 
